@@ -303,7 +303,7 @@ def test_addrm_exit_store_requires_complete_initial_memory(tag, initialization, 
             results=(),
             loads=(),
             stores=(),
-            node=None,
+            source_backed=False,
         )
         entry = replace(entry, ops=entry.ops[:-1] + (clobber, entry.ops[-1]))
     body = replace(body, blocks=tuple(entry if block.at == entry.at else block for block in body.blocks))

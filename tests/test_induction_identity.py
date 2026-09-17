@@ -827,16 +827,6 @@ def test_inserted_counter_operations_own_their_insertion_location() -> None:
 @pytest.mark.parametrize("symbolic", [False, True])
 def test_cse_replaces_phi_uses_of_a_deleted_initializer(second_variable: int, has_origin: bool, symbolic: bool) -> None:
     """matrix printed T=0 for T=380 after CSE deleted a zero still named by its loop phi."""
-    from pathlib import Path
-
-    import corpus
-
-    node = next(
-        node
-        for body in corpus.bodies(Path("fixtures/omf/matrix-p-g2.obj"))
-        for node in body.nodes
-        if isinstance(node, ir.Opaque)
-    )
     first = mir.Value(10, 0, variable=7)
     second = mir.Value(11, 2, variable=second_variable)
     result = mir.Value(12, 4, variable=7)
@@ -850,9 +840,17 @@ def test_cse_replaces_phi_uses_of_a_deleted_initializer(second_variable: int, ha
         args=(mir.Symbol(Space.SEGMENT, 5, 6, 2) if symbolic else mir.Const(0, 2),),
         results=(mir.Held(first, 2),),
         covers=(0, 2),
-        node=node if has_origin else None,
+        source_backed=has_origin,
+        id=10 if has_origin else None,
     )
-    duplicate = replace(define, at=2, defines=(second,), results=(mir.Held(second, 2),), covers=(2, 4))
+    duplicate = replace(
+        define,
+        at=2,
+        defines=(second,),
+        results=(mir.Held(second, 2),),
+        covers=(2, 4),
+        id=11 if has_origin else None,
+    )
     jump = mir.Op(4, ir.Operation.JUMP, "", (), (), kind=mir.Kind.JUMP, covers=(4, 6), target=6)
     use = mir.Op(6, ir.Operation.PUSH, "", (), (result,), kind=mir.Kind.ARG, args=(mir.Held(result, 2),))
     direct = replace(use, at=7, uses=(second,), args=(mir.Held(second, 2),))
@@ -893,17 +891,17 @@ def test_cse_keeps_distinct_linker_addresses(other: mir.Arg) -> None:
 
 def test_dead_byte_transfer_cannot_span_a_surviving_jump() -> None:
     """matrix refused emission after dead assigned the live jump's nine bytes twice."""
-    from pathlib import Path
-
-    import corpus
-
-    node = next(
-        node
-        for body in corpus.bodies(Path("fixtures/omf/matrix-p-g2.obj"))
-        for node in body.nodes
-        if isinstance(node, ir.Opaque)
+    first = mir.Op(
+        0,
+        ir.Operation.MOVE,
+        "",
+        (),
+        (),
+        kind=mir.Kind.COPY,
+        source_backed=True,
+        covers=(0, 4),
+        id=1,
     )
-    first = mir.Op(0, ir.Operation.MOVE, "", (), (), kind=mir.Kind.COPY, node=node, covers=(0, 4))
     removed = replace(first, at=4, covers=(8, 10))
     jump = replace(first, at=4, kind=mir.Kind.JUMP, covers=(4, 8))
     result = transform._without([first, removed, jump], lambda op: op is removed)

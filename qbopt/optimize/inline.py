@@ -287,7 +287,7 @@ def _at(
                         replace(result, value=swap[result.value.id]) if isinstance(result, mir.Held) else result
                         for result in read.results
                     ),
-                    node=None,
+                    source_backed=False,
                     id=None,
                     raised=None,
                     covers=(call.at, call.at),

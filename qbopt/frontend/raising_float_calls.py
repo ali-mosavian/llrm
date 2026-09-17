@@ -110,7 +110,7 @@ def raised(body, found, contracts, source_map: module.SourceMap | None = None):
                 variable += 1
                 wide = mir.Value(serial, op.at, variable=variable, version=1)
                 ops.append(
-                    replace(
+                    mir.detached(
                         op,
                         kind=mir.Kind.SIGN_EXTEND,
                         op=ir.Operation.EXTEND,
@@ -122,7 +122,6 @@ def raised(body, found, contracts, source_map: module.SourceMap | None = None):
                         loads=(),
                         stores=(),
                         merges={},
-                        node=None,
                         raised=None,
                         id=None,
                         stack=None,
@@ -131,7 +130,7 @@ def raised(body, found, contracts, source_map: module.SourceMap | None = None):
                     )
                 )
                 ops.append(
-                    replace(
+                    mir.detached(
                         op,
                         kind=mir.Kind.EXTRACT,
                         op=mir.Synth.HALF_TO_LOW,
@@ -143,7 +142,6 @@ def raised(body, found, contracts, source_map: module.SourceMap | None = None):
                         loads=(),
                         stores=(),
                         merges={},
-                        node=None,
                         raised=None,
                         id=None,
                         stack=None,
@@ -158,7 +156,7 @@ def raised(body, found, contracts, source_map: module.SourceMap | None = None):
                     if isinstance(argument, mir.Held)
                     else tuple(value for value in (ref.base, ref.segment) if value is not None)
                 )
-                op = replace(
+                op = mir.detached(
                     op,
                     kind=mir.Kind.FLOAD,
                     op=ir.Operation.FLOAT_LOAD,
@@ -170,7 +168,6 @@ def raised(body, found, contracts, source_map: module.SourceMap | None = None):
                     loads=(ref,) if ref is not None else (),
                     stores=(),
                     merges={},
-                    node=None,
                     raised=None,
                     stack=1,
                     symbol=ref is not None,

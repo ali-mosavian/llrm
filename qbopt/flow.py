@@ -134,7 +134,15 @@ def run(data: bytes, native_fpu: bool = False, optimise: bool = True) -> tuple[b
             )
             body = rotate.entered(body)
         low = verified(
-            lower.lowered(name, body, found.calls, source.absorbed, contracts, source.coverage),
+            lower.lowered(
+                name,
+                body,
+                found.calls,
+                source.absorbed,
+                contracts,
+                source.coverage,
+                nodes=source.nodes,
+            ),
             "lower",
             in_ssa=True,
         )

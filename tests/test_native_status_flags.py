@@ -14,10 +14,9 @@ def test_c_status_word_reaches_sahf_high_byte() -> None:
     assert module is not None
     mapped = blocks.code_map(module)
     assert not isinstance(mapped, str)
-    name, body = next(
-        (name, body) for name, body in mir.bodies(module, list(blocks.partition(module, mapped))) if body.entry == 0
-    )
-    low = lower.lowered(name, body, module.calls, module.absorbed, {})
+    raised = mir.bodies(module, list(blocks.partition(module, mapped)))
+    name, body = next((name, body) for name, body in raised if body.entry == 0)
+    low = lower.lowered(name, body, module.calls, module.absorbed, {}, nodes=raised.source.nodes)
     consumer = next(one for one in low.insns if one.at == 0x60)
     producer = next(one for one in low.insns if one.at == 0x5D)
     assert len(consumer.requires) == 1

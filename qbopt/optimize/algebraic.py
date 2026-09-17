@@ -90,7 +90,7 @@ def _negated_difference(op: mir.Op, definitions: dict, wanted: set[mir.Value], u
     args = tuple(reversed(difference.args))
     return replace(op, kind=mir.Kind.SUB, name="sub", op=ir.Operation.BINARY, args=args,
                    defines=(result.value,), uses=tuple(arg.value for arg in args if isinstance(arg, mir.Held)),
-                   node=None, raised=None)
+                   source_backed=False, raised=None)
 
 
 def _shared_shifts(body: mir.MirBody, wanted: set[mir.Value]) -> mir.MirBody:
@@ -121,7 +121,7 @@ def _shared_shifts(body: mir.MirBody, wanted: set[mir.Value]) -> mir.MirBody:
                             previous.value if value == source.value else value: target
                             for value, target in op.merges.items()
                         },
-                        node=None,
+                        source_backed=False,
                         raised=None,
                     )
                 if result.value in used:
@@ -162,7 +162,7 @@ def _scaled_chain(op: mir.Op, definitions: dict, wanted: set[mir.Value], uses: C
     source, initial = first
     factor = consts.masked(initial * factor, source.width)
     return replace(op, kind=mir.Kind.MUL, args=(source, mir.Const(factor, source.width)),
-                   defines=(op.results[0].value,), uses=(source.value,), node=None, raised=None)
+                   defines=(op.results[0].value,), uses=(source.value,), source_backed=False, raised=None)
 
 
 def _offset(op: mir.Op, wanted: set[mir.Value]):
@@ -195,7 +195,7 @@ def _offset_chain(op: mir.Op, definitions: dict, wanted: set[mir.Value], uses: C
     amount = consts.masked(initial + amount, source.width)
     return replace(op, kind=mir.Kind.ADD, name="add", op=ir.Operation.BINARY,
                    args=(source, mir.Const(amount, source.width)),
-                   defines=(op.results[0].value,), uses=(source.value,), node=None, raised=None)
+                   defines=(op.results[0].value,), uses=(source.value,), source_backed=False, raised=None)
 
 
 def _recombined(op: mir.Op, definitions: dict) -> mir.Op:
@@ -209,7 +209,7 @@ def _recombined(op: mir.Op, definitions: dict) -> mir.Op:
     if original is None:
         return op
     return replace(op, kind=mir.Kind.COPY, args=(original,), uses=(original.value,),
-                   merges={}, node=None, raised=None)
+                   merges={}, source_backed=False, raised=None)
 
 
 def _redundant_extension(op: mir.Op, definitions: dict) -> mir.Op:
@@ -243,7 +243,7 @@ def _redundant_extension(op: mir.Op, definitions: dict) -> mir.Op:
         return op
     known = mir.Held(viewed.value, result.width)
     return replace(op, kind=mir.Kind.COPY, args=(known,), uses=(viewed.value,),
-                   merges={}, node=None, raised=None)
+                   merges={}, source_backed=False, raised=None)
 
 
 def _zero_difference(op: mir.Op, definitions: dict) -> mir.Op:
@@ -260,7 +260,7 @@ def _zero_difference(op: mir.Op, definitions: dict) -> mir.Op:
         or not _copied_zero(zero, definitions)):
         return op
     return replace(op, kind=mir.Kind.NEG, name="neg", op=ir.Operation.UNARY,
-                   args=(source,), uses=(source.value,), node=None, raised=None)
+                   args=(source,), uses=(source.value,), source_backed=False, raised=None)
 
 
 def _copied_zero(arg: mir.Arg, definitions: dict) -> bool:
@@ -335,7 +335,7 @@ def _halved(body: mir.MirBody) -> mir.MirBody:
         if whole is None:
             return (op,)
         high, low = split[whole]
-        fresh = dict(node=None, raised=None, merges={})
+        fresh = dict(source_backed=False, raised=None, merges={})
         later = dict(fresh, covers=(op.at, op.at), id=None, extra_covers=())
 
         def reads(*args, ref=None):
@@ -388,7 +388,7 @@ def _shift_chain(op: mir.Op, definitions: dict, wanted: set[mir.Value], uses: Co
         return op
     return replace(op, args=(original, mir.Const(total, count.width)),
                    uses=tuple(dict.fromkeys(original.value if value == source.value else value for value in op.uses)),
-                   node=None, raised=None)
+                   source_backed=False, raised=None)
 
 
 def _divisions(body: mir.MirBody) -> mir.MirBody:

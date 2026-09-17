@@ -113,7 +113,7 @@ def test_lowering_can_preserve_a_shared_sum_after_redundant_float_ops_are_remove
     removed = {sums[1].id} | {op.id for op in floats if set(op.defines) & set(sums[1].uses)}
     ops = tuple(replace(op, op=ir.Operation.NOTHING, kind=mir.Kind.NOTHING,
                         name="", args=(), results=(), uses=(), defines=(), loads=(),
-                        stores=(), merges={}, node=None, raised=None,
+                        stores=(), merges={}, source_backed=False, raised=None,
                         floating=None, stack=None)
                 if op.id in removed else ssa.substituted(op, {second_sum.id: first_sum})
                 for op in block.ops)

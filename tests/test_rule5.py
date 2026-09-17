@@ -143,6 +143,11 @@ def test_mir_has_no_slot_for_selected_machine_semantics() -> None:
     assert "made" not in mir.Op.__dataclass_fields__
 
 
+def test_mir_has_no_slot_for_decoded_instruction_nodes() -> None:
+    """Decoded x86 nodes are raise provenance, not program semantics."""
+    assert "node" not in mir.Op.__dataclass_fields__
+
+
 def test_a_pass_is_a_transform_and_nothing_else() -> None:
     """The contract, as a fact rather than a convention.
 

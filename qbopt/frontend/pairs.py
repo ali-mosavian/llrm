@@ -268,7 +268,7 @@ def _written(op: Op, origin: dict) -> Register_:
 def _shape(op: Op) -> ir.Semantics | None:
     if op.floating_origin is not None:
         return None
-    return lower.current(op)
+    return lower.current(op, node=getattr(op, "node", None))
 
 
 def _binary_against(op: Op, want: type) -> str | None:

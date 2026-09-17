@@ -133,7 +133,7 @@ def test_a_two_address_operation_keeps_both_halves_in_one_register() -> None:
     made = mir.Value(1, 0x10)
     read = mir.Value(2, 0x08)
     ref = mir.MemRef(None, 2)
-    op = mir.Op(
+    op = mir._RaisedOp(
         0x10,
         ir.Operation.BINARY,
         "add",
@@ -547,9 +547,17 @@ def test_the_rewriter_hands_on_the_bytes_a_dropped_copy_stood_for(stem: str) -> 
 
     found = module.of(omf.parse(Path(f"fixtures/omf/{stem}.obj").read_bytes()))
     blocks = split.partition(found, code_map(found))
-    name, body = next(iter(mir.bodies(found, blocks)))
+    raised = mir.bodies(found, blocks)
+    name, body = next(iter(raised))
     body = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
-    low = lower.lowered(name, body, found.calls, set(found.absorbed), runtime.for_module(found))
+    low = lower.lowered(
+        name,
+        body,
+        found.calls,
+        set(found.absorbed),
+        runtime.for_module(found),
+        nodes=raised.source.nodes,
+    )
     owned = lambda one: {  # noqa: E731
         at for block in one.blocks for i in block.insns if i.covers for at in range(*i.covers)
     }

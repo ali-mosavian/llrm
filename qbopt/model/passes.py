@@ -10,16 +10,13 @@ take the module's layout and end up choosing registers.
 Rule 5 is the reason this exists. Selected instruction semantics now begin
 on ``lir.Insn.what``; what still ties MIR to its source machine is:
 
-  Op.node      the instruction this was raised from. Lowering reads it, and
-               so does anything asking what BC originally wrote.
-
   MirBody.origin
                value -> register. Sanctioned today for four readers with a
                reason -- which register pair a long arrived in, where a use
                came from -- and the last thing to go, because lowering and
                the allocator's identity baseline are built on it.
 
-  Op.covers, Op.ref
+  Op.covers
                which of BC's bytes this stands for, and which fixup it
                carries. Facts about an object file, not about a program.
 

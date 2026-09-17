@@ -254,6 +254,7 @@ class SourceMap:
     """
 
     refs: dict[int, tuple[int, ...]] = field(default_factory=dict)
+    nodes: dict[int, object] = field(default_factory=dict)
     float_protocols: dict[int, int] = field(default_factory=dict)
     absorbed: dict[int, object] = field(default_factory=dict)
     coverage: dict[int, tuple[tuple[int, int], ...]] = field(default_factory=dict)
@@ -262,6 +263,7 @@ class SourceMap:
     def from_module(cls, found: Module) -> "SourceMap":
         return cls(
             dict(found.refs),
+            {},
             dict(found.float_protocols),
             dict(found.absorbed),
             dict(found.coverage),

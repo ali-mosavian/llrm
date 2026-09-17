@@ -46,14 +46,17 @@ def test_qrender_math_calls_lower_without_replacement(module, symbol):
     found = corpus.loaded(path)
     rules = runtime.for_module(found)
     seen = 0
-    for name, body in mir.bodies(found, corpus.partitioned(path), rules):
+    bodies = mir.bodies(found, corpus.partitioned(path), rules)
+    for name, body in bodies:
         for block in body.blocks:
             for op in block.ops:
                 if found.calls.get(op.at) != symbol:
                     continue
                 isolated = replace(body, entry=block.at,
                     blocks=(replace(block, phis=(), ops=(op,), succ=()),))
-                result = lower.lowered(name, isolated, found.calls, found.absorbed, rules)
+                result = lower.lowered(
+                    name, isolated, found.calls, found.absorbed, rules, nodes=bodies.source.nodes
+                )
                 assert any(one.at == op.at and one.what.name == "call" for one in result.insns)
                 seen += 1
     assert seen > 0

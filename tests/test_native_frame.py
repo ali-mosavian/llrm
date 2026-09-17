@@ -153,8 +153,11 @@ def test_private_calls_and_explicit_pascal_cleanup_balance_recursive_body() -> N
     assert contracts[0x3C4].cleanup == 0
     assert not contracts[0x3C4].established
     assert contracts[0x3C4].writes == runtime.Memory.ANY
-    for name, raised in mir.bodies(module, list(parts), contracts):
-        lowered = lower.lowered(name, raised, module.calls, module.absorbed, contracts)
+    bodies = mir.bodies(module, list(parts), contracts)
+    for name, raised in bodies:
+        lowered = lower.lowered(
+            name, raised, module.calls, module.absorbed, contracts, nodes=bodies.source.nodes
+        )
         assert lowered.entry == raised.entry
 
 
@@ -171,8 +174,9 @@ def test_lowering_uses_the_same_per_site_clobbers_as_raising() -> None:
     contracts = nativecalls.interfaces(module, partition, parts, runtime.for_module(module))
     # This is a contract-routing test, not a claim about the real callee.
     contracts[0x6BF] = replace(contracts[0x6BF], clobbers=frozenset({runtime.Reg.AX}), clobbers_reached=True)
-    name, body = next((name, body) for name, body in mir.bodies(module, list(parts), contracts) if body.entry == 0x604)
-    low = lower.lowered(name, body, module.calls, module.absorbed, contracts)
+    bodies = mir.bodies(module, list(parts), contracts)
+    name, body = next((name, body) for name, body in bodies if body.entry == 0x604)
+    low = lower.lowered(name, body, module.calls, module.absorbed, contracts, nodes=bodies.source.nodes)
     calls = [one for one in low.insns if one.at == 0x6BF and one.what and one.what.name == "call"]
     assert len(calls) == 1
     assert calls[0].clobbers == {Register.EAX}
@@ -187,14 +191,13 @@ def test_native_register_saves_survive_allocation() -> None:
     assert not isinstance(mapped, str)
     parts = tuple(blocks.partition(module, mapped))
     contracts = nativecalls.interfaces(module, partition, parts, runtime.for_module(module))
-    name, raised = next(
-        (name, body) for name, body in mir.bodies(module, list(parts), contracts) if body.entry == 0x604
-    )
+    bodies = mir.bodies(module, list(parts), contracts)
+    name, raised = next((name, body) for name, body in bodies if body.entry == 0x604)
     original = next(body for body in partition.bodies if body.seed == raised.entry)
     owned = tuple(block for block in parts if any(lo <= block.at < hi for lo, hi in original.ranges))
     plan = nativeframe.plan(owned, raised.entry)
     assert plan is not None
-    low = lower.lowered(name, raised, module.calls, module.absorbed, contracts)
+    low = lower.lowered(name, raised, module.calls, module.absorbed, contracts, nodes=bodies.source.nodes)
     slots = frame.of(low, native=plan)
     for phase in flow.machine(flow._pinned(low), slots, module.calls):
         low = phase.transform(low)

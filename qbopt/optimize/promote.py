@@ -265,7 +265,7 @@ def promoted(
                 exact = _instead(op, holds, found, fresh)
                 if exact is not None:
                     fresh += 1
-                    ops.append(replace(exact, node=None, id=None, covers=(op.at, op.at), extra_covers=(), symbol=False))
+                    ops.append(replace(exact, source_backed=False, id=None, covers=(op.at, op.at), extra_covers=(), symbol=False))
                 for addr, fact in initialized.items():
                     value = mir.Value(fresh, op.at, variable=holds[addr], version=1)
                     fresh += 1
@@ -281,7 +281,7 @@ def promoted(
                             merges={},
                             args=(mir.Const(fact.n, fact.width),),
                             results=(mir.Held(value, fact.width),),
-                            node=None,
+                            source_backed=False,
                             raised=None,
                             id=None,
                             covers=(op.at, op.at),
@@ -302,7 +302,7 @@ def promoted(
             changed = True
             if op.stores:
                 ops.append(op)
-                made = replace(made, node=None, id=None, covers=(op.at, op.at), symbol=False)
+                made = replace(made, source_backed=False, id=None, covers=(op.at, op.at), symbol=False)
             ops.append(made)
         blocks.append(replace(block, ops=tuple(ops)))
     if not changed:
@@ -343,7 +343,7 @@ def _separated(body: MirBody) -> MirBody:
                     loads=(),
                     defines=(),
                     uses=(result,),
-                    node=None,
+                    source_backed=False,
                     raised=None,
                     covers=(op.at, op.at),
                     extra_covers=(),

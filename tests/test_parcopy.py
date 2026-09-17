@@ -212,9 +212,17 @@ def test_nothing_leaves_the_machine_pipeline_still_grouped() -> None:
     # the pipeline this checks is never reached.
     found = module.of(omf.parse(Path("fixtures/omf/pressx-p-g2.obj").read_bytes()))
     blocks = split.partition(found, code_map(found))
-    name, body = next(iter(mir.bodies(found, blocks)))
+    raised = mir.bodies(found, blocks)
+    name, body = next(iter(raised))
     body = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
-    low = lower.lowered(name, body, found.calls, set(found.absorbed), runtime.for_module(found))
+    low = lower.lowered(
+        name,
+        body,
+        found.calls,
+        set(found.absorbed),
+        runtime.for_module(found),
+        nodes=raised.source.nodes,
+    )
     for phase in flow.machine(flow._pinned(body), frames.of(low), found.calls):
         low = phase.transform(low)
     left = [one.at for block in low.blocks for one in block.insns if one.group is not None]

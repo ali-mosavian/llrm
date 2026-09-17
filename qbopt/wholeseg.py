@@ -357,6 +357,7 @@ def _through_lir(
                     contracts,
                     source.coverage,
                     cpu,
+                    nodes=source.nodes,
                     pointer_model=pointer_model,
                     noreturn=body.entry in no_return,
                 ),

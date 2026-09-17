@@ -56,7 +56,7 @@ def _addressing(body: mir.MirBody) -> set[Value]:
     found: set[Value] = set()
     for block in body.blocks:
         for op in block.ops:
-            what = lower.current(op)
+            what = lower.current(op, node=getattr(op, "node", None))
             if what is None:
                 continue
             wanted = {where for where, need in target.reads(what).items() if need.fixed is None}
@@ -84,7 +84,7 @@ def required(body: mir.MirBody) -> dict[Value, Register_]:
     out: dict[Value, Register_] = {}
     for block in body.blocks:
         for op in block.ops:
-            what = lower.current(op)
+            what = lower.current(op, node=getattr(op, "node", None))
             if what is None:
                 continue
             for side, needs in ((op.uses, target.reads(what)), (op.defines, target.writes(what))):
@@ -213,7 +213,7 @@ def congruent(body: mir.MirBody) -> dict[Value, Value]:
         # which operations are one; x86 says it by naming the operand twice
         # and nothing else in the pipeline knew.
         for op in block.ops:
-            what = lower.current(op)
+            what = lower.current(op, node=getattr(op, "node", None))
             if what is None:
                 continue
             where = target.tied(what)
@@ -319,7 +319,7 @@ def untangled(body: mir.MirBody) -> mir.MirBody:
     reads: dict[int, dict] = {}
     for block in body.blocks:
         for op in block.ops:
-            what = lower.current(op)
+            what = lower.current(op, node=getattr(op, "node", None))
             if what is None or target.tied(what) is None:
                 continue
             for one in op.defines:
@@ -381,7 +381,7 @@ def _semantics_of_last(ops: tuple):
     if not ops:
         return None
     one = ops[-1]
-    return lower.current(one)
+    return lower.current(one, node=getattr(one, "node", None))
 
 
 def colour(body: mir.MirBody, pinned: dict[Value, Register_] | None = None) -> dict[Value, Register_] | str:

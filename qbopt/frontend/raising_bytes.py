@@ -39,7 +39,7 @@ def scalar(body: mir.MirBody) -> mir.MirBody:
         if len(inputs) != 1 or len(outputs) != 1:
             return op
         before, after = inputs[0], outputs[0]
-        return replace(
+        return mir.detached(
             op,
             kind=mir.Kind.AND,
             name="and",
@@ -48,7 +48,6 @@ def scalar(body: mir.MirBody) -> mir.MirBody:
             defines=(after,),
             uses=(before,),
             merges={before: after},
-            node=None,
             raised=None,
         )
 

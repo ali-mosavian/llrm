@@ -60,14 +60,15 @@ def test_qrender_sys_lowers_runtime_calls(procedure: str, at: int, cleanup: int 
         )
     }
     rules = runtime.for_module(found, external=external)
+    raised = mir.bodies(found, corpus.partitioned(path), rules)
     name, body = next(
         (name, body)
-        for name, body in mir.bodies(found, corpus.partitioned(path), rules)
+        for name, body in raised
         if name == f"procedure {procedure}"
     )
     block = next(block for block in body.blocks if any(op.at == at for op in block.ops))
     body = replace(body, entry=block.at, blocks=(block,))
-    lowered = lower.lowered(name, body, found.calls, found.absorbed, rules)
+    lowered = lower.lowered(name, body, found.calls, found.absorbed, rules, nodes=raised.source.nodes)
     assert any(one.at == at for one in lowered.insns)
     contract = rules[at]
     assert contract.cleanup == cleanup
@@ -140,7 +141,7 @@ def model_calls(request):
     path = Path(f"fixtures/regressions/qrender-{request.param}-v-g3.obj")
     found = corpus.loaded(path)
     rules = runtime.for_module(found)
-    return found, rules, list(mir.bodies(found, corpus.partitioned(path), rules))
+    return found, rules, mir.bodies(found, corpus.partitioned(path), rules)
 
 
 @pytest.mark.parametrize(
@@ -162,7 +163,9 @@ def test_model_file_calls_lower_without_replacement(model_calls, symbol):
                 if found.calls.get(op.at) != symbol:
                     continue
                 isolated = replace(body, entry=block.at, blocks=(replace(block, phis=(), ops=(op,), succ=()),))
-                result = lower.lowered(name, isolated, found.calls, found.absorbed, rules)
+                result = lower.lowered(
+                    name, isolated, found.calls, found.absorbed, rules, nodes=bodies.source.nodes
+                )
                 assert any(one.at == op.at and one.what.name == "call" for one in result.insns)
                 seen += 1
     assert seen > 0
@@ -187,13 +190,16 @@ def test_qbdemo_main_calls_lower(symbol):
     found = corpus.loaded(path)
     rules = runtime.for_module(found)
     seen = 0
-    for name, body in mir.bodies(found, corpus.partitioned(path), rules):
+    bodies = mir.bodies(found, corpus.partitioned(path), rules)
+    for name, body in bodies:
         for block in body.blocks:
             for op in block.ops:
                 if found.calls.get(op.at) != symbol:
                     continue
                 isolated = replace(body, entry=block.at, blocks=(replace(block, phis=(), ops=(op,), succ=()),))
-                result = lower.lowered(name, isolated, found.calls, found.absorbed, rules)
+                result = lower.lowered(
+                    name, isolated, found.calls, found.absorbed, rules, nodes=bodies.source.nodes
+                )
                 assert any(one.at == op.at and one.what.name == "call" for one in result.insns)
                 seen += 1
     assert seen

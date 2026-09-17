@@ -62,8 +62,8 @@ def named(body: mir.MirBody) -> mir.MirBody:
             args, results = tuple(map(arg, op.args)), tuple(map(arg, op.results))
             uses = tuple(dict.fromkeys([one.value for one in args if isinstance(one, mir.Held)]
                          + [value for ref in refs.values() for value in (ref.base, ref.segment) if value is not None]))
-            ops.append(replace(op, args=args, results=results, uses=uses,
+            ops.append(mir.detached(op, args=args, results=results, uses=uses,
                 loads=tuple(refs[ref] for ref in op.loads), stores=tuple(refs[ref] for ref in op.stores),
-                node=None, raised=None, symbol=bool(op.stores)))
+                raised=None, symbol=bool(op.stores)))
         blocks.append(replace(block, ops=tuple(ops)))
     return replace(body, blocks=tuple(blocks))

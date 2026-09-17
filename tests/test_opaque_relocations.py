@@ -17,7 +17,7 @@ def test_carried_float_compare_keeps_its_constant_relocation() -> None:
     body = next(body for _, body in bodies if body.entry == 0x38A)
     op = next(op for block in body.blocks for op in block.ops if op.at == 0x566)
     isolated = mir.MirBody(op.at, (mir.MirBlock(op.at, (), (op,), ()),), origin=body.origin)
-    lowered = lower.lowered("compare", isolated, {}, {}, {})
+    lowered = lower.lowered("compare", isolated, {}, {}, {}, nodes=bodies.source.nodes)
     carried = lowered.blocks[0].insns
     laid = asm.assemble(list(carried), 0, found, native_fpu=True)
     assert isinstance(laid, asm.Laid), laid

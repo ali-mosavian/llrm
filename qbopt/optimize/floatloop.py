@@ -106,7 +106,7 @@ def _store(beside, ref, value):
 
 def _jump(beside, destination):
     return replace(beside, kind=mir.Kind.JUMP, name="", args=(), results=(),
-                   uses=(), defines=(), loads=(), stores=(), merges={}, node=None,
+                   uses=(), defines=(), loads=(), stores=(), merges={}, source_backed=False,
                    raised=((), ()), target=destination, test=None)
 
 

@@ -141,7 +141,7 @@ def reused(body: mir.MirBody, dgroup: frozenset[int] = frozenset(), *, insert: b
             fresh += 1
             phis.append(mir.Phi(value, incoming))
             ops.append(replace(op, kind=mir.Kind.COPY, args=(mir.Held(value, result.width),),
-                               uses=(value,), loads=(), node=None, raised=None, symbol=False))
+                               uses=(value,), loads=(), source_backed=False, raised=None, symbol=False))
         blocks.append(replace(block, phis=tuple(phis), ops=tuple(ops)))
     for index, block in enumerate(blocks):
         ops = list(block.ops)

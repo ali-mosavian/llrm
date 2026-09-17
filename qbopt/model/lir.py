@@ -80,6 +80,9 @@ class Insn:
     # this instruction would strand bytes it cannot hand to a neighbour.
     spread: tuple = ()
     op: object = None
+    # Decoded source occurrence transferred at lowering. Machine provenance
+    # begins here; MIR operations carry only the SourceMap identity.
+    node: object = None
     # Which parallel copy this move belongs to, or None for an ordinary
     # one. A phi says several values arrive together on one edge, and the
     # moves it becomes are simultaneous: emitting them in the order they
@@ -143,7 +146,7 @@ class Insn:
         """
         idiom = (
             self.op is not None
-            and isinstance(getattr(self.op, "node", None), ir.Restore)
+            and isinstance(self.node, ir.Restore)
             and getattr(self.what, "op", None) is ir.Operation.RESTORE
         )
         return not idiom and self.covers is not None and self.covers[0] == self.covers[1]
@@ -152,10 +155,6 @@ class Insn:
     def source(self):
         """The MIR provenance this occurrence still represents, if any."""
         return None if self.inserted else self.op
-
-    @property
-    def node(self):
-        return getattr(self.source, "node", None)
 
     @property
     def id(self):
@@ -203,7 +202,7 @@ class Insn:
         """Whether optimization changed the source-level operation."""
         from qbopt.model import mir
 
-        return self.source is None or self.source.node is None or mir.rewritten(self.source)
+        return self.source is None or not self.source.source_backed or mir.rewritten(self.source)
 
 
 @dataclass(frozen=True, slots=True)

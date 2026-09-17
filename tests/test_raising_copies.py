@@ -1,6 +1,6 @@
 """Copy semantics retain BC's pointer results, ordering, and environment gates."""
 
-from dataclasses import replace
+from dataclasses import fields, replace
 from pathlib import Path
 
 import corpus
@@ -15,17 +15,23 @@ from qbopt.model import ir, mir
 def _instruction(raw):
     decoded = declen.decode(bytes(0x14b) + raw, 0x14b)
     node = ir.Opaque(decoded, ir.instruction_effects(decoded, lambda *_: None))
-    return mir.Op(decoded.at, ir.Operation.BARRIER, "", (), (), node=node,
-                  covers=(decoded.at, decoded.end), memory_complete=node.effects.memory_complete,
-                  loads=tuple(mir.MemRef(cell.addr, cell.width) for cell in node.effects.loads),
-                  stores=tuple(mir.MemRef(cell.addr, cell.width) for cell in node.effects.stores))
+    return mir._RaisedOp(decoded.at, ir.Operation.BARRIER, "", (), (), node=node,
+                         covers=(decoded.at, decoded.end), memory_complete=node.effects.memory_complete,
+                         loads=tuple(mir.MemRef(cell.addr, cell.width) for cell in node.effects.loads),
+                         stores=tuple(mir.MemRef(cell.addr, cell.width) for cell in node.effects.stores))
 
 
 def _copy(byte=0xfc):
     path = Path("fixtures/omf/fpdeep-p-g2.obj")
     found = corpus.loaded(path)
-    body = mir.bodies(found, corpus.partitioned(path))[0][1]
-    ops = tuple(op for block in body.blocks for op in block.ops if 0x14c <= op.at <= 0x157)
+    raised = mir.bodies(found, corpus.partitioned(path))
+    body = raised[0][1]
+
+    def with_node(op):
+        values = {field.name: getattr(op, field.name) for field in fields(mir.Op)}
+        return mir._RaisedOp(**values, node=raised.source.nodes.get(op.id))
+
+    ops = tuple(with_node(op) for block in body.blocks for op in block.ops if 0x14c <= op.at <= 0x157)
     if byte is not None:
         ops = (_instruction(bytes([byte])), *ops)
     return found, replace(body, initial=(), blocks=(mir.MirBlock(body.entry, (), ops, ()),))

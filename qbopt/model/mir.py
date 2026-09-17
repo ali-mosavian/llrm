@@ -53,15 +53,16 @@ addresses are its own -- `movsw` writes through es:di, which nothing here
 can disambiguate -- so avail.py drops every held cell at one, on the flag
 itself rather than on any register set.
 
-Nothing is optimised here and nothing is lowered. Every Op keeps the ir.Node
-it came from, so a lowering that applies no transform is that node's own
-bytes -- the same discipline that makes ir.emit() verbatim, and the same
-reason it can be trusted before anything is built on top of it.
+Nothing is optimised here and nothing is lowered. The raise returns decoded
+nodes in a side table keyed by operation identity, so a lowering that applies
+no transform can still carry their bytes verbatim without exposing a node to
+an optimization pass.
 """
 
 import itertools
 from enum import StrEnum
 from dataclasses import field
+from dataclasses import fields
 from dataclasses import replace
 from dataclasses import dataclass
 from collections.abc import Iterator
@@ -824,7 +825,10 @@ class Op:
     floating_origin: FloatingOrigin | None = field(default=None, kw_only=True)
     loads: tuple[MemRef, ...] = ()
     stores: tuple[MemRef, ...] = ()
-    node: ir.Node | None = None  # what it came from, so lowering can be verbatim
+    # Whether this occurrence has a decoded source node in the external
+    # SourceMap.  This says only that lowering may recover its original
+    # machine occurrence; the node itself never crosses the raise boundary.
+    source_backed: bool = False
     # Which of the original bytes this op stands for, when that is not just
     # its own node's span. A transform that replaces two instructions with
     # one leaves the second's bytes belonging to nothing, and layout.py
@@ -899,6 +903,11 @@ class Op:
     memory_complete: bool = False
     # Complete value reads do not imply movable or removable side effects.
     reads_complete: bool = False
+    # Effects on resources MIR deliberately does not model as values. Names,
+    # not registers: passes may preserve ordering without learning machine
+    # locations. None means every such resource.
+    opaque_defs: frozenset[str] | None = frozenset()
+    opaque_uses: frozenset[str] | None = frozenset()
     # Whether CALL takes its destination from a value rather than a named
     # procedure.  This is control-flow meaning established by the frontend,
     # not an encoding choice: lowering decides how that value is addressed.
@@ -912,8 +921,26 @@ class Op:
     def inserted(self) -> bool:
         """An explicit zero-byte occurrence, even if its operands retain source identity."""
         return (
-            self.node is None and not self.extra_covers and self.covers is not None and self.covers[0] == self.covers[1]
+            not self.source_backed
+            and not self.extra_covers
+            and self.covers is not None
+            and self.covers[0] == self.covers[1]
         )
+
+
+@dataclass(frozen=True, slots=True)
+class _RaisedOp(Op):
+    """An operation inside the raise, before machine provenance is externalized."""
+
+    node: ir.Node | None = None
+
+
+def detached(operation: Op, **changes) -> Op:
+    """A rewritten raising operation that no longer carries its decoded node."""
+    changes["source_backed"] = False
+    if isinstance(operation, _RaisedOp):
+        changes["node"] = None
+    return replace(operation, **changes)
 
 
 @dataclass(frozen=True, slots=True)
@@ -998,6 +1025,43 @@ class RaisedBodies:
 
     def __getitem__(self, index: int | slice) -> tuple[str, MirBody] | tuple[tuple[str, MirBody], ...]:
         return self.values[index]
+
+
+def _opaque_effects(node: ir.Node | None) -> tuple[frozenset[str] | None, frozenset[str] | None]:
+    """Effects on resources not represented by SSA values, without register identities."""
+
+    def outside(registers) -> frozenset[str] | None:
+        if registers is None:
+            return None
+        return frozenset(f"resource-{one}" for one in registers if one not in TRACKED)
+
+    if node is None:
+        return frozenset(), frozenset()
+    return outside(node.effects.defs), outside(node.effects.uses)
+
+
+def _externalized(body: MirBody, source: module.SourceMap) -> MirBody:
+    """Move every decoded node out of a completed raise and into ``source``."""
+
+    names = tuple(one.name for one in fields(Op))
+
+    def operation(op: Op) -> Op:
+        node = getattr(op, "node", None)
+        if node is not None and op.id is not None:
+            source.nodes[op.id] = node
+        opaque_defs, opaque_uses = _opaque_effects(node)
+        values = {name: getattr(op, name) for name in names}
+        values.update(
+            source_backed=node is not None,
+            opaque_defs=opaque_defs,
+            opaque_uses=opaque_uses,
+        )
+        return Op(**values)
+
+    return replace(
+        body,
+        blocks=tuple(replace(block, ops=tuple(operation(op) for op in block.ops)) for block in body.blocks),
+    )
 
 
 class Unraisable(Exception):
@@ -1455,7 +1519,7 @@ def _handing_back(at: int, node: "ir.Node", now: "Value", was: "Value", answer: 
     The bit range is explicit, so optimization sees a value extraction.
     Lowering chooses the instructions; the old node retains provenance only.
     """
-    return Op(
+    return _RaisedOp(
         at,
         Synth.HALF_TO_LOW,
         "restore",
@@ -1463,7 +1527,7 @@ def _handing_back(at: int, node: "ir.Node", now: "Value", was: "Value", answer: 
         (was, answer),
         (),
         (),
-        ir.Restore(at=at, end=at, pair=0, effects=ir.RESTORE_EFFECTS[0]),
+        node=ir.Restore(at=at, end=at, pair=0, effects=ir.RESTORE_EFFECTS[0]),
         kind=Kind.EXTRACT,
         args=(Held(answer, 4), Const(16, 4)),
         results=(Held(now, 2),),
@@ -1701,7 +1765,7 @@ def raise_body(
             # where the remainder's belongs.
             kept = tuple(one for one in made if handed is None or one is not handed[0])
             ops[at].append(
-                Op(
+                _RaisedOp(
                     where_at,
                     Synth.HALF_TO_LOW if isinstance(node, ir.Restore) else node.semantics.op,
                     node.semantics.name or "",
@@ -1709,7 +1773,7 @@ def raise_body(
                     used,
                     loads,
                     stores,
-                    node,
+                    node=node,
                     kind=kind,
                     merges=_merged(node.semantics, holds, written, where[0]),
                     covers=covers,
@@ -1756,30 +1820,9 @@ def raise_body(
     )
 
 
-def _touched_op(op: Op, calls: dict[int, str] | None = None) -> tuple[frozenset[Register_], frozenset[Register_]]:
-    """The source instruction's conservative register effects.
-
-    Rewritten MIR carries value dataflow directly. Machine semantics are not
-    available here; lowering is the first phase allowed to choose them.
-    """
-    defines: set[Register_] = set()
-    uses: set[Register_] = set()
-    if op.node is not None:
-        was, read = _touched(op.node, calls)
-        defines, uses = set(was), set(read)
-
-    return frozenset(defines), frozenset(uses)
-
-
 def unheld(op: Op) -> tuple[frozenset | None, frozenset | None]:
-    """(written, read) of the machine state no value holds -- stack, frame, segments. None is all of it."""
-    if op.node is None:
-        return frozenset(), frozenset()
-
-    def outside(registers):
-        return None if registers is None else frozenset(one for one in registers if one not in TRACKED)
-
-    return outside(op.node.effects.defs), outside(op.node.effects.uses)
+    """(written, read) of opaque resources; None means every resource."""
+    return op.opaque_defs, op.opaque_uses
 
 
 def _rebased(refs: tuple[MemRef, ...], namer: "_Namer", at: int) -> tuple[MemRef, ...]:
@@ -2064,13 +2107,14 @@ def verify(body: MirBody) -> list[str]:
     return problems
 
 
-def lower(body: MirBody) -> tuple[ir.Node, ...]:
+def lower(body: MirBody, nodes: dict[int, object] | None = None) -> tuple[ir.Node, ...]:
     """The nodes this body is made of, in address order.
 
     With nothing transformed this is exactly what was raised, so emitting it
-    gives back the bytes it came from. That is the whole point of keeping an
-    origin on every Op: the identity case is checkable before any transform
-    exists, which is the only moment the machinery can be trusted for free.
+    gives back the bytes it came from. That is the whole point of keeping the
+    decoded occurrences in the raise's external source map: the identity case
+    is checkable before any transform exists, which is the only moment the
+    machinery can be trusted for free.
     Once something does change a body, this is where a real instruction
     selector goes, and this round trip is what it will be measured against.
 
@@ -2080,12 +2124,19 @@ def lower(body: MirBody) -> tuple[ir.Node, ...]:
     actually split those definitions into different registers has to put
     anything back, and nothing here does yet.
     """
-    return tuple(op.node for block in body.blocks for op in block.ops if op.node is not None)
+    source = nodes or {}
+    return tuple(
+        node
+        for block in body.blocks
+        for op in block.ops
+        if (node := source.get(op.id) if op.source_backed and op.id is not None else getattr(op, "node", None))
+        is not None
+    )
 
 
-def relowered(found: Module, body: MirBody) -> bytes:
+def relowered(found: Module, body: MirBody, nodes: dict[int, object] | None = None) -> bytes:
     """This body's own bytes, rebuilt from the graph."""
-    return ir.emit(found, lower(body))
+    return ir.emit(found, lower(body, nodes))
 
 
 def same_bytes(one: MemRef, other: MemRef) -> bool:
@@ -2497,6 +2548,7 @@ def bodies(
 
             built = raising_dispatch.raised(built, found, mine)
             source.refs.update(_referenced(built, found))
+            built = _externalized(built, source)
             built = _frame_bounded(built)
             folded, absorbed, refs, coverage = _folded(built, found, blocks)
             source.absorbed.update(absorbed)
@@ -2683,12 +2735,9 @@ def rewritable(op: "Op") -> bool:
         return op.kind in (Kind.LOAD, Kind.STORE)
     if op.floating_origin is not None:
         return op.kind is not Kind.NOTHING
-    from qbopt.backend import lower
-
-    if isinstance(op.node, ir.Restore):
+    if op.op is Synth.HALF_TO_LOW and op.name == "restore":
         return False
-    what = lower.current(op)
-    return what is not None and what.op is not ir.Operation.BARRIER
+    return not op.barrier and op.kind not in (Kind.NOTHING, Kind.OPAQUE)
 
 
 def _flags_after(blocks: list[Block], live: dict, lo: int, hi: int):
@@ -2725,11 +2774,12 @@ def _referenced(body: MirBody, found: Module) -> dict[int, int]:
         return {}
 
     def owned(op: Op) -> int | None:
-        if op.node is None or isinstance(op.node, ir.Restore):
+        node = getattr(op, "node", None)
+        if node is None or isinstance(node, ir.Restore):
             return None
         if found.code[op.at : op.at + 1] in (b"\x9a", b"\xea") and op.at + 1 in known:
             return op.at + 1
-        lo, hi = ir.span(op.node)
+        lo, hi = ir.span(node)
         inside = [one for one in known if lo <= one < hi]
         return inside[0] if len(inside) == 1 else None
 

@@ -45,8 +45,9 @@ def test_string_copy_keeps_its_implicit_address_registers() -> None:
 
     found = module.of(omf.parse(Path("fixtures/omf/fpdeep-p-g2.obj").read_bytes()))
     contracts = runtime.for_module(found)
-    name, body = mir.bodies(found, split.partition(found, code_map(found)), contracts)[0]
-    lowered = lower.lowered(name, body, found.calls, found.absorbed, contracts)
+    raised = mir.bodies(found, split.partition(found, code_map(found)), contracts)
+    name, body = raised[0]
+    lowered = lower.lowered(name, body, found.calls, found.absorbed, contracts, nodes=raised.source.nodes)
     copies = [
         one
         for block in lowered.blocks
@@ -68,8 +69,9 @@ def test_an_opaque_address_keeps_the_registers_it_is_written_in() -> None:
 
     found = module.of(omf.parse(rewrite(Path("fixtures/omf/hotlpx-p-g2.obj").read_bytes(), dry_run=False)[0]))
     contracts = runtime.for_module(found)
-    name, body = mir.bodies(found, split.partition(found, code_map(found)), contracts)[0]
-    lowered = lower.lowered(name, body, found.calls, found.absorbed, contracts)
+    raised = mir.bodies(found, split.partition(found, code_map(found)), contracts)
+    name, body = raised[0]
+    lowered = lower.lowered(name, body, found.calls, found.absorbed, contracts, nodes=raised.source.nodes)
     (lea,) = [
         one
         for block in lowered.blocks
@@ -86,10 +88,9 @@ def test_a_procedure_hands_back_dx_ax() -> None:
 
     found = module.of(omf.parse(Path("fixtures/omf/procs-p-ot.obj").read_bytes()))
     contracts = runtime.for_module(found)
-    name, body = next(
-        one for one in mir.bodies(found, split.partition(found, code_map(found)), contracts) if "TWICE" in one[0]
-    )
-    lowered = lower.lowered(name, body, found.calls, found.absorbed, contracts)
+    raised = mir.bodies(found, split.partition(found, code_map(found)), contracts)
+    name, body = next(one for one in raised if "TWICE" in one[0])
+    lowered = lower.lowered(name, body, found.calls, found.absorbed, contracts, nodes=raised.source.nodes)
     (ret,) = [
         one
         for block in lowered.blocks
@@ -99,10 +100,10 @@ def test_a_procedure_hands_back_dx_ax() -> None:
     assert {register for _, register in ret.requires} == {Register.AX, Register.DX}
 
 
-def _semantics(op: mir.Op) -> ir.Semantics | None:
+def _semantics(op: mir.Op, nodes: dict[int, object]) -> ir.Semantics | None:
     from qbopt.backend import lower
 
-    return lower.current(op)
+    return lower.current(op, node=nodes.get(op.id))
 
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
@@ -123,11 +124,12 @@ def test_bcs_own_assignment_satisfies_every_requirement(obj: Path) -> None:
     if isinstance(mapped, str):
         return
 
-    for name, body in mir.bodies(found, split.partition(found, mapped)):
+    raised = mir.bodies(found, split.partition(found, mapped))
+    for name, body in raised:
         for block in body.blocks:
             written: set = set()
             for op in block.ops:
-                what = _semantics(op)
+                what = _semantics(op, raised.source.nodes)
                 # `cwd` before `idiv` is raised as a sign extension the
                 # divide no longer names; dx still holds what BC put there.
                 held = {ir.ROOT.get(body.origin.get(one, -1), -1) for one in op.uses} | written
@@ -225,17 +227,18 @@ def _one_body(stem: str):
 
     found = module.of(omf.parse((Path("fixtures/omf") / f"{stem}.obj").read_bytes()))
     blocks = split.partition(found, code_map(found))
-    name, body = next(iter(mir.bodies(found, blocks)))
-    return lower, name, body, found
+    raised = mir.bodies(found, blocks)
+    name, body = next(iter(raised))
+    return lower, name, body, found, raised.source.nodes
 
 
 def test_lowering_is_one_instruction_per_operation_unless_something_expands() -> None:
     """The default, and it has to stay exactly what it was: every operation
     is one instruction, carrying its own address, span and operation."""
-    lower, name, body, found = _one_body("hotlop-p-g2")
+    lower, name, body, found, nodes = _one_body("hotlop-p-g2")
     from qbopt.abi import runtime
 
-    low = lower.lowered(name, body, found.calls, None, runtime.for_module(found))
+    low = lower.lowered(name, body, found.calls, None, runtime.for_module(found), nodes=nodes)
     ops = [op for block in body.blocks for op in block.ops]
     insns = [one for block in low.blocks for one in block.insns]
     assert len(insns) == len(ops)
@@ -254,7 +257,7 @@ def test_an_expansion_gives_its_leader_the_operation_and_its_followers_none(monk
     from the load -- and the effect the operation had belongs to the run,
     not to any one instruction in it.
     """
-    lower, name, body, found = _one_body("hotlop-p-g2")
+    lower, name, body, found, nodes = _one_body("hotlop-p-g2")
     kind = next(op.kind for block in body.blocks for op in block.ops if op.kind is mir.Kind.ADD)
 
     def two(op, making):
@@ -268,7 +271,7 @@ def test_an_expansion_gives_its_leader_the_operation_and_its_followers_none(monk
     monkeypatch.setitem(lower._EXPANDS, kind, two)
     from qbopt.abi import runtime
 
-    low = lower.lowered(name, body, found.calls, None, runtime.for_module(found))
+    low = lower.lowered(name, body, found.calls, None, runtime.for_module(found), nodes=nodes)
     runs = []
     for block in low.blocks:
         for index, one in enumerate(block.insns):
@@ -291,7 +294,7 @@ def test_an_expansion_gives_its_leader_the_operation_and_its_followers_none(monk
 
 def test_an_expansion_invents_values_nothing_else_uses(monkeypatch) -> None:
     """A fresh id per call, and none of them one the body already had."""
-    lower, name, body, found = _one_body("hotlop-p-g2")
+    lower, name, body, found, _nodes = _one_body("hotlop-p-g2")
     had = {one.id for block in body.blocks for op in block.ops for one in (*op.defines, *op.uses)}
     made = lower.Lowering(body, set(), {}, ())
     got = [made.fresh() for _ in range(8)]
@@ -320,11 +323,19 @@ def test_an_allocatable_value_stays_a_value_through_lowering() -> None:
     # harr: pressx no longer loads a constant and then a cell in a row.
     found = module.of(omf.parse(Path("fixtures/omf/harr-v-g3.obj").read_bytes()))
     blocks = split.partition(found, code_map(found))
-    name, body = next(iter(mir.bodies(found, blocks)))
+    raised = mir.bodies(found, blocks)
+    name, body = next(iter(raised))
     body = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
     from qbopt.abi import runtime
 
-    low = lower.lowered(name, body, found.calls, set(found.absorbed), runtime.for_module(found))
+    low = lower.lowered(
+        name,
+        body,
+        found.calls,
+        set(found.absorbed),
+        runtime.for_module(found),
+        nodes=raised.source.nodes,
+    )
 
     # By what they compute, not by where they sit: an inserted instruction
     # carries its neighbour's address, so an address names a crowd.
@@ -369,7 +380,8 @@ def test_an_increment_is_its_own_operation(stem: str, at: int, kind: str, want: 
 
     found = module.of(omf.parse((Path("fixtures/omf") / f"{stem}.obj").read_bytes()))
     blocks = split.partition(found, code_map(found))
-    for _name, body in mir.bodies(found, blocks):
+    raised = mir.bodies(found, blocks)
+    for _name, body in raised:
         body = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
         for block in body.blocks:
             for op in block.ops:
@@ -377,7 +389,7 @@ def test_an_increment_is_its_own_operation(stem: str, at: int, kind: str, want: 
                     continue
                 assert op.kind is getattr(mir.Kind, kind), f"raised as {op.kind}"
                 assert len(op.args) == 1, f"the implicit operand was written out: {op.args}"
-                what = lower.current(op, lower.as_a_value)
+                what = lower.current(op, lower.as_a_value, node=raised.source.nodes.get(op.id))
                 assert what.op is ir.Operation.UNARY and what.name == want
                 assert len(what.sources) == 1 and isinstance(what.sources[0], ir.Held)
                 assert isinstance(what.dests[0], ir.Held)
@@ -413,11 +425,19 @@ def test_a_stores_address_is_the_value_that_computed_it() -> None:
     found = module.of(omf.parse(Path("fixtures/omf/addrm-p-g2.obj").read_bytes()))
     blocks = split.partition(found, code_map(found))
     seen = 0
-    for name, body in mir.bodies(found, blocks):
+    raised = mir.bodies(found, blocks)
+    for name, body in raised:
         body = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
         from qbopt.abi import runtime
 
-        low = lower.lowered(name, body, found.calls, set(found.absorbed), runtime.for_module(found))
+        low = lower.lowered(
+            name,
+            body,
+            found.calls,
+            set(found.absorbed),
+            runtime.for_module(found),
+            nodes=raised.source.nodes,
+        )
         for block in low.blocks:
             for one in block.insns:
                 what = one.what
@@ -474,7 +494,6 @@ def test_a_lowered_cell_names_the_value_that_computed_its_address() -> None:
         uses=(base,),
         loads=(),
         stores=(ref,),
-        node=None,
         kind=mir.Kind.STORE,
         args=(mir.Const(7, 2),),
         results=(mir.Cell(ref),),
@@ -611,7 +630,6 @@ def test_a_store_reads_the_value_its_cell_is_reached_by_and_writes_none() -> Non
         uses=(base,),
         loads=(),
         stores=(ref,),
-        node=None,
         kind=mir.Kind.STORE,
         args=(mir.Const(7, 2),),
         results=(mir.Cell(ref),),
@@ -629,7 +647,6 @@ def test_a_store_reads_the_value_its_cell_is_reached_by_and_writes_none() -> Non
         uses=(base,),
         loads=(),
         stores=(),
-        node=None,
         kind=mir.Kind.COPY,
         args=(mir.Const(4, 2),),
         results=(mir.Held(made, 2),),
@@ -714,11 +731,19 @@ def test_a_call_still_defines_the_results_its_operands_do_not_name() -> None:
     blocks = split.partition(found, code_map(found))
     absorbed = set(found.absorbed)
     seen = []
-    for name, body in mir.bodies(found, blocks):
+    raised = mir.bodies(found, blocks)
+    for name, body in raised:
         body = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
         from qbopt.abi import runtime
 
-        low = lower.lowered(name, body, found.calls, absorbed, runtime.for_module(found))
+        low = lower.lowered(
+            name,
+            body,
+            found.calls,
+            absorbed,
+            runtime.for_module(found),
+            nodes=raised.source.nodes,
+        )
         # A result nothing reads is deliberately not recorded -- a Held the
         # allocator never hears of. The ones read are the question.
         read = {value for block in low.blocks for one in block.insns for value in one.uses}
@@ -763,7 +788,6 @@ def test_a_call_to_an_unestablished_routine_is_refused() -> None:
         uses=(first, second),
         loads=(),
         stores=(),
-        node=None,
         kind=mir.Kind.CALL,
         args=(),
         results=(),
@@ -807,7 +831,6 @@ def test_a_call_argument_is_required_where_the_contract_reads_it() -> None:
         uses=(low_half, high_half),
         loads=(),
         stores=(),
-        node=None,
         kind=mir.Kind.CALL,
         args=(mir.Held(low_half, 2), mir.Held(high_half, 2)),
         results=(),
@@ -846,7 +869,6 @@ def test_a_declared_contract_its_arguments_do_not_answer_is_refused() -> None:
         uses=(only,),
         loads=(),
         stores=(),
-        node=None,
         kind=mir.Kind.CALL,
         args=(mir.Held(only, 2),),  # one, where the contract declares two
         results=(),
@@ -883,7 +905,6 @@ def test_lowering_a_call_the_caller_chose_no_contract_for_is_refused() -> None:
         uses=(only,),
         loads=(),
         stores=(),
-        node=None,
         kind=mir.Kind.CALL,
         args=(),
         results=(),
@@ -921,7 +942,6 @@ def test_a_call_marked_interface_unknown_is_refused_on_that_alone() -> None:
         uses=(only,),
         loads=(),
         stores=(),
-        node=None,
         kind=mir.Kind.CALL,
         args=(),
         results=(),
@@ -965,7 +985,6 @@ def test_a_phi_chain_nothing_reads_does_not_reach_lir() -> None:
             uses=(),
             loads=(),
             stores=(),
-            node=None,
             kind=mir.Kind.COPY,
             args=(mir.Const(step, 2),),
             results=(mir.Held(one, 2),),
@@ -982,7 +1001,6 @@ def test_a_phi_chain_nothing_reads_does_not_reach_lir() -> None:
         uses=(kept,),
         loads=(),
         stores=(),
-        node=None,
         kind=mir.Kind.COPY,
         args=(mir.Held(kept, 2),),
         results=(mir.Held(mir.Value(9, 0x20, 0, 3, 1), 2),),

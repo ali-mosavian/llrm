@@ -39,9 +39,9 @@ def raised(body, found, contracts, source: module.SourceMap | None = None):
             serial += 1
             variable += 1
             result = mir.Held(mir.Value(serial, op.at, variable=variable, version=1), width)
-            converted = replace(op, kind=mir.Kind.FSTORE, op=ir.Operation.FLOAT_STORE, name="fistp",
+            converted = mir.detached(op, kind=mir.Kind.FSTORE, op=ir.Operation.FLOAT_STORE, name="fistp",
                 args=(mir.Opaque(ir.St(0), "st0"),), results=(result,), defines=(result.value,),
-                uses=(), loads=(), stores=(), merges={}, node=None, raised=None,
+                uses=(), loads=(), stores=(), merges={}, raised=None,
                 stack=-1, symbol=False)
             ops.append(converted)
             source.float_protocols[op.id] = 0x34

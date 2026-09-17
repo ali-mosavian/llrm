@@ -1,5 +1,6 @@
 """Address-space identities survive optimization without selecting registers in MIR passes."""
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -40,8 +41,8 @@ def test_a_clobber_ends_the_raised_selector_dependency():
                       kind=mir.Kind.LOAD, args=(mir.Cell(descriptor),), results=(mir.Opaque(None, "es"),))
     def store(at):
         node = SimpleNamespace(effects=SimpleNamespace(uses=frozenset({Register.ES}), defs=frozenset()))
-        return mir.Op(at, ir.Operation.MOVE, "mov", (), (), stores=(element,), node=node,
-                      kind=mir.Kind.STORE, results=(mir.Cell(element),))
+        return mir._RaisedOp(at, ir.Operation.MOVE, "mov", (), (), stores=(element,), node=node,
+                             kind=mir.Kind.STORE, results=(mir.Cell(element),))
     clobber = mir.Op(2, ir.Operation.CALL, "call", (), (), kind=mir.Kind.CALL)
     body = mir.MirBody(0, (mir.MirBlock(0, (), (selector, store(1), clobber, store(3)), ()),), {})
     raised = raising_addresses.loaded(body).blocks[0].ops
@@ -69,21 +70,35 @@ def test_long_extraction_preserves_the_far_store_selector():
     extract = mir.Op(2, mir.Synth.HALF_TO_LOW, "extract", (low,), (whole,),
                      kind=mir.Kind.EXTRACT, args=(mir.Held(whole, 4), mir.Const(0, 1)),
                      results=(mir.Held(low, 2),))
-    store = mir.Op(3, ir.Operation.MOVE, "mov", (), (whole,), stores=(element,),
-                   kind=mir.Kind.STORE, args=(mir.Held(whole, 4),), results=(mir.Cell(element),),
-                   node=SimpleNamespace(
-                       semantics=ir.Semantics(
-                           ir.Operation.MOVE,
-                           "mov",
-                           (ir.Mem(element.addr, 4, Register.BX),),
-                           (ir.Reg(Register.EAX, 4),),
-                       )
-                   ))
+    store = mir._RaisedOp(
+        3,
+        ir.Operation.MOVE,
+        "mov",
+        (),
+        (whole,),
+        stores=(element,),
+        kind=mir.Kind.STORE,
+        args=(mir.Held(whole, 4),),
+        results=(mir.Cell(element),),
+        id=3,
+        node=SimpleNamespace(
+            semantics=ir.Semantics(
+                ir.Operation.MOVE,
+                "mov",
+                (ir.Mem(element.addr, 4, Register.BX),),
+                (ir.Reg(Register.EAX, 4),),
+            )
+        ),
+    )
     body = mir.MirBody(0, (mir.MirBlock(0, (), (selector, extract, store), ()),), {})
     raised = raising_addresses.loaded(body)
     first, _, last = raised.blocks[0].ops
+    last = replace(last, source_backed=True)
+    raised = replace(raised, blocks=(replace(raised.blocks[0], ops=(first, raised.blocks[0].ops[1], last)),))
     segment, = first.defines
-    write, = lower.Lowering(raised, {whole.id, low.id, segment.id}, {}, (), {}).expand(last)
+    write, = lower.Lowering(
+        raised, {whole.id, low.id, segment.id}, {}, (), {}, nodes={last.id: last.node}
+    ).expand(last)
     # The cell carries its selector; the allocator seats it in a segment register.
     assert write.what.dests[0].selector == ir.Held(segment.id, 2)
     assert segment.id in write.uses

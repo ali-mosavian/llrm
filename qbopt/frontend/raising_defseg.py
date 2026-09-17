@@ -44,14 +44,13 @@ def _self_xor(op) -> bool:
 
 
 def _zeroed(op):
-    return replace(
+    return mir.detached(
         op,
         kind=mir.Kind.COPY,
         op=ir.Operation.MOVE,
         name="mov",
         args=(mir.Const(0, op.args[0].width),),
         uses=(),
-        node=None,
         symbol=False,
         covers=op.covers or (op.at, op.at),
     )
@@ -184,13 +183,15 @@ def raised(body: mir.MirBody, found, contracts, source: module.SourceMap | None 
                 # node cleared nothing derives a length, and layout refuses a
                 # body it cannot account for every byte of -- rightly, since
                 # that is how it catches data BC put between instructions.
-                span = ir.span(op.node) if op.node is not None else None
-                pushed_span = ir.span(gone.node) if gone.node is not None else None
+                node = getattr(op, "node", None)
+                gone_node = getattr(gone, "node", None)
+                span = ir.span(node) if node is not None else None
+                pushed_span = ir.span(gone_node) if gone_node is not None else None
                 if span is None or pushed_span is None:
                     ops.append(gone)
                     ops.append(op)
                     continue
-                op = replace(
+                op = mir.detached(
                     op,
                     kind=mir.Kind.STORE,
                     op=ir.Operation.MOVE,
@@ -202,7 +203,6 @@ def raised(body: mir.MirBody, found, contracts, source: module.SourceMap | None 
                     loads=(),
                     stores=(ref,),
                     merges={},
-                    node=None,
                     raised=None,
                     symbol=True,
                     covers=(pushed_span[0], span[1]),

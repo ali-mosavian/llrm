@@ -11,6 +11,7 @@ def test_restore_declares_its_input_and_high_result() -> None:
     from iced_x86 import Register
 
     source, high = mir.Value(1, 0), mir.Value(2, 0)
+    node = ir.Restore(at=0, end=4, pair=0, effects=ir.RESTORE_EFFECTS[0])
     op = mir.Op(
         0,
         ir.Operation.BARRIER,
@@ -18,10 +19,11 @@ def test_restore_declares_its_input_and_high_result() -> None:
         (high,),
         (source,),
         kind=mir.Kind.OPAQUE,
-        node=ir.Restore(at=0, end=4, pair=0, effects=ir.RESTORE_EFFECTS[0]),
+        source_backed=True,
+        id=1,
     )
     body = mir.MirBody(0, (mir.MirBlock(0, (), (op,), ()),), {source: Register.EAX, high: Register.EDX})
-    lowering = lower.Lowering(body, {source.id, high.id}, {}, ())
+    lowering = lower.Lowering(body, {source.id, high.id}, {}, (), nodes={op.id: node})
     assert lowering._abi(op) == ((ir.Held(source.id, 4), Register.EAX),)
     assert lowering._idiom(op) == ((ir.Held(high.id, 2), Register.DX),)
 

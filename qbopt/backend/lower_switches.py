@@ -60,9 +60,7 @@ def expanded(body: mir.MirBody) -> mir.MirBody:
             if isinstance(selector, mir.Const):
                 mask = (1 << (8 * selector.width)) - 1
                 target = next((target for number, target in op.cases if number & mask == selector.n & mask), target)
-            jump = replace(
-                op, kind=mir.Kind.JUMP, target=target, args=(), uses=(), cases=(), name="", raised=None
-            )
+            jump = replace(op, kind=mir.Kind.JUMP, target=target, args=(), uses=(), cases=(), name="", raised=None)
             replacements[block.at] = [replace(block, ops=(*block.ops[:-1], jump), succ=(target,))]
             for successor in block.succ:
                 incoming[(successor, block.at)] = [block.at] if successor == target else []
@@ -100,7 +98,13 @@ def expanded(body: mir.MirBody) -> mir.MirBody:
                 symbol=False,
             )
             if index == 0:
-                compare = replace(compare, covers=op.covers, extra_covers=op.extra_covers, node=op.node)
+                compare = replace(
+                    compare,
+                    covers=op.covers,
+                    extra_covers=op.extra_covers,
+                    id=op.id,
+                    source_backed=op.source_backed,
+                )
             rebuilt.append(
                 mir.MirBlock(
                     at,

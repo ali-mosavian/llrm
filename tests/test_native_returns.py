@@ -15,10 +15,9 @@ def test_c_false_return_reaches_ax() -> None:
     assert module is not None
     mapped = blocks.code_map(module)
     assert not isinstance(mapped, str)
-    name, body = next(
-        (name, body) for name, body in mir.bodies(module, list(blocks.partition(module, mapped))) if body.entry == 0
-    )
-    low = lower.lowered(name, body, module.calls, None, {})
+    raised = mir.bodies(module, list(blocks.partition(module, mapped)))
+    name, body = next((name, body) for name, body in raised if body.entry == 0)
+    low = lower.lowered(name, body, module.calls, None, {}, nodes=raised.source.nodes)
     producer = next(one for one in low.insns if one.at == 0x2CE)
     consumer = next(one for one in low.insns if one.at == 0x2D6)
     returned = [(held, register) for held, register in consumer.requires if register == Register.AX]
@@ -33,10 +32,9 @@ def test_native_far_return_keeps_cleanup_and_both_result_words() -> None:
     assert module is not None
     mapped = blocks.code_map(module)
     assert not isinstance(mapped, str)
-    name, body = next(
-        (name, body) for name, body in mir.bodies(module, list(blocks.partition(module, mapped))) if body.entry == 0x6CB
-    )
-    low = lower.lowered(name, body, module.calls, None, {})
+    raised = mir.bodies(module, list(blocks.partition(module, mapped)))
+    name, body = next((name, body) for name, body in raised if body.entry == 0x6CB)
+    low = lower.lowered(name, body, module.calls, None, {}, nodes=raised.source.nodes)
     consumer = next(one for one in low.insns if one.at == 0x6E0)
     assert consumer.what.name == "retf"
     assert consumer.what.sources == (ir.Imm(4, 2),)
@@ -49,10 +47,9 @@ def test_native_leaf_preserves_unused_callee_saved_values() -> None:
     assert module is not None
     mapped = blocks.code_map(module)
     assert not isinstance(mapped, str)
-    name, body = next(
-        (name, body) for name, body in mir.bodies(module, list(blocks.partition(module, mapped))) if body.entry == 0x6CB
-    )
-    low = lower.lowered(name, body, module.calls, None, {})
+    raised = mir.bodies(module, list(blocks.partition(module, mapped)))
+    name, body = next((name, body) for name, body in raised if body.entry == 0x6CB)
+    low = lower.lowered(name, body, module.calls, None, {}, nodes=raised.source.nodes)
     consumer = next(one for one in low.insns if one.at == 0x6E0)
     defined = {value for one in low.insns for value in one.defines}
     preserved = {register: held for held, register in consumer.requires if register in (Register.SI, Register.DI)}

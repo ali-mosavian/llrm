@@ -316,8 +316,16 @@ def test_a_join_that_would_make_a_class_uncolourable_is_refused() -> None:
 
     found = module.of(omf.parse(Path("fixtures/omf/divmod-p-g2.obj").read_bytes()))
     blocks = split.partition(found, code_map(found))
-    name, body = mir.bodies(found, blocks)[0]
-    low = lower.lowered(name, body, found.calls, set(found.absorbed), runtime.for_module(found))
+    raised = mir.bodies(found, blocks)
+    name, body = raised[0]
+    low = lower.lowered(
+        name,
+        body,
+        found.calls,
+        set(found.absorbed),
+        runtime.for_module(found),
+        nodes=raised.source.nodes,
+    )
     pinned = flow._pinned(body)
     for phase in flow.machine(pinned, None, found.calls):
         low = phase.transform(low)

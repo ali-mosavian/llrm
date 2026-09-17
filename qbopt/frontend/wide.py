@@ -296,7 +296,7 @@ def widened(pair: Pair) -> ir.Semantics | None:
     or a location this cannot double is not one operand of a 32-bit
     operation, whatever the carry edge suggests.
     """
-    what = getattr(pair.low.node, "semantics", None)
+    what = getattr(getattr(pair.low, "node", None), "semantics", None)
     if what is None or what.op is ir.Operation.BARRIER:
         return None
     dests = [_wider(one) for one in what.dests]

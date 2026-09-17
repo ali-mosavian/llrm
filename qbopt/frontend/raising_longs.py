@@ -33,9 +33,9 @@ def sign_fills(body: mir.MirBody) -> mir.MirBody:
             ops.append(mir.Op(op.at, ir.Operation.EXTEND, "sign_extend", (whole.value,),
                               (op.args[0].value,), kind=mir.Kind.SIGN_EXTEND,
                               args=op.args, results=(whole,), covers=(op.at, op.at)))
-            ops.append(replace(op, kind=mir.Kind.EXTRACT, op=mir.Synth.HALF_TO_LOW,
+            ops.append(mir.detached(op, kind=mir.Kind.EXTRACT, op=mir.Synth.HALF_TO_LOW,
                                name="extract", args=(whole, mir.Const(16, 4)),
-                               uses=(whole.value,), merges={}, node=None, raised=None))
+                               uses=(whole.value,), merges={}, raised=None))
         blocks.append(replace(block, ops=tuple(ops)))
     return replace(body, blocks=tuple(blocks))
 
@@ -57,10 +57,10 @@ def arguments(body: mir.MirBody) -> mir.MirBody:
                         for op in (high, low))):
                 source = mir.extracted_whole(high.args[0], low.args[0], definitions)
                 if source is not None:
-                    ops[-1] = replace(high, args=(source,), uses=(source.value,),
+                    ops[-1] = mir.detached(high, args=(source,), uses=(source.value,),
                                       stores=(replace(high.stores[0], width=4),),
                                       covers=(high.covers[0], low.covers[1]),
-                                      node=None, raised=None)
+                                      raised=None)
                     continue
             ops.append(low)
         blocks.append(replace(block, ops=tuple(ops)))
@@ -285,8 +285,8 @@ def scalar(body: mir.MirBody) -> mir.MirBody:
                                    args=(mir.Cell(ref),), results=(loaded,), defines=(loaded.value,),
                                    uses=tuple(value for value in (ref.base, ref.segment) if value is not None),
                                    symbol=True))
-                widened = replace(widened, args=(args[0], loaded), uses=(args[0].value, loaded.value),
-                                  loads=(), node=None, id=None, symbol=False,
+                widened = mir.detached(widened, args=(args[0], loaded), uses=(args[0].value, loaded.value),
+                                  loads=(), id=None, symbol=False,
                                   covers=(low.at, low.at), extra_covers=())
             ops.append(widened)
             if not stores:

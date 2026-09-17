@@ -150,7 +150,7 @@ def simplified(body: mir.MirBody) -> mir.MirBody:
                                 defines=tuple(value for value in op.defines if value.flags),
                                 uses=(value, bound),
                                 loads=(),
-                                node=None,
+                                source_backed=False,
                                 raised=None,
                             )
                         elif op is branch:
@@ -158,7 +158,7 @@ def simplified(body: mir.MirBody) -> mir.MirBody:
                                 op,
                                 test=mir.Kind.NE if branch.target in loop.body else mir.Kind.EQ,
                                 name="",
-                                node=None,
+                                source_backed=False,
                                 raised=((), ()),
                             )
                         else:
@@ -327,7 +327,7 @@ def _rebased_equalities(
             uses = tuple(
                 alternative if value == counter else actual if value == other.value else value for value in op.uses
             )
-            replacements[id(op)] = replace(op, args=tuple(args), uses=uses, node=None, raised=None)
+            replacements[id(op)] = replace(op, args=tuple(args), uses=uses, source_backed=False, raised=None)
     return replacements
 
 
@@ -523,12 +523,12 @@ def zeroed(body: mir.MirBody) -> mir.MirBody:
                             defines=tuple(value for value in op.defines if value.flags),
                             uses=(phi.result,),
                             loads=(),
-                            node=None,
+                            source_backed=False,
                             raised=None,
                         )
                     elif op is branch:
                         test = mir.Kind.NE if branch.target in inside else mir.Kind.EQ
-                        op = replace(op, test=test, name="", node=None, raised=((), ()))
+                        op = replace(op, test=test, name="", source_backed=False, raised=((), ()))
                     else:
                         op = rebased.get(id(op), op)
                     ops.append(op)

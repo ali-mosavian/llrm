@@ -77,7 +77,8 @@ def _without(ops: list[Op], drop) -> list[Op]:
         if drop(op):
             # Inserted, or raised from no bytes at all: nothing to hand on.
             if (
-                (op.covers is not None and op.covers[0] == op.covers[1] or op.covers is None and op.node is None)
+                (op.covers is not None and op.covers[0] == op.covers[1]
+                 or op.covers is None and not op.source_backed)
                 and not op.extra_covers
                 and op.floating_origin is None
             ):
@@ -444,7 +445,7 @@ def _erased_floating(op: Op) -> Op:
         loads=(),
         stores=(),
         merges={},
-        node=None,
+        source_backed=False,
         raised=None,
         floating=None,
         stack=None,
@@ -708,7 +709,7 @@ def reused_divides(body: MirBody, dgroup: frozenset[int], found=None) -> MirBody
             merges={},
             args=(served,),
             results=(wanted,),
-            node=None,
+            source_backed=False,
         )
     if not into:
         return body
@@ -903,7 +904,7 @@ def _empty_operation(op: Op) -> Op:
         loads=(),
         stores=(),
         merges={},
-        node=None,
+        source_backed=False,
         raised=None,
         symbol=False,
     )
@@ -983,7 +984,7 @@ def forwarded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> M
                         args=args,
                         loads=(),
                         uses=op.uses,
-                        node=None,
+                        source_backed=False,
                         raised=None,
                         symbol=False,
                         covers=op.covers or mir_span(op),
@@ -1001,7 +1002,7 @@ def forwarded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> M
                         args=args,
                         loads=(),
                         uses=op.uses + (holder,),
-                        node=None,
+                        source_backed=False,
                         raised=None,
                         symbol=False,
                         covers=op.covers or mir_span(op),
@@ -1014,9 +1015,8 @@ def forwarded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> M
 
 
 def mir_span(op):
-    """The bytes an op stood for, for a rewrite that clears its node."""
-    span = ir.span(op.node) if op.node is not None else None
-    return span
+    """The bytes an op stood for, without consulting decoded provenance."""
+    return op.covers
 
 
 def _served(op: Op, holder) -> "tuple[mir.Arg, ...] | None":
@@ -2098,7 +2098,7 @@ def _folded_division(op: Op, numbers: tuple[int, int], wanted: set) -> tuple[Op,
             merges={},
             raised=None,
             symbol=False,
-            node=None,
+            source_backed=False,
             covers=op.covers if index == 0 else (op.at, op.at),
             id=op.id if index == 0 else None,
             extra_covers=op.extra_covers if index == 0 else (),
@@ -2189,7 +2189,7 @@ def _constant_update(op: Op, facts: dict, memory: dict, wanted: set) -> Op:
         uses=tuple(value for value in op.uses if value in address_values),
         loads=(),
         args=(mir.Const(fact.n, fact.width),),
-        node=None,
+        source_backed=False,
         raised=None,
         symbol=False,
     )
@@ -2306,7 +2306,7 @@ def _constant_operands(op: Op, facts: dict, memory: dict | None = None, symbols:
         op,
         args=tuple(args),
         loads=tuple(ref for ref in op.loads if ref not in removed),
-        node=None if removed else op.node,
+        source_backed=False if removed else op.source_backed,
         raised=None if removed else op.raised,
         uses=tuple(value for value in op.uses if value not in replaced or value in op.merges or value in retained),
     )
@@ -2342,7 +2342,7 @@ def _constant_argument(op: Op, facts: dict, memory: dict, symbols: dict | None =
         args=(literal,),
         uses=uses,
         loads=kept,
-        node=None,
+        source_backed=False,
         raised=None,
         # A number owns no relocation.  A symbol takes the defining copy's
         # identity as well as its value: that is how emission moves the
@@ -2400,7 +2400,7 @@ def _folded_op(op: Op, facts: dict, wanted: set) -> Op:
         args=(mir.Const(fact.n, into.width),),
         results=(mir.Held(target, into.width),),
         symbol=False,
-        node=None,
+        source_backed=False,
         raised=None,
     )
 

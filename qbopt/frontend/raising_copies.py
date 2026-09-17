@@ -17,7 +17,7 @@ from qbopt.objectfile.module import Addr, Space
 
 def _after(op, state, pushed_data):
     direction, same_segment, data_segment = state
-    node = op.node
+    node = getattr(op, "node", None)
     decoded = getattr(node, "insn", None)
     if decoded is None:
         return (None, False, False), False
@@ -82,7 +82,7 @@ def scalar(body: mir.MirBody, found) -> mir.MirBody:
         pushed_data = False
         ops = []
         for op in block.ops:
-            node = op.node
+            node = getattr(op, "node", None)
             decoded = getattr(node, "insn", None)
             insn = decoded.insn if decoded is not None else None
             if insn is None:

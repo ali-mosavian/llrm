@@ -29,7 +29,8 @@ def test_qrender_main_spill_uses_shutdown_control_proof(terminal: bool) -> None:
         for name in ("MOD_TEX_DUMP", "SB_DUMP")
     }
     contracts = runtime.for_module(found, external=external)
-    bodies = {body.entry: body for _, body in mir.bodies(found, corpus.partitioned(path), contracts)}
+    raised = mir.bodies(found, corpus.partitioned(path), contracts)
+    bodies = {body.entry: body for _, body in raised}
     symbols = {name: at for at, name in omf.pubdef_names(found.records, found.seg).items()}
     local = {at: symbols[name] for at, name in found.calls.items() if name in symbols}
     exits = frozenset(
@@ -42,7 +43,15 @@ def test_qrender_main_spill_uses_shutdown_control_proof(terminal: bool) -> None:
     assert (symbols["HOST_SHUTDOWN"] in proven) is terminal
     assert symbols["HOST_INIT"] not in proven  # Has END arms and a returning arm.
 
-    body = lower.lowered("main", bodies[0x30], found.calls, found.absorbed, contracts, noreturn=0x30 in proven)
+    body = lower.lowered(
+        "main",
+        bodies[0x30],
+        found.calls,
+        found.absorbed,
+        contracts,
+        noreturn=0x30 in proven,
+        nodes=raised.source.nodes,
+    )
     assert (
         allocate.applied(replace(body, blocks=()), allocate.Assignment({}, frozenset(), 0, True)).noreturn is terminal
     )

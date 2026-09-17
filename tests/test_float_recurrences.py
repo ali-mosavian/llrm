@@ -23,7 +23,7 @@ def test_proved_exit_folds_a_read_without_removing_strict_operations():
     value = mir.Value(10000, exit_block.at, variable=10000)
     read = replace(exit_block.ops[0], kind=mir.Kind.LOAD, args=(mir.Cell(accumulator),),
                    results=(mir.Held(value, 4),), defines=(value,), uses=(),
-                   loads=(accumulator,), stores=(), merges={}, node=None, raised=None)
+                   loads=(accumulator,), stores=(), merges={}, source_backed=False, raised=None)
     body = replace(body, blocks=tuple(replace(block, ops=(read, *block.ops))
                                      if block is exit_block else block for block in body.blocks))
     changed = transform.folded(body, found.dgroup, found.calls)

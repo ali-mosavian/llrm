@@ -143,7 +143,7 @@ def _selector_dead(body, block, position, contracts):
                 if runtime.Reg.ES in contract.clobbers:
                     break
             else:
-                effects = getattr(later.node, "effects", None)
+                effects = getattr(getattr(later, "node", None), "effects", None)
                 if effects is None or effects.uses is None or Register.ES in effects.uses:
                     return False
                 if effects.defs is not None and Register.ES in effects.defs:
@@ -162,7 +162,7 @@ def _whole_consumer(body, block, position, value, contracts):
         candidate = block.ops[consumer_position]
         if value in candidate.uses:
             break
-        effects = getattr(candidate.node, "effects", None)
+        effects = getattr(getattr(candidate, "node", None), "effects", None)
         if (candidate.kind is mir.Kind.CALL or effects is None or effects.uses is None
             or effects.defs is None or Register.ES in effects.uses | effects.defs):
             return None
@@ -358,7 +358,7 @@ def _native(body, found, *, bounds_checks):
                                          base=pointer.value, pointer=True)
                         def cell(arg):
                             return mir.Cell(ref) if isinstance(arg, mir.Cell) else arg
-                        changed = replace(consumer, node=None, name="mov", op=ir.Operation.MOVE,
+                        changed = mir.detached(consumer, name="mov", op=ir.Operation.MOVE,
                             args=tuple(map(cell, consumer.args)), results=tuple(map(cell, consumer.results)),
                             uses=tuple(pointer.value if value == outputs[0] else value for value in consumer.uses),
                             loads=(ref,) if consumer.loads else (), stores=(ref,) if consumer.kind is mir.Kind.STORE else (),
@@ -386,7 +386,7 @@ def _native(body, found, *, bounds_checks):
                 op.op in (ir.Operation.MOVE, ir.Operation.BINARY, ir.Operation.UNARY, ir.Operation.EXTEND)
                 and not op.stores and not op.barrier
                 and all(ref.addr is not None and ref.space is not Space.STACK for ref in op.loads)
-                and (effects := getattr(op.node, "effects", None)) is not None
+                and (effects := getattr(getattr(op, "node", None), "effects", None)) is not None
                 and effects.uses is not None and effects.defs is not None
                 and Register.ESP not in effects.uses | effects.defs
             ):

@@ -117,10 +117,12 @@ it and collapses the two into the diagram at the top.
                            honouring a substituted value
 ```
 
-**MIR itself still carries three source-machine facts.** `Op.node` (the
-decoded instruction), `Op.covers` (a range of BC's bytes) and
-`MirBody.origin`. Selected machine semantics have moved to LIR. The passes
-barely touch the remaining provenance; the data structure still holds it.
+**MIR itself still carries two source-machine facts.** `Op.covers` (a range
+of BC's bytes) and `MirBody.origin`. Decoded instructions now leave the raise
+in `SourceMap.nodes`, keyed by the operation's stable id, and lowering
+transfers each required node to LIR. Selected machine semantics also live
+only on LIR. The passes barely touch the remaining provenance; the data
+structure still holds it.
 
 **LIR is now the backend form.** It owns selected machine semantics and
 allocation requirements (`tied`, `reads`, `writes`), and layout plus fresh
@@ -136,9 +138,9 @@ been deleted.
 
 1. **Phase D** -- absorption at the raise, then the machine arm retires:
    `lift.py`, `calls.py`'s emission, `memory.py`, `forward.py`.
-2. `node` and `covers` leave `mir.Op` for a side table keyed on `Op.id`;
-   `origin` last, because lowering and the allocator's identity baseline are
-   built on it. (`made` has already moved to LIR.)
+2. `covers` leaves `mir.Op` for a side table keyed on `Op.id`; `origin` last,
+   because lowering and the allocator's identity baseline are built on it.
+   (`made` has already moved to LIR and `node` is already in `SourceMap`.)
 3. Add the post-allocation peephole now that LIR has become a real form.
 
 Until then, every one of those is a debt with a name, and none of them is a
@@ -160,13 +162,14 @@ Audited 2026-09-05. What was broken, and what it is now:
 | `transform`, `avail` and `simplify` asked `regalloc.live()` | `qbopt/analysis/liveness.py`. Liveness over SSA values names no register; it sat in regalloc because that is what first needed it |
 
 `mir.bodies` now returns `RaisedBodies`: the MIR sequence plus an external
-`SourceMap` containing relocations, floating protocols, absorbed sites and
-disjoint byte coverage.  `_folded` returns its maps, and the other recognition
-steps write only that fresh result.  The parsed `Module` remains unchanged;
-optimization coverage, lowering, layout and fresh OMF emission receive that
-same side table explicitly. `SourceMap.applied()` remains only as a compatibility
-helper for focused low-level tests; no production route reconstructs a fused
-module view.
+`SourceMap` containing decoded nodes, relocations, floating protocols,
+absorbed sites and disjoint byte coverage. `_folded` returns its maps, and the
+other recognition steps write only that fresh result. The parsed `Module`
+remains unchanged; optimization coverage, lowering, layout and fresh OMF
+emission receive that same side table explicitly. Lowering is the only stage
+that joins decoded nodes back to operations, and it places them directly on
+LIR. `SourceMap.applied()` remains only as a compatibility helper for focused
+low-level tests; no production route reconstructs a fused module view.
 
 ## What honouring a pass's order would take
 

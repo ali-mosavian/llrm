@@ -176,7 +176,7 @@ def joined(body: mir.MirBody, *, insert: bool = True) -> mir.MirBody:
             replacements[op.results[0].value.id] = result
             phis.append(mir.Phi(result, incoming))
             ops.append(replace(op, op=ir.Operation.NOTHING, kind=mir.Kind.NOTHING, name="",
-                               args=(), results=(), defines=(), uses=(), node=None, raised=None))
+                               args=(), results=(), defines=(), uses=(), source_backed=False, raised=None))
             changed = True
         blocks.append(replace(block, phis=tuple(phis), ops=tuple(ops)))
     if not changed:

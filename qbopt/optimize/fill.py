@@ -205,7 +205,7 @@ def _filled(body: mir.MirBody, loop) -> mir.MirBody | None:
         # class remains semantic.  Lowering needs it to select SS rather
         # than DS for a fill reached through a frame-derived near pointer.
         stores=(mir.MemRef(None, ref.width, space=ref.space, provenance=ref.provenance),),
-        node=None,
+        source_backed=False,
         raised=None,
     )
     ops = []

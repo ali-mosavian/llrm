@@ -223,7 +223,7 @@ def semantics(op: mir.Op, was: ir.Semantics | None = None, place=None) -> ir.Sem
     if op.kind is mir.Kind.JUMP and op.target is not None:
         return ir.Semantics(ir.Operation.JUMP, "jmp", (), (), op.target)
     if (
-        op.node is None
+        not op.source_backed
         and op.kind in (mir.Kind.CALL, mir.Kind.RETURN)
         and op.op in (ir.Operation.CALL, ir.Operation.RETURN)
     ):
@@ -329,7 +329,7 @@ def _place(arg: mir.Arg, had: tuple, index: int) -> ir.Loc:
     return was if isinstance(was, ir.Reg) and was.width == got.width else got
 
 
-def rewritten(op, place=None) -> "ir.Semantics | None":
+def rewritten(op, place=None, *, node=None) -> "ir.Semantics | None":
     """What a pass made of this operation, in machine form, or None.
 
     None means nothing rewrote it, which is a different answer from what
@@ -343,11 +343,11 @@ def rewritten(op, place=None) -> "ir.Semantics | None":
     select.py can emit`) and stride its `t` (`add [t],ax` emitted with no
     fixup, accumulating into offset zero, T= 0 for 210).
     """
-    was = getattr(op.node, "semantics", None)
+    was = getattr(node, "semantics", None)
     return _located(semantics(op, was, place), was)
 
 
-def current(op, place=None) -> "ir.Semantics | None":
+def current(op, place=None, *, node=None) -> "ir.Semantics | None":
     """What this operation computes now, in machine form.
 
     Rewritten operations are selected from MIR operands; untouched ones may
@@ -355,7 +355,7 @@ def current(op, place=None) -> "ir.Semantics | None":
     """
     if place is None and any(ref.pointer for ref in (*op.loads, *op.stores)):
         return None
-    return rewritten(op, place) or getattr(op.node, "semantics", None)
+    return rewritten(op, place, node=node) or getattr(node, "semantics", None)
 
 
 def _target(op: mir.Op, was: ir.Semantics | None) -> int | None:
@@ -499,6 +499,7 @@ def lowered(
     coverage: "dict[int, tuple] | None" = None,
     cpu: str | targets.Profile = "386",
     *,
+    nodes: dict[int, object] | None = None,
     pointer_model=None,
     noreturn: bool = False,
 ) -> "lir.LirBody":
@@ -547,7 +548,17 @@ def lowered(
     read = {one.id for block in body.blocks for op in block.ops for one in op.uses}
     read |= {value.id for block in body.blocks for phi in block.phis for value in phi.incoming.values()}
     calls = calls or {}
-    making = Lowering(body, read, calls, absorbed or (), contracts, coverage, cpu, pointer_model=pointer_model)
+    making = Lowering(
+        body,
+        read,
+        calls,
+        absorbed or (),
+        contracts,
+        coverage,
+        cpu,
+        nodes=nodes,
+        pointer_model=pointer_model,
+    )
     # Once: expanding twice would build two of every instruction, and the
     # question below is about the ones this body will actually hold.
     readers = Counter(value for block in body.blocks for op in block.ops for value in op.uses)
@@ -609,7 +620,7 @@ def _check_inserted_conditions(ops: tuple[mir.Op, ...], leaving: frozenset[mir.V
     for op in reversed(ops):
         preserved = alive - set(op.defines)
         if (
-            op.node is None
+            not op.source_backed
             and op.kind in (mir.Kind.ADD, mir.Kind.MUL, mir.Kind.SMULHI, mir.Kind.PTR_OFFSET)
             and preserved
         ):
@@ -839,7 +850,7 @@ def _word_division(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...]
     if len(op.args) != 2 or len(op.results) != 2:
         return None
     width = op.results[0].width if isinstance(op.results[0], mir.Held) else 0
-    if width == 4 and op.node is not None:
+    if width == 4 and op.source_backed:
         return None  # Legacy folded sites order results by their runtime entry point.
     if (
         width not in (2, 4)
@@ -944,7 +955,7 @@ def _pointer_access(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...
     def place(arg, had, index):
         return cell if isinstance(arg, mir.Cell) and arg.ref == ref else as_a_value(arg, had, index)
 
-    access = current(op, place)
+    access = current(op, place, node=lowering.node(op))
     if access is None:
         raise Unlowered(f"whole-pointer access has no operation at {op.at:#x}")
     # Materialization is local to the memory instruction. Restore the segment
@@ -1044,6 +1055,10 @@ class Lowering:
     layout's accounting still adds up.
     """
 
+    def node(self, op: "mir.Op"):
+        """The decoded occurrence for this source-backed operation, if any."""
+        return self._nodes.get(op.id) if op.source_backed and op.id is not None else None
+
     def _widths(self, op: "mir.Op") -> tuple:
         """How wide each value an operand-less operation names is.
 
@@ -1098,7 +1113,7 @@ class Lowering:
         if op.kind is mir.Kind.CALL:
             widths = dict(self._widths(op))
             where = dict(self._origin)
-            if op.node is None:
+            if self.node(op) is None:
                 # A float result is on the x87, not in a register.
                 integers = (one for one in op.defines if not one.flags and widths.get(one.id) != 10)
                 where = {**dict(zip(integers, _RETURNED)), **where}
@@ -1107,7 +1122,8 @@ class Lowering:
                 for value in op.defines
                 if not value.flags and value.id in self._read and value in where
             )
-        if op.kind is mir.Kind.OPAQUE and not isinstance(op.node, ir.Restore):
+        node = self.node(op)
+        if op.kind is mir.Kind.OPAQUE and not isinstance(node, ir.Restore):
             return self._implicit_values(op, op.defines)
         if op.kind is mir.Kind.DIVMOD:
             # A folded site is a sequence too, and it leaves its answers in
@@ -1135,14 +1151,14 @@ class Lowering:
                 for one, where in zip(op.results, (first, second))
                 if getattr(one, "value", None) is not None and one.value.id in self._read
             )
-        if not isinstance(op.node, ir.Restore):
+        if not isinstance(node, ir.Restore):
             return ()
         out = []
         for one in op.defines:
             if one.flags or one.id not in self._read:
                 continue
             root = ir.ROOT.get(self._origin.get(one, -1), -1)
-            if root not in mir.RESTORE_PAIR[op.node.pair]:
+            if root not in mir.RESTORE_PAIR[node.pair]:
                 raise Unlowered(f"{op.at:#06x}: the restore's {one} is in no register the idiom writes")
             out.append((ir.Held(one.id, 2), target.named(root, 2)))  # a half, and the idiom pops one word into each
         return tuple(out)
@@ -1175,7 +1191,8 @@ class Lowering:
         every tracked register until a contract narrows it, and that is a
         liveness dependency rather than an argument list.
         """
-        if op.kind is mir.Kind.RETURN and op.node is None and op.args:
+        node = self.node(op)
+        if op.kind is mir.Kind.RETURN and node is None and op.args:
             # Placed by position, not by pinning the value: a pass may
             # replace the operand, and a pin stays with the value it named.
             returned = []
@@ -1185,15 +1202,15 @@ class Lowering:
                     raise Unlowered(f"{op.at:#06x}: return operand needs materialization")
                 returned.append((ir.Held(arg.value.id, arg.width), target.named(register, arg.width)))
             return tuple(returned)
-        if op.kind is mir.Kind.RETURN and op.node is not None:
+        if op.kind is mir.Kind.RETURN and node is not None:
             returned = []
-            for arg, location in zip(op.args, op.node.semantics.sources):
+            for arg, location in zip(op.args, node.semantics.sources):
                 if isinstance(location, ir.Reg):
                     if not isinstance(arg, mir.Held):
                         raise Unlowered(f"{op.at:#06x}: return operand needs materialization")
                     returned.append((ir.Held(arg.value.id, arg.width), location.register))
             return tuple(returned)
-        if op.kind is mir.Kind.OPAQUE and not isinstance(op.node, ir.Restore):
+        if op.kind is mir.Kind.OPAQUE and not isinstance(node, ir.Restore):
             return self._implicit_values(op, op.uses, inputs=True)
         if op.id in self._sites:
             # These selected multi-instruction sequences still encode their
@@ -1204,14 +1221,14 @@ class Lowering:
                 for ref in op.loads
                 if ref.base is not None and ref.addr is not None
             )
-        if isinstance(op.node, ir.Restore):
+        if isinstance(node, ir.Restore):
             # The idiom reads the widened value in the pair's own register
             # -- `push eax` -- and names it nowhere, so without this the
             # allocation left the answer in ebx and the idiom pushed
             # whatever eax happened to hold. Only that one: the other use
             # is the previous contents of the half it writes, which is a
             # merge and not an input.
-            source, _into = mir.RESTORE_PAIR[op.node.pair]
+            source, _into = mir.RESTORE_PAIR[node.pair]
             return tuple(
                 (ir.Held(one.id, 4), target.named(source, 4))
                 for one in op.uses
@@ -1258,11 +1275,12 @@ class Lowering:
 
     def _implicit_values(self, op: mir.Op, values: tuple[mir.Value, ...], *, inputs: bool = False) -> tuple:
         """Unencoded operands of an opaque instruction still have machine locations."""
-        if not isinstance(op.node, ir.Opaque):
+        node = self.node(op)
+        if not isinstance(node, ir.Opaque):
             return ()
         registers = {
             ir.ROOT.get(one.register, one.register): one.register
-            for one in InstructionInfoFactory().info(op.node.insn.insn).used_registers()
+            for one in InstructionInfoFactory().info(node.insn.insn).used_registers()
         }
         if inputs:
             # SSA holds the unshifted word; copying its low byte to AH is not an extraction.
@@ -1295,7 +1313,7 @@ class Lowering:
             )
             if isinstance(where, int) and where != Register.NONE
         }
-        return self._positional(op, registers) if registers and op.node is not None else ()
+        return self._positional(op, registers) if registers and self.node(op) is not None else ()
 
     def _positional(self, op: mir.Op, registers: dict) -> tuple:
         # A use's register is its position, not its value's origin: the
@@ -1303,7 +1321,8 @@ class Lowering:
         # copy into `out dx,al` hands it a value BC kept somewhere else.
         # By origin, UNWHITEFADE's third OUT pinned nothing to AL and
         # wrote 0x3C9's low byte as every blue.
-        order = sorted(mir._touched(op.node)[1], key=lambda one: (one is not mir.FLAGS, one))
+        node = self.node(op)
+        order = sorted(mir._touched(node)[1], key=lambda one: (one is not mir.FLAGS, one)) if node is not None else []
         if len(op.uses) < len(order):
             raise Unlowered(f"{op.at:#06x}: {len(op.uses)} uses for {len(order)} operand registers")
         return tuple(
@@ -1323,6 +1342,7 @@ class Lowering:
         coverage=None,
         cpu: str | targets.Profile = "386",
         *,
+        nodes: dict[int, object] | None = None,
         pointer_model=None,
     ) -> None:
         self.cpu = targets.profile(cpu)
@@ -1362,6 +1382,7 @@ class Lowering:
 
         self._exposed = {value.id for value in leaving(body)}
         self._coverage = coverage or {}
+        self._nodes = nodes or {}
         self._origin = body.origin
         self._calls = calls
         # The same answer the raise used, per call site. Looked up here
@@ -1422,7 +1443,14 @@ class Lowering:
         if any(one.id in self._folded for one in op.defines):
             # The address is its cells' base and index now; see addressforms.indexed.
             op = replace(
-                op, kind=mir.Kind.NOTHING, name="", args=(), results=(), defines=(), uses=(), node=None
+                op,
+                kind=mir.Kind.NOTHING,
+                name="",
+                args=(),
+                results=(),
+                defines=(),
+                uses=(),
+                source_backed=False,
             )
         made = _EXPANDS.get(op.kind)
         parts = made(op, self) if made is not None else _pointer_access(op, self)
@@ -1441,8 +1469,9 @@ class Lowering:
             # came out with nothing to emit, and every body holding one
             # left the route that can spill. An operation with no node has
             # no site's bytes to be emitted from.
-            folded = op.id in self._absorbed and op.node is not None
-            what = None if folded else current(op, as_a_value)
+            node = self.node(op)
+            folded = op.id in self._absorbed and node is not None
+            what = None if folded else current(op, as_a_value, node=node)
             from qbopt.backend import addressforms
 
             what = addressforms.scaled(addressforms.selected(what, self._address_forms), self._indexed)
@@ -1474,7 +1503,7 @@ class Lowering:
             # in st(0): said by an instruction beside it, which FloatAlloc reads.
             floats = (
                 tuple(one.value.id for one in (*op.args, *op.results) if isinstance(one, mir.Held) and one.width == 10)
-                if op.node is None and op.kind in (mir.Kind.CALL, mir.Kind.RETURN)
+                if node is None and op.kind in (mir.Kind.CALL, mir.Kind.RETURN)
                 else ()
             )
             before = tuple(
@@ -1504,7 +1533,7 @@ class Lowering:
                     ),
                     uses=inputs,
                     requires=requires,
-                    clobbers=_clobbers(op, self._calls, self._contracts),
+                    clobbers=_clobbers(op, self._calls, self._contracts, node=node),
                     clobbers_high=_clobbered_high(op, self._calls, self._contracts),
                     spread=()
                     if op.inserted
@@ -1514,6 +1543,7 @@ class Lowering:
                     delivers=delivers,
                     widths=self._widths(op) if what is None else (),
                     op=op,
+                    node=node,
                     symbol=op.symbol,
                 ),
                 *self._caller_cleanup(op),
@@ -1536,6 +1566,7 @@ class Lowering:
                 uses=tuple(_read(parts[0])),
                 clobbers=frozenset(),
                 op=op,
+                node=self.node(op),
             ),
             *(_follows(op, one) for one in parts[1:]),
         )
@@ -1710,7 +1741,9 @@ def clobbering(op: "mir.Op") -> "frozenset[Register_]":
     return _clobbers(op, {}) if op.kind is mir.Kind.DIVMOD else frozenset()
 
 
-def _clobbers(op: "mir.Op", calls: dict[int, str], contracts: dict | None = None) -> "frozenset[Register_]":
+def _clobbers(
+    op: "mir.Op", calls: dict[int, str], contracts: dict | None = None, *, node=None
+) -> "frozenset[Register_]":
     """Which registers this instruction destroys without naming them.
 
     For a call, from `runtime.py`'s own contract for the routine
@@ -1723,10 +1756,10 @@ def _clobbers(op: "mir.Op", calls: dict[int, str], contracts: dict | None = None
     from qbopt.model import mir
     from qbopt.abi import runtime
 
-    if isinstance(op.node, ir.Restore):
+    if isinstance(node, ir.Restore):
         # The source is unchanged by push-wide/pop-low. The second pop
         # overwrites the other register even when its result is dead.
-        return frozenset({mir.RESTORE_PAIR[op.node.pair][1]})
+        return frozenset({mir.RESTORE_PAIR[node.pair][1]})
     if op.kind is mir.Kind.DIVMOD:
         # An absorbed divide is emitted as a sequence, not as one
         # instruction, and it writes registers none of its operands name:

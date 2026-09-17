@@ -528,11 +528,14 @@ def test_resolving_preserves_an_untouched_bodys_program(obj: Path) -> None:
     if isinstance(mapped, str):
         pytest.skip(reason=mapped)  # ty: ignore[unknown-argument]
 
-    for name, body in mir.bodies(found, split.partition(found, mapped)):
+    raised = mir.bodies(found, split.partition(found, mapped))
+    for name, body in raised:
         got = mir.resolved(body, found.calls)
         assert not isinstance(got, str), f"{obj.stem} {name}: {got}"
 
-        assert mir.lower(got) == mir.lower(body), f"{obj.stem} {name}: the rebuild lowers differently"
+        assert mir.lower(got, raised.source.nodes) == mir.lower(body, raised.source.nodes), (
+            f"{obj.stem} {name}: the rebuild lowers differently"
+        )
         assert not mir.verify(got), f"{obj.stem} {name}: the rebuild is not SSA"
 
 

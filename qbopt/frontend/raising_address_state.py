@@ -32,7 +32,7 @@ def raised(
                 return mir.Cell(reference(arg.ref)) if isinstance(arg, mir.Cell) else arg
 
             loads, stores = tuple(map(reference, op.loads)), tuple(map(reference, op.stores))
-            effect = getattr(op.node, "effects", None)
+            effect = getattr(getattr(op, "node", None), "effects", None)
             contract = (contracts or {}).get(op.at) if op.kind is mir.Kind.CALL else None
             if contract is not None and contract.established:
                 # A call says what it touches where anything does. Without

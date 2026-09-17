@@ -50,7 +50,7 @@ def test_a_sign_extension_from_a_segment_register_is_not_a_long() -> None:
 
     def extending(source: ir.Loc) -> tuple[mir.Op, mir.Op]:
         into = ir.Reg(register=Register.AX, width=2)
-        low = mir.Op(
+        low = mir._RaisedOp(
             at=0x100,
             op=ir.Operation.MOVE,
             name="mov",
@@ -58,7 +58,7 @@ def test_a_sign_extension_from_a_segment_register_is_not_a_long() -> None:
             uses=(),
             node=SimpleNamespace(semantics=ir.Semantics(ir.Operation.MOVE, "mov", dests=(into,), sources=(source,))),
         )
-        high = mir.Op(
+        high = mir._RaisedOp(
             at=0x103,
             op=ir.Operation.NOTHING if hasattr(ir.Operation, "NOTHING") else ir.Operation.MOVE,
             name="cwd",
@@ -101,7 +101,7 @@ def test_two_negates_without_the_borrow_are_not_one_long_negate() -> None:
 
     def unary(at: int, name: str, register: Register_, value: int) -> mir.Op:
         where = ir.Reg(register=register, width=2)
-        return mir.Op(
+        return mir._RaisedOp(
             at=at,
             op=ir.Operation.UNARY,
             name=name,
@@ -116,7 +116,7 @@ def test_two_negates_without_the_borrow_are_not_one_long_negate() -> None:
     high = unary(0x106, "neg", Register.DX, 3)
     origin = {mir.Value(1, 0x100): Register.EAX, mir.Value(2, 0x103): Register.EDX, mir.Value(3, 0x106): Register.EDX}
 
-    borrow = mir.Op(
+    borrow = mir._RaisedOp(
         at=0x103,
         op=ir.Operation.BINARY,
         name="adc",

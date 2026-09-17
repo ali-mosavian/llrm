@@ -83,9 +83,9 @@ def _specialized(body, copied, loop, entry, selected, compare, branch):
     anchor = last.at if last is not None else entry
     guard = replace(compare, at=anchor, defines=tuple(definitions[value.id] for value in compare.defines),
                     results=tuple(replace(result, value=definitions[result.value.id]) for result in compare.results),
-                    node=None, raised=None, covers=(anchor, anchor), extra_covers=(), id=None, symbol=False)
+                    source_backed=False, raised=None, covers=(anchor, anchor), extra_covers=(), id=None, symbol=False)
     dispatch = replace(ssa.substituted(branch, definitions), at=anchor, target=cloned_header,
-                       node=None, raised=None, name="", id=None, symbol=False,
+                       source_backed=False, raised=None, name="", id=None, symbol=False,
                        covers=last.covers if replaces_jump else (anchor, anchor),
                        extra_covers=last.extra_covers if replaces_jump else ())
     parent = replace(parent, ops=(*(parent.ops[:-1] if replaces_jump else parent.ops), guard, dispatch),

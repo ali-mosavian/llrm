@@ -37,7 +37,8 @@ def native(body):
             replace(
                 block,
                 ops=tuple(
-                    _discarded(op) if isinstance(op.node, ir.Opaque) and op.node.insn.insn.code == Code.INTO else op
+                    _discarded(op) if isinstance((node := getattr(op, "node", None)), ir.Opaque)
+                    and node.insn.insn.code == Code.INTO else op
                     for op in block.ops
                 ),
             )
