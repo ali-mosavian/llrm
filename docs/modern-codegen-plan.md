@@ -235,3 +235,23 @@ word, while qbopt still reloads both owners in the loop and carries both the
 source counter and the scaled recurrence in registers.  That is the next
 mechanism to compare with the GCC/LLVM best-case loop structures and BCC's
 medium-model legal form; this iteration makes no timing claim.
+
+### 13. Best-case reference audit — 2026-09-18
+
+`tools/quality.py --references` produced fresh flat-i386 `clang -O3` and
+`i686-elf-gcc -O3` listings for the compact far-load loop.  Both retain the
+two owner pointers across their inner loop and each emits one byte RMW; neither
+performs the repeated owner reload that qbopt still does.  They choose
+different flat-model induction forms, and their pointer widths, stack ABI,
+address sizes, and unbounded SIB addressing differ from the medium-model
+target.  Their reported estimated instruction ratios (clang `1.99x`, GCC
+`1.68x`) are therefore advisory structural signals, not quality gates or
+timing results.
+
+The BCC listing supplies the applicable target form: two retained near owners,
+one source counter, and a frame-carried scaled offset.  This comparison gives
+the next general implementation a concrete requirement: strength reduction's
+register budget must account for loop-invariant address bases and actual
+transient live pressure, not only a fixed two-register reserve.  The next
+iteration will add that MIR-level pressure model with a fail-first regression;
+it must not hard-code `r_walk` or any particular register assignment.
