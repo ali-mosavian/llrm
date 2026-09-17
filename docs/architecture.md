@@ -1094,13 +1094,15 @@ one documented target without materially regressing another.
   also receive a conservative `pure` proof: only acyclic, returning procedures
   with frame-local memory, non-trapping integer work and already-proven-pure
   callees qualify.  Recursive SCCs, floating point, division, opaque work and
-  nonlocal memory remain observable.
+  nonlocal memory remain observable. A private, non-address-taken procedure's
+  scalar parameter is seeded when every internal call agrees on the same
+  constant; entry memory facts ensure a later parameter store still kills it.
 - [ ] Propagate constants and effects across procedure boundaries (`IPSCCP`).
   Common integer return tuples now flow through direct calls to a fixed point.
   The call stays until its independently proven effects and result liveness
   permit deletion; its exact stack-argument operations are deleted with it.
-  Argument specialization, unreachable call-edge pruning and procedure-local
-  global propagation remain open.
+  Per-call cloning for differing arguments, unreachable call-edge pruning and
+  procedure-local global propagation remain open.
 - [ ] Inline selectively when doing so exposes a measured optimization; keep
   runtime-idiom recognition in the raise rather than implementing it as
   generic inlining.

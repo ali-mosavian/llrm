@@ -156,12 +156,29 @@ def assembled(
     bodies = {one.name: alias.calls_annotated(aliases[one.name], modref) for one in raised_procedures}
     from qbopt.analysis import interprocedural
 
+    address_taken = _address_taken_procedures(unit)
     call_arguments = {
         one.name: interprocedural.argument_sites(bodies[one.name], one.contracts) for one in raised_procedures
     }
     for raised in raised_procedures:
         if watch is not None:
             watch("mir-raised", raised.name, bodies[raised.name])
+
+    if optimise:
+        private = frozenset(
+            one.name for one in raised_procedures if not one.symbol.exported and one.name not in address_taken
+        )
+        constants = interprocedural.constant_parameters(
+            {one.name: (one.calls, one.constants) for one in raised_procedures}, private
+        )
+        for raised in raised_procedures:
+            if raised.name not in constants:
+                continue
+            bodies[raised.name] = interprocedural.specialize_parameters(
+                bodies[raised.name], raised.parameters, constants[raised.name]
+            )
+            if watch is not None:
+                watch("mir-ipa-args", raised.name, bodies[raised.name])
 
     def run_optimiser(raised: raise_hir.Raised, body: mir.MirBody, prefix: str = "") -> mir.MirBody:
         from qbopt.optimize import rotate
@@ -214,9 +231,7 @@ def assembled(
             after = interprocedural.remove_dead_pure_calls(before, raised.calls, pure, call_arguments[raised.name])
             if after is not before:
                 bodies[raised.name] = run_optimiser(raised, after, "ipa-pure.")
-        roots = frozenset(one.name for one in raised_procedures if one.symbol.exported) | _address_taken_procedures(
-            unit
-        )
+        roots = frozenset(one.name for one in raised_procedures if one.symbol.exported) | address_taken
         reachable = _reachable_procedures(raised_procedures, bodies, roots)
         raised_procedures = [one for one in raised_procedures if one.name in reachable]
 

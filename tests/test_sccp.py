@@ -131,8 +131,27 @@ def test_module_constant_returns_require_every_exit_to_agree():
     }
 
 
+def test_parameter_specialization_requires_every_call_to_agree():
+    """One constant call cannot specialize a body also called with another value."""
+    seven, nine = mir.Const(7, 2), mir.Const(9, 2)
+    procedures = {
+        "a": ({1: "leaf"}, {1: (seven,)}),
+        "b": ({2: "leaf"}, {2: (nine,)}),
+    }
+    assert interprocedural.constant_parameters(procedures, frozenset({"leaf"})) == {}
+    procedures["b"] = ({2: "leaf"}, {2: (seven,)})
+    assert interprocedural.constant_parameters(procedures, frozenset({"leaf"})) == {
+        "leaf": (seven,)
+    }
+
+
 def test_pure_call_removal_drops_its_exact_argument_pushes():
-    """Deleting a cdecl call but leaving its ARG changed SP at every iteration."""
+    """Deleting a cdecl call must drop its ARG but keep same-site facts.
+
+    Constant return propagation inserts a COPY at the call's source address.
+    Deleting every operation with that address left answer_from_argument as a
+    bare RETF instead of returning 42.
+    """
     argument = mir.Op(1, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.ARG, args=(mir.Const(9, 2),))
     result = mir.Value(2, 2, variable=2, version=1)
     call = mir.Op(
@@ -144,8 +163,19 @@ def test_pure_call_removal_drops_its_exact_argument_pushes():
         kind=mir.Kind.CALL,
         results=(mir.Held(result, 2),),
     )
-    ret = mir.Op(3, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.RETURN)
-    body = mir.MirBody(1, (mir.MirBlock(1, (), (argument, call, ret), ()),), sealed=True)
+    answer = mir.Value(3, 2, variable=3, version=1)
+    constant = mir.Op(
+        2,
+        ir.Operation.NOTHING,
+        "",
+        (answer,),
+        (),
+        kind=mir.Kind.COPY,
+        args=(mir.Const(42, 2),),
+        results=(mir.Held(answer, 2),),
+    )
+    ret = mir.Op(3, ir.Operation.NOTHING, "", (), (answer,), kind=mir.Kind.RETURN, args=(mir.Held(answer, 2),))
+    body = mir.MirBody(1, (mir.MirBlock(1, (), (argument, call, constant, ret), ()),), sealed=True)
 
     class Contract:
         cleanup = 0
@@ -153,7 +183,7 @@ def test_pure_call_removal_drops_its_exact_argument_pushes():
 
     sites = interprocedural.argument_sites(body, {2: Contract()})
     made = interprocedural.remove_dead_pure_calls(body, {2: "leaf"}, frozenset({"leaf"}), sites)
-    assert [op.kind for op in made.blocks[0].ops] == [mir.Kind.RETURN]
+    assert [op.kind for op in made.blocks[0].ops] == [mir.Kind.COPY, mir.Kind.RETURN]
 
 
 def test_purity_refuses_nontermination_and_nonlocal_stores():

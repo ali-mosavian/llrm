@@ -1,0 +1,51 @@
+INIT sw=0x808000 target=0xec size=50 rev=0x23
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=2
+SEG 3 attr=0xc name="CONST2" align=2
+SEG 4 attr=0x6 name="_DATA" align=2
+START
+f1 DBSrcFile "fixtures/c/iparg.c"
+- DBSrcCue f1 2 1
+SYM y1 name="twice" base="twice" pattern="_*" attr=0x43 seg=1
+CALLCONV y1 class=0x80 target=0x712 parms=[] ret=0:0
+- CGProcDecl y1 TY_INT_2
+SYM y2 name="value" base="value" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y2 TY_INT_2
+l2 CGLastParm
+t3 CGTemp TY_INT_2
+- DBSrcCue f1 4 1
+n4 CGFEName y2 TY_INT_2
+n5 CGUnary O_POINTS n4 TY_INT_2
+n6 CGInteger 2 TY_INTEGER
+n7 CGBinary O_TIMES n5 n6 TY_INTEGER
+n8 CGUnary O_CONVERT n7 TY_INT_2
+n9 CGTempName t3 TY_INT_2
+n10 CGAssign n9 n8 TY_INT_2
+- CGDone n10
+- DBSrcCue f1 5 1
+n11 CGTempName t3 TY_INT_2
+n12 CGUnary O_POINTS n11 TY_INT_2
+- CGReturn n12 TY_INT_2
+- DBSrcCue f1 7 1
+SYM y3 name="answer_from_argument" base="answer_from_argument" pattern="_*" attr=0x7 seg=1
+CALLCONV y3 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y3 TY_INT_2
+l13 CGLastParm
+t14 CGTemp TY_INT_2
+- DBSrcCue f1 9 1
+n15 CGFEName y1 TY_CODE_PTR
+c16 CGInitCall n15 TY_INT_2 y1
+n17 CGInteger 21 TY_INT_2
+- CGAddParm c16 n17 TY_INT_2
+n18 CGCall c16
+n19 CGUnary O_POINTS n18 TY_INT_2
+n20 CGUnary O_CONVERT n19 TY_INT_2
+n21 CGTempName t14 TY_INT_2
+n22 CGAssign n21 n20 TY_INT_2
+- CGDone n22
+- DBSrcCue f1 10 1
+n23 CGTempName t14 TY_INT_2
+n24 CGUnary O_POINTS n23 TY_INT_2
+- CGReturn n24 TY_INT_2
+STOP
+FINI

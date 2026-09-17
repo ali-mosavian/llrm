@@ -126,6 +126,24 @@ def test_global_dce_keeps_an_address_taken_private_procedure():
     assert cfront._address_taken_procedures(unit) == frozenset({"_callback"})
 
 
+def test_private_constant_argument_specializes_before_local_sccp():
+    """twice is called only as twice(21), but its frame load hid 42 from
+    caller SCCP. The specialized pure call should collapse without losing
+    the same-address constant copy that defines AX.
+    """
+    lines = [
+        line.strip()
+        for line in cfront.compiled(
+            (FIXTURES / "iparg.cgs").read_text(), "iparg", optimise=True
+        ).splitlines()
+    ]
+    assert "_twice proc near" not in lines
+    body = lines[
+        lines.index("_answer_from_argument proc far") : lines.index("_answer_from_argument endp")
+    ]
+    assert "call _twice" not in body
+    assert "mov ax, 42" in body
+
 def test_int64_stream_raises_whole_signed_and_unsigned_mir_values():
     """Watcom emits TY_{U,}INT_8, but qbopt stopped at `no scalar width`.
 

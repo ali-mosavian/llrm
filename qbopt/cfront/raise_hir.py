@@ -214,6 +214,10 @@ class Raised:
     contracts: dict[int, runtime.Contract]
     # Source-order actual pointer provenance: Provenance, (value, offset), or None.
     arguments: dict[int, tuple[object, ...]]
+    # Source-order scalar constants, kept outside MIR for module specialization.
+    constants: dict[int, tuple[mir.Const | None, ...]]
+    # Entry cells occupied by source parameters, in declaration order.
+    parameters: tuple[mir.MemRef, ...]
     # A site whose callee is inline assembly: its bytes, and (kind, name, offset) where a symbol goes.
     inline: dict[int, tuple]
 
@@ -290,6 +294,7 @@ class _Raise:
         self.callees: dict[int, hir.Symbol] = {}
         self.contracts: dict[int, runtime.Contract] = {}
         self.arguments: dict[int, tuple[object, ...]] = {}
+        self.constants: dict[int, tuple[mir.Const | None, ...]] = {}
         self.inline: dict[int, tuple] = {}
         self.frame: dict[str, int] = {}
         self.objects: list[tuple[int, int]] = []  # each frame object's bytes
@@ -447,6 +452,8 @@ class _Raise:
             self.callees,
             self.contracts,
             self.arguments,
+            self.constants,
+            tuple(self.placed(Frame(self.frame[f"y{symbol}"]), self.size(type_)) for symbol, type_ in self.proc.parms),
             self.inline,
         )
 
@@ -1125,6 +1132,7 @@ class _Raise:
         if indirect is None:
             self.callees[site.at] = callee
         self.arguments[site.at] = tuple(self._call_actual(value, arg_type) for value, arg_type in source_arguments)
+        self.constants[site.at] = tuple(self._call_constant(value, arg_type) for value, arg_type in source_arguments)
         canonical = self.unit.canonical_type(type_)
         if canonical in POINTERS and isinstance(returned, Returned):
             self.pointer_values.add(returned.low)
@@ -1154,6 +1162,13 @@ class _Raise:
             caller_cleanup=pushed if caller_pops else 0,
         )
         return returned
+
+    def _call_constant(self, value, type_: str) -> mir.Const | None:
+        """A scalar actual known without inspecting the callee's ABI."""
+        type_ = self.unit.canonical_type(type_)
+        if type_ in POINTERS or type_ in FLOATS or not isinstance(value, mir.Const):
+            return None
+        return self.narrowed(value, self.width(type_))
 
     def _call_actual(self, value, type_: str):
         """A pointer actual without emitting another address computation."""

@@ -16,6 +16,7 @@ from qbopt.analysis import consts
 from qbopt.objectfile.module import Space
 
 Returns = dict[str, tuple[mir.Const, ...]]
+Parameters = dict[str, tuple[mir.Const | None, ...]]
 
 _MAY_TRAP = frozenset({mir.Kind.DIV, mir.Kind.REM, mir.Kind.DIVMOD, mir.Kind.UDIVMOD})
 _FLOATING = frozenset(
@@ -33,6 +34,44 @@ _FLOATING = frozenset(
         mir.Kind.FCHECK,
     }
 )
+
+
+def constant_parameters(
+    procedures: dict[str, tuple[dict[int, str], dict[int, tuple[mir.Const | None, ...]]]],
+    eligible: frozenset[str],
+) -> Parameters:
+    """Parameter constants agreed by every direct call to a private body."""
+    actuals: dict[str, list[tuple[mir.Const | None, ...]]] = {name: [] for name in eligible}
+    for calls, constants in procedures.values():
+        for at, target in calls.items():
+            if target in actuals and at in constants:
+                actuals[target].append(constants[at])
+
+    out: Parameters = {}
+    for name, sites in actuals.items():
+        if not sites or len({len(site) for site in sites}) != 1:
+            continue
+        agreed = []
+        for index in range(len(sites[0])):
+            values = {site[index] for site in sites}
+            agreed.append(values.pop() if len(values) == 1 and None not in values else None)
+        if any(value is not None for value in agreed):
+            out[name] = tuple(agreed)
+    return out
+
+
+def specialize_parameters(
+    body: mir.MirBody,
+    parameters: tuple[mir.MemRef, ...],
+    constants: tuple[mir.Const | None, ...],
+) -> mir.MirBody:
+    """Seed agreed parameter bytes at procedure entry for ordinary SCCP."""
+    known = tuple(
+        (ref, constant)
+        for ref, constant in zip(parameters, constants, strict=False)
+        if constant is not None and constant.width == ref.width
+    )
+    return replace(body, initial=(*body.initial, *known)) if known else body
 
 
 def constant_returns(bodies: dict[str, mir.MirBody]) -> Returns:
@@ -261,11 +300,22 @@ def remove_dead_pure_calls(
     }
     if not removed:
         return body
-    discarded = removed | set().union(*(arguments[at] for at in removed))
+    discarded_arguments = set().union(*(arguments[at] for at in removed))
     made = replace(
         body,
         blocks=tuple(
-            replace(block, ops=tuple(op for op in block.ops if op.at not in discarded)) for block in body.blocks
+            replace(
+                block,
+                ops=tuple(
+                    op
+                    for op in block.ops
+                    if not (
+                        (op.kind is mir.Kind.CALL and op.at in removed)
+                        or (op.kind is mir.Kind.ARG and op.at in discarded_arguments)
+                    )
+                ),
+            )
+            for block in body.blocks
         ),
     )
     problems = mir.verify(made)
