@@ -214,3 +214,24 @@ LLVM listings remain best-case flat-i386 structural references; BCC remains
 the ABI-constrained reference for this comparison.  No timing claim is made
 until the committed qbopt revision can be used to produce a clean paired
 QCport manifest.
+
+### 12. Committed far-load QCport validation — 2026-09-18
+
+The clean paired listing is now recorded at qbopt `b3bc47d7745a46cd806d007f45c39995d806d832`,
+CPU `386`, against clean QCport `18f5e1f9e8d4ad54622da847dd5a412e6726ab50`
+and source hash
+`e5abf5f8fb67c3cac011579fcb980bff446ab068c130dd2c196652bbf802fef0`.
+The manifest records BCC listing SHA-256
+`3ad08c6af9b725812091677ea60022c629e0ff0c13abd7f82b09c7c0fcde38b7`
+and qbopt listing SHA-256
+`21d841130f6445e2c403b3e82fe995f6ba711f659c3bd244b702e08d8aa0204f`.
+
+Raw assembly verifies both `world->lfc` and `rdr->pflag` now load through
+`les bx,dword ptr [bx+38]` and `les bx,dword ptr [bx+1014]`, respectively.
+This closes the former post-allocation address-identity loss.  The remaining
+gap is now cleanly isolated to phase 4/5 pressure and formula choice: BCC
+keeps the two near owners in DI/SI and carries its scaled offset in a frame
+word, while qbopt still reloads both owners in the loop and carries both the
+source counter and the scaled recurrence in registers.  That is the next
+mechanism to compare with the GCC/LLVM best-case loop structures and BCC's
+medium-model legal form; this iteration makes no timing claim.
