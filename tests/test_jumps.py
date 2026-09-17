@@ -4,8 +4,11 @@ Over qcport: 335 `jcc` over a `jmp`, 262 `jmp` to the next label, 69 jumps
 to a block that only jumps.
 """
 
+from pathlib import Path
+
 from iced_x86 import Register
 
+from qbopt.cfront import compile as cfront
 from qbopt.model import ir
 from qbopt.model import lir
 from qbopt.backend import masm
@@ -91,6 +94,80 @@ def test_jump_over_a_block_nothing_reaches_is_dropped():
 def test_a_block_that_jumps_to_itself_stays():
     """`for (;;);` -- following jumps must not go round forever."""
     assert _printed(lir.LirBlock(1, (_jump(1, 1),), (1,))) == ["L0_1:", "jmp L0_1"]
+
+
+def test_identical_result_tails_are_merged() -> None:
+    """qglsurf emitted the same zero-result tail from two failure arms."""
+    body = lir.LirBody(
+        "f",
+        1,
+        (
+            lir.LirBlock(1, (_compare(1), _branch(2, "je", 20)), (20, 10)),
+            lir.LirBlock(10, (_move(10, ir.Imm(0, 2)), _jump(11, 30)), (30,)),
+            lir.LirBlock(20, (_move(20, ir.Imm(0, 2)), _jump(21, 30)), (30,)),
+            lir.LirBlock(30, (_return(30),), ()),
+        ),
+        {},
+        {},
+    )
+
+    result = jumps.merged(jumps.placed(body))
+    physical = [
+        one.what
+        for block in result.blocks
+        for one in block.insns
+        if one.what is not None and one.what.op is not ir.Operation.NOTHING
+    ]
+
+    assert sum(what.op is ir.Operation.MOVE for what in physical) == 1
+    assert sum(what.op is ir.Operation.BRANCH for what in physical) == 0
+
+
+def test_sieve_rejects_tail_sharing_that_adds_a_hot_jump() -> None:
+    """Unpriced tail sharing grew C sieve from 54 to 55 instructions."""
+    source = Path("bench/c/sieve.c")
+    module = cfront.assembled(cfront.recorded(source, []), source.stem, optimise=True)
+    (procedure,) = module.procedures
+    physical = [
+        one
+        for block in procedure.body.blocks
+        for one in block.insns
+        if one.what is not None and one.what.op is not ir.Operation.NOTHING
+    ]
+
+    assert len(physical) == 46
+
+
+def test_qglsurf_shares_all_three_zero_result_tails() -> None:
+    """QGL surface failure exits fell from 71 to 65 emitted instructions."""
+    source = Path("fixtures/c/qglsurf.cgs")
+    module = cfront.assembled(source.read_text(), source.stem, optimise=True)
+    (procedure,) = module.procedures
+    physical = [
+        one
+        for block in procedure.body.blocks
+        for one in block.insns
+        if one.what is not None and one.what.op is not ir.Operation.NOTHING
+    ]
+
+    assert len(physical) == 57
+    zero_tails = 0
+    for block in procedure.body.blocks:
+        real = [one.what for one in block.insns if one.what is not None and one.what.op is not ir.Operation.NOTHING]
+        if len(real) not in {2, 3} or (len(real) == 3 and real[-1].op is not ir.Operation.JUMP):
+            continue
+        zero, store = real[:2]
+        if (
+            zero.op is ir.Operation.BINARY
+            and zero.name == "xor"
+            and store.op is ir.Operation.MOVE
+            and store.dests
+            and isinstance(store.dests[0], ir.Mem)
+            and store.dests[0].addr is not None
+            and store.dests[0].addr.disp == -14
+        ):
+            zero_tails += 1
+    assert zero_tails == 1
 
 
 def test_loop_test_is_placed_after_its_latch():

@@ -112,6 +112,127 @@ def threaded(body: lir.LirBody) -> lir.LirBody:
     return body
 
 
+def merged(body: lir.LirBody) -> lir.LirBody:
+    """Merge physically identical allocated tails after fallthroughs are explicit."""
+    from qbopt.backend import masm
+
+    # Removing a duplicate block is sound only when every incoming edge is an
+    # instruction that can be retargeted. ``placed`` establishes exactly that
+    # form. Decline a body presented at an earlier pipeline boundary.
+    if any(masm._falls_to(block, body.name) is not None for block in body.blocks):
+        return body
+    while True:
+        groups: dict[tuple, list[lir.LirBlock]] = {}
+        for block in body.blocks:
+            key = _tail_key(block)
+            if key is not None:
+                groups.setdefault(key, []).append(block)
+        redirect = {}
+        for copies in groups.values():
+            if len(copies) < 2:
+                continue
+            canonical = next((block for block in copies if block.at == body.entry), copies[0])
+            redirect.update({block.at: canonical.at for block in copies if block is not canonical})
+        if not redirect:
+            return body
+        body = _redirected(body, redirect)
+
+
+def _tail_key(block: lir.LirBlock) -> tuple | None:
+    """The complete physical form of a mergeable block."""
+    if block.phis:
+        return None
+    shaped = []
+    for one in _real(block):
+        what = one.what
+        if (
+            what is None
+            or what.op in {ir.Operation.BARRIER, ir.Operation.CALL, ir.Operation.DATA}
+            or one.symbol is True
+            or one.group is not None
+        ):
+            return None
+        shaped.append(
+            (
+                what,
+                one.clobbers,
+                one.clobbers_high,
+                tuple(register for _value, register in one.requires),
+                tuple(register for _value, register in one.delivers),
+                one.frame_adjust,
+            )
+        )
+    return (tuple(shaped), tuple(sorted(set(block.succ)))) if shaped else None
+
+
+def _redirected(body: lir.LirBody, redirect: dict[int, int]) -> lir.LirBody:
+    """Redirect every explicit edge, remove duplicate blocks, and fold diamonds."""
+
+    def target(at: int) -> int:
+        seen = set()
+        while at in redirect and at not in seen:
+            seen.add(at)
+            at = redirect[at]
+        return at
+
+    blocks = []
+    for block in body.blocks:
+        if block.at in redirect:
+            continue
+        insns = []
+        for one in block.insns:
+            what = one.what
+            if what is not None and what.op in {ir.Operation.BRANCH, ir.Operation.JUMP} and what.target is not None:
+                one = replace(one, what=replace(what, target=target(what.target)))
+            insns.append(one)
+        successors = tuple(dict.fromkeys(target(at) for at in block.succ))
+        blocks.append(_fold_converged(replace(block, insns=tuple(insns), succ=successors)))
+    entry = target(body.entry)
+    return replace(body, entry=entry, blocks=tuple(blocks))
+
+
+def _fold_converged(block: lir.LirBlock) -> lir.LirBlock:
+    """A conditional whose two CFG edges became one is an unconditional edge."""
+    if len(block.succ) != 1:
+        return block
+    destination = block.succ[0]
+    real = _real(block)
+    last = real[-1] if real else None
+    if (
+        last is not None
+        and last.what is not None
+        and last.what.op is ir.Operation.JUMP
+        and last.what.target == destination
+        and len(real) > 1
+    ):
+        branch = real[-2]
+        if branch.what is not None and branch.what.op is ir.Operation.BRANCH and branch.what.target == destination:
+            return replace(
+                block,
+                insns=tuple(lir.anchor(one) if one is branch else one for one in block.insns),
+            )
+    if last is not None and last.what is not None and last.what.op is ir.Operation.BRANCH:
+        jump = replace(last, what=ir.Semantics(ir.Operation.JUMP, "jmp", target=destination), uses=())
+        return replace(block, insns=tuple(jump if one is last else one for one in block.insns))
+    return block
+
+
+def _work(body: lir.LirBody) -> tuple[int, int]:
+    """Static and profile-free dynamic machine-instruction counts."""
+    from qbopt.analysis import intervals
+
+    depth = intervals.depths(body)
+    counts = {block.at: len(_real(block)) for block in body.blocks}
+    return sum(counts.values()), sum(count * 10 ** depth[at] for at, count in counts.items())
+
+
+def preferred(before: lir.LirBody, after: lir.LirBody) -> lir.LirBody:
+    """Take tail sharing only when size falls without adding executed work."""
+    before_static, before_dynamic = _work(before)
+    after_static, after_dynamic = _work(after)
+    return after if after_static < before_static and after_dynamic <= before_dynamic else before
+
+
 def _step(body: lir.LirBody) -> tuple[lir.LirBody, bool]:
     blocks = list(body.blocks)
     at = {block.at: index for index, block in enumerate(blocks)}

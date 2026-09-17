@@ -1244,7 +1244,23 @@ one documented target without materially regressing another.
   straight CFG edge, agreeing and disagreeing joins, opaque calls, successor
   overwrites, live flags, memory reads, and the C `add sp,N` cleanup defect
   exposed while integrating DCE.
-- [ ] Add branch folding and tail merging after final block placement.
+- [ ] Add branch folding and tail merging after final block placement. The C
+  fresh-emission path now materializes every fallthrough, recursively merges
+  physically identical allocated blocks, folds a conditional whose two edges
+  converge, reruns machine DCE, and then selects fallthroughs. The candidate is
+  transactional: it must reduce static machine-instruction count without
+  increasing the loop-depth-weighted executed count. That rule was added by a
+  fail-first regression after unconditional sharing grew sieve from 54 to 55
+  emitted instructions and also regressed `anims` and `ls_animate`; all three
+  now retain their former code. Shellsort improves from 214 bytes / 73
+  instructions / 286 modeled 386 cost to 210 / 71 / 277, and all later CPU
+  profiles lose four bytes and two instructions without a modeled-cost
+  regression. Qglsurf's three identical zero-result exits become one, taking
+  the function from 201 bytes / 71 instructions to 183 / 65 on every CPU.
+  The first changed stage is exactly `lir-layout` (63 to 57 physical LIR
+  instructions); every earlier machine phase is identical. Source-map-aware
+  tail sharing for raised BC bodies remains open, so this item is not yet
+  complete across both frontends.
 - [ ] Extend rematerialization, spill folding, spill-slot reuse and live-range
   splitting using measured interval costs.
   Lowering rematerializes shared immediate PRINT arguments, including relocated
