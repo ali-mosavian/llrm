@@ -71,3 +71,21 @@ loop.  This confirms a general phase-4 region-splitting and pressure issue.
 Do not add a `r_walk` special case: the next implementation must preserve
 profitable invariant values across any call-free loop and include a
 source-independent fail-first regression.
+
+### 4. Allocator split trace — 2026-09-18
+
+The initial explanation above was refined with a trace of the production
+allocator.  `splitkit` does propose its normal hottest-region split for both
+incoming pointer values (block 77, the loop body), but rejects both because
+no legal general-purpose register is free in that region.  The blocker is not
+a missing split category.  qbopt widens the byte load/OR/store into several
+word temporaries before allocation, while BCC keeps the operation as one byte
+read-modify-write instruction.  Those temporary live ranges consume the
+capacity that the existing splitter needs.
+
+Next implementation: recognize a general, non-volatile byte memory
+read-modify-write chain in MIR/LIR and select a byte RMW form when its address,
+load and store are identical and no intervening effect observes the value.
+The regression must use a standalone C input; after it lowers pressure, rerun
+the paired `r_walk` manifest to establish whether the generic splitter keeps
+the pointer bases.
