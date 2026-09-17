@@ -62,10 +62,17 @@ def spilled(
     made: set[int] = set()
     constants = _constants(body, values)
     frame_addresses = _frame_addresses(body, values)
+    extensions = _extensions(body, values)
     frame_loads = {**_stable_loads(body, values), **_frame_loads(body, values)}
     frame_homes = _frame_homes(body, values - frame_loads.keys())
     rebuilt = {**frame_loads, **{value: home for value, (home, _at) in frame_homes.items()}}
-    stored = values - constants.keys() - frame_addresses.keys() - frame_loads.keys() - frame_homes.keys()
+    stored = values.difference(
+        constants,
+        frame_addresses,
+        extensions,
+        frame_loads,
+        frame_homes,
+    )
     # Before any cell names a slot: one made at the first use's width is
     # outgrown by a wider use later, which then writes over its neighbour.
     _color_slots(body, stored, _widest(body, stored), frame)
@@ -99,6 +106,7 @@ def spilled(
                     (
                         value not in constants
                         and value not in frame_addresses
+                        and value not in extensions
                         and value not in frame_loads
                         and value not in frame_homes
                     )
@@ -135,6 +143,21 @@ def spilled(
                                 ),
                                 (fresh,),
                                 (),
+                            ),
+                            rematerialized=True,
+                        )
+                    )
+                elif value in extensions:
+                    definition = extensions[value]
+                    destination = definition.what.dests[0]
+                    source = definition.what.sources[0]
+                    insns.append(
+                        replace(
+                            _inserted(
+                                one,
+                                replace(definition.what, dests=(ir.Held(fresh, destination.width),)),
+                                (fresh,),
+                                (source.value,),
                             ),
                             rematerialized=True,
                         )
@@ -183,7 +206,7 @@ def spilled(
                 rematerialized_definitions.add(id(rewritten))
             if (
                 len(one.defines) == 1
-                and one.defines[0] in constants.keys() | frame_addresses.keys()
+                and one.defines[0] in constants.keys() | frame_addresses.keys() | extensions.keys()
                 and not (one.requires or one.delivers or one.clobbers)
                 and one.group is None
                 and one.symbol is not True
@@ -468,6 +491,7 @@ def rematerializable(body: lir.LirBody, values: frozenset[int]) -> frozenset[int
     return (
         frozenset(_constants(body, values))
         | frozenset(_frame_addresses(body, values))
+        | frozenset(_extensions(body, values))
         | frame_rematerializable(body, values)
         | frozenset(_stable_loads(body, values))
         | frozenset(_frame_homes(body, values))
@@ -1003,6 +1027,65 @@ def _frame_addresses(body: lir.LirBody, values: frozenset[int]) -> dict[int, ir.
                 and source.index == Register.NONE
             ):
                 result[value] = source
+    return result
+
+
+def _extensions(body: lir.LirBody, values: frozenset[int]) -> dict[int, lir.Insn]:
+    """One-use integer extensions that are cheaper to recreate than spill.
+
+    Moving a single ``movsx`` or ``movzx`` from its definition to its only
+    consumer duplicates no machine work.  It replaces the wide result's live
+    range with the narrower source's, and removes both the spill store and the
+    reload (or memory operand) that preserving the result would require.
+
+    LIR is no longer SSA after phi elimination, so delaying an extension is
+    sound only while its source cannot be redefined on the way.  An incoming
+    value has no definitions; otherwise require its sole definition to be
+    earlier in the same block as the extension.  Grouped consumers are kept
+    out because inserting an instruction into a parallel copy would split the
+    simultaneous run.
+    """
+    definitions: dict[int, list[tuple[int, int, lir.Insn]]] = {}
+    uses: dict[int, list[lir.Insn]] = {value: [] for value in values}
+    for block_index, block in enumerate(body.blocks):
+        for insn_index, one in enumerate(block.insns):
+            for value in one.defines:
+                definitions.setdefault(value, []).append((block_index, insn_index, one))
+            for value in values.intersection(one.uses):
+                uses[value].append(one)
+
+    result: dict[int, lir.Insn] = {}
+    for value in values:
+        found = definitions.get(value, ())
+        consumers = uses.get(value, ())
+        if len(found) != 1 or len(consumers) != 1 or consumers[0].group is not None:
+            continue
+        block_index, insn_index, one = found[0]
+        match one.what:
+            case ir.Semantics(
+                ir.Operation.EXTEND,
+                "movsx" | "movzx",
+                (ir.Held(value=destination, width=wide),),
+                (ir.Held(value=source, width=narrow),),
+            ) if (
+                destination == value
+                and wide > narrow
+                and one.defines == (value,)
+                and one.uses == (source,)
+                and source not in values
+                and not (one.requires or one.delivers or one.clobbers or one.clobbers_high)
+                and one.group is None
+                and not one.spread
+                and one.symbol is not True
+            ):
+                source_definitions = definitions.get(source, ())
+                unchanged = not source_definitions or (
+                    len(source_definitions) == 1
+                    and source_definitions[0][0] == block_index
+                    and source_definitions[0][1] < insn_index
+                )
+                if unchanged:
+                    result[value] = one
     return result
 
 

@@ -1311,6 +1311,16 @@ one documented target without materially regressing another.
   metrics; focused two-round fixtures demonstrate safe reuse, overlapping
   refusal, and width-compatible reuse. This is allocator infrastructure, not
   a benchmark speedup claim.
+  Rematerialization now also covers one-use `movsx` and `movzx` results. The
+  gate proves the narrow source has no intervening redefinition and refuses
+  repeated or parallel-copy consumers, so moving the extension cannot
+  duplicate work or split a simultaneous copy. Mandelbrot's parameter
+  extension was stored solely to feed one later copy; recreating it there
+  removes that private slot. Its 386 result moves from a 20- to a 16-byte
+  frame, 198 to 192 emitted bytes, 58 to 57 instructions, and 295 to 293
+  modeled cost. The freshly linked DOS program still returns the independent
+  answer 8873. The fail-first regressions cover both signed and unsigned
+  extensions plus every refusal condition.
   The current uncommitted qrender rollout removes 10,590 code bytes across
   all 21 BASIC modules and restores E1M1 screenshot completion. Three dedicated
   QGL checks match baseline; broader renderer acceptance remains open. See

@@ -368,6 +368,93 @@ def test_spilled_frame_address_is_rematerialized_without_a_frame_slot() -> None:
     assert result.insns[-1].what.sources[1].value == recreated[0].defines[0]
 
 
+@pytest.mark.parametrize("name", ["movsx", "movzx"])
+def test_single_use_extension_is_rematerialized_at_its_use(name: str) -> None:
+    """Mandelbrot stored a one-use ``movsx`` result in a private slot and
+    read that slot back in its hot loop.
+
+    Moving the same extension beside its only use cannot duplicate work: it
+    replaces the extended value's live range with its narrower source's and
+    removes one spill store plus one reload or folded memory operand.
+    """
+    extension = lir.Insn(
+        at=0x10,
+        covers=(0x10, 0x10),
+        what=ir.Semantics(ir.Operation.EXTEND, name, (ir.Held(2, 4),), (ir.Held(1, 2),)),
+        defines=(2,),
+        uses=(1,),
+    )
+    use = lir.Insn(
+        at=0x14,
+        covers=(0x14, 0x16),
+        what=ir.Semantics(
+            ir.Operation.BINARY,
+            "add",
+            (ir.Held(3, 4),),
+            (ir.Held(3, 4), ir.Held(2, 4)),
+        ),
+        defines=(3,),
+        uses=(3, 2),
+    )
+    frame = frames.Frame(0)
+
+    result, _made = spiller.spilled(_body(_move(1, 0, at=0x0F), extension, use), frozenset({2}), frame)
+
+    assert 2 not in frame.slots
+    assert [one.what.name for one in result.insns] == ["mov", name, "add"]
+    assert result.insns[1].rematerialized
+    assert result.insns[1].uses == (1,)
+    assert result.insns[2].uses == (3, result.insns[1].defines[0])
+    assert not any(
+        isinstance(operand, ir.Mem) for one in result.insns for operand in (*one.what.dests, *one.what.sources)
+    )
+
+
+@pytest.mark.parametrize("unsafe", ["multiple uses", "source redefined", "parallel copy"])
+def test_extension_rematerialization_requires_one_unchanged_ordinary_use(unsafe: str) -> None:
+    """Delaying an extension must neither duplicate it nor read a newer
+    source value, and cannot split a simultaneous parallel-copy run."""
+    extension = lir.Insn(
+        at=0x10,
+        covers=(0x10, 0x10),
+        what=ir.Semantics(ir.Operation.EXTEND, "movsx", (ir.Held(2, 4),), (ir.Held(1, 2),)),
+        defines=(2,),
+        uses=(1,),
+    )
+    use = lir.Insn(
+        at=0x14,
+        covers=(0x14, 0x16),
+        what=ir.Semantics(
+            ir.Operation.BINARY,
+            "add",
+            (ir.Held(3, 4),),
+            (ir.Held(3, 4), ir.Held(2, 4)),
+        ),
+        defines=(3,),
+        uses=(3, 2),
+        group=7 if unsafe == "parallel copy" else None,
+    )
+    middle = (_move(1, 4, at=0x12),) if unsafe == "source redefined" else ()
+    later = (
+        (
+            lir.Insn(
+                at=0x18,
+                covers=(0x18, 0x1A),
+                what=replace(use.what, dests=(ir.Held(5, 4),), sources=(ir.Held(5, 4), ir.Held(2, 4))),
+                defines=(5,),
+                uses=(5, 2),
+            ),
+        )
+        if unsafe == "multiple uses"
+        else ()
+    )
+    frame = frames.Frame(0)
+
+    spiller.spilled(_body(extension, *middle, use, *later), frozenset({2}), frame)
+
+    assert 2 in frame.slots
+
+
 def test_c_matmul_multiplies_spilled_rows_directly_from_memory() -> None:
     """Matmul reloaded all eight unrolled lhs values solely to feed ``imul``.
 
