@@ -38,10 +38,13 @@ that fails to return without mistaking a timeout for a wrong answer.
 - rematerializations count the final allocated-LIR instructions that rebuild a
   value at its use instead of keeping it live or assigning a spill slot.
 - dynamic operations are a profile-free CFG estimate: ordinary branches divide
-  evenly and natural loops use the allocator's ten-iteration convention. Calls,
-  interrupts, repeated instructions, irreducible control flow, and nonterminating
-  estimates remain explicitly unmeasured because their hidden work is unbounded.
-  A `null` here is not zero.
+  evenly and natural loops use the allocator's ten-iteration convention. The
+  same basic-block construction, natural-loop analysis and frequency solver run
+  over GCC/Clang assembly, so an unrolled reference is compared with the work a
+  qbopt loop executes rather than with qbopt's much smaller static body. Calls,
+  interrupts, repeated instructions, unresolved or indirect branch targets,
+  irreducible control flow, and nonterminating estimates remain explicitly
+  unmeasured because their hidden work is unbounded. A `null` here is not zero.
 
 The report always writes raw qbopt assembly.  With `--references`, it also asks
 Clang and `i686-elf-gcc` for freestanding i386 `-O3` assembly with SSE and
@@ -49,6 +52,15 @@ vectorization disabled.  GCC's reported target is checked before it is used.
 A compiler without an i386 backend is reported as failed or unavailable;
 output from the host architecture is not substituted.  Reference assembly is
 advisory and does not become the target automatically.
+
+The one-line reference comparison prefers estimated executed instructions when
+both functions have a complete estimate and says so in the label. It falls back
+to a separately labelled **static instructions** ratio otherwise. This matters
+for the corpus: i686 GCC expands the constant CRC input into hundreds of static
+instructions, while qbopt keeps an outer loop. The old static-only headline
+reported qbopt at `0.13x`, flattering it by almost eightfold; the CFG estimate
+reports `1.19x` executed work instead. Static size remains in the JSON report
+and is still a separate acceptance dimension.
 
 ## Target trust boundary
 

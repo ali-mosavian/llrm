@@ -16,6 +16,7 @@ import hashlib
 import argparse
 import subprocess
 from pathlib import Path
+from dataclasses import dataclass
 from collections.abc import Callable
 
 from iced_x86 import Decoder
@@ -44,6 +45,13 @@ REFERENCE_QUALIFIERS = ("near", "far", "huge", "cdecl", "pascal")
 STRUCTURAL_METRICS = ("instructions", "loads", "stores", "branches", "calls", "address_calculations")
 
 _FUNCTION_TYPE = re.compile(r'^\.type\s+"?([^",]+)"?\s*,\s*[@%]function$')
+
+
+@dataclass(frozen=True, slots=True)
+class _ReferenceBlock:
+    at: int
+    instructions: tuple[str, ...]
+    succ: tuple[int, ...]
 
 
 def _normalized_hash(instructions: tuple[str, ...]) -> str:
@@ -145,28 +153,100 @@ def _reference_metrics(instructions: list[str]) -> dict[str, int]:
     }
 
 
+def _reference_dynamic(events: list[tuple[str, str]]) -> tuple[float | None, str]:
+    """Profile-free executed instructions from a reference function's CFG."""
+    if any(
+        line.split(None, 1)[0] in {"call", "int", "into"} or line.split(None, 1)[0].startswith("rep")
+        for kind, line in events
+        if kind == "instruction"
+    ):
+        return None, "unmeasured: call, interrupt, or repeated instruction hides executed work"
+
+    chunks: list[tuple[tuple[str, ...], tuple[str, ...]]] = []
+    labels: list[str] = []
+    instructions: list[str] = []
+
+    def terminates(line: str) -> bool:
+        mnemonic = line.split(None, 1)[0]
+        return mnemonic == "ud2" or any(mnemonic.startswith(prefix) for prefix in ("j", "loop", "ret"))
+
+    def finish() -> None:
+        nonlocal labels, instructions
+        if instructions:
+            chunks.append((tuple(labels), tuple(instructions)))
+            labels, instructions = [], []
+
+    for kind, text in events:
+        if kind == "label":
+            finish()
+            labels.append(text.lower())
+            continue
+        instructions.append(text)
+        if terminates(text):
+            finish()
+    finish()
+    if not chunks:
+        return None, "unmeasured: function has no basic blocks"
+    target_of = {label: index for index, (names, _insns) in enumerate(chunks) for label in names}
+    blocks = []
+    for index, (_names, insns) in enumerate(chunks):
+        mnemonic, _, operands = insns[-1].partition(" ")
+        following = (index + 1,) if index + 1 < len(chunks) else ()
+        if mnemonic.startswith("ret") or mnemonic == "ud2":
+            successors = ()
+        elif mnemonic == "jmp":
+            destination = operands.split()[-1].strip('"').lower()
+            if destination not in target_of:
+                return None, f"unmeasured: unresolved branch target {destination}"
+            successors = (target_of[destination],)
+        elif mnemonic.startswith("j") or mnemonic.startswith("loop"):
+            destination = operands.split()[-1].strip('"').lower()
+            if destination not in target_of:
+                return None, f"unmeasured: unresolved branch target {destination}"
+            successors = tuple(dict.fromkeys((target_of[destination], *following)))
+        else:
+            successors = following
+        blocks.append(_ReferenceBlock(index, insns, successors))
+    body = lir.LirBody(
+        "reference",
+        0,
+        tuple(lir.LirBlock(block.at, (), block.succ) for block in blocks),
+        {},
+        {},
+    )
+    frequencies = _frequencies(body)
+    if frequencies is None:
+        return None, "unmeasured: control flow has no finite profile-free estimate"
+    estimate = round(sum(len(block.instructions) * frequencies.get(block.at, 0.0) for block in blocks), 6)
+    return estimate, "estimated: CFG branches and ten iterations per natural loop"
+
+
 def _reference_functions(assembly: str) -> list[dict]:
     """Measure each explicitly delimited function in GCC/Clang assembly."""
     declared: set[str] = set()
     current: str | None = None
     functions: list[dict] = []
     instructions: list[str] = []
+    events: list[tuple[str, str]] = []
 
     def finish() -> None:
-        nonlocal current, instructions
+        nonlocal current, instructions, events
         if current is None:
             return
         raw = _reference_metrics(instructions)
         body = _abi_body(instructions, lambda line: line.partition(" ")[::2])
+        dynamic_operations, dynamic_status = _reference_dynamic(events)
         functions.append(
             {
                 "name": current,
                 **raw,
                 "comparison": _reference_metrics(body),
+                "dynamic_operations": dynamic_operations,
+                "dynamic_status": dynamic_status,
                 "normalized_sha256": _normalized_hash(tuple(instructions)),
             }
         )
-        current, instructions = None, []
+        current, instructions, events = None, [], []
 
     for raw in assembly.splitlines():
         line = raw.split("#", 1)[0].strip()
@@ -177,16 +257,23 @@ def _reference_functions(assembly: str) -> list[dict]:
             continue
         if line.endswith(":") and line[:-1].strip('"') in declared:
             finish()
-            current = line[:-1].strip('"')
+            function_name = line[:-1].strip('"')
+            current = function_name
+            events.append(("label", function_name.lower()))
             continue
         if current is None:
             continue
         if line.startswith(".size"):
             finish()
             continue
-        if line.startswith(".") or line.endswith(":"):
+        if line.endswith(":"):
+            events.append(("label", line[:-1].strip('"').lower()))
             continue
-        instructions.append(" ".join(line.lower().split()))
+        if line.startswith("."):
+            continue
+        normalized = " ".join(line.lower().split())
+        instructions.append(normalized)
+        events.append(("instruction", normalized))
     finish()
     return functions
 
@@ -581,6 +668,15 @@ def _comparisons(reports: list[dict], references: list[dict]) -> list[dict]:
                     metric: candidate_metrics[metric] / reference_metrics[metric] if reference_metrics[metric] else None
                     for metric in STRUCTURAL_METRICS
                 }
+                candidate_dynamic = function.get("dynamic_operations")
+                reference_dynamic = other.get("dynamic_operations")
+                ratios["dynamic_operations"] = (
+                    candidate_dynamic / reference_dynamic
+                    if isinstance(candidate_dynamic, (int, float))
+                    and isinstance(reference_dynamic, (int, float))
+                    and reference_dynamic > 0
+                    else None
+                )
                 attribution = {
                     metric: _gap_attribution(
                         function.get("stages", []),
@@ -597,8 +693,14 @@ def _comparisons(reports: list[dict], references: list[dict]) -> list[dict]:
                         "function": name,
                         "compiler": reference["compiler"],
                         "reference_assembly": reference.get("assembly"),
-                        "qbopt": {metric: candidate_metrics[metric] for metric in STRUCTURAL_METRICS},
-                        "reference": {metric: reference_metrics[metric] for metric in STRUCTURAL_METRICS},
+                        "qbopt": {
+                            **{metric: candidate_metrics[metric] for metric in STRUCTURAL_METRICS},
+                            "dynamic_operations": candidate_dynamic,
+                        },
+                        "reference": {
+                            **{metric: reference_metrics[metric] for metric in STRUCTURAL_METRICS},
+                            "dynamic_operations": reference_dynamic,
+                        },
                         "ratios": ratios,
                         "gap_attribution": attribution,
                         "first_excess_stage": {
@@ -665,11 +767,11 @@ def _stage_metrics(state: object) -> dict:
         memory_sources = tuple(operand for operand in what.sources if isinstance(operand, ir.Mem))
         stores += len(memory_dests)
         loads += len(memory_sources)
-        if what.op not in (ir.Operation.MOVE, ir.Operation.FLOAT_STORE) and not _pure_memory_store(what.name):
+        if what.op not in (ir.Operation.MOVE, ir.Operation.FLOAT_STORE) and not _pure_memory_store(what.name or ""):
             loads += sum(operand not in memory_sources for operand in memory_dests)
         branches += what.op in (ir.Operation.JUMP, ir.Operation.BRANCH)
         calls += what.op is ir.Operation.CALL
-        addresses += what.name.lower() == "lea"
+        addresses += (what.name or "").lower() == "lea"
     return {
         "form": "lir",
         "instructions": len(insns),
@@ -745,11 +847,13 @@ def main(argv: list[str] | None = None) -> int:
                 f"{function['bytes']:>5} bytes {function['instructions']:>4} ins {cost:>7} cost {ratio}"
             )
     for comparison in comparisons:
-        ratio = comparison["ratios"]["instructions"]
+        dynamic = comparison["ratios"].get("dynamic_operations")
+        ratio = dynamic if dynamic is not None else comparison["ratios"]["instructions"]
         measured = "--" if ratio is None else f"{ratio:.2f}x"
+        metric = "estimated executed instructions" if dynamic is not None else "static instructions"
         print(
             f" ref {comparison['cpu']:>4} {Path(comparison['source']).stem}.{comparison['function']:<24} "
-            f"{comparison['compiler']:<14} {measured:>6} instructions"
+            f"{comparison['compiler']:<14} {measured:>6} {metric}"
         )
     if not args.gate:
         return 0

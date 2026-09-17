@@ -200,6 +200,8 @@ def test_reference_assembly_is_measured_per_function_without_directives_or_comme
                 "calls": 1,
                 "address_calculations": 0,
             },
+            "dynamic_operations": None,
+            "dynamic_status": "unmeasured: call, interrupt, or repeated instruction hides executed work",
             "normalized_sha256": quality._normalized_hash(
                 (
                     "mov eax, dword ptr [esp+4]",
@@ -211,6 +213,26 @@ def test_reference_assembly_is_measured_per_function_without_directives_or_comme
             ),
         }
     ]
+
+
+def test_reference_dynamic_operations_count_a_natural_loop() -> None:
+    """CRC's unrolled GCC body looked 7.7x worse because only static work was compared."""
+    assembly = """
+        .type bench_loop, @function
+    bench_loop:
+        mov ecx, 10
+    .Lagain:
+        add eax, 1
+        dec ecx
+        jne .Lagain
+        ret
+        .size bench_loop, .-bench_loop
+    """
+
+    (function,) = quality._reference_functions(assembly)
+
+    assert function["dynamic_operations"] == 32.0
+    assert function["dynamic_status"] == "estimated: CFG branches and ten iterations per natural loop"
 
 
 @pytest.mark.parametrize("mnemonic", ["fld", "fsubr", "cmp", "push"])
@@ -267,6 +289,7 @@ def test_structural_comparison_matches_c_and_medium_model_symbol_spellings() -> 
                     "branches": 3,
                     "calls": 0,
                     "address_calculations": 2,
+                    "dynamic_operations": 120.0,
                 }
             ],
         }
@@ -285,6 +308,7 @@ def test_structural_comparison_matches_c_and_medium_model_symbol_spellings() -> 
                     "branches": 2,
                     "calls": 0,
                     "address_calculations": 1,
+                    "dynamic_operations": 100.0,
                 }
             ],
         }
@@ -298,6 +322,7 @@ def test_structural_comparison_matches_c_and_medium_model_symbol_spellings() -> 
         "branches": 1.5,
         "calls": None,
         "address_calculations": 2.0,
+        "dynamic_operations": 1.2,
     }
 
 
