@@ -712,14 +712,26 @@ def _truncating(body: lir.LirBody, frame) -> lir.LirBody:
     in the body writes it."""
     from qbopt.backend.lower import Unlowered
 
-    if not any(one.what is not None and one.what.op is ir.Operation.FLOAT_STORE and one.what.name == "fisttp" for one in body.insns):
+    if not any(
+        one.what is not None and one.what.op is ir.Operation.FLOAT_STORE and one.what.name == "fisttp"
+        for one in body.insns
+    ):
         return body
     if frame is None:
         raise Unlowered("rounding toward zero requires an owned frame")
     saved, chop = frame.cell(("control",), 2), frame.cell(("chop",), 2)
+    from qbopt.backend.spiller import _next_value
+
+    loaded_id = _next_value(body)
+    chopped_id = loaded_id + 1
+    loaded = ir.Held(loaded_id, 2)
+    chopped = ir.Held(chopped_id, 2)
 
     def insn(what: ir.Semantics, at: int) -> lir.Insn:
-        return lir.Insn(at, (at, at), what, (), ())
+        defines = tuple(arg.value for arg in what.dests if isinstance(arg, ir.Held))
+        uses = tuple(arg.value for arg in what.sources if isinstance(arg, ir.Held))
+        widths = tuple((arg.value, arg.width) for arg in (*what.dests, *what.sources) if isinstance(arg, ir.Held))
+        return lir.Insn(at, (at, at), what, defines, uses, widths=widths)
 
     blocks = []
     for block in body.blocks:
@@ -728,8 +740,9 @@ def _truncating(body: lir.LirBody, frame) -> lir.LirBody:
             at = block.insns[0].at if block.insns else block.at
             insns += [
                 insn(ir.Semantics(ir.Operation.BARRIER, "fnstcw", (saved,), ()), at),
-                insn(ir.Semantics(ir.Operation.BARRIER, "fnstcw", (chop,), ()), at),
-                insn(ir.Semantics(ir.Operation.BINARY, "or", (chop,), (chop, ir.Imm(0x0C00, 2))), at),
+                insn(ir.Semantics(ir.Operation.MOVE, "mov", (loaded,), (saved,)), at),
+                insn(ir.Semantics(ir.Operation.BINARY, "or", (chopped,), (loaded, ir.Imm(0x0C00, 2))), at),
+                insn(ir.Semantics(ir.Operation.MOVE, "mov", (chop,), (chopped,)), at),
             ]
         for one in block.insns:
             if one.what is None or one.what.op is not ir.Operation.FLOAT_STORE or one.what.name != "fisttp":

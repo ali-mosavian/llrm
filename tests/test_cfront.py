@@ -381,7 +381,13 @@ def test_float_cast_truncates():
     assert body[at + 1].startswith("fmul dword ptr L_f") and "mov word ptr [bp-10], 10" not in body
     assert [line.split()[0] for line in body[at + 2 : at + 5]] == ["fldcw", "fistp", "fldcw"]
     saves = [index for index, line in enumerate(body) if line.startswith("fnstcw")]
-    assert len(saves) == 2 and saves[-1] < at
+    assert len(saves) == 1 and saves[0] < at
+    masks = [
+        line
+        for line in body
+        if line.startswith("or ") and not line.startswith("or word ptr") and line.endswith((", 3072", ", 12"))
+    ]
+    assert len(masks) == 1
 
 
 def test_register_convention_is_refused():

@@ -240,3 +240,22 @@ stack token conservatively serializes that chain. It may overstate overlap
 between independent x87 expressions, but it cannot hide dependent work as
 parallel work; a future eight-entry stack model can refine it without changing
 the cost-table interface.
+
+## Deriving the truncating control word with integer work
+
+C floating-to-integer conversion previously initialized both control-word
+slots with `fnstcw`, then ORed the truncation bits into the second slot. The
+second x87 state store is unnecessary: one `fnstcw`, followed by an integer
+load/OR/store, derives the same word while retaining the original for the
+restore. GCC's local i686 compiler emits the same dependency shape for the C
+floats benchmark: `fnstcw`, `movw`, `orb`, `movw`.
+
+On the committed benchmark the emitted setup changes from 11 bytes and three
+instructions to 12 bytes and four instructions. That one-byte static tradeoff
+removes an x87 control-store operation. The form-specific quality ranking falls
+on every profile: 363 to 355 on 386, 281 to 273 on 486, 111 to 107 on P5, 138
+to 137 on P6, 145 to 141 on K5, 136 to 134 on K6, 111 to 109 on K7, and 135 to
+133 on Core. These are weighted static costs, not elapsed cycles. In particular,
+the older standalone cycle scorer has no memory dependency model and may place
+the old `fnstcw [slot]` and following `or [slot]` in parallel; that result is an
+instrument limitation, not evidence that the dependency is absent.

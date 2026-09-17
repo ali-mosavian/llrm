@@ -9,7 +9,7 @@ from iced_x86 import Register
 def test_truncation_saves_the_control_word_once_per_body():
     """Every `(int)f` saved the control word and built the truncating one again:
     six instructions a site, 143 sites over qcport, where one save at entry
-    leaves three a site."""
+    leaves three a site. The derived word needs no second x87 state store."""
     from qbopt.backend import frame
 
     def insn(at, what):
@@ -25,7 +25,11 @@ def test_truncation_saves_the_control_word_once_per_body():
     )
     result = floatalloc._truncating(lir.LirBody("t", 0, blocks, {}, {}), frame.Frame(-8))
     names = {block.at: [one.what.name for one in block.insns if one.what.name] for block in result.blocks}
-    assert names == {0: ["fnstcw", "fnstcw", "or"], 5: ["fldcw", "fistp", "fldcw", "fldcw", "fistp", "fldcw"]}
+    assert names == {
+        0: ["fnstcw", "mov", "or", "mov"],
+        5: ["fldcw", "fistp", "fldcw", "fldcw", "fistp", "fldcw"],
+    }
+
 
 from qbopt.model import ir
 from qbopt.model import lir
