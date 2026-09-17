@@ -1,14 +1,14 @@
 # Getting the machine out of MIR itself
 
-The passes are the easy half. `mir.Op` was the hard half: four of its fields
-were machine facts, and `MirBody.origin` is a fifth.
+The passes were the easy half. `mir.Op` carried four machine facts and
+`MirBody` carried placement; all five have left public MIR.
 
 ```
   Op.node    ir.Node -- the decoded x86 instruction              removed
   Op.made    ir.Semantics over ir.Reg -- machine operands         removed
   Op.covers  a range of BC's bytes                                removed
   Op.symbol  whether this operation still owns its source fixup       removed
-  MirBody.origin  Value -> Register_
+  MirBody.origin  Value -> Register_                             removed
 ```
 
 ## What replaces them
@@ -49,7 +49,7 @@ C. `covers` -> `absorbed`.                                shadow model done;
 E. `origin`.
    production BASIC and C lowering use the external side table. done
    optimization and shared analysis do not read or propagate it. done
-   remove the compatibility fields from public `MirBody`. pending
+   remove the compatibility fields from public `MirBody`. done
 
 ## Measuring it
 

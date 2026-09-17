@@ -44,7 +44,7 @@ def test_a_clobber_ends_the_raised_selector_dependency():
         return mir._RaisedOp(at, ir.Operation.MOVE, "mov", (), (), stores=(element,), node=node,
                              kind=mir.Kind.STORE, results=(mir.Cell(element),))
     clobber = mir.Op(2, ir.Operation.CALL, "call", (), (), kind=mir.Kind.CALL)
-    body = mir.MirBody(0, (mir.MirBlock(0, (), (selector, store(1), clobber, store(3)), ()),), {})
+    body = mir._RaisedBody(0, (mir.MirBlock(0, (), (selector, store(1), clobber, store(3)), ()),))
     raised = raising_addresses.loaded(body).blocks[0].ops
     value, = raised[0].defines
     assert raised[1].stores[0].segment == value
@@ -90,7 +90,7 @@ def test_long_extraction_preserves_the_far_store_selector():
             )
         ),
     )
-    body = mir.MirBody(0, (mir.MirBlock(0, (), (selector, extract, store), ()),), {})
+    body = mir._RaisedBody(0, (mir.MirBlock(0, (), (selector, extract, store), ()),))
     raised = raising_addresses.loaded(body)
     first, _, last = raised.blocks[0].ops
     last = replace(last, source_backed=True)

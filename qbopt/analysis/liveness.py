@@ -51,7 +51,10 @@ def entry_values(body: mir.MirBody) -> frozenset[Value]:
     used = {
         one
         for block in body.blocks
-        for one in ({u for op in block.ops for u in op.uses} | {v for phi in block.phis for v in phi.incoming.values()})
+        for one in (
+            {u for op in block.ops for u in (*op.uses, *op.exits)}
+            | {v for phi in block.phis for v in phi.incoming.values()}
+        )
     }
     return frozenset(used - defined)
 
@@ -103,7 +106,13 @@ def live(body: mir.MirBody) -> Liveness:
     while changing:
         changing = False
         for block in body.blocks:
-            out: set[Value] = set()
+            # An exit observation happens after the operation carrying it.
+            # Seeding live-out, rather than treating it as an operand, lets a
+            # terminal call define the value its caller observes without also
+            # pretending that the call reads its own result.
+            out: set[Value] = {
+                value for op in block.ops for value in mir.exit_values(op)
+            }
             for successor in block.succ:
                 found = body.block(successor)
                 if found is None:

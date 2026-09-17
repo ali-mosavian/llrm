@@ -25,7 +25,8 @@ def _copy(byte=0xfc):
     path = Path("fixtures/omf/fpdeep-p-g2.obj")
     found = corpus.loaded(path)
     raised = mir.bodies(found, corpus.partitioned(path))
-    body = raised[0][1]
+    public = raised[0][1]
+    body = mir._with_hints(public, raised.hints[public.entry])
 
     def with_node(op):
         values = {field.name: getattr(op, field.name) for field in fields(mir.Op)}

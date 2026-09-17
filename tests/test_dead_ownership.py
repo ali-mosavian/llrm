@@ -87,6 +87,6 @@ def test_local_overwrite_does_not_expose_an_opaque_reader(guard):
         ops = (initial, overwrite, opaque)
     if guard == "exit":
         ops = (initial, opaque)
-    body = mir.MirBody(0, (mir.MirBlock(0, (), ops, ()),), {})
+    body = mir.MirBody(0, (mir.MirBlock(0, (), ops, ()),))
     changed = transform.dead(body)
     assert (changed.blocks[0].ops[0].kind is mir.Kind.NOTHING) == (guard is None)

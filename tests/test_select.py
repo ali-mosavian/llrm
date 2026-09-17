@@ -1100,6 +1100,7 @@ def test_an_instruction_holding_a_moved_operand_is_not_the_site_it_came_from() -
     and only one moved, and the count cannot say which is which.
     """
     from qbopt.model import ir
+    from qbopt.model import lir
     from qbopt.model import mir
     from qbopt.backend import asm
     from qbopt.objectfile import omf
@@ -1109,13 +1110,12 @@ def test_an_instruction_holding_a_moved_operand_is_not_the_site_it_came_from() -
 
     found = module.of(omf.parse(Path("fixtures/omf/cmpord-p-g2.obj").read_bytes()))
     raised = mir.bodies(found, split.partition(found, code_map(found)))
-    found = raised.source.applied(found)
     bodies = list(raised)
-    site = next(one for one in found.absorbed)
+    site = next(one for one in raised.source.absorbed)
     # Kind and all, so the site's own record would answer for it: the
     # kind check alone lets one through whose operation still raises as a
     # divide, and what says no is that the operand moved here.
-    kind = found.absorbed[site][0]
+    kind = raised.source.absorbed[site][0]
     lifted = mir.Op(
         at=kind.start,
         op=ir.Operation.MOVE,
@@ -1126,13 +1126,30 @@ def test_an_instruction_holding_a_moved_operand_is_not_the_site_it_came_from() -
         id=site,
         symbol=True,
     )
-    assert asm._folded_site(lifted, found) is None, "the moved operand was read as the site"
+    address = ir.Addr(ir.Space.SEGMENT, 0)
+    instruction = lir.Insn(
+        kind.start,
+        (kind.start, kind.start),
+        ir.Semantics(
+            ir.Operation.MOVE,
+            "mov",
+            (ir.Reg(Register.AX, 2),),
+            (ir.Imm(0, 2, address),),
+        ),
+        (),
+        (),
+        op=lifted,
+        symbol=True,
+    )
+    assert asm._folded_site(instruction, found, raised.source) is None, "the moved operand was read as the site"
     assert bodies, "the fixture raised nothing"
 
     # And the fixup: one is its own, two is a guess.
-    was = found.refs.get(site)
-    found.refs[site] = (0x40,)
-    assert asm._field_in(found, lifted, frozenset({0x40})) == 0x40
-    found.refs[site] = (0x40, 0x44)
-    assert asm._field_in(found, lifted, frozenset({0x40, 0x44})) is None, "one of two fixups was picked"
-    found.refs[site] = was
+    was = raised.source.refs.get(site)
+    raised.source.refs[site] = (0x40,)
+    assert asm._field_in(found, instruction, frozenset({0x40}), raised.source) == 0x40
+    raised.source.refs[site] = (0x40, 0x44)
+    assert asm._field_in(found, instruction, frozenset({0x40, 0x44}), raised.source) is None, (
+        "one of two fixups was picked"
+    )
+    raised.source.refs[site] = was

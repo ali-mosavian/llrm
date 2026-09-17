@@ -40,7 +40,6 @@ from iced_x86 import Register_
 from qbopt.analysis import liveness
 from qbopt.model import mir
 from qbopt.model.mir import Op
-from qbopt.legacy import regalloc
 from qbopt.model.mir import Value
 from qbopt.model.mir import MirBody
 from qbopt.objectfile.module import Space
@@ -113,7 +112,15 @@ def _high_half_of(op: Op) -> tuple[Value, Value] | None:
     return None if source is None else (op.defines[0], source)
 
 
-def _target_is_free(body: MirBody, block: mir.MirBlock, lo: int, hi: int, target: Register_, made: Value) -> bool:
+def _target_is_free(
+    body: MirBody,
+    hints: mir.AllocationHints,
+    block: mir.MirBlock,
+    lo: int,
+    hi: int,
+    target: Register_,
+    made: Value,
+) -> bool:
     """Whether `target` holds nothing live anywhere in [lo, hi].
 
     A rejoin into another register is removed by emitting the move where the
@@ -131,13 +138,15 @@ def _target_is_free(body: MirBody, block: mir.MirBlock, lo: int, hi: int, target
     for op in reversed(block.ops):
         if lo <= op.at <= hi:
             for one in after:
-                if one is not made and body.origin.get(one) is target:
+                if one is not made and hints.origin_of(one) is target:
                     return False
         after = (after - set(op.defines)) | set(op.uses)
     return True
 
 
-def _target_survives(body: MirBody, block: mir.MirBlock, lo: int, hi: int, target: Register_) -> bool:
+def _target_survives(
+    body: MirBody, hints: mir.AllocationHints, block: mir.MirBlock, lo: int, hi: int, target: Register_
+) -> bool:
     """Whether `target` still holds what it held at `lo` when `hi` is reached.
 
     The deletion's whole argument is that the round trip hands the value
@@ -163,11 +172,11 @@ def _target_survives(body: MirBody, block: mir.MirBlock, lo: int, hi: int, targe
     anything write it.
     """
     return not any(
-        lo < op.at < hi and any(body.origin.get(one) is target for one in op.defines) for op in block.ops
+        lo < op.at < hi and any(hints.origin_of(one) is target for one in op.defines) for op in block.ops
     )
 
 
-def round_trips(body: MirBody) -> tuple[RoundTrip, ...]:
+def round_trips(body: MirBody, hints: mir.AllocationHints) -> tuple[RoundTrip, ...]:
     """Every split-and-rejoin in this body that computes nothing.
 
     Block-scoped, because a stack slot is a depth measured from the top of
@@ -201,13 +210,13 @@ def round_trips(body: MirBody) -> tuple[RoundTrip, ...]:
                     # to delete only while both ends name one register: the
                     # deletion leaves that register holding the value, and
                     # nothing downstream is rewritten.
-                    was, now = body.origin.get(low[1]), body.origin.get(value)
+                    was, now = hints.origin_of(low[1]), hints.origin_of(value)
                     at = tuple(sorted((low[2], high[2], op.at)))
                     if (
                         was is not None
                         and now is not None
-                        and _target_survives(body, block, at[0], at[-1], now)
-                        and (was is now or _target_is_free(body, block, at[0], at[-1], now, value))
+                        and _target_survives(body, hints, block, at[0], at[-1], now)
+                        and (was is now or _target_is_free(body, hints, block, at[0], at[-1], now, value))
                     ):
                         # Where the value already is, and where the pop puts
                         # it. Equal is a plain deletion. Different needs a

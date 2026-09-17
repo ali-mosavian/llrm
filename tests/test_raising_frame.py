@@ -119,7 +119,7 @@ def test_push_pop_frame_operand_is_not_its_implicit_stack_access(pushing):
     op = mir.Op(at, ir.Operation.PUSH if pushing else ir.Operation.POP, "", (), (),
                 kind=mir.Kind.ARG if pushing else mir.Kind.COPY,
                 loads=loads, stores=stores, args=(mir.Cell(loads[0]),), results=(mir.Cell(stores[0]),))
-    body = mir.MirBody(0x30, (mir.MirBlock(0x30, (), (op,), ()),), {})
+    body = mir._RaisedBody(0x30, (mir.MirBlock(0x30, (), (op,), ()),))
     result = raising_frame.annotated(body, found, [block], {}).blocks[0].ops[0]
     explicit = result.loads[0] if pushing else result.stores[0]
     implicit = result.stores[0] if pushing else result.loads[0]

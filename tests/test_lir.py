@@ -56,6 +56,7 @@ def test_string_copy_keeps_its_implicit_address_registers() -> None:
         raised.source.coverage,
         nodes=raised.source.nodes,
         occurrences=raised.source.occurrences,
+        hints=raised.hints[body.entry],
     )
     copies = [
         one
@@ -162,13 +163,14 @@ def test_bcs_own_assignment_satisfies_every_requirement(obj: Path) -> None:
 
     raised = mir.bodies(found, split.partition(found, mapped))
     for name, body in raised:
+        hints = raised.hints[body.entry]
         for block in body.blocks:
             written: set = set()
             for op in block.ops:
                 # `cwd` before `idiv` is raised as a sign extension the
                 # divide no longer names; dx still holds what BC put there.
-                held = {ir.ROOT.get(body.origin.get(one, -1), -1) for one in op.uses} | written
-                written |= {ir.ROOT.get(body.origin.get(one, -1), -1) for one in op.defines}
+                held = {ir.ROOT.get(hints.origin_of(one), -1) for one in op.uses} | written
+                written |= {ir.ROOT.get(hints.origin_of(one), -1) for one in op.defines}
                 # Recognition can replace BC's call sequence with a new
                 # machine-independent operation (for example DIVMOD). Its
                 # eventual fixed-register requirements belong to our
@@ -545,8 +547,6 @@ def test_a_lowered_cell_names_the_value_that_computed_its_address() -> None:
 
     Constructed, so this holds without a compiled object to hand.
     """
-    from iced_x86 import Register
-
     from qbopt.backend import lower
     from qbopt.objectfile.module import Addr
     from qbopt.objectfile.module import Space
@@ -568,7 +568,7 @@ def test_a_lowered_cell_names_the_value_that_computed_its_address() -> None:
         args=(mir.Const(7, 2),),
         results=(mir.Cell(ref),),
     )
-    body = mir.MirBody(0, (mir.MirBlock(0, (), (stored,), ()),), {}, {})
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (stored,), ()),))
     from qbopt.abi import runtime
 
     low = lower.lowered("one", body, {}, set(), runtime.per_call({}))
@@ -719,7 +719,7 @@ def test_a_store_reads_the_value_its_cell_is_reached_by_and_writes_none() -> Non
         args=(mir.Const(4, 2),),
         results=(mir.Held(made, 2),),
     )
-    body = mir.MirBody(0, (mir.MirBlock(0, (), (stored, after), ()),), {}, {})
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (stored, after), ()),))
     from qbopt.abi import runtime
 
     low = lower.lowered("one", body, {}, set(), runtime.per_call({}))
@@ -738,7 +738,7 @@ def test_word_concatenation_lowers_high_then_low_without_register_assumptions() 
     op = mir.Op(1, mir.Synth.CONCAT_LOW, "concat", (result,), (high, low),
                 kind=mir.Kind.CONCAT, args=(mir.Held(high, 2), mir.Held(low, 2)),
                 results=(mir.Held(result, 4),))
-    body = mir.MirBody(0, (mir.MirBlock(0, (), (op,), ()),), {})
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (op,), ()),))
     lowered = lower.lowered("concat", body, {}, set(), {})
     insns = lowered.blocks[0].insns
     assert [one.what.op for one in insns] == [machine.Operation.PUSH, machine.Operation.PUSH, machine.Operation.POP]
@@ -751,7 +751,6 @@ def test_word_concatenation_lowers_high_then_low_without_register_assumptions() 
 def test_call_with_inputs_keeps_its_implicit_result() -> None:
     """nbody read COMMAND$ from an unwritten spill slot and skipped its simulation."""
     from dataclasses import replace
-    from iced_x86 import Register
     from qbopt.backend import lower
     from qbopt.abi import runtime
     from qbopt.model import ir as machine
@@ -761,8 +760,7 @@ def test_call_with_inputs_keeps_its_implicit_result() -> None:
                   kind=mir.Kind.CALL, args=(mir.Held(source, 2),))
     push = mir.Op(5, machine.Operation.PUSH, "push", (), (result,), (), (), None,
                   kind=mir.Kind.ARG, args=(mir.Held(result, 2),))
-    body = mir.MirBody(0, (mir.MirBlock(0, (), (call, push), ()),),
-                       {source: Register.EAX, result: Register.EAX}, {})
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (call, push), ()),))
     contract = replace(runtime.worst("helper"), inputs=frozenset({runtime.Reg.AX}))
     low = lower.lowered("one", body, {0: "helper"}, set(), {0: contract})
     first, second = low.blocks[0].insns
@@ -839,8 +837,6 @@ def test_a_call_to_an_unestablished_routine_is_refused() -> None:
     `mov cx,0` / `mov bx,0` into dx and di. Neither is emittable, so the
     body keeps BC's own layout.
     """
-    from iced_x86 import Register
-
     from qbopt.backend import lower
     from qbopt.abi import runtime
     from qbopt.model import ir as machine
@@ -863,8 +859,6 @@ def test_a_call_to_an_unestablished_routine_is_refused() -> None:
     body = mir.MirBody(
         0x106,
         (mir.MirBlock(0x106, (), (called,), ()),),
-        {first: Register.ECX, second: Register.EBX},
-        {},
     )
     import pytest
 
@@ -881,8 +875,6 @@ def test_a_call_argument_is_required_where_the_contract_reads_it() -> None:
     routine's contract and is what pinned the whole register file at every
     call to a routine that declares nothing.
     """
-    from iced_x86 import Register
-
     from qbopt.backend import lower
     from qbopt.abi import runtime
     from qbopt.model import ir as machine
@@ -905,9 +897,6 @@ def test_a_call_argument_is_required_where_the_contract_reads_it() -> None:
     body = mir.MirBody(
         0x106,
         (mir.MirBlock(0x106, (), (called,), ()),),
-        # Neither argument is where the routine reads it.
-        {low_half: Register.ESI, high_half: Register.EDI},
-        {},
     )
     low = lower.lowered("one", body, {0x106: "B$FILD"}, set(), runtime.per_call({0x106: "B$FILD"}))
     call = next(one for block in low.blocks for one in block.insns if one.op is called)
@@ -921,8 +910,6 @@ def test_a_declared_contract_its_arguments_do_not_answer_is_refused() -> None:
     """Emitting the call unconstrained would say B$FILD reads nothing,
     which is the one thing known to be false about it."""
     import pytest
-    from iced_x86 import Register
-
     from qbopt.backend import lower
     from qbopt.model import ir as machine
 
@@ -939,7 +926,7 @@ def test_a_declared_contract_its_arguments_do_not_answer_is_refused() -> None:
         args=(mir.Held(only, 2),),  # one, where the contract declares two
         results=(),
     )
-    body = mir.MirBody(0x106, (mir.MirBlock(0x106, (), (called,), ()),), {only: Register.ESI}, {})
+    body = mir.MirBody(0x106, (mir.MirBlock(0x106, (), (called,), ()),))
     with pytest.raises(lower.Unlowered, match="1 arguments for 2 declared inputs"):
         from qbopt.abi import runtime
 
@@ -955,8 +942,6 @@ def test_lowering_a_call_the_caller_chose_no_contract_for_is_refused() -> None:
     not cover is a call nobody decided about.
     """
     import pytest
-    from iced_x86 import Register
-
     from qbopt.backend import lower
     from qbopt.abi import runtime
     from qbopt.model import ir as machine
@@ -974,7 +959,7 @@ def test_lowering_a_call_the_caller_chose_no_contract_for_is_refused() -> None:
         args=(),
         results=(),
     )
-    body = mir.MirBody(0x106, (mir.MirBlock(0x106, (), (called,), ()),), {only: Register.ECX}, {})
+    body = mir.MirBody(0x106, (mir.MirBlock(0x106, (), (called,), ()),))
     with pytest.raises(lower.Unlowered, match="no contract for"):
         lower.lowered("one", body, {0x106: "B$FILD"}, set(), {})
     # And with the map the caller built, it is the map's answer that runs.
@@ -991,8 +976,6 @@ def test_a_call_marked_interface_unknown_is_refused_on_that_alone() -> None:
     state B$ENRA raises -- and that alone must refuse.
     """
     import pytest
-    from iced_x86 import Register
-
     from qbopt.backend import lower
     from qbopt.abi import runtime
     from qbopt.model import ir as machine
@@ -1011,7 +994,7 @@ def test_a_call_marked_interface_unknown_is_refused_on_that_alone() -> None:
         results=(),
         args_known=False,
     )
-    body = mir.MirBody(0x106, (mir.MirBlock(0x106, (), (called,), ()),), {only: Register.ECX}, {})
+    body = mir.MirBody(0x106, (mir.MirBlock(0x106, (), (called,), ()),))
     # A contract the map does hold, so "no contract" cannot be the reason.
     where = runtime.per_call({0x106: "B$PEI2"})
     assert where[0x106].inputs == frozenset()
@@ -1085,14 +1068,6 @@ def test_a_phi_chain_nothing_reads_does_not_reach_lir() -> None:
                 (),
             ),
         ),
-        {
-            feeder: Register.EAX,
-            unread: Register.ECX,
-            kept: Register.EAX,
-            dead: Register.ECX,
-            middle: Register.EAX,
-        },
-        {},
     )
     low = lower.lowered("one", body, {}, set(), runtime.per_call({}))
     left = {phi.result for block in low.blocks for phi in block.phis}

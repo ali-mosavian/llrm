@@ -379,7 +379,7 @@ def _module_cost(module_, blocks, found: Counter, trips: int) -> None:
         raise Unmeasured("decoded bodies do not cover every code block")
 
 
-def _registers(body, module_, found: Counter) -> None:
+def _registers(body, module_, found: Counter, hints: mir.AllocationHints) -> None:
     """How many variables a loop touches, against how many registers it uses.
 
     The question the roadmap never asked, and the one that says plainly
@@ -402,7 +402,7 @@ def _registers(body, module_, found: Counter) -> None:
                     cells.add(str(ref.addr))
                     traffic += 1
                 for value in (*op.defines, *op.uses):
-                    got = body.origin.get(value)
+                    got = hints.origin_of(value)
                     if got is None:
                         continue
                     name = NAMED.get(got, "").upper().removeprefix("E")
@@ -515,7 +515,7 @@ def counted(paths: list[Path], raw: bool = False) -> Counter:
                     break
 
             _invariant(body, module_, found)
-            _registers(body, module_, found)
+            _registers(body, module_, found, bodies.hints[body.entry])
             _reloads(body, module_, found)
 
             for at in sorted(blocks):

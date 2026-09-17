@@ -1238,18 +1238,10 @@ one documented target without materially regressing another.
 These are boundary defects with an owner, not permission to add more cross-layer
 knowledge:
 
-1. `MirBody.origin` is the remaining source-machine fact on public MIR.
-   Decoded nodes, fixup provenance and immutable source occurrences live in
-   `SourceMap`; public operations transfer only opaque `Op.absorbed`
-   identities. Concrete byte ranges exist on the private raising occurrence
-   and allocated LIR, where lowering resolves them for layout and emission.
-   Selected machine semantics already live only on LIR.
-2. Layout and fresh OMF emission consume allocated LIR directly; the former
-   allocated-LIR-to-MIR adapter has been removed.
-3. Target costing is narrower than LLVM/GCC's formula selection. Loop strength
+1. Target costing is narrower than LLVM/GCC's formula selection. Loop strength
    reduction and unrolling need register-pressure and target-cost comparisons,
    not unconditional pattern replacement.
-4. Strict numeric behavior and checked-loop preguards are incomplete. Policy is
+2. Strict numeric behavior and checked-loop preguards are incomplete. Policy is
    already separate (`--basic-semantics`, `--bounds-checks`); broader lowering
    coverage must preserve that separation.
 

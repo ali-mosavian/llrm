@@ -9,9 +9,10 @@ the count only came out when someone walked the AST for it.
 So this walks the AST. A pass that names a register fails here, and a new
 one cannot be added quietly.
 
-What is allowed, and why. `MirBody.origin` is where BC kept a value, and
-`Value`'s own docstring sanctions reading it "with a reason, not by
-accident". Two compatibility readers remain:
+What is allowed, and why. Source placement is private to raising and leaves
+that boundary as `AllocationHints`; no optimization or shared-analysis pass
+may reach it. Two frontend recognition helpers still inspect the private
+raise-time view:
 
   pairs.py    which register pair a long arrived in -- ax:dx or cx:bx is
               BC's convention and the only evidence a load pair is one long
@@ -27,6 +28,8 @@ from pathlib import Path
 import pytest
 
 from qbopt.model import mir
+from qbopt.analysis import liveness
+from qbopt.analysis import ssa
 
 HERE = Path(__file__).resolve().parent.parent / "qbopt"
 
@@ -300,21 +303,88 @@ def test_raise_returns_external_allocation_hints() -> None:
     assert raised.hints
     for _name, body in raised:
         hints = raised.hints[body.entry]
-        assert all(isinstance(variable, int) for variable in hints.origins)
-        for value, register in body.origin.items():
+        values = tuple(ssa.values(body))
+        assert hints.origins
+        assert set(hints.origins) <= {value.variable for value in values}
+        for variable, register in hints.origins.items():
+            value = next(value for value in values if value.variable == variable)
             assert hints.origin_of(value) == register
             renamed = replace(value, id=value.id + 100_000, version=value.version + 100)
             assert hints.origin_of(renamed) == register
         definitions = {
-            value: (op, index)
+            (op.id, index): (op, index)
             for block in body.blocks
             for op in block.ops
+            if op.id is not None
             for index, value in enumerate(op.defines)
         }
-        for value, register in body.pins.items():
-            op, index = definitions[value]
+        assert set(hints.pins) <= set(definitions)
+        for key, register in hints.pins.items():
+            op, index = definitions[key]
             assert hints.pin_of(op, index) == register
             assert hints.pin_of(replace(op, at=op.at + 100_000), index) == register
+
+
+def test_public_mir_body_has_no_allocation_fields() -> None:
+    """Placement history must leave at the raise/MIR boundary.
+
+    Keeping an external copy while public MIR still exposed ``origin`` and
+    ``pins`` let the next pass silently make them semantic again.  The type
+    itself must make that architecture violation impossible.
+    """
+    assert "origin" not in mir.MirBody.__dataclass_fields__
+    assert "pins" not in mir.MirBody.__dataclass_fields__
+
+
+@pytest.mark.parametrize("stem", ["addrm-q-noO", "fpdeep-q-noO"])
+def test_public_mir_names_values_observable_at_a_machine_exit(stem: str) -> None:
+    """Removing ``origin`` must not make a body exit semantically unreadable.
+
+    ADDRM printed 264 instead of 210 and FPDEEP printed SQ 2 = 0 when dead
+    code and lowering could no longer see the values held at the terminal
+    runtime call.  Raising knows those live-outs from source placement; it
+    must express them as semantic MIR uses before placement becomes private,
+    without turning them into operands of the terminal machine instruction.
+    """
+    import corpus
+    from qbopt import wholeseg
+
+    path = Path(f"fixtures/omf/{stem}.obj")
+    found = corpus.loaded(path)
+    raised = mir.bodies(found, corpus.partitioned(path))
+    exits = [block for _name, body in raised for block in body.blocks if not block.succ]
+
+    assert exits
+    assert all(block.ops and mir.exit_values(block.ops[-1]) for block in exits)
+    assert all(
+        set(mir.exit_values(block.ops[-1])).isdisjoint(mir.ordinary_uses(block.ops[-1]))
+        for block in exits
+    )
+    for _name, body in raised:
+        live = liveness.live(body)
+        for block in body.blocks:
+            if not block.succ:
+                assert set(mir.exit_values(block.ops[-1])) <= set(live.live_out[block.at])
+
+    lowered = []
+    result = wholeseg.emitted(
+        path.read_bytes(),
+        watch=lambda stage, _name, state: lowered.append(state) if stage == "lowered" else None,
+    )
+    assert result.outcome is wholeseg.Emission.LIR
+    tagged = [
+        insn
+        for body in lowered
+        for block in body.blocks
+        for insn in block.insns
+        if insn.op is not None and insn.op.exits
+    ]
+    assert tagged
+    for insn in tagged:
+        exiting = {value.id for value in mir.exit_values(insn.op)}
+        delivered = {held.value for held, _register in insn.delivers}
+        assert exiting.isdisjoint(insn.uses)
+        assert exiting.isdisjoint(delivered)
 
 
 def test_a_pin_belongs_to_one_definition_not_every_ssa_version() -> None:
@@ -331,17 +401,13 @@ def test_a_pin_belongs_to_one_definition_not_every_ssa_version() -> None:
     second = mir.Value(2, 20, variable=7, version=2)
     first_op = mir.Op(10, mir.Synth.CONCAT_LOW, "first", (first,), (), id=100)
     second_op = mir.Op(20, mir.Synth.CONCAT_LOW, "second", (second,), (), id=200)
-    body = mir.MirBody(10, (mir.MirBlock(10, (), (first_op, second_op), ()),), pins={first: Register.EDX})
-
-    hints = mir.AllocationHints.from_body(body)
+    hints = mir.AllocationHints(pins={(first_op.id, 0): Register.EDX})
     assert hints.pin_of(first_op, 0) == Register.EDX
     assert hints.pin_of(second_op, 0) is None
 
 
 def test_lowering_consumes_external_allocation_hints() -> None:
     """The machine boundary must not need placement fields on MIR itself."""
-    from dataclasses import replace
-
     import corpus
     from qbopt.abi import runtime
     from qbopt.backend import lower
@@ -352,10 +418,9 @@ def test_lowering_consumes_external_allocation_hints() -> None:
     raised = mir.bodies(found, corpus.partitioned(path), contracts)
     name, body = raised[0]
     hints = raised.hints[body.entry]
-    stripped = replace(body, origin={}, pins={})
     low = lower.lowered(
         name,
-        stripped,
+        body,
         found.calls,
         raised.source.absorbed,
         contracts,
@@ -365,7 +430,9 @@ def test_lowering_consumes_external_allocation_hints() -> None:
         hints=hints,
     )
     actual = {value.variable: register for value, register in low.origin.items()}
-    assert actual and all(actual[variable] == register for variable, register in hints.origins.items() if variable in actual)
+    assert actual and all(
+        actual[variable] == register for variable, register in hints.origins.items() if variable in actual
+    )
 
 
 @pytest.mark.parametrize("relative", ["flow.py", "wholeseg.py", "cfront/compile.py"])

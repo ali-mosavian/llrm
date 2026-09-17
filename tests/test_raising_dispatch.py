@@ -60,7 +60,9 @@ def test_unproved_dispatch_remains_a_call(fixtures: Path, monkeypatch: pytest.Mo
     machine = corpus.partitioned(source)
     with monkeypatch.context() as context:
         context.setattr(raising_dispatch, "raised", lambda body, found, machine: body)
-        body = mir.bodies(found, machine)[0][1]
+        bodies = mir.bodies(found, machine)
+        public = bodies[0][1]
+        body = mir._with_raise_context(public, bodies.hints[public.entry], bodies.source)
     block = next(block for block in body.blocks if block.ops and found.calls.get(block.ops[-1].at) == "B$OGTA")
     op = block.ops[-1]
     match invalid:

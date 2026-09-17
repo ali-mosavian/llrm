@@ -21,7 +21,6 @@ from iced_x86 import Register
 from iced_x86 import Formatter
 from iced_x86 import FormatterSyntax
 
-import corpus
 from qbopt.model import ir
 from qbopt.backend import asm
 from qbopt.model import lir
@@ -145,7 +144,9 @@ def test_a_two_address_operation_keeps_both_halves_in_one_register() -> None:
         results=(mir.Held(made, 2),),
         node=SimpleNamespace(semantics=what),
     )
-    body = mir.MirBody(0x10, (mir.MirBlock(0x10, (), (op,), ()),), {made: Register.EAX, read: Register.EAX}, {})
+    body = mir._RaisedBody(
+        0x10, (mir.MirBlock(0x10, (), (op,), ()),), origin={made: Register.EAX, read: Register.EAX}
+    )
     klass = regalloc.congruent(body)
     # Both present, not both absent: `.get` on two values neither of which
     # is in the map returns None twice, which compares equal and says
@@ -174,7 +175,9 @@ def test_an_allocation_keeps_every_value_where_it_was_unless_forced() -> None:
         if isinstance(mapped, str):
             continue
 
-        for body_name, body in mir.bodies(found, split.partition(found, mapped)):
+        raised = mir.bodies(found, split.partition(found, mapped))
+        for body_name, public in raised:
+            body = mir._with_hints(public, raised.hints[public.entry])
             graph = regalloc.interference(body)
             victim = next((one for one in graph if not one.flags and one in body.origin), None)
             if victim is None:
@@ -251,7 +254,9 @@ def test_resolving_after_a_move_relinks_by_register() -> None:
         ),
         (),
     )
-    body = mir.MirBody(0x10, (head,), {first: Register.EAX, second: Register.EAX, third: Register.EAX}, {})
+    body = mir._RaisedBody(
+        0x10, (head,), origin={first: Register.EAX, second: Register.EAX, third: Register.EAX}
+    )
 
     got = mir.resolved(body, {})
     assert not isinstance(got, str), got
@@ -471,6 +476,7 @@ def test_the_rewriter_hands_on_the_bytes_a_dropped_copy_stood_for(stem: str) -> 
         set(found.absorbed),
         runtime.for_module(found),
         nodes=raised.source.nodes,
+        hints=raised.hints[body.entry],
     )
     owned = lambda one: {  # noqa: E731
         at for block in one.blocks for i in block.insns if i.covers for at in range(*i.covers)

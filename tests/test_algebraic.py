@@ -612,7 +612,7 @@ def test_constant_word_concatenation(high: int, low: int, answer: int) -> None:
     result = mir.Value(1, 0)
     op = mir.Op(0, mir.Synth.CONCAT_LOW, "concat", (result,), (), kind=mir.Kind.CONCAT,
                 args=(mir.Const(high, 2), mir.Const(low, 2)), results=(mir.Held(result, 4),))
-    body = mir.MirBody(0, (mir.MirBlock(0, (), (op,), ()),), {})
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (op,), ()),))
     done = algebraic.simplified(body, {result}, set()).blocks[0].ops[0]
     assert done.kind is mir.Kind.COPY
     assert done.args == (mir.Const(answer, 4),)

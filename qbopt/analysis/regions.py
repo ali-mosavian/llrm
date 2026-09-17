@@ -300,11 +300,12 @@ def regions(ref, bounds: dict | None = None, known: dict | None = None, layout=N
 def typed_apart(one, other) -> bool:
     """Axiom 5: a declared object is reached only through its own type class.
 
-    Two incompatible typed lvalues cannot legally designate the same C
-    object. Character, aggregate and otherwise untyped accesses carry no
-    class and therefore retain the conservative answer."""
+    An access of another class may still be a union's other member, so two
+    accesses say nothing.  At least one side must name the declared object's
+    effective type; character, aggregate and otherwise untyped accesses carry
+    no class and therefore retain the conservative answer."""
     a, b = getattr(one, "typed", None), getattr(other, "typed", None)
-    return a is not None and b is not None and a[0] != b[0]
+    return a is not None and b is not None and a[0] != b[0] and (a[1] or b[1])
 
 
 def may_alias(

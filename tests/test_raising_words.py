@@ -16,7 +16,7 @@ def body_with_reader(width=2):
     read = mir.Op(3, ir.Operation.MOVE, "", (output,), (result,),
                   kind=mir.Kind.COPY, args=(mir.Held(result, width),),
                   results=(mir.Held(output, width),))
-    return mir.MirBody(0, (mir.MirBlock(0, (), (copy, read), ()),)), old, result
+    return mir._RaisedBody(0, (mir.MirBlock(0, (), (copy, read), ()),)), old, result
 
 
 def test_unused_upper_word_does_not_keep_the_old_definition():

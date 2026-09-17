@@ -369,9 +369,10 @@ def test_a_routine_that_reads_no_register_leaves_no_phantom_live_across_it() -> 
     from qbopt.frontend.blocks import code_map
 
     found = module.of(omf.parse(Path("fixtures/omf/bools-q-O.obj").read_bytes()))
+    bodies = mir.bodies(found, split.partition(found, code_map(found)))
     ((op, body),) = [
         (op, body)
-        for _who, body in mir.bodies(found, split.partition(found, code_map(found)))
+        for _who, body in bodies
         for block in body.blocks
         for op in block.ops
         if op.kind is mir.Kind.CALL and found.calls.get(op.at) == "B$CENP"
@@ -381,7 +382,8 @@ def test_a_routine_that_reads_no_register_leaves_no_phantom_live_across_it() -> 
     assert not [one for one in op.uses if not one.flags and one not in written], (
         f"the call reads {op.uses}, and nothing in the body wrote them"
     )
-    assert {body.origin[one] for one in op.defines if not one.flags} == set(mir.TRACKED), (
+    hints = bodies.hints[body.entry]
+    assert {hints.origin_of(one) for one in op.defines if not one.flags} == set(mir.TRACKED), (
         "it still disturbs every tracked register"
     )
 
@@ -549,8 +551,7 @@ def test_a_variable_keeps_one_name_across_every_version_of_it() -> None:
     nothing but other phis: that is the register file describing itself, and
     it is unreadable while every version has its own name.
     """
-    from collections import Counter
-
+    from qbopt.analysis import ssa
     from qbopt.model import mir
     from qbopt.objectfile import omf
     from qbopt.objectfile import module
@@ -563,22 +564,26 @@ def test_a_variable_keeps_one_name_across_every_version_of_it() -> None:
     assert not isinstance(mapped, str)
 
     seen = 0
-    for _name, body in mir.bodies(found, split.partition(found, mapped)):
+    bodies = mir.bodies(found, split.partition(found, mapped))
+    for _name, body in bodies:
+        hints = bodies.hints[body.entry]
         # One variable per place BC kept something, and every value of it
         # says which variable it is.
         by_variable: dict[int, set] = {}
-        for value, register in body.origin.items():
+        values = set(ssa.values(body))
+        for value in values:
+            register = hints.origin_of(value)
+            if register is None:
+                continue
             by_variable.setdefault(value.variable, set()).add(register)
             assert value.version, f"{value!r} has no version"
         assert all(len(one) == 1 for one in by_variable.values()), "one variable stands for two registers"
 
-        # And versions of one variable are consecutive from 1, so `v3_7` is
-        # the seventh time that variable was written.
-        counted = Counter(value.variable for value in body.origin)
-        for which, count in counted.items():
-            versions = {value.version for value in body.origin if value.variable is which}
-            assert versions == set(range(1, count + 1)), f"variable {which}: {sorted(versions)}"
-        seen += len(counted)
+        # Recognition consumes source definitions, so gaps in the surviving
+        # version sequence are expected.  Every surviving name must still be
+        # a real version of its one variable.
+        assert all(value.version > 0 for value in values if hints.origin_of(value) is not None)
+        seen += len(by_variable)
     assert seen, "no body named a variable, so this proves nothing"
 
 

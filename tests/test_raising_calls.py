@@ -18,13 +18,15 @@ def test_nbody_timer_does_not_keep_arithmetic_scratch_values_live():
     """NBODY kept Y damping's DVI4 because PITSNAP invented register arguments."""
     path = Path("fixtures/bench/nbody-v-g3.obj")
     found = corpus.loaded(path)
-    body = mir.bodies(found, corpus.partitioned(path))[0][1]
+    raised = mir.bodies(found, corpus.partitioned(path))
+    body = raised[0][1]
+    hints = raised.hints[body.entry]
     ops = [op for block in body.blocks for op in block.ops]
     timers = [op for op in ops if op.kind is mir.Kind.CALL and found.calls.get(op.at) == "PITSNAP"]
     assert len(timers) == 2
     # Only the SI and DI its caller reads afterwards, which the callee keeps.
     from iced_x86 import Register
-    assert all(op.defines and {body.origin.get(value) for value in op.uses} <= {Register.ESI, Register.EDI}
+    assert all(op.defines and {hints.origin_of(value) for value in op.uses} <= {Register.ESI, Register.EDI}
                for op in timers)
     assert any(op.at == 0x26e and op.kind is mir.Kind.DIVMOD for op in ops)
     emitted = wholeseg.emitted(path.read_bytes())

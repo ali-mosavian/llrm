@@ -22,8 +22,15 @@ def test_restore_declares_its_input_and_high_result() -> None:
         source_backed=True,
         id=1,
     )
-    body = mir.MirBody(0, (mir.MirBlock(0, (), (op,), ()),), {source: Register.EAX, high: Register.EDX})
-    lowering = lower.Lowering(body, {source.id, high.id}, {}, (), nodes={op.id: node})
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (op,), ()),))
+    lowering = lower.Lowering(
+        body,
+        {source.id, high.id},
+        {},
+        (),
+        nodes={op.id: node},
+        origin={source: Register.EAX, high: Register.EDX},
+    )
     assert lowering._abi(op) == ((ir.Held(source.id, 4), Register.EAX),)
     assert lowering._idiom(op) == ((ir.Held(high.id, 2), Register.DX),)
 

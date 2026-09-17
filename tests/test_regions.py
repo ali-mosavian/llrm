@@ -187,14 +187,16 @@ def test_the_sign_a_word_to_float_helper_leaves_in_dx_is_named_not_kept() -> Non
     mapped = code_map(found)
     assert not isinstance(mapped, str)
     named = 0
-    for _name, body in mir.bodies(found, split.partition(found, mapped), runtime.for_module(found)):
+    raised = mir.bodies(found, split.partition(found, mapped), runtime.for_module(found))
+    for _name, body in raised:
+        hints = raised.hints[body.entry]
         read = {one for block in body.blocks for op in block.ops for one in op.uses}
         read.update(one for block in body.blocks for phi in block.phis for one in phi.incoming.values())
         for block in body.blocks:
             for index, op in enumerate(block.ops):
                 if op.kind is mir.Kind.CALL and found.calls.get(op.at) == "B$FIL2":
                     kept = [one for one in op.defines if one in read]
-                    assert not (kept and all(not one.flags and body.origin.get(one) == Reg.EDX for one in kept)), (
+                    assert not (kept and all(not one.flags and hints.origin_of(one) == Reg.EDX for one in kept)), (
                         f"{op.at:#06x}: kept as a call for a dx it could have named"
                     )
                 if (

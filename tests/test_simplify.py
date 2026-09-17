@@ -37,7 +37,7 @@ def test_bc_alone_has_no_round_trips(obj: Path) -> None:
     """
     _, raised = bodies(obj)
     for _, body in raised:
-        assert simplify.round_trips(body) == ()
+        assert simplify.round_trips(body, raised.hints[body.entry]) == ()
 
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
@@ -50,8 +50,9 @@ def test_every_round_trip_names_one_register_at_both_ends(obj: Path) -> None:
     """
     _, raised = bodies(obj)
     for _, body in raised:
-        for trip in simplify.round_trips(body):
-            assert body.origin.get(trip.value) is trip.source
+        hints = raised.hints[body.entry]
+        for trip in simplify.round_trips(body, hints):
+            assert hints.origin_of(trip.value) is trip.source
             assert trip.free == (trip.source is trip.target)
 
 
@@ -75,9 +76,8 @@ def test_a_real_round_trip_is_found_and_proved() -> None:
     assert found is not None
     mapped = code_map(found)
     assert not isinstance(mapped, str), mapped
-    left = [
-        trip for _, body in mir.bodies(found, split.partition(found, mapped)) for trip in simplify.round_trips(body)
-    ]
+    raised = mir.bodies(found, split.partition(found, mapped))
+    left = [trip for _, body in raised for trip in simplify.round_trips(body, raised.hints[body.entry])]
     # A free one needs nothing emitted, so none may survive the pass that
     # removes them. One landing in another register needs a move, and is
     # refused until something emits it.
@@ -134,12 +134,14 @@ def test_a_round_trip_whose_register_is_overwritten_is_refused() -> None:
                 succ=(),
             ),
         ),
-        origin={value: ecx},
     )
+    hints = mir.AllocationHints(origins={value.variable: ecx})
     block = body.blocks[0]
-    assert not simplify._target_survives(body, block, 0x100, 0x111, ecx), "the pop at 0x107 overwrote ecx"
+    assert not simplify._target_survives(body, hints, block, 0x100, 0x111, ecx), (
+        "the pop at 0x107 overwrote ecx"
+    )
     # and the same span with nothing writing it is still allowed
-    assert simplify._target_survives(body, block, 0x100, 0x111, Register.EBX)
+    assert simplify._target_survives(body, hints, block, 0x100, 0x111, Register.EBX)
 
 
 def test_every_suite_program_fits_a_dos_file_name() -> None:

@@ -14,14 +14,15 @@ def test_ls_animate_string_address_is_explicit_and_round_trips() -> None:
     path = Path("fixtures/regressions/qrender-d-surf-v-g3.obj")
     found = corpus.loaded(path)
     assert found is not None
-    body = next(body for name, body in mir.bodies(found, corpus.partitioned(path)) if name.endswith(" LS_ANIMATE"))
+    raised = mir.bodies(found, corpus.partitioned(path))
+    body = next(body for name, body in raised if name.endswith(" LS_ANIMATE"))
     addresses = [op for block in body.blocks for op in block.ops if op.at in (0x2BB, 0x2C4)]
     assert len(addresses) == 2
     for op in addresses:
         assert not isinstance(op.args[0], mir.Opaque)
         assert op.args[0] == mir.FrameAddress(-32, 2)
         assert not op.loads and not op.stores
-        machine = lower.current(op)
+        machine = lower.current(op, node=raised.source.nodes.get(op.id))
         assert machine is not None
         assert machine.op is ir.Operation.ADDRESS
         source = machine.sources[0]

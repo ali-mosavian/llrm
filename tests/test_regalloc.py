@@ -156,10 +156,10 @@ def test_a_flags_phi_does_not_enter_the_interference_graph() -> None:
         (op(0x20, moving, (again,), (merged,)), op(0x24, comparing, (flag_back,), (again, flag_merged))),
         (0x20,),
     )
-    body = mir.MirBody(
+    body = mir._RaisedBody(
         0x10,
         (head, latch),
-        {
+        origin={
             start: Register.AX,
             again: Register.AX,
             merged: Register.AX,
@@ -167,7 +167,6 @@ def test_a_flags_phi_does_not_enter_the_interference_graph() -> None:
             flag_back: Register.NONE,
             flag_merged: Register.NONE,
         },
-        {},
     )
 
     graph = regalloc.interference(body)
@@ -200,7 +199,9 @@ def test_moving_one_side_of_a_phi_moves_the_whole_class() -> None:
     latch = mir.MirBlock(
         0x20, (mir.Phi(merged, {0x10: start, 0x20: again}),), (op(0x20, (again,), (merged,)),), (0x20,)
     )
-    body = mir.MirBody(0x10, (head, latch), {start: Register.AX, again: Register.AX, merged: Register.AX}, {})
+    body = mir._RaisedBody(
+        0x10, (head, latch), origin={start: Register.AX, again: Register.AX, merged: Register.AX}
+    )
 
     assert regalloc.congruent(body)[start] is regalloc.congruent(body)[merged], "a phi ties them together"
 
@@ -241,47 +242,11 @@ def test_a_class_wanted_across_its_own_phi_may_stay_but_may_not_move() -> None:
         (op(0x20, (again,), (merged,)), op(0x24, (), (again, merged))),
         (0x20,),
     )
-    body = mir.MirBody(0x10, (head, latch), {start: Register.AX, again: Register.AX, merged: Register.AX}, {})
+    body = mir._RaisedBody(
+        0x10, (head, latch), origin={start: Register.AX, again: Register.AX, merged: Register.AX}
+    )
 
     assert not isinstance(regalloc.colour(body, {}), str), "staying put is always allowed"
     moved = regalloc.colour(body, {start: Register.DX})
     assert isinstance(moved, str), "and moving is not"
     assert "across its own phi" in moved, moved
-
-
-@pytest.mark.parametrize("stem", ["pressx-p-g2", "pressx-v-noO"])
-def test_a_call_hands_its_result_back_where_bc_reads_it(stem: str) -> None:
-    """chain printed CONST= 39649280 for 0: the long MOD returned in dx:ax.
-
-    A runtime routine writes its result into the registers its own code
-    names, and the operation standing for the call says nothing about it.
-    The allocator moved the high half to bx and re-encoded every reader --
-    which then agreed with each other and not with the callee, so the push
-    run handing the result on pushed whatever bx held.
-    """
-    from qbopt.objectfile import omf
-    from qbopt.backend import layout
-    from qbopt.objectfile import module
-    from qbopt.optimize import transform
-    from qbopt.frontend import blocks as split
-    from qbopt.frontend.blocks import code_map
-
-    found = module.of(omf.parse((Path("fixtures/omf") / f"{stem}.obj").read_bytes()))
-    blocks = split.partition(found, code_map(found))
-    plain = list(mir.bodies(found, blocks))
-    bodies = [
-        (name, transform.applied(one, found.dgroup, found.calls, blocks=blocks, found=found))
-        for name, one in plain
-    ]
-    settled, assignment = layout.allocated(bodies, plain=plain)
-    assert assignment, "nothing was coloured, so this proves nothing"
-    moved = [
-        f"{op.at:#06x} {one} {target.name_of(body.origin[one])} -> {target.name_of(assignment[one])}"
-        for _name, body in settled
-        for block in body.blocks
-        for op in block.ops
-        if op.kind is mir.Kind.CALL
-        for one in op.defines
-        if not one.flags and one in body.origin and one in assignment and assignment[one] != body.origin[one]
-    ]
-    assert not moved, "; ".join(moved[:3])

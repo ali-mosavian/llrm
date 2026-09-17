@@ -90,8 +90,8 @@ def test_spilled_segment_load_still_sets_es():
         args=(cell,),
         results=(mir.Held(segment, 2),),
     )
-    context = mir.MirBody(0xFCC, (mir.MirBlock(0xFCC, (), (op,), ()),), origin={segment: Register.ES})
-    (load,) = lower.Lowering(context, {segment.id}, {}, (), {}).expand(op)
+    context = mir.MirBody(0xFCC, (mir.MirBlock(0xFCC, (), (op,), ()),))
+    (load,) = lower.Lowering(context, {segment.id}, {}, (), {}, origin={segment: Register.ES}).expand(op)
     far = ir.Mem(Addr(Space.FAR, 0x10, segment=Register.ES), 2, selector=ir.Held(segment.id, 2))
     use = _insn(ir.Semantics(ir.Operation.MOVE, "mov", (far,), (ir.Imm(7, 2),)), (), (segment.id,), at=0xFCF)
     body, pins = constrain.constrained(_body(load, use), {})
@@ -130,10 +130,16 @@ def test_far_read_restores_its_forwarded_selector(selected_site):
         id=8,
         raised=((), ()),
     )
-    context = mir.MirBody(0, (mir.MirBlock(0, (), (op,), ()),), origin={segment: Register.ES})
+    context = mir.MirBody(0, (mir.MirBlock(0, (), (op,), ()),))
     sites = {op.id: ()} if selected_site else {}
     (read,) = lower.Lowering(
-        context, {1, 2}, {}, sites, {}, nodes={op.id: SimpleNamespace(semantics=machine)}
+        context,
+        {1, 2},
+        {},
+        sites,
+        {},
+        nodes={op.id: SimpleNamespace(semantics=machine)},
+        origin={segment: Register.ES},
     ).expand(op)
     assert segment.id in read.uses, "the selector must remain live until the far read"
     saved = _insn(

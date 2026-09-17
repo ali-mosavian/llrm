@@ -84,7 +84,9 @@ def test_retained_division_delivers_live_results_in_abi_registers():
     """LNGMXX printed 772198217 instead of 142900 when a DX return was allocated to BX."""
     path = Path("fixtures/omf/lngmxx-p-g2.obj")
     found = corpus.loaded(path)
-    body = mir.bodies(found, corpus.partitioned(path), basic_semantics=True)[0][1]
+    raised = mir.bodies(found, corpus.partitioned(path), basic_semantics=True)
+    body = raised[0][1]
+    hints = raised.hints[body.entry]
     op = next(op for block in body.blocks for op in block.ops
               if op.kind is mir.Kind.CALL and found.calls.get(op.at) == "B$DVI4")
     read = {value.id for block in body.blocks for one in block.ops for value in one.uses}
@@ -93,4 +95,4 @@ def test_retained_division_delivers_live_results_in_abi_registers():
     for value in op.defines:
         if value.id in read and not value.flags:
             assert delivered[value.id] == {Register.EAX: Register.AX, Register.EDX: Register.DX}[
-                body.origin[value]]
+                hints.origin_of(value)]

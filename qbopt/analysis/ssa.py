@@ -8,7 +8,8 @@ from qbopt.model.mir import MirBody
 
 
 def pruned_phis(body: MirBody, roots: set[mir.Value]) -> MirBody:
-    needed = roots | {value for block in body.blocks for op in block.ops for value in mir.consumed(op)}
+    needed = roots | set(mir.exposed(body))
+    needed |= {value for block in body.blocks for op in block.ops for value in mir.consumed(op)}
     needed |= {
         value
         for block in body.blocks
@@ -79,6 +80,7 @@ def substituted(op: Op, swap: dict[int, mir.Value]) -> Op:
     return replace(
         op,
         uses=tuple(provider(one, swap) for one in op.uses),
+        exits=tuple(provider(one, swap) for one in op.exits),
         args=tuple(operand(one) for one in op.args),
         results=tuple(operand(one) if isinstance(one, mir.Cell) else one for one in op.results),
         loads=tuple(reference(ref) for ref in op.loads),
@@ -126,6 +128,7 @@ def renumbered(body: MirBody, variable: int) -> MirBody:
                 op,
                 defines=tuple(named(one) for one in op.defines),
                 uses=tuple(named(one) for one in op.uses),
+                exits=tuple(named(one) for one in op.exits),
                 args=tuple(operand(one) for one in op.args),
                 results=tuple(operand(one) for one in op.results),
                 loads=tuple(reference(one) for one in op.loads),
@@ -163,6 +166,7 @@ def constructed(body: MirBody, variables: frozenset[int]) -> MirBody:
                         op,
                         defines=owned(op.defines),
                         uses=owned(op.uses),
+                        exits=owned(op.exits),
                         args=(),
                         results=(),
                         loads=(),
@@ -220,6 +224,7 @@ def constructed(body: MirBody, variables: frozenset[int]) -> MirBody:
                     replace(
                         op,
                         uses=tuple(mapping[one] for one in op.uses),
+                        exits=tuple(mapping[one] for one in op.exits),
                         defines=tuple(mapping[one] for one in op.defines),
                     )
                     for op in block.ops
@@ -266,6 +271,7 @@ def values(body: MirBody) -> Iterator[mir.Value]:
         for op in block.ops:
             yield from op.defines
             yield from op.uses
+            yield from op.exits
         for phi in block.phis:
             yield phi.result
             yield from phi.incoming.values()

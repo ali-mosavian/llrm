@@ -63,7 +63,14 @@ def test_optimized_branch_result_is_promoted_to_a_phi():
             (FIXTURES / "choose.cgs").read_text(), "choose", optimise=True
         ).splitlines()
     ]
-    body = lines[lines.index("_pick proc near") : lines.index("_pick endp")]
+    # Promotion now exposes the one-use helper to inlining, so the strongest
+    # result has no _pick body to inspect.  A regression leaves either the
+    # helper or its inlined temporary behind; inspect whichever body owns the
+    # choice instead of requiring one particular inlining decision.
+    if "_pick proc near" in lines:
+        body = lines[lines.index("_pick proc near") : lines.index("_pick endp")]
+    else:
+        body = lines[lines.index("_choose proc far") : lines.index("_choose endp")]
     assert not any("[bp-" in line for line in body)
 
 
@@ -311,7 +318,7 @@ def test_int64_helper_result_placement_is_an_external_hint() -> None:
     )
     legalized = lower_int64.expanded(raised.body, raised.calls, raised.contracts, raised.hints)
 
-    assert legalized.body.origin == raised.body.origin
+    assert not hasattr(legalized.body, "origin")
     added = {
         variable: register
         for variable, register in legalized.hints.origins.items()
@@ -413,12 +420,12 @@ def test_optimised_locals_lose_their_dead_stores():
     text = cfront.compiled((FIXTURES / "pal.cgs").read_text(), "pal", optimise=True)
     lines = [line.strip() for line in text.splitlines()]
     body = lines[lines.index("_pal_bestfit proc far") : lines.index("_pal_bestfit endp")]
-    stored = [
-        one
-        for one in body
-        if one.startswith("mov dword ptr [bp-") and one.split("[bp-")[1].split("]")[0] in ("14", "18", "22", "26")
-    ]
-    assert stored == []
+    # Argument extensions may legitimately spill before the loop, and their
+    # offsets change with allocation.  The dead dr/dg/db/d temporaries were
+    # stores between the first palette load and the distance comparison.
+    first_component = next(index for index, line in enumerate(body) if "byte ptr _pal_now" in line)
+    comparison = next(index for index in range(first_component, len(body)) if body[index].startswith("jge "))
+    assert not any(line.startswith("mov dword ptr [bp-") for line in body[first_component:comparison])
 
 
 def test_strlen_does_not_force_a_counter_reload() -> None:
@@ -426,7 +433,11 @@ def test_strlen_does_not_force_a_counter_reload() -> None:
     text = cfront.compiled((FIXTURES / "ls.cgs").read_text(), "ls", optimise=True)
     body = _proc([line.strip() for line in text.splitlines()], "_ls_init")
     call = body.index("call far ptr _strlen")
-    length_store = next(index for index in range(call + 1, len(body)) if "mov word ptr [si+2]" in body[index])
+    length_store = next(
+        index
+        for index in range(call + 1, len(body))
+        if body[index].startswith("mov word ptr [") and body[index].endswith("+2], ax")
+    )
 
     assert not any(line.startswith("mov ") and "[bp-" in line for line in body[call + 1 : length_store]), body
 
@@ -536,8 +547,9 @@ def test_constant_far_address_loads_its_selector_through_the_stack():
 def test_compound_assignment_widens_its_source():
     """`total += step`, a long and a short: the raise refused a word used at width 4."""
     body = _proc(_asm("control"), "_grow")
-    at = body.index("movsx ebx, bx")
-    assert body[at + 1 : at + 3] == ["add eax, ebx", "mov dword ptr [bp+6], eax"]
+    at = next(index for index, line in enumerate(body) if line.startswith("movsx ") and "word ptr [bp+10]" in line)
+    widened = body[at].split()[1].rstrip(",")
+    assert body[at + 1 : at + 3] == [f"add eax, {widened}", "mov dword ptr [bp+6], eax"]
 
 
 def test_address_of_a_float_is_a_pointer():

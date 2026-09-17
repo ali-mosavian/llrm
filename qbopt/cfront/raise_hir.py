@@ -429,7 +429,7 @@ class _Raise:
             )
             for block in kept
         )
-        body = mir.MirBody(
+        body = mir._RaisedBody(
             blocks[0].at,
             blocks,
             origin=dict(self.origin),
@@ -446,14 +446,16 @@ class _Raise:
         # can reach nonlocal storage, pointer actuals and frame objects that
         # escaped before the call, but not every byte of this activation.
         body = alias.calls_annotated(alias.Procedure(body, self.calls, self.arguments), {})
+        body = mir._with_live_outs(body)
         problems = mir.verify(body)
         if problems:
             raise Unsupported(f"{self.symbol.name}: raised MIR is not SSA: {problems[:3]}")
+        hints = mir.AllocationHints.from_body(body)
         return Raised(
             self.symbol.object_name,
             self.symbol,
-            body,
-            mir.AllocationHints.from_body(body),
+            mir._public(body),
+            hints,
             self.calls,
             self.callees,
             self.contracts,

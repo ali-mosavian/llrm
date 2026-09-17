@@ -67,11 +67,10 @@ about values. Every one of them is impossible to state -- not merely harder
 | a machine resource   | `Register.ES`, `st(0)` | `mir.Opaque`, carrying the name and nothing else |
 | where something is   | an address, a byte span | a block, and `Op.target` for a branch |
 
-The abstract side may *carry* a machine fact it never reads --
-`MirBody.origin` is where BC kept each value, which lowering needs and
-`Value`'s own docstring sanctions four readers of. Carrying is not the same
-as reasoning: a pass that reads `origin` to decide something has crossed
-the line, and `tests/test_rule5.py` is the fence.
+The abstract side carries no placement history.  Raising returns public MIR
+plus an `AllocationHints` side table; optimization receives only the former,
+and lowering receives both independently.  `tests/test_rule5.py` checks the
+datatype and every pass module rather than relying on convention.
 
 ## How it is enforced
 
@@ -114,20 +113,19 @@ external `AllocationHints` table.  The old register-sensitive redundant-load
 path has been deleted, and CFG/SSA cloning relies on stable semantic variable
 and operation identities instead of copying physical locations.
 
-**MIR itself still carries one source-machine fact:** `MirBody.origin`.
-Decoded instructions leave the raise in `SourceMap.nodes`, keyed by the
-operation's stable id. Raw byte ranges exist only on the raise's private
-occurrence type and in `SourceMap.occurrences`; public MIR carries opaque
-`Op.absorbed` identities. Lowering resolves those identities into concrete
-LIR `covers` and disjoint `spread` ranges, and layout consumes those LIR ranges
-directly. Optimization modules are mechanically forbidden from naming byte
-ranges: deletion leaves an inert owner and semantic combination transfers only
-opaque identities. Selected machine semantics live only on LIR.
+**Public MIR carries no source-machine fact.** Decoded instructions live in
+`SourceMap.nodes`, placement in `AllocationHints`, and raw byte ranges in
+`SourceMap.occurrences`; all are keyed by stable semantic identities outside
+the body. Public MIR carries only opaque `Op.absorbed` identities. Lowering
+resolves those identities into concrete LIR `covers` and disjoint `spread`
+ranges, and layout consumes those LIR ranges directly. Optimization modules
+are mechanically forbidden from naming registers or byte ranges. Selected
+machine semantics live only on LIR.
 
 **LIR is now the backend form.** It owns selected machine semantics and
 allocation requirements (`tied`, `reads`, `writes`), and layout plus fresh
-OMF emission consume allocated LIR directly. There is still no peephole or
-post-allocation optimization pass.
+OMF emission consume allocated LIR directly. Physical copy propagation,
+folding and peephole cleanup run only after allocation.
 
 **Long-pair recognition is not a pass.** `raising_longs` turns BC's adjacent
 word operations into whole scalar MIR before the fixed point. The old
@@ -138,12 +136,11 @@ been deleted.
 
 1. **Phase D** -- absorption at the raise, then the machine arm retires:
    `lift.py`, `calls.py`'s emission, `memory.py`, `forward.py`.
-2. Remove the compatibility `origin` and `pins` fields from public `MirBody`.
-   Production lowering already receives `AllocationHints` explicitly; the
-   remaining work is to make the raise's temporary machine view private and
-   migrate legacy/test constructors. (`made` and concrete byte coverage have
-   already moved to LIR; `node` and source occurrences are in `SourceMap`.)
-3. Add the post-allocation peephole now that LIR has become a real form.
+2. ~~Remove placement from public `MirBody`.~~ Done: the private raise-time
+   carrier is consumed into `AllocationHints` before any pass runs.
+3. ~~Add post-allocation cleanup once LIR is a real form.~~ Copy propagation,
+   folding and peephole cleanup now run over allocated LIR; general machine
+   CSE/DCE and scheduling remain code-quality work rather than boundary debt.
 
 Until then, every one of those is a debt with a name, and none of them is a
 licence to add another.

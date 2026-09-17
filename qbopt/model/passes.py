@@ -10,9 +10,8 @@ take the module's layout and end up choosing registers.
 Rule 5 is the reason this exists. Selected instruction semantics now begin
 on ``lir.Insn.what``. Source placement is captured by the raise in an external
 ``AllocationHints`` table; optimization and shared-analysis passes cannot read
-or propagate it. Public ``MirBody`` still has compatibility fields while the
-raise's temporary machine view is made private, but they are not part of this
-contract.
+or propagate it. Public ``MirBody`` has no placement fields; the raise's
+temporary machine view is private and is consumed before a pass sees the body.
 
   Op.absorbed
                opaque identities of the raise-time occurrences this stands

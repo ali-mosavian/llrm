@@ -51,16 +51,24 @@ def test_dead_and_result_uses_test_without_a_destination(width):
 
 @pytest.mark.parametrize("observation", ["read", "exit", "merge"])
 def test_and_keeps_an_observed_or_partial_result(observation):
-    from iced_x86 import Register
-
     source, result = mir.Value(1, 0), mir.Value(2, 0)
     condition = mir.Value(3, 0, flags=True)
     op = mir.Op(0, ir.Operation.BINARY, "and", (result, condition), (source,),
                 kind=mir.Kind.AND, args=(mir.Held(source, 2),) * 2,
                 results=(mir.Held(result, 2),),
                 merges={source: result} if observation == "merge" else {})
-    built = mir.MirBody(0, (mir.MirBlock(0, (), (op,), ()),),
-                        origin={result: Register.EAX} if observation == "exit" else {})
+    returned = mir.Op(
+        1,
+        ir.Operation.RETURN,
+        "ret",
+        (),
+        (result,),
+        kind=mir.Kind.RETURN,
+        args=(mir.Held(result, 2),),
+        exits=(result,),
+    )
+    operations = (op, returned) if observation == "exit" else (op,)
+    built = mir.MirBody(0, (mir.MirBlock(0, (), operations, ()),))
     emitted = lower.Lowering(built, {result.id} if observation == "read" else set(), {}, (), {}).expand(op)
     assert emitted[0].what.name == "and"
     assert emitted[0].defines == (result.id,)

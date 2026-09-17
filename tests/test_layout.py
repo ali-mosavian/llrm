@@ -181,7 +181,7 @@ def test_a_tangled_class_is_split_on_the_phi_edge() -> None:
 
     # `made` is defined before the join, arrives at the phi, and is read
     # again after it -- so it overlaps the phi's own result.
-    body = mir.MirBody(
+    body = mir._RaisedBody(
         0x10,
         (
             mir.MirBlock(
@@ -227,8 +227,7 @@ def test_a_tangled_class_is_split_on_the_phi_edge() -> None:
         ),
         # The class starts in ax, and `other` is held there too -- so the
         # class has to move, and while it is tangled nothing can move it.
-        {made: Register.EAX, carried: Register.EAX, other: Register.EAX},
-        {},
+        origin={made: Register.EAX, carried: Register.EAX, other: Register.EAX},
     )
 
     body = replace(body, pins={other: Register.EAX})

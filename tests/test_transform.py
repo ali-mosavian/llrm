@@ -186,7 +186,7 @@ def test_dead_store_does_not_delete_a_load_at_the_same_address() -> None:
     use = mir.Op(
         9, ir.Operation.PUSH, "push", (), (loaded,), kind=mir.Kind.ARG, args=(mir.Held(loaded, 2),)
     )
-    body = mir.MirBody(0, (mir.MirBlock(0, (), (first, store, load, overwrite, use), ()),), {})
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (first, store, load, overwrite, use), ()),))
     done = transform.without_dead_stores(body, frozenset({5}), {})
     ops = done.blocks[0].ops
     assert any(loaded in op.defines for op in ops)
@@ -241,7 +241,7 @@ def test_forwarding_extends_lifetime_without_conflating_shared_addresses() -> No
         results=(mir.Held(unrelated, 4),),
         loads=(other,),
     )
-    body = mir.MirBody(0, (mir.MirBlock(0, (), (first, store, load, neighbor), ()),), {})
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (first, store, load, neighbor), ()),))
     done = transform.forwarded(body, frozenset({5}), {}).blocks[0].ops
     assert done[2].args == (mir.Held(source, 4),) and not done[2].loads
     assert done[3] == neighbor
@@ -834,11 +834,11 @@ def test_dead_code_leaves_a_body_it_cannot_read_alone() -> None:
     doomed = mir.Op(
         0x12, ir.Operation.MOVE, "mov", (mir.Value(2, 0x12),), (), kind=mir.Kind.COPY, absorbed=(2,)
     )
-    plain = mir.MirBody(0x10, (mir.MirBlock(0x10, (), (first, doomed), ()),), {})
+    plain = mir.MirBody(0x10, (mir.MirBlock(0x10, (), (first, doomed), ()),))
     assert transform.dead(plain) is not plain, "a dead move goes when the body is readable"
 
     opaque = mir.Op(0x14, ir.Operation.BARRIER, "?", (), (), absorbed=(3,))
-    body = mir.MirBody(0x10, (mir.MirBlock(0x10, (), (first, doomed, opaque), ()),), {})
+    body = mir.MirBody(0x10, (mir.MirBlock(0x10, (), (first, doomed, opaque), ()),))
     assert transform.dead(body) is body, "and stays when the body holds a barrier"
 
 
@@ -1008,8 +1008,8 @@ def test_an_unplaced_held_keeps_its_fold() -> None:
     raise AssertionError("no body folded anything; the test measures nothing")
 
 
-def test_what_leaves_a_loop_is_its_own_variable_and_keeps_its_origin() -> None:
-    """Two halves of one fix, and each is useless without the other.
+def test_what_leaves_a_loop_is_its_own_semantic_variable() -> None:
+    """A hoisted computation must not be merged with a source-register peer.
 
     In MIR a register is a variable, so two values BC kept in one register
     are one variable -- true only while nothing has moved them. The moment
@@ -1018,16 +1018,13 @@ def test_what_leaves_a_loop_is_its_own_variable_and_keeps_its_origin() -> None:
     that said the loop's reads of the product were reads of the counter.
     Nothing downstream could see a conflict because in MIR there was none.
 
-    So the hoist gives everything the run defines a variable of its own --
-    which is what `_insertion` was doing when it picked a spare register,
-    said without naming one. And the values keep their origin: "where BC
-    had it" is still true of them and is what layout remaps an operand
-    through. Drop it and the operand keeps the register the instruction was
-    raised with, whatever the allocator decided, and the hoisted load lands
-    on the counter again.
+    The hoist gives everything the run defines a variable of its own.  That
+    semantic identity is enough for SSA; physical placement lives in the
+    external allocation-hint table and must not be copied by this pass.
     """
     from qbopt.objectfile import omf
     from qbopt.objectfile import module
+    from qbopt.analysis import ssa
     from qbopt.frontend import blocks as split
     from qbopt.frontend.blocks import code_map
 
@@ -1039,16 +1036,13 @@ def test_what_leaves_a_loop_is_its_own_variable_and_keeps_its_origin() -> None:
 
     seen = 0
     for _name, body in mir.bodies(found, blocks):
-        before = {value.variable for value in body.origin}
+        before = {value.variable for value in ssa.values(body)}
         after = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
-        fresh = {value.variable for value in after.origin} - before
+        fresh = {value.variable for value in ssa.values(after)} - before
         if not fresh:
             continue
         seen += 1
-        # Every value of a fresh variable still says where BC had it.
-        placed = [value for value in after.origin if value.variable in fresh]
-        assert placed, "a fresh variable with no origin cannot be remapped"
-        # And no phi joins a fresh variable to one that was there before.
+        # No phi joins a fresh variable to one that was there before.
         for block in after.blocks:
             for phi in block.phis:
                 names = {one.variable for one in phi.incoming.values()} | {phi.result.variable}
@@ -1166,7 +1160,7 @@ def test_cse_propagates_a_complete_narrow_copy_to_an_opaque_reader(preserves_hig
         previous = mir.Value(3, 0, variable=3, version=1)
         copy = replace(copy, uses=(source, previous), merges={previous: copied})
     use = mir.Op(4, ir.Operation.PUSH, "push", (), (copied,), kind=mir.Kind.OPAQUE)
-    body = mir.MirBody(0, (mir.MirBlock(0, (), (first, copy, use), ()),), {})
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (first, copy, use), ()),))
     done = transform.subexpressions(body)
     assert done.blocks[0].ops[-1].uses == (copied if preserves_high else source,)
     assert any(copied in op.defines for op in done.blocks[0].ops) == preserves_high

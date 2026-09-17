@@ -47,7 +47,9 @@ def test_argument_join_requires_ordered_adjacent_halves(monkeypatch, hazard):
     found = corpus.loaded(path)
     with monkeypatch.context() as context:
         context.setattr(raising_longs, "arguments", lambda body: body)
-        body = mir.bodies(found, corpus.partitioned(path))[0][1]
+        bodies = mir.bodies(found, corpus.partitioned(path))
+        public = bodies[0][1]
+        body = mir._with_raise_context(public, bodies.hints[public.entry], bodies.source)
     block = body.blocks[0]
     index = next(index for index, op in enumerate(block.ops[:-1])
                  if op.kind is mir.Kind.ARG and block.ops[index + 1].kind is mir.Kind.ARG)
@@ -74,7 +76,9 @@ def test_long_negation_keeps_observed_intermediate_results(monkeypatch, observed
     found = corpus.loaded(path)
     with monkeypatch.context() as context:
         context.setattr(raising_longs, "unary", lambda body: body)
-        body = mir.bodies(found, corpus.partitioned(path))[0][1]
+        bodies = mir.bodies(found, corpus.partitioned(path))
+        public = bodies[0][1]
+        body = mir._with_raise_context(public, bodies.hints[public.entry], bodies.source)
     block = body.blocks[0]
     index = next(index for index, op in enumerate(block.ops) if op.kind is mir.Kind.NEG)
     low, carry, high = block.ops[index:index + 3]

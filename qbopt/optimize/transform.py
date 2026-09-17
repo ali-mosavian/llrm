@@ -1278,9 +1278,7 @@ _OBSERVED = frozenset(
 
 
 def _leaving(body: MirBody) -> set:
-    from qbopt.frontend.raising_words import leaving
-
-    return leaving(body)
+    return set(mir.exposed(body))
 
 
 # A value is a 32-bit register and this machine's code is 16-bit, so the

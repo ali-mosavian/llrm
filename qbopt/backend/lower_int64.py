@@ -520,7 +520,7 @@ def expanded(
     hints: mir.AllocationHints | None = None,
 ) -> Legalized:
     """Split every eight-byte integer into ABI dwords, if the body has one."""
-    hints = hints or mir.AllocationHints.from_body(body)
+    hints = hints or mir.AllocationHints()
     has_wide = any(
         isinstance(arg, (mir.Held, mir.Const)) and arg.width == 8
         for block in body.blocks

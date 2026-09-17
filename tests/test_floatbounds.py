@@ -115,7 +115,9 @@ def test_integer_helper_with_a_live_clobbered_result_keeps_it_defined(monkeypatc
     contracts = runtime.for_module(found)
     raise_calls = raising_float_calls.raised
     monkeypatch.setattr(raising_float_calls, "raised", lambda body, *args: body)
-    body = mir.bodies(found, corpus.partitioned(path), contracts)[0][1]
+    bodies = mir.bodies(found, corpus.partitioned(path), contracts)
+    public = bodies[0][1]
+    body = mir._with_hints(public, bodies.hints[public.entry])
     block = next(one for one in body.blocks if any(found.calls.get(op.at) == "B$FIL2" for op in one.ops))
     index = next(index for index, op in enumerate(block.ops) if found.calls.get(op.at) == "B$FIL2")
     call = block.ops[index]

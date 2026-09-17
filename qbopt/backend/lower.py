@@ -528,7 +528,7 @@ def lowered(
     # generic boundary; `_constant_store` below splits an eight-byte memory
     # bit pattern without pretending it is integer arithmetic.
 
-    hints = hints or mir.AllocationHints.from_body(body)
+    hints = hints or mir.AllocationHints()
     try:
         body = lower_switches.expanded(body)
     except ValueError as error:
@@ -557,6 +557,11 @@ def lowered(
     # What anything reads, so a definition nothing reads can become what it
     # always was: a statement that the register is destroyed, which
     # `clobbers` makes without inventing a value to carry it.
+    # Exit uses are semantic liveness, not operands of the instruction that
+    # exits the body.  Treating a terminal call's own results as its inputs
+    # made lowering deliver and allocate values the call merely leaves
+    # observable (ADDRM printed 264 for 210).  They remain visible through
+    # ``mir.exposed`` wherever instruction selection must not discard them.
     read = {one.id for block in body.blocks for op in block.ops for one in op.uses}
     read |= {value.id for block in body.blocks for phi in block.phis for value in phi.incoming.values()}
     calls = calls or {}
@@ -1394,13 +1399,11 @@ class Lowering:
                 ):
                     dividends[one.args[0].value.id] = one.args[1].value.id
         self._dividends = {high: low for high, low in dividends.items() if readers.get(high) == 1}
-        from qbopt.frontend.raising_words import leaving
-
-        self._exposed = {value.id for value in leaving(body)}
+        self._exposed = {value.id for value in mir.exposed(body)}
         self._coverage = coverage or {}
         self._occurrences = occurrences
         self._nodes = nodes or {}
-        self._origin = origin if origin is not None else body.origin
+        self._origin = origin or {}
         self._calls = calls
         # The same answer the raise used, per call site. Looked up here
         # only where the caller had none to give.

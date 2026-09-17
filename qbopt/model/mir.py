@@ -165,10 +165,10 @@ class Value:
     names contain where they landed, and a 32-bit root has no way to say
     "the low half of that". docs/variables.md has the measurement.
 
-    Where BC kept it is still known, and is a fact about lowering rather
-    than about the value: MirBody.origin holds it. Reading that map from an
-    analysis is a choice with a reason, not something that happens by
-    accident because the register was sitting on the value.
+    Where BC kept it is captured by the raise in ``AllocationHints`` and is
+    handed directly to lowering.  It is not reachable from a public MIR body,
+    so an analysis cannot accidentally turn historical placement into program
+    semantics.
     """
 
     id: int
@@ -180,8 +180,8 @@ class Value:
     # `v56`, `v394`, `v400` said they were three, which is what makes a loop
     # header's phis read as six variables when they are six registers.
     #
-    # `variable` is an index, not a register: which register it was is
-    # MirBody.origin's, and it stays there.
+    # `variable` is an index, not a register.  AllocationHints may associate
+    # that index with a soft historical home after MIR optimization.
     variable: int = 0
     version: int = 0
 
@@ -906,6 +906,11 @@ class Op:
     # procedure.  This is control-flow meaning established by the frontend,
     # not an encoding choice: lowering decides how that value is addressed.
     indirect: bool = False
+    # Values observable after this operation exits the body.  They are not
+    # operands: a terminal runtime call can define one of them itself.  This
+    # separate semantic edge prevents ordinary dataflow analyses and lowering
+    # from mistaking ABI visibility for an encoded machine input.
+    exits: tuple[Value, ...] = field(default=(), kw_only=True)
 
     @property
     def barrier(self) -> bool:
@@ -1026,14 +1031,6 @@ class MirBlock:
 class MirBody:
     entry: int
     blocks: tuple[MirBlock, ...]
-    origin: dict[Value, Register_] = field(default_factory=dict)  # where BC kept each value
-    # Where a transform has asked for a value to go instead. Empty for a
-    # body as raised, and the reason a pass can move anything at all:
-    # regalloc.colour() returns the identity assignment unless something
-    # pins, and hoisting a load out of a loop is exactly a request for a
-    # register the loop does not already use. wholeseg.py colours with
-    # these and hands the result to layout.
-    pins: dict[Value, Register_] = field(default_factory=dict)
     # Loader-established literal bytes, valid on entry only. They are not
     # immutable: ordinary alias and call effects invalidate these facts.
     initial: tuple[tuple[MemRef, Const], ...] = ()
@@ -1063,6 +1060,152 @@ class MirBody:
 
 
 @dataclass(frozen=True, slots=True)
+class _RaisedBody(MirBody):
+    """The raise's private machine view before the public MIR boundary.
+
+    Recognition is allowed to ask where source values arrived; optimization
+    is not.  ``bodies()`` and the C frontend consume these fields into an
+    ``AllocationHints`` side table and return an ordinary ``MirBody``.
+    """
+
+    origin: dict[Value, Register_] = field(default_factory=dict)
+    pins: dict[Value, Register_] = field(default_factory=dict)
+
+
+def _live_outs(body: _RaisedBody) -> dict[int, frozenset[Value]]:
+    """The source values observable at each machine exit.
+
+    This is the last placement-aware question asked by raising.  The result
+    is immediately materialized as semantic MIR exit observations, so neither
+    this map nor the source registers cross the public boundary.
+    """
+    from qbopt.analysis import liveness as alive_at
+
+    predecessors = loops.predecessors(list(body.blocks))
+    arriving: dict[Register_, set[Value]] = {}
+    for value in alive_at.entry_values(body):
+        register = body.origin.get(value)
+        if register is not None:
+            arriving.setdefault(ir.ROOT.get(register, register), set()).add(value)
+
+    outof: dict[int, dict[Register_, set[Value]]] = {block.at: {} for block in body.blocks}
+    changing = True
+    while changing:
+        changing = False
+        for block in body.blocks:
+            here: dict[Register_, set[Value]] = {}
+            incoming = [outof[one] for one in predecessors[block.at]]
+            if block.at == body.entry:
+                incoming.append(arriving)
+            for state in incoming:
+                for register, values in state.items():
+                    here.setdefault(register, set()).update(values)
+            for phi in block.phis:
+                if phi.result.flags:
+                    continue
+                register = body.origin.get(phi.result)
+                if register is not None:
+                    here[ir.ROOT.get(register, register)] = {phi.result}
+            for op in block.ops:
+                for value in op.defines:
+                    if value.flags:
+                        continue
+                    register = body.origin.get(value)
+                    if register is not None:
+                        here[ir.ROOT.get(register, register)] = {value}
+            if here != outof[block.at]:
+                outof[block.at] = here
+                changing = True
+
+    return {
+        block.at: frozenset(value for values in outof[block.at].values() for value in values)
+        for block in body.blocks
+        if not block.succ
+    }
+
+
+def _with_live_outs(body: _RaisedBody) -> _RaisedBody:
+    """Turn placement-derived exit visibility into machine-free MIR uses.
+
+    Exit observations are distinct from ordinary uses: the terminal
+    operation does not read them, and may define them itself.  SSA rewrites
+    carry this edge explicitly while ordinary analyses remain unchanged.
+    """
+    live = _live_outs(body)
+    blocks = []
+    for block in body.blocks:
+        leaving = live.get(block.at, frozenset())
+        if not leaving:
+            blocks.append(block)
+            continue
+        ordered = tuple(sorted(leaving, key=lambda value: (value.variable, value.version, value.id)))
+        if block.ops:
+            last = block.ops[-1]
+            blocks.append(
+                replace(
+                    block,
+                    ops=(
+                        *block.ops[:-1],
+                        replace(last, exits=ordered),
+                    ),
+                )
+            )
+        else:
+            marker = Op(
+                block.at,
+                ir.Operation.NOTHING,
+                "",
+                (),
+                (),
+                kind=Kind.NOTHING,
+                source_backed=False,
+                id=next(_IDS),
+                exits=ordered,
+            )
+            blocks.append(replace(block, ops=(marker,)))
+    return replace(body, blocks=tuple(blocks))
+
+
+def exposed(body: MirBody) -> frozenset[Value]:
+    """Values explicitly observable after control leaves this body.
+
+    The raise records ABI-visible return and escape operands on their MIR
+    operations.  Analyses therefore ask program semantics rather than which
+    source register happened to contain a value at an exit.
+    """
+    return frozenset(
+        value
+        for block in body.blocks
+        if not block.succ and block.ops
+        for value in exit_values(block.ops[-1])
+    )
+
+
+def ordinary_uses(op: Op) -> tuple[Value, ...]:
+    """Uses encoded or otherwise consumed by ``op`` itself."""
+    return op.uses
+
+
+def exit_values(op: Op) -> tuple[Value, ...]:
+    """Values observable after ``op`` without being its machine operands."""
+    return op.exits
+
+
+def _public(body: MirBody) -> MirBody:
+    """Drop the raise-only machine view at the public MIR boundary."""
+    return MirBody(
+        entry=body.entry,
+        blocks=body.blocks,
+        initial=body.initial,
+        repetitions=body.repetitions,
+        cloned=body.cloned,
+        sealed=body.sealed,
+        pointer_values=body.pointer_values,
+        pointer_seeds=body.pointer_seeds,
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class AllocationHints:
     """Backend-only placement history, outside program semantics.
 
@@ -1079,7 +1222,7 @@ class AllocationHints:
     pins: dict[tuple[int, int], Register_] = field(default_factory=dict)
 
     @classmethod
-    def from_body(cls, body: MirBody) -> "AllocationHints":
+    def from_body(cls, body: _RaisedBody) -> "AllocationHints":
         def variables(locations: dict[Value, Register_]) -> dict[int, Register_]:
             out: dict[int, Register_] = {}
             for value, location in locations.items():
@@ -1113,6 +1256,79 @@ class AllocationHints:
 
     def pin_of(self, operation: Op, result: int) -> Register_ | None:
         return None if operation.id is None else self.pins.get((operation.id, result))
+
+
+def _with_hints(body: MirBody, hints: AllocationHints) -> _RaisedBody:
+    """Reattach placement only for raise-time recognition or legacy diagnostics.
+
+    Production optimization never calls this inverse boundary.  It exists for
+    frontend unit tests and the historical comparison tools that deliberately
+    inspect BC's assignment.
+    """
+    values = {
+        value
+        for block in body.blocks
+        for value in (
+            *(phi.result for phi in block.phis),
+            *(value for phi in block.phis for value in phi.incoming.values()),
+            *(value for op in block.ops for value in (*op.defines, *op.uses, *op.exits)),
+        )
+    }
+    origins = {value: where for value in values if (where := hints.origin_of(value)) is not None}
+    pins = {
+        value: where
+        for block in body.blocks
+        for op in block.ops
+        for index, value in enumerate(op.defines)
+        if (where := hints.pin_of(op, index)) is not None
+    }
+    return _RaisedBody(
+        entry=body.entry,
+        blocks=body.blocks,
+        initial=body.initial,
+        repetitions=body.repetitions,
+        cloned=body.cloned,
+        sealed=body.sealed,
+        pointer_values=body.pointer_values,
+        pointer_seeds=body.pointer_seeds,
+        origin=origins,
+        pins=pins,
+    )
+
+
+def _with_raise_context(body: MirBody, hints: AllocationHints, source: module.SourceMap) -> _RaisedBody:
+    """Reconstruct the private raise view for focused frontend tests.
+
+    Production never crosses the public boundary backwards.  A recognition
+    test deliberately does: it disables one raising step, perturbs its input,
+    and invokes that step directly.  Such a test needs both placement hints
+    and the occurrence ranges that were externalized at the boundary.
+    """
+
+    def occurrence(op: Op) -> Op:
+        spans = tuple(
+            span
+            for identity in op.absorbed
+            for span in source.occurrences.get(identity, ())
+        )
+        node = source.nodes.get(op.id) if op.id is not None else None
+        if not spans and node is None:
+            return op
+        return raising_occurrence(
+            op,
+            spans[0] if spans else (op.at, op.at),
+            extra=spans[1:],
+            node=node,
+        )
+
+    private = replace(
+        body,
+        blocks=tuple(
+            replace(block, ops=tuple(occurrence(op) for op in block.ops))
+            for block in body.blocks
+        ),
+    )
+    return _with_hints(private, hints)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1995,9 +2211,9 @@ def raise_body(
             namer.stack[variable].pop()
 
     rename(start)
-    return MirBody(
-        start,
-        tuple(
+    return _RaisedBody(
+        entry=start,
+        blocks=tuple(
             MirBlock(
                 block.at,
                 tuple(phis[block.at].values()),
@@ -2006,7 +2222,7 @@ def raise_body(
             )
             for block in blocks
         ),
-        dict(namer.origin),
+        origin=dict(namer.origin),
     )
 
 
@@ -2031,21 +2247,15 @@ def _rebased(refs: tuple[MemRef, ...], namer: "_Namer", at: int) -> tuple[MemRef
 class _Renamer:
     """Fresh values per MIR variable, and which one each currently holds."""
 
-    def __init__(self, home: dict[int, Register_]) -> None:
+    def __init__(self) -> None:
         self.next = 0
-        self.home = home
         self.stack: dict[int, list[Value]] = {}
         self.versions: dict[int, int] = {}
-        self.origin: dict[Value, Register_] = {}
 
     def fresh(self, variable: int, at: int, flags: bool = False) -> Value:
         self.next += 1
         self.versions[variable] = self.versions.get(variable, 0) + 1
-        made = Value(self.next, at, flags, variable, self.versions[variable])
-        where = self.home.get(variable)
-        if where is not None:
-            self.origin[made] = where
-        return made
+        return Value(self.next, at, flags, variable, self.versions[variable])
 
     def current_of(self, variable: int, at: int) -> Value:
         held = self.stack.setdefault(variable, [])
@@ -2117,18 +2327,10 @@ def resolved(body: MirBody, calls: dict[int, str] | None = None) -> MirBody | st
         if parent is not None:
             children[parent].append(block.at)
 
-    # Keyed on the MIR variable, not on the register. In MIR a register is
-    # a variable and nothing more -- but two values BC happened to keep in
-    # one register are one variable only while nothing has moved them, and
-    # the moment the hoist lifts a computation out of a loop they are not:
-    # the product and the counter both lived in ax, and re-deriving by
-    # register put a phi over them that said the loop's reads of the
-    # product were reads of the counter. hotlpx printed the wrong sum with
-    # every host test agreeing.
+    # Keyed on the MIR variable, never on a source register. Two values that
+    # happened to occupy one register are not one variable after a transform
+    # separates their computations.
     frontier = loops.frontiers(blocks, start)
-    home: dict[int, Register_] = {}
-    for value, register in (body.origin or {}).items():
-        home.setdefault(value.variable, register)
 
     where: dict[int, set[int]] = {}
     for block in blocks:
@@ -2146,15 +2348,13 @@ def resolved(body: MirBody, calls: dict[int, str] | None = None) -> MirBody | st
                     needed[join].add(variable)
                     pending.append(join)
 
-    namer = _Renamer(home)
+    namer = _Renamer()
     phis: dict[int, dict[int, Phi]] = {block.at: {} for block in blocks}
     out: dict[int, list[Op]] = {block.at: [] for block in blocks}
     flagged = {value.variable for block in blocks for op in block.ops for value in op.defines if value.flags}
     for block in blocks:
         for variable in sorted(needed[block.at], key=lambda one: (one not in flagged, one)):
             phis[block.at][variable] = Phi(namer.fresh(variable, block.at, variable in flagged), {})
-
-    again: dict[Value, Value] = {}
 
     def rename(at: int) -> None:
         block = by_at[at]
@@ -2165,6 +2365,7 @@ def resolved(body: MirBody, calls: dict[int, str] | None = None) -> MirBody | st
 
         for op in block.ops:
             used = tuple(namer.current(one, start) for one in op.uses)
+            exits = tuple(namer.current(one, start) for one in op.exits)
             swap = {one.variable: now for one, now in zip(op.uses, used)}
             loads = tuple(_rehomed(one, namer, start) for one in op.loads)
             stores = tuple(_rehomed(one, namer, start) for one in op.stores)
@@ -2175,18 +2376,13 @@ def resolved(body: MirBody, calls: dict[int, str] | None = None) -> MirBody | st
                 namer.stack.setdefault(one.variable, []).append(value)
                 pushed.append(one.variable)
                 fresh.append(value)
-                # In SSA a value is defined once, so this is a whole map
-                # from the old name to the new one -- which is what a pin
-                # needs to survive. Carried unremapped, every pin naming a
-                # value some pass had caused to be re-versioned addressed
-                # nothing, and the allocator moved what a call hands back.
-                again[one] = value
             made = {one.variable: now for one, now in zip(op.defines, fresh)}
             out[at].append(
                 replace(
                     op,
                     defines=tuple(fresh),
                     uses=used,
+                    exits=exits,
                     loads=loads,
                     stores=stores,
                     args=tuple(_renamed_arg(one, swap, refs) for one in op.args),
@@ -2217,8 +2413,8 @@ def resolved(body: MirBody, calls: dict[int, str] | None = None) -> MirBody | st
 
     rename(start)
     return MirBody(
-        start,
-        tuple(
+        entry=start,
+        blocks=tuple(
             MirBlock(
                 block.at,
                 tuple(phis[block.at].values()),
@@ -2227,12 +2423,12 @@ def resolved(body: MirBody, calls: dict[int, str] | None = None) -> MirBody | st
             )
             for block in blocks
         ),
-        dict(namer.origin),
-        {again.get(one, one): where for one, where in body.pins.items()},
-        body.initial,
-        body.repetitions,
-        body.cloned,
-        body.sealed,
+        initial=body.initial,
+        repetitions=body.repetitions,
+        cloned=body.cloned,
+        sealed=body.sealed,
+        pointer_values=body.pointer_values,
+        pointer_seeds=body.pointer_seeds,
     )
 
 
@@ -2294,6 +2490,12 @@ def verify(body: MirBody) -> list[str]:
                 elif where not in doms.get(block.at, frozenset()):
                     problems.append(f"{op.at:#06x} uses {value}, defined in {where:#06x}, which does not dominate it")
             pending.difference_update(op.defines)
+            for value in op.exits:
+                where = defined_at.get(value)
+                if where is not None and where not in doms.get(block.at, frozenset()):
+                    problems.append(
+                        f"{op.at:#06x} exposes {value}, defined in {where:#06x}, which does not dominate it"
+                    )
     return problems
 
 
@@ -2642,8 +2844,8 @@ def bodies(
     from qbopt.frontend import raising_call_memory
 
     spared = raising_call_memory.spared(found, result, contracts)
-    out: list[tuple[str, MirBody]] = []
-    error_handlers: list[MirBody] = []
+    out: list[tuple[str, _RaisedBody]] = []
+    error_handlers: list[_RaisedBody] = []
     for body in result:
         mine = [one for one in blocks if any(lo <= one.at < hi for lo, hi in body.body.ranges)]
         from qbopt.frontend import raising_control
@@ -2773,11 +2975,9 @@ def bodies(
             )
             for name, body in out
         ]
-    return RaisedBodies(
-        tuple(out),
-        source,
-        {body.entry: AllocationHints.from_body(body) for _name, body in out},
-    )
+    out = [(name, _with_live_outs(body)) for name, body in out]
+    hints = {body.entry: AllocationHints.from_body(body) for _name, body in out}
+    return RaisedBodies(tuple((name, _public(body)) for name, body in out), source, hints)
 
 
 def _sites(found: Module, blocks: list[Block]) -> dict:

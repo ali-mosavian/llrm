@@ -103,7 +103,9 @@ def test_signed_store_requires_the_matching_sign_word(mismatch, monkeypatch):
         patch.setattr(raising_longs, "scalar", lambda body: body)
         patch.setattr(raising_longs, "sign_fills", lambda body: body)
         path = Path("fixtures/omf/addrm-p-g2.obj")
-        body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
+        raised = mir.bodies(corpus.loaded(path), corpus.partitioned(path))
+        public = raised[0][1]
+        body = mir._with_raise_context(public, raised.hints[public.entry], raised.source)
     extension = next(op for block in body.blocks for op in block.ops if op.at == 0x5c)
     match mismatch:
         case "source":
@@ -125,7 +127,9 @@ def nbody(monkeypatch):
         patch.setattr(raising_longs, "scalar", lambda body: body)
         path = Path("fixtures/regressions/nbody-stack-p-g2.obj")
         found = corpus.loaded(path)
-        body = mir.bodies(found, corpus.partitioned(path))[0][1]
+        raised = mir.bodies(found, corpus.partitioned(path))
+        public = raised[0][1]
+        body = mir._with_raise_context(public, raised.hints[public.entry], raised.source)
     return body, recognize
 
 

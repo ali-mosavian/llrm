@@ -355,7 +355,11 @@ def test_strided_ranges_prove_interleaved_arrays_disjoint() -> None:
 
 
 def test_restrict_roots_and_tbaa_share_the_alias_query() -> None:
-    """Distinct restrict roots are disjoint; character accesses still defeat TBAA."""
+    """Restrict roots are disjoint; TBAA needs a declared effective type.
+
+    Two incompatible accesses alone may still be two members of one union.
+    Character accesses remain conservative regardless of provenance.
+    """
     unknown = memory.Object(memory.Kind.UNKNOWN)
     left = mir.MemRef(None, 4, typed=("int4", False), provenance=memory.Provenance.one(unknown, restrict=1))
     right = mir.MemRef(None, 4, typed=("float4", False), provenance=memory.Provenance.one(unknown, restrict=2))
@@ -363,7 +367,7 @@ def test_restrict_roots_and_tbaa_share_the_alias_query() -> None:
     typed_only = replace(right, provenance=memory.Provenance.one(unknown))
 
     assert not mir.overlapping(left, right, frozenset())
-    assert not mir.overlapping(replace(left, provenance=memory.Provenance.one(unknown)), typed_only, frozenset())
+    assert mir.overlapping(replace(left, provenance=memory.Provenance.one(unknown)), typed_only, frozenset())
     assert mir.overlapping(left, chars, frozenset())
 
 

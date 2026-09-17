@@ -25,9 +25,19 @@ def test_qrender_word_conversion_lowers_without_extracting_a_word_from_a_word():
             inputs=frozenset({runtime.Reg.AX, runtime.Reg.BX, runtime.Reg.CX,
                               runtime.Reg.DX, runtime.Reg.SI, runtime.Reg.DI})),
     })
-    name, body = next((name, body) for name, body in mir.bodies(found, corpus.partitioned(path), rules)
-                      if name == "procedure ENT_CHECK_TELEPORT")
-    result = lower.lowered(name, body, found.calls, found.absorbed, rules)
+    bodies = mir.bodies(found, corpus.partitioned(path), rules)
+    name, body = next((name, body) for name, body in bodies if name == "procedure ENT_CHECK_TELEPORT")
+    result = lower.lowered(
+        name,
+        body,
+        found.calls,
+        bodies.source.absorbed,
+        rules,
+        bodies.source.coverage,
+        nodes=bodies.source.nodes,
+        occurrences=bodies.source.occurrences,
+        hints=bodies.hints[body.entry],
+    )
     conversion = [one.what for one in result.insns if one.at == 0xae9 and one.what]
     assert any(one.name == "fistp" and one.dests[0].width == 2 for one in conversion)
     assert not any(one.op is ir.Operation.CALL for one in conversion)
@@ -76,7 +86,9 @@ def test_float_integer_recognition_requires_the_full_helper_contract(guard, monk
     rules = runtime.for_module(found)
     recognize = raising_float_results.raised
     monkeypatch.setattr(raising_float_results, "raised", lambda body, *args: body)
-    body = mir.bodies(found, corpus.partitioned(path), rules)[0][1]
+    bodies = mir.bodies(found, corpus.partitioned(path), rules)
+    public = bodies[0][1]
+    body = mir._with_raise_context(public, bodies.hints[public.entry], bodies.source)
     call = next(op for block in body.blocks for op in block.ops if found.calls.get(op.at) == "B$FIST")
     if guard == "flags":
         flag = next(value for value in call.defines if value.flags)
