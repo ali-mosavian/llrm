@@ -1,12 +1,14 @@
-from dataclasses import replace
 from collections import Counter
+from dataclasses import replace
 
+from qbopt.model import ir
+from qbopt.model import mir
 from qbopt.analysis import consts
-from qbopt.model import ir, mir
 
 
 def simplified(body: mir.MirBody, wanted: set[mir.Value], wide: set[mir.Value]) -> mir.MirBody:
-    from qbopt.optimize import wholephis, wholestores
+    from qbopt.optimize import wholephis
+    from qbopt.optimize import wholestores
     body = wholestores.joined(wholephis.joined(body))
     body = _halved(_divisions(body))
     mentioned = {value for block in body.blocks for op in block.ops for value in op.uses if value not in op.merges} | {
@@ -23,7 +25,7 @@ def simplified(body: mir.MirBody, wanted: set[mir.Value], wide: set[mir.Value]) 
         op = _redundant_extension(op, definitions)
         op = _zero_difference(op, definitions)
         op = _negated_difference(op, definitions, wanted | mentioned, uses)
-        op = _shift_chain(op, definitions, wanted | mentioned)
+        op = _shift_chain(op, definitions, wanted | mentioned, uses)
         op = _product(op, wanted | mentioned, wide)
         op = _scaled_chain(op, definitions, wanted | mentioned, uses)
         op = _offset_chain(op, definitions, wanted | mentioned, uses)
@@ -100,7 +102,7 @@ def _shared_shifts(body: mir.MirBody, wanted: set[mir.Value]) -> mir.MirBody:
         available = {}
         ops = []
         for op in block.ops:
-            scale = _scale(op, wanted) if op.kind is mir.Kind.SHL else None
+            scale = _scale(op, wanted, tied=True) if op.kind is mir.Kind.SHL else None
             if scale is not None:
                 source, factor = scale
                 count = factor.bit_length() - 1
@@ -110,9 +112,18 @@ def _shared_shifts(body: mir.MirBody, wanted: set[mir.Value]) -> mir.MirBody:
                 if smaller:
                     amount = max(smaller)
                     previous = candidates[amount]
-                    op = replace(op, args=(previous, mir.Const(count - amount, 1)),
-                                 defines=(result.value,), uses=(previous.value,),
-                                 node=None, raised=None)
+                    op = replace(
+                        op,
+                        args=(previous, mir.Const(count - amount, 1)),
+                        defines=(result.value,),
+                        uses=tuple(previous.value if value == source.value else value for value in op.uses),
+                        merges={
+                            previous.value if value == source.value else value: target
+                            for value, target in op.merges.items()
+                        },
+                        node=None,
+                        raised=None,
+                    )
                 if result.value in used:
                     candidates[count] = result
             ops.append(op)
@@ -120,8 +131,9 @@ def _shared_shifts(body: mir.MirBody, wanted: set[mir.Value]) -> mir.MirBody:
     return replace(body, blocks=tuple(blocks))
 
 
-def _scale(op: mir.Op, wanted: set[mir.Value]):
-    if (op.kind not in (mir.Kind.MUL, mir.Kind.SHL) or op.loads or op.stores or op.barrier or op.merges
+def _scale(op: mir.Op, wanted: set[mir.Value], tied: bool = False):
+    if (op.kind not in (mir.Kind.MUL, mir.Kind.SHL) or op.loads or op.stores or op.barrier
+        or op.merges and (not tied or mir.partial(op))
         or len(op.args) != 2 or len(op.results) != 1 or not isinstance(op.results[0], mir.Held)
         or any(value in wanted for value in op.defines if value != op.results[0].value)):
         return None
@@ -351,14 +363,20 @@ def _halved(body: mir.MirBody) -> mir.MirBody:
         replace(block, ops=tuple(one for op in block.ops for one in rewritten(op))) for block in body.blocks))
 
 
-def _shift_chain(op: mir.Op, definitions: dict, wanted: set[mir.Value]) -> mir.Op:
+def _shift_chain(op: mir.Op, definitions: dict, wanted: set[mir.Value], uses: Counter) -> mir.Op:
     if op.kind is not mir.Kind.SHL or op.loads or op.stores or op.barrier or len(op.args) != 2 or len(op.results) != 1:
         return op
     source, count = op.args
     if not isinstance(source, mir.Held) or not isinstance(count, mir.Const):
         return op
     previous = definitions.get(source.value)
-    if previous is None or previous.kind is not mir.Kind.SHL or len(previous.args) != 2 or len(previous.results) != 1:
+    if (
+        previous is None
+        or uses[source.value] != 1
+        or previous.kind is not mir.Kind.SHL
+        or len(previous.args) != 2
+        or len(previous.results) != 1
+    ):
         return op
     original, first_count = previous.args
     if (not isinstance(original, mir.Held) or not isinstance(first_count, mir.Const)

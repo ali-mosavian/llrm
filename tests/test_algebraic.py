@@ -1,4 +1,5 @@
 from pathlib import Path
+from collections import Counter
 from dataclasses import replace
 
 import pytest
@@ -85,7 +86,8 @@ def test_nbody_counter_is_stored_as_one_whole_value():
 @pytest.mark.parametrize("mismatch", ["address", "value", "barrier"])
 def test_whole_store_requires_adjacent_matching_word_writes(mismatch):
     """NBODY's counter store is not permission to combine unrelated or observable writes."""
-    from qbopt.optimize import wholephis, wholestores
+    from qbopt.optimize import wholephis
+    from qbopt.optimize import wholestores
     path = Path("fixtures/bench/nbody-v-g3.obj")
     body = wholephis.joined(mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1])
     header = next(block for block in body.blocks if block.at == 0x2f0)
@@ -151,8 +153,9 @@ def test_sixty_dimensional_zero_offset_needs_no_pointer_arithmetic(tag):
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_hotlpx_scales_by_twenty_without_a_second_multiply(tag):
     """HOTLPX's closed-form sum still used IMUL for the constant factor twenty."""
-    from qbopt import wholeseg
     from iced_x86 import Mnemonic
+
+    from qbopt import wholeseg
     result = wholeseg.emitted(Path(f"fixtures/omf/hotlpx-{tag}.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     insns = [one.insn for block in corpus.partitioned(result.data) for one in block.insns]
@@ -162,8 +165,10 @@ def test_hotlpx_scales_by_twenty_without_a_second_multiply(tag):
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_spill_combines_constant_accumulator_steps(tag):
     """SPILL added 150 and then 70 to the same accumulator on every outer iteration."""
+    from iced_x86 import OpKind
+    from iced_x86 import Mnemonic
+
     from qbopt import wholeseg
-    from iced_x86 import Mnemonic, OpKind
     result = wholeseg.emitted(Path(f"fixtures/omf/spill-{tag}.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     additions = [one.insn.immediate(1) for block in corpus.partitioned(result.data) for one in block.insns
@@ -204,19 +209,20 @@ def test_offset_composition_preserves_modular_values_and_observers(kind, guard):
         assert (((value + 65530) & 65535) + delta) & 65535 == (value + done.args[1].n) & 65535
 
 
-@pytest.mark.xfail(reason="i*4 is rebuilt from i: lea bx,[eax+eax] then mov di,ax / shl di,2", strict=True)
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_addrm_reuses_word_scale_for_long_address(tag):
     """ADDRM rebuilt i*4 after using i*2, paying another copy and a larger shift each iteration."""
-    from qbopt.frontend import blocks
-    from qbopt.objectfile import module, omf
-    from qbopt import wholeseg
     from iced_x86 import Mnemonic
+
+    from qbopt import wholeseg
+    from qbopt.objectfile import omf
+    from qbopt.frontend import blocks
+    from qbopt.objectfile import module
     result = wholeseg.emitted(Path(f"fixtures/omf/addrm-{tag}.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
     shifts = [one.insn for one in blocks.instructions(found) if one.insn.mnemonic == Mnemonic.SHL]
-    assert len(shifts) == 2
+    assert len(shifts) == 1
     assert all(one.immediate(1) == 1 for one in shifts)
 
 
@@ -274,13 +280,67 @@ def test_shared_shift_requires_available_same_width_value(guard):
         assert (((value << 1) & 65535) << 1) & 65535 == (value << 2) & 65535
 
 
+@pytest.mark.parametrize("partial", [False, True])
+def test_shared_shift_distinguishes_a_word_tie_from_a_partial_write(partial):
+    """ADDRM's word shifts carried an allocator tie that hid a reusable scale."""
+    source, middle, result = (mir.Value(index, 0) for index in range(1, 4))
+    width = 1 if partial else 2
+    first_result = mir.Held(middle, width)
+    final_result = mir.Held(result, width)
+    first = mir.Op(
+        0,
+        ir.Operation.BINARY,
+        "shl",
+        (middle,),
+        (source,),
+        kind=mir.Kind.SHL,
+        args=(mir.Held(source, width), mir.Const(1, 1)),
+        results=(first_result,),
+        merges={source: middle},
+    )
+    last = mir.Op(
+        1,
+        ir.Operation.BINARY,
+        "shl",
+        (result,),
+        (source,),
+        kind=mir.Kind.SHL,
+        args=(mir.Held(source, width), mir.Const(2, 1)),
+        results=(final_result,),
+        merges={source: result},
+    )
+    observe = mir.Op(
+        2,
+        ir.Operation.MOVE,
+        "mov",
+        (),
+        (middle,),
+        kind=mir.Kind.OPAQUE,
+        args=(first_result,),
+    )
+
+    done = algebraic._shared_shifts(
+        mir.MirBody(0, (mir.MirBlock(0, (), (first, observe, last), ()),)),
+        set(),
+    ).blocks[0].ops[-1]
+
+    if partial:
+        assert done == last
+    else:
+        assert done.args == (first_result, mir.Const(1, 1))
+        assert done.uses == (middle,)
+        assert done.merges == {middle: result}
+
+
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_nested_combines_row_scale_in_emitted_code(tag):
     """NESTED multiplied the row by six, then shifted it again to address word elements."""
-    from qbopt.frontend import blocks
-    from qbopt.objectfile import module, omf
-    from qbopt import wholeseg
     from iced_x86 import Code
+
+    from qbopt import wholeseg
+    from qbopt.objectfile import omf
+    from qbopt.frontend import blocks
+    from qbopt.objectfile import module
     result = wholeseg.emitted(Path(f"fixtures/omf/nested-{tag}.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
@@ -315,7 +375,8 @@ def test_extracted_halves_recombine_to_the_original_value(high_offset, different
 def test_joined_halves_are_consumed_as_halves(mode) -> None:
     """A call's DX:AX long was joined only to be stored, tested for zero and
     pushed; lowered, the join is `push dx; push ax; pop eax`."""
-    from qbopt.cfront.raise_hir import Addr, Space
+    from qbopt.cfront.raise_hir import Addr
+    from qbopt.cfront.raise_hir import Space
     low, high, whole, flags, other = (mir.Value(index, 0) for index in range(1, 6))
     flags = mir.Value(4, 0, True)
     K = mir.Kind
@@ -414,10 +475,13 @@ def test_nbody_address_shifts_combine_without_an_extra_counter() -> None:
 
 def test_nbody_damping_keeps_negation_whole():
     """NBODY split both velocity negations into words, emitting push/pop traffic and paired stores."""
-    from qbopt.frontend import blocks
-    from qbopt.objectfile import module, omf
+    from iced_x86 import Mnemonic
+    from iced_x86 import Register
+
     from qbopt import wholeseg
-    from iced_x86 import Mnemonic, Register
+    from qbopt.objectfile import omf
+    from qbopt.frontend import blocks
+    from qbopt.objectfile import module
     path = Path("fixtures/regressions/nbody-stack-p-g2.obj")
     body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
     negated = [op for block in body.blocks for op in block.ops if op.kind is mir.Kind.NEG]
@@ -433,10 +497,12 @@ def test_nbody_damping_keeps_negation_whole():
 
 def test_nbody_damping_reverses_subtraction_without_negation():
     """NBODY paid for -(quotient-velocity) instead of one velocity-quotient subtraction."""
-    from qbopt.frontend import blocks
-    from qbopt.objectfile import module, omf
-    from qbopt import wholeseg
     from iced_x86 import Mnemonic
+
+    from qbopt import wholeseg
+    from qbopt.objectfile import omf
+    from qbopt.frontend import blocks
+    from qbopt.objectfile import module
     result = wholeseg.emitted(Path("fixtures/regressions/nbody-stack-p-g2.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
@@ -473,15 +539,23 @@ def test_reversed_difference_preserves_observed_values_and_flags(guard):
             assert (-((first - second) & 0xffffffff)) & 0xffffffff == (second - first) & 0xffffffff
 
 
-@pytest.mark.parametrize(("first_count", "last_count", "live_flags"), [(15, 1, False), (32, 1, False), (1, 1, True)])
-def test_shift_combination_preserves_count_and_flag_boundaries(first_count, last_count, live_flags) -> None:
+@pytest.mark.parametrize(
+    ("first_count", "last_count", "live_flags", "uses"),
+    [(15, 1, False, 1), (32, 1, False, 1), (1, 1, True, 1), (1, 1, False, 2)],
+)
+def test_shift_combination_preserves_count_flag_and_use_boundaries(first_count, last_count, live_flags, uses) -> None:
     source, middle, result = (mir.Value(index, 0) for index in range(1, 4))
     flags = mir.Value(4, 0, flags=True)
     first = mir.Op(0, ir.Operation.BINARY, "shl", (middle,), (source,), kind=mir.Kind.SHL,
                    args=(mir.Held(source, 2), mir.Const(first_count, 1)), results=(mir.Held(middle, 2),))
     last = mir.Op(1, ir.Operation.BINARY, "shl", (result, flags), (middle,), kind=mir.Kind.SHL,
                   args=(mir.Held(middle, 2), mir.Const(last_count, 1)), results=(mir.Held(result, 2),))
-    assert algebraic._shift_chain(last, {middle: first}, {flags} if live_flags else set()) == last
+    assert algebraic._shift_chain(
+        last,
+        {middle: first},
+        {flags} if live_flags else set(),
+        Counter({middle: uses}),
+    ) == last
 
 
 @pytest.mark.parametrize(("width", "divisor"), [(4, 2), (4, 16), (4, 512), (4, 262144), (2, 2), (2, 16), (2, 16384)])
