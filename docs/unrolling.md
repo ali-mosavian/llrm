@@ -215,8 +215,43 @@ gate while retaining the no-division, branch-count, exposed-input, and dynamic-
 work checks.  This larger scalar candidate takes about 172 seconds to compile on
 the development host versus roughly 90 seconds before the new leaves were
 exposed; that compile-time cost is recorded as a remaining optimization problem.
-A fresh full quality report and DOS known-answer run are the next measurement,
-so this checkpoint does not claim a final elapsed-time or GCC/Clang parity result.
+
+The full report exposed 192 semantic stores after all 64 matrix-result loads had
+been promoted.  Exit ownership recognized only direct `[bp+n]` cells, so DSE
+could not prove that a bounded canonical frame object ceased to exist at return.
+The first adjacent stage difference is `mir-r01-drop_stores` after final
+specialization: 14,691 operations / 192 stores becomes 14,627 / 128; every
+earlier recorded stage is identical.
+Current-activation frame objects are now private when their canonical pointer is
+not published through a call argument, return, escape, opaque operation, barrier,
+or non-frame store.  Publication is conservative when a direct frame address has
+no SSA identity to match.
+
+The first implementation deleted too much and returned **2,990,729,762** instead
+of 353,712.  DSE still called every indirect load unnamed; consequently privacy
+shielded a real canonical pointer load from an overlapping private store.  The
+fail-first regression records that wrong answer and requires canonical object-and-
+byte provenance to count as a named reference.  Unresolved pointers retain the
+old conservative behavior.  The corrected emitted object links with Microsoft
+LINK 5.31 and returns the independent 353,712 answer under DOSBox.
+
+Against the exact post-SROA baseline, the corrected 386 report is:
+
+| Metric | Before frame ownership | After |
+|---|---:|---:|
+| Bytes | 3,769 | 3,385 |
+| Instructions | 880 | 816 |
+| Static weighted cost | 3,106 | 2,978 |
+| Estimated dynamic operations | 1,702 | 1,638 |
+| Loads / stores | 374 / 332 | 374 / 268 |
+| Spill reloads / stores | 143 / 71 | 143 / 71 |
+
+The 64 removed stores are the fully promoted `c` matrix.  The 128 `a` and `b`
+initializer stores remain because their in-body pointer loads are observable.
+The body contains one `imul`, no division, and three final branches.  Allocation
+is still the dominant remaining gap: frame ownership removes semantic stores but
+does not change the 143/71 spill pair.  These are static/model measurements, not
+elapsed runtime timings or a completed GCC/Clang parity target.
 
 Larger-than-four-trip loops may now expand within that same operation budget
 when every extended floating result in the expanded loop is proven exact.

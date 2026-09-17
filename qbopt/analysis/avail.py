@@ -309,11 +309,15 @@ class Forward:
 def _fixed(ref: MemRef) -> bool:
     """Whether a cell is named outright rather than reached through a value.
 
-    Only a named cell can be a private one: a cell is private because no
-    address of it escaped, so a pointer, an index or a selector reaches it
-    no more than a call does.
+    A direct symbolic operand names its bytes.  So does canonical provenance:
+    an SSA pointer may choose the machine address at run time while its object
+    and possible byte lanes are already explicit in MIR.  An unresolved
+    pointer, index or selector remains unnamed and reaches a private cell no
+    more than an unknown call does.
     """
-    return ref.addr is not None and ref.addr.direct and ref.base is None and ref.segment is None
+    canonical = ref.provenance is not None and bool(ref.provenance.slices)
+    direct = ref.addr is not None and ref.addr.direct and ref.base is None and ref.segment is None
+    return canonical or direct
 
 
 def _dead_in(

@@ -20,12 +20,14 @@ into DGROUP or the stack names no variable a program can know the place of.
 """
 
 from bisect import bisect_right
-from collections.abc import Callable
 from dataclasses import dataclass
+from collections.abc import Callable
 
 from iced_x86 import Register
 
 from qbopt.model import mir
+from qbopt.model import memory
+from qbopt.analysis import alias
 from qbopt.objectfile import omf
 from qbopt.analysis import frameescape
 from qbopt.objectfile.module import Space
@@ -90,9 +92,7 @@ def _exposure(found: Module, blocks: list) -> Exposure | None:
         return disp, named[after] if after < len(named) else BEYOND
 
     insns = {insn.at: insn for block in blocks for insn in block.insns}
-    by_field = {
-        field: insn for insn in insns.values() for field in (insn.disp_at, insn.imm_at) if field is not None
-    }
+    by_field = {field: insn for insn in insns.values() for field in (insn.disp_at, insn.imm_at) if field is not None}
     everywhere = [reach(offset) for seg, offset in publics if seg == data]
     direct: dict[int, list[tuple[int, int]]] = {}
     for one in fixups:
@@ -142,6 +142,25 @@ def private(body: mir.MirBody, found: Module | None, blocks: list | None) -> Cal
     if exposed is None:
         return None
     escapes = frameescape.analysed(body)
+    pointers = alias.points_to(body)
+    published = set(pointers.escaped)
+    unknown_frame_publication = False
+    publishing = frozenset({mir.Kind.ARG, mir.Kind.CALL, mir.Kind.RETURN, mir.Kind.ESCAPE, mir.Kind.OPAQUE})
+    for block in body.blocks:
+        for op in block.ops:
+            if op.kind not in publishing and not op.barrier and not op.exits:
+                continue
+            values = set(op.uses) | set(op.exits)
+            values.update(arg.value for arg in op.args if isinstance(arg, mir.Held))
+            for value in values:
+                provenance = pointers.values.get(value)
+                if provenance is not None:
+                    published.update(one.object for one in provenance.slices)
+            # A direct address operand has no SSA value through which to
+            # match a frontend-defined object identity.  Conservatively
+            # expose every canonical frame object rather than guessing from
+            # coincident offsets.
+            unknown_frame_publication |= any(isinstance(arg, mir.FrameAddress) for arg in op.args)
     frame = escapes.reach is not None and not escapes.opaque_addresses
     reach = escapes.reach or frozenset()
     statics = exposed.data is not None and body.entry == exposed.main
@@ -150,6 +169,18 @@ def private(body: mir.MirBody, found: Module | None, blocks: list | None) -> Cal
     )
 
     def unobserved(ref: mir.MemRef) -> bool:
+        provenance = pointers.reference(ref)
+        if provenance is not None and provenance.slices and not unknown_frame_publication:
+            canonical = all(
+                one.object.kind is memory.Kind.FRAME
+                and one.object.extent is not None
+                and 0 <= one.low < one.high
+                and one.high + one.width - 1 <= one.object.extent
+                and one.object not in published
+                for one in provenance.slices
+            )
+            if canonical:
+                return True
         addr = ref.addr
         if addr is None or addr.base != Register.NONE or ref.base is not None or ref.segment is not None:
             return False
