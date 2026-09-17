@@ -315,8 +315,8 @@ def test_lowering_consumes_external_allocation_hints() -> None:
     assert actual and all(actual[variable] == register for variable, register in hints.origins.items() if variable in actual)
 
 
-@pytest.mark.parametrize("relative", ["flow.py", "wholeseg.py"])
-def test_basic_production_lowering_supplies_external_allocation_hints(relative: str) -> None:
+@pytest.mark.parametrize("relative", ["flow.py", "wholeseg.py", "cfront/compile.py"])
+def test_production_lowering_supplies_external_allocation_hints(relative: str) -> None:
     """A compatibility fallback must not become the production data path."""
     tree = ast.parse((HERE / relative).read_text())
     calls = [

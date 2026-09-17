@@ -293,6 +293,34 @@ def test_int64_number_crunching_programs_survive_the_mir_pipeline(module, kinds)
     assert "_main proc" in assembly
 
 
+def test_int64_helper_result_placement_is_an_external_hint() -> None:
+    """euclid64's remainder lived in EBX:ECX by mutating ``MirBody.origin``.
+
+    Int64 legalization is the machine boundary, so its fixed helper result is
+    a backend allocation hint keyed by the new scalar variables.  Public MIR
+    must remain unchanged; otherwise removing ``MirBody.origin`` would silently
+    discard the helper ABI and euclid64 would miscompile after allocation.
+    """
+    from iced_x86 import Register
+
+    from qbopt.backend import lower_int64
+
+    unit = cfront.hir.unit(cfront.stream.parse((FIXTURES / "mir" / "euclid64.cgs").read_text()))
+    raised = next(
+        cfront.raise_hir.raised(unit, proc) for proc in unit.procs if unit.symbols[proc.symbol].object_name == "_gcd64"
+    )
+    legalized = lower_int64.expanded(raised.body, raised.calls, raised.contracts, raised.hints)
+
+    assert legalized.body.origin == raised.body.origin
+    added = {
+        variable: register
+        for variable, register in legalized.hints.origins.items()
+        if variable not in raised.hints.origins
+    }
+    assert set(added.values()) == {Register.EBX, Register.ECX}
+    assert len(added) == 2
+
+
 def test_int64_hot_helpers_do_work_proportional_to_the_operands() -> None:
     """signedCrunch64 used to run 64 restoring rounds for every `/ 7`.
 

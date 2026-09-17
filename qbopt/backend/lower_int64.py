@@ -22,6 +22,7 @@ class Legalized:
     body: mir.MirBody
     calls: dict[int, str]
     contracts: dict[int, runtime.Contract]
+    hints: mir.AllocationHints
     inline: dict[int, tuple[bytes, ...]]
 
 
@@ -127,10 +128,18 @@ _FOUR_CLOBBERS = _FOUR_INPUTS | {runtime.Reg.FLAGS}
 
 
 class _Legalizer:
-    def __init__(self, body: mir.MirBody, calls: dict[int, str], contracts: dict[int, runtime.Contract]) -> None:
+    def __init__(
+        self,
+        body: mir.MirBody,
+        calls: dict[int, str],
+        contracts: dict[int, runtime.Contract],
+        hints: mir.AllocationHints,
+    ) -> None:
         self.body = body
         self.calls = dict(calls)
         self.contracts = dict(contracts)
+        self.origins = dict(hints.origins)
+        self.pins = dict(hints.pins)
         self.inline: dict[int, tuple[bytes, ...]] = {}
         values = {
             value
@@ -323,10 +332,8 @@ class _Legalizer:
         prefix, args = self.materialize(source, (left[0], right[0], right[1], left[1]))
         made = self.inline_helper(source, name, code, args, results, _FOUR_INPUTS, _FOUR_CLOBBERS)
         if len(results) == 4:
-            origin = dict(self.body.origin)
-            origin[results[2].value] = Register.EBX
-            origin[results[3].value] = Register.ECX
-            self.body = replace(self.body, origin=origin)
+            self.origins[results[2].value.variable] = Register.EBX
+            self.origins[results[3].value.variable] = Register.ECX
         return [*prefix, made]
 
     def multiply(self, source: mir.Op) -> list[mir.Op]:
@@ -380,10 +387,8 @@ class _Legalizer:
             frozenset({runtime.Reg.AX, runtime.Reg.BX, runtime.Reg.DX}),
             _FOUR_CLOBBERS,
         )
-        origin = dict(self.body.origin)
-        origin[results[2].value] = Register.EBX
-        origin[results[3].value] = Register.ECX
-        self.body = replace(self.body, origin=origin)
+        self.origins[results[2].value.variable] = Register.EBX
+        self.origins[results[3].value.variable] = Register.ECX
         return [*prefix, made]
 
     def compare(self, source: mir.Op) -> list[mir.Op]:
@@ -499,15 +504,23 @@ class _Legalizer:
         problems = mir.verify(body)
         if problems:
             raise lower.Unlowered("invalid int64 legalization: " + "; ".join(problems))
-        return Legalized(body, self.calls, self.contracts, self.inline)
+        return Legalized(
+            body,
+            self.calls,
+            self.contracts,
+            mir.AllocationHints(self.origins, self.pins),
+            self.inline,
+        )
 
 
 def expanded(
     body: mir.MirBody,
     calls: dict[int, str] | None = None,
     contracts: dict[int, runtime.Contract] | None = None,
+    hints: mir.AllocationHints | None = None,
 ) -> Legalized:
     """Split every eight-byte integer into ABI dwords, if the body has one."""
+    hints = hints or mir.AllocationHints.from_body(body)
     has_wide = any(
         isinstance(arg, (mir.Held, mir.Const)) and arg.width == 8
         for block in body.blocks
@@ -515,5 +528,5 @@ def expanded(
         for arg in (*op.args, *op.results)
     )
     if not has_wide:
-        return Legalized(body, dict(calls or {}), dict(contracts or {}), {})
-    return _Legalizer(body, calls or {}, contracts or {}).run()
+        return Legalized(body, dict(calls or {}), dict(contracts or {}), hints, {})
+    return _Legalizer(body, calls or {}, contracts or {}, hints).run()

@@ -275,12 +275,21 @@ def assembled(
         mirs.append(_mir_text(raised.name, body))
         if optimise:
             mirs.append(_mir_text(raised.name + " (opt)", body))
-        legalized = lower_int64.expanded(body, raised.calls, raised.contracts)
+        legalized = lower_int64.expanded(body, raised.calls, raised.contracts, raised.hints)
         body = legalized.body
         if dump and body is not raised.body:
             _write(dump, f"passes/{raised.name}.int64-lower", _mir_text(raised.name, body))
         low = flow.verified(
-            lower.lowered(raised.name, body, legalized.calls, {}, legalized.contracts, {}, cpu=target),
+            lower.lowered(
+                raised.name,
+                body,
+                legalized.calls,
+                {},
+                legalized.contracts,
+                {},
+                cpu=target,
+                hints=legalized.hints,
+            ),
             "lower",
             in_ssa=True,
         )
