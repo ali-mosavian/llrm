@@ -1118,7 +1118,11 @@ def _encodable(what: ir.Semantics) -> bool:
 
     taken: dict[int, object] = {}
     rows = {
-        width: [one for one in target.WIDTHS if target.WIDTHS[one] == width and one in target.AVAILABLE]
+        width: [
+            one
+            for one in target.AVAILABLE
+            if target.WIDTHS.get(target.named(one, width)) == width
+        ]
         for width in (1, 2, 4)
     }
 

@@ -273,8 +273,7 @@ def test_two_spilled_operands_keep_the_accumulator_value(name, expected) -> None
     assert values[frame.cell(2, 2)] == 3000
 
 
-@pytest.mark.xfail(reason="both spilled operands are reloaded into scratch registers", strict=True)
-def test_two_spilled_operands_do_not_need_two_scratch_registers():
+def test_two_spilled_operands_do_not_need_two_scratch_registers() -> None:
     """LNGMXX's two spilled operands must retain the accumulator but need only one scratch."""
     result = _out(_body(_add(1, 2)), {1, 2})
     assert len(result) == 2
@@ -445,10 +444,10 @@ def test_constant_reload_precedes_an_in_place_spilled_update() -> None:
     (add,) = [one for one in result if one.what and one.what.name == "add"]
     made = {value: one for one in result[: result.index(add)] for value in one.defines}
     added = {made[value].what.sources[0] for value in add.uses}
-    store = result[-1].what
     assert ir.Imm(20, 2) in added
-    assert isinstance(store.dests[0], ir.Mem) and store.dests[0] in added
-    assert store.sources == add.what.dests
+    assert isinstance(add.what.dests[0], ir.Mem)
+    assert add.what.sources[0] == add.what.dests[0]
+    assert not any(one.spill_store for one in result)
 
 
 def test_a_lifted_memory_operand_takes_the_fixup_with_it() -> None:
@@ -497,10 +496,20 @@ def test_a_grouped_move_writes_its_spilled_destination_where_it_lives() -> None:
 
 def test_a_grouped_move_with_both_ends_spilled_stays_grouped() -> None:
     """NESTED refused a phi copy between two spilled values before scheduling."""
-    got = _out(_body(_move(1, 2, group=1)), {1, 2})
+    frame = frames.Frame(0, slots={1: -2, 2: -4})
+    got, _ = spiller.spilled(_body(_move(1, 2, group=1)), frozenset({1, 2}), frame)
+    got = list(got.insns)
     assert len(got) == 1 and got[0].group == 1
     assert all(isinstance(cell, ir.Mem) for cell in (*got[0].what.dests, *got[0].what.sources))
     assert got[0].defines == got[0].uses == ()
+
+
+def test_a_grouped_move_coalesced_to_one_spill_slot_is_an_identity() -> None:
+    """A parallel copy between noninterfering spill values need not survive scheduling."""
+    frame = frames.Frame(0)
+    got, _ = spiller.spilled(_body(_move(1, 2, group=1)), frozenset({1, 2}), frame)
+    assert frame.slots[1] == frame.slots[2]
+    assert got.insns == ()
 
 
 def test_an_unhandled_arithmetic_form_keeps_its_reload() -> None:
@@ -524,7 +533,6 @@ def _binary(name: str, into: int, other: int, at: int = 0x200) -> lir.Insn:
     return lir.Insn(at=at, covers=(at, at + 2), what=what, defines=(into,), uses=(into, other), op=None)
 
 
-@pytest.mark.xfail(reason="the tied value is reloaded and stored around the add, not updated in memory", strict=True)
 def test_a_tied_value_is_spilled_into_the_operand_itself() -> None:
     """pressx spilled 207, then 212, then 215, at one `add`, two
     instructions added every round. Spilling a value an instruction both
