@@ -179,7 +179,7 @@ def test_nothing_leaves_the_machine_pipeline_still_grouped() -> None:
     found = module.of(omf.parse(Path("fixtures/omf/pressx-p-g2.obj").read_bytes()))
     blocks = split.partition(found, code_map(found))
     name, body = next(iter(mir.bodies(found, blocks)))
-    body = transform.widened(transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found))
+    body = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
     low = lower.lowered(name, body, found.calls, set(found.absorbed), runtime.for_module(found))
     for phase in flow.machine(flow._pinned(body), frames.of(low), found.calls):
         low = phase.transform(low)

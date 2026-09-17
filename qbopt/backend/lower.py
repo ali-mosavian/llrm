@@ -345,11 +345,10 @@ def rewritten(op, place=None) -> "ir.Semantics | None":
     if op.made is not None:
         if place is None:
             return op.made
-        # Valueized in place. `pairs.widened` writes machine form -- one
-        # 32-bit `and eax,...` for two 16-bit halves and a carry -- and
-        # returning it untouched made a widened operation the only one
-        # still naming BC's own registers while its neighbours had become
-        # values, with nothing for the allocator to rewrite.
+        # Valueized in place. Older raised bodies may carry a rewritten
+        # machine form, and returning it untouched would leave BC's original
+        # registers among abstract values with nothing for the allocator to
+        # rewrite.
         #
         # Its own operands, not rebuilt from the operation: passing it
         # back through `semantics` gave the restore idiom -- which has

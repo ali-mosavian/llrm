@@ -116,7 +116,7 @@ def run(data: bytes, native_fpu: bool = False, optimise: bool = True) -> tuple[b
             body = transform.applied(
                 body, found.dgroup, found.calls, blocks=blocks, found=found, promote_=False, strength_=False
             )
-            body = transform.widened(rotate.entered(body))
+            body = rotate.entered(body)
         low = verified(
             lower.lowered(name, body, found.calls, set(found.absorbed), contracts),
             "lower",

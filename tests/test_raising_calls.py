@@ -7,7 +7,7 @@ import corpus
 from qbopt.backend import asm
 from qbopt.model import ir, mir
 from qbopt.objectfile import module, omf
-from qbopt.frontend import pairs, raising_calls
+from qbopt.frontend import raising_calls
 from qbopt.optimize import transform
 from qbopt import wholeseg
 from qbopt.legacy import calls
@@ -102,15 +102,15 @@ def test_unused_loop_clobbers_do_not_hide_nbody_division() -> None:
     assert not any(op.at == 0x204 and op.kind is mir.Kind.CALL for op in ops)
 
 
-def test_widening_does_not_move_nbody_store_before_its_definition(monkeypatch) -> None:
-    """PDS nbody printed PX0=6137536 for 1258 after widening moved DELTAY before its subtract."""
+def test_optimization_does_not_move_nbody_store_before_its_definition(monkeypatch) -> None:
+    """PDS nbody printed PX0=6137536 for 1258 after DELTAY moved before its subtract."""
     # Needs the stores drop_stores proves unobservable.
     monkeypatch.setattr("qbopt.analysis.observers.private", lambda *args: None)
     path = Path("fixtures/regressions/nbody-stack-p-g2.obj")
     found = corpus.loaded(path)
     blocks = corpus.partitioned(path)
     body = mir.bodies(found, blocks)[0][1]
-    body = pairs.widened(transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found))
+    body = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
     ops = next(block.ops for block in body.blocks if block.at == 0x117)
     store = next(op for op in ops if op.at == 0x150 and op.kind is mir.Kind.STORE)
     source = store.args[0].value

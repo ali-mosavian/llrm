@@ -320,7 +320,7 @@ def test_an_allocatable_value_stays_a_value_through_lowering() -> None:
     found = module.of(omf.parse(Path("fixtures/omf/harr-v-g3.obj").read_bytes()))
     blocks = split.partition(found, code_map(found))
     name, body = next(iter(mir.bodies(found, blocks)))
-    body = transform.widened(transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found))
+    body = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
     from qbopt.abi import runtime
 
     low = lower.lowered(name, body, found.calls, set(found.absorbed), runtime.for_module(found))
@@ -369,7 +369,7 @@ def test_an_increment_is_its_own_operation(stem: str, at: int, kind: str, want: 
     found = module.of(omf.parse((Path("fixtures/omf") / f"{stem}.obj").read_bytes()))
     blocks = split.partition(found, code_map(found))
     for _name, body in mir.bodies(found, blocks):
-        body = transform.widened(transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found))
+        body = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
         for block in body.blocks:
             for op in block.ops:
                 if op.at != at:
@@ -413,7 +413,7 @@ def test_a_stores_address_is_the_value_that_computed_it() -> None:
     blocks = split.partition(found, code_map(found))
     seen = 0
     for name, body in mir.bodies(found, blocks):
-        body = transform.widened(transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found))
+        body = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
         from qbopt.abi import runtime
 
         low = lower.lowered(name, body, found.calls, set(found.absorbed), runtime.for_module(found))
@@ -714,7 +714,7 @@ def test_a_call_still_defines_the_results_its_operands_do_not_name() -> None:
     absorbed = set(found.absorbed)
     seen = []
     for name, body in mir.bodies(found, blocks):
-        body = transform.widened(transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found))
+        body = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
         from qbopt.abi import runtime
 
         low = lower.lowered(name, body, found.calls, absorbed, runtime.for_module(found))

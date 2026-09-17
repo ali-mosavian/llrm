@@ -20,11 +20,9 @@ asks a question about its own result. So the passes run here the way they run
 in wholeseg -- all of them on one body, lowering once at the end -- and each
 stage costs a pass rather than a pass plus a machine round trip.
 
-Widening is in the list and is not a pass. It recognises an idiom -- a long
-written as two halves joined by a carry -- and writes machine form, so
-wholeseg runs it after every pass and before lowering. On a program whose
-arithmetic is all longs it is the only step that fires, and leaving it out
-made the dump say nothing had happened.
+Long-pair recognition is part of raising. The historical `mir-widen` label is
+retained for saved stage consumers, but it now observes the final MIR body;
+no machine-shaped widening step runs between optimization and lowering.
 """
 
 import sys

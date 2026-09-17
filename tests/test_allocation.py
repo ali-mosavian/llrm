@@ -540,7 +540,7 @@ def test_the_rewriter_hands_on_the_bytes_a_dropped_copy_stood_for(stem: str) -> 
     found = module.of(omf.parse(Path(f"fixtures/omf/{stem}.obj").read_bytes()))
     blocks = split.partition(found, code_map(found))
     name, body = next(iter(mir.bodies(found, blocks)))
-    body = transform.widened(transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found))
+    body = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
     low = lower.lowered(name, body, found.calls, set(found.absorbed), runtime.for_module(found))
     owned = lambda one: {  # noqa: E731
         at for block in one.blocks for i in block.insns if i.covers for at in range(*i.covers)

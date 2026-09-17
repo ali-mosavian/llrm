@@ -1177,19 +1177,16 @@ one documented target without materially regressing another.
 These are boundary defects with an owner, not permission to add more cross-layer
 knowledge:
 
-1. `transform.widened()` still recognizes a BC register-pair idiom after the
-   MIR pass fixed point. Recognition must finish moving into the raise; encoding
-   belongs below lowering.
-2. MIR still carries source-machine provenance (`node`, `made`, byte coverage,
+1. MIR still carries source-machine provenance (`node`, `made`, byte coverage,
    fixup identity and `MirBody.origin`). Passes should see only the parts needed
    to preserve semantics; byte/fixup provenance belongs in a side map owned by
    lowering and emission.
-3. `omfwrite._as_mir()` converts allocated LIR back into MIR-shaped operations
+2. `omfwrite._as_mir()` converts allocated LIR back into MIR-shaped operations
    because layout has not yet been made a direct LIR consumer.
-4. Target costing is narrower than LLVM/GCC's formula selection. Loop strength
+3. Target costing is narrower than LLVM/GCC's formula selection. Loop strength
    reduction and unrolling need register-pressure and target-cost comparisons,
    not unconditional pattern replacement.
-5. Strict numeric behavior and checked-loop preguards are incomplete. Policy is
+4. Strict numeric behavior and checked-loop preguards are incomplete. Policy is
    already separate (`--basic-semantics`, `--bounds-checks`); broader lowering
    coverage must preserve that separation.
 

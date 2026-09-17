@@ -603,13 +603,12 @@ model** -- and on the program that matters most the cost model rejects most
 candidates. `lift.py` has one ("widening it grows N bytes to M"). A MIR
 version without it would make qb-qrender bigger.
 
-- [x] widening — **on**, and clean on the fuzz corpus, all twelve
-      configurations of `matrix.py`, and 20,813 host tests. Recognition, a
-      rename, a restore and a cost model, all in `qbopt/frontend/pairs.py`;
-      `transform.widened()` applies it, last, after the passes that reason
-      about memory -- a widened op keeps the low half's own `loads`, two
-      bytes at `[x]`, while the instruction reads four, and `avail.py` was
-      forwarding a stale high half across it.
+- [x] widening — recognized during raising as whole scalar MIR. The late
+      `transform.widened()` rename/restore path has been deleted, so memory
+      passes see the true four-byte access rather than a machine-shaped op
+      retaining the low half's two-byte metadata. The notes below describe
+      the superseded late implementation and the failures that motivated the
+      raise-side representation.
 
       **What it saves on top of what is already there is 21 bytes**, over
       the whole corpus. That is not a disappointment, it is the M5

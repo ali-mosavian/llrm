@@ -127,9 +127,10 @@ the data structure holds them, so nothing stops a pass from starting.
 is no third representation and no peephole, so nothing runs after
 allocation.
 
-**Widening is not a pass** and is correctly outside the list: it recognises
-an idiom and writes machine form. It runs after every pass and before
-lowering, in `wholeseg`.
+**Long-pair recognition is not a pass.** `raising_longs` turns BC's adjacent
+word operations into whole scalar MIR before the fixed point. The old
+post-optimization `transform.widened()` path and its restore machinery have
+been deleted.
 
 ## What closes it
 
@@ -160,9 +161,6 @@ Audited 2026-09-05. What was broken, and what it is now:
 
 Still open, and each is a change rather than a move:
 
-- **`layout.rebuild` runs a MIR pass.** `wholeseg` hands it
-  `settle=transform.widened`, and layout calls it on a body the allocator
-  refused. The decision is layout's to report and wholeseg's to make.
 - **`mir._folded` writes into the Module it is given** -- `found.absorbed`
   and `found.refs`. The raise may see machine form; it may not mutate its
   input. It should return the two maps.

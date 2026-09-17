@@ -278,10 +278,10 @@ def test_a_call_hands_its_result_back_where_bc_reads_it(stem: str) -> None:
     blocks = split.partition(found, code_map(found))
     plain = list(mir.bodies(found, blocks))
     bodies = [
-        (name, transform.widened(transform.applied(one, found.dgroup, found.calls, blocks=blocks, found=found)))
+        (name, transform.applied(one, found.dgroup, found.calls, blocks=blocks, found=found))
         for name, one in plain
     ]
-    settled, assignment = layout.allocated(bodies, plain=plain, settle=transform.widened)
+    settled, assignment = layout.allocated(bodies, plain=plain)
     assert assignment, "nothing was coloured, so this proves nothing"
     moved = [
         f"{op.at:#06x} {one} {target.name_of(body.origin[one])} -> {target.name_of(assignment[one])}"

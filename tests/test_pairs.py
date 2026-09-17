@@ -4,44 +4,12 @@ from pathlib import Path
 
 import pytest
 
-import corpus
 from qbopt.model import mir
 from qbopt.frontend import pairs
 from qbopt.frontend import blocks as split
 from qbopt.frontend.blocks import code_map
 
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
-
-
-def test_widened_restore_reads_the_value_it_splits() -> None:
-    """nbody widening changed PX0 from 1258 to 47624: restores had no input dependency."""
-    from qbopt.model import ir
-
-    value = mir.Value(1, 0, 0, 1, 1)
-    after = mir.Op(0, ir.Operation.MOVE, "mov", (value,), (), (), (), None,
-                   kind=mir.Kind.COPY, results=(mir.Held(value, 4),))
-    restored = pairs._restore_op(0, 3, after, 7)
-    assert restored.uses == (value,)
-    from dataclasses import replace
-    store = replace(after, defines=(), results=(), args=(mir.Held(value, 4),))
-    assert pairs._restore_op(0, 3, store, 7).uses == (value,)
-
-
-@pytest.mark.parametrize("number", [0, 1])
-def test_restore_clobbers_its_high_half_even_when_dead(number: int) -> None:
-    """nbody printed PX0=1163 for 1258 when a restore overwrote its array index."""
-    from qbopt.model import ir
-    from qbopt.backend import lower
-
-    value = mir.Value(1, 0)
-    after = mir.Op(0, ir.Operation.MOVE, "mov", (value,), (),
-                   kind=mir.Kind.COPY, results=(mir.Held(value, 4),))
-    restored = pairs._restore_op(number, 3, after, 7)
-    source, high = mir.RESTORE_PAIR[number]
-    body = mir.MirBody(0, (mir.MirBlock(0, (), (after, restored), ()),), {value: source})
-    low = lower.lowered("restore", body, {}, set(), {})
-    assert high in low.blocks[0].insns[-1].clobbers
-    assert source not in low.blocks[0].insns[-1].clobbers
 
 
 def test_a_pair_needs_adjacent_addresses_and_a_known_pair() -> None:
@@ -65,61 +33,6 @@ def test_a_pair_needs_adjacent_addresses_and_a_known_pair() -> None:
     assert pairs._half_of(Register.ECX, {}) == (1, 0)
     assert pairs._half_of(Register.EBX, {}) == (1, 1)
     assert pairs._half_of(Register.ESI, {}) is None
-
-
-def test_the_slot_is_cleared_by_anything_that_writes_a_half() -> None:
-    """lift.py's rule, and the one a shape recogniser does not have.
-
-    `pairs.found()` says two ops are one 32-bit access. `pairs.held()` says
-    what is in the pair when they run, and the difference is a call: after
-    one returning a long in dx:ax, `mov ds:[0],ax` / `mov ds:[0],dx` is a
-    real 32-bit store whose value cannot be named, because the call wrote
-    both halves. Widening that needs the call's contract, not the shape.
-    """
-    found = corpus.loaded(Path("fixtures/omf/arith-p-g2-zd.obj"))
-    assert found is not None
-    mapped = code_map(found)
-    assert not isinstance(mapped, str)
-
-    cleared = False
-    for _name, body in mir.bodies(found, split.partition(found, mapped)):
-        state = pairs.held(body)
-        for block in body.blocks:
-            live = {0: False, 1: False}
-            for op in block.ops:
-                slots = state[op.at]
-                for number in pairs.PAIRS:
-                    if live[number] and slots[number] is None:
-                        cleared = True
-                    live[number] = slots[number] is not None
-    assert cleared, "no slot was ever cleared, so nothing here proves a write to a half stops the pair being known"
-
-
-def test_a_pair_doubled_is_recognised_and_not_chained() -> None:
-    """`add ax,ax / adc dx,dx` is a real 32-bit add of a pair with itself.
-
-    lift.py does not report it as alu-v; this does, which is the recogniser
-    being broader rather than wrong. What stops it mattering is that
-    held() will not chain from a slot it does not know, and the one site in
-    the corpus is exactly that case -- so the shape is counted and the
-    provenance is still refused.
-    """
-    from qbopt.frontend import declen
-
-    at = 0x12D
-    found = corpus.loaded(Path("fixtures/omf/procs-p-evt.obj"))
-    assert found is not None
-    low = declen.decode(found.code, at)
-    assert low is not None and str(low.insn) == "add ax,ax"
-    mapped = code_map(found)
-    assert not isinstance(mapped, str)
-    for _name, body in mir.bodies(found, split.partition(found, mapped)):
-        state = pairs.held(body)
-        for one in pairs.found(body):
-            if min(one.at) == at:
-                assert one.kind is pairs.Kind.ALU_REG
-                assert state[at][one.pair] is None, "a doubling of an unknown pair stays unknown"
-                return
 
 
 def test_a_sign_extension_from_a_segment_register_is_not_a_long() -> None:
@@ -217,30 +130,22 @@ def test_two_negates_without_the_borrow_are_not_one_long_negate() -> None:
 
 
 @pytest.mark.parametrize("stem", ["negnot-q-O", "arith-v-g3"])
-def test_widening_leaves_no_consumer_without_a_producer(stem: str) -> None:
-    """negnot pushed a stale high word: `push dx` read v3_5, and widening
-    had removed the `neg dx` that defined it without putting anything in
-    its place. The restore is what hands the pair back, and it said it
-    defined nothing -- so the value had no interval, the allocator skipped
-    it, and its pin was never applied.
-    """
+def test_raised_longs_leave_no_consumer_without_a_producer(stem: str) -> None:
+    """negnot pushed a stale high word: every raised long consumer needs a producer."""
     from qbopt.objectfile import omf
     from qbopt.objectfile import module
-    from qbopt.optimize import transform
 
     found = module.of(omf.parse((Path("fixtures/omf") / f"{stem}.obj").read_bytes()))
     blocks = split.partition(found, code_map(found))
     for _name, body in mir.bodies(found, blocks):
-        wide = transform.widened(body)
-        made = {one.id for block in wide.blocks for op in block.ops for one in op.defines}
-        made |= {phi.result.id for block in wide.blocks for phi in wide.blocks[0].phis} if False else set()
-        made |= {phi.result.id for block in wide.blocks for phi in block.phis}
+        made = {one.id for block in body.blocks for op in block.ops for one in op.defines}
+        made |= {phi.result.id for block in body.blocks for phi in block.phis}
         entry = {one.id for block in body.blocks for op in block.ops for one in op.uses} - {
             one.id for block in body.blocks for op in block.ops for one in op.defines
         }
         orphans = [
             f"{op.at:#06x} reads {one}"
-            for block in wide.blocks
+            for block in body.blocks
             for op in block.ops
             for one in op.uses
             if not one.flags and one.id not in made and one.id not in entry

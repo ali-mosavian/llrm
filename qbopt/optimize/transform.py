@@ -6,18 +6,9 @@ This changes the values, and layout.py turns what is left into bytes -- so a
 transform here says what the program computes and nothing about how it was
 written. That is the difference the roadmap calls retiring the machine arm.
 
-Three of them so far, each the MIR statement of a pass that already exists
-against the machine code, and each measured there first:
-
-  widening      wide.pairs() finds the add/adc pair; lift.py emits it today
-  redundant     avail.redundant() finds the reload; forward.py deletes it
-  dead stores   avail.dead_stores() finds it; memory.py deletes it
-
-Two of the three are on and find nothing extra, which is what parity means:
-rewrite.py has already run forward.py and memory.py by the time a body
-reaches here, so there is nothing left for them to take. Their worth is that
-the machine arm can be deleted, not that they save a byte today. Widening is
-off and applied() says why.
+Long pairs and runtime arithmetic are recognized while raising, before any
+transform sees the body.  A transform therefore never reconstructs a source
+operation from BC's register convention.
 
 **Every byte of the original body has to stay accounted for.** layout.py
 refuses a body it cannot cover, which is how it catches data BC put between
@@ -39,7 +30,6 @@ from qbopt.model import mir
 from qbopt.model.mir import Op
 from qbopt.optimize import fill
 from qbopt.analysis import avail
-from qbopt.frontend import pairs
 from qbopt.optimize import lcssa
 from qbopt.analysis import consts
 from qbopt.optimize import unroll
@@ -129,29 +119,6 @@ def _without(ops: list[Op], drop) -> list[Op]:
             )
         ]
     return out
-
-
-def widened(body: MirBody, dead: frozenset[int] = frozenset()) -> MirBody:
-    """Every chain worth widening, as 32-bit operations on one register.
-
-    This was wrong once and is worth saying how, because the fix was not the
-    part that looked wrong. It renamed `add ax,[x]` with `adc dx,[x+2]` to
-    `add eax,[x]`, and BC keeps that long in dx:ax -- so the carry landed in
-    eax's high half and dx kept what it held. The rename itself is right;
-    what was missing either side of it is:
-
-    - the **chain**. One pair widened in isolation says nothing about where
-      the long came from or goes. qbopt/frontend/pairs.py answers that -- six of its
-      shapes agree with lift.py exactly, object by object.
-    - the **restore**. `push eax / pop ax / pop dx` hands the long back to
-      BC's sixteen-bit code, and without it every later read of dx is stale.
-    - the **cost**. Two instructions become one plus a four-byte restore, so
-      a lone pair widened is longer than what BC wrote. 235 of qb-qrender's
-      341 chains would grow.
-
-    All three live in pairs.py; this is where they are applied.
-    """
-    return pairs.widened(body, dead)
 
 
 def without_redundant_loads(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirBody:

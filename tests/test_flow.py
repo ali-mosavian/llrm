@@ -618,7 +618,7 @@ def test_no_phi_survives_elimination_on_a_critical_edge() -> None:
     absorbed = set(found.absorbed)
     critical = 0
     for name, body in raised:
-        body = transform.widened(transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found))
+        body = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
         low = lower.lowered(name, body, found.calls, absorbed, runtime.for_module(found))
         at_of = {block.at: block for block in low.blocks}
         for block in low.blocks:

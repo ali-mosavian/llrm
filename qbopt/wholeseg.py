@@ -218,20 +218,19 @@ def _rebuilt(
     # after a deletion; `optimise=False` emits the body exactly as raised,
     # which is what a caller bisecting a layout question wants.
     if optimise:
-        # Widening is not a MIR pass and is no longer in the list. It
-        # recognises an idiom -- a long written as two halves joined by a
-        # carry -- and writes the one 32-bit operation that replaces it,
-        # which is machine form: 95 register references, all of them BC's
-        # ax:dx convention. Recognition belongs at the raise and emission
-        # below the boundary; until the two are separated it runs here,
-        # after every pass and before lowering, which is where it ran
-        # anyway and is where rule 5 puts it.
+        # Long pairs are whole scalar values before this point.  The late
+        # pairs.widened recognizer used to recover them after optimization,
+        # when it could only do so by inspecting BC's registers and writing
+        # machine Semantics into MIR.  raising_longs now owns recognition;
+        # nothing between here and lowering may repeat it.
         def one(name: str, body: mir.MirBody) -> mir.MirBody:
-            # `only="widen"` is the step on its own, which tools/stages.py
-            # asks for; every other name selects a pass and leaves widening
-            # out, so the two can be diffed apart.
+            # Keep the old diagnostic spelling as an identity selection for
+            # callers with saved stage commands.  There is no late widening
+            # stage to run or diff any more.
             if only == "widen":
-                return transform.widened(body)
+                if watch is not None:
+                    watch("mir-widen", name, body)
+                return body
             done = transform.applied(
                 body,
                 found.dgroup,
@@ -248,8 +247,8 @@ def _rebuilt(
                 done = rotate.entered(done)
                 if watch is not None:
                     watch("mir-rotate", name, done)
-                done = transform.widened(done)
-                if watch is not None:
+                    # Compatibility label for existing stage consumers. No
+                    # widening occurs here; this is the final MIR body.
                     watch("mir-widen", name, done)
             return done
 

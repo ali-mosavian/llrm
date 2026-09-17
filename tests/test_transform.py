@@ -293,8 +293,8 @@ def test_hotlop_add_uses_its_known_product_directly() -> None:
     assert seen
 
 
-def test_widening_is_on_and_runs_after_the_memory_passes() -> None:
-    """Order, not preference. A widened op lies about how much it reads.
+def test_long_pair_recognition_is_not_an_optimizer_pass() -> None:
+    """A late widened op lies about how much memory it reads.
 
     `mov eax,[x]` keeps the low half's own `loads` -- two bytes at [x] --
     while the instruction reads four, so avail.py asked whether [x+2] had
@@ -302,10 +302,8 @@ def test_widening_is_on_and_runs_after_the_memory_passes() -> None:
     high half. Running widening after the passes that reason about memory
     means none of them ever sees the mismatch.
 
-    The reverse order was deliberate and its reason was real: folding a pair
-    retires the carry between its halves, which makes a later reload of the
-    same cell visible as redundant rather than as the high half's own read.
-    Worth having, and not at that price.
+    Recognition now happens during raising, where the whole access is
+    represented correctly before any memory pass runs.
     """
     import inspect
 
@@ -313,9 +311,8 @@ def test_widening_is_on_and_runs_after_the_memory_passes() -> None:
     assert signature.parameters["drop_loads"].default is True
     assert signature.parameters["drop_stores"].default is True
 
-    # Widening is not a pass any more -- it recognises an idiom and writes
-    # machine form -- and wholeseg runs it after every pass, which is the
-    # order this was protecting.
+    # Widening is not a pass: raising has already made whole scalar values,
+    # so no optimizer pipeline entry may repeat machine-shaped recognition.
     assert "widen" not in transform.PASSES
     assert "drop_stores" in transform.PASSES
 

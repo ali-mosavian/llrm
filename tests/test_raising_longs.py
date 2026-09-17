@@ -250,3 +250,14 @@ def test_localp_signed_index_addition_is_a_whole_long(tag):
     assert any(op.kind is mir.Kind.ADD and len(op.results) == 1
                and isinstance(op.results[0], mir.Held) and op.results[0].width == 4 for op in ops)
     assert not any(op.kind is mir.Kind.ADD_CARRY for op in ops)
+
+
+def test_production_does_not_recognize_long_pairs_after_optimization():
+    """Long-pair recognition belongs to raising; the late machine-shaped pass must not exist."""
+    from qbopt import wholeseg
+    from qbopt.frontend import pairs
+
+    assert not hasattr(pairs, "widened")
+    path = Path("fixtures/omf/arith-p-g2.obj")
+    emitted = wholeseg.emitted(path.read_bytes(), optimise=True)
+    assert emitted.outcome is wholeseg.Emission.LIR
