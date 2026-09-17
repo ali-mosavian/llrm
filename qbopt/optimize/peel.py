@@ -21,6 +21,15 @@ from qbopt.optimize import loopclone
 from qbopt.model.passes import MIRTransform
 
 
+# Peeling exists specifically for branchy and nested exact loops whose cloned
+# control flow collapses after constants reach it.  Bound the transient MIR,
+# but leave enough room to evaluate a small fixed outer loop after an eight-way
+# inner specialization.  The much smaller straight-line unroller keeps its own
+# tighter bound; every candidate here still has to pass the target-priced
+# profitability transaction after the ordinary fixed point simplifies it.
+MAX_SPECULATIVE_OPERATIONS = 4096
+
+
 class Peel(MIRTransform):
     name = "peel"
 
@@ -56,7 +65,7 @@ def _candidate(
         emitted = sum(
             op.kind is not mir.Kind.NOTHING for block in closed.blocks if block.at in loop.body for op in block.ops
         )
-        if count * emitted > 512:
+        if count * emitted > MAX_SPECULATIVE_OPERATIONS:
             continue
         candidate = loopclone.peeled(closed, loop, count)
         if candidate is not None:

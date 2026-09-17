@@ -249,30 +249,40 @@ def indexed(body: mir.MirBody, exposed: set[int]) -> tuple[dict[int, FoldedForm]
             folded.add(address.value.id)
 
     phi_reads = {value.id for block in body.blocks for phi in block.phis for value in phi.incoming.values()}
-    for value in fixed_frames:
-        if value in exposed or value in phi_reads:
-            continue
-        for block in body.blocks:
-            for op in block.ops:
-                if not any(one.id == value for one in op.uses):
-                    continue
-                based = {
-                    one.ref.base.id
-                    for one in (*op.args, *op.results)
-                    if isinstance(one, mir.Cell) and one.ref.base is not None
-                }
-                held = any(isinstance(one, mir.Held) and one.value.id == value for one in op.args)
-                # Reading one fixed address solely to define another fixed
-                # address is part of the fold even when the chain spans
-                # several blocks.  Any ordinary value use still keeps it.
-                derived = held and any(one.id in fixed_frames or one.id in folded for one in op.defines)
-                if (held and not derived) or (not held and value not in based):
-                    break
-            else:
+    # Prove deletion backwards from actual folded memory operands.  Being a
+    # recognizable fixed address is insufficient: its defining arithmetic
+    # may remain as an ordinary value computation.  The old forward test
+    # accepted any child in ``fixed_frames`` and deleted the parent LEA while
+    # leaving ``add child,parent,constant`` behind with an undefined source.
+    # A chain becomes dead only after every child operation that reads it is
+    # itself in ``folded``; iterate because the proof runs from leaves to root.
+    while True:
+        before = len(folded)
+        for value in fixed_frames:
+            if value in folded or value in exposed or value in phi_reads:
                 continue
+            for block in body.blocks:
+                for op in block.ops:
+                    if not any(one.id == value for one in op.uses):
+                        continue
+                    based = {
+                        one.ref.base.id
+                        for one in (*op.args, *op.results)
+                        if isinstance(one, mir.Cell) and one.ref.base is not None
+                    }
+                    held = any(isinstance(one, mir.Held) and one.value.id == value for one in op.args)
+                    derived = held and any(
+                        isinstance(result, mir.Held) and result.value.id in folded for result in op.results
+                    )
+                    if (held and not derived) or (not held and value not in based):
+                        break
+                else:
+                    continue
+                break
+            else:
+                folded.add(value)
+        if len(folded) == before:
             break
-        else:
-            folded.add(value)
     return forms, frozenset(folded)
 
 

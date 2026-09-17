@@ -69,7 +69,7 @@ def test_unroll_profitability_uses_the_selected_cpu() -> None:
 
 
 def test_c_matmul_unrolls_exact_multiblock_loops() -> None:
-    """Matmul stayed at 6,726 ops; then a stale bridge phi made it return 4252537476, not 353712."""
+    """Matmul retained eight DIVs after its fixed 8x8 initializer, then a stale bridge phi returned 4252537476."""
     from tools import quality
     from qbopt.cfront import compile as cfront
 
@@ -81,6 +81,7 @@ def test_c_matmul_unrolls_exact_multiblock_loops() -> None:
     dynamic, status = quality._dynamic_operations(module, procedure, 0)
 
     assert not procedure.body.inputs
+    assert not any(mnemonic == "div" for _raw, mnemonic, _operands in rows)
     assert sum(mnemonic.startswith("j") for _raw, mnemonic, _operands in rows) < 9
     assert status.startswith("estimated:")
     assert dynamic is not None and dynamic < 6_000

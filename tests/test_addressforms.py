@@ -294,6 +294,43 @@ def test_chained_constant_frame_addresses_fold_to_one_displacement() -> None:
     assert direct.base is None
 
 
+def test_frame_address_root_survives_a_live_derived_value() -> None:
+    """Peeled C matmul lowered three ADDs from an undefined frame-address root.
+
+    A pure constant-derived address is only part of the memory fold when its
+    complete use chain reaches foldable cells.  Merely recognizing the child
+    as a frame address must not delete the parent while the child remains an
+    ordinary observable value.
+    """
+    frame, derived = (mir.Value(index, 0) for index in range(1, 3))
+    frame_address = mir.Op(
+        1,
+        ir.Operation.ADDRESS,
+        "lea",
+        (frame,),
+        (),
+        kind=mir.Kind.ADDRESS,
+        args=(mir.FrameAddress(-132, 2, (-132, -4)),),
+        results=(mir.Held(frame, 2),),
+    )
+    add = mir.Op(
+        2,
+        ir.Operation.BINARY,
+        "add",
+        (derived,),
+        (frame,),
+        kind=mir.Kind.ADD,
+        args=(mir.Held(frame, 2), mir.Const(14, 2)),
+        results=(mir.Held(derived, 2),),
+    )
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (frame_address, add), ()),))
+
+    forms, folded = addressforms.indexed(body, {derived.id})
+
+    assert forms == {}
+    assert folded == frozenset()
+
+
 def test_direct_frame_array_address_folds_into_its_memory_operand() -> None:
     """Unrolled C nbody emitted six LEAs for element zero's fixed addresses."""
     frame = mir.Value(1, 0)

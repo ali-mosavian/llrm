@@ -167,6 +167,36 @@ blocks now use the same complete inert-operation constructor as all other MIR
 deletion. A focused fail-first regression checks both the retained source owner
 and the absence of stale floating computation.
 
+C matmul exposed the next nested-loop boundary.  Peeling its branchy inner
+initializer produces 473 semantic operations in the enclosing exact eight-trip
+loop; evaluating that outer specialization therefore needs 3,784 transient
+operations.  CFG peeling now has a 4,096-operation construction ceiling while
+the simpler straight-line unroller retains its 512-operation bound.  This is a
+resource allowance, not an acceptance shortcut: the residual loop must still
+disappear under the ordinary fixed point and the selected CPU's priced dynamic
+savings must still exceed semantic growth.  The emitted initializer contains
+no runtime `div`, branches fall from 21 to 4, and the profile-free estimate
+falls from 4,481 to 3,494 executed instructions.  The emitted body is 602
+instructions / 2,647 bytes, so this is a speed-first intermediate result rather
+than the size target.  Its fresh OMF object links under the VBDOS toolchain and
+returns the independent answer 353,712 in DOSBox.
+
+That larger candidate also caught a fail-first address-form defect.  Recognizing
+a constant-derived frame address had been treated as proof that its parent was
+dead, even when the child remained an ordinary value; lowering consequently
+read three ADD sources whose shared LEA definition had vanished.  Frame-address
+deletion is now proved bottom-up from actual folded memory leaves.  Every child
+operation must itself be deleted before its parent can be deleted.  The focused
+regression preserves the root of a live derived value, while the existing
+complete-chain regression still folds `&x[4] - 16` into one BP displacement.
+
+The raw matmul comparison also identifies the next independent mechanism:
+after specialization, all 64 stores to `b` are constants, but SROA/promotion ran
+before the loop was specialized and therefore cannot forward those cells into
+the dot products.  The current output still contains 64 multiplies.  Re-running
+aggregate scalarization after structural specialization is the next step; this
+measurement is not presented as GCC/Clang parity.
+
 Larger-than-four-trip loops may now expand within that same operation budget
 when every extended floating result in the expanded loop is proven exact.
 FPCSE's ten ordered iterations satisfy this; FPCSEX's runtime-input loop does
