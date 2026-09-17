@@ -68,6 +68,28 @@ class LIRTransform:
 
 
 @dataclass(frozen=True, slots=True)
+class OperationCosts:
+    """Machine-neutral costs a MIR profitability decision may compare.
+
+    The backend translates its instruction-form table at the boundary. MIR
+    sees only semantic work -- arithmetic, address formation and memory
+    traffic -- and therefore cannot name an opcode, register or encoding.
+    Unit defaults preserve callers that have not selected a target.
+    """
+
+    add: int = 1
+    multiply: int = 1
+    divide: int = 1
+    shift: int = 1
+    address: int = 1
+    load: int = 1
+    store: int = 1
+    memory_update: int = 1
+    branch: int = 1
+    prefix: int = 0
+
+
+@dataclass(frozen=True, slots=True)
 class Where:
     """What a pass may be told about the module it is compiling.
 
@@ -116,6 +138,9 @@ class Where:
     # no register: a pass told "an address may be base + index*2" still
     # knows nothing about how that is spelt.
     index_scales: frozenset[int] = frozenset()
+    # Semantic work only. The profile boundary translates instruction forms
+    # once; no MIR pass can recover an opcode or register from these prices.
+    costs: OperationCosts = OperationCosts()
 
     @property
     def named(self) -> dict:

@@ -8,6 +8,7 @@ import pytest
 from qbopt.analysis import loops
 from qbopt.frontend import blocks
 from qbopt.model import mir
+from qbopt.model.passes import OperationCosts
 from qbopt.objectfile import module
 from qbopt.optimize import edges, transform, unswitch
 
@@ -75,6 +76,38 @@ def test_unswitch_rejects_a_candidate_without_loop_removal(monkeypatch):
     found, body = original("p-g2")
     monkeypatch.setattr(transform, "applied", lambda body, *args, **kwargs: body)
     assert unswitch.optimized(body, found.dgroup, found.calls) is body
+
+
+def test_unswitch_reoptimization_preserves_mir_target_costs(monkeypatch):
+    """Specializing IVARM used to restart optimization with default tuning."""
+    found, body = original("p-g2")
+    costs = OperationCosts(add=97, address=89, load=83)
+    observed = []
+    real = transform.applied
+
+    def recording(*args, **kwargs):
+        observed.append(
+            (
+                kwargs.get("registers"),
+                kwargs.get("call_registers"),
+                kwargs.get("index_scales"),
+                kwargs.get("costs"),
+            )
+        )
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(transform, "applied", recording)
+    unswitch.optimized(
+        body,
+        found.dgroup,
+        found.calls,
+        registers=5,
+        call_registers=2,
+        index_scales=frozenset({1, 2}),
+        costs=costs,
+    )
+
+    assert observed == [(5, 2, frozenset({1, 2}), costs)]
 
 
 def test_implicit_edge_bridge_does_not_retarget_the_taken_arm():

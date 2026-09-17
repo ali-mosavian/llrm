@@ -45,9 +45,10 @@ from qbopt.model.mir import Op
 from qbopt.analysis import consts
 from qbopt.model.mir import MirBody
 from qbopt.analysis import induction
-from qbopt.model.passes import Where
 from qbopt.objectfile.module import Space
-from qbopt.model.passes import MIRTransform
+from qbopt.model.passes import MIRTransform, OperationCosts, Where
+
+_DEFAULT_COSTS = OperationCosts()
 
 
 class Strength(MIRTransform):
@@ -71,6 +72,7 @@ class Strength(MIRTransform):
             self.where.registers,
             self.where.index_scales,
             self.where.call_registers,
+            self.where.costs,
         )
         body = exitsink.sunk(transform.dead(ivshare.shared(body)))
         body = loopexit.evaluated(body)
@@ -85,6 +87,7 @@ def reduced(
     registers: int = 0,
     scales: frozenset[int] = frozenset(),
     call_registers: int = 0,
+    costs: OperationCosts = _DEFAULT_COSTS,
 ) -> MirBody:
     """`body` with every multiply of a counter by an invariant made an add."""
     from qbopt.optimize import transform as passes
@@ -94,6 +97,11 @@ def reduced(
         return body
 
     at_of = {block.at: block for block in body.blocks}
+    references: dict[int, int] = {}
+    for block in body.blocks:
+        for op in block.ops:
+            for value in op.uses:
+                references[value.id] = references.get(value.id, 0) + 1
     taken = max((one.variable for one in ssa.values(body)), default=0)
     first = taken + 1
     ahead: dict[int, list[Op]] = {}
@@ -146,7 +154,7 @@ def reduced(
             capacity = min(capacity, call_registers) if capacity else call_registers
         if capacity:
             room = max(0, capacity - _recurrences(body, loop) - _RESERVE)
-        candidates = _formula_set(candidates, room, free)
+        candidates = _formula_set(candidates, room, free, costs=costs, references=references)
         indexes = {
             id(one.op): scale for one in candidates if (scale := _indexable(body, loop, one, scales, facts)) is not None
         }
@@ -301,6 +309,9 @@ def _formula_set(
     candidates: list[induction.Derived],
     room: int | None = None,
     free: set[int] | frozenset[int] = frozenset(),
+    *,
+    costs: OperationCosts = _DEFAULT_COSTS,
+    references: dict[int, int] | None = None,
 ) -> list[induction.Derived]:
     """Choose whole recurrence formulas, collapsing sibling address forms.
 
@@ -332,7 +343,9 @@ def _formula_set(
     def slots() -> int:
         return len(selected.difference(free))
 
+    references = references or {}
     while slots() > room:
+        overflow = slots() - room
         choices = []
         for order, parent in enumerate(candidates):
             if not parent.op.results or not isinstance(parent.op.results[0], mir.Held):
@@ -351,10 +364,24 @@ def _formula_set(
                 continue
             gain = len(children) - (0 if id(parent.op) in selected else 1)
             if gain > 0:
-                choices.append((gain, -order, parent, children))
+                relief = min(gain, overflow)
+                cheapest = sorted(
+                    references.get(child.op.results[0].value.id, 1)
+                    for child in children
+                    if child.op.results and isinstance(child.op.results[0], mir.Held)
+                )[:relief]
+                # Best case for retaining the leaves: allocation spills the
+                # least-used children. Each then needs a memory update at the
+                # latch and a reload at every address use. The extra ADD is a
+                # pressure-risk charge for exceeding the stated capacity.
+                spill = sum(costs.memory_update + uses * costs.load + costs.add for uses in cheapest)
+                leaf = len(children) * costs.add
+                collapsed = costs.add + len(children) * costs.address
+                benefit = spill - (collapsed - leaf)
+                choices.append((benefit, gain, -order, parent, children))
         if not choices:
             break
-        _gain, _order, parent, children = max(choices, key=lambda choice: choice[:2])
+        _benefit, _gain, _order, parent, children = max(choices, key=lambda choice: choice[:3])
         selected.difference_update(id(child.op) for child in children)
         selected.add(id(parent.op))
 

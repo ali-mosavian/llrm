@@ -34,7 +34,7 @@ from qbopt.optimize import promote
 from qbopt.model.mir import MirBody
 from qbopt.objectfile import module
 from qbopt.optimize import strength
-from qbopt.model.passes import Where
+from qbopt.model.passes import OperationCosts, Where
 from qbopt.optimize import algebraic
 from qbopt.optimize import loopmotion
 from qbopt.optimize import loopsimplify
@@ -2721,6 +2721,8 @@ def applied(
     only: str | None = None,
     registers: int | None = None,
     call_registers: int = 0,
+    index_scales: frozenset[int] | None = None,
+    costs: OperationCosts | None = None,
     coverage: dict[int, tuple[tuple[int, int], ...]] | None = None,
     watch=None,
 ) -> MirBody:
@@ -2768,8 +2770,9 @@ def applied(
         # is. It belongs to the caller once the drivers thread it.
         registers=len(mir.TRACKED) if registers is None else registers,
         call_registers=call_registers,
-        # 32-bit registers are tracked, so the target is a 386 and has SIB.
-        index_scales=frozenset({1, 2, 4, 8}),
+        # Existing callers target a 386 when they omit the legal forms.
+        index_scales=frozenset({1, 2, 4, 8}) if index_scales is None else index_scales,
+        costs=costs or OperationCosts(),
     )
     # These names were public debugging selectors before value reuse became
     # one pass.  Keep them as aliases rather than accepting a command that
@@ -2808,7 +2811,16 @@ def applied(
             if only is None and unswitch_:
                 from qbopt.optimize import unswitch
 
-                return unswitch.optimized(body, dgroup, calls, watch=watch)
+                return unswitch.optimized(
+                    body,
+                    dgroup,
+                    calls,
+                    registers=where.registers,
+                    call_registers=where.call_registers,
+                    index_scales=where.index_scales,
+                    costs=where.costs,
+                    watch=watch,
+                )
             return body
         if any(body == previous for previous in history):
             raise RuntimeError(f"MIR optimization did not converge: cycle after {iteration + 1} rounds")

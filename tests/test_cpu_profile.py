@@ -4,10 +4,16 @@ from dataclasses import FrozenInstanceError
 import pytest
 
 from qbopt import flow
+from qbopt.model import ir
+from qbopt.model import mir
+from qbopt.analysis import induction
 from qbopt.backend import cpu
 from qbopt.backend import lower
 from qbopt.backend import allocate
 from qbopt.cfront import compile as cfront
+from qbopt.optimize import transform
+from qbopt.optimize import strength
+from qbopt.model.passes import OperationCosts
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "c"
 
@@ -17,6 +23,22 @@ def test_every_public_cpu_name_has_one_immutable_profile() -> None:
     assert tuple(cpu.profile(name).name for name in cpu.names()) == cpu.names()
     with pytest.raises(FrozenInstanceError):
         cpu.profile("P5").name = "386"
+    for name in cpu.names():
+        target = cpu.profile(name)
+        assert target.operations.add == target.cost("alu_rr")
+        assert target.operations.address == target.cost("lea")
+        assert target.operations.memory_update == target.cost("alu_mr")
+        assert target.operations.prefix == target.prefix_cost
+
+
+def test_operation_costs_do_not_change_the_existing_profile_positional_shape() -> None:
+    """Adding MIR costs must not reinterpret a caller's capacity arguments."""
+    target = cpu.Profile("test", 1, True, 0, 0, 3, 1, frozenset({1}), (), ())
+
+    assert target.register_capacity == 3
+    assert target.call_register_capacity == 1
+    assert target.address_scales == frozenset({1})
+    assert target.operations == OperationCosts()
 
 
 def test_unknown_cpu_is_rejected_at_the_shared_boundary() -> None:
@@ -54,3 +76,69 @@ def test_c_frontend_default_remains_386(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setattr(lower, "lowered", recording)
     cfront.compiled((FIXTURES / "halve.cgs").read_text(), "halve", optimise=True)
     assert observed and set(observed) == {cpu.profile("386")}
+
+
+def test_c_frontend_threads_machine_neutral_cpu_costs_to_mir(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CPU selection reached lowering but loop profitability still saw no costs."""
+    observed = []
+    real = transform.applied
+
+    def recording(*args, **kwargs):
+        observed.append((kwargs.get("costs"), kwargs.get("index_scales")))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(transform, "applied", recording)
+    cfront.compiled((FIXTURES / "halve.cgs").read_text(), "halve", optimise=True, cpu="P5")
+
+    assert observed
+    assert {costs for costs, _scales in observed} == {cpu.profile("P5").operations}
+    assert {scales for _costs, scales in observed} == {cpu.profile("P5").address_scales}
+
+
+def test_formula_selection_prices_complete_sibling_groups() -> None:
+    """A largest-group heuristic chose three costly address recomputations.
+
+    When only one recurrence slot must be recovered, collapsing the smaller
+    sibling group is cheaper if every retained child address is expensive.
+    The selected set must still be complete: parent or all children, never a
+    mixture from one group.
+    """
+
+    def group(start: int, count: int) -> list[induction.Derived]:
+        counter = mir.Value(start, 0)
+        product = mir.Value(start + 1, 1)
+        affine = induction.Affine(counter.id, mir.Const(0, 2), mir.Const(1, 2), 1)
+        multiply = mir.Op(
+            1,
+            ir.Operation.MULTIPLY,
+            "imul",
+            (product,),
+            (counter,),
+            kind=mir.Kind.MUL,
+            args=(mir.Held(counter, 2), mir.Const(8, 2)),
+            results=(mir.Held(product, 2),),
+        )
+        out = [induction.Derived(multiply, affine, mir.Const(8, 2))]
+        for index in range(count):
+            answer = mir.Value(start + 2 + index, 2 + index)
+            add = mir.Op(
+                2 + index,
+                ir.Operation.BINARY,
+                "add",
+                (answer,),
+                (product,),
+                kind=mir.Kind.ADD,
+                args=(mir.Held(product, 2), mir.Const(index * 16, 2)),
+                results=(mir.Held(answer, 2),),
+            )
+            out.append(induction.Derived(add, affine, mir.Const(8, 2), ((mir.Const(index * 16, 2), 1),)))
+        return out
+
+    small = group(10, 2)
+    large = group(100, 3)
+    candidates = [*small, *large]
+    costly_addresses = OperationCosts(add=1, address=100, load=1, memory_update=1)
+
+    selected = strength._formula_set(candidates, room=4, costs=costly_addresses)
+
+    assert selected == [small[0], *large[1:]]

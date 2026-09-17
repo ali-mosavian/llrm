@@ -10,6 +10,7 @@ contains the smaller audited subset used for legality-changing decisions.
 from dataclasses import dataclass
 
 from qbopt.cycles import timings
+from qbopt.model.passes import OperationCosts
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,6 +25,9 @@ class Profile:
     address_scales: frozenset[int] = frozenset({1, 2, 4, 8})
     _costs: tuple[tuple[str, int], ...] = ()
     _latencies: tuple[tuple[str, int], ...] = ()
+    # Appended so the positional shape of the pre-profile interface remains
+    # compatible. Drivers and MIR deliberately use this field by name.
+    operations: OperationCosts = OperationCosts()
 
     def cost(self, operation: str) -> int:
         """The existing target-ranking cost for one named instruction form."""
@@ -94,18 +98,45 @@ _I386_COSTS = {
 }
 
 
+def _operation_costs(costs: dict[str, int], prefix: int) -> OperationCosts:
+    """Translate backend instruction forms into MIR's semantic vocabulary."""
+    return OperationCosts(
+        add=costs["alu_rr"],
+        multiply=costs["mul_r16"],
+        divide=costs["div_r16"],
+        shift=costs["shift_ri"],
+        address=costs["lea"],
+        load=costs["mov_rm"],
+        store=costs["mov_mr"],
+        memory_update=costs["alu_mr"],
+        branch=costs["jcc"],
+        prefix=prefix,
+    )
+
+
 def _profile(name: str) -> Profile:
     if name == "386":
-        costs = tuple(_I386_COSTS.items())
-        return Profile(name, 1, True, 0, 0, _costs=costs, _latencies=costs)
+        costs = dict(_I386_COSTS)
+        return Profile(
+            name,
+            1,
+            True,
+            0,
+            0,
+            operations=_operation_costs(costs, 0),
+            _costs=tuple(costs.items()),
+            _latencies=tuple(costs.items()),
+        )
     at = timings.ARCHS.index(name)
+    costs = {operation: values[at] for operation, values in timings.COST.items()}
     return Profile(
         name,
         timings.ISSUE[at],
         bool(timings.INORDER[at]),
         timings.PREFIX[at],
         timings.PARTIAL_STALL[at],
-        _costs=tuple((operation, values[at]) for operation, values in timings.COST.items()),
+        operations=_operation_costs(costs, timings.PREFIX[at]),
+        _costs=tuple(costs.items()),
         _latencies=tuple((operation, values[at]) for operation, values in timings.LATENCY.items()),
     )
 

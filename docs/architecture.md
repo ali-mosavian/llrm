@@ -1005,6 +1005,15 @@ one documented target without materially regressing another.
   the leaves do not fit, it carries the shared byte offset and retains the
   ordinary invariant-base additions, never a pressure-heavy mixture of both
   representations. Indexed memory formulas consume no recurrence budget.
+  The immutable CPU profile now translates backend forms once into MIR's
+  machine-neutral `OperationCosts` (arithmetic, address, memory, branch and
+  prefix costs), and both frontends thread those costs and legal address scales
+  through ordinary and unswitched optimization. Competing complete sibling
+  groups are ranked by recomputation cost and best-case spill traffic rather
+  than cardinality alone. On the 486 profile, C nbody's selected shared forms
+  are 598 bytes, 138 instructions and 33,632 estimated dynamic operations with
+  0/1 spill reload/store, versus 781 bytes, 182 instructions, 38,610 dynamic
+  operations and 15/7 spills when all leaf recurrences are forced.
   Constant frame addresses exposed by later unrolling fold directly to BP
   displacements. On C nbody this changes 732 -> 598 bytes, 163 -> 138 emitted
   instructions, the dynamic-operation estimate 38,793 -> 33,632, address

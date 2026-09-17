@@ -30,6 +30,7 @@ from qbopt.objectfile import module
 from qbopt.frontend import fppatches
 from qbopt.optimize import transform
 from qbopt.backend import nativeframe
+from qbopt.backend import cpu as targets
 from qbopt.frontend import blocks as split
 from qbopt.frontend.blocks import code_map
 
@@ -80,7 +81,7 @@ def emitted(
     native_fpu: bool = True,
     only: str | None = None,
     watch: Watch | None = None,
-    cpu: str = "386",
+    cpu: str | targets.Profile = "386",
     basic_semantics: bool = False,
     bounds_checks: bool = False,
     *,
@@ -131,7 +132,7 @@ def _rebuilt(
     native_fpu: bool = True,
     only: str | None = None,
     watch: Watch | None = None,
-    cpu: str = "386",
+    cpu: str | targets.Profile = "386",
     basic_semantics: bool = False,
     bounds_checks: bool = False,
     *,
@@ -142,6 +143,7 @@ def _rebuilt(
     Returns the input unchanged where anything refuses, so a caller can use
     this as a transform without deciding first whether it will work.
     """
+    target = targets.profile(cpu)
     records = omf.parse(data)
     found = module.of(records)
     if found is None:
@@ -243,6 +245,10 @@ def _rebuilt(
                 coverage=source.coverage,
                 only=only,
                 unswitch_=True,
+                registers=target.register_capacity,
+                call_registers=target.call_register_capacity,
+                index_scales=target.address_scales,
+                costs=target.operations,
                 watch=(lambda stage, state: watch(f"mir-{stage}", name, state)) if watch is not None else None,
             )
             if only is None:
@@ -275,7 +281,7 @@ def _rebuilt(
         native_fpu,
         contracts,
         watch,
-        cpu,
+        target,
         basic_semantics=basic_semantics,
         native_frames=native_frames,
     )
@@ -301,7 +307,7 @@ def _through_lir(
     native_fpu: bool,
     contracts: dict[int, runtime.Contract],
     watch: Watch | None = None,
-    cpu: str = "386",
+    cpu: str | targets.Profile = "386",
     *,
     basic_semantics: bool = False,
     native_frames: dict[int, nativeframe.Plan] | None = None,

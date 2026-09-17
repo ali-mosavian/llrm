@@ -99,8 +99,14 @@ def checked(body: lir.LirBody, phase: LIRTransform, *, in_ssa: bool) -> lir.LirB
     return verified(phase.transform(body), phase.name or type(phase).__name__, in_ssa=in_ssa)
 
 
-def run(data: bytes, native_fpu: bool = False, optimise: bool = True) -> tuple[bytes, str]:
+def run(
+    data: bytes,
+    native_fpu: bool = False,
+    optimise: bool = True,
+    cpu: str | targets.Profile = "386",
+) -> tuple[bytes, str]:
     """The object, rewritten, and what happened. The input back on refusal."""
+    target = targets.profile(cpu)
     records = omf.parse(data)
     found = module.of(records)
     mapped = code_map(found)
@@ -130,6 +136,10 @@ def run(data: bytes, native_fpu: bool = False, optimise: bool = True) -> tuple[b
                 found=found,
                 promote_=False,
                 strength_=False,
+                registers=target.register_capacity,
+                call_registers=target.call_register_capacity,
+                index_scales=target.address_scales,
+                costs=target.operations,
                 coverage=source.coverage,
             )
             body = rotate.entered(body)
@@ -141,6 +151,7 @@ def run(data: bytes, native_fpu: bool = False, optimise: bool = True) -> tuple[b
                 source.absorbed,
                 contracts,
                 source.coverage,
+                target,
                 nodes=source.nodes,
                 occurrences=source.occurrences,
                 hints=result.hints[body.entry],
@@ -150,7 +161,7 @@ def run(data: bytes, native_fpu: bool = False, optimise: bool = True) -> tuple[b
         )
         frame = frames.of(low, found.calls)
         in_ssa = True
-        for phase in machine(_pinned(low), frame, found.calls):
+        for phase in machine(_pinned(low), frame, found.calls, cpu=target):
             if isinstance(phase, phielim.PhiElimination):
                 in_ssa = False
             low = checked(low, phase, in_ssa=in_ssa)

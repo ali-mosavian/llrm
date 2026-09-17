@@ -200,6 +200,8 @@ def assembled(
             # two places available, not the full register file.
             registers=target.register_capacity,
             call_registers=target.call_register_capacity,
+            index_scales=target.address_scales,
+            costs=target.operations,
             watch=observe if dump is not None or watch is not None else None,
         )
         body = rotate.entered(body)

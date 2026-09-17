@@ -4,10 +4,21 @@ from dataclasses import replace
 
 from qbopt.analysis import loops, ssa
 from qbopt.model import mir
+from qbopt.model.passes import OperationCosts
 from qbopt.optimize import edges, lcssa, loopclone
 
 
-def optimized(body: mir.MirBody, dgroup, calls, *, watch=None) -> mir.MirBody:
+def optimized(
+    body: mir.MirBody,
+    dgroup,
+    calls,
+    *,
+    registers: int | None = None,
+    call_registers: int = 0,
+    index_scales: frozenset[int] | None = None,
+    costs: OperationCosts | None = None,
+    watch=None,
+) -> mir.MirBody:
     from qbopt.optimize import transform
 
     candidate = specialized(body)
@@ -15,6 +26,8 @@ def optimized(body: mir.MirBody, dgroup, calls, *, watch=None) -> mir.MirBody:
         return body
     stages = [("unswitch", candidate)]
     result = transform.applied(candidate, dgroup, calls, unswitch_=False,
+                               registers=registers, call_registers=call_registers,
+                               index_scales=index_scales, costs=costs,
                                watch=lambda name, state: stages.append((name, state)))
     def size(state):
         return sum(op.kind is not mir.Kind.NOTHING for block in state.blocks for op in block.ops)
