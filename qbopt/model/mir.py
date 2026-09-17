@@ -1063,6 +1063,40 @@ class MirBody:
 
 
 @dataclass(frozen=True, slots=True)
+class AllocationHints:
+    """Backend-only placement history, keyed by semantic SSA variable.
+
+    A pass may renumber value occurrences while keeping the variable they are
+    versions of. Keying the side table by that variable makes the hint survive
+    ordinary SSA reconstruction without copying a physical register through
+    MIR. A genuinely new variable deliberately has no historical placement.
+    """
+
+    origins: dict[int, Register_] = field(default_factory=dict)
+    pins: dict[int, Register_] = field(default_factory=dict)
+
+    @classmethod
+    def from_body(cls, body: MirBody) -> "AllocationHints":
+        def variables(locations: dict[Value, Register_]) -> dict[int, Register_]:
+            out: dict[int, Register_] = {}
+            for value, location in locations.items():
+                previous = out.setdefault(value.variable, location)
+                if previous != location:
+                    raise ValueError(
+                        f"variable {value.variable} has conflicting allocation hints: {previous} and {location}"
+                    )
+            return out
+
+        return cls(variables(body.origin), variables(body.pins))
+
+    def origin_of(self, value: Value) -> Register_ | None:
+        return self.origins.get(value.variable)
+
+    def pin_of(self, value: Value) -> Register_ | None:
+        return self.pins.get(value.variable)
+
+
+@dataclass(frozen=True, slots=True)
 class RaisedBodies:
     """The raised bodies and their external machine-provenance side table.
 
@@ -1073,6 +1107,7 @@ class RaisedBodies:
 
     values: tuple[tuple[str, MirBody], ...]
     source: module.SourceMap
+    hints: dict[int, AllocationHints]
 
     def __iter__(self) -> Iterator[tuple[str, MirBody]]:
         return iter(self.values)
@@ -2574,7 +2609,7 @@ def bodies(
     unreached = _unreached(found)
     result = ir.decode_module(found)
     if isinstance(result, str):
-        return RaisedBodies((), source)
+        return RaisedBodies((), source, {})
     nodes = {ir.span(node)[0]: node for body in result for node in body.nodes}
     from qbopt.frontend import blocks as split
     from qbopt.frontend import raising_returns
@@ -2719,7 +2754,11 @@ def bodies(
             )
             for name, body in out
         ]
-    return RaisedBodies(tuple(out), source)
+    return RaisedBodies(
+        tuple(out),
+        source,
+        {body.entry: AllocationHints.from_body(body) for _name, body in out},
+    )
 
 
 def _sites(found: Module, blocks: list[Block]) -> dict:

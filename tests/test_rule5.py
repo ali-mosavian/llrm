@@ -261,6 +261,30 @@ def test_lowering_resolves_source_byte_ownership_without_mir_ranges() -> None:
         assert actual == expected
 
 
+def test_raise_returns_variable_keyed_allocation_hints() -> None:
+    """SSA renumbering must not make passes copy physical registers.
+
+    Every version of one raised variable has one historical home.  The
+    external table records that invariant once by variable number, so a value
+    renumbered by SSA still resolves without machine metadata on the value.
+    """
+    from dataclasses import replace
+
+    import corpus
+
+    path = Path("fixtures/omf/lngmix-p-g2.obj")
+    found = corpus.loaded(path)
+    raised = mir.bodies(found, corpus.partitioned(path))
+    assert raised.hints
+    for _name, body in raised:
+        hints = raised.hints[body.entry]
+        assert all(isinstance(variable, int) for variable in (*hints.origins, *hints.pins))
+        for value, register in body.origin.items():
+            assert hints.origin_of(value) == register
+            renamed = replace(value, id=value.id + 100_000, version=value.version + 100)
+            assert hints.origin_of(renamed) == register
+
+
 def test_a_pass_is_a_transform_and_nothing_else() -> None:
     """The contract, as a fact rather than a convention.
 

@@ -213,6 +213,7 @@ class Raised:
     name: str
     symbol: hir.Symbol
     body: mir.MirBody
+    hints: mir.AllocationHints
     calls: dict[int, str]  # call site -> callee object name
     callees: dict[int, hir.Symbol]
     contracts: dict[int, runtime.Contract]
@@ -452,6 +453,7 @@ class _Raise:
             self.symbol.object_name,
             self.symbol,
             body,
+            mir.AllocationHints.from_body(body),
             self.calls,
             self.callees,
             self.contracts,
