@@ -173,6 +173,31 @@ def test_aggregate_argument_is_pushed_by_value(tmp_path):
     assert [op.args[0].width for op in args] == [4, 4, 4]
 
 
+def test_repeated_volatile_accesses_remain_observable(tmp_path):
+    """``volatileValue + volatileValue`` was reduced to one memory read.
+
+    A volatile lvalue is an observable access, not an ordinary load that GVN
+    or scalar replacement may reuse, and one store may not replace another.
+    Check optimized output rather than a frontend marker so the regression
+    covers the complete C path.
+    """
+    text = _stream(
+        tmp_path,
+        "volatile unsigned volatileValue;\n"
+        "unsigned readTwice(void) { return volatileValue + volatileValue; }\n"
+        "void writeTwice(unsigned value) { volatileValue = value; volatileValue = value; }\n",
+    )
+
+    assembly = cfront.compiled(text, "volatile_reads", optimise=True)
+    read_body = assembly[assembly.index("_readTwice proc far") : assembly.index("_readTwice endp")]
+    write_body = assembly[assembly.index("_writeTwice proc far") : assembly.index("_writeTwice endp")]
+    reads = [line for line in read_body.splitlines() if "_volatileValue" in line]
+    writes = [line for line in write_body.splitlines() if "_volatileValue" in line]
+
+    assert len(reads) == 2, read_body
+    assert len(writes) == 2, write_body
+
+
 def test_near_function_pointer_call_reaches_the_emitter(tmp_path):
     """qcport's pl_items_touch calls ItemInfo.take through a near pointer;
     the frontend stopped at `indirect call` instead of emitting `call r/m16`."""

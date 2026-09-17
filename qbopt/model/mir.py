@@ -265,6 +265,11 @@ class MemRef:
     # Canonical object/subobject identity. Legacy frontends are normalized by
     # analysis.regions; source frontends attach this directly.
     provenance: "memory.Provenance | None" = None
+    # A source-language volatile access is observable even when its value is
+    # redundant.  The operation carrying this reference is also a scheduling
+    # barrier, but the property belongs on the memory occurrence so cloning,
+    # splitting and aggregate expansion cannot silently shed it.
+    volatile: bool = False
 
     @property
     def where(self) -> "Space | None":

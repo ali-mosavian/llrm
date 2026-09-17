@@ -126,6 +126,8 @@ def _blocked_objects(refs: list[mir.MemRef]) -> frozenset[memory.Object]:
 
 
 def _key(ref, blocked: frozenset[memory.Object] = frozenset()):
+    if ref.volatile:
+        return None
     objects = set() if ref.provenance is None else {span.object for span in ref.provenance.slices}
     if objects & blocked:
         return None

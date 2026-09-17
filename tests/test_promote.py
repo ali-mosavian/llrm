@@ -305,6 +305,57 @@ def test_sroa_uses_a_singleton_index_range_as_an_exact_leaf() -> None:
     assert promote._bounded_ref(one, {first: ranges.Interval(12, 12, 2)}).provenance == whole
 
 
+def test_sroa_never_promotes_a_volatile_aggregate_leaf() -> None:
+    """A volatile struct field store followed by a load lost the load.
+
+    Volatility belongs to the memory occurrence, so SROA must reject it even
+    if an operation is cloned without the frontend's additional ordering
+    barrier. This guards the semantic property independently of C parsing.
+    """
+    from qbopt.model import ir
+    from qbopt.model import memory
+    from qbopt.model.passes import Where
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
+
+    object_ = memory.Object(memory.Kind.FRAME, ("volatile aggregate", -8), extent=8)
+    ref = mir.MemRef(
+        Addr(Space.FRAME, -8),
+        4,
+        space=Space.FRAME,
+        provenance=memory.Provenance.one(object_, 0, 4),
+        volatile=True,
+    )
+    loaded = mir.Value(1, 1, variable=1, version=1)
+    store = mir.Op(
+        0,
+        ir.Operation.MOVE,
+        "mov",
+        (),
+        (),
+        kind=mir.Kind.STORE,
+        args=(mir.Const(7, 4),),
+        results=(mir.Cell(ref),),
+        stores=(ref,),
+    )
+    load = mir.Op(
+        1,
+        ir.Operation.MOVE,
+        "mov",
+        (loaded,),
+        (),
+        kind=mir.Kind.LOAD,
+        args=(mir.Cell(ref),),
+        results=(mir.Held(loaded, 4),),
+        loads=(ref,),
+    )
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (store, load), ()),))
+
+    result = promote.Sroa(Where()).transform(body)
+
+    assert result == body
+
+
 @pytest.mark.parametrize("effect", ["call", "barrier"])
 def test_partial_store_does_not_restore_constants_from_before_unknown_effect(effect):
     """A post-clobber low-word store must not resurrect an old high word as a promoted LONG."""

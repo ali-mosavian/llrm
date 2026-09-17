@@ -140,6 +140,7 @@ ARITHMETIC = {
 class Frame:
     disp: int
     declared: str | None = field(default=None, compare=False)  # the aliasing class of the scalar it names
+    volatile: bool = field(default=False, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,6 +150,7 @@ class Global:
     disp: int = 0
     base: mir.Value | None = None  # an index into the symbol, `_arr[j]`
     declared: str | None = field(default=None, compare=False)
+    volatile: bool = field(default=False, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,6 +161,7 @@ class Near:
     # frame-derived near pointer is an SS address even after arithmetic has
     # moved it out of BP-relative form; ordinary near pointers remain DS.
     space: Space = Space.LITERAL
+    volatile: bool = field(default=False, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,6 +172,7 @@ class Far:
     whole: mir.Value | None = None  # the 4-byte pointer these halves were split from, at disp 0
     named: int = 0  # the selector symbol when the segment is a named object's own, else 0
     declared: str | None = field(default=None, compare=False)
+    volatile: bool = field(default=False, compare=False)
 
 
 type Address = Frame | Global | Near | Far
@@ -385,9 +389,17 @@ class _Raise:
                 if part is not None
             ]
             uses = tuple(dict.fromkeys(read))
+        references = (*extra.get("loads", ()), *extra.get("stores", ()))
+        observable = any(ref.volatile for ref in references)
+        if observable:
+            # The explicit references are the complete footprint; BARRIER
+            # prevents elimination and motion without pretending a volatile
+            # read writes all memory or a volatile store reads all memory.
+            extra["memory_complete"] = True
+            extra["reads_complete"] = True
         made = mir.Op(
             self.at,
-            ir.Operation.NOTHING,
+            ir.Operation.BARRIER if observable else ir.Operation.NOTHING,
             "",
             defines,
             uses,
@@ -662,8 +674,15 @@ class _Raise:
                 return self.choose(test, yes, no, type_)
             case "CGCompare" | "CGFlow", _:
                 return self.truth(node)
-            case "CGEval" | "CGVolatile", (inner,):
+            case "CGEval", (inner,):
                 return self.eval(inner)
+            case "CGVolatile", (inner,):
+                got = self.eval(inner)
+                if isinstance(got, (Frame, Global, Near, Far)):
+                    return replace(got, volatile=True)
+                if isinstance(got, Restricted) and isinstance(got.value, (Frame, Global, Near, Far)):
+                    return replace(got, value=replace(got.value, volatile=True))
+                raise Unsupported(f"{self.symbol.name}: volatile access through {got}")
             case "CGAttr", (inner, "3"):
                 got = self.eval(inner)
                 match got:
@@ -1447,6 +1466,8 @@ class _Raise:
         declared = getattr(address, "declared", None)
         access = self.aliasing(type_)
         ref = self.placed(address, width)
+        if address.volatile:
+            ref = replace(ref, volatile=True)
         if declared is not None:
             return replace(ref, typed=(declared, True))
         return replace(ref, typed=(access, False)) if access is not None else ref
