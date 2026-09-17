@@ -12,10 +12,15 @@ from qbopt.objectfile import module
 from qbopt.optimize import loopmotion
 
 
-@pytest.mark.xfail(reason="UDTRNG's guarded record fields are still loaded and stored inside the loop", strict=True)
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_indexed_record_accumulators_store_only_after_loop(tag):
-    """UDTRNG wrote both promoted record accumulators on every iteration instead of once at exit."""
+    """UDTRNG wrote both promoted record accumulators on every iteration instead of once at exit.
+
+    This was a strict xfail until scalar promotion and loop cleanup began
+    removing the intermediate stores for all three compiler layouts.  Keep it
+    as an ordinary production regression: losing that cooperation is a real
+    hot-loop regression, not an optional optimization.
+    """
     from qbopt import wholeseg
 
     states = []
