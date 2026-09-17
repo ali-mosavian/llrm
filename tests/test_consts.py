@@ -13,6 +13,8 @@ from qbopt.model import mir
 from qbopt.backend import lower
 from qbopt.analysis import consts
 from qbopt.optimize import transform
+from qbopt.objectfile.module import Addr
+from qbopt.objectfile.module import Space
 
 
 @pytest.mark.parametrize("width", [2, 4])
@@ -28,6 +30,53 @@ def test_pointer_displacement_constants_preserve_order_and_width(width):
     assert pointer in changed.uses
 
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
+
+
+def test_an_index_constant_is_not_the_value_of_an_indexed_store() -> None:
+    """Nbody printed PY1=258564 instead of -3574 after one step.
+
+    The peeled loop knew the array byte index was four but did not know the
+    value being stored through it.  Memory constant tracking treated the one
+    known address use as the store's data, then joined two word stores into
+    0x00040004 and folded the later velocity load to that invented number.
+    """
+    index, source, loaded = (mir.Value(number, 0) for number in range(1, 4))
+    ref = mir.MemRef(Addr(Space.SEGMENT, 0x5A, 5), 2, base=index, base_width=2)
+    set_index = mir.Op(
+        0,
+        ir.Operation.MOVE,
+        "mov",
+        (index,),
+        (),
+        kind=mir.Kind.COPY,
+        args=(mir.Const(4, 2),),
+        results=(mir.Held(index, 2),),
+    )
+    store = mir.Op(
+        1,
+        ir.Operation.MOVE,
+        "mov",
+        (),
+        (source, index),
+        kind=mir.Kind.STORE,
+        args=(mir.Held(source, 2),),
+        results=(mir.Cell(ref),),
+        stores=(ref,),
+    )
+    load = mir.Op(
+        2,
+        ir.Operation.MOVE,
+        "mov",
+        (loaded,),
+        (index,),
+        kind=mir.Kind.LOAD,
+        args=(mir.Cell(ref),),
+        results=(mir.Held(loaded, 2),),
+        loads=(ref,),
+    )
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (set_index, store, load), ()),))
+
+    assert loaded not in consts.known(body, frozenset({5}), {})
 
 
 @pytest.mark.parametrize("number", [0, 1, 32767, 32768, 65535])

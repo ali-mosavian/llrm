@@ -101,13 +101,14 @@ def _put(op: mir.Op, known: dict[mir.Value, Known]) -> Known | None:
     all, and it writes an assignment as a store of a value, where the
     number is whatever that value was known to hold.
     """
-    if op.kind is not mir.Kind.STORE:
+    if op.kind is not mir.Kind.STORE or len(op.args) != 1:
         return None
-    for one in op.args:
-        if isinstance(one, mir.Const):
-            return Known(masked(one.n, one.width), one.width)
-    from_value = [one for one in op.uses if one in known and not one.flags]
-    return known[from_value[0]] if len(from_value) == 1 else None
+    source = op.args[0]
+    if isinstance(source, mir.Const):
+        return Known(masked(source.n, source.width), source.width)
+    if isinstance(source, mir.Held):
+        return known.get(source.value)
+    return None
 
 
 def initialized(op: mir.Op, ref: mir.MemRef) -> Known | None:
