@@ -5,15 +5,14 @@ from dataclasses import replace
 
 import pytest
 
+from qbopt import wholeseg
 from qbopt.model import mir
 from qbopt.objectfile import omf
 from qbopt.frontend import blocks
-from qbopt.objectfile import module
 from qbopt.optimize import promote
-from qbopt import wholeseg
+from qbopt.objectfile import module
 
 
-@pytest.mark.xfail(reason="UDTRNG's guarded record fields are still loaded and stored inside the loop", strict=True)
 @pytest.mark.parametrize("tag", ["q-O", "p-g2", "v-g3"])
 def test_guarded_indexed_accumulators_do_not_reload_in_loop(tag):
     """UDTRNG reloaded both LONG record fields on each of seven accumulator updates."""
@@ -50,13 +49,23 @@ def test_procedure_frame_fields_reuse_stored_values():
 def test_frame_promotion_respects_unknown_and_overlapping_writes(clobber, reused):
     """LOCALP's held frame field must not survive an unknown call or a write to that field."""
     from qbopt.model import ir
-    from qbopt.objectfile.module import Addr, Space
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
     cell = mir.MemRef(Addr(Space.FRAME, -8), 2)
     changed = mir.MemRef(None, 0) if clobber is None else mir.MemRef(Addr(Space.FRAME, clobber), 2)
     value = mir.Value(1, 4, variable=1, version=1)
     store = mir.Op(0, ir.Operation.MOVE, "", (), (), kind=mir.Kind.STORE,
                    args=(mir.Const(7, 2),), results=(mir.Cell(cell),), stores=(cell,))
-    write = mir.Op(2, ir.Operation.CALL, "", (), (), kind=mir.Kind.CALL, stores=(changed,))
+    write = mir.Op(
+        2,
+        ir.Operation.CALL,
+        "",
+        (),
+        (),
+        kind=mir.Kind.CALL,
+        stores=(changed,),
+        memory_complete=clobber is not None,
+    )
     load = mir.Op(4, ir.Operation.MOVE, "", (value,), (), kind=mir.Kind.LOAD,
                   args=(mir.Cell(cell),), results=(mir.Held(value, 2),), loads=(cell,))
     body = mir.MirBody(0, (mir.MirBlock(0, (), (store, write, load), ()),))
@@ -69,7 +78,8 @@ def test_frame_promotion_respects_unknown_and_overlapping_writes(clobber, reused
 def test_partial_store_does_not_restore_constants_from_before_unknown_effect(effect):
     """A post-clobber low-word store must not resurrect an old high word as a promoted LONG."""
     from qbopt.model import ir
-    from qbopt.objectfile.module import Addr, Space
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
     cell = mir.MemRef(Addr(Space.FRAME, -8), 4)
     word = replace(cell, width=2)
     value = mir.Value(1, 6, variable=1, version=1)
@@ -233,8 +243,8 @@ def test_only_an_intervening_call_invalidates_a_stored_value(position: int, reus
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_spill_accumulator_is_a_loop_carried_value(tag):
     """SPILL's packed zero initializer prevented promotion of t across its hundred inner iterations."""
-    from qbopt.optimize import transform
     from qbopt.analysis import loops
+    from qbopt.optimize import transform
     path = Path(f"fixtures/omf/spill-{tag}.obj")
     found = module.of(omf.parse(path.read_bytes()))
     partition = blocks.partition(found, blocks.code_map(found))
@@ -249,7 +259,8 @@ def test_spill_accumulator_is_a_loop_carried_value(tag):
 def test_packed_capture_keeps_wide_and_narrow_definitions_and_rejects_unknown_overlap():
     """Capturing one field must not lose the whole store or reuse a field after an unknown wide write."""
     from qbopt.model import ir
-    from qbopt.objectfile.module import Addr, Space
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
     address = Addr(Space.SEGMENT, 6, 5)
     whole = mir.MemRef(address, 4)
     half = mir.MemRef(address.plus(2), 2)
@@ -299,7 +310,8 @@ def test_addrm_long_accumulator_survives_split_initialization(tag):
 def test_split_initializer_requires_every_byte(complete):
     """ADDRM's two word stores may initialize a long; one word must not invent the other."""
     from qbopt.model import ir
-    from qbopt.objectfile.module import Addr, Space
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
     address = Addr(Space.SEGMENT, 6, 5)
     whole = mir.MemRef(address, 4)
     def store(at, offset, number):

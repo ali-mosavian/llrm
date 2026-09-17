@@ -2133,8 +2133,7 @@ def overlapping(
             one, other = ranges.covering(one, known or {}), ranges.covering(other, other_known or {})
         one, other = _symbolic_ref(one), _symbolic_ref(other)
         if (
-            one.base is not None
-            and one.base == other.base
+            one.base == other.base
             and one.addr is not None
             and other.addr is not None
             and one.addr.space is other.addr.space

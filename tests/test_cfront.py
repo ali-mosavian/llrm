@@ -52,6 +52,21 @@ def test_choose_joins_both_arms_in_one_cell():
     assert _reached(body, body.index(body[at - 2].split()[1] + ":")) == "mov word ptr [bp-4], 0"
 
 
+def test_optimized_branch_result_is_promoted_to_a_phi():
+    """pick's two arms stored 7/9 to a frame temporary and reloaded it at
+    their join. Restricting scalar promotion to loops left ordinary
+    straight-line mem2reg work behind and blocked later inlining.
+    """
+    lines = [
+        line.strip()
+        for line in cfront.compiled(
+            (FIXTURES / "choose.cgs").read_text(), "choose", optimise=True
+        ).splitlines()
+    ]
+    body = lines[lines.index("_pick proc near") : lines.index("_pick endp")]
+    assert not any("[bp-" in line for line in body)
+
+
 def test_data_pointer_to_a_literal():
     """ls's style table points at its pattern strings; DGBackPtr was refused."""
     unit = cfront.hir.unit(cfront.stream.parse((FIXTURES / "ls.cgs").read_text()))

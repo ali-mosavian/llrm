@@ -92,7 +92,7 @@ class Promote(MIRTransform):
         self.where = where
 
     def transform(self, body: MirBody) -> MirBody:
-        return promoted(body, self.where.dgroup, self.where.bounds, loop_only=True)
+        return promoted(body, self.where.dgroup, self.where.bounds)
 
 
 def promotable(body: MirBody, dgroup: frozenset[int] = frozenset(), bounds: dict | None = None) -> dict:
@@ -265,11 +265,7 @@ def promoted(
                 exact = _instead(op, holds, found, fresh)
                 if exact is not None:
                     fresh += 1
-                    ops.append(
-                        replace(
-                            exact, node=None, id=None, covers=(op.at, op.at), extra_covers=(), symbol=False
-                        )
-                    )
+                    ops.append(replace(exact, node=None, id=None, covers=(op.at, op.at), extra_covers=(), symbol=False))
                 for addr, fact in initialized.items():
                     value = mir.Value(fresh, op.at, variable=holds[addr], version=1)
                     fresh += 1

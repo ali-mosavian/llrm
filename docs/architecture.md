@@ -889,6 +889,13 @@ one documented target without materially regressing another.
   pairs. LOCALP's signed INTEGER addition now enters MIR as one LONG addition
   and store, and promotion keeps the whole accumulator. Costs fall further to
   QB/PDS 380 and VBDOS 368; no machine-pair recognition was added to a pass.
+  Promotion now runs over the whole body rather than loop blocks alone.  C's
+  `pick(c, 7, 9)` no longer stores either arm through a frame temporary: on
+  the 386 profile `_pick` falls from 29 bytes/11 instructions/cost 60 to
+  19 bytes/9 instructions/cost 52, and its caller falls from 66/28 to 55/26.
+  All seven production C benchmark reports are unchanged.  The broader run
+  also makes UDTRNG's guarded indexed-field regressions pass, so their stale
+  strict expected-failure markers are gone.
 - [x] Implement global value numbering with partial redundancy elimination
   (`GVN-PRE`) for scalar and memory expressions.
   Scalar full redundancy at joins is implemented: when every incoming edge
