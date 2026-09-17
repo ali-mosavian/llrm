@@ -1064,16 +1064,19 @@ class MirBody:
 
 @dataclass(frozen=True, slots=True)
 class AllocationHints:
-    """Backend-only placement history, keyed by semantic SSA variable.
+    """Backend-only placement history, outside program semantics.
 
     A pass may renumber value occurrences while keeping the variable they are
-    versions of. Keying the side table by that variable makes the hint survive
-    ordinary SSA reconstruction without copying a physical register through
-    MIR. A genuinely new variable deliberately has no historical placement.
+    versions of.  An origin is only a preference, so keying it by that variable
+    makes it survive ordinary SSA reconstruction without copying a physical
+    register through MIR.  A pin is different: it is the fixed result of one
+    source occurrence, not a requirement on every version of the variable.
+    Its operation identity and result position survive SSA reconstruction and
+    cloning without broadening that hard constraint to an unrelated phi.
     """
 
     origins: dict[int, Register_] = field(default_factory=dict)
-    pins: dict[int, Register_] = field(default_factory=dict)
+    pins: dict[tuple[int, int], Register_] = field(default_factory=dict)
 
     @classmethod
     def from_body(cls, body: MirBody) -> "AllocationHints":
@@ -1087,13 +1090,29 @@ class AllocationHints:
                     )
             return out
 
-        return cls(variables(body.origin), variables(body.pins))
+        definitions = {
+            value: (op.id, index)
+            for block in body.blocks
+            for op in block.ops
+            if op.id is not None
+            for index, value in enumerate(op.defines)
+        }
+        pins: dict[tuple[int, int], Register_] = {}
+        for value, location in body.pins.items():
+            key = definitions.get(value)
+            if key is None:
+                raise ValueError(f"pinned {value!r} has no source definition identity")
+            previous = pins.setdefault(key, location)
+            if previous != location:
+                raise ValueError(f"definition {key} has conflicting allocation pins: {previous} and {location}")
+
+        return cls(variables(body.origin), pins)
 
     def origin_of(self, value: Value) -> Register_ | None:
         return self.origins.get(value.variable)
 
-    def pin_of(self, value: Value) -> Register_ | None:
-        return self.pins.get(value.variable)
+    def pin_of(self, operation: Op, result: int) -> Register_ | None:
+        return None if operation.id is None else self.pins.get((operation.id, result))
 
 
 @dataclass(frozen=True, slots=True)

@@ -538,7 +538,13 @@ def lowered(
     body = ssa.pruned_phis(body, {phi.result for block in body.blocks for phi in block.phis if not phi.result.flags})
     values = set(ssa.values(body))
     origin = {value: where for value in values if (where := hints.origin_of(value)) is not None}
-    pins = {value: where for value in values if (where := hints.pin_of(value)) is not None}
+    pins = {
+        value: where
+        for block in body.blocks
+        for op in block.ops
+        for index, value in enumerate(op.defines)
+        if (where := hints.pin_of(op, index)) is not None
+    }
 
     # An absorbed call site is emitted by select.absorbed, seventeen bytes
     # of mov and idiv, and not from any semantics this could give it.

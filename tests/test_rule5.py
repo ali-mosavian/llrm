@@ -261,12 +261,12 @@ def test_lowering_resolves_source_byte_ownership_without_mir_ranges() -> None:
         assert actual == expected
 
 
-def test_raise_returns_variable_keyed_allocation_hints() -> None:
+def test_raise_returns_external_allocation_hints() -> None:
     """SSA renumbering must not make passes copy physical registers.
 
-    Every version of one raised variable has one historical home.  The
-    external table records that invariant once by variable number, so a value
-    renumbered by SSA still resolves without machine metadata on the value.
+    Every version of one raised variable has one historical home, while a hard
+    result pin belongs to one source definition.  Both survive SSA renumbering
+    without putting machine metadata on MIR values.
     """
     from dataclasses import replace
 
@@ -278,11 +278,42 @@ def test_raise_returns_variable_keyed_allocation_hints() -> None:
     assert raised.hints
     for _name, body in raised:
         hints = raised.hints[body.entry]
-        assert all(isinstance(variable, int) for variable in (*hints.origins, *hints.pins))
+        assert all(isinstance(variable, int) for variable in hints.origins)
         for value, register in body.origin.items():
             assert hints.origin_of(value) == register
             renamed = replace(value, id=value.id + 100_000, version=value.version + 100)
             assert hints.origin_of(renamed) == register
+        definitions = {
+            value: (op, index)
+            for block in body.blocks
+            for op in block.ops
+            for index, value in enumerate(op.defines)
+        }
+        for value, register in body.pins.items():
+            op, index = definitions[value]
+            assert hints.pin_of(op, index) == register
+            assert hints.pin_of(replace(op, at=op.at + 100_000), index) == register
+
+
+def test_a_pin_belongs_to_one_definition_not_every_ssa_version() -> None:
+    """r_walk was refused because its loop phi inherited a DX result pin.
+
+    Both definitions are versions of variable seven, but only the first is
+    the result of the source occurrence whose ABI fixes it in DX.  Treating a
+    hard pin like the variable-wide origin preference pins the loop's joined
+    pointer to DX, outside the 16-bit addressing register class.
+    """
+    from iced_x86 import Register
+
+    first = mir.Value(1, 10, variable=7, version=1)
+    second = mir.Value(2, 20, variable=7, version=2)
+    first_op = mir.Op(10, mir.Synth.CONCAT_LOW, "first", (first,), (), id=100)
+    second_op = mir.Op(20, mir.Synth.CONCAT_LOW, "second", (second,), (), id=200)
+    body = mir.MirBody(10, (mir.MirBlock(10, (), (first_op, second_op), ()),), pins={first: Register.EDX})
+
+    hints = mir.AllocationHints.from_body(body)
+    assert hints.pin_of(first_op, 0) == Register.EDX
+    assert hints.pin_of(second_op, 0) is None
 
 
 def test_lowering_consumes_external_allocation_hints() -> None:
