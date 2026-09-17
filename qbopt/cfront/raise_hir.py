@@ -267,7 +267,10 @@ def names(unit: hir.Unit, shared: Shared | None = None) -> dict[tuple[Space, int
         {
             (Space.GROUP, SELECTOR + one.id): f"seg {one.object_name}"
             for one in unit.symbols.values()
-            if not unit.grouped(one)
+            # Procedure symbols name code, never DGROUP.  A far function
+            # designator needs its code segment just like a far data symbol
+            # needs its owning segment.
+            if one.proc or not unit.grouped(one)
         }
     )
     out.update({(Space.SEGMENT, LITERAL + back): f"L_b{back}" for back, symbol in unit.backs.items() if not symbol})
@@ -822,6 +825,23 @@ class _Raise:
 
     def convert(self, got, source: str, type_: str):
         # An address's node is typed by what it addresses: `(void far *) &a_float`.
+        if isinstance(got, Function):
+            # A direct call keeps the symbolic Function form.  Once C decays
+            # it to a pointer (including an explicit integer cast), materialize
+            # the relocatable code address and let the ordinary pointer/long
+            # path carry it from here.
+            offset = self.fresh()
+            symbol = got.symbol
+            self.op(K.COPY, (mir.Held(offset, 2),), (mir.Symbol(_space(symbol), symbol.id, 0, 2),))
+            if symbol.far:
+                segment = self.fresh()
+                self.op(
+                    K.COPY,
+                    (mir.Held(segment, 2),),
+                    (mir.Symbol(Space.GROUP, SELECTOR + symbol.id, 0, 2),),
+                )
+                return Far(segment, offset, named=SELECTOR + symbol.id)
+            return mir.Held(offset, 2)
         if isinstance(got, (Frame, Global, Near)) and self.far_pointer(type_):
             return Far(self.dgroup(), self.near(got))
         if isinstance(got, (Frame, Global, Near, Far)):

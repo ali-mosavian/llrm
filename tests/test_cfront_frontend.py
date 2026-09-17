@@ -232,6 +232,27 @@ def test_near_function_pointer_call_reaches_the_emitter(tmp_path):
     assert any(line.strip().startswith("call ") and "_take" not in line for line in assembly.splitlines())
 
 
+def test_far_function_designator_cast_to_a_long_reaches_the_emitter(tmp_path):
+    """qcport snd.c passes its far DSP callback as a packed long address.
+
+    A function designator is not yet a scalar value.  The raiser must first
+    materialize its relocatable far address, then let the ordinary long
+    argument path push the segment:offset pair.
+    """
+    text = _stream(
+        tmp_path,
+        "typedef void (far *Callback)(void);\n"
+        "static void far cdecl cb(void) {}\n"
+        "extern void callback(long);\n"
+        "void use(void) { callback((long)(Callback) cb); }\n",
+    )
+
+    assembly = cfront.compiled(text, "far_callback", optimise=True)
+
+    body = assembly[assembly.index("_use proc far") : assembly.index("_use endp")]
+    assert "pushw seg _cb" in body and "push offset _cb" in body
+
+
 def test_external_far_object_uses_its_own_selector(tmp_path):
     """qcport linked mon_facts against DGROUP even though its declaration is
     far; the linker rejected the offset's group frame as a different segment."""
