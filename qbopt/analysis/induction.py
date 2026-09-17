@@ -309,7 +309,12 @@ def _last_counter(body: mir.MirBody, loop, counter: Affine, facts: dict, width: 
             mir.Kind.EQ: mir.Kind.NE,
             mir.Kind.NE: mir.Kind.EQ,
         }.get(test)
-    comparisons = [bound for op in header.ops[:-1] if (bound := _counter_bound(op, branch, counter, width)) is not None]
+    made = {value.id: op for block in body.blocks for op in block.ops for value in op.defines}
+    comparisons = [
+        bound
+        for op in header.ops[:-1]
+        if (bound := _counter_bound(op, branch, counter, width, made)) is not None
+    ]
     if len(comparisons) != 1:
         return None
     raw = tuple(_constant(arg, facts, width) for arg in (counter.start, counter.step, comparisons[0]))
@@ -362,7 +367,7 @@ def _as_signed(value: int, width: int) -> int:
     return (value ^ sign) - sign
 
 
-def _counter_bound(op, branch, counter, width):
+def _counter_bound(op, branch, counter, width, made=None):
     if (
         len(op.args) != 2
         or op.loads
@@ -370,9 +375,11 @@ def _counter_bound(op, branch, counter, width):
         or op.barrier
         or op.merges
         or not isinstance(op.args[0], mir.Held)
-        or op.args[0].value.id != counter.value
         or op.args[0].width != width
     ):
+        return None
+    compared = _copied(op.args[0], made) if made is not None else op.args[0]
+    if compared.value.id != counter.value:
         return None
     flags = [value for value in op.defines if value.flags]
     if len(flags) != 1 or flags[0] not in branch.uses:

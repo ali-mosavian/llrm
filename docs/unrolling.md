@@ -31,10 +31,29 @@ from a backedge to eight ordered bodies. Emitted metrics change as follows:
 This is an explicit speed/size tradeoff: the profile-free hot-operation
 estimate improves 6.3%, while code grows 26.0%. Static weighted cost is the
 sum over the body and therefore also grows; it is not a runtime-frequency
-cost. The inner matrix-product loop is not expanded after strength reduction,
-and the report makes no elapsed-time claim. A future partial-unroll selector
-should compare size and frequency per CPU instead of treating this full
-expansion as a universal final choice.
+cost. The first version still missed the inner matrix-product loop after
+strength reduction: the comparison read a copy of the header recurrence, and
+exact-trip analysis required the PHI result itself. Copy-transparent recurrence
+matching now proves that loop as eight trips too. This is the same structural
+choice made by the local GCC 16.2.0 i686 reference, which also expands the
+fixed-size inner product. Against the first integer-unrolling result above, the
+current 386 report is:
+
+| Metric | Before copy-transparent SCEV | After |
+|---|---:|---:|
+| Estimated dynamic operations | 10,800 | 8,588 |
+| Static branches | 12 | 9 |
+| Spill reloads/stores | 0/0 | 18/16 |
+| Bytes | 519 | 697 |
+| Static weighted cost | 776 | 939 |
+
+The estimated dynamic operation count improves 20.5%. The increased spills,
+34.3% code growth and static-cost growth are recorded rather than hidden: this
+is a speed-first full-unroll choice, not the final pressure-aware selector.
+The raw assembly contains eight multiply/add steps in source order. The report
+makes no elapsed-time claim; a future partial-unroll selector should compare
+size, frequency and predicted spill cost per CPU instead of treating full
+expansion as universally final.
 
 The follow-up checkpoint/ownership change reduces FPCSE's static costs from
 324/359/314 to **173/182/167** (PDS/QB/VBDOS). SINGLE PRINT is a four-byte

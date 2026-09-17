@@ -214,11 +214,6 @@ FLOAT = {
 }
 
 
-# ds and ss are the frame and the data segment and BC does not reload them.
-# es is the one a dynamic array reaches its elements through.
-SEGMENTS = {getattr(iced_x86.Register, one) for one in ("ES", "FS", "GS") if hasattr(iced_x86.Register, one)}
-
-
 def _reloads(body, module_, found: Counter) -> None:
     """Segment loads inside a loop, from something the loop never writes.
 
@@ -228,27 +223,12 @@ def _reloads(body, module_, found: Counter) -> None:
     once, by B$DDIM, before the loop. A hundred iterations reload es a
     hundred times from a word that has not changed.
 
-    Not visible to the cell counters above, and that is the point: the
-    descriptor is reached through a base register, so it has no address they
-    can name. This asks about the instruction instead.
+    The old implementation inspected ``Op.made`` to find the physical ES
+    destination.  MIR deliberately no longer carries that machine form, so
+    this report does not manufacture a segment-register count from source
+    provenance.  The emitted-code quality report measures actual loads.
     """
     at_of = {block.at: block for block in body.blocks}
-    seen: set[int] = set()
-    for loop in loopy.loops(list(body.blocks), body.entry):
-        if any(one.at in module_.calls for at in loop.body for one in at_of[at].ops):
-            continue  # a call in the loop may leave es anywhere
-        for at in loop.body:
-            for op in at_of[at].ops:
-                what = op.made if op.made is not None else getattr(op.node, "semantics", None)
-                if what is None or what.op is not ir.Operation.MOVE or not what.dests:
-                    continue
-                into = what.dests[0]
-                # Once per site. A nested loop contains the inner one's
-                # blocks, so counting per loop counts an inner reload twice.
-                if isinstance(into, ir.Reg) and into.register in SEGMENTS and op.at not in seen:
-                    seen.add(op.at)
-                    found["segment register reloaded inside a loop"] += 1
-
     # A multiply inside a loop is the induction-variable question: an
     # element's address is affine in the counter, so recomputing it with a
     # multiply on every pass is what strength reduction replaces with one
@@ -258,10 +238,9 @@ def _reloads(body, module_, found: Counter) -> None:
     for loop in loopy.loops(list(body.blocks), body.entry):
         for at in loop.body:
             for op in at_of[at].ops:
-                what = op.made if op.made is not None else getattr(op.node, "semantics", None)
-                if what is None or op.at in where:
+                if op.at in where:
                     continue
-                if what.op in (ir.Operation.MULTIPLY, ir.Operation.DIVIDE):
+                if op.kind in (mir.Kind.MUL, mir.Kind.DIVMOD):
                     where.add(op.at)
                     found["a multiply or divide inside a loop"] += 1
 

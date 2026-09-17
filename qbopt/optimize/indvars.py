@@ -17,6 +17,7 @@ def simplified(body: mir.MirBody) -> mir.MirBody:
 
     facts = consts.known(body)
     blocks = {block.at: block for block in body.blocks}
+    made = {value.id: op for block in body.blocks for op in block.ops for value in op.defines}
     dominators = loops.dominators(body.blocks, body.entry)
     predecessors = loops.predecessors(body.blocks)
     for loop in loops.loops(body.blocks, body.entry):
@@ -39,7 +40,9 @@ def simplified(body: mir.MirBody) -> mir.MirBody:
             update = phi.incoming[next(iter(loop.latches))]
             branch = header.ops[-1]
             compare = next(
-                op for op in header.ops[:-1] if induction._counter_bound(op, branch, counter, width) is not None
+                op
+                for op in header.ops[:-1]
+                if induction._counter_bound(op, branch, counter, width, made) is not None
             )
             (exit_at,) = [at for at in header.succ if at not in loop.body]
             if set(predecessors.get(exit_at, ())) != {header.at} or not blocks[exit_at].ops:
@@ -396,7 +399,7 @@ def zeroed(body: mir.MirBody) -> mir.MirBody:
                 (op, compared)
                 for op in header.ops[:-1]
                 for compared in (2, 4)
-                if induction._counter_bound(op, branch, counter, compared) is not None
+                if induction._counter_bound(op, branch, counter, compared, made) is not None
             ]
             if len(compares) != 1:
                 continue

@@ -15,7 +15,7 @@ from qbopt.backend import lower_floats
 
 
 def test_c_matmul_unrolls_an_exact_integer_inner_loop() -> None:
-    """Matmul retained all 16 static branches, including its eight-way checksum backedge."""
+    """Matmul retained 12 branches: copied counters hid its exact eight-trip inner loops."""
     from tools import quality
     from qbopt.cfront import compile as cfront
 
@@ -25,7 +25,7 @@ def test_c_matmul_unrolls_an_exact_integer_inner_loop() -> None:
     procedure = next(one for one in module.procedures if one.name == "_bench_matmul")
     rows = quality._rows(quality._blob(module, procedure, 0))
 
-    assert sum(mnemonic.startswith("j") for _raw, mnemonic, _operands in rows) < 16
+    assert sum(mnemonic.startswith("j") for _raw, mnemonic, _operands in rows) < 12
 
 
 @pytest.mark.parametrize("checkpoint", [False, True])
