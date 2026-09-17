@@ -32,6 +32,16 @@ def test_commutative_instruction_reuses_the_dying_operand(name):
     assert tied.what.sources == (ir.Held(3, 4), ir.Held(1, 4))
 
 
+def test_multiply_reuses_the_dying_operand() -> None:
+    """Matmul tied ``imul`` to its live, spilled factor and reloaded it eight times."""
+    one = addition("imul")
+    one = replace(one, what=replace(one.what, op=ir.Operation.MULTIPLY))
+
+    chosen = twoaddr._commuted(one, frozenset({1, 3}))
+
+    assert chosen.what.sources == tuple(reversed(one.what.sources))
+
+
 @pytest.mark.parametrize("name", ["sub", "adc", "sbb", "shl"])
 def test_noncommutative_or_implicit_arithmetic_is_not_swapped(name):
     one = addition(name)

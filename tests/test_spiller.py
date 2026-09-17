@@ -203,6 +203,30 @@ def test_untied_spill_source_is_read_directly_by_arithmetic(name, width):
     assert result[0].uses == (1,)
 
 
+@pytest.mark.parametrize("width", [2, 4])
+def test_untied_spill_source_is_read_directly_by_multiply(width: int) -> None:
+    """A commuted matmul factor needed no scratch reload before ``imul``."""
+    op = lir.Insn(
+        at=0x100,
+        covers=(0x100, 0x103),
+        what=ir.Semantics(
+            ir.Operation.MULTIPLY,
+            "imul",
+            (ir.Held(1, width),),
+            (ir.Held(1, width), ir.Held(2, width)),
+        ),
+        defines=(1,),
+        uses=(1, 2),
+    )
+
+    result = _out(_body(op), {2})
+
+    assert len(result) == 1
+    assert result[0].what.sources[0] == ir.Held(1, width)
+    assert isinstance(result[0].what.sources[1], ir.Mem)
+    assert result[0].uses == (1,)
+
+
 @pytest.mark.parametrize("name", ["xor", "add", "and", "sub"])
 def test_repeated_tied_operand_does_not_become_memory_to_memory(name: str) -> None:
     """nbody-q-O refused XOR at 0x54 after both sources became the same frame slot."""
@@ -340,6 +364,29 @@ def test_spilled_frame_address_is_rematerialized_without_a_frame_slot() -> None:
     assert recreated[0].what.sources == (source,)
     assert recreated[0].rematerialized
     assert result.insns[-1].what.sources[1].value == recreated[0].defines[0]
+
+
+def test_c_matmul_multiplies_spilled_rows_directly_from_memory() -> None:
+    """Matmul reloaded all eight unrolled lhs values solely to feed ``imul``.
+
+    The other factor dies at the multiply and can own its result register, so
+    commutative two-address selection must leave the long-lived row value in
+    its spill slot and use x86's register-by-memory multiply form.
+    """
+    from qbopt.cfront import compile as cfront
+    from tools import quality
+
+    source = Path("bench/c/matmul.c")
+    module = cfront.assembled(cfront.recorded(source, []), source.stem, optimise=True)
+    procedure = next(one for one in module.procedures if one.name == "_bench_matmul")
+    multiplies = [
+        operands
+        for _raw, mnemonic, operands in quality._rows(quality._blob(module, procedure, 0))
+        if mnemonic == "imul"
+    ]
+
+    assert len(multiplies) >= 8
+    assert sum("[bp" in operands.lower() for operands in multiplies) >= 8, multiplies
 
 
 def test_nonoverlapping_spills_share_one_compatible_frame_slot() -> None:

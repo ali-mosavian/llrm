@@ -396,7 +396,11 @@ The frame is backend-owned. `frame.py` assigns slots below BC's deepest existing
 frame displacement, `spiller.py` inserts loads and stores, and `prologue.py`
 reserves the added space at every entry/return path. Reloads created by the
 spiller are marked so they cannot be recursively treated like arbitrary source
-memory operations.
+memory operations. Two-address selection chooses a dying operand for
+commutative integer operations, including the named-result `imul` form. When
+the other operand is spilled, the spiller leaves it in its frame slot and uses
+the target's register-by-memory instruction form rather than creating a scratch
+reload.
 
 ### LLVM and GCC reference points
 
@@ -1200,6 +1204,11 @@ one documented target without materially regressing another.
   commutative inputs, allowing coalescing to remove LOCALP's accumulator copy.
   Its loop loses one MOV (20 modeled units at the standard ten-iteration weight)
   on each compiler. Liveness and fixed/grouped operand constraints take priority.
+  The same selection applies to named-result multiply: C matmul's eight
+  unrolled products now read their long-lived lhs factors directly from spill
+  slots. On the 386 profile `_bench_matmul` falls from 717 to 685 bytes, 191 to
+  182 instructions, 18 to 9 spill reloads, and 8,588 to 7,787 estimated dynamic
+  operations; the linked DOS benchmark retains its independent answer.
   The greedy allocator also uses soft copy-neighbor preferences, including
   copies inserted after coalescing. It prefers fixed or already assigned
   neighbors without relaxing interference, clobbers, classes or pins.

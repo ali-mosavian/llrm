@@ -777,6 +777,14 @@ def folded_source(one: lir.Insn, values: frozenset[int]) -> "ir.Held | None":
                 return None
         case ir.Semantics(ir.Operation.COMPARE, "cmp", (), (ir.Held() as left, ir.Held() as right)):
             pass
+        case ir.Semantics(
+            ir.Operation.MULTIPLY,
+            "imul",
+            (ir.Held() as dest,),
+            (ir.Held() as left, ir.Held() as right),
+        ):
+            if dest != left:
+                return None
         case _:
             return None
     if (

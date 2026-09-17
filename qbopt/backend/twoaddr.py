@@ -113,10 +113,13 @@ def _distance(copies: dict[int, set[int]], start: int, goal: int, limit: int = 8
 
 def _commuted(one: lir.Insn, alive: frozenset[int], copies=None, interference=None) -> lir.Insn:
     what = one.what
+    commutative = what is not None and (
+        (what.op is ir.Operation.BINARY and what.name in {"add", "and", "or", "xor"})
+        or (what.op is ir.Operation.MULTIPLY and what.name == "imul")
+    )
     if (
         what is None
-        or what.op is not ir.Operation.BINARY
-        or what.name not in {"add", "and", "or", "xor"}
+        or not commutative
         or len(what.dests) != 1
         or len(what.sources) != 2
         or one.group is not None
