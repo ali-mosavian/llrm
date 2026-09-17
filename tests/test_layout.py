@@ -276,6 +276,7 @@ def test_a_moved_operation_keeps_its_fixup() -> None:
     mapped = code_map(found)
     assert not isinstance(mapped, str)
     bodies = mir.bodies(found, split.partition(found, mapped))
+    found = bodies.source.applied(found)
     assert found.refs, "the raise recorded no relocations at all"
 
     selected = [

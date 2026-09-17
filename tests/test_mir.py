@@ -71,6 +71,28 @@ def test_absorbed_array_operand_keeps_its_index_value() -> None:
     assert load.base == index
 
 
+def test_raise_returns_provenance_without_mutating_the_parsed_module() -> None:
+    """Raising CMPORD populated the parsed module's absorbed-call and fixup
+    dictionaries in place, so a second consumer saw state created by the first
+    rather than a source map belonging to that particular raise.
+    """
+    path = Path("fixtures/omf/cmpord-p-evt.obj")
+    found = corpus.loaded(path)
+    result = mir.bodies(found, corpus.partitioned(path))
+
+    assert not found.refs
+    assert not found.absorbed
+    assert not found.coverage
+    assert not found.float_protocols
+    assert result.source.refs
+    assert result.source.absorbed
+    again = mir.bodies(found, corpus.partitioned(path))
+    assert set(again.source.refs.values()) == set(result.source.refs.values())
+    assert len(again.source.absorbed) == len(result.source.absorbed)
+    assert set(again.source.refs).isdisjoint(result.source.refs)
+    assert again.source.refs is not result.source.refs
+
+
 def test_unknown_pointee_keeps_its_address_value() -> None:
     """procs TWICE read [si] after its BYREF pointer moved to bx, corrupting the result."""
     namer = mir._Namer()

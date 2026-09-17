@@ -42,7 +42,8 @@ def _signs(served, width, origin) -> bool:
     return width == 2 and all(not one.flags and origin.get(one) == Register.EDX for one in served)
 
 
-def raised(body, found, contracts):
+def raised(body, found, contracts, source_map: module.SourceMap | None = None):
+    source_map = source_map or module.SourceMap.from_module(found)
     if "FIDRQQ" not in omf.externals(found.records):
         return body
     serial = max((one.id for one in ssa.values(body)), default=0)
@@ -175,12 +176,12 @@ def raised(body, found, contracts):
                     symbol=ref is not None,
                 )
                 if load is not None:
-                    found.refs.update(mir._referenced(replace(body, blocks=(replace(block, ops=(load,)),)), found))
-                    if load.id in found.refs:
-                        found.refs[op.id] = found.refs[load.id]
+                    source_map.refs.update(mir._referenced(replace(body, blocks=(replace(block, ops=(load,)),)), found))
+                    if load.id in source_map.refs:
+                        source_map.refs[op.id] = source_map.refs[load.id]
                 # The helper supplied its own emulator dispatch. Its replacement
                 # must retain that protocol, independent of the call's opcode.
-                found.float_protocols[op.id] = 0x34
+                source_map.float_protocols[op.id] = 0x34
             ops.append(op)
             definitions.update({value: (index, op) for value in op.defines})
         blocks.append(replace(block, ops=tuple(ops)))

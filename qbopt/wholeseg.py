@@ -196,7 +196,9 @@ def _rebuilt(
             if layout is None:
                 return data, f"native frame or call cleanup unproved at {procedure.seed:#x}", None
             native_frames[procedure.seed] = layout
-    bodies = list(mir.bodies(found, blocks, contracts, basic_semantics=basic_semantics, bounds_checks=bounds_checks))
+    raised = mir.bodies(found, blocks, contracts, basic_semantics=basic_semantics, bounds_checks=bounds_checks)
+    bodies = list(raised)
+    found = raised.source.applied(found)
     if not bodies:
         return data, "no bodies were raised", None
     if not bounds_checks:

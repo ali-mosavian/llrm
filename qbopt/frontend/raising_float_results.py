@@ -10,7 +10,8 @@ from qbopt.model import ir, mir
 from qbopt.objectfile import module, omf
 
 
-def raised(body, found, contracts):
+def raised(body, found, contracts, source: module.SourceMap | None = None):
+    source = source or module.SourceMap.from_module(found)
     if "FIDRQQ" not in omf.externals(found.records):
         return body
     local = module.defines(found.records, found.seg)
@@ -43,7 +44,7 @@ def raised(body, found, contracts):
                 uses=(), loads=(), stores=(), merges={}, node=None, raised=None,
                 stack=-1, symbol=False)
             ops.append(converted)
-            found.float_protocols[op.id] = 0x34
+            source.float_protocols[op.id] = 0x34
             for shift, register in enumerate(registers):
                 target = outputs[register]
                 ops.append(mir.Op(op.at, ir.Operation.MOVE, "mov" if width == 2 else "",

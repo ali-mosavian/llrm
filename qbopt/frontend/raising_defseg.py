@@ -125,7 +125,8 @@ def _candidate(op, block_ops, found, contracts, local, expected) -> "tuple | Non
     return (made.args[0] if made is not None else mir.Held(pushed, 2)), pushed
 
 
-def raised(body: mir.MirBody, found, contracts) -> mir.MirBody:
+def raised(body: mir.MirBody, found, contracts, source: module.SourceMap | None = None) -> mir.MirBody:
+    source = source or module.SourceMap.from_module(found)
     field = _fixup(found)
     if field is None:
         return body
@@ -206,7 +207,7 @@ def raised(body: mir.MirBody, found, contracts) -> mir.MirBody:
                     symbol=True,
                     covers=(pushed_span[0], span[1]),
                 )
-                found.refs[op.id] = (field,)
+                source.refs[op.id] = (field,)
             ops.append(op)
         out.append(replace(block, ops=tuple(ops)))
     body = replace(body, blocks=tuple(out))

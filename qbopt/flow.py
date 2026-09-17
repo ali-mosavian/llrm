@@ -111,7 +111,9 @@ def run(data: bytes, native_fpu: bool = False, optimise: bool = True) -> tuple[b
     # One map for the module, and the same object reaches the raise and
     # the lowering: a contract chosen twice can be chosen differently.
     contracts = runtime.for_module(found)
-    raised = list(mir.bodies(found, blocks, contracts))
+    result = mir.bodies(found, blocks, contracts)
+    raised = list(result)
+    found = result.source.applied(found)
     if not raised:
         return data, "nothing to raise"
 

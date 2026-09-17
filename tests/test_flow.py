@@ -39,7 +39,8 @@ def _raised(name: str):
     found = module.of(omf.parse(Path(f"fixtures/omf/{name}.obj").read_bytes()))
     blocks = split.partition(found, code_map(found))
     contracts = runtime.for_module(found)
-    return found, blocks, list(mir.bodies(found, blocks, contracts)), contracts
+    raised = mir.bodies(found, blocks, contracts)
+    return raised.source.applied(found), blocks, list(raised), contracts
 
 
 @pytest.mark.corpus
@@ -616,7 +617,9 @@ def test_no_phi_survives_elimination_on_a_critical_edge() -> None:
 
     found = module.of(omf.parse(Path("fixtures/omf/harr-q-O.obj").read_bytes()))
     blocks = split.partition(found, code_map(found))
-    raised = list(mir.bodies(found, blocks))
+    result = mir.bodies(found, blocks)
+    found = result.source.applied(found)
+    raised = list(result)
     absorbed = set(found.absorbed)
     critical = 0
     for name, body in raised:

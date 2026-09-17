@@ -64,6 +64,8 @@ from enum import StrEnum
 from dataclasses import field
 from dataclasses import replace
 from dataclasses import dataclass
+from collections.abc import Iterator
+from typing import overload
 
 from iced_x86 import Code
 from iced_x86 import Register
@@ -968,6 +970,34 @@ class MirBody:
             for block in self.blocks
             for value in ([phi.result for phi in block.phis] + [v for op in block.ops for v in op.defines])
         )
+
+
+@dataclass(frozen=True, slots=True)
+class RaisedBodies:
+    """The raised bodies and their external machine-provenance side table.
+
+    Sequence methods preserve the long-standing ``bodies()[0]`` and
+    ``for ... in bodies()`` interface while making provenance an explicit
+    result instead of an invisible mutation of the parsed module.
+    """
+
+    values: tuple[tuple[str, MirBody], ...]
+    source: module.SourceMap
+
+    def __iter__(self) -> Iterator[tuple[str, MirBody]]:
+        return iter(self.values)
+
+    def __len__(self) -> int:
+        return len(self.values)
+
+    @overload
+    def __getitem__(self, index: int) -> tuple[str, MirBody]: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> tuple[tuple[str, MirBody], ...]: ...
+
+    def __getitem__(self, index: int | slice) -> tuple[str, MirBody] | tuple[tuple[str, MirBody], ...]:
+        return self.values[index]
 
 
 class Unraisable(Exception):
@@ -2344,7 +2374,7 @@ def bodies(
     *,
     basic_semantics: bool = False,
     bounds_checks: bool = False,
-) -> list[tuple[str, MirBody]]:
+) -> RaisedBodies:
     """Every body in the module, raised, labelled, and skipping what will not.
 
     One place rather than three: dump.py, the measurement scripts and now
@@ -2353,10 +2383,11 @@ def bodies(
     call, which is not a CFG edge, so raise_body() has to be handed one
     body's blocks and no others.
     """
+    source = module.SourceMap.from_module(found)
     unreached = _unreached(found)
     result = ir.decode_module(found)
     if isinstance(result, str):
-        return []
+        return RaisedBodies((), source)
     nodes = {ir.span(node)[0]: node for body in result for node in body.nodes}
     from qbopt.frontend import blocks as split
     from qbopt.frontend import raising_returns
@@ -2436,15 +2467,15 @@ def bodies(
             built = raising_addresses.loaded(built, contracts)
             from qbopt.frontend import raising_defseg
 
-            built = raising_defseg.raised(built, found, contracts)
+            built = raising_defseg.raised(built, found, contracts, source)
             from qbopt.frontend import raising_float_calls
 
             if not basic_semantics:
-                built = raising_float_calls.raised(built, found, contracts)
+                built = raising_float_calls.raised(built, found, contracts, source)
             from qbopt.frontend import raising_float_results
 
             if not basic_semantics:
-                built = raising_float_results.raised(built, found, contracts)
+                built = raising_float_results.raised(built, found, contracts, source)
             built = raising_longs.arguments(built)
             from qbopt.frontend import raising_floats
 
@@ -2465,9 +2496,13 @@ def bodies(
             from qbopt.frontend import raising_dispatch
 
             built = raising_dispatch.raised(built, found, mine)
-            found.refs.update(_referenced(built, found))
+            source.refs.update(_referenced(built, found))
             built = _frame_bounded(built)
-            held = {**_returned(built), **_folded(built, found, blocks)}
+            folded, absorbed, refs, coverage = _folded(built, found, blocks)
+            source.absorbed.update(absorbed)
+            source.refs.update(refs)
+            source.coverage.update(coverage)
+            held = {**_returned(built), **folded}
             if held:
                 built = replace(built, pins={**built.pins, **held})
             out.append((f"{body.body.kind} {body.body.name or '(main)'}", built))
@@ -2494,7 +2529,7 @@ def bodies(
             )
             for name, body in out
         ]
-    return out
+    return RaisedBodies(tuple(out), source)
 
 
 def _sites(found: Module, blocks: list[Block]) -> dict:
@@ -2557,7 +2592,9 @@ def _returned(body: MirBody) -> dict:
     }
 
 
-def _folded(body: MirBody, found: Module, blocks: list[Block]) -> dict:
+def _folded(
+    body: MirBody, found: Module, blocks: list[Block]
+) -> tuple[dict, dict[int, object], dict[int, tuple[int, ...]], dict[int, tuple[tuple[int, int], ...]]]:
     """Each folded operation told which site it stands for, and which fixups.
 
     Both by op id, beside the refs, because they are the same kind of fact:
@@ -2576,8 +2613,11 @@ def _folded(body: MirBody, found: Module, blocks: list[Block]) -> dict:
 
     sites = {one.start: one for one in _sites(found, blocks).values()}
     if not sites:
-        return {}
+        return {}, {}, {}, {}
     held: dict = {}
+    absorbed: dict[int, object] = {}
+    refs: dict[int, tuple[int, ...]] = {}
+    coverage: dict[int, tuple[tuple[int, int], ...]] = {}
     live = flagged.live_in(blocks)
     for block in body.blocks:
         for op in block.ops:
@@ -2595,15 +2635,15 @@ def _folded(body: MirBody, found: Module, blocks: list[Block]) -> dict:
             # eax in push/pop -- so the emitter has to be given the same
             # answer the raise filtered on, or the two disagree on length.
             read = _flags_after(blocks, live, site.start, site.end)
-            found.absorbed[op.id] = (site, read)
+            absorbed[op.id] = (site, read)
             held.update({one: body.origin[one] for one in op.defines if not one.flags and one in body.origin})
             made = machine.absorb(site, read)
             if not isinstance(made, str) and made.relocations:
-                found.refs[op.id] = tuple(field for _where, field in made.relocations)
+                refs[op.id] = tuple(field for _where, field in made.relocations)
             pushes = _disjoint(site)
             if pushes and op.covers is not None:
-                found.coverage[op.id] = (op.covers, *pushes)
-    return held
+                coverage[op.id] = (op.covers, *pushes)
+    return held, absorbed, refs, coverage
 
 
 def instruction(op: "Op") -> bool:

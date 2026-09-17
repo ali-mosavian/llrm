@@ -70,19 +70,14 @@ def _bodies(
     # the raise and the lowering are given the same object -- built twice
     # they can differ, which is what wholeseg.py takes care not to do.
     contracts = runtime.for_module(found, external=external_contracts)
-    return (
+    raised = mir.bodies(
         found,
-        list(
-            mir.bodies(
-                found,
-                split.partition(found, mapped),
-                contracts,
-                basic_semantics=basic_semantics,
-                bounds_checks=bounds_checks,
-            )
-        ),
+        split.partition(found, mapped),
         contracts,
+        basic_semantics=basic_semantics,
+        bounds_checks=bounds_checks,
     )
+    return raised.source.applied(found), list(raised), contracts
 
 
 def _shape(body) -> str:

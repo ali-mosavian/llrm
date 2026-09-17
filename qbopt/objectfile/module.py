@@ -242,6 +242,42 @@ class Module:
         return self.operands.get(field_offset, Addr(Space.LITERAL, literal))
 
 
+@dataclass(frozen=True, slots=True)
+class SourceMap:
+    """Machine provenance produced by raising, kept beside rather than in MIR.
+
+    The parsed :class:`Module` is an input description.  Recognition adds
+    facts keyed by the stable MIR operation id, but those facts belong to one
+    particular raise and must not be written back into that input.  The
+    backend still accepts a Module while the provenance migration is
+    incremental; ``applied`` makes that adapter explicit and non-mutating.
+    """
+
+    refs: dict[int, tuple[int, ...]] = field(default_factory=dict)
+    float_protocols: dict[int, int] = field(default_factory=dict)
+    absorbed: dict[int, object] = field(default_factory=dict)
+    coverage: dict[int, tuple[tuple[int, int], ...]] = field(default_factory=dict)
+
+    @classmethod
+    def from_module(cls, found: Module) -> "SourceMap":
+        return cls(
+            dict(found.refs),
+            dict(found.float_protocols),
+            dict(found.absorbed),
+            dict(found.coverage),
+        )
+
+    def applied(self, found: Module) -> Module:
+        """A backend view carrying this raise's provenance, without mutation."""
+        return replace(
+            found,
+            refs=dict(self.refs),
+            float_protocols=dict(self.float_protocols),
+            absorbed=dict(self.absorbed),
+            coverage=dict(self.coverage),
+        )
+
+
 def frame_relative(literal: int) -> Addr:
     return Addr(Space.FRAME, literal)
 
