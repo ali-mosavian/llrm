@@ -29,6 +29,7 @@ def test_report_measures_each_emitted_function_and_names_its_profile() -> None:
         assert function["instructions"] > 0
         assert function["peak_live_values"] >= 0
         assert function["rematerializations"] >= 0
+        assert function["dynamic_operations"] is not None
         assert function["target_status"] == "missing"
         assert function["ratio"] is None
 
@@ -231,3 +232,46 @@ def test_stage_metrics_count_rematerialized_instructions() -> None:
     insn = lir.Insn(0, (0, 0), what, (1,), (), rematerialized=True)
     body = lir.LirBody("remat", 0, (lir.LirBlock(0, (insn,)),), {}, {})
     assert quality._stage_metrics(body)["rematerializations"] == 1
+
+
+def test_dynamic_frequencies_account_for_branches_and_loop_iterations() -> None:
+    """A static instruction count cannot stand in for hot-path execution."""
+    from qbopt.model import lir
+
+    blocks = (
+        lir.LirBlock(0, (), succ=(1,)),
+        lir.LirBlock(1, (), succ=(2, 3)),
+        lir.LirBlock(2, (), succ=(1,)),
+        lir.LirBlock(3, (), succ=()),
+    )
+    body = lir.LirBody("loop", 0, blocks, {}, {})
+    assert quality._frequencies(body) == pytest.approx({0: 1.0, 1: 10.0, 2: 9.0, 3: 1.0})
+
+
+def test_dynamic_estimate_refuses_hidden_callee_cost() -> None:
+    """Counting CALL as one instruction made an arbitrarily expensive helper look free."""
+    from qbopt.model import ir
+    from qbopt.model import lir
+    from qbopt.backend import masm
+
+    call = lir.Insn(0, (0, 0), ir.Semantics(ir.Operation.CALL, "call"), (), ())
+    ret = lir.Insn(1, (1, 1), ir.Semantics(ir.Operation.RETURN, "ret"), (), ())
+    body = lir.LirBody("caller", 0, (lir.LirBlock(0, (call, ret)),), {}, {})
+    procedure = masm.Procedure("caller", False, False, body, 0, {0: masm.Callee("helper", False)})
+    module = masm.Module("CODE", {}, (("helper", "near"),), (), (), (procedure,))
+    estimate, status = quality._dynamic_operations(module, procedure, 0)
+    assert estimate is None
+    assert status == "unmeasured: call or interrupt hides executed work"
+
+
+def test_dynamic_estimate_refuses_an_unmapped_block(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A CFG block absent from the byte layout must not silently cost zero."""
+    from qbopt.model import lir
+    from qbopt.backend import masm
+
+    body = lir.LirBody("lost", 7, (lir.LirBlock(7, ()),), {}, {})
+    procedure = masm.Procedure("lost", False, False, body, 0, {})
+    module = masm.Module("CODE", {}, (), (), (), (procedure,))
+    monkeypatch.setattr(quality, "_image", lambda *_args: (b"\x90", {}))
+    with pytest.raises(quality.InvalidMeasurement, match="no label for block 0x7"):
+        quality._dynamic_operations(module, procedure, 0)

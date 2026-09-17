@@ -24,8 +24,13 @@ must return `0xcbf43926` for a zero salt.
   makes it `null`; it is never silently assigned zero.
 - loads, stores, branches, calls, address calculations, peak live values, and
   allocator spill markers are structural counts.  They are not elapsed time.
-- dynamic operations and rematerializations remain explicitly unmeasured until
-  the pipeline can supply complete evidence.  A `null` here is not zero.
+- rematerializations count the final allocated-LIR instructions that rebuild a
+  value at its use instead of keeping it live or assigning a spill slot.
+- dynamic operations are a profile-free CFG estimate: ordinary branches divide
+  evenly and natural loops use the allocator's ten-iteration convention. Calls,
+  interrupts, repeated instructions, irreducible control flow, and nonterminating
+  estimates remain explicitly unmeasured because their hidden work is unbounded.
+  A `null` here is not zero.
 
 The report always writes raw qbopt assembly.  With `--references`, it also asks
 Clang and `i686-elf-gcc` for freestanding i386 `-O3` assembly with SSE and

@@ -26,6 +26,7 @@ from qbopt.model import lir
 from qbopt.model import mir
 from qbopt.backend import masm
 from qbopt.cycles import cycles
+from qbopt.analysis import loops
 from qbopt.backend import allocate
 from qbopt.backend import omfwrite
 from qbopt.backend import cpu as targets
@@ -143,8 +144,8 @@ def _revision() -> str | None:
     return done.stdout.strip() if done.returncode == 0 else None
 
 
-def _blob(module: masm.Module, procedure: masm.Procedure, number: int) -> bytes:
-    """The exact selected bytes, with relocation fields normalized to zero."""
+def _image(module: masm.Module, procedure: masm.Procedure, number: int) -> tuple[bytes, dict[str, int]]:
+    """The exact selected bytes and labels, with relocations normalized to zero."""
     encoded = []
     for item in masm.listing(procedure, number):
         encoded.extend(omfwrite._items(item, module.names, number))
@@ -160,7 +161,12 @@ def _blob(module: masm.Module, procedure: masm.Procedure, number: int) -> bytes:
                 out.extend(omfwrite._jump(name, labels[label], len(out), long).code)
             case omfwrite.Near():
                 out.extend(b"\xe8\x00\x00")
-    return bytes(out)
+    return bytes(out), labels
+
+
+def _blob(module: masm.Module, procedure: masm.Procedure, number: int) -> bytes:
+    """The exact selected bytes, with relocation fields normalized to zero."""
+    return _image(module, procedure, number)[0]
 
 
 def _rows(code: bytes) -> list[tuple[str, str, str]]:
@@ -203,6 +209,95 @@ def _memory(rows: list[tuple[str, str, str]]) -> tuple[int, int]:
     return loads, stores
 
 
+def _transitions(body: lir.LirBody) -> dict[int, dict[int, float]]:
+    """Estimated successor probabilities from CFG shape alone.
+
+    Ordinary alternatives divide evenly.  A branch that either remains in a
+    natural loop or exits it assigns nine tenths to continuing: the same
+    profile-free ten-iteration convention used by spill weighting.
+    """
+    known = {block.at for block in body.blocks}
+    natural = loops.loops(body.blocks, body.entry)
+    out: dict[int, dict[int, float]] = {}
+    for block in body.blocks:
+        successors = tuple(one for one in block.succ if one in known)
+        if not successors:
+            out[block.at] = {}
+            continue
+        split = None
+        for loop in natural:
+            if block.at not in loop.body:
+                continue
+            inside = tuple(one for one in successors if one in loop.body)
+            outside = tuple(one for one in successors if one not in loop.body)
+            if inside and outside:
+                split = {
+                    **{one: 0.9 / len(inside) for one in inside},
+                    **{one: 0.1 / len(outside) for one in outside},
+                }
+                break
+        out[block.at] = split or {one: 1.0 / len(successors) for one in successors}
+    return out
+
+
+def _frequencies(body: lir.LirBody) -> dict[int, float] | None:
+    """Profile-free expected executions of each block per function entry."""
+    if loops.irreducible(body.blocks, body.entry):
+        return None
+    transitions = _transitions(body)
+    frequency = dict.fromkeys(transitions, 0.0)
+    for _iteration in range(1000):
+        updated = dict.fromkeys(transitions, 0.0)
+        if body.entry in updated:
+            updated[body.entry] = 1.0
+        for source, successors in transitions.items():
+            for destination, probability in successors.items():
+                updated[destination] += frequency[source] * probability
+        if max((abs(updated[at] - frequency[at]) for at in updated), default=0.0) < 1e-9:
+            return {at: round(value, 9) for at, value in updated.items()}
+        frequency = updated
+    return None
+
+
+def _block_instruction_counts(
+    module: masm.Module, procedure: masm.Procedure, number: int
+) -> tuple[int, dict[int, int], list[tuple[str, str, str]]]:
+    """Exact emitted instruction counts split at the final block labels."""
+    code, labels = _image(module, procedure, number)
+    rows = _rows(code)
+    starts = []
+    for block in procedure.body.blocks:
+        name = masm.label(number, block.at)
+        if name not in labels:
+            raise InvalidMeasurement(f"emitted function has no label for block {block.at:#x}")
+        starts.append((block.at, labels[name]))
+    prologue_end = starts[0][1] if starts else len(code)
+    prologue = len(_rows(code[:prologue_end])) if prologue_end else 0
+    counts = {}
+    for index, (at, start) in enumerate(starts):
+        end = starts[index + 1][1] if index + 1 < len(starts) else len(code)
+        counts[at] = len(_rows(code[start:end])) if end > start else 0
+    if prologue + sum(counts.values()) != len(rows):
+        raise InvalidMeasurement("block instruction extents do not cover the emitted function exactly once")
+    return prologue, counts, rows
+
+
+def _dynamic_operations(
+    module: masm.Module, procedure: masm.Procedure, number: int
+) -> tuple[float | None, str]:
+    """Estimate executed instructions only when every visible cost is bounded."""
+    prologue, counts, rows = _block_instruction_counts(module, procedure, number)
+    if any(mnemonic in {"call", "int", "into"} for _raw, mnemonic, _operands in rows):
+        return None, "unmeasured: call or interrupt hides executed work"
+    if any(mnemonic.startswith("rep") for _raw, mnemonic, _operands in rows):
+        return None, "unmeasured: repeated instruction has no audited count"
+    frequencies = _frequencies(procedure.body)
+    if frequencies is None:
+        return None, "unmeasured: control flow has no finite profile-free estimate"
+    estimate = round(float(prologue) + sum(counts[at] * frequencies.get(at, 0.0) for at in counts), 6)
+    return estimate, "estimated: CFG branches and ten iterations per natural loop"
+
+
 def _cost(rows: list[tuple[str, str, str]], target: targets.Profile) -> float | None:
     if target.name == "386":
         total = 0
@@ -222,13 +317,14 @@ def function_report(module: masm.Module, procedure: masm.Procedure, number: int,
     rows = _rows(code)
     loads, stores = _memory(rows)
     instructions = tuple(one for block in procedure.body.blocks for one in block.insns)
+    dynamic_operations, dynamic_status = _dynamic_operations(module, procedure, number)
     return {
         "name": procedure.name,
         "bytes": len(code),
         "instructions": len(rows),
         "weighted_cost": _cost(rows, target),
-        "dynamic_operations": None,
-        "dynamic_status": "unmeasured: no audited trip/profile weights",
+        "dynamic_operations": dynamic_operations,
+        "dynamic_status": dynamic_status,
         "loads": loads,
         "stores": stores,
         "branches": sum(mnemonic.startswith("j") for _raw, mnemonic, _operands in rows),
