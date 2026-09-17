@@ -176,3 +176,13 @@ does not itself remove `r_walk`'s word-offset recurrence: that recurrence is
 the legal fallback for `i * 2` under 16-bit addressing.  The next iteration
 still needs pressure-aware selection between that register recurrence and a
 stack/recomputed offset, with BCC's medium-model listing as the ABI reference.
+
+### 10. Address-form validation listing — 2026-09-18
+
+The clean paired `r_walk` build at qbopt `a8eb96e` keeps the same qbopt listing
+hash, `ccbacccfc7ff5f46553d0e8b41dd78652f7bb7ad8ad7aa486dc629c92511badc`.
+That is the expected result for this loop: `i * 2` has no legal scaled
+16-bit address form, so the existing strength reducer already chose its
+register-recurrence fallback.  The profile correction prevents future MIR
+formula selection from incorrectly pricing a SIB-scale option; it is not
+claimed as a performance change here.
