@@ -310,3 +310,20 @@ pressure plan: retain the valuable invariant base *and* split/relocate a
 specific short competing range as one candidate, then compare its complete
 traffic and copy cost against the original assignment.  It cannot be an
 after-the-fact split of whichever range happened to be allocated.
+
+### 17. Fixed-register allocation invariant — 2026-09-18
+
+Before evaluating a joint pressure plan, allocation now distinguishes a hard
+register fact from an ordinary spill candidate.  A fail-first allocator
+regression constructs two simultaneously live values both fixed to DX.  The
+old greedy path allocated the first and returned the second in `spilled`;
+spilling it would replace the hard requirement with a reload free to use any
+register.  That is neither a valid allocation nor a valid recovery.
+
+`allocate()` now reports that state as `Unplaced`.  The existing constrained
+occurrence regression continues to prove that valid short fixed occurrences
+are retained.  This is phase 4 correctness infrastructure, not a QCport
+pressure solution: no whole-loop owner was pinned and the `r_walk` listing is
+intentionally unchanged.  With impossible hard constraints no longer able to
+masquerade as a spill plan, the next iteration can evaluate an explicit,
+joint invariant-base/competing-range candidate honestly.

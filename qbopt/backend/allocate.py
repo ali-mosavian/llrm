@@ -508,6 +508,16 @@ def allocate(
         # Splitting is a rewrite of the body, not a decision about this
         # assignment, so it is the caller's -- RegAlloc.transform runs
         # splitkit and asks again. Here it means "no register".
+        #
+        # A pin is not a preference.  `constrain` normally mints a short
+        # value for a hard occurrence, but callers may also pin a whole
+        # interval.  If two such intervals overlap in the same register,
+        # sending either one through the spiller loses the requirement: its
+        # reload is free to land in a different register.  There is no
+        # legal allocation in that case, so report it instead of returning
+        # an assignment whose `spilled` set contradicts `where`.
+        if value in fixed:
+            raise Unplaced(f"value#{value} cannot be placed in fixed {fixed[value]!r}")
         if mine.weight == float("inf"):
             # It cannot be spilled and it cannot be placed. Saying so is
             # the only honest answer: a reload with nowhere to go means the

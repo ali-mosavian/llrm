@@ -770,3 +770,23 @@ def test_a_value_minted_for_a_fixed_register_is_not_spilled_out_of_it() -> None:
         where = last[-1].where
         wrong = {one: want for one, want in minted.items() if where.get(one) is not want}
         assert not wrong, f"{name}: {sorted(wrong)} were minted for a register and did not get it"
+
+
+def test_conflicting_hard_register_assignments_are_unplaceable_not_spills() -> None:
+    """Two simultaneous DX requirements must fail honestly.
+
+    A fixed assignment is a hardware fact, rather than an allocation
+    preference.  Greedy allocation used to reserve DX for the first value,
+    then quietly return the second in ``spilled`` when DX was still occupied.
+    The spiller would reload it into an arbitrary register, turning an
+    impossible encoding requirement into malformed code instead of naming the
+    impossible allocation.
+    """
+    from qbopt.backend import allocate
+
+    first = _mov(1, 1, 0)
+    second = _mov(2, 2, 2)
+    both = _shl(1, 2, 4)
+
+    with pytest.raises(allocate.Unplaced, match=r"value#2 cannot be placed"):
+        allocate.allocate(_one_block(first, second, both), pinned={1: Register.DX, 2: Register.DX})
