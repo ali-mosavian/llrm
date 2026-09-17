@@ -862,6 +862,28 @@ def assemble(
                 return f"{op.at:#06x}: the restore idiom did not come back its own length"
             out += made.code
             continue
+        # The length pass asks whether a recognized source idiom has a
+        # selected replacement before it considers carrying source bytes.
+        # Emission must ask in the same order.  CPI4 is represented by a
+        # source-backed operation whose ordinary ``what`` is deliberately
+        # absent; carrying its five-byte call here after measuring the
+        # twelve-byte comparison sequence shifted every later symbol and
+        # fixup by seven bytes while still reporting successful emission.
+        folded = _folded_site(op, found, source)
+        chosen = _selected_divide(op, found, assignment, origin, fields, source)
+        if isinstance(chosen, str):
+            return chosen
+        if chosen is None and isinstance(folded, str):
+            return folded
+        if folded is not None or chosen is not None:
+            made = chosen[0] if chosen is not None else _absorbed(*folded)
+            if made is None or len(made.code) != lengths[index]:
+                return f"{op.at:#06x}: the absorbed call changed length between the two passes"
+            binds = chosen[1] if chosen is not None else _fields_in(found, op, fields, source)
+            for where, field in zip(made.places, binds, strict=False):
+                relocations.append((len(out) + where, field))
+            out += made.code
+            continue
         # A barrier is an instruction ir.py models nothing about --
         # `movsx eax,bx` is one -- so there is nothing to select from and
         # its own bytes are the only right answer. Carried, unless it names
@@ -881,21 +903,6 @@ def assemble(
         # separate facts: retaining the former is how the final accounting
         # proves those bytes were deliberately removed.
         if _semantics(op) is None and op.node is None and op.kind is mir.Kind.NOTHING:
-            continue
-        folded = _folded_site(op, found, source)
-        chosen = _selected_divide(op, found, assignment, origin, fields, source)
-        if isinstance(chosen, str):
-            return chosen
-        if chosen is None and isinstance(folded, str):
-            return folded
-        if folded is not None or chosen is not None:
-            made = chosen[0] if chosen is not None else _absorbed(*folded)
-            if made is None or len(made.code) != lengths[index]:
-                return f"{op.at:#06x}: the absorbed call changed length between the two passes"
-            binds = chosen[1] if chosen is not None else _fields_in(found, op, fields, source)
-            for where, field in zip(made.places, binds, strict=False):
-                relocations.append((len(out) + where, field))
-            out += made.code
             continue
         before = _semantics(op)
         if before is None:
@@ -972,6 +979,9 @@ def assemble(
             explained.update(one for one in known if lo <= one < hi)
             if landed is not None:
                 folded.update({one: landed for one in range(lo, hi) if one not in moved})
+    measured = sum(lengths)
+    if len(out) != measured:
+        return f"layout measured {measured} emitted bytes but produced {len(out)}"
     return Laid(bytes(out), moved, tuple(relocations), frozenset(explained - kept_fields), folded, tuple(symbols))
 
 

@@ -53,3 +53,22 @@ def test_an_unoptimised_rebuild_keeps_bcs_x87_stores(path: Path) -> None:
     assert all(other[0] in _MATERIALISED for other in remaining)
     spent = [one for one in after if one[0] not in _MATERIALISED]
     assert len(spent) <= len([one for one in before if one[0] not in _MATERIALISED])
+
+
+def test_nbodys_folded_comparison_does_not_shift_a_later_public() -> None:
+    """NBODYS put PITSNAP seven bytes inside a call after rebuilding.
+
+    The sizing pass selected CPI4's twelve-byte replacement while emission
+    copied its five-byte source call. Every later public and fixup was then
+    placed seven bytes away from the bytes actually emitted.
+    """
+    from qbopt.frontend.blocks import code_map
+    from qbopt.objectfile import module, omf
+
+    data = Path("fixtures/bench/nbodys-v-g3.obj").read_bytes()
+    rebuilt = wholeseg.emitted(data, optimise=False)
+    assert rebuilt.outcome is wholeseg.Emission.LIR, rebuilt.reason
+    found = module.of(omf.parse(rebuilt.data))
+    mapped = code_map(found)
+    assert not isinstance(mapped, str), mapped
+    assert found.publics and found.publics <= mapped.starts
