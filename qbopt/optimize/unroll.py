@@ -191,6 +191,7 @@ def _expanded(body, loop, header, latch, bridge_ops, latch_ops, exit_at, entry, 
     next_variable = max(value.variable for value in values) + 1
     swap = {phi.result.id: phi.incoming[entry] for phi in header.phis}
     initial = dict(swap)
+    copies = []
 
     def clone(op, owns):
         nonlocal next_id, next_variable
@@ -201,6 +202,7 @@ def _expanded(body, loop, header, latch, bridge_ops, latch_ops, exit_at, entry, 
             next_id += 1
             next_variable += 1
             defined[value.id] = fresh
+        copies.append(defined)
         swap.update(defined)
         results = tuple(replace(arg, value=defined.get(arg.value.id, arg.value))
                         if isinstance(arg, mir.Held) else arg for arg in read.results)
@@ -256,4 +258,11 @@ def _expanded(body, loop, header, latch, bridge_ops, latch_ops, exit_at, entry, 
                    if exit_at in dominators.get(block.at, ()) else block.ops)
             block = replace(block, ops=ops, phis=phis)
         changed.append(block)
-    return replace(body, blocks=tuple(changed), repetitions=(*body.repetitions, (latch.at, count)))
+    pointer_values, pointer_seeds = ssa.cloned_pointer_metadata(body, iter(copies))
+    return replace(
+        body,
+        blocks=tuple(changed),
+        repetitions=(*body.repetitions, (latch.at, count)),
+        pointer_values=pointer_values,
+        pointer_seeds=pointer_seeds,
+    )

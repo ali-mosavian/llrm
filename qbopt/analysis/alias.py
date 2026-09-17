@@ -368,7 +368,15 @@ def _direct(op: mir.Op, values: dict[mir.Value, memory.Provenance]) -> memory.Pr
             continue
         fact = values[pointer.value]
         if isinstance(amount, mir.Const):
-            delta = amount.n if op.kind is not mir.Kind.SUB else -amount.n
+            # Pointer displacements are ptrdiff values represented in the
+            # operation's fixed-width integer.  Folding -16 into a 16-bit
+            # ADD produces 65520; treating that spelling as a positive byte
+            # offset loses exact provenance for cancellation chains such as
+            # ``base + 16 - 16``.
+            sign = 1 << (amount.width * 8 - 1)
+            delta = ((amount.n & ((sign << 1) - 1)) ^ sign) - sign
+            if op.kind is mir.Kind.SUB:
+                delta = -delta
             return fact.shifted(delta)
         # Arithmetic by an unknown integer remains within each known object,
         # but no longer has a byte offset precise enough to compare.
@@ -419,8 +427,14 @@ def points_to(
             for op in block.ops:
                 direct = _direct(op, values)
                 for result in op.defines:
-                    if result in pointer_values and result not in body.pointer_seeds and direct is not None:
+                    # ADDRESS and arithmetic derived from an already-known
+                    # pointer prove their own pointer nature. Requiring the
+                    # frontend side table to redundantly list every COPY/ADD
+                    # result loses facts as soon as a MIR pass synthesizes or
+                    # reparents one of those otherwise ordinary values.
+                    if result not in body.pointer_seeds and direct is not None:
                         values[result] = direct
+                        pointer_values.add(result)
                 if op.loads and len(op.defines) == 1 and op.defines[0] in pointer_values:
                     facts = [state.get(_cell_key(ref)) for ref in op.loads]
                     loaded = _union(facts)

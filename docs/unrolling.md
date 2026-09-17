@@ -190,12 +190,33 @@ operation must itself be deleted before its parent can be deleted.  The focused
 regression preserves the root of a live derived value, while the existing
 complete-chain regression still folds `&x[4] - 16` into one BP displacement.
 
-The raw matmul comparison also identifies the next independent mechanism:
-after specialization, all 64 stores to `b` are constants, but SROA/promotion ran
-before the loop was specialized and therefore cannot forward those cells into
-the dot products.  The current output still contains 64 multiplies.  Re-running
-aggregate scalarization after structural specialization is the next step; this
-measurement is not presented as GCC/Clang parity.
+The raw matmul comparison then identified a separate phase-ordering boundary:
+after specialization, all 64 stores to `b` are constants, but SROA/promotion had
+already run and therefore could not forward those cells into the dot products.
+SROA now runs once on each structural candidate before its ordinary scalar fixed
+point.  It remains outside the repeated scalar rounds, which avoids paying for
+global pointer/range analysis after every local simplification.
+
+That boundary exposed three pointer-provenance defects which now have focused
+fail-first regressions.  SSA repair and hoist reparenting renamed operations but
+left `pointer_values` and `pointer_seeds` naming discarded values; CFG peeling
+and straight-line expansion did the same for fresh clones.  Finally, alias
+analysis computed provenance for `pointer + constant` but discarded it unless
+the frontend redundantly classified every intermediate result.  Metadata is now
+renamed with values, clones inherit it, and an operation derived from a proven
+pointer propagates its own fact.  A 16-bit folded displacement is interpreted at
+its MIR width, so `base + 16 + 65520` is the same exact object position as
+`base`, not an out-of-bounds 65,536-byte advance.
+
+The adjacent stage dump now shows all 64 matrix loads as exact scalar leaves at
+`peel-sroa`, where none were exact before.  The emitted matmul acceptance test,
+which failed first with 65 `imul` instructions, now passes its fewer-than-16
+gate while retaining the no-division, branch-count, exposed-input, and dynamic-
+work checks.  This larger scalar candidate takes about 172 seconds to compile on
+the development host versus roughly 90 seconds before the new leaves were
+exposed; that compile-time cost is recorded as a remaining optimization problem.
+A fresh full quality report and DOS known-answer run are the next measurement,
+so this checkpoint does not claim a final elapsed-time or GCC/Clang parity result.
 
 Larger-than-four-trip loops may now expand within that same operation budget
 when every extended floating result in the expanded loop is proven exact.

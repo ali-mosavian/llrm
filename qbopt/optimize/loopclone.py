@@ -153,4 +153,11 @@ def peeled(body: mir.MirBody, loop: loops.Loop, count: int) -> mir.MirBody | Non
             phis.append(replace(phi, incoming=incoming))
         changed.append(replace(block, phis=tuple(phis)))
 
-    return replace(body, blocks=(*changed, *cloned), cloned=True)
+    pointer_values, pointer_seeds = ssa.cloned_pointer_metadata(body, iter(copies))
+    return replace(
+        body,
+        blocks=(*changed, *cloned),
+        cloned=True,
+        pointer_values=pointer_values,
+        pointer_seeds=pointer_seeds,
+    )

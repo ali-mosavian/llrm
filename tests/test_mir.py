@@ -122,6 +122,45 @@ def test_resolving_segld_renames_memory_operands_with_their_accesses() -> None:
     assert checked
 
 
+def test_resolving_renames_pointer_metadata_with_its_values() -> None:
+    """Matmul's frame address became an ordinary integer after SSA repair.
+
+    The operations were renamed, but ``pointer_values`` and ``pointer_seeds``
+    still named the discarded SSA value.  Alias analysis then lost every
+    exact field reached through the repaired address chain.
+    """
+    from qbopt.model import ir
+    from qbopt.model import memory
+
+    pointer = mir.Value(99, 0, variable=7, version=4)
+    object_ = memory.Object(memory.Kind.FRAME, (3, -16, -4), extent=12)
+    provenance = memory.Provenance.one(object_, 0, 1)
+    address = mir.Op(
+        0,
+        ir.Operation.ADDRESS,
+        "lea",
+        (pointer,),
+        (),
+        kind=mir.Kind.ADDRESS,
+        args=(mir.FrameAddress(-16, 2, (-16, -4)),),
+        results=(mir.Held(pointer, 2),),
+    )
+    body = mir.MirBody(
+        0,
+        (mir.MirBlock(0, (), (address,), ()),),
+        pointer_values=frozenset({pointer}),
+        pointer_seeds={pointer: provenance},
+    )
+
+    result = mir.resolved(body)
+
+    assert not isinstance(result, str)
+    renamed = result.blocks[0].ops[0].defines[0]
+    assert renamed != pointer
+    assert result.pointer_values == frozenset({renamed})
+    assert result.pointer_seeds == {renamed: provenance}
+
+
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_arithmetic_has_only_operand_dependencies(tag: str) -> None:
     """nbody refused emission: an absorbed multiply read an undefined condition."""

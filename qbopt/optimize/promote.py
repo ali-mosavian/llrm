@@ -241,6 +241,46 @@ def _bounded_ref(ref: mir.MemRef, known: dict) -> mir.MemRef:
     return replace(ref, provenance=provenance)
 
 
+def _pointed_ref(
+    ref: mir.MemRef,
+    pointers: dict[mir.Value, memory.Provenance],
+) -> mir.MemRef:
+    """Give an exact object-relative pointer access its scalar leaf.
+
+    A pointer value is an address, not an integer range.  The alias analysis
+    already follows frame addresses, copies and constant byte offsets while
+    retaining canonical object identity.  Use that fact only when it denotes
+    one exact byte position inside the same bounded object named by the
+    reference's whole-object provenance.
+    """
+    if ref.base is None or ref.provenance is None or len(ref.provenance.slices) != 1:
+        return ref
+    source = next(iter(ref.provenance.slices))
+    extent = source.object.extent
+    if extent is None or source.low > 0 or source.high < extent:
+        return ref
+    provenance = pointers.get(ref.base)
+    if provenance is None or len(provenance.slices) != 1:
+        return ref
+    address = next(iter(provenance.slices))
+    if (
+        address.object != source.object
+        or address.stride != 1
+        or address.width != 1
+        or address.high - address.low != 1
+    ):
+        return ref
+    low = address.low + (0 if ref.addr is None else ref.addr.disp)
+    high = low + ref.width
+    if not 0 <= low < high <= extent:
+        return ref
+    exact = memory.Provenance(
+        frozenset({memory.Slice(source.object, low, high)}),
+        ref.provenance.restrict,
+    )
+    return replace(ref, provenance=exact)
+
+
 def _bounded_leaves(body: MirBody) -> MirBody:
     """Materialize exact singleton proofs on every indexed-ref occurrence.
 
@@ -249,13 +289,15 @@ def _bounded_leaves(body: MirBody) -> MirBody:
     expression to a fixed point; running the much heavier loop-range analysis
     here more than doubled compile time and produced no additional leaf.
     """
+    from qbopt.analysis import alias
     from qbopt.analysis import ranges
 
     constants = ranges.singletons(body)
+    pointers = alias.points_to(body).values
     blocks = []
     for block in body.blocks:
         def reference(ref: mir.MemRef) -> mir.MemRef:
-            return _bounded_ref(ref, constants)
+            return _pointed_ref(_bounded_ref(ref, constants), pointers)
 
         def operand(arg: mir.Arg) -> mir.Arg:
             return mir.Cell(reference(arg.ref)) if isinstance(arg, mir.Cell) else arg

@@ -2328,6 +2328,8 @@ def _reparented(body: MirBody, crossed: set) -> MirBody:
             )
             for block in body.blocks
         ),
+        pointer_values=frozenset(value(one) for one in body.pointer_values),
+        pointer_seeds={value(one): provenance for one, provenance in body.pointer_seeds.items()},
     )
 
 
@@ -2772,20 +2774,26 @@ def applied(
     if only in {"forward", "drop_loads", "reuse", "cse"}:
         only = "gvn"
     passes = [one for one in pipeline(where, **wanted) if only is None or one.name == only]
-    # SROA establishes the scalar memory shape on the original body.  It is a
-    # boundary pass, not a member of the scalar fixed point: rerunning global
-    # range analysis after every scalar round made the C corpus take four
-    # times as long while producing identical code.
+    # SROA establishes the scalar memory shape at structural boundaries.  It
+    # is not a member of the scalar fixed point: rerunning global range
+    # analysis after every scalar round made the C corpus take four times as
+    # long while producing identical code.  Exact loop cloning can expose new
+    # fixed aggregate leaves, though, so each structural candidate crosses
+    # this boundary once before its ordinary scalar convergence.
     boundary = [one for one in passes if isinstance(one, promote.Sroa)]
     passes = [one for one in passes if not isinstance(one, promote.Sroa)]
     unrollers = [one for one in passes if isinstance(one, unroll.Unroll)]
     passes = [one for one in passes if not isinstance(one, unroll.Unroll)]
     peelers = [one for one in passes if isinstance(one, peel.Peel)]
     passes = [one for one in passes if not isinstance(one, peel.Peel)]
-    for one in boundary:
-        body = one.transform(body)
-        if watch is not None:
-            watch(f"r01-{one.name}", body)
+    def scalarized(state: MirBody, stage: str) -> MirBody:
+        for one in boundary:
+            state = one.transform(state)
+            if watch is not None:
+                watch(f"{stage}-{one.name}", state)
+        return state
+
+    body = scalarized(body, "r01")
     if only is not None and boundary:
         return body
     if only is not None and unrollers:
@@ -2820,7 +2828,7 @@ def applied(
                 state = unroll.optimized(
                     state,
                     where,
-                    optimize=lambda candidate: fixed(candidate),
+                    optimize=lambda candidate: fixed(scalarized(candidate, "unroll")),
                     watch=watch,
                 )
             if only is not None or state == before:
@@ -2835,7 +2843,9 @@ def applied(
         body = peel.optimized(
             body,
             where,
-            optimize=lambda candidate: fixed(candidate, consider_unroll=bool(unrollers)),
+            optimize=lambda candidate: fixed(
+                scalarized(candidate, "peel"), consider_unroll=bool(unrollers)
+            ),
             watch=watch,
         )
     if unswitch_:

@@ -3,6 +3,7 @@ from collections.abc import Iterator
 
 from qbopt.model import ir
 from qbopt.model import mir
+from qbopt.model import memory
 from qbopt.model.mir import Op
 from qbopt.model.mir import MirBody
 
@@ -87,6 +88,30 @@ def substituted(op: Op, swap: dict[int, mir.Value]) -> Op:
         stores=tuple(reference(ref) for ref in op.stores),
         merges={provider(source, swap): mask for source, mask in op.merges.items()},
     )
+
+
+def cloned_pointer_metadata(
+    body: MirBody,
+    mappings: Iterator[dict[int, mir.Value]],
+) -> tuple[frozenset[mir.Value], dict[mir.Value, "memory.Provenance"]]:
+    """Carry semantic pointer facts onto fresh SSA definitions.
+
+    Structural transformations clone values by id.  Pointer classification
+    and frontend-established object roots are properties of those values,
+    not of their old numeric ids, so every clone needs the corresponding
+    side-table entry before alias analysis runs again.
+    """
+    pointer_ids = {value.id for value in body.pointer_values}
+    seeds = {value.id: provenance for value, provenance in body.pointer_seeds.items()}
+    pointer_values = set(body.pointer_values)
+    pointer_seeds = dict(body.pointer_seeds)
+    for mapping in mappings:
+        for original, cloned in mapping.items():
+            if original in pointer_ids:
+                pointer_values.add(cloned)
+            if original in seeds:
+                pointer_seeds[cloned] = seeds[original]
+    return frozenset(pointer_values), pointer_seeds
 
 
 def renumbered(body: MirBody, variable: int) -> MirBody:

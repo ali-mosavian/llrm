@@ -2361,10 +2361,20 @@ def resolved(body: MirBody, calls: dict[int, str] | None = None) -> MirBody | st
     namer = _Renamer()
     phis: dict[int, dict[int, Phi]] = {block.at: {} for block in blocks}
     out: dict[int, list[Op]] = {block.at: [] for block in blocks}
+    renamed: dict[Value, set[Value]] = {}
+
+    def remember(old: Value | None, new: Value | None) -> None:
+        if old is not None and new is not None:
+            renamed.setdefault(old, set()).add(new)
+
     flagged = {value.variable for block in blocks for op in block.ops for value in op.defines if value.flags}
     for block in blocks:
         for variable in sorted(needed[block.at], key=lambda one: (one not in flagged, one)):
             phis[block.at][variable] = Phi(namer.fresh(variable, block.at, variable in flagged), {})
+        for old in block.phis:
+            made = phis[block.at].get(old.result.variable)
+            if made is not None:
+                remember(old.result, made.result)
 
     def rename(at: int) -> None:
         block = by_at[at]
@@ -2376,9 +2386,16 @@ def resolved(body: MirBody, calls: dict[int, str] | None = None) -> MirBody | st
         for op in block.ops:
             used = tuple(namer.current(one, start) for one in op.uses)
             exits = tuple(namer.current(one, start) for one in op.exits)
+            for old, new in zip(op.uses, used, strict=True):
+                remember(old, new)
+            for old, new in zip(op.exits, exits, strict=True):
+                remember(old, new)
             swap = {one.variable: now for one, now in zip(op.uses, used)}
             loads = tuple(_rehomed(one, namer, start) for one in op.loads)
             stores = tuple(_rehomed(one, namer, start) for one in op.stores)
+            for old, new in zip((*op.loads, *op.stores), (*loads, *stores), strict=True):
+                remember(old.base, new.base)
+                remember(old.segment, new.segment)
             refs = dict(zip((*op.loads, *op.stores), (*loads, *stores)))
             fresh = []
             for one in op.defines:
@@ -2386,6 +2403,7 @@ def resolved(body: MirBody, calls: dict[int, str] | None = None) -> MirBody | st
                 namer.stack.setdefault(one.variable, []).append(value)
                 pushed.append(one.variable)
                 fresh.append(value)
+                remember(one, value)
             made = {one.variable: now for one, now in zip(op.defines, fresh)}
             out[at].append(
                 replace(
@@ -2422,9 +2440,7 @@ def resolved(body: MirBody, calls: dict[int, str] | None = None) -> MirBody | st
             namer.stack[variable].pop()
 
     rename(start)
-    return MirBody(
-        entry=start,
-        blocks=tuple(
+    resolved_blocks = tuple(
             MirBlock(
                 block.at,
                 tuple(phis[block.at].values()),
@@ -2432,13 +2448,31 @@ def resolved(body: MirBody, calls: dict[int, str] | None = None) -> MirBody | st
                 tuple(one for one in block.succ if one in reachable),
             )
             for block in blocks
-        ),
+        )
+    pointer_values = frozenset(
+        new
+        for old in body.pointer_values
+        for new in renamed.get(old, ())
+    )
+    pointer_seeds: dict[Value, memory.Provenance] = {}
+    conflicting: set[Value] = set()
+    for old, provenance in body.pointer_seeds.items():
+        for new in renamed.get(old, ()):
+            if new in pointer_seeds and pointer_seeds[new] != provenance:
+                conflicting.add(new)
+            else:
+                pointer_seeds[new] = provenance
+    for value in conflicting:
+        del pointer_seeds[value]
+    return MirBody(
+        entry=start,
+        blocks=resolved_blocks,
         initial=body.initial,
         repetitions=body.repetitions,
         cloned=body.cloned,
         sealed=body.sealed,
-        pointer_values=body.pointer_values,
-        pointer_seeds=body.pointer_seeds,
+        pointer_values=pointer_values | frozenset(pointer_seeds),
+        pointer_seeds=pointer_seeds,
     )
 
 

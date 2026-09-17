@@ -414,6 +414,36 @@ def test_sroa_runs_once_before_the_scalar_fixed_point(monkeypatch: pytest.Monkey
     assert calls == 1
 
 
+def test_sroa_reruns_once_after_structural_specialization(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Matmul exposed 64 constant aggregate leaves only after exact-loop peeling."""
+    from dataclasses import replace
+
+    from qbopt.model.passes import Where
+    from qbopt.optimize import peel
+    from qbopt.optimize import promote
+
+    seen = []
+    scalarizer = promote.Sroa(Where())
+    structural = peel.Peel(Where())
+
+    def sroa(body: mir.MirBody) -> mir.MirBody:
+        seen.append(body.cloned)
+        return body
+
+    def specialized(body, _where, *, optimize, watch=None):
+        return optimize(replace(body, cloned=True))
+
+    monkeypatch.setattr(scalarizer, "transform", sroa)
+    monkeypatch.setattr(peel, "optimized", specialized)
+    monkeypatch.setattr(transform, "pipeline", lambda *_args, **_kwargs: [scalarizer, structural])
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (), ()),))
+
+    result = transform.applied(body, frozenset(), {})
+
+    assert result.cloned
+    assert seen == [False, True]
+
+
 def test_the_rename_alone_is_what_was_unsound() -> None:
     """The concrete fact the chain and the restore exist to handle.
 
@@ -1281,6 +1311,44 @@ def test_cse_reuses_one_frame_object_address() -> None:
     assert sum(op.kind is mir.Kind.ADDRESS for op in done.blocks[0].ops) == 1
     assert done.blocks[0].ops[-1].uses == (first,)
     assert done.blocks[0].ops[-1].args == (mir.Held(first, 2),)
+
+
+def test_reparenting_a_hoisted_pointer_keeps_its_object_facts() -> None:
+    """Matmul's hoisted local-array address stopped being a pointer.
+
+    Hoisting gives a loop-crossing value a fresh MIR variable.  The pointer
+    value and its exact frontend seed must be renamed by that same semantic
+    operation or later alias analysis sees the address as an integer.
+    """
+    from qbopt.model import ir
+    from qbopt.model import memory
+
+    pointer = mir.Value(1, 0, variable=3, version=1)
+    object_ = memory.Object(memory.Kind.FRAME, (5, -16, -4), extent=12)
+    provenance = memory.Provenance.one(object_, 0, 1)
+    address = mir.Op(
+        0,
+        ir.Operation.ADDRESS,
+        "lea",
+        (pointer,),
+        (),
+        kind=mir.Kind.ADDRESS,
+        args=(mir.FrameAddress(-16, 2, (-16, -4)),),
+        results=(mir.Held(pointer, 2),),
+    )
+    body = mir.MirBody(
+        0,
+        (mir.MirBlock(0, (), (address,), ()),),
+        pointer_values=frozenset({pointer}),
+        pointer_seeds={pointer: provenance},
+    )
+
+    result = transform._reparented(body, {pointer})
+
+    renamed = result.blocks[0].ops[0].defines[0]
+    assert renamed.variable != pointer.variable
+    assert result.pointer_values == frozenset({renamed})
+    assert result.pointer_seeds == {renamed: provenance}
 
 
 def test_cse_refuses_an_operand_that_is_only_half_its_value() -> None:

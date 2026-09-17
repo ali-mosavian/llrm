@@ -305,6 +305,113 @@ def test_sroa_uses_a_singleton_index_range_as_an_exact_leaf() -> None:
     assert promote._bounded_ref(one, {first: ranges.Interval(12, 12, 2)}).provenance == whole
 
 
+def test_sroa_uses_exact_frame_pointer_provenance_as_a_leaf() -> None:
+    """Matmul retained 64 products after peeling made every array offset constant.
+
+    The cloned initializer reaches each local matrix field through a
+    ``FrameAddress + constant`` pointer chain.  Those addresses are not
+    integer constants, but pointer analysis proves an exact byte position in
+    one bounded frame object; stores and loads through equivalent chains must
+    therefore become the same scalar leaf.
+    """
+    from qbopt.model import ir
+    from qbopt.model import memory
+    from qbopt.model.passes import Where
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
+
+    root = mir.Value(1, 0, variable=1, version=1)
+    first_base = mir.Value(2, 1, variable=2, version=1)
+    first = mir.Value(3, 2, variable=3, version=1)
+    second_base = mir.Value(4, 3, variable=4, version=1)
+    second = mir.Value(5, 4, variable=5, version=1)
+    loaded = mir.Value(6, 7, variable=6, version=1)
+    object_ = memory.Object(memory.Kind.FRAME, (7, -16, -4), extent=12)
+    whole = memory.Provenance.one(object_)
+
+    address = mir.Op(
+        0,
+        ir.Operation.ADDRESS,
+        "lea",
+        (root,),
+        (),
+        kind=mir.Kind.ADDRESS,
+        args=(mir.FrameAddress(-16, 2, (-16, -4)),),
+        results=(mir.Held(root, 2),),
+    )
+
+    def offset(at: int, source: mir.Value, amount: int, result: mir.Value) -> mir.Op:
+        return mir.Op(
+            at,
+            ir.Operation.BINARY,
+            "add",
+            (result,),
+            (source,),
+            kind=mir.Kind.ADD,
+            args=(mir.Held(source, 2), mir.Const(amount, 2)),
+            results=(mir.Held(result, 2),),
+        )
+
+    reference = mir.MemRef(
+        Addr(Space.LITERAL, 0),
+        4,
+        base=first,
+        space=Space.FRAME,
+        base_width=2,
+        provenance=whole,
+    )
+    equivalent = replace(reference, base=second)
+    store = mir.Op(
+        5,
+        ir.Operation.MOVE,
+        "mov",
+        (),
+        (first,),
+        kind=mir.Kind.STORE,
+        args=(mir.Const(37, 4),),
+        results=(mir.Cell(reference),),
+        stores=(reference,),
+    )
+    load = mir.Op(
+        6,
+        ir.Operation.MOVE,
+        "mov",
+        (loaded,),
+        (second,),
+        kind=mir.Kind.LOAD,
+        args=(mir.Cell(equivalent),),
+        results=(mir.Held(loaded, 4),),
+        loads=(equivalent,),
+    )
+    body = mir.MirBody(
+        0,
+        (
+            mir.MirBlock(
+                0,
+                (),
+                (
+                    address,
+                    offset(1, root, 16, first_base),
+                    offset(2, first_base, 65520, first),
+                    offset(3, root, 16, second_base),
+                    offset(4, second_base, 65520, second),
+                    store,
+                    load,
+                ),
+                (),
+            ),
+        ),
+        pointer_values=frozenset({root}),
+        pointer_seeds={root: memory.Provenance.one(object_, 0, 1)},
+    )
+
+    result = promote.Sroa(Where()).transform(body)
+
+    after = next(op for op in result.blocks[0].ops if op.at == load.at)
+    assert not after.loads
+    assert all(not isinstance(arg, mir.Cell) for arg in after.args)
+
+
 def test_sroa_never_promotes_a_volatile_aggregate_leaf() -> None:
     """A volatile struct field store followed by a load lost the load.
 

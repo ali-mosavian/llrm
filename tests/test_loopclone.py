@@ -88,6 +88,47 @@ def test_clones_read_their_own_values_and_do_not_duplicate_byte_ownership():
     assert changed.block(3).ops == body.block(3).ops
 
 
+def test_peeling_clones_pointer_identity_and_seed_facts() -> None:
+    """Matmul's peeled pointer values lost their exact frame-object leaves.
+
+    SSA cloning changes value identity, so semantic pointer classification
+    and frontend-established roots must be remapped with the definitions.
+    Otherwise alias analysis sees the cloned address arithmetic as ordinary
+    integers and SROA cannot scalarize its fixed aggregate accesses.
+    """
+    from qbopt.model import memory
+
+    body, values = diamond()
+    _seed, _carried, left, right, selected, stepped, _answer = values
+    object_ = memory.Object(memory.Kind.FRAME, (7, -16, -4), extent=12)
+    provenance = memory.Provenance.one(object_, 0, 1)
+    pointers = frozenset({left, right, selected, stepped})
+    body = replace(body, pointer_values=pointers, pointer_seeds={left: provenance})
+    (loop,) = loops.loops(body.blocks, body.entry)
+
+    changed = loopclone.peeled(body, loop, 1)
+
+    assert changed is not None
+    originals = {block.at for block in body.blocks}
+    copied_results = [
+        op.defines[0]
+        for block in changed.blocks
+        if block.at not in originals
+        for op in block.ops
+        if op.at in (30, 40, 50) and op.defines
+    ]
+    assert copied_results
+    assert set(copied_results) <= changed.pointer_values
+    cloned_left = next(
+        op.defines[0]
+        for block in changed.blocks
+        if block.at not in originals
+        for op in block.ops
+        if op.at == 30
+    )
+    assert changed.pointer_seeds[cloned_left] == provenance
+
+
 def test_unclosed_loop_value_is_refused():
     body, values = diamond()
     exit_block = body.block(6)

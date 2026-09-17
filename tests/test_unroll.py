@@ -82,6 +82,7 @@ def test_c_matmul_unrolls_exact_multiblock_loops() -> None:
 
     assert not procedure.body.inputs
     assert not any(mnemonic == "div" for _raw, mnemonic, _operands in rows)
+    assert sum(mnemonic == "imul" for _raw, mnemonic, _operands in rows) < 16
     assert sum(mnemonic.startswith("j") for _raw, mnemonic, _operands in rows) < 9
     assert status.startswith("estimated:")
     assert dynamic is not None and dynamic < 6_000
