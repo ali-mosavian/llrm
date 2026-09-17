@@ -26,8 +26,9 @@ that fails to return without mistaking a timeout for a wrong answer.
 - `bytes` and `instructions` cover the exact selected function body after
   branch relaxation.  Relocation fields are normalized to zero, as they are in
   a fresh object before linking.
-- `weighted_cost` is a ranking from the selected CPU profile.  A missing form
-  makes it `null`; it is never silently assigned zero.
+- `weighted_cost` is a ranking from the selected CPU profile. A missing form
+  makes it `null`; `weighted_status` and `unpriced_forms` name the reason and
+  the table prints it as `UNPRICED[...]`. It is never silently assigned zero.
 - loads, stores, branches, calls, address calculations, peak live values, and
   allocator spill markers are structural counts.  They are not elapsed time.
 - rematerializations count the final allocated-LIR instructions that rebuild a

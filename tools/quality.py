@@ -320,19 +320,27 @@ def _dynamic_operations(module: masm.Module, procedure: masm.Procedure, number: 
     return estimate, "estimated: CFG branches and ten iterations per natural loop"
 
 
-def _cost(rows: list[tuple[str, str, str]], target: targets.Profile) -> float | None:
+def _cost_report(
+    rows: list[tuple[str, str, str]], target: targets.Profile
+) -> tuple[float | None, str, tuple[str, ...]]:
+    """Return the ranking and make every missing cost assumption visible."""
     kinds = [cycles.classify(mnemonic, operands, raw) for raw, mnemonic, operands in rows]
-    if "unknown" in kinds:
-        return None
-    try:
-        for kind in kinds:
-            target.cost(kind)
-    except KeyError:
-        return None
+    missing = {
+        f"unknown:{mnemonic}" if kind == "unknown" else kind
+        for (_raw, mnemonic, _operands), kind in zip(rows, kinds, strict=True)
+        if kind == "unknown" or not target.prices(kind)
+    }
+    if missing:
+        forms = tuple(sorted(missing))
+        return None, f"unpriced: {', '.join(forms)}", forms
     if target.name == "386":
-        return float(sum(target.cost(kind) for kind in kinds))
+        return float(sum(target.cost(kind) for kind in kinds)), "priced", ()
     scored, _detail = cycles.score(rows)
-    return float(scored[0][targets.names().index(target.name) - 1])
+    return float(scored[0][targets.names().index(target.name) - 1]), "priced", ()
+
+
+def _cost(rows: list[tuple[str, str, str]], target: targets.Profile) -> float | None:
+    return _cost_report(rows, target)[0]
 
 
 def function_report(module: masm.Module, procedure: masm.Procedure, number: int, cpu: str) -> dict:
@@ -342,11 +350,14 @@ def function_report(module: masm.Module, procedure: masm.Procedure, number: int,
     loads, stores = _memory(rows)
     instructions = tuple(one for block in procedure.body.blocks for one in block.insns)
     dynamic_operations, dynamic_status = _dynamic_operations(module, procedure, number)
+    weighted_cost, weighted_status, unpriced_forms = _cost_report(rows, target)
     return {
         "name": procedure.name,
         "bytes": len(code),
         "instructions": len(rows),
-        "weighted_cost": _cost(rows, target),
+        "weighted_cost": weighted_cost,
+        "weighted_status": weighted_status,
+        "unpriced_forms": unpriced_forms,
         "dynamic_operations": dynamic_operations,
         "dynamic_status": dynamic_status,
         "loads": loads,
@@ -628,7 +639,11 @@ def main(argv: list[str] | None = None) -> int:
         args.json.write_text(json.dumps(result, indent=2) + "\n")
     for report in reports:
         for function in report["functions"]:
-            cost = "--" if function["weighted_cost"] is None else f"{function['weighted_cost']:g}"
+            cost = (
+                f"UNPRICED[{','.join(function['unpriced_forms'])}]"
+                if function["weighted_cost"] is None
+                else f"{function['weighted_cost']:g}"
+            )
             ratio = "NO TARGET" if function["ratio"] is None else f"{function['ratio']:.2f}x"
             print(
                 f"{report['cpu']:>4} {Path(report['source']).stem}.{function['name']:<24} "

@@ -32,6 +32,10 @@ class Profile:
         except KeyError as error:
             raise KeyError(f"{self.name} has no cost for {operation}") from error
 
+    def prices(self, operation: str) -> bool:
+        """Whether this profile has an explicit ranking for a form."""
+        return operation in dict(self._costs)
+
     def latency(self, operation: str) -> int:
         """The existing dependency latency, distinct from occupancy cost."""
         try:

@@ -279,6 +279,17 @@ def test_unknown_instruction_has_no_invented_default_cost() -> None:
     assert quality._cost([("0f0b", "ud2", "")], cpu.profile("P5")) is None
 
 
+def test_unpriced_repeated_instruction_names_the_missing_cost_form() -> None:
+    """Sieve's null weighted cost did not say that runtime-counted REP was unpriced."""
+    from qbopt.backend import cpu
+
+    rows = [("f3aa", "rep stosb", "")]
+    cost, status, forms = quality._cost_report(rows, cpu.profile("386"))
+    assert cost is None
+    assert status == "unpriced: rep_string"
+    assert forms == ("rep_string",)
+
+
 def test_stage_metrics_count_a_two_address_memory_operand_once() -> None:
     """The same RMW cell is both a semantic source and destination, but one load."""
     from qbopt.model import ir
