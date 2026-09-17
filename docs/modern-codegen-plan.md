@@ -271,3 +271,24 @@ far-field load it prevents, then compare that benefit against the best
 available recurrence or transient spill.  Formula selection remains necessary
 afterward, but the regression must first prove that an allocator can retain a
 generic invariant address base rather than reserve DI/SI for this function.
+
+### 15. Spill-price and split trace — 2026-09-18
+
+The allocator trace confirms why the owners lose: its normalized interval
+weight is used both to prioritize placement and to price spilling.  The two
+long owner intervals consequently score about `0.08`, even though each has a
+loop-weighted dynamic frame reload.  An experimental separation of raw spill
+traffic from placement priority, including constant rematerialization and an
+address-base reload charge, did not satisfy the fail-first retained-owner
+regression.  The register file still needs a temporary register during the
+face/mask sequence, so changing only the eviction victim cannot create a
+legal assignment.
+
+That experiment was deliberately discarded rather than committed: it leaves
+the regression red and does not prove an improvement.  The evidence changes
+the next implementation precisely: extend the existing `splitkit` ladder so
+that a loop-invariant address base can be retained for its dynamic address
+uses but cut around a disjoint high-pressure local region.  Accept a split
+only when re-allocation lowers weighted memory traffic; that is the generic
+phase-4 mechanism, not a function-specific register preference.  The
+far-load regression remains the fail-first acceptance case for that work.
