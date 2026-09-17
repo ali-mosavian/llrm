@@ -75,6 +75,7 @@ class _Leaf:
     object: memory.Object
     low: int
     high: int
+    type_class: str | None
 
 
 def _leaf(ref: mir.MemRef) -> _Leaf | None:
@@ -86,10 +87,48 @@ def _leaf(ref: mir.MemRef) -> _Leaf | None:
         return None
     if span.object.extent is not None and not (0 <= span.low < span.high <= span.object.extent):
         return None
-    return _Leaf(span.object, span.low, span.high)
+    return _Leaf(span.object, span.low, span.high, None if ref.typed is None else ref.typed[0])
 
 
-def _key(ref):
+def _blocked_objects(refs: list[mir.MemRef]) -> frozenset[memory.Object]:
+    """Objects whose accesses cannot form disjoint scalar leaves.
+
+    Equal ranges are repeated accesses to one leaf.  Disjoint ranges are
+    independent leaves.  A proper overlap means that no leaf partition can
+    represent both accesses without observable partial writes, so the whole
+    object remains memory.  Ambiguous multi-object provenance is likewise not
+    an object identity on which scalar replacement may be based.
+    """
+    accesses: dict[memory.Object, list[_Leaf]] = {}
+    blocked: set[memory.Object] = set()
+    for ref in refs:
+        provenance = ref.provenance
+        if provenance is None:
+            continue
+        objects = {span.object for span in provenance.slices}
+        if len(objects) != 1 or len(provenance.slices) != 1:
+            blocked.update(objects)
+            continue
+        if (leaf := _leaf(ref)) is not None:
+            accesses.setdefault(leaf.object, []).append(leaf)
+
+    for object_, leaves in accesses.items():
+        for index, one in enumerate(leaves):
+            for other in leaves[index + 1 :]:
+                overlaps = max(one.low, other.low) < min(one.high, other.high)
+                same_range = (one.low, one.high) == (other.low, other.high)
+                if overlaps and (not same_range or one.type_class != other.type_class):
+                    blocked.add(object_)
+                    break
+            if object_ in blocked:
+                break
+    return frozenset(blocked)
+
+
+def _key(ref, blocked: frozenset[memory.Object] = frozenset()):
+    objects = set() if ref.provenance is None else {span.object for span in ref.provenance.slices}
+    if objects & blocked:
+        return None
     if (leaf := _leaf(ref)) is not None:
         return leaf
     if ref.addr is None or ref.segment is not None or ref.addr.space not in CELLS:
@@ -116,9 +155,34 @@ def _reference(key, width):
 
 def _order(key):
     if isinstance(key, _Leaf):
-        return 1, str(key.object.kind), repr(key.object.identity), key.object.generation, key.low, key.high
+        return (
+            1,
+            str(key.object.kind),
+            repr(key.object.identity),
+            key.object.generation,
+            key.low,
+            key.high,
+            "" if key.type_class is None else key.type_class,
+        )
     ref = _reference(key, 0)
     return 0, ref.addr.index, ref.addr.disp, -1 if ref.base is None else ref.base.id
+
+
+def _aggregate_objects(leaves) -> frozenset[memory.Object]:
+    """Objects known to contain more than the scalar leaf being accessed."""
+    ranges: dict[memory.Object, set[tuple[int, int]]] = {}
+    for leaf in leaves:
+        if isinstance(leaf, _Leaf):
+            ranges.setdefault(leaf.object, set()).add((leaf.low, leaf.high))
+    return frozenset(
+        object_
+        for object_, parts in ranges.items()
+        if len(parts) > 1
+        or (
+            object_.extent is not None
+            and any(object_.extent > high - low for low, high in parts)
+        )
+    )
 
 
 class Promote(MIRTransform):
@@ -131,7 +195,25 @@ class Promote(MIRTransform):
         return promoted(body, self.where.dgroup, self.where.bounds)
 
 
-def promotable(body: MirBody, dgroup: frozenset[int] = frozenset(), bounds: dict | None = None) -> dict:
+class Sroa(MIRTransform):
+    """Scalarize proven aggregate leaves before scalar simplification."""
+
+    name = "sroa"
+
+    def __init__(self, where: Where) -> None:
+        self.where = where
+
+    def transform(self, body: MirBody) -> MirBody:
+        return promoted(body, self.where.dgroup, self.where.bounds, aggregate_only=True)
+
+
+def promotable(
+    body: MirBody,
+    dgroup: frozenset[int] = frozenset(),
+    bounds: dict | None = None,
+    *,
+    aggregate_only: bool = False,
+) -> dict:
     """Cells whose reads can use a known stored value, by address.
 
     Touched more than once, because promoting a cell read or written once
@@ -140,25 +222,33 @@ def promotable(body: MirBody, dgroup: frozenset[int] = frozenset(), bounds: dict
     writes cannot. Availability excludes reads after intervening aliasing writes.
     """
     every = [one for block in body.blocks for op in block.ops for one in (*op.loads, *op.stores)]
+    blocked = _blocked_objects(every)
     seen: Counter = Counter()
     widths: dict = {}
     for one in every:
-        key = _key(one)
+        key = _key(one, blocked)
         if key is None:
             continue
         seen[key] += 1
     for block in body.blocks:
         for op in block.ops:
             if op.loads and (ref := _cell(op)) is not None:
-                widths.setdefault(_key(ref), set()).add(ref.width)
+                widths.setdefault(_key(ref, blocked), set()).add(ref.width)
 
     candidates = {
         addr: next(iter(widths[addr]))
         for addr, times in seen.items()
         if times > 1 and addr in widths and len(widths[addr]) == 1
     }
+    if aggregate_only:
+        aggregates = _aggregate_objects(candidates)
+        candidates = {
+            addr: width
+            for addr, width in candidates.items()
+            if isinstance(addr, _Leaf) and addr.object in aggregates
+        }
     usable = _available(body, candidates, dgroup, bounds)
-    used = {_key(ref) for block in body.blocks for op in block.ops if id(op) in usable for ref in op.loads}
+    used = {_key(ref, blocked) for block in body.blocks for op in block.ops if id(op) in usable for ref in op.loads}
     return {addr: width for addr, width in candidates.items() if addr in used}
 
 
@@ -263,11 +353,21 @@ def promoted(
     *,
     loop_only: bool = False,
     split_updates: bool = True,
+    aggregate_only: bool = False,
 ) -> MirBody:
     """Reuse eligible stored values without removing observable writes."""
     original = body
-    body = _separated(body) if split_updates else body
-    found = promotable(body, dgroup, bounds)
+    aggregate_objects = None
+    if aggregate_only:
+        refs = [ref for block in body.blocks for op in block.ops for ref in (*op.loads, *op.stores)]
+        blocked = _blocked_objects(refs)
+        aggregate_objects = _aggregate_objects(
+            key for ref in refs if (key := _key(ref, blocked)) is not None
+        )
+        if not aggregate_objects:
+            return original
+    body = _separated(body, aggregate_objects) if split_updates else body
+    found = promotable(body, dgroup, bounds, aggregate_only=aggregate_only)
     if loop_only:
         hot = {at for loop in loops.loops(body.blocks, body.entry) for at in loop.body}
         read = {_key(ref) for block in body.blocks if block.at in hot for op in block.ops for ref in op.loads}
@@ -281,7 +381,14 @@ def promoted(
         for block in body.blocks
         for op in block.ops
     ):
-        return promoted(original, dgroup, bounds, loop_only=loop_only, split_updates=False)
+        return promoted(
+            original,
+            dgroup,
+            bounds,
+            loop_only=loop_only,
+            split_updates=False,
+            aggregate_only=aggregate_only,
+        )
 
     taken = max((one.variable for one in ssa.values(body)), default=0)
     fresh = _next(body)
@@ -359,7 +466,7 @@ def promoted(
     return ssa.constructed(replace(body, blocks=tuple(blocks)), frozenset(holds.values()))
 
 
-def _separated(body: MirBody) -> MirBody:
+def _separated(body: MirBody, objects: frozenset[memory.Object] | None = None) -> MirBody:
     """Expose a memory update as a value computation and an observable store."""
     fresh = _next(body)
     variable = max((one.variable for one in ssa.values(body)), default=0) + 1
@@ -367,14 +474,18 @@ def _separated(body: MirBody) -> MirBody:
     for block in body.blocks:
         ops = []
         for op in block.ops:
+            leaf = _leaf(op.loads[0]) if len(op.loads) == 1 else None
             if (
                 op.kind not in READS - {mir.Kind.LOAD}
                 or len(op.loads) != 1
                 or op.loads != op.stores
                 or op.results != (mir.Cell(op.loads[0]),)
                 or any(not value.flags for value in op.defines)
-                or op.loads[0].base is not None
-                or op.loads[0].segment is not None
+                or (
+                    objects is None
+                    and (op.loads[0].base is not None or op.loads[0].segment is not None)
+                )
+                or (objects is not None and (leaf is None or leaf.object not in objects))
             ):
                 ops.append(op)
                 continue
@@ -391,7 +502,11 @@ def _separated(body: MirBody) -> MirBody:
                     args=(held,),
                     loads=(),
                     defines=(),
-                    uses=(result,),
+                    uses=tuple(
+                        value
+                        for value in (result, op.loads[0].base, op.loads[0].segment)
+                        if value is not None
+                    ),
                     source_backed=False,
                     raised=None,
                     absorbed=(),

@@ -120,6 +120,7 @@ def test_same_object_leaf_is_promoted_across_equivalent_pointer_values(far: bool
         args=(mir.Held(stored, 4),),
         results=(mir.Cell(via_first),),
         stores=(via_first,),
+        id=100,
     )
     load = mir.Op(
         6,
@@ -131,6 +132,7 @@ def test_same_object_leaf_is_promoted_across_equivalent_pointer_values(far: bool
         args=(mir.Cell(via_second),),
         results=(mir.Held(loaded, 4),),
         loads=(via_second,),
+        id=101,
     )
     body = mir.MirBody(0, (mir.MirBlock(0, (), (store, load), ()),))
 
@@ -138,6 +140,64 @@ def test_same_object_leaf_is_promoted_across_equivalent_pointer_values(far: bool
     after = next(op for op in result.blocks[0].ops if op.at == load.at)
     assert not after.loads
     assert all(not isinstance(arg, mir.Cell) for arg in after.args)
+    scalarized = promote.promoted(body, aggregate_only=True)
+    assert not next(op for op in scalarized.blocks[0].ops if op.at == load.at).loads
+
+    scalar_object = memory.Object(memory.Kind.FRAME, ("scalar", -2), extent=2)
+    scalar_ref = mir.MemRef(
+        Addr(Space.FRAME, -2),
+        2,
+        space=Space.FRAME,
+        provenance=memory.Provenance.one(scalar_object, 0, 2),
+    )
+    flags = mir.Value(9, 8, flags=True, variable=9, version=1)
+    scalar_update = mir.Op(
+        8,
+        ir.Operation.UNARY,
+        "inc",
+        (flags,),
+        (),
+        kind=mir.Kind.INCREMENT,
+        args=(mir.Cell(scalar_ref),),
+        results=(mir.Cell(scalar_ref),),
+        loads=(scalar_ref,),
+        stores=(scalar_ref,),
+        id=102,
+    )
+    aggregate_flags = mir.Value(10, 5, flags=True, variable=10, version=1)
+    aggregate_update = mir.Op(
+        5,
+        ir.Operation.BINARY,
+        "add",
+        (aggregate_flags,),
+        tuple(value for value in (second, second_segment) if value is not None),
+        kind=mir.Kind.ADD,
+        args=(mir.Cell(via_second), mir.Const(1, 4)),
+        results=(mir.Cell(via_second),),
+        loads=(via_second,),
+        stores=(via_second,),
+        id=104,
+    )
+    mixed = replace(
+        body,
+        blocks=(replace(body.blocks[0], ops=(store, aggregate_update, load, scalar_update)),),
+    )
+    scalarized = promote.promoted(mixed, aggregate_only=True)
+    aggregate_ops = [op for op in scalarized.blocks[0].ops if op.at == aggregate_update.at]
+    assert [op.kind for op in aggregate_ops[:2]] == [mir.Kind.ADD, mir.Kind.STORE]
+    assert not aggregate_ops[0].loads and not aggregate_ops[0].stores
+    assert set(value for value in (second, second_segment) if value is not None) <= set(aggregate_ops[1].uses)
+    untouched = [op for op in scalarized.blocks[0].ops if op.at == scalar_update.at]
+    assert untouched == [scalar_update], "early SROA must not split an unrelated scalar memory update"
+
+    integer = replace(via_first, typed=("int4", True))
+    pun = replace(via_second, typed=("float4", False))
+    typed_store = replace(store, stores=(integer,), results=(mir.Cell(integer),))
+    typed_load = replace(load, loads=(pun,), args=(mir.Cell(pun),))
+    typed = replace(body, blocks=(replace(body.blocks[0], ops=(typed_store, typed_load)),))
+    result = promote.promoted(typed, aggregate_only=True)
+    after = next(op for op in result.blocks[0].ops if op.at == typed_load.at)
+    assert after.loads == (pun,), "incompatible union member types must keep the object in memory"
 
     upper_half = mir.MemRef(
         Addr(space, 6 if far else -10, 7 if far else 0),
@@ -146,7 +206,7 @@ def test_same_object_leaf_is_promoted_across_equivalent_pointer_values(far: bool
         provenance=memory.Provenance.one(object_, 6, 8),
     )
     overwrite = mir.Op(
-        5,
+        6,
         ir.Operation.MOVE,
         "mov",
         (),
@@ -155,11 +215,27 @@ def test_same_object_leaf_is_promoted_across_equivalent_pointer_values(far: bool
         args=(mir.Const(0, 2),),
         results=(mir.Cell(upper_half),),
         stores=(upper_half,),
+        id=103,
     )
-    clobbered = replace(body, blocks=(replace(body.blocks[0], ops=(store, overwrite, load)),))
-    result = promote.promoted(clobbered)
-    after = next(op for op in result.blocks[0].ops if op.at == load.at)
-    assert after.loads == (via_second,), "an overlapping partial store must invalidate the scalar leaf"
+    early_value = mir.Value(7, 5, variable=7, version=1)
+    early = replace(
+        load,
+        at=5,
+        defines=(early_value,),
+        results=(mir.Held(early_value, 4),),
+    )
+    late_value = mir.Value(8, 7, variable=8, version=1)
+    late = replace(
+        load,
+        at=7,
+        defines=(late_value,),
+        results=(mir.Held(late_value, 4),),
+    )
+    clobbered = replace(body, blocks=(replace(body.blocks[0], ops=(store, early, overwrite, late)),))
+    result = promote.promoted(clobbered, aggregate_only=True)
+    after = {op.at: op for op in result.blocks[0].ops}
+    assert after[early.at].loads == (via_second,), "a partially overlapping object must not be scalarized"
+    assert after[late.at].loads == (via_second,), "an overlapping partial store must invalidate the scalar leaf"
 
 
 @pytest.mark.parametrize("effect", ["call", "barrier"])

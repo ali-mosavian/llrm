@@ -2662,6 +2662,9 @@ def pipeline(where: Where, **wanted) -> list[MIRTransform]:
     it and skipped, so what runs is what this returns.
     """
     every: list[MIRTransform] = [
+        # Aggregate/object leaves become ordinary SSA before any scalar or
+        # CFG pass asks what is constant, redundant, or loop invariant.
+        promote.Sroa(where),
         Fold(where),
         Decide(where),
         loopsimplify.LoopSimplify(),
@@ -2669,6 +2672,9 @@ def pipeline(where: Where, **wanted) -> list[MIRTransform]:
         Hoist(where),
         DropStores(where),
         Gvn(where),
+        # Ordinary scalar write-through promotion remains after memory GVN;
+        # moving all of mem2reg ahead of loop normalization inflated matmul
+        # from 165 to 226 instructions by creating loop phis too early.
         promote.Promote(where),
         strength.Strength(where),
         Algebraic(),
@@ -2746,6 +2752,7 @@ def applied(
         "drop_stores": drop_stores,
         # Recurrences currently replace multiplication chains in innermost
         # loops. Shift-only and outer-loop formulas need pressure costing.
+        "sroa": promote_,
         "promote": promote_,
         "strength": strength_,
         "unroll": unroll_,
@@ -2770,7 +2777,16 @@ def applied(
     if only in {"forward", "drop_loads", "reuse", "cse"}:
         only = "gvn"
     passes = [one for one in pipeline(where, **wanted) if only is None or one.name == only]
-    for iteration in range(16):
+    # A monotone chain may expose one simplification per operation.  Sixteen
+    # happened to cover the old corpus, but an early scalar-replacement
+    # experiment made matmul's longer address chain prove that a constant
+    # limit is not a fixed-point rule.  Scale with the body and separately
+    # reject a repeated state, so an oscillator fails immediately instead of
+    # consuming that larger allowance.
+    size = sum(1 + len(block.phis) + len(block.ops) for block in body.blocks)
+    limit = max(16, size + 1)
+    history = [body]
+    for iteration in range(limit):
         before = body
         for one in passes:
             body = one.transform(body)
@@ -2782,4 +2798,7 @@ def applied(
 
                 return unswitch.optimized(body, dgroup, calls, watch=watch)
             return body
-    raise RuntimeError("MIR optimization did not converge after 16 rounds")
+        if any(body == previous for previous in history):
+            raise RuntimeError(f"MIR optimization did not converge: cycle after {iteration + 1} rounds")
+        history.append(body)
+    raise RuntimeError(f"MIR optimization did not converge after {limit} size-scaled rounds")

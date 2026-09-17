@@ -324,6 +324,62 @@ def test_value_reuse_is_one_gvn_pre_pass() -> None:
     assert not {"forward", "drop_loads", "reuse", "cse"} & set(transform.PASSES)
 
 
+def test_scalar_replacement_precedes_scalar_and_cfg_simplification() -> None:
+    """Aggregate leaves must become SSA before scalar and CFG passes run.
+
+    Running promotion after folding, branch selection and loop normalization
+    hid constants and values behind memory for the entire first fixed-point
+    round, so those passes could not expose the opportunities created by
+    scalar replacement at their intended boundary.
+    """
+    order = {name: transform.PASSES.index(name) for name in ("sroa", "fold", "decide", "loopsimplify")}
+    assert order["sroa"] < min(order[name] for name in ("fold", "decide", "loopsimplify"))
+
+
+def test_fixed_point_budget_scales_with_the_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Moving all promotion early made C matmul need over sixteen rounds.
+
+    A fixed iteration count is not a convergence rule: a larger body can
+    contain a longer simplification chain.  The driver must allow progress
+    proportional to the number of operations while still rejecting cycles.
+    """
+    from dataclasses import replace
+
+    class OneAtATime:
+        name = "one_at_a_time"
+
+        def transform(self, body: mir.MirBody) -> mir.MirBody:
+            block = body.blocks[0]
+            return body if not block.ops else replace(body, blocks=(replace(block, ops=block.ops[:-1]),))
+
+    ops = tuple(
+        mir.Op(at, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.NOTHING, source_backed=False)
+        for at in range(20)
+    )
+    body = mir.MirBody(0, (mir.MirBlock(0, (), ops, ()),))
+    monkeypatch.setattr(transform, "pipeline", lambda *_args, **_kwargs: [OneAtATime()])
+
+    result = transform.applied(body, frozenset(), {})
+    assert not result.blocks[0].ops
+
+
+def test_fixed_point_reports_a_repeated_state_as_a_cycle(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A size-scaled budget must not turn an oscillating pass into a long wait."""
+    from dataclasses import replace
+
+    class Toggle:
+        name = "toggle"
+
+        def transform(self, body: mir.MirBody) -> mir.MirBody:
+            return replace(body, cloned=not body.cloned)
+
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (), ()),))
+    monkeypatch.setattr(transform, "pipeline", lambda *_args, **_kwargs: [Toggle()])
+
+    with pytest.raises(RuntimeError, match="cycle"):
+        transform.applied(body, frozenset(), {})
+
+
 def test_the_rename_alone_is_what_was_unsound() -> None:
     """The concrete fact the chain and the restore exist to handle.
 
