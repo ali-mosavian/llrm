@@ -166,3 +166,6 @@ def test_small_private_pure_helpers_inline_in_mir() -> None:
     ]
     assert addresses
     assert all({one.object.kind for one in facts.values[value].slices} == {memory.Kind.GLOBAL} for value in addresses)
+    assert not any("offset L_" in line for line in body), (
+        "both inlined choices are object addresses, so their null test is true and neither address is needed"
+    )

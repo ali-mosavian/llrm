@@ -1584,7 +1584,7 @@ def _comparison(block, op: Op):
     return None
 
 
-def _outcome(block, op: Op, facts: dict, held: dict) -> bool | None:
+def _outcome(block, op: Op, facts: dict, held: dict, pointers=None) -> bool | None:
     """Whether this branch is taken, where both its operands are numbers."""
     comparison = _comparison(block, op)
     if comparison is None:
@@ -1598,7 +1598,21 @@ def _outcome(block, op: Op, facts: dict, held: dict) -> bool | None:
         return zero if op.test is mir.Kind.EQ else not zero
     parts = [consts._operand(compare, one, facts, held.get((block.at, index))) for one in compare.args]
     if any(one is None for one in parts):
-        return None
+        if op.test not in (mir.Kind.EQ, mir.Kind.NE) or pointers is None:
+            return None
+        pointer = next(
+            (
+                arg.value
+                for arg, other in zip(compare.args, reversed(compare.args), strict=True)
+                if isinstance(arg, mir.Held)
+                and isinstance(other, mir.Const)
+                and consts.masked(other.n, other.width) == 0
+            ),
+            None,
+        )
+        if pointer is None or not pointers.nonnull(pointer):
+            return None
+        return op.test is mir.Kind.NE
     left, right = parts
     width = max(left.width, right.width)
     return _TAKEN[op.test](_signed(left), _signed(right), lambda n: consts.masked(n, width))
@@ -1629,7 +1643,7 @@ def _switch_target(op: mir.Op, facts: dict[mir.Value, consts.Known]) -> int | No
     return next((target for number, target in op.cases if consts.masked(number, value.width) == value.n), op.target)
 
 
-def _executable_successors(block, facts, states, held):
+def _executable_successors(block, facts, states, held, pointers=None):
     from qbopt.analysis.constant_cycles import State
 
     if not block.ops:
@@ -1646,7 +1660,7 @@ def _executable_successors(block, facts, states, held):
         return block.succ
     if last.target not in block.succ:
         return block.succ
-    answer = _outcome(block, last, facts, held)
+    answer = _outcome(block, last, facts, held, pointers)
     if answer is not None:
         return (last.target,) if answer else tuple(at for at in block.succ if at != last.target)
     comparison = _comparison(block, last)
@@ -1754,7 +1768,38 @@ def _threaded(body: MirBody) -> MirBody:
                 )
             ops = (*ops[:-1], last)
         blocks.append(replace(block, ops=ops, succ=successors))
-    return _unreachable(replace(body, blocks=tuple(blocks))) if changed else body
+
+    # If both arms reach the same block through otherwise empty jump
+    # trampolines, the condition has no semantic successor to choose.  Keep a
+    # real jump at the source: the implicit arm may need one when source bodies
+    # are interleaved, which is why ordinary threading above deliberately does
+    # not erase that trampoline.
+    converged = []
+    for block in blocks:
+        last = block.ops[-1] if block.ops else None
+        if last is None or last.kind is not mir.Kind.BRANCH or len(block.succ) != 2:
+            converged.append(block)
+            continue
+        destinations = tuple(destination(at, block.at) for at in block.succ)
+        if len(set(destinations)) != 1:
+            converged.append(block)
+            continue
+        target = destinations[0]
+        jump = replace(
+            last,
+            op=ir.Operation.JUMP,
+            kind=mir.Kind.JUMP,
+            name="jmp",
+            uses=(),
+            args=(),
+            results=(),
+            test=None,
+            target=target,
+            covers=last.covers or _span_of(last),
+        )
+        converged.append(replace(block, ops=(*block.ops[:-1], jump), succ=(target,)))
+        changed = True
+    return _unreachable(replace(body, blocks=tuple(converged))) if changed else body
 
 
 def decided(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirBody:
@@ -1772,10 +1817,13 @@ def decided(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mir
     body = _threaded(body)
     facts = consts.known(body, dgroup, calls)
     held = consts.cells(body, dgroup, calls, facts)
+    from qbopt.analysis import alias
+
+    pointers = alias.points_to(body)
     from qbopt.analysis import constant_cycles
 
     facts = constant_cycles.propagated(
-        body, facts, lambda block, values, states: _executable_successors(block, values, states, held)
+        body, facts, lambda block, values, states: _executable_successors(block, values, states, held, pointers)
     )
     from qbopt.analysis import ranges
 
@@ -1808,7 +1856,7 @@ def decided(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mir
             out.append(replace(block, ops=(*block.ops[:-1], jump), succ=(target,)))
             changed = True
             continue
-        answer = _outcome(block, last, facts, held)
+        answer = _outcome(block, last, facts, held, pointers)
         if answer is None and block.at in scoped and last.kind is mir.Kind.BRANCH and len(block.succ) == 2:
             possible = tuple(at for at in block.succ if ranges.on_edge(block, at, scoped[block.at], facts) is not None)
             if len(possible) == 1:

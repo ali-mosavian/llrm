@@ -4,6 +4,7 @@ from dataclasses import replace
 
 from qbopt.model import ir
 from qbopt.model import mir
+from qbopt.model import memory
 from qbopt.analysis import consts
 from qbopt.optimize import transform
 from qbopt.objectfile.module import Addr
@@ -53,6 +54,50 @@ def test_runtime_condition_preserves_both_phi_inputs():
     body = replace(body, blocks=(replace(entry, ops=(compare, entry.ops[1])), *body.blocks[1:]))
     result = transform.decided(body, frozenset(), {})
     assert next(block for block in result.blocks if block.at == 30).succ == (40, 50)
+
+
+def test_nullable_pointer_parameter_keeps_both_null_test_edges():
+    """Object addresses are non-null, but an incoming pointer still may be null."""
+    pointer = mir.Value(1, 0, variable=1, version=1)
+    flags = mir.Value(2, 0, flags=True, variable=2, version=1)
+    compare = mir.Op(
+        1,
+        ir.Operation.COMPARE,
+        "cmp",
+        (flags,),
+        (pointer,),
+        kind=mir.Kind.SUB,
+        args=(mir.Held(pointer, 2), mir.Const(0, 2)),
+        covers=(1, 2),
+    )
+    branch = mir.Op(
+        2,
+        ir.Operation.BRANCH,
+        "",
+        (),
+        (flags,),
+        kind=mir.Kind.BRANCH,
+        test=mir.Kind.EQ,
+        target=10,
+        covers=(2, 3),
+    )
+    body = mir.MirBody(
+        0,
+        (
+            mir.MirBlock(0, (), (compare, branch), (10, 20)),
+            mir.MirBlock(10, (), (), ()),
+            mir.MirBlock(20, (), (), ()),
+        ),
+        pointer_values=frozenset({pointer}),
+        pointer_seeds={pointer: memory.Provenance.one(memory.Object(memory.Kind.PARAMETER, 0))},
+    )
+
+    decided = transform.decided(body, frozenset(), {})
+
+    entry = decided.block(0)
+    assert entry is not None
+    assert entry.succ == (10, 20)
+    assert entry.ops[-1].kind is mir.Kind.BRANCH
 
 
 def test_unresolved_successor_callback_cannot_drop_edges():

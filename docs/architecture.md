@@ -1124,8 +1124,14 @@ one documented target without materially regressing another.
   the whole module falls from 93 bytes / 44 instructions to 48 bytes / 22
   instructions on every CPU profile. GCC 16.2's installed i686 compiler also
   inlines both, then if-converts the resulting choices into a compare,
-  `sbb`, mask and add; the remaining code-shape gap is an if-conversion and
-  algebraic-selection target, not attributed to inlining.
+  `sbb`, mask and add. Inlined pointer parameters now take their provenance
+  from the caller's actual rather than retaining the callee's abstract
+  parameter identity. SCCP consequently proves the choice between two object
+  addresses non-null and removes that selection and its null-test diamond:
+  `_choose` falls again to 23 bytes / 11 instructions on 386. Nullable incoming
+  parameters and allocation results remain unresolved. The remaining code-shape
+  gap is the first integer choice's if-conversion and algebraic selection, not
+  attributed to inlining.
 - [ ] Remove unreachable procedures and unused public/internal definitions
   where OMF linkage permits it (`GlobalDCE`).  Unreachable private C
   procedures are now removed after call deletion. Exported procedures,

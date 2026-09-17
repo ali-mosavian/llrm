@@ -40,6 +40,20 @@ class PointsTo:
         """Canonical bytes reached by a reference through an analysed value."""
         return _resolved_reference(ref, self.values)
 
+    def nonnull(self, value: mir.Value) -> bool:
+        """Whether ``value`` can only designate a real static or frame object.
+
+        Incoming pointers and allocation results remain nullable.  A current
+        frame object or a linked object symbol is non-null by the source
+        language contract even though its eventual 16-bit offset is not known
+        until link time.
+        """
+        provenance = self.values.get(value)
+        nonnull = frozenset({memory.Kind.FRAME, memory.Kind.GLOBAL, memory.Kind.EXTERNAL, memory.Kind.NAMED})
+        return bool(provenance and provenance.slices) and all(
+            one.object.kind in nonnull for one in provenance.slices
+        )
+
 
 def _resolved_reference(
     ref: mir.MemRef,
@@ -396,11 +410,12 @@ def points_to(
                         state[key] = _union(one[key] for one in parents)
             incoming[block.at] = dict(state)
             for phi in block.phis:
-                if phi.result in pointer_values:
-                    parts = [values.get(one) for one in phi.incoming.values()]
+                parts = [values.get(one) for one in phi.incoming.values()]
+                if phi.result in pointer_values or parts and all(one is not None for one in parts):
                     fact = UNKNOWN if any(one is None for one in parts) else _union(parts)
                     if fact is not None:
                         values[phi.result] = fact
+                        pointer_values.add(phi.result)
             for op in block.ops:
                 direct = _direct(op, values)
                 for result in op.defines:
