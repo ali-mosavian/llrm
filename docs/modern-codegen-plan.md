@@ -43,3 +43,12 @@ GCC/Clang sieve listing generation both pass.
 Next: retain source-line-address evidence in a paired clean QCport BCC/WC
 build, then use it to validate or reject the `r_recursive_world_node` loop
 regression before changing allocation or aliasing for that case.
+
+### 2. Reproducible QCport compiler listings — 2026-09-18
+
+`tools/qcport_listings.py` creates matched BCC `-S` and qbopt assembly listings
+from a clean QCport worktree, plus a hash manifest covering the QCport and
+qbopt commits, every input source, CPU profile, output listing and stage dump.
+It rejects a dirty source tree rather than comparing stale binaries to edited
+loops.  The next run must use a clean QCport worktree and retain the manifest
+with any loop-level regression or performance claim.
