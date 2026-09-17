@@ -1033,10 +1033,13 @@ def _frame_addresses(body: lir.LirBody, values: frozenset[int]) -> dict[int, ir.
 def _extensions(body: lir.LirBody, values: frozenset[int]) -> dict[int, lir.Insn]:
     """One-use integer extensions that are cheaper to recreate than spill.
 
-    Moving a single ``movsx`` or ``movzx`` from its definition to its only
-    consumer duplicates no machine work.  It replaces the wide result's live
-    range with the narrower source's, and removes both the spill store and the
-    reload (or memory operand) that preserving the result would require.
+    Moving a single ``movsx`` or ``movzx`` later within the same block
+    duplicates no machine work.  It replaces the wide result's live range
+    with the narrower source's, and removes both the spill store and the reload
+    (or memory operand) that preserving the result would require.  A consumer
+    in another block may execute more often than the definition -- Mandelbrot's
+    one static use was in an outer loop -- and needs a frequency-and-pressure
+    profitability proof this local mechanism cannot provide.
 
     LIR is no longer SSA after phi elimination, so delaying an extension is
     sound only while its source cannot be redefined on the way.  An incoming
@@ -1046,21 +1049,24 @@ def _extensions(body: lir.LirBody, values: frozenset[int]) -> dict[int, lir.Insn
     simultaneous run.
     """
     definitions: dict[int, list[tuple[int, int, lir.Insn]]] = {}
-    uses: dict[int, list[lir.Insn]] = {value: [] for value in values}
+    uses: dict[int, list[tuple[int, int, lir.Insn]]] = {value: [] for value in values}
     for block_index, block in enumerate(body.blocks):
         for insn_index, one in enumerate(block.insns):
             for value in one.defines:
                 definitions.setdefault(value, []).append((block_index, insn_index, one))
             for value in values.intersection(one.uses):
-                uses[value].append(one)
+                uses[value].append((block_index, insn_index, one))
 
     result: dict[int, lir.Insn] = {}
     for value in values:
         found = definitions.get(value, ())
         consumers = uses.get(value, ())
-        if len(found) != 1 or len(consumers) != 1 or consumers[0].group is not None:
+        if len(found) != 1 or len(consumers) != 1:
             continue
         block_index, insn_index, one = found[0]
+        consumer_block, consumer_index, consumer = consumers[0]
+        if consumer.group is not None or consumer_block != block_index or consumer_index <= insn_index:
+            continue
         match one.what:
             case ir.Semantics(
                 ir.Operation.EXTEND,

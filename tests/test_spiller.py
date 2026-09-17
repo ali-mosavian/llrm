@@ -373,9 +373,10 @@ def test_single_use_extension_is_rematerialized_at_its_use(name: str) -> None:
     """Mandelbrot stored a one-use ``movsx`` result in a private slot and
     read that slot back in its hot loop.
 
-    Moving the same extension beside its only use cannot duplicate work: it
-    replaces the extended value's live range with its narrower source's and
-    removes one spill store plus one reload or folded memory operand.
+    Within one block, moving the same extension beside its only use cannot
+    duplicate work: it replaces the extended value's live range with its
+    narrower source's and removes one spill store plus one reload or folded
+    memory operand.
     """
     extension = lir.Insn(
         at=0x10,
@@ -451,6 +452,67 @@ def test_extension_rematerialization_requires_one_unchanged_ordinary_use(unsafe:
     frame = frames.Frame(0)
 
     spiller.spilled(_body(extension, *middle, use, *later), frozenset({2}), frame)
+
+    assert 2 in frame.slots
+
+
+def test_extension_is_not_rematerialized_from_an_entry_into_a_loop() -> None:
+    """Mandelbrot's nominally one-use argument extension moved from function
+    entry into the outer loop, raising estimated executed instructions from
+    10309 to 10317.
+
+    A static use count is not an execution count. Cross-block rematerializing
+    an expression needs a frequency-and-pressure proof; the local spelling
+    cannot assume its consumer runs as often as its definition.
+    """
+    source = _move(1, 0, at=0x10)
+    extension = lir.Insn(
+        at=0x12,
+        covers=(0x12, 0x12),
+        what=ir.Semantics(ir.Operation.EXTEND, "movsx", (ir.Held(2, 4),), (ir.Held(1, 2),)),
+        defines=(2,),
+        uses=(1,),
+    )
+    jump = lir.Insn(
+        at=0x14,
+        covers=(0x14, 0x16),
+        what=ir.Semantics(ir.Operation.JUMP, "jmp", (), (), 0x20),
+        defines=(),
+        uses=(),
+    )
+    use = lir.Insn(
+        at=0x20,
+        covers=(0x20, 0x22),
+        what=ir.Semantics(
+            ir.Operation.BINARY,
+            "add",
+            (ir.Held(3, 4),),
+            (ir.Held(3, 4), ir.Held(2, 4)),
+        ),
+        defines=(3,),
+        uses=(3, 2),
+    )
+    branch = lir.Insn(
+        at=0x22,
+        covers=(0x22, 0x24),
+        what=ir.Semantics(ir.Operation.BRANCH, "jne", (), (), 0x20),
+        defines=(),
+        uses=(),
+    )
+    body = lir.LirBody(
+        "loop",
+        0x10,
+        (
+            lir.LirBlock(0x10, (source, extension, jump), (0x20,)),
+            lir.LirBlock(0x20, (use, branch), (0x20, 0x30)),
+            lir.LirBlock(0x30, (), ()),
+        ),
+        origin={},
+        pins={},
+    )
+    frame = frames.Frame(0)
+
+    spiller.spilled(body, frozenset({2}), frame)
 
     assert 2 in frame.slots
 

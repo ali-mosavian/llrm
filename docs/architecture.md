@@ -1311,16 +1311,18 @@ one documented target without materially regressing another.
   metrics; focused two-round fixtures demonstrate safe reuse, overlapping
   refusal, and width-compatible reuse. This is allocator infrastructure, not
   a benchmark speedup claim.
-  Rematerialization now also covers one-use `movsx` and `movzx` results. The
-  gate proves the narrow source has no intervening redefinition and refuses
-  repeated or parallel-copy consumers, so moving the extension cannot
-  duplicate work or split a simultaneous copy. Mandelbrot's parameter
-  extension was stored solely to feed one later copy; recreating it there
-  removes that private slot. Its 386 result moves from a 20- to a 16-byte
-  frame, 198 to 192 emitted bytes, 58 to 57 instructions, and 295 to 293
-  modeled cost. The freshly linked DOS program still returns the independent
-  answer 8873. The fail-first regressions cover both signed and unsigned
-  extensions plus every refusal condition.
+  Rematerialization now also covers one-use `movsx` and `movzx` results within
+  one block. The gate proves the narrow source has no intervening redefinition
+  and refuses repeated or parallel-copy consumers, so moving the extension
+  cannot duplicate work or split a simultaneous copy. Cross-block motion is
+  deliberately not inferred from a static use count. An initial version moved
+  Mandelbrot's parameter extension from function entry into its outer loop:
+  static output fell from 198 to 192 bytes and 58 to 57 instructions, but
+  estimated executed instructions regressed from 10309 to 10317. A fail-first
+  regression now records that rejected result. The corrected gate restores
+  Mandelbrot exactly to its previous 20-byte frame, 198 bytes, 58 instructions,
+  295 modeled cost and 10309 dynamic operations; general cross-block
+  rematerialization remains open until it has a frequency-and-pressure proof.
   The current uncommitted qrender rollout removes 10,590 code bytes across
   all 21 BASIC modules and restores E1M1 screenshot completion. Three dedicated
   QGL checks match baseline; broader renderer acceptance remains open. See
