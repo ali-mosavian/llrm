@@ -285,6 +285,36 @@ def test_raise_returns_variable_keyed_allocation_hints() -> None:
             assert hints.origin_of(renamed) == register
 
 
+def test_lowering_consumes_external_allocation_hints() -> None:
+    """The machine boundary must not need placement fields on MIR itself."""
+    from dataclasses import replace
+
+    import corpus
+    from qbopt.abi import runtime
+    from qbopt.backend import lower
+
+    path = Path("fixtures/omf/lngmix-p-g2.obj")
+    found = corpus.loaded(path)
+    contracts = runtime.for_module(found)
+    raised = mir.bodies(found, corpus.partitioned(path), contracts)
+    name, body = raised[0]
+    hints = raised.hints[body.entry]
+    stripped = replace(body, origin={}, pins={})
+    low = lower.lowered(
+        name,
+        stripped,
+        found.calls,
+        raised.source.absorbed,
+        contracts,
+        raised.source.coverage,
+        nodes=raised.source.nodes,
+        occurrences=raised.source.occurrences,
+        hints=hints,
+    )
+    actual = {value.variable: register for value, register in low.origin.items()}
+    assert actual and all(actual[variable] == register for variable, register in hints.origins.items() if variable in actual)
+
+
 def test_a_pass_is_a_transform_and_nothing_else() -> None:
     """The contract, as a fact rather than a convention.
 

@@ -501,6 +501,7 @@ def lowered(
     *,
     nodes: dict[int, object] | None = None,
     occurrences: dict[int, tuple[tuple[int, int], ...]] | None = None,
+    hints: "mir.AllocationHints | None" = None,
     pointer_model=None,
     noreturn: bool = False,
 ) -> "lir.LirBody":
@@ -527,6 +528,7 @@ def lowered(
     # generic boundary; `_constant_store` below splits an eight-byte memory
     # bit pattern without pretending it is integer arithmetic.
 
+    hints = hints or mir.AllocationHints.from_body(body)
     try:
         body = lower_switches.expanded(body)
     except ValueError as error:
@@ -534,6 +536,9 @@ def lowered(
     body = named(body)
     lower_floats.checked(body)
     body = ssa.pruned_phis(body, {phi.result for block in body.blocks for phi in block.phis if not phi.result.flags})
+    values = set(ssa.values(body))
+    origin = {value: where for value in values if (where := hints.origin_of(value)) is not None}
+    pins = {value: where for value in values if (where := hints.pin_of(value)) is not None}
 
     # An absorbed call site is emitted by select.absorbed, seventeen bytes
     # of mov and idiv, and not from any semantics this could give it.
@@ -559,6 +564,7 @@ def lowered(
         cpu,
         nodes=nodes,
         occurrences=occurrences,
+        origin=origin,
         pointer_model=pointer_model,
     )
     # Once: expanding twice would build two of every instruction, and the
@@ -610,10 +616,10 @@ def lowered(
             )
             for block in body.blocks
         ),
-        origin=dict(body.origin),
+        origin=origin,
         inputs=frozenset(value.id for value in liveness.entry_values(body) if not value.flags and value.id is not None),
         ordered=True,
-        pins={**body.pins, **{value: Register.ES for value in body.values if body.origin.get(value) == Register.ES}},
+        pins={**pins, **{value: Register.ES for value in values if origin.get(value) == Register.ES}},
     )
 
 
@@ -1346,6 +1352,7 @@ class Lowering:
         *,
         nodes: dict[int, object] | None = None,
         occurrences: dict[int, tuple[tuple[int, int], ...]] | None = None,
+        origin: dict["mir.Value", Register_] | None = None,
         pointer_model=None,
     ) -> None:
         self.cpu = targets.profile(cpu)
@@ -1387,7 +1394,7 @@ class Lowering:
         self._coverage = coverage or {}
         self._occurrences = occurrences
         self._nodes = nodes or {}
-        self._origin = body.origin
+        self._origin = origin if origin is not None else body.origin
         self._calls = calls
         # The same answer the raise used, per call site. Looked up here
         # only where the caller had none to give.
