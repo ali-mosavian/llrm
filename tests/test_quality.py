@@ -106,6 +106,19 @@ def test_machine_cse_reuses_c_nbody_frame_addresses() -> None:
         assert len(addresses) <= 1, hot
 
 
+def test_shellsort_folds_indexed_frame_array_addresses() -> None:
+    """C shellsort rematerialised its fixed local-array base in three hot blocks."""
+    source = CORPUS / "shellsort.c"
+    assembly = cfront.compiled(cfront.recorded(source, []), "shellsort_frame_index", optimise=True)
+    frame_bases = [line for line in assembly.splitlines() if "lea " in line and "[bp-132]" in line]
+
+    # Pointer recurrences initialize the array, walk values[i], and read the
+    # final checksum. The three indexed insertion-sort accesses encode BP
+    # directly and must not materialize additional copies of this base.
+    assert len(frame_bases) <= 3, assembly
+    assert sum("ss:[bp+" in line and "-132]" in line for line in assembly.splitlines()) >= 3, assembly
+
+
 def test_reference_compilers_name_the_i686_gcc_not_the_host_gcc() -> None:
     assert quality.REFERENCE_COMPILERS == ("clang", "i686-elf-gcc")
 

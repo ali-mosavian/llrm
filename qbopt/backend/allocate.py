@@ -1150,7 +1150,7 @@ def _settled(where: ir.Loc | ir.Held, held: dict, origin: dict) -> ir.Loc:
             raise Unplaced(f"scaled cell {where} has no register for its base or index")
         return replace(
             where,
-            through=target.named(base, where.base.width) if base is not None else Register.NONE,
+            through=target.named(base, where.base.width) if base is not None else where.through,
             index_through=target.named(index, where.index.width),
         )
     if isinstance(where, ir.Mem) and where.base is not None:

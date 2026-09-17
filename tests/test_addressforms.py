@@ -17,6 +17,7 @@ from qbopt.objectfile.module import Space
 
 
 @pytest.mark.parametrize("offset", [4, 8, -12, 65535])
+@pytest.mark.full
 def test_far_float_address_folds_offset_without_changing_selector(offset: int) -> None:
     found = corpus.loaded(Path("fixtures/regressions/r_walk-borland.obj"))
     assert found is not None
@@ -86,3 +87,69 @@ def test_based_local_array_folds_add_into_word_addressing() -> None:
 
     assert forms == {address.id: (ir.Held(base.id, 2), ir.Held(shifted.id, 2), 1)}
     assert folded == frozenset({address.id})
+
+
+def test_indexed_frame_array_uses_bp_as_the_encoded_base() -> None:
+    """C shellsort emitted ``lea bx,[bp-132]`` in every hot array block.
+
+    The dynamic byte offset already fits the index half of 16-bit addressing;
+    materialising the fixed local-array base in a second register is excess
+    work because ``[bp+si-132]`` encodes the same wrapped address directly.
+    """
+    index = mir.Value(1, 0)
+    frame = mir.Value(2, 0)
+    address = mir.Value(3, 0)
+    loaded = mir.Value(4, 0)
+    frame_address = mir.Op(
+        1,
+        ir.Operation.ADDRESS,
+        "lea",
+        (frame,),
+        (),
+        kind=mir.Kind.ADDRESS,
+        args=(mir.FrameAddress(-132, 2, (-132, -4)),),
+        results=(mir.Held(frame, 2),),
+    )
+    add = mir.Op(
+        2,
+        ir.Operation.BINARY,
+        "add",
+        (address,),
+        (frame, index),
+        kind=mir.Kind.ADD,
+        args=(mir.Held(frame, 2), mir.Held(index, 2)),
+        results=(mir.Held(address, 2),),
+    )
+    ref = mir.MemRef(
+        Addr(Space.LITERAL, 0),
+        2,
+        base=address,
+        space=Space.FRAME,
+        base_width=2,
+        within=((-132, -4),),
+    )
+    load = mir.Op(
+        3,
+        ir.Operation.MOVE,
+        "mov",
+        (loaded,),
+        (address,),
+        kind=mir.Kind.LOAD,
+        args=(mir.Cell(ref),),
+        results=(mir.Held(loaded, 2),),
+        loads=(ref,),
+    )
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (frame_address, add, load), ()),))
+    forms, folded = addressforms.indexed(body, set())
+    cell = ir.Mem(Addr(Space.LITERAL, 0, segment=Register.SS), 2, base=ir.Held(address.id, 2))
+
+    changed = addressforms.scaled(ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(loaded.id, 2),), (cell,)), forms)
+
+    assert folded == frozenset({address.id})
+    assert changed is not None
+    indexed = changed.sources[0]
+    assert isinstance(indexed, ir.Mem)
+    assert indexed.addr == Addr(Space.LITERAL, -132, segment=Register.SS)
+    assert indexed.through == Register.BP
+    assert indexed.base is None
+    assert indexed.index == ir.Held(index.id, 2)

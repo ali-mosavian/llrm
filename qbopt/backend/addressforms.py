@@ -4,6 +4,7 @@ from iced_x86 import Register
 
 from qbopt.model import ir
 from qbopt.model import mir
+from qbopt.objectfile.module import Addr
 from qbopt.objectfile.module import Space
 
 
@@ -60,9 +61,11 @@ def selected(what: ir.Semantics | None, forms: dict[int, tuple[ir.Held, int]]) -
 
 # Scales 32-bit addressing encodes; 16-bit `[bx+si]` has none but one.
 _SCALES = {4: (0, 1, 2, 3), 2: (0,)}
+type IndexedBase = ir.Held | ir.Address
+type IndexedForm = tuple[IndexedBase, ir.Held, int]
 
 
-def indexed(body: mir.MirBody, exposed: set[int]) -> tuple[dict[int, tuple[ir.Held, ir.Held, int]], frozenset[int]]:
+def indexed(body: mir.MirBody, exposed: set[int]) -> tuple[dict[int, IndexedForm], frozenset[int]]:
     """Based addresses `b + (c << k)` read only by cells, and what computes them.
 
     The address becomes the cell's `[base+index*scale]` and the add and
@@ -72,6 +75,22 @@ def indexed(body: mir.MirBody, exposed: set[int]) -> tuple[dict[int, tuple[ir.He
     objects; the address width below decides whether a scale is legal.
     """
     made = {value.id: op for block in body.blocks for op in block.ops for value in op.defines}
+    frame_bases = {
+        result.value.id: ir.Address(
+            Addr(Space.FRAME, source.offset),
+            Register.BP,
+            offset=source.offset,
+            disp_width=1 if -128 <= source.offset <= 127 else 2,
+        )
+        for op in made.values()
+        if op.kind is mir.Kind.ADDRESS
+        and not (op.loads or op.stores or op.merges or op.barrier)
+        and len(op.args) == len(op.results) == 1
+        and isinstance((source := op.args[0]), mir.FrameAddress)
+        and source.width == 2
+        and isinstance((result := op.results[0]), mir.Held)
+        and result.width == 2
+    }
     bases: dict[int, int] = {}
     other: dict[int, int] = {}
     for block in body.blocks:
@@ -105,7 +124,7 @@ def indexed(body: mir.MirBody, exposed: set[int]) -> tuple[dict[int, tuple[ir.He
             and not any(one.flags and (one.id in other or one.id in bases) for one in op.defines)
         )
 
-    forms: dict[int, tuple[ir.Held, ir.Held, int]] = {}
+    forms: dict[int, IndexedForm] = {}
     folded: set[int] = set()
     for block in body.blocks:
         for op in block.ops:
@@ -117,7 +136,8 @@ def indexed(body: mir.MirBody, exposed: set[int]) -> tuple[dict[int, tuple[ir.He
             if not all(isinstance(one, mir.Held) and one.width == address.width for one in op.args):
                 continue
             base, index = op.args
-            form = (ir.Held(base.value.id, base.width), ir.Held(index.value.id, index.width), 1)
+            fixed = frame_bases.get(base.value.id)
+            form = (fixed or ir.Held(base.value.id, base.width), ir.Held(index.value.id, index.width), 1)
             for base, index in (op.args, op.args[::-1]):
                 shift = made.get(index.value.id)
                 if (
@@ -132,7 +152,12 @@ def indexed(body: mir.MirBody, exposed: set[int]) -> tuple[dict[int, tuple[ir.He
                     and index.value.id not in bases
                 ):
                     counter = shift.args[0]
-                    form = (ir.Held(base.value.id, base.width), ir.Held(counter.value.id, counter.width), 1 << shift.args[1].n)
+                    fixed = frame_bases.get(base.value.id)
+                    form = (
+                        fixed or ir.Held(base.value.id, base.width),
+                        ir.Held(counter.value.id, counter.width),
+                        1 << shift.args[1].n,
+                    )
                     folded.add(index.value.id)
                     break
             forms[address.value.id] = form
@@ -140,7 +165,7 @@ def indexed(body: mir.MirBody, exposed: set[int]) -> tuple[dict[int, tuple[ir.He
     return forms, frozenset(folded)
 
 
-def scaled(what: ir.Semantics | None, forms: dict[int, tuple[ir.Held, ir.Held, int]]) -> ir.Semantics | None:
+def scaled(what: ir.Semantics | None, forms: dict[int, IndexedForm]) -> ir.Semantics | None:
     """`what` with every folded far address written as its cell's base and index."""
     if what is None or not forms:
         return what
@@ -149,6 +174,28 @@ def scaled(what: ir.Semantics | None, forms: dict[int, tuple[ir.Held, ir.Held, i
         if not isinstance(arg, ir.Mem) or arg.base is None or arg.base.value not in forms:
             return arg
         base, index, scale = forms[arg.base.value]
+        if isinstance(base, ir.Address):
+            if (
+                base.addr is None
+                or base.addr.space is not Space.FRAME
+                or arg.addr is None
+                or arg.addr.space is not Space.LITERAL
+            ):
+                return arg
+            # A frame address is already BP plus a constant displacement.
+            # Keep the dynamic byte offset as the word index and put the
+            # constant directly in the memory operand: [bp+si+disp].  The
+            # literal spelling says no relocation owns the displacement;
+            # SS preserves the frame selector when the data model has DS != SS.
+            displacement = (arg.addr.disp + base.offset + 32768) % 65536 - 32768
+            return replace(
+                arg,
+                addr=replace(arg.addr, space=Space.LITERAL, disp=displacement, segment=Register.SS),
+                through=Register.BP,
+                base=None,
+                index=index,
+                scale=scale,
+            )
         return replace(arg, base=base, index=index, scale=scale, through=Register.NONE)
 
     return replace(what, dests=tuple(map(operand, what.dests)), sources=tuple(map(operand, what.sources)))
