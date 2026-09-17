@@ -204,7 +204,73 @@ class Sroa(MIRTransform):
         self.where = where
 
     def transform(self, body: MirBody) -> MirBody:
+        body = _bounded_leaves(body)
         return promoted(body, self.where.dgroup, self.where.bounds, aggregate_only=True)
+
+
+def _bounded_ref(ref: mir.MemRef, known: dict) -> mir.MemRef:
+    """Give one singleton indexed access its exact object slice.
+
+    Whole-object provenance establishes identity; the range establishes the
+    byte offset.  Both are required, and the object's extent proves the
+    addition cannot select or wrap outside that object.
+    """
+    if ref.base is None or ref.addr is None or ref.provenance is None or len(ref.provenance.slices) != 1:
+        return ref
+    interval = known.get(ref.base)
+    if interval is None or interval.width != ref.base_width or interval.low != interval.high:
+        return ref
+    source = next(iter(ref.provenance.slices))
+    extent = source.object.extent
+    if extent is None:
+        return ref
+    # Only whole-object provenance can be narrowed this way.  A pointer into
+    # a subobject already has an offset origin of its own.
+    if source.low > 0 or source.high < extent:
+        return ref
+    low = ref.addr.disp + interval.low
+    high = low + ref.width
+    if not 0 <= low < high <= extent:
+        return ref
+    provenance = memory.Provenance(
+        frozenset({memory.Slice(source.object, low, high)}),
+        ref.provenance.restrict,
+    )
+    return replace(ref, provenance=provenance)
+
+
+def _bounded_leaves(body: MirBody) -> MirBody:
+    """Materialize exact singleton proofs on every indexed-ref occurrence.
+
+    General loop intervals select several elements and therefore cannot be
+    one scalar leaf.  Constant propagation already computes every singleton
+    expression to a fixed point; running the much heavier loop-range analysis
+    here more than doubled compile time and produced no additional leaf.
+    """
+    from qbopt.analysis import ranges
+
+    constants = ranges.singletons(body)
+    blocks = []
+    for block in body.blocks:
+        def reference(ref: mir.MemRef) -> mir.MemRef:
+            return _bounded_ref(ref, constants)
+
+        def operand(arg: mir.Arg) -> mir.Arg:
+            return mir.Cell(reference(arg.ref)) if isinstance(arg, mir.Cell) else arg
+
+        ops = tuple(
+            replace(
+                op,
+                loads=tuple(map(reference, op.loads)),
+                stores=tuple(map(reference, op.stores)),
+                args=tuple(map(operand, op.args)),
+                results=tuple(map(operand, op.results)),
+                memory_values=tuple((reference(ref), value) for ref, value in op.memory_values),
+            )
+            for op in block.ops
+        )
+        blocks.append(replace(block, ops=ops))
+    return replace(body, blocks=tuple(blocks))
 
 
 def promotable(

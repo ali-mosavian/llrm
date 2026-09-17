@@ -380,6 +380,40 @@ def test_fixed_point_reports_a_repeated_state_as_a_cycle(monkeypatch: pytest.Mon
         transform.applied(body, frozenset(), {})
 
 
+def test_sroa_runs_once_before_the_scalar_fixed_point(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Range-based SROA took four times longer when repeated every round."""
+    from dataclasses import replace
+
+    calls = 0
+
+    class OneAtATime:
+        name = "one_at_a_time"
+
+        def transform(self, body: mir.MirBody) -> mir.MirBody:
+            block = body.blocks[0]
+            return body if not block.ops else replace(body, blocks=(replace(block, ops=block.ops[:-1]),))
+
+    def sroa(body: mir.MirBody) -> mir.MirBody:
+        nonlocal calls
+        calls += 1
+        return body
+
+    from qbopt.model.passes import Where
+    from qbopt.optimize import promote
+
+    first = promote.Sroa(Where())
+    monkeypatch.setattr(first, "transform", sroa)
+    monkeypatch.setattr(transform, "pipeline", lambda *_args, **_kwargs: [first, OneAtATime()])
+    ops = tuple(
+        mir.Op(at, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.NOTHING, source_backed=False)
+        for at in range(20)
+    )
+    body = mir.MirBody(0, (mir.MirBlock(0, (), ops, ()),))
+
+    transform.applied(body, frozenset(), {})
+    assert calls == 1
+
+
 def test_the_rename_alone_is_what_was_unsound() -> None:
     """The concrete fact the chain and the restore exist to handle.
 

@@ -2777,6 +2777,18 @@ def applied(
     if only in {"forward", "drop_loads", "reuse", "cse"}:
         only = "gvn"
     passes = [one for one in pipeline(where, **wanted) if only is None or one.name == only]
+    # SROA establishes the scalar memory shape on the original body.  It is a
+    # boundary pass, not a member of the scalar fixed point: rerunning global
+    # range analysis after every scalar round made the C corpus take four
+    # times as long while producing identical code.
+    boundary = [one for one in passes if isinstance(one, promote.Sroa)]
+    passes = [one for one in passes if not isinstance(one, promote.Sroa)]
+    for one in boundary:
+        body = one.transform(body)
+        if watch is not None:
+            watch(f"r01-{one.name}", body)
+    if only is not None and boundary:
+        return body
     # A monotone chain may expose one simplification per operation.  Sixteen
     # happened to cover the old corpus, but an early scalar-replacement
     # experiment made matmul's longer address chain prove that a constant

@@ -297,3 +297,35 @@ def constants(body: mir.MirBody, dgroup: frozenset[int] | None = None, calls: di
     selector's value reaches the query.
     """
     return {value: Interval(fact.n, fact.n, fact.width) for value, fact in consts.known(body, dgroup, calls).items()}
+
+
+def singletons(body: mir.MirBody) -> dict[mir.Value, Interval]:
+    """Exact values computed without consulting memory.
+
+    SROA needs only singleton indexes.  The full constant analysis also walks
+    MemorySSA until scalar and memory facts agree, which is necessary for
+    folding but needless for an address expression made solely from values.
+    This small lattice reaches the same pure expressions without paying that
+    compile-time cost at the pre-optimization boundary.
+    """
+    known: dict[mir.Value, Interval] = {}
+    while True:
+        before = len(known)
+        for block in body.blocks:
+            for phi in block.phis:
+                if phi.result in known or not phi.incoming:
+                    continue
+                incoming = [known.get(value) for value in phi.incoming.values()]
+                if incoming and None not in incoming and len(set(incoming)) == 1:
+                    known[phi.result] = incoming[0]
+            for op in block.ops:
+                if not op.results or not isinstance(op.results[0], mir.Held):
+                    continue
+                result = op.results[0].value
+                if result in known:
+                    continue
+                interval = _computed(op, known, {})
+                if interval is not None and interval.low == interval.high:
+                    known[result] = interval
+        if len(known) == before:
+            return known

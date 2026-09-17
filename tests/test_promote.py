@@ -238,6 +238,73 @@ def test_same_object_leaf_is_promoted_across_equivalent_pointer_values(far: bool
     assert after[late.at].loads == (via_second,), "an overlapping partial store must invalidate the scalar leaf"
 
 
+def test_sroa_uses_a_singleton_index_range_as_an_exact_leaf() -> None:
+    """Two constant-derived indexes into one local array still reloaded it.
+
+    The pointers are different SSA values, but range analysis proves both
+    select bytes 4..8 of the same bounded object.  A non-singleton or
+    out-of-bounds interval must not receive that exact leaf identity.
+    """
+    from qbopt.model import ir
+    from qbopt.model import memory
+    from qbopt.analysis import ranges
+    from qbopt.model.passes import Where
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
+
+    object_ = memory.Object(memory.Kind.FRAME, ("array", -16), extent=12)
+    whole = memory.Provenance.one(object_)
+    first = mir.Value(1, 0, variable=1, version=1)
+    second = mir.Value(2, 1, variable=2, version=1)
+    stored = mir.Value(3, 2, variable=3, version=1)
+    loaded = mir.Value(4, 3, variable=4, version=1)
+
+    def constant(at: int, value: mir.Value) -> mir.Op:
+        return mir.Op(
+            at,
+            ir.Operation.MOVE,
+            "mov",
+            (value,),
+            (),
+            kind=mir.Kind.COPY,
+            args=(mir.Const(4, 2),),
+            results=(mir.Held(value, 2),),
+        )
+
+    one = mir.MemRef(Addr(Space.FRAME, 0), 4, base=first, space=Space.FRAME, base_width=2, provenance=whole)
+    two = replace(one, base=second)
+    store = mir.Op(
+        2,
+        ir.Operation.MOVE,
+        "mov",
+        (),
+        (stored, first),
+        kind=mir.Kind.STORE,
+        args=(mir.Held(stored, 4),),
+        results=(mir.Cell(one),),
+        stores=(one,),
+    )
+    load = mir.Op(
+        3,
+        ir.Operation.MOVE,
+        "mov",
+        (loaded,),
+        (second,),
+        kind=mir.Kind.LOAD,
+        args=(mir.Cell(two),),
+        results=(mir.Held(loaded, 4),),
+        loads=(two,),
+    )
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (constant(0, first), constant(1, second), store, load), ()),))
+
+    result = promote.Sroa(Where()).transform(body)
+    after = next(op for op in result.blocks[0].ops if op.at == load.at)
+    assert not after.loads
+    assert all(not isinstance(arg, mir.Cell) for arg in after.args)
+    assert promote._bounded_ref(one, {first: ranges.Interval(4, 5, 2)}).provenance == whole
+    assert promote._bounded_ref(one, {first: ranges.Interval(12, 12, 2)}).provenance == whole
+
+
 @pytest.mark.parametrize("effect", ["call", "barrier"])
 def test_partial_store_does_not_restore_constants_from_before_unknown_effect(effect):
     """A post-clobber low-word store must not resurrect an old high word as a promoted LONG."""
