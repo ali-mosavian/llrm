@@ -70,6 +70,42 @@ def test_corpus_has_independent_inputs_and_canonical_crc() -> None:
         assert isinstance(oracle["result"], int)
 
 
+def test_machine_cse_reuses_c_nbody_frame_addresses() -> None:
+    """C nbody recomputed two unchanged frame bases in its hot pair loop.
+
+    Allocation leaves ``lea bx,[bp-100]`` live across the floating update,
+    then lowering emitted the identical LEA again before the store; the
+    ``bp-132`` velocity array did the same.  This is a post-allocation
+    redundancy, not a MIR expression.  Keep the real benchmark as the
+    symptom while allowing a future selector to fold either address away
+    completely.
+    """
+    source = CORPUS / "nbody.c"
+    stream = cfront.recorded(source, [])
+    assembly = cfront.compiled(stream, "nbody_machine_cse", optimise=True)
+    blocks: list[list[str]] = []
+    for line in assembly.splitlines():
+        if line.startswith("L") and line.endswith(":"):
+            blocks.append([])
+        if blocks:
+            blocks[-1].append(line)
+    rendered = ["\n".join(lines) for lines in blocks]
+    candidates = [
+        block
+        for block in rendered
+        if all(displacement in block for displacement in ("[bp-100]", "[bp-132]"))
+        and "fld qword ptr" in block
+        and "fstp qword ptr" in block
+    ]
+    assert len(candidates) == 1, candidates
+    hot = candidates[0]
+
+    assert "fld qword ptr" in hot and "fstp qword ptr" in hot, hot
+    for displacement in ("[bp-100]", "[bp-132]"):
+        addresses = [line for line in hot.splitlines() if "lea " in line and displacement in line]
+        assert len(addresses) <= 1, hot
+
+
 def test_reference_compilers_name_the_i686_gcc_not_the_host_gcc() -> None:
     assert quality.REFERENCE_COMPILERS == ("clang", "i686-elf-gcc")
 

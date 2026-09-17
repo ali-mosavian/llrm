@@ -27,6 +27,7 @@ class Peephole(LIRTransform):
         from qbopt.backend import phielim
         from qbopt.backend import copyprop
         from qbopt.backend import copysink
+        from qbopt.backend import machinecse
         from qbopt.backend import regthrash
         from qbopt.backend import spillforward
         from qbopt.backend import storecombine
@@ -43,7 +44,8 @@ class Peephole(LIRTransform):
         body = storecombine.combined(body)
         body = pushed_constants(body)
         body = far_loads(fused(overwritten(shuttles(commuted(constants(pushes(body)))))))
-        return self._frame(waits(zero_compares(tested(zeroes(addresses(body))))))
+        body = machinecse.eliminated(addresses(body))
+        return self._frame(waits(zero_compares(tested(zeroes(body)))))
 
     def _frame(self, body):
         """Drop only synthetic reservations when no added stack storage remains."""
