@@ -255,7 +255,7 @@ def test_the_verifier_objects_to_a_body_that_claims_a_byte_twice() -> None:
 def test_a_spilled_value_gets_a_slot_and_the_prologue_reserves_it() -> None:
     """Choosing to spill is half of it. Until the spiller existed the
     choice was made and 237 of 487 objects were refused because an operand
-    still named a value with no register."""
+    still named a value with no register. Dead ranges may share one slot."""
     from qbopt.backend import verify
     from qbopt.backend import spiller
     from qbopt.backend import prologue
@@ -277,7 +277,12 @@ def test_a_spilled_value_gets_a_slot_and_the_prologue_reserves_it() -> None:
     assert got.spilled, "harr-p-evt spills; the allocator says otherwise"
     frame = frames.of(low)
     after, reloads = spiller.spilled(low, got.spilled, frame)
-    assert frame.size >= 2 * len(got.spilled), "the frame did not grow by a slot per spilled value"
+    assert got.spilled <= frame.slots.keys(), "a spilled value has no frame slot"
+    live = intervals.intervals(low)
+    for value in got.spilled:
+        for other in got.spilled:
+            if value < other and frame.slots[value] == frame.slots[other]:
+                assert not live[value].overlaps(live[other]), "overlapping values share a spill slot"
     assert reloads, "spilling made no reload values"
     again = allocate.allocate(after, {}, reloads).spilled
     assert not (again & (got.spilled | reloads)), "spilling freed no register"

@@ -29,6 +29,7 @@ from qbopt.backend import frame as frames
 from qbopt.objectfile.module import Space
 from qbopt.model.passes import LIRTransform
 from qbopt.analysis.regions import addresses
+from qbopt.analysis import intervals as ranges
 
 
 class Spiller(LIRTransform):
@@ -66,8 +67,7 @@ def spilled(
     stored = values - constants.keys() - frame_loads.keys() - frame_homes.keys()
     # Before any cell names a slot: one made at the first use's width is
     # outgrown by a wider use later, which then writes over its neighbour.
-    for value, width in sorted(_widest(body, stored).items()):
-        frame.slot(value, width)
+    _color_slots(body, stored, _widest(body, stored), frame)
     abandoned: set[int] = set()
     rematerialized_definitions: set[int] = set()
     identities: set[int] = set()
@@ -311,6 +311,47 @@ def siblings(body: lir.LirBody, values: "frozenset[int]", frame, fixed: "frozens
         taken |= group
         chosen |= group - values
     return frozenset(chosen)
+
+
+def _color_slots(
+    body: lir.LirBody, values: "set[int] | frozenset[int]", widths: dict[int, int], frame: frames.Frame
+) -> None:
+    """Assign compatible noninterfering spill values to the same frame slot.
+
+    Values already assigned by an earlier spill round retain their slots: the
+    rewritten body no longer carries their original live interval. New values
+    are considered widest first, so a smaller value can safely occupy a larger
+    slot without growing into an already allocated neighbour.
+    """
+    live = ranges.intervals(body)
+    colors: list[tuple[int, int, list[ranges.Interval]]] = []
+    pending = sorted(
+        (value for value in values if value not in frame.slots),
+        key=lambda value: (-max(widths[value], frames.WORD), value),
+    )
+    for value in pending:
+        width = widths[value]
+        capacity = max(width, frames.WORD)
+        interval = live.get(value)
+        if interval is None:
+            frame.slot(value, width)
+            continue
+        color = next(
+            (
+                one
+                for one in colors
+                if one[1] >= capacity
+                and all(not interval.overlaps(other) for other in one[2])
+            ),
+            None,
+        )
+        if color is None:
+            home = frame.slot(value, width)
+            colors.append((home, capacity, [interval]))
+            continue
+        home, _capacity, occupants = color
+        frame.slots[value] = home
+        occupants.append(interval)
 
 
 def rematerializable(body: lir.LirBody, values: frozenset[int]) -> frozenset[int]:

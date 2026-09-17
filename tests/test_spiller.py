@@ -320,6 +320,47 @@ def test_spilled_constant_is_rematerialized_without_a_frame_slot() -> None:
     assert result[-1].what.sources[1].value == result[-2].defines[0]
 
 
+def test_nonoverlapping_spills_share_one_compatible_frame_slot() -> None:
+    """Two sequential spills reserved separate words although their lifetimes never overlap."""
+    frame = frames.Frame(0)
+    body = _body(_move(1, 10, at=0x10), _add(11, 1, at=0x12), _move(2, 20, at=0x14), _add(21, 2, at=0x16))
+    spiller.spilled(body, frozenset({1, 2}), frame)
+    assert frame.slots[1] == frame.slots[2]
+    assert frame.size == 2
+
+
+def test_overlapping_spills_keep_distinct_frame_slots() -> None:
+    """Slot coloring must follow liveness, not merely source instruction order."""
+    frame = frames.Frame(0)
+    body = _body(_move(1, 10, at=0x10), _move(2, 20, at=0x12), _add(11, 1, at=0x14), _add(21, 2, at=0x16))
+    spiller.spilled(body, frozenset({1, 2}), frame)
+    assert frame.slots[1] != frame.slots[2]
+    assert frame.size == 4
+
+
+def test_narrow_spill_can_reuse_a_dead_wider_slot() -> None:
+    """Compatible slot coloring is by capacity, not only exact value width."""
+    frame = frames.Frame(0)
+    wide = lir.Insn(
+        0x10,
+        (0x10, 0x10),
+        ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(1, 4),), (ir.Held(10, 4),)),
+        (1,),
+        (10,),
+    )
+    use_wide = lir.Insn(
+        0x12,
+        (0x12, 0x12),
+        ir.Semantics(ir.Operation.BINARY, "add", (ir.Held(11, 4),), (ir.Held(11, 4), ir.Held(1, 4))),
+        (11,),
+        (11, 1),
+    )
+    body = _body(wide, use_wide, _move(2, 20, at=0x14), _add(21, 2, at=0x16))
+    spiller.spilled(body, frozenset({1, 2}), frame)
+    assert frame.slots[1] == frame.slots[2]
+    assert frame.size == 4
+
+
 @pytest.mark.parametrize("destination_spilled", [False, True])
 def test_grouped_constant_rematerializes_without_splitting_parallel_copy(destination_spilled):
     """NBODY's literal zero was spilled because its loop initializers belonged to parallel copies."""
