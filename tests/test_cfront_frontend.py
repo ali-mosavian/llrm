@@ -198,6 +198,28 @@ def test_repeated_volatile_accesses_remain_observable(tmp_path):
     assert len(writes) == 2, write_body
 
 
+def test_volatile_floating_accesses_retain_encodable_semantics(tmp_path):
+    """The C floating benchmark stopped before lowering.
+
+    Marking a volatile load/store by replacing its machine operation with a
+    generic barrier preserved ordering but erased the ``fld``/``fstp`` shape
+    that validates its IEEE conversion semantics.  Volatility and encoded
+    computation are independent facts; optimized output must retain both.
+    """
+    text = _stream(
+        tmp_path,
+        "double once(void) { volatile double value = 1.0; "
+        "value = value + 0.5; return value; }\n",
+    )
+
+    assembly = cfront.compiled(text, "volatile_float", optimise=True)
+    body = assembly[assembly.index("_once proc far") : assembly.index("_once endp")]
+
+    assert body.count("fld ") >= 2, body
+    assert "fadd" in body, body
+    assert "fstp" in body, body
+
+
 def test_near_function_pointer_call_reaches_the_emitter(tmp_path):
     """qcport's pl_items_touch calls ItemInfo.take through a near pointer;
     the frontend stopped at `indirect call` instead of emitting `call r/m16`."""

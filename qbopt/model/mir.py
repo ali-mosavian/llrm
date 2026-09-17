@@ -898,6 +898,11 @@ class Op:
     memory_complete: bool = False
     # Complete value reads do not imply movable or removable side effects.
     reads_complete: bool = False
+    # A source-language volatile access is ordered and observable while its
+    # computation remains fully modeled.  This cannot be represented by
+    # replacing ``op`` with Operation.BARRIER: doing so erases the encoded
+    # floating operation whose precision and rounding lowering must verify.
+    volatile: bool = field(default=False, kw_only=True)
     # Effects on resources MIR deliberately does not model as values. Names,
     # not registers: passes may preserve ordering without learning machine
     # locations. None means every such resource.
@@ -919,7 +924,7 @@ class Op:
 
     @property
     def barrier(self) -> bool:
-        return self.op is ir.Operation.BARRIER
+        return self.op is ir.Operation.BARRIER or self.volatile
 
     @property
     def inserted(self) -> bool:

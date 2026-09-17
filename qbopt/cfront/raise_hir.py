@@ -392,14 +392,16 @@ class _Raise:
         references = (*extra.get("loads", ()), *extra.get("stores", ()))
         observable = any(ref.volatile for ref in references)
         if observable:
-            # The explicit references are the complete footprint; BARRIER
-            # prevents elimination and motion without pretending a volatile
-            # read writes all memory or a volatile store reads all memory.
+            # The explicit references are the complete footprint. Volatility
+            # prevents elimination and motion without pretending a read
+            # writes all memory or erasing the modeled operation that lowering
+            # must encode (notably fld/fstp precision and rounding).
             extra["memory_complete"] = True
             extra["reads_complete"] = True
+            extra["volatile"] = True
         made = mir.Op(
             self.at,
-            ir.Operation.BARRIER if observable else ir.Operation.NOTHING,
+            ir.Operation.NOTHING,
             "",
             defines,
             uses,
