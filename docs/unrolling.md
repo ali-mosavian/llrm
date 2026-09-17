@@ -84,10 +84,30 @@ and FPEMU also passed. Final FPCSE stage dumps and runtime artifacts:
 The earlier before listing is under
 `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-exact-loop-42yop23c/after`.
 
-Bounded unrolling now runs after placement in the normal MIR pipeline.
-The next fixed-point iteration folds the exposed computations; callers can
-disable expansion with `unroll_=False`. The existing two-to-four-trip and
-256-operation bound remains. No CPU timing or register decisions enter MIR.
+Bounded unrolling is now a transaction at its original post-placement pass
+boundary. The raw expansion is sent through the ordinary scalar fixed point,
+then accepted only when it removes a loop and its exact-trip dynamic cost falls
+by more than the target-priced charge for added semantic operations. The cost
+model is the shared machine-neutral `optimize/profit.py`; MIR sees arithmetic,
+memory, call, branch and x87 prices, never registers or encodings. Unpriced work
+rejects the candidate. A rejected loop is skipped while later candidates are
+considered, and callers can still disable expansion with `unroll_=False`.
+
+Waiting for the scalar fixed point before proposing the expansion was tested
+and reverted: it destroyed matmul's recognizable exact inner loop. The existing
+emitted regression failed with 13 branches. Asking at the original boundary and
+converging only the candidate retains the eight-element expansion. On the 386
+quality report the current `_bench_matmul` is 642 bytes, 165 instructions, 849
+modeled static units and 6,726 estimated dynamic operations, with its independent
+runtime answer unchanged. `_bench_crc` remains 225 bytes / 63 instructions and
+`_bench_nbody` remains 598 bytes / 138 instructions. These are structural model
+results, not elapsed-time claims.
+
+The eight-profile scan retains 165 matmul instructions everywhere (642 bytes on
+386/486/P5, 646 on P6/K5/K6/K7/Core), 63 CRC instructions / 225 bytes, and 138
+nbody instructions / 598 bytes. Their profile costs differ as intended; their
+hard targets are still missing, so this is cross-target consistency evidence,
+not a completed GCC/Clang parity gate.
 
 Larger-than-four-trip loops may now expand within that same operation budget
 when every extended floating result in the expanded loop is proven exact.
@@ -159,8 +179,10 @@ monkeypatch**, FPDEEP passes all 33 output checks across PDS, QB and VBDOS.
 58 focused expansion, emission and floating-allocation tests pass.
 Artifacts: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-clone-integrated-warr3ky_`.
 
-The generic cost model's ten-trip assumption exaggerates this improvement:
-FPDEEP actually runs three iterations. Re-costing both sides with three
+The former generic cost model's ten-trip assumption exaggerated this improvement:
+FPDEEP actually runs three iterations. The transactional selector now keys the
+proved count by latch and uses it for this decision. The historical recosting
+that motivated that correction was:
 iterations gives the following static estimates, **not runtime timings**:
 
 | Compiler | Normal optimized | Expanded + folded | Target |

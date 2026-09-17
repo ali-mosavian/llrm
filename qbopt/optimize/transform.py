@@ -2786,43 +2786,63 @@ def applied(
     # times as long while producing identical code.
     boundary = [one for one in passes if isinstance(one, promote.Sroa)]
     passes = [one for one in passes if not isinstance(one, promote.Sroa)]
+    unrollers = [one for one in passes if isinstance(one, unroll.Unroll)]
+    passes = [one for one in passes if not isinstance(one, unroll.Unroll)]
     for one in boundary:
         body = one.transform(body)
         if watch is not None:
             watch(f"r01-{one.name}", body)
     if only is not None and boundary:
         return body
-    # A monotone chain may expose one simplification per operation.  Sixteen
-    # happened to cover the old corpus, but an early scalar-replacement
-    # experiment made matmul's longer address chain prove that a constant
-    # limit is not a fixed-point rule.  Scale with the body and separately
-    # reject a repeated state, so an oscillator fails immediately instead of
-    # consuming that larger allowance.
-    size = sum(1 + len(block.phis) + len(block.ops) for block in body.blocks)
-    limit = max(16, size + 1)
-    history = [body]
-    for iteration in range(limit):
-        before = body
-        for one in passes:
-            body = one.transform(body)
-            if watch is not None:
-                watch(f"r{iteration + 1:02d}-{one.name}", body)
-        if only is not None or body == before:
-            if only is None and unswitch_:
-                from qbopt.optimize import unswitch
+    if only is not None and unrollers:
+        body = unrollers[0].transform(body)
+        if watch is not None:
+            watch("r01-unroll", body)
+        return body
 
-                return unswitch.optimized(
-                    body,
-                    dgroup,
-                    calls,
-                    registers=where.registers,
-                    call_registers=where.call_registers,
-                    index_scales=where.index_scales,
-                    costs=where.costs,
+    def fixed(state: MirBody, *, consider_unroll: bool = False) -> MirBody:
+        # A monotone chain may expose one simplification per operation.
+        # Scale with the body and separately reject a repeated state, so an
+        # oscillator fails immediately instead of consuming that allowance.
+        size = sum(1 + len(block.phis) + len(block.ops) for block in state.blocks)
+        limit = max(16, size + 1)
+        history = [state]
+        for iteration in range(limit):
+            before = state
+            for one in passes:
+                state = one.transform(state)
+                if watch is not None:
+                    watch(f"r{iteration + 1:02d}-{one.name}", state)
+            # Ask at the original pipeline boundary. Fully converging the
+            # scalar passes first destroys matmul's exact counted-loop shape;
+            # accepting the candidate still requires a separately converged
+            # result, so profitability never compares a rough expansion.
+            if consider_unroll and unrollers:
+                state = unroll.optimized(
+                    state,
+                    where,
+                    optimize=lambda candidate: fixed(candidate),
                     watch=watch,
                 )
-            return body
-        if any(body == previous for previous in history):
-            raise RuntimeError(f"MIR optimization did not converge: cycle after {iteration + 1} rounds")
-        history.append(body)
-    raise RuntimeError(f"MIR optimization did not converge after {limit} size-scaled rounds")
+            if only is not None or state == before:
+                return state
+            if any(state == previous for previous in history):
+                raise RuntimeError(f"MIR optimization did not converge: cycle after {iteration + 1} rounds")
+            history.append(state)
+        raise RuntimeError(f"MIR optimization did not converge after {limit} size-scaled rounds")
+
+    body = fixed(body, consider_unroll=bool(unrollers))
+    if unswitch_:
+        from qbopt.optimize import unswitch
+
+        body = unswitch.optimized(
+            body,
+            dgroup,
+            calls,
+            registers=where.registers,
+            call_registers=where.call_registers,
+            index_scales=where.index_scales,
+            costs=where.costs,
+            watch=watch,
+        )
+    return body

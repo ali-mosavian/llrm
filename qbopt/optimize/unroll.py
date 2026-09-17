@@ -17,6 +17,7 @@ from qbopt.analysis import induction
 from qbopt.model.passes import Where
 from qbopt.analysis import floatfacts
 from qbopt.model.passes import MIRTransform
+from qbopt.optimize import profit
 
 
 class Unroll(MIRTransform):
@@ -29,7 +30,13 @@ class Unroll(MIRTransform):
         return expanded(body, self.where.dgroup, self.where.calls)
 
 
-def expanded(body: mir.MirBody, dgroup: frozenset[int], calls: dict) -> mir.MirBody:
+def expanded(
+    body: mir.MirBody,
+    dgroup: frozenset[int],
+    calls: dict,
+    *,
+    skip: frozenset[int] = frozenset(),
+) -> mir.MirBody:
     blocks = {block.at: block for block in body.blocks}
     predecessors = loops.predecessors(body.blocks)
     facts = consts.known(body, dgroup, calls)
@@ -38,6 +45,8 @@ def expanded(body: mir.MirBody, dgroup: frozenset[int], calls: dict) -> mir.MirB
             continue
         header = blocks[loop.header]
         latch = blocks[next(iter(loop.latches))]
+        if latch.at in skip:
+            continue
         outside = set(predecessors[header.at]) - loop.body
         exits = set(header.succ) - loop.body
         if len(outside) != 1 or len(exits) != 1 or latch.phis:
@@ -119,6 +128,56 @@ def expanded(body: mir.MirBody, dgroup: frozenset[int], calls: dict) -> mir.MirB
                 continue
         return candidate
     return body
+
+
+def _size(body: mir.MirBody) -> int:
+    return sum(len(block.phis) + sum(op.kind is not mir.Kind.NOTHING for op in block.ops) for block in body.blocks)
+
+
+def _profitable(
+    before: mir.MirBody,
+    after: mir.MirBody,
+    latch: int,
+    count: int,
+    where: Where,
+) -> bool:
+    """Whether exact dynamic savings pay for the optimized straight-line body."""
+    if len(loops.loops(after.blocks, after.entry)) >= len(loops.loops(before.blocks, before.entry)):
+        return False
+    dynamic_before = profit.weighted(before, where.costs, {latch: count})
+    dynamic_after = profit.weighted(after, where.costs)
+    if dynamic_before is None or dynamic_after is None or dynamic_after >= dynamic_before:
+        return False
+    # MIR cannot know final encoding bytes. Charge one register move per added
+    # semantic operation: target-priced, bounded, and never an implicit free
+    # expansion. Later selection still supplies the exact size measurement.
+    growth = max(0, _size(after) - _size(before)) * where.costs.move
+    return dynamic_before - dynamic_after > growth
+
+
+def optimized(body: mir.MirBody, where: Where, *, optimize, watch=None) -> mir.MirBody:
+    """Repeatedly expand one profitable exact loop and re-run scalar MIR."""
+    rejected: set[int] = set()
+    while True:
+        candidate = expanded(body, where.dgroup, where.named, skip=frozenset(rejected))
+        if candidate is body:
+            return body
+        additions = candidate.repetitions[len(body.repetitions) :]
+        if len(additions) != 1:
+            return body
+        latch, count = additions[0]
+        if latch in rejected:
+            return body
+        if watch is not None:
+            watch("unroll-candidate", candidate)
+        result = optimize(candidate)
+        if not _profitable(body, result, latch, count, where):
+            rejected.add(latch)
+            continue
+        body = result
+        if watch is not None:
+            watch("unroll-accepted", body)
+        rejected.clear()
 
 
 def _expanded(body, loop, header, latch, latch_ops, exit_at, entry, count):

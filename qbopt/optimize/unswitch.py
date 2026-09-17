@@ -5,114 +5,7 @@ from dataclasses import replace
 from qbopt.analysis import loops, ssa
 from qbopt.model import mir
 from qbopt.model.passes import OperationCosts
-from qbopt.optimize import edges, lcssa, loopclone
-
-
-_ALU = frozenset(
-    {
-        mir.Kind.ADD,
-        mir.Kind.SUB,
-        mir.Kind.ADD_CARRY,
-        mir.Kind.SUB_BORROW,
-        mir.Kind.INCREMENT,
-        mir.Kind.DECREMENT,
-        mir.Kind.AND,
-        mir.Kind.OR,
-        mir.Kind.XOR,
-        mir.Kind.NEG,
-        mir.Kind.NOT,
-        mir.Kind.LT,
-        mir.Kind.LE,
-        mir.Kind.GT,
-        mir.Kind.GE,
-        mir.Kind.EQ,
-        mir.Kind.NE,
-        mir.Kind.BELOW,
-        mir.Kind.BELOW_EQ,
-        mir.Kind.ABOVE,
-        mir.Kind.ABOVE_EQ,
-    }
-)
-_MOVES = frozenset(
-    {
-        mir.Kind.COPY,
-        mir.Kind.CONVERT,
-        mir.Kind.SIGN_EXTEND,
-        mir.Kind.ZERO_EXTEND,
-        mir.Kind.EXTRACT,
-        mir.Kind.CONCAT,
-        mir.Kind.JOIN,
-        mir.Kind.ARG,
-        mir.Kind.RESULT,
-    }
-)
-
-
-def _operation_cost(one: mir.Op, costs: OperationCosts) -> int | None:
-    """Target price for semantic work, or None when the profile cannot price it."""
-    if one.kind is mir.Kind.NOTHING:
-        return 0
-    if one.kind is mir.Kind.FLOAD:
-        return costs.float_load
-    if one.kind is mir.Kind.FSTORE:
-        return costs.float_store
-    folded_update = len(one.loads) == len(one.stores) == 1 and one.loads == one.stores
-    memory = (
-        costs.memory_update
-        if folded_update
-        else len(one.loads) * costs.load + len(one.stores) * costs.store
-    )
-    if one.kind in (mir.Kind.LOAD, mir.Kind.STORE):
-        return memory
-    if folded_update:
-        return memory
-    if one.kind in _ALU:
-        work = costs.add
-    elif one.kind in _MOVES:
-        work = costs.move
-    elif one.kind in (mir.Kind.MUL, mir.Kind.SMULHI):
-        work = costs.multiply
-    elif one.kind in (mir.Kind.DIV, mir.Kind.REM, mir.Kind.DIVMOD, mir.Kind.UDIVMOD):
-        work = costs.divide
-    elif one.kind in (mir.Kind.SHL, mir.Kind.SHR, mir.Kind.SAR):
-        work = costs.shift
-    elif one.kind in (mir.Kind.ADDRESS, mir.Kind.PTR_OFFSET):
-        work = costs.address
-    elif one.kind in (mir.Kind.FADD, mir.Kind.FSUB, mir.Kind.FNEG, mir.Kind.FABS, mir.Kind.FCOMPARE):
-        work = costs.float_add
-    elif one.kind is mir.Kind.FMUL:
-        work = costs.float_multiply
-    elif one.kind in (mir.Kind.FDIV, mir.Kind.FSQRT):
-        work = costs.float_divide
-    elif one.kind is mir.Kind.FCHECK:
-        work = costs.float_store
-    elif one.kind is mir.Kind.CALL:
-        work = costs.call
-    elif one.kind in (mir.Kind.RETURN, mir.Kind.ESCAPE):
-        work = costs.return_
-    elif one.kind in (mir.Kind.BRANCH, mir.Kind.SWITCH, mir.Kind.JUMP):
-        work = costs.branch
-    else:
-        return None
-    return work + memory
-
-
-def _weighted_cost(body: mir.MirBody, costs: OperationCosts) -> int | None:
-    """Profile-free expected work, using ten iterations per loop level."""
-    depth = {block.at: 0 for block in body.blocks}
-    for loop in loops.loops(body.blocks, body.entry):
-        for at in loop.body:
-            if at in depth:
-                depth[at] += 1
-    total = 0
-    for block in body.blocks:
-        priced = tuple(_operation_cost(one, costs) for one in block.ops)
-        if any(one is None for one in priced):
-            return None
-        total += (10 ** depth[block.at]) * (
-            len(block.phis) * costs.move + sum(one for one in priced if one is not None)
-        )
-    return total
+from qbopt.optimize import edges, lcssa, loopclone, profit
 
 
 def optimized(
@@ -139,7 +32,7 @@ def optimized(
     def size(state):
         return sum(op.kind is not mir.Kind.NOTHING for block in state.blocks for op in block.ops)
     prices = costs or OperationCosts()
-    before, after = _weighted_cost(body, prices), _weighted_cost(result, prices)
+    before, after = profit.weighted(body, prices), profit.weighted(result, prices)
     if (len(loops.loops(result.blocks, result.entry)) >= len(loops.loops(body.blocks, body.entry))
         or size(result) > size(body)
         or before is None

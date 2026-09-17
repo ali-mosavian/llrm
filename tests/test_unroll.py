@@ -11,7 +11,60 @@ from qbopt.analysis import loops
 from qbopt.optimize import unroll
 from qbopt.optimize import transform
 from qbopt.analysis import floatfacts
+from qbopt.backend import cpu
 from qbopt.backend import lower_floats
+from qbopt.model.passes import OperationCosts, Where
+
+
+def test_unroll_rejects_growth_not_paid_for_by_dynamic_work(monkeypatch) -> None:
+    """Five straight-line moves are not a win over a two-trip ADD/branch loop."""
+    from qbopt.model import ir
+
+    add = mir.Op(1, ir.Operation.BINARY, "add", (), (), kind=mir.Kind.ADD)
+    branch = mir.Op(1, ir.Operation.BRANCH, "jne", (), (), kind=mir.Kind.BRANCH, target=1)
+    original = mir.MirBody(
+        0,
+        (
+            mir.MirBlock(0, (), (), (1,)),
+            mir.MirBlock(1, (), (add, branch), (1, 2)),
+            mir.MirBlock(2, (), (), ()),
+        ),
+    )
+    move = lambda at: mir.Op(at, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.COPY)
+    candidate = mir.MirBody(
+        0,
+        (mir.MirBlock(0, (), tuple(move(at) for at in range(5)), (2,)), mir.MirBlock(2, (), (), ())),
+        repetitions=((1, 2),),
+    )
+    monkeypatch.setattr(unroll, "expanded", lambda *_args, **_kwargs: candidate)
+    where = Where(costs=OperationCosts(add=1, branch=2, move=1))
+
+    assert unroll.optimized(original, where, optimize=lambda body: body) is original
+
+
+def test_unroll_profitability_uses_the_selected_cpu() -> None:
+    """A short branch-heavy expansion is worthwhile on 386 but not P5."""
+    from qbopt.model import ir
+
+    add = mir.Op(1, ir.Operation.BINARY, "add", (), (), kind=mir.Kind.ADD)
+    branch = mir.Op(1, ir.Operation.BRANCH, "jne", (), (), kind=mir.Kind.BRANCH, target=1)
+    original = mir.MirBody(
+        0,
+        (
+            mir.MirBlock(0, (), (), (1,)),
+            mir.MirBlock(1, (), (add, branch), (1, 2)),
+            mir.MirBlock(2, (), (), ()),
+        ),
+    )
+    move = lambda at: mir.Op(at, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.COPY)
+    result = mir.MirBody(
+        0,
+        (mir.MirBlock(0, (), tuple(move(at) for at in range(3)), (2,)), mir.MirBlock(2, (), (), ())),
+        repetitions=((1, 2),),
+    )
+
+    assert unroll._profitable(original, result, 1, 2, Where(costs=cpu.profile("386").operations))
+    assert not unroll._profitable(original, result, 1, 2, Where(costs=cpu.profile("P5").operations))
 
 
 def test_c_matmul_unrolls_an_exact_integer_inner_loop() -> None:

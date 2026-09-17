@@ -271,8 +271,10 @@ flowchart LR
     LoopSimplify --> LCSSA["lcssa"] --> Hoist["hoist<br/>+ sink stores"] --> DS["drop_stores"]
     DS --> GVN["gvn<br/>scalar + memory PRE<br/>divide reuse"] --> Promote["promote"]
     Promote --> Strength["strength"] --> Algebraic["algebraic"]
-    Algebraic --> Dead["dead"] --> Place["place"] --> Unroll["unroll"]
-    Unroll --> Fill["fill"] --> Changed{"body changed?"}
+    Algebraic --> Dead["dead"] --> Place["place"] --> Fill["fill"]
+    Fill --> Unroll{"profitable exact<br/>unroll candidate?"}
+    Unroll -->|"accepted after its own fixed point"| Changed
+    Unroll -->|"none or rejected"| Changed{"body changed?"}
     Changed -->|"yes, round < 16"| Fold
     Changed -->|"no"| Wide["temporary post-pass widening seam"]
     Changed -->|"still changing at 16"| Error["hard convergence error"]
@@ -1081,6 +1083,17 @@ one documented target without materially regressing another.
   ```
 - [ ] Add loop rotation only where it improves the canonical form or emitted
   branch structure.
+  Exact full unrolling now proposes a candidate at the established
+  post-placement boundary, runs that candidate through the ordinary scalar
+  fixed point, and compares exact-trip dynamic work using the selected CPU's
+  machine-neutral costs. Added semantic operations pay a target-priced size
+  charge; unpriced work and candidates that retain the loop are rejected.
+  Rejected loops no longer hide later candidates. The fail-first synthetic
+  regression rejects a five-move expansion whose one-unit dynamic saving does
+  not pay for three added operations, while the same branch-heavy shape is
+  accepted for 386 and rejected for P5. Matmul's real eight-trip loop remains
+  expanded; moving candidate discovery after convergence made its emitted
+  branch regression fail and was corrected at the pass boundary.
   `optimize/loopclone.py` now supplies CFG-preserving peeling candidates:
   fresh SSA values, cloned branch joins and early-exit phis, followed by the
   residual loop. It requires loop-closed live-outs and rejects opaque dispatch
@@ -1264,9 +1277,9 @@ one documented target without materially regressing another.
 These are boundary defects with an owner, not permission to add more cross-layer
 knowledge:
 
-1. Target costing is narrower than LLVM/GCC's formula selection. Loop strength
-   reduction and unrolling need register-pressure and target-cost comparisons,
-   not unconditional pattern replacement.
+1. Target costing remains narrower than LLVM/GCC's formula selection. Strength
+   reduction and exact full unrolling now use target costs, but partial unroll,
+   peeling and rotation still need exact code-size and spill forecasts.
 2. Strict numeric behavior and checked-loop preguards are incomplete. Policy is
    already separate (`--basic-semantics`, `--bounds-checks`); broader lowering
    coverage must preserve that separation.
