@@ -63,9 +63,10 @@ def selected(what: ir.Semantics | None, forms: dict[int, tuple[ir.Held, int]]) -
 _SCALES = {4: (0, 1, 2, 3), 2: (0,)}
 type IndexedBase = ir.Held | ir.Address
 type IndexedForm = tuple[IndexedBase, ir.Held, int]
+type FoldedForm = IndexedForm | ir.Address
 
 
-def indexed(body: mir.MirBody, exposed: set[int]) -> tuple[dict[int, IndexedForm], frozenset[int]]:
+def indexed(body: mir.MirBody, exposed: set[int]) -> tuple[dict[int, FoldedForm], frozenset[int]]:
     """Based addresses `b + (c << k)` read only by cells, and what computes them.
 
     The address becomes the cell's `[base+index*scale]` and the add and
@@ -124,7 +125,7 @@ def indexed(body: mir.MirBody, exposed: set[int]) -> tuple[dict[int, IndexedForm
             and not any(one.flags and (one.id in other or one.id in bases) for one in op.defines)
         )
 
-    forms: dict[int, IndexedForm] = {}
+    forms: dict[int, FoldedForm] = {}
     folded: set[int] = set()
     for block in body.blocks:
         for op in block.ops:
@@ -132,6 +133,22 @@ def indexed(body: mir.MirBody, exposed: set[int]) -> tuple[dict[int, IndexedForm
                 continue
             address = op.results[0]
             if address.value.id in other or address.value.id not in bases or address.width not in _SCALES:
+                continue
+            held = [one for one in op.args if isinstance(one, mir.Held) and one.width == address.width]
+            constants = [one for one in op.args if isinstance(one, mir.Const) and one.width == address.width]
+            if len(held) == len(constants) == 1 and (fixed := frame_bases.get(held[0].value.id)) is not None:
+                # `&local[0] + 8` is an address spelling, not a value worth
+                # carrying.  Full unrolling exposes many of these with a
+                # literal subscript; keep the 16-bit wrapping arithmetic and
+                # put the result straight in the BP displacement.
+                displacement = (fixed.offset + constants[0].n + 32768) % 65536 - 32768
+                forms[address.value.id] = replace(
+                    fixed,
+                    addr=replace(fixed.addr, disp=displacement) if fixed.addr is not None else None,
+                    offset=displacement,
+                    disp_width=1 if -128 <= displacement <= 127 else 2,
+                )
+                folded.add(address.value.id)
                 continue
             if not all(isinstance(one, mir.Held) and one.width == address.width for one in op.args):
                 continue
@@ -165,7 +182,7 @@ def indexed(body: mir.MirBody, exposed: set[int]) -> tuple[dict[int, IndexedForm
     return forms, frozenset(folded)
 
 
-def scaled(what: ir.Semantics | None, forms: dict[int, IndexedForm]) -> ir.Semantics | None:
+def scaled(what: ir.Semantics | None, forms: dict[int, FoldedForm]) -> ir.Semantics | None:
     """`what` with every folded far address written as its cell's base and index."""
     if what is None or not forms:
         return what
@@ -173,7 +190,11 @@ def scaled(what: ir.Semantics | None, forms: dict[int, IndexedForm]) -> ir.Seman
     def operand(arg: object) -> object:
         if not isinstance(arg, ir.Mem) or arg.base is None or arg.base.value not in forms:
             return arg
-        base, index, scale = forms[arg.base.value]
+        form = forms[arg.base.value]
+        if isinstance(form, ir.Address):
+            base, index, scale = form, None, 1
+        else:
+            base, index, scale = form
         if isinstance(base, ir.Address):
             if (
                 base.addr is None
@@ -188,6 +209,15 @@ def scaled(what: ir.Semantics | None, forms: dict[int, IndexedForm]) -> ir.Seman
             # literal spelling says no relocation owns the displacement;
             # SS preserves the frame selector when the data model has DS != SS.
             displacement = (arg.addr.disp + base.offset + 32768) % 65536 - 32768
+            if index is None:
+                return replace(
+                    arg,
+                    addr=replace(base.addr, disp=displacement),
+                    through=Register.NONE,
+                    base=None,
+                    index=None,
+                    scale=1,
+                )
             return replace(
                 arg,
                 addr=replace(arg.addr, space=Space.LITERAL, disp=displacement, segment=Register.SS),

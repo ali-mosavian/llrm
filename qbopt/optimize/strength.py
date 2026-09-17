@@ -121,8 +121,6 @@ def reduced(
                 and any(isinstance(offset, mir.Held) for offset, _ in one.offsets)
             )
         ]
-        consumed = {arg.value for one in candidates for arg in one.op.args if isinstance(arg, mir.Held)}
-        candidates = [one for one in candidates if one.op.results[0].value not in consumed]
         if scales:
             candidates = [one for one in candidates if not _indexed(body, one)]
         # Priced, which is the half of LLVM's LSR this did not have. A
@@ -140,6 +138,15 @@ def reduced(
         # 1.03x to 1.63x. Values live across the backedge is no better: a
         # promoted loop legitimately carries more than the register file,
         # and harr's loops report nine.
+        leaves = _formula_set(candidates)
+        free = {id(one.op) for one in leaves if _indexable(body, loop, one, scales, facts) is not None}
+        room = len(candidates)
+        capacity = registers
+        if call_registers and any(op.kind is mir.Kind.CALL for at in loop.body for op in at_of[at].ops):
+            capacity = min(capacity, call_registers) if capacity else call_registers
+        if capacity:
+            room = max(0, capacity - _recurrences(body, loop) - _RESERVE)
+        candidates = _formula_set(candidates, room, free)
         indexes = {
             id(one.op): scale for one in candidates if (scale := _indexable(body, loop, one, scales, facts)) is not None
         }
@@ -217,23 +224,9 @@ def reduced(
             )
             wide.add(answer)
         candidates = [one for one in candidates if id(one.op) not in indexes]
-        # An address recurrence replaces the basic counter's repeated
-        # multiply/add chain and gives indvars an equivalent loop-control
-        # value; it does not consume an additional recurrence slot. Scalar
-        # products do, and are priced against the registers that survive a
-        # call below. This is the small form of LLVM LSR's formula choice:
-        # distinguish a replacement formula from another live IV.
-        replacements_for_iv = {
-            id(one.op)
-            for one in candidates
-            if one.op.kind is mir.Kind.ADD and one.offsets and _multiplies(one, derived)
-        }
-        room = len(candidates)
-        capacity = registers
-        if call_registers and any(op.kind is mir.Kind.CALL for at in loop.body for op in at_of[at].ops):
-            capacity = min(capacity, call_registers) if capacity else call_registers
-        if capacity:
-            room = max(0, capacity - _recurrences(body, loop) - _RESERVE)
+        # Every remaining formula is a value live around the loop. Formula
+        # selection above has already collapsed complete sibling groups when
+        # their separate address recurrences would exceed this budget.
         added = 0
         # One counter an expression. Reads of `t[j]` through two counters
         # stepping alike are one recurrence, and given one each, a round at a
@@ -251,7 +244,7 @@ def reduced(
             if key in shared:
                 replacements[id(one.op)] = _copying(one.op, shared[key], answer, width)
                 continue
-            if id(one.op) not in replacements_for_iv and added >= room:
+            if added >= room:
                 continue
             if _times(one.of.step, one.by, width) is None:
                 continue
@@ -284,8 +277,7 @@ def reduced(
             )
             replacements[id(one.op)] = _copying(one.op, start, answer, width)
             shared[key] = start
-            if id(one.op) not in replacements_for_iv:
-                added += 1
+            added += 1
 
     if not replacements:
         return body
@@ -303,6 +295,70 @@ def reduced(
         ),
     )
     return ssa.constructed(changed, frozenset(range(first, taken + 1)))
+
+
+def _formula_set(
+    candidates: list[induction.Derived],
+    room: int | None = None,
+    free: set[int] | frozenset[int] = frozenset(),
+) -> list[induction.Derived]:
+    """Choose whole recurrence formulas, collapsing sibling address forms.
+
+    A shared product followed by several invariant base additions has two
+    useful representations: carry every resulting address, or carry the one
+    product and retain the cheap additions. Selecting only some addresses is
+    the bad third representation -- both the shared product and some of its
+    children remain live. Collapse a complete sibling group whenever its leaf
+    formulas do not fit, and leave unrelated formulas for the ordinary budget
+    below to rank in source order.
+
+    ``free`` names leaves that lowering can express as indexed memory forms;
+    they consume no recurrence and must not make their shared parent win.
+    """
+    made = {
+        one.op.results[0].value: one for one in candidates if one.op.results and isinstance(one.op.results[0], mir.Held)
+    }
+    consumed = {
+        arg.value for one in candidates for arg in one.op.args if isinstance(arg, mir.Held) and arg.value in made
+    }
+    selected = {
+        id(one.op)
+        for one in candidates
+        if one.op.results and isinstance(one.op.results[0], mir.Held) and one.op.results[0].value not in consumed
+    }
+    if room is None:
+        return [one for one in candidates if id(one.op) in selected]
+
+    def slots() -> int:
+        return len(selected.difference(free))
+
+    while slots() > room:
+        choices = []
+        for order, parent in enumerate(candidates):
+            if not parent.op.results or not isinstance(parent.op.results[0], mir.Held):
+                continue
+            result = parent.op.results[0].value
+            children = [
+                child
+                for child in candidates
+                if id(child.op) in selected
+                and child.of == parent.of
+                and any(isinstance(arg, mir.Held) and arg.value == result for arg in child.op.args)
+            ]
+            # An indexed child is already the zero-recurrence formula. A
+            # single child saves no pressure by replacing it with its parent.
+            if len(children) < 2 or any(id(child.op) in free for child in children):
+                continue
+            gain = len(children) - (0 if id(parent.op) in selected else 1)
+            if gain > 0:
+                choices.append((gain, -order, parent, children))
+        if not choices:
+            break
+        _gain, _order, parent, children = max(choices, key=lambda choice: choice[:2])
+        selected.difference_update(id(child.op) for child in children)
+        selected.add(id(parent.op))
+
+    return [one for one in candidates if id(one.op) in selected]
 
 
 def _copying(op: Op, start: mir.Value, answer: mir.Value, width: int) -> Op:

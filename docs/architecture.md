@@ -1000,11 +1000,19 @@ one documented target without materially regressing another.
   strength reduction; never create a recurrence merely because one is legal.
   The first call-aware capacity is now explicit: the C ABI exposes two value
   registers across a call, rather than the six available between calls, and a
-  scalar recurrence must fit that smaller budget. Address recurrences that
-  replace the basic counter's multiply/add formula remain eligible rather than
-  being charged as another live induction variable. This is the bounded form
-  of LLVM LSR's distinction between alternative formulas and added registers;
-  complete per-use target costing remains open.
+  scalar recurrence must fit that smaller budget. Formula selection now keeps
+  a shared product and all of its sibling address formulas as one choice: if
+  the leaves do not fit, it carries the shared byte offset and retains the
+  ordinary invariant-base additions, never a pressure-heavy mixture of both
+  representations. Indexed memory formulas consume no recurrence budget.
+  Constant frame addresses exposed by later unrolling fold directly to BP
+  displacements. On C nbody this changes 732 -> 616 bytes, 163 -> 144 emitted
+  instructions, the dynamic-operation estimate 38,793 -> 33,686, and allocator
+  spill reload/store counts 6/6 -> 0/1. The static 386 instruction-price sum is
+  1393 -> 1447 because the fully unrolled four-element update counts its
+  required x87 operations four times where the prior loop body was counted
+  once; the raw assembly has less executed address and branch work. Complete
+  per-use, per-CPU target costing remains open.
 - [ ] Hoist invariant bounds checks into loop preguards when checks are enabled.
   Checked dynamic accesses already become native arithmetic when every index
   is proven within the live descriptor's bounds. Unknown indices or descriptor

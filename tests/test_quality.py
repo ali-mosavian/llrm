@@ -107,6 +107,22 @@ def test_machine_cse_reuses_c_nbody_frame_addresses() -> None:
         assert len(addresses) <= 1, hot
 
 
+def test_nbody_strength_reduction_respects_the_address_register_budget() -> None:
+    """C nbody gave four sibling array addresses independent recurrences.
+
+    The 16-bit address register file could not hold them with the surrounding
+    loop state, so allocation inserted six reload/store pairs. Formula
+    selection must carry their shared byte offset as one recurrence, while
+    constant addresses exposed by unrolling fold into frame displacements.
+    """
+    source = CORPUS / "nbody.c"
+    built = cfront.assembled(cfront.recorded(source, []), "nbody_strength_budget", optimise=True)
+    body = built.procedures[0].body
+
+    assert sum(one.spill_reload for one in body.insns) < 6
+    assert sum(one.spill_store for one in body.insns) < 6
+
+
 def test_shellsort_folds_indexed_frame_array_addresses() -> None:
     """C shellsort rematerialised its fixed local-array base in three hot blocks."""
     source = CORPUS / "shellsort.c"

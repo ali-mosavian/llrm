@@ -153,3 +153,75 @@ def test_indexed_frame_array_uses_bp_as_the_encoded_base() -> None:
     assert indexed.through == Register.BP
     assert indexed.base is None
     assert indexed.index == ir.Held(index.id, 2)
+
+
+def test_constant_frame_array_address_folds_to_a_displacement() -> None:
+    """Unrolled C nbody spilled twelve ``&local[0] + constant`` addresses.
+
+    A constant offset from a known frame object is already an encodable BP
+    displacement.  It must not become a loop-invariant value that allocation
+    has to preserve in a register or spill slot.
+    """
+    frame = mir.Value(1, 0)
+    address = mir.Value(2, 0)
+    loaded = mir.Value(3, 0)
+    frame_address = mir.Op(
+        1,
+        ir.Operation.ADDRESS,
+        "lea",
+        (frame,),
+        (),
+        kind=mir.Kind.ADDRESS,
+        args=(mir.FrameAddress(-36, 2, (-36, -4)),),
+        results=(mir.Held(frame, 2),),
+    )
+    add = mir.Op(
+        2,
+        ir.Operation.BINARY,
+        "add",
+        (address,),
+        (frame,),
+        kind=mir.Kind.ADD,
+        args=(mir.Held(frame, 2), mir.Const(8, 2)),
+        results=(mir.Held(address, 2),),
+    )
+    ref = mir.MemRef(
+        Addr(Space.LITERAL, 0),
+        8,
+        base=address,
+        space=Space.FRAME,
+        base_width=2,
+        within=((-36, -4),),
+    )
+    load = mir.Op(
+        3,
+        ir.Operation.FLOAT_LOAD,
+        "fld",
+        (loaded,),
+        (address,),
+        kind=mir.Kind.FLOAD,
+        args=(mir.Cell(ref),),
+        results=(mir.Held(loaded, 10),),
+        loads=(ref,),
+    )
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (frame_address, add, load), ()),))
+    forms, folded = addressforms.indexed(body, set())
+    cell = ir.Mem(Addr(Space.LITERAL, 0, segment=Register.SS), 8, base=ir.Held(address.id, 2))
+
+    changed = addressforms.scaled(ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (ir.St(0),), (cell,)), forms)
+
+    assert folded == frozenset({address.id})
+    assert changed is not None
+    direct = changed.sources[0]
+    assert isinstance(direct, ir.Mem)
+    assert direct.addr == Addr(Space.FRAME, -28)
+    assert direct.through == Register.NONE
+    assert direct.base is None
+    assert direct.index is None
+    selected = select.emit(changed)
+    assert selected is not None
+    instruction = decode(selected.code, 0)
+    assert instruction is not None
+    assert instruction.insn.memory_segment == Register.SS
+    assert instruction.insn.memory_base == Register.BP
+    assert instruction.insn.memory_displacement & 65535 == (-28) & 65535
