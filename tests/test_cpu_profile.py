@@ -29,6 +29,14 @@ def test_every_public_cpu_name_has_one_immutable_profile() -> None:
         assert target.operations.address == target.cost("lea")
         assert target.operations.memory_update == target.cost("alu_mr")
         assert target.operations.prefix == target.prefix_cost
+        assert target.operations.move == target.cost("mov_rr")
+        assert target.operations.call == target.cost("call_far")
+        assert target.operations.return_ == target.cost("ret_far")
+        assert target.operations.float_add == target.cost("x87_add")
+        assert target.operations.float_multiply == target.cost("x87_mul")
+        assert target.operations.float_divide == target.cost("x87_div")
+        assert target.operations.float_load == target.cost("x87_load")
+        assert target.operations.float_store == target.cost("x87_store")
 
 
 def test_operation_costs_do_not_change_the_existing_profile_positional_shape() -> None:

@@ -1006,8 +1006,9 @@ one documented target without materially regressing another.
   ordinary invariant-base additions, never a pressure-heavy mixture of both
   representations. Indexed memory formulas consume no recurrence budget.
   The immutable CPU profile now translates backend forms once into MIR's
-  machine-neutral `OperationCosts` (arithmetic, address, memory, branch and
-  prefix costs), and both frontends thread those costs and legal address scales
+  machine-neutral `OperationCosts` (integer and x87 arithmetic, movement,
+  address, memory, calls, returns, branches and prefixes), and both frontends
+  thread those costs and legal address scales
   through ordinary and unswitched optimization. Competing complete sibling
   groups are ranked by recomputation cost and best-case spill traffic rather
   than cardinality alone. On the 486 profile, C nbody's selected shared forms
@@ -1033,8 +1034,15 @@ one documented target without materially regressing another.
   each body. It simplifies a bounded candidate on MIR and accepts it
   only if the loop count falls without increasing semantic operation count.
   Pure conditions use dominating invariant values; memory-reading conditions
-  and unsupported CFG/live-out shapes remain unchanged. This is an initial
-  structural profitability rule, not a target-cost model. Backend layout keeps
+  and unsupported CFG/live-out shapes remain unchanged. Profitability also
+  requires no increase in loop-depth-weighted work under the selected CPU's
+  machine-neutral operation prices; an operation without a semantic price
+  rejects the candidate instead of becoming an implicit unit cost. Regressions
+  where the old raw count traded a looped ADD for a much dearer DIV, or treated
+  opaque work as cheap, fail before that gate. PDS IVARM
+  remains profitable on every profile: 31 → 27 semantic operations, no
+  remaining loop, and weighted work from 722 → 408 on 386, 329 → 186 on 486,
+  and 169 → 82 on P5. Backend layout keeps
   each cloned body's sequence together while retaining legacy ordering for the
   other bodies. Carried tables/padding follow their original byte owner, not a
   count of source addresses (which put zero padding inside IVPROC's VBDOS path).
@@ -1049,7 +1057,7 @@ one documented target without materially regressing another.
   either arm, including a true LONG with a zero low word (65536), pass on all
   three compilers. The 32 PDS suite objects remain byte-identical to the pipeline
   without unswitching; these improvements are in the regression fixtures.
-  General bounds/alias versioning and target-aware profitability remain open.
+  General bounds/alias versioning and static-size pricing remain open.
   IVPROC adds an unchanged ANNOUNCE procedure beside the specialized main loop:
   QB 632 → 358, PDS 612 → 358, VBDOS 604 → 350 modeled cost, with runtime output
   verified on all three. Its final stores replace the loop exactly as below;

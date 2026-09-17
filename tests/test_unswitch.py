@@ -7,6 +7,7 @@ import pytest
 
 from qbopt.analysis import loops
 from qbopt.frontend import blocks
+from qbopt.model import ir
 from qbopt.model import mir
 from qbopt.model.passes import OperationCosts
 from qbopt.objectfile import module
@@ -108,6 +109,47 @@ def test_unswitch_reoptimization_preserves_mir_target_costs(monkeypatch):
     )
 
     assert observed == [(5, 2, frozenset({1, 2}), costs)]
+
+
+def test_unswitch_rejects_lower_count_but_higher_target_cost(monkeypatch):
+    """One DIV outside a loop can cost more than one cheap ADD in the loop."""
+    add = mir.Op(1, ir.Operation.BINARY, "add", (), (), kind=mir.Kind.ADD)
+    divide = mir.Op(2, ir.Operation.DIVIDE, "div", (), (), kind=mir.Kind.DIV)
+    original = mir.MirBody(
+        0,
+        (
+            mir.MirBlock(0, (), (), (1,)),
+            mir.MirBlock(1, (), (add,), (1, 2)),
+            mir.MirBlock(2, (), (), ()),
+        ),
+    )
+    candidate = replace(original, cloned=True)
+    result = mir.MirBody(0, (mir.MirBlock(0, (), (divide,), (2,)), mir.MirBlock(2, (), (), ())), cloned=True)
+    monkeypatch.setattr(unswitch, "specialized", lambda _body: candidate)
+    monkeypatch.setattr(transform, "applied", lambda *_args, **_kwargs: result)
+
+    costs = OperationCosts(add=1, divide=100)
+    assert unswitch.optimized(original, frozenset(), {}, costs=costs) is original
+
+
+def test_unswitch_rejects_semantic_work_without_a_target_price(monkeypatch):
+    """An unknown operation must not become cheap merely because it is unpriced."""
+    add = mir.Op(1, ir.Operation.BINARY, "add", (), (), kind=mir.Kind.ADD)
+    opaque = mir.Op(2, ir.Operation.BARRIER, "", (), (), kind=mir.Kind.OPAQUE)
+    original = mir.MirBody(
+        0,
+        (
+            mir.MirBlock(0, (), (), (1,)),
+            mir.MirBlock(1, (), (add,), (1, 2)),
+            mir.MirBlock(2, (), (), ()),
+        ),
+    )
+    candidate = replace(original, cloned=True)
+    result = mir.MirBody(0, (mir.MirBlock(0, (), (opaque,), (2,)), mir.MirBlock(2, (), (), ())), cloned=True)
+    monkeypatch.setattr(unswitch, "specialized", lambda _body: candidate)
+    monkeypatch.setattr(transform, "applied", lambda *_args, **_kwargs: result)
+
+    assert unswitch.optimized(original, frozenset(), {}) is original
 
 
 def test_implicit_edge_bridge_does_not_retarget_the_taken_arm():

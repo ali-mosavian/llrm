@@ -87,6 +87,14 @@ class OperationCosts:
     memory_update: int = 1
     branch: int = 1
     prefix: int = 0
+    move: int = 1
+    call: int = 1
+    return_: int = 1
+    float_add: int = 1
+    float_multiply: int = 1
+    float_divide: int = 1
+    float_load: int = 1
+    float_store: int = 1
 
 
 @dataclass(frozen=True, slots=True)

@@ -111,6 +111,14 @@ def _operation_costs(costs: dict[str, int], prefix: int) -> OperationCosts:
         memory_update=costs["alu_mr"],
         branch=costs["jcc"],
         prefix=prefix,
+        move=costs["mov_rr"],
+        call=costs["call_far"],
+        return_=costs["ret_far"],
+        float_add=costs["x87_add"],
+        float_multiply=costs["x87_mul"],
+        float_divide=costs["x87_div"],
+        float_load=costs["x87_load"],
+        float_store=costs["x87_store"],
     )
 
 
