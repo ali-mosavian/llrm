@@ -345,3 +345,29 @@ only and are not part of production output: this establishes the feasible
 joint-plan alternative, while the next iteration must choose it from
 allocation costs and legal split/recompute alternatives rather than naming
 those two owners or their registers.
+
+### 19. Joint-plan feasibility audit — 2026-09-18
+
+The allocated-LIR trace corrects the earlier location diagnosis: both near
+owner loads are already hoisted by MIR LICM into the preheader.  Their values
+are `v5` and `v13` at LIR entry; ordinary allocation spills them and the
+spiller reloads each immediately before the corresponding `les`.  This is
+the first stage at which the BCC shape is lost.
+
+A controlled allocation with those two values protected retains them, but
+the greedy alternative spills the carried word recurrence and a derived index
+instead (`v114` and `v18`; the raw loop-weighted spill traffic rises from `44`
+to `95`).  Carrying that diagnostic plan through the full spill/reload loop
+also becomes unplaceable: the new reload has no legal register at its use.
+It is therefore rejected, not promoted to an output regression or a tuning
+claim.
+
+The result narrows phase 4/5 precisely.  The required candidate is not
+“protect invariant bases”: it must describe both the retained invariant and
+the short value placed in memory or recomputed across the exact high-pressure
+region, then price the resulting loads, stores, folds and copies as one plan.
+In particular it must be able to consider the loaded face value's later bit
+use, which BCC deliberately stores before reusing its register as the bitmap
+index.  The next implementation is a general pressure-plan representation
+and evaluator; it may not encode this loop, its values, DI/SI, or a source
+procedure name.
