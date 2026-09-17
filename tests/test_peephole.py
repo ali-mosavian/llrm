@@ -494,8 +494,14 @@ def test_word_copy_survives_partial_overwrite(dest):
     assert peephole.overwritten(body) == body
 
 
-def test_addrm_index_scale_uses_one_lea():
-    """ADDRM QB copied and shifted SI on every iteration instead of one LEA."""
+def test_addrm_index_scale_does_not_copy_and_shift_a_register():
+    """ADDRM QB copied and shifted SI on every iteration instead of one LEA.
+
+    Exact loop unrolling can remove the dynamic scale entirely, so requiring
+    an LEA tests yesterday's optimized shape rather than the excess work.  If
+    a scale survives, it must not regress to the original register copy plus
+    shift sequence.
+    """
     import corpus
     from qbopt import wholeseg
 
@@ -504,7 +510,12 @@ def test_addrm_index_scale_uses_one_lea():
     import re
 
     instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]
-    assert any(re.fullmatch(r"lea \w\w,\[(e\w\w)\+\1\]", one) for one in instructions), instructions
+    copied_and_shifted = []
+    for copy, shift in zip(instructions, instructions[1:]):
+        moved = re.fullmatch(r"mov (e?\w+),(e?\w+)", copy)
+        if moved is not None and re.fullmatch(rf"shl {re.escape(moved.group(1))},1", shift):
+            copied_and_shifted.append((copy, shift))
+    assert not copied_and_shifted, copied_and_shifted
 
 
 @pytest.mark.parametrize("following", ["add", "adc", "inc", "shl", "call", "je"])
