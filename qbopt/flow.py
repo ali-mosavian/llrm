@@ -45,6 +45,7 @@ from qbopt.backend import peephole
 from qbopt.backend import prologue
 from qbopt.objectfile import module
 from qbopt.optimize import transform
+from qbopt.backend import cpu as targets
 from qbopt.backend import frame as frames
 from qbopt.frontend import blocks as split
 from qbopt.frontend.blocks import code_map
@@ -52,11 +53,17 @@ from qbopt.model.passes import LIRTransform
 
 
 def machine(
-    pinned: dict, frame=None, calls: dict | None = None, *, basic_semantics: bool = False
+    pinned: dict,
+    frame=None,
+    calls: dict | None = None,
+    *,
+    basic_semantics: bool = False,
+    cpu: str | targets.Profile = "386",
 ) -> list[LIRTransform]:
     """Every phase between lowering and emission, in order."""
     from qbopt.backend import floatalloc
 
+    target = targets.profile(cpu)
     if frame is not None and frame.native is not None:
         pinned = {**pinned, **frame.native_pins}
     return [
@@ -64,7 +71,7 @@ def machine(
         phielim.PhiElimination(),
         twoaddr.TwoAddress(),
         coalesce.Coalescer(),
-        allocate.RegAlloc(pinned, frame),
+        allocate.RegAlloc(pinned, frame, cpu=target),
         # After the allocation and before anything reads the code as a
         # sequence: which moves in a phi's copy conflict is a question
         # about locations, and until the allocator has chosen them there

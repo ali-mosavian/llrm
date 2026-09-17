@@ -26,6 +26,7 @@ from iced_x86 import Register_
 from qbopt.model import ir
 from qbopt.model import lir
 from qbopt.backend import target
+from qbopt.backend import cpu as targets
 from qbopt.model.passes import LIRTransform
 from qbopt.analysis import intervals as ranges
 
@@ -686,9 +687,16 @@ class RegAlloc(LIRTransform):
     # groups, so it wants more rounds to settle.
     ROUNDS = 12
 
-    def __init__(self, pinned: "dict[int, Register_] | None" = None, frame: "Frame | None" = None) -> None:
+    def __init__(
+        self,
+        pinned: "dict[int, Register_] | None" = None,
+        frame: "Frame | None" = None,
+        *,
+        cpu: "str | targets.Profile" = "386",
+    ) -> None:
         self.pinned: dict[int, Register_] = dict(pinned or {})
         self.frame = frame
+        self.cpu = targets.profile(cpu)
 
     def transform(self, body: lir.LirBody) -> lir.LirBody:
         """Assign; where that spills, make the spill real and assign again.
