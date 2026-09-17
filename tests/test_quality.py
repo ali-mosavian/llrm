@@ -248,6 +248,33 @@ def test_dynamic_frequencies_account_for_branches_and_loop_iterations() -> None:
     assert quality._frequencies(body) == pytest.approx({0: 1.0, 1: 10.0, 2: 9.0, 3: 1.0})
 
 
+def test_dynamic_frequencies_solve_nested_loops_without_iteration_cutoff() -> None:
+    """C nbody's four nested loops converged too slowly and were reported unmeasured."""
+    from qbopt.model import lir
+
+    edges = {
+        1: (35,),
+        35: (40, 180),
+        40: (42,),
+        42: (46, 140),
+        46: (50,),
+        50: (54, 135),
+        54: (50,),
+        135: (42,),
+        140: (142,),
+        142: (146, 175),
+        146: (142,),
+        175: (35,),
+        180: (),
+    }
+    body = lir.LirBody("nested", 1, tuple(lir.LirBlock(at, (), succ) for at, succ in edges.items()), {}, {})
+    frequencies = quality._frequencies(body)
+    assert frequencies is not None
+    assert frequencies == pytest.approx(
+        {1: 1, 35: 10, 40: 9, 42: 90, 46: 81, 50: 810, 54: 729, 135: 81, 140: 9, 142: 90, 146: 81, 175: 9, 180: 1}
+    )
+
+
 def test_dynamic_estimate_refuses_hidden_callee_cost() -> None:
     """Counting CALL as one instruction made an arbitrarily expensive helper look free."""
     from qbopt.model import ir

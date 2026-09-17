@@ -245,18 +245,38 @@ def _frequencies(body: lir.LirBody) -> dict[int, float] | None:
     if loops.irreducible(body.blocks, body.entry):
         return None
     transitions = _transitions(body)
-    frequency = dict.fromkeys(transitions, 0.0)
-    for _iteration in range(1000):
-        updated = dict.fromkeys(transitions, 0.0)
-        if body.entry in updated:
-            updated[body.entry] = 1.0
-        for source, successors in transitions.items():
-            for destination, probability in successors.items():
-                updated[destination] += frequency[source] * probability
-        if max((abs(updated[at] - frequency[at]) for at in updated), default=0.0) < 1e-9:
-            return {at: round(value, 9) for at, value in updated.items()}
-        frequency = updated
-    return None
+    nodes = tuple(transitions)
+    index = {at: position for position, at in enumerate(nodes)}
+    # f = entry + P^T f, solved directly. Iterating this equation made the
+    # four nested loops in C nbody need thousands of rounds even though the
+    # finite solution is small and well-conditioned.
+    matrix = [[float(row == column) for column in range(len(nodes))] for row in range(len(nodes))]
+    right = [0.0] * len(nodes)
+    if body.entry in index:
+        right[index[body.entry]] = 1.0
+    for source, successors in transitions.items():
+        column = index[source]
+        for destination, probability in successors.items():
+            matrix[index[destination]][column] -= probability
+
+    for column in range(len(nodes)):
+        pivot = max(range(column, len(nodes)), key=lambda row: abs(matrix[row][column]))
+        if abs(matrix[pivot][column]) < 1e-12:
+            return None
+        matrix[column], matrix[pivot] = matrix[pivot], matrix[column]
+        right[column], right[pivot] = right[pivot], right[column]
+        scale = matrix[column][column]
+        matrix[column] = [value / scale for value in matrix[column]]
+        right[column] /= scale
+        for row in range(len(nodes)):
+            if row == column or abs(matrix[row][column]) < 1e-15:
+                continue
+            scale = matrix[row][column]
+            matrix[row] = [value - scale * pivoted for value, pivoted in zip(matrix[row], matrix[column], strict=True)]
+            right[row] -= scale * right[column]
+    if any(value < -1e-9 for value in right):
+        return None
+    return {at: round(max(0.0, right[index[at]]), 9) for at in nodes}
 
 
 def _block_instruction_counts(
