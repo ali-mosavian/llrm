@@ -155,16 +155,15 @@ def _written(one: lir.Insn) -> "set[tuple] | None":
     return writes
 
 
-def _block(block: lir.LirBlock) -> lir.LirBlock:
-    # Unknown entry values still have stable identities within one block.  A
-    # write replaces that identity; an opaque effect clears every fact.
-    state = {}
+def _transfer(block: lir.LirBlock, incoming: dict) -> tuple[dict, frozenset[int]]:
+    """Physical values leaving one block and redundant occurrences within it."""
+    state = dict(incoming)
     redundant: set[int] = set()
     for one in block.insns:
         candidate = _candidate(one)
         if candidate is not None:
             expression, reads, writes = candidate
-            inputs = tuple((lane, state.get(lane, ("entry", lane))) for lane in reads)
+            inputs = tuple((lane, state.get(lane, ("block-entry", block.at, lane))) for lane in reads)
             value = ("expression", expression, inputs)
             wanted = {lane: (value, byte) for byte, lane in enumerate(writes)}
             if all(state.get(lane) == token for lane, token in wanted.items()):
@@ -178,16 +177,69 @@ def _block(block: lir.LirBlock) -> lir.LirBlock:
             continue
         for lane in writes:
             state[lane] = ("written", id(one), lane)
-    if not redundant:
-        return block
-    return replace(
-        block,
-        insns=tuple(lir.anchor(one) if id(one) in redundant else one for one in block.insns),
-    )
+    return state, frozenset(redundant)
+
+
+def _merged(states: list[dict]) -> dict:
+    """The physical lane values every incoming edge agrees on."""
+    if not states:
+        return {}
+    common = dict(states[0])
+    for state in states[1:]:
+        common = {lane: token for lane, token in common.items() if state.get(lane) == token}
+    return common
+
+
+def _lanes_used(body: lir.LirBody) -> frozenset[tuple]:
+    lanes = set()
+    for one in body.insns:
+        candidate = _candidate(one)
+        if candidate is not None:
+            _expression, reads, writes = candidate
+            lanes.update(reads)
+            lanes.update(writes)
+        elif (writes := _written(one)) is not None:
+            lanes.update(writes)
+    return frozenset(lanes)
 
 
 def eliminated(body: lir.LirBody) -> lir.LirBody:
-    """Value-number deterministic register computations inside each block."""
-    blocks = tuple(_block(block) for block in body.blocks)
+    """Value-number deterministic register computations across the CFG."""
+    predecessors = {block.at: set() for block in body.blocks}
+    for block in body.blocks:
+        for successor in block.succ:
+            if successor in predecessors:
+                predecessors[successor].add(block.at)
+    entry = {lane: ("entry", lane) for lane in _lanes_used(body)}
+    outgoing: dict[int, dict] = {}
+    redundant: dict[int, frozenset[int]] = {}
+    # Acyclic facts normally settle in layout order in one pass. Reversed
+    # blocks and conservative loop joins may need more; refusal to converge
+    # keeps the body unchanged rather than trusting a partial physical state.
+    for _round in range(max(1, len(body.blocks) * 4)):
+        changed = False
+        for block in body.blocks:
+            states = [outgoing[at] for at in predecessors[block.at] if at in outgoing]
+            if len(states) != len(predecessors[block.at]):
+                states.append({})
+            if block.at == body.entry:
+                states.append(entry)
+            incoming = _merged(states)
+            after, gone = _transfer(block, incoming)
+            if outgoing.get(block.at) != after or redundant.get(block.at) != gone:
+                outgoing[block.at], redundant[block.at], changed = after, gone, True
+        if not changed:
+            break
+    else:
+        return body
+    blocks = tuple(
+        replace(
+            block,
+            insns=tuple(lir.anchor(one) if id(one) in redundant.get(block.at, ()) else one for one in block.insns),
+        )
+        if redundant.get(block.at)
+        else block
+        for block in body.blocks
+    )
     unchanged = all(before is after for before, after in zip(body.blocks, blocks, strict=True))
     return body if unchanged else replace(body, blocks=blocks)

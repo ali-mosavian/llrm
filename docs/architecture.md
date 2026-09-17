@@ -1230,8 +1230,20 @@ one documented target without materially regressing another.
   LLVM and the register/memory alternative used by GCC, not a C-source idiom.
   The recorded qcport C set falls from 768 to 761 instructions (`ls` 612 to
   608, `qglsurf` 75 to 72, and `pal` unchanged at 81).
-- [ ] Add machine CSE and dead-machine-instruction elimination over allocated
-  LIR.
+- [x] Add machine CSE and dead-machine-instruction elimination over allocated
+  LIR. Exact reproducible register computations are value-numbered by physical
+  byte lane across the CFG; a join retains a fact only when every incoming edge
+  agrees, and calls or opaque instructions clear it. The companion backward
+  pass removes only register/flag computations whose complete decoded result is
+  dead on every path. Memory reads, trapping divide and x87 forms, relocations,
+  control flow, stack-pointer writes and segment-state writes are outside its
+  licence. Anchors retain virtual definitions and source-byte ownership in both
+  passes. The new cases are byte-neutral over the seven C benchmarks and all 32
+  representative PDS `/G2` objects: this closes the machine-dataflow gap but is
+  not claimed as a corpus performance improvement. Its regressions cover a
+  straight CFG edge, agreeing and disagreeing joins, opaque calls, successor
+  overwrites, live flags, memory reads, and the C `add sp,N` cleanup defect
+  exposed while integrating DCE.
 - [ ] Add branch folding and tail merging after final block placement.
 - [ ] Extend rematerialization, spill folding, spill-slot reuse and live-range
   splitting using measured interval costs.

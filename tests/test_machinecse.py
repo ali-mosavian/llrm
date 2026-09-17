@@ -60,6 +60,101 @@ def test_repeated_frame_address_is_kept_after_destination_changes() -> None:
     assert result.insns[2].what == repeated.what
 
 
+def test_repeated_frame_address_is_eliminated_across_a_cfg_edge() -> None:
+    """Lowering rebuilt the same frame address in two consecutive blocks."""
+    first, repeated = _lea(1, 0), _lea(2, 5)
+    body = lir.LirBody(
+        "machine-cse",
+        0,
+        (lir.LirBlock(0, (first,), (5,)), lir.LirBlock(5, (repeated,), ())),
+        {},
+        {},
+    )
+
+    result = machinecse.eliminated(body)
+
+    successor = next(block for block in result.blocks if block.at == 5)
+    assert successor.insns[0].what.op is ir.Operation.NOTHING
+    assert successor.insns[0].defines == repeated.defines
+
+
+def test_repeated_frame_address_is_eliminated_after_agreeing_branches() -> None:
+    first, second, repeated = _lea(1, 1), _lea(2, 2), _lea(3, 5)
+    body = lir.LirBody(
+        "machine-cse",
+        0,
+        (
+            lir.LirBlock(0, (), (1, 2)),
+            lir.LirBlock(1, (first,), (5,)),
+            lir.LirBlock(2, (second,), (5,)),
+            lir.LirBlock(5, (repeated,), ()),
+        ),
+        {},
+        {},
+    )
+
+    result = machinecse.eliminated(body)
+
+    successor = next(block for block in result.blocks if block.at == 5)
+    assert successor.insns[0].what.op is ir.Operation.NOTHING
+
+
+def test_repeated_frame_address_is_kept_when_one_branch_disagrees() -> None:
+    first, repeated = _lea(1, 1), _lea(3, 5)
+    overwrite = lir.Insn(
+        2,
+        (2, 4),
+        ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg(Register.BX, 2),), (ir.Imm(7, 2),)),
+        (2,),
+        (),
+    )
+    body = lir.LirBody(
+        "machine-cse",
+        0,
+        (
+            lir.LirBlock(0, (), (1, 2)),
+            lir.LirBlock(1, (first,), (5,)),
+            lir.LirBlock(2, (overwrite,), (5,)),
+            lir.LirBlock(5, (repeated,), ()),
+        ),
+        {},
+        {},
+    )
+
+    result = machinecse.eliminated(body)
+
+    successor = next(block for block in result.blocks if block.at == 5)
+    assert successor.insns[0].what == repeated.what
+
+
+def test_repeated_frame_address_is_kept_across_an_opaque_call() -> None:
+    """A callee may replace every physical input and output register."""
+    first, repeated = _lea(1, 0), _lea(3, 5)
+    call = lir.Insn(
+        3,
+        (3, 5),
+        ir.Semantics(ir.Operation.CALL, "call", (), (), target=10),
+        (2,),
+        (),
+    )
+    body = lir.LirBody(
+        "machine-cse",
+        0,
+        (
+            lir.LirBlock(0, (first,), (3,)),
+            lir.LirBlock(3, (call,), (5,)),
+            lir.LirBlock(5, (repeated,), ()),
+        ),
+        {},
+        {},
+    )
+
+    result = machinecse.eliminated(body)
+
+    successor = next(block for block in result.blocks if block.at == 5)
+    assert successor.insns[0].what == repeated.what
+
+
 def test_address_coefficients_are_part_of_the_expression_identity() -> None:
     """The IR ignores encoding registers when comparing addresses.
 
