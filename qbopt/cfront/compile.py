@@ -92,6 +92,14 @@ def _address_taken_procedures(unit: hir.Unit) -> frozenset[str]:
         for fixup in symbol.code.fixups
         if fixup.symbol in unit.symbols and unit.symbols[fixup.symbol].proc
     )
+    taken.update(
+        symbol.object_name
+        for segment in unit.segments.values()
+        for call, args in segment.items
+        if call == "DGFEPtr"
+        and (symbol := unit.symbols.get(hir.handle(args[0]))) is not None
+        and symbol.proc
+    )
     return frozenset(taken)
 
 

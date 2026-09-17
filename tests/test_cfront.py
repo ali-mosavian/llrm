@@ -131,7 +131,9 @@ def test_constant_return_propagates_across_a_direct_call():
 
 
 def test_global_dce_keeps_an_address_taken_private_procedure():
-    """A static function absent from the direct-call graph may still be reached
+    """qcport item.c lost every item_take callback from an initialized table.
+
+    A static function absent from the direct-call graph may still be reached
     through a function pointer or an initialized relocation.
     """
     unit = cfront.hir.Unit()
@@ -146,6 +148,11 @@ def test_global_dce_keeps_an_address_taken_private_procedure():
     del unit.nodes[2]
     unit.backs[1] = 1
     assert cfront._address_taken_procedures(unit) == frozenset({"_callback"})
+
+    data_root = cfront.hir.Unit()
+    data_root.symbols[1] = cfront.hir.Symbol(1, "callback", "callback", "_*", cfront.hir.FE_PROC)
+    data_root.segments[1] = cfront.hir.Segment(1, "callbacks", 0, [("DGFEPtr", ("y1", "TY_NEAR_POINTER", "0"))])
+    assert cfront._address_taken_procedures(data_root) == frozenset({"_callback"})
 
 
 def test_private_constant_argument_specializes_before_local_sccp():
