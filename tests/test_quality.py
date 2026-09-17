@@ -225,6 +225,40 @@ def test_386_cost_covers_integer_and_x87_forms_in_emitted_c() -> None:
     assert quality._cost(rows, cpu.profile("386")) == 69
 
 
+@pytest.mark.parametrize("name", ["486", "P5", "P6", "K5", "K6", "K7", "Core"])
+def test_every_cpu_profile_prices_emitted_integer_and_x87_forms(name: str) -> None:
+    """Every floating C benchmark reported a null cost outside the 386 profile."""
+    from qbopt.backend import cpu
+
+    rows = [
+        ("dd46f4", "fld", "qword ptr [bp-0ch]"),
+        ("dec1", "faddp", "st(1),st"),
+        ("dc0e0000", "fmul", "qword ptr ds:[0]"),
+        ("def9", "fdivp", "st(1),st"),
+        ("df7ef4", "fistp", "qword ptr [bp-0ch]"),
+        ("d97ef2", "fnstcw", "word ptr [bp-0eh]"),
+        ("d96ef2", "fldcw", "word ptr [bp-0eh]"),
+        ("c9", "leave", ""),
+    ]
+
+    assert quality._cost(rows, cpu.profile(name)) is not None
+
+
+def test_x87_stack_dependencies_are_not_scored_as_parallel_work() -> None:
+    """A dependent P6 expression was priced as only its slowest x87 instruction."""
+    from qbopt.backend import cpu
+
+    rows = [
+        ("dd46f4", "fld", "qword ptr [bp-0ch]"),
+        ("dec1", "faddp", "st(1),st"),
+        ("dc0e0000", "fmul", "qword ptr ds:[0]"),
+        ("def9", "fdivp", "st(1),st"),
+        ("df7ef4", "fistp", "qword ptr [bp-0ch]"),
+    ]
+
+    assert quality._cost(rows, cpu.profile("P6")) == 75
+
+
 def test_unknown_instruction_has_no_invented_default_cost() -> None:
     """An unclassified instruction used to receive two cycles on every non-386 target."""
     from qbopt.backend import cpu

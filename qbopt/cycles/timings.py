@@ -161,3 +161,65 @@ PREFIX = (1, 1, 0, 0, 0, 0, 0)
 #                      486   P5    P6    K5    K6    K7   Core
 COST["mul_r32"] = (26, 10, 4, 4, 3, 5, 3)
 LATENCY["mul_r32"] = (26, 10, 4, 4, 3, 5, 3)
+
+# Complete the forms emitted by the C frontend's x87 lowering.  These remain
+# target-ranking units, not a claim that all columns are measured cycles.  The
+# Intel/AMD columns follow the corresponding GCC tuning tables; K5 uses the
+# double-real forms in AMD publication 20007D where that guide lists them.
+# K5's guide does not give FDIV a timing, so its division entry deliberately
+# keeps the conservative K6 ranking rather than manufacturing a precise claim.
+#
+#                         486  P5  P6  K5  K6  K7 Core
+_X87_LOAD = (8, 2, 2, 6, 6, 4, 6)
+_X87_STORE = (8, 4, 4, 6, 4, 6, 6)
+_X87_ADD = (8, 3, 3, 5, 2, 4, 3)
+_X87_MUL = (16, 3, 5, 8, 2, 4, 5)
+_X87_DIV = (73, 39, 56, 56, 56, 24, 24)
+
+# Memory arithmetic is a distinct form.  K5 has direct published double-real
+# figures (7-cycle add, 10-cycle multiply); the other ranking tables expose an
+# arithmetic cost and a load cost, which are composed here and named as such.
+_X87_ADD_M = (16, 5, 5, 7, 8, 8, 9)
+_X87_MUL_M = (24, 5, 7, 10, 8, 8, 11)
+_X87_DIV_M = (81, 41, 58, 62, 62, 28, 30)
+
+COST.update(
+    {
+        # LEAVE is the target's ordinary frame-register move plus POP ranking.
+        "leave": (5, 2, 2, 2, 2, 2, 2),
+        "x87_load": _X87_LOAD,
+        "x87_store": _X87_STORE,
+        # Conversion plus store, except K5 whose FISTP int64 form is published
+        # directly as seven cycles.
+        "x87_convert_store": (35, 7, 7, 7, 6, 12, 12),
+        "x87_add": _X87_ADD,
+        "x87_add_m": _X87_ADD_M,
+        "x87_mul": _X87_MUL,
+        "x87_mul_m": _X87_MUL_M,
+        "x87_div": _X87_DIV,
+        "x87_div_m": _X87_DIV_M,
+        # Control-word transfers are memory transfers in this ranking until a
+        # primary form-specific table establishes a different value.
+        "x87_control_load": _X87_LOAD,
+        "x87_control_store": _X87_STORE,
+    }
+)
+
+# Keep dependency cost separate in representation.  The available compiler
+# tuning data does not establish a second number for these forms, so matching
+# values are explicit instead of silently falling through to `unknown`.
+for _form in (
+    "leave",
+    "x87_load",
+    "x87_store",
+    "x87_convert_store",
+    "x87_add",
+    "x87_add_m",
+    "x87_mul",
+    "x87_mul_m",
+    "x87_div",
+    "x87_div_m",
+    "x87_control_load",
+    "x87_control_store",
+):
+    LATENCY[_form] = COST[_form]

@@ -234,6 +234,28 @@ def score(rows):
         srcs = regs_of(ops)
         dsts = regs_of(a[0] if a else "")
 
+        # The x87 stack is implicit in the printed operands.  Without a
+        # synthetic dependency, a dependent expression such as
+        # FLD/FADDP/FMUL/FDIVP/FISTP appears fully parallel and gets priced as
+        # only its slowest operation on an out-of-order target.  One token is
+        # intentionally conservative: it preserves the accumulator chain
+        # without pretending that this small scorer allocates all eight stack
+        # positions.
+        if kind == "x87_load":
+            dsts.add("x87-stack")
+        elif kind in {
+            "x87_store",
+            "x87_convert_store",
+            "x87_add",
+            "x87_add_m",
+            "x87_mul",
+            "x87_mul_m",
+            "x87_div",
+            "x87_div_m",
+        }:
+            srcs.add("x87-stack")
+            dsts.add("x87-stack")
+
         for o in a:
             r = o.strip("[]+ ")
             if r in W32 and r[1:] in written16:

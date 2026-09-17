@@ -208,3 +208,35 @@ control-word transfers instead of collapsing all of them to `unknown`. A form
 with no entry returns a null weighted cost. In particular, non-386 profiles do
 not inherit the old generic two-unit fallback for an unclassified instruction,
 and `rep` remains unpriced until its runtime count is known.
+
+## Complete cross-profile x87 report coverage
+
+The 486, P5, P6, K6, K7 and Core profile columns now cover every x87 form
+currently emitted by the C frontend. The arithmetic rankings are taken from
+the corresponding local GCC tuning tables in
+`gcc/config/i386/x86-tune-costs.h`; floating load/store and conversion entries
+come from the same processor-cost structures. A memory arithmetic form is
+recorded separately from a register-stack form. Where GCC exposes arithmetic
+and load separately, the report composes those two explicitly rather than
+silently treating memory as a register operand.
+
+AMD publication 20007D, *AMD-K5 Processor Software Development Guide*, table
+2-3, gives the K5 double-real forms used here: FLD 6, FSTP 6, FADD 7 and FMUL
+10 for memory operands, and FADD 5, FMUL 8 and FISTP int64 7 for stack/integer
+forms. That table omits FDIV even though the instruction is supported. The K5
+FDIV value therefore remains a clearly provisional conservative ranking copied
+from K6; it is not an audited K5 latency and may not be used as a hard target.
+
+`LEAVE` is ranked as the profile's frame-register move plus pop. Control-word
+loads and stores temporarily use the profile's floating memory-transfer rank.
+Those are explicit, reviewable approximations and not primary timing claims.
+The quality report calls every one of these values `weighted_cost`, never
+measured cycles.
+
+The scorer now represents the otherwise implicit x87 accumulator stack as a
+dependency. Before this correction, P6 could score a dependent
+FLD/FADDP/FMUL/FDIVP/FISTP chain as only the slowest member. A single synthetic
+stack token conservatively serializes that chain. It may overstate overlap
+between independent x87 expressions, but it cannot hide dependent work as
+parallel work; a future eight-entry stack model can refine it without changing
+the cost-table interface.
