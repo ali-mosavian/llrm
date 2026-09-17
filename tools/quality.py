@@ -196,18 +196,10 @@ def _peak_live(procedure: masm.Procedure) -> int:
 
 def _memory(rows: list[tuple[str, str, str]]) -> tuple[int, int]:
     loads = stores = 0
-    for raw, mnemonic, operands in rows:
-        kind = cycles.classify(mnemonic, operands, raw)
-        if kind.endswith("_rm") or kind in {"push_m", "imul_m32", "idiv_m32"}:
-            loads += 1
-        if kind.endswith("_mr"):
-            stores += 1
-            if mnemonic not in {"mov", "fst", "fstp", "fist", "fistp"}:
-                loads += 1
-        if "[" in operands and mnemonic.startswith(("fld", "fiadd", "fisub", "fimul", "fidiv")):
-            loads += 1
-        if "[" in operands and mnemonic.startswith(("fst", "fist")):
-            stores += 1
+    for _raw, mnemonic, operands in rows:
+        read, written = _reference_memory(mnemonic, operands)
+        loads += read
+        stores += written
     return loads, stores
 
 
@@ -442,12 +434,12 @@ def _stage_metrics(state: object) -> dict:
         what = one.what
         if what is None:
             continue
-        memory_dests = sum(isinstance(operand, ir.Mem) for operand in what.dests)
-        memory_sources = sum(isinstance(operand, ir.Mem) for operand in what.sources)
-        stores += memory_dests
-        loads += memory_sources
-        if memory_dests and what.op not in (ir.Operation.MOVE, ir.Operation.FLOAT_STORE):
-            loads += memory_dests
+        memory_dests = tuple(operand for operand in what.dests if isinstance(operand, ir.Mem))
+        memory_sources = tuple(operand for operand in what.sources if isinstance(operand, ir.Mem))
+        stores += len(memory_dests)
+        loads += len(memory_sources)
+        if what.op not in (ir.Operation.MOVE, ir.Operation.FLOAT_STORE):
+            loads += sum(operand not in memory_sources for operand in memory_dests)
         branches += what.op in (ir.Operation.JUMP, ir.Operation.BRANCH)
         calls += what.op is ir.Operation.CALL
         addresses += what.name.lower() == "lea"

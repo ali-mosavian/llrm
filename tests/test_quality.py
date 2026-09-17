@@ -195,3 +195,27 @@ def test_gap_attribution_refuses_a_stage_measure_that_disagrees_with_emitted_byt
         "last_stage": 99,
         "emitted": 62,
     }
+
+
+def test_emitted_memory_metrics_cover_forms_missing_from_the_cycle_table() -> None:
+    """MOVZX memory loads vanished from nbody's decoded load total."""
+    rows = [
+        ("0fb604", "movzx", "eax,byte ptr [si]"),
+        ("833e000000", "cmp", "word ptr [0],0"),
+        ("dd1e0000", "fstp", "qword ptr [0]"),
+        ("01060000", "add", "word ptr [0],ax"),
+    ]
+    assert quality._memory(rows) == (3, 2)
+
+
+def test_stage_metrics_count_a_two_address_memory_operand_once() -> None:
+    """The same RMW cell is both a semantic source and destination, but one load."""
+    from qbopt.model import ir
+    from qbopt.model import lir
+
+    cell = ir.Mem(None, 2)
+    what = ir.Semantics(ir.Operation.BINARY, "add", (cell,), (cell, ir.Held(1, 2)))
+    insn = lir.Insn(0, (0, 2), what, (), (1,))
+    body = lir.LirBody("rmw", 0, (lir.LirBlock(0, (insn,)),), {}, {})
+    metrics = quality._stage_metrics(body)
+    assert (metrics["loads"], metrics["stores"]) == (1, 1)
