@@ -479,7 +479,7 @@ def assembled(
         # to return, then repeat because its caller may now be terminal too.
         while True:
             noreturn = interprocedural.noreturn_procedures(
-                {one.name: (bodies[one.name], one.calls) for one in raised_procedures}
+                {one.name: (bodies[one.name], one.calls) for one in raised_procedures}, private
             )
             changed = False
             for raised in raised_procedures:

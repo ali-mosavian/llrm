@@ -367,7 +367,9 @@ def _readonly_effects(body: mir.MirBody, calls: dict[int, str], readonly: frozen
     return True
 
 
-def noreturn_procedures(procedures: dict[str, tuple[mir.MirBody, dict[int, str]]]) -> frozenset[str]:
+def noreturn_procedures(
+    procedures: dict[str, tuple[mir.MirBody, dict[int, str]]], eligible: frozenset[str]
+) -> frozenset[str]:
     """Direct private procedures that cannot reach a normal return.
 
     This is the named-body spelling of the shared MIR control proof used by
@@ -382,6 +384,7 @@ def noreturn_procedures(procedures: dict[str, tuple[mir.MirBody, dict[int, str]]
         found = proven | frozenset(
             name
             for name, (body, calls) in procedures.items()
+            if name in eligible
             if noreturn._cannot_return(body, frozenset(at for at, target in calls.items() if target in proven))
         )
         if found == proven:

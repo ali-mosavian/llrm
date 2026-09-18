@@ -428,7 +428,16 @@ def test_direct_noreturn_summary_prunes_only_the_callers_impossible_tail():
     caller = mir.MirBody(2, (mir.MirBlock(2, (), (call, returned), ()),), sealed=True)
     procedures = {"spin": (spin, {}), "caller": (caller, {2: "spin"})}
 
-    assert interprocedural.noreturn_procedures(procedures) == frozenset({"spin", "caller"})
+    assert interprocedural.noreturn_procedures(procedures, frozenset({"spin", "caller"})) == frozenset(
+        {"spin", "caller"}
+    )
     pruned = interprocedural.terminal_calls(caller, {2: "spin"}, frozenset({"spin"}))
     assert pruned.blocks[0].ops == (call,)
     assert pruned.blocks[0].succ == ()
+
+
+def test_noreturn_summary_does_not_make_an_exported_body_a_private_fact():
+    """The direct proof must not turn an externally visible infinite loop into an IPA-only summary."""
+    spin = mir.MirBody(1, (mir.MirBlock(1, (), (), (1,)),), sealed=True)
+
+    assert interprocedural.noreturn_procedures({"exported": (spin, {})}, frozenset()) == frozenset()

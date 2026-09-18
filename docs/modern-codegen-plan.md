@@ -30,6 +30,26 @@ iteration updates this file in the same commit.
 
 ## Iteration log
 
+### 85. Keep no-return summaries private — 2026-09-18
+
+The first no-return fixed point considered every raised C procedure.  Its
+control proof was sound for a direct local call, but that exceeded Phase 6's
+declared selective-internal scope by manufacturing an IPA summary for an
+exported or address-taken body.  The full interprocedural ABI/visibility proof
+is still unfinished, so widening this fact would be an assumption rather than
+a needed optimization.
+
+The summary now receives the existing private eligibility set and accepts only
+those named bodies.  Direct calls still retain their physical call and prune
+only a tail after an already-proven private terminal callee.  The new negative
+MIR regression fails before the boundary is supplied: an otherwise-terminal
+exported body must not enter the private summary set.  The original caller-tail
+regressions remain unchanged.  Focused checks pass (`3 passed`, `0.22s`).
+This is a conservative Phase 6 scope correction; public/address-taken,
+indirect, external, and recursive claims remain unfinished.  GCC/LLVM remain
+best-case flat-i386 listing references; BCC/WC medium-model output remains the
+hard authority for ABI, segment, legal-address, and target-performance facts.
+
 ### 84. Direct private no-return caller-tail pruning — 2026-09-18
 
 `ipa_noreturn` first emitted `call _spinForever`, followed by the impossible
