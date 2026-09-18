@@ -23,7 +23,7 @@ iteration updates this file in the same commit.
 | Per-CPU measurement | in progress | CPU profiles, C corpus, static/dynamic metrics and reference listings exist; audited targets remain. |
 | MIR/LIR provenance and fresh OMF | largely complete | allocated LIR emits directly with external source maps/allocation hints; legacy object-rewrite compatibility remains. |
 | SROA and scalar promotion | partial | fixed/disjoint leaves and some indexed leaves promote; general aggregate/copy decomposition remains. |
-| Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection and local rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
+| Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
 | Loop optimization | partial | exact pre- and post-tested recurrences, composed pointer recurrences, formula costing, specialization, peeling and exact unrolling exist; versioning, rotation and broad pressure forecasting remain. |
 | Whole-module optimization | partial | summaries, constant returns, private inlining and private procedure DCE exist; full IPSCCP/cloning and private-data DCE remain. |
 | Post-allocation quality | partial | copy propagation, machine CSE/DCE and C-path tail sharing exist; source-map-aware BC tail sharing and CPU scheduling remain. |
@@ -1392,3 +1392,27 @@ suite passes (`84 passed`, `0.08s`), CPU-profile suite passes (`10 passed`,
 `13.38s`).  This advances Phase 4's target- and pressure-driven x87
 allocation.  GCC/LLVM remain best-case flat-i386 structural references;
 BCC/WC medium-model output remains the ABI and legal-form authority.
+
+### 63. Relocatable-address rematerialization — 2026-09-18
+
+The spill path already rebuilt constants, BP-relative frame addresses,
+conversions, stable loads, and established frame homes.  It nevertheless
+assigned a separate frame slot to a direct `lea` of a SEGDEF or EXTDEF symbol.
+That address has no dynamic input: retaining it in a slot costs both a store
+and a reload, whereas recreating the `lea` at a use costs only the relocation
+the fresh OMF emitter already knows how to own.
+
+`spiller._addresses()` now admits precisely those direct segment and external
+addresses, as well as the existing BP-relative frame form.  It still rejects
+general register-address expressions, FAR selector-dependent addresses, and
+indexed forms: those require a value-availability proof rather than this
+local rematerialization rule.  The test was run fail-first for both SEGDEF and
+EXTDEF: each formerly allocated a private spill slot.  It now proves no slot
+is allocated, the inserted `lea` carries the same address operand, and direct
+fresh-OMF encoding emits the expected offset relocation for `_descriptor`.
+
+The focused spill regression passes (`2 passed`, `0.05s`).  This is a Phase-4
+local-rematerialization increment, not a timing or hard-target claim.  GCC
+and LLVM remain best-case flat-i386 structural listings only; BCC/WC
+medium-model output remains the ABI, segmentation, and legal-addressing
+authority.

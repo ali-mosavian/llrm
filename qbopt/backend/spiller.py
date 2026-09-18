@@ -61,14 +61,14 @@ def spilled(
     fresh = _next_value(body)
     made: set[int] = set()
     constants = _constants(body, values)
-    frame_addresses = _frame_addresses(body, values)
+    addresses = _addresses(body, values)
     extensions = _extensions(body, values)
     frame_loads = {**_stable_loads(body, values), **_frame_loads(body, values)}
     frame_homes = _frame_homes(body, values - frame_loads.keys())
     rebuilt = {**frame_loads, **{value: home for value, (home, _at) in frame_homes.items()}}
     stored = values.difference(
         constants,
-        frame_addresses,
+        addresses,
         extensions,
         frame_loads,
         frame_homes,
@@ -117,7 +117,7 @@ def spilled(
                 if (
                     (
                         value not in constants
-                        and value not in frame_addresses
+                        and value not in addresses
                         and value not in extensions
                         and value not in frame_loads
                         and value not in frame_homes
@@ -141,8 +141,8 @@ def spilled(
                             rematerialized=True,
                         )
                     )
-                elif value in frame_addresses:
-                    address = frame_addresses[value]
+                elif value in addresses:
+                    address = addresses[value]
                     insns.append(
                         replace(
                             _inserted(
@@ -218,7 +218,7 @@ def spilled(
                 rematerialized_definitions.add(id(rewritten))
             if (
                 len(one.defines) == 1
-                and one.defines[0] in constants.keys() | frame_addresses.keys() | extensions.keys()
+                and one.defines[0] in constants.keys() | addresses.keys() | extensions.keys()
                 and not (one.requires or one.delivers or one.clobbers)
                 and one.group is None
                 and one.symbol is not True
@@ -502,7 +502,7 @@ def rematerializable(body: lir.LirBody, values: frozenset[int]) -> frozenset[int
     """Spill candidates whose value can be reconstructed without a slot."""
     return (
         frozenset(_constants(body, values))
-        | frozenset(_frame_addresses(body, values))
+        | frozenset(_addresses(body, values))
         | frozenset(_extensions(body, values))
         | frame_rematerializable(body, values)
         | frozenset(_stable_loads(body, values))
@@ -1100,15 +1100,17 @@ def _constants(body: lir.LirBody, values: frozenset[int]) -> dict[int, ir.Imm]:
             return {value: constant for value, constant in result.items() if value in values}
 
 
-def _frame_addresses(body: lir.LirBody, values: frozenset[int]) -> dict[int, ir.Address]:
-    """Pure frame-relative addresses cheap enough to recreate at every use.
+def _addresses(body: lir.LirBody, values: frozenset[int]) -> dict[int, ir.Address]:
+    """Pure addresses cheap enough to recreate at every use.
 
     A shared ``lea`` can span an entire loop nest after CSE. Keeping that
     pointer in a slot is strictly worse than spelling the same ``lea`` beside
     each use: the latter reads no memory, needs no store, and has no aliasing
-    state to preserve. Restrict this proof to BP-relative frame objects;
-    relocated addresses own fixups and general register expressions depend on
-    values whose availability must be proved separately.
+    state to preserve. A BP-relative frame address and a direct SEGDEF/EXTDEF
+    address have no dynamic input. The latter's relocation belongs to the
+    newly emitted ``lea`` just as it did to the original one, so fresh OMF
+    emission can reproduce it safely. General register expressions remain out:
+    their inputs' availability needs a separate proof.
     """
     definitions: dict[int, list[lir.Insn]] = {}
     for one in body.insns:
@@ -1136,8 +1138,12 @@ def _frame_addresses(body: lir.LirBody, values: frozenset[int]) -> dict[int, ir.
                 and one.group is None
                 and one.symbol is not True
                 and source.addr is not None
-                and source.addr.space is Space.FRAME
-                and source.through == Register.BP
+                and (
+                    source.addr.space is Space.FRAME
+                    and source.through == Register.BP
+                    or source.addr.space in (Space.SEGMENT, Space.EXTERNAL)
+                    and source.through == Register.NONE
+                )
                 and source.index == Register.NONE
             ):
                 result[value] = source

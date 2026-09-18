@@ -413,6 +413,44 @@ def test_spilled_frame_address_is_rematerialized_without_a_frame_slot() -> None:
     assert result.insns[-1].what.sources[1].value == recreated[0].defines[0]
 
 
+@pytest.mark.parametrize("space", [Space.SEGMENT, Space.EXTERNAL])
+def test_spilled_relocatable_address_is_rematerialized_without_a_frame_slot(space) -> None:
+    """QCport's global descriptor address spilled into a private frame cell.
+
+    A direct SEGDEF/EXTDEF address has no dynamic input: recreating its
+    ``lea`` at the use is cheaper than storing an offset and reloading it.
+    Fresh OMF emission owns the duplicated relocation, so this is valid for
+    both module data and imported data rather than only BP-relative locals.
+    """
+    source = ir.Address(Addr(space, 12, 7), Register.NONE, disp_width=2)
+    address = lir.Insn(
+        at=0,
+        covers=(0, 3),
+        what=ir.Semantics(ir.Operation.ADDRESS, "lea", (ir.Held(1, 2),), (source,)),
+        defines=(1,),
+        uses=(),
+    )
+    frame = frames.Frame(0)
+
+    result, _made = spiller.spilled(_body(address, _add(2, 1)), frozenset({1}), frame)
+
+    assert 1 not in frame.slots
+    recreated = [one for one in result.insns if one.what and one.what.op is ir.Operation.ADDRESS]
+    assert len(recreated) == 1
+    assert recreated[0].what.sources == (source,)
+    assert recreated[0].rematerialized
+    # The rematerialized spelling is not an unrelocated literal zero: fresh
+    # OMF emission places the original symbol fixup on its new displacement.
+    from qbopt.backend import omfwrite
+
+    emitted = omfwrite._encoded(
+        ir.Semantics(ir.Operation.ADDRESS, "lea", (ir.Reg(Register.BX, 2),), (source,)),
+        {(space, 7): "_descriptor"},
+    )
+    assert emitted.code == bytes.fromhex("8d1e0c00")
+    assert emitted.fixups == (omfwrite.Fixup(2, omfwrite.OFFSET, "_descriptor"),)
+
+
 @pytest.mark.parametrize("name", ["movsx", "movzx"])
 def test_single_use_extension_is_rematerialized_at_its_use(name: str) -> None:
     """Mandelbrot stored a one-use ``movsx`` result in a private slot and
