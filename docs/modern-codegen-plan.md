@@ -1440,3 +1440,27 @@ This advances the shared Phase-3 scalarization substrate and Phase-4 pressure
 work without registering a performance target.  GCC and LLVM remain best-case
 flat-i386 structural listings only; BCC/WC medium-model output remains the
 ABI, segmentation, and legal-addressing authority.
+
+### 65. Reachable x87-edge allocation — 2026-09-18
+
+The first CFG allocation audit found an erroneous kind of join before the
+larger stack-state work: `FloatAlloc` counted every syntactic predecessor of
+a block, including a block unreachable from the procedure entry.  That made
+one executed floating edge look like a join, so an otherwise unchanged x87
+stack was either bridged through an 80-bit frame cell or refused when no owned
+frame was available.
+
+The allocator now computes reachability from the LIR body entry and builds
+its predecessor and straight-edge facts only from executable edges.  Dead
+blocks remain in the body for layout and ordinary emission; this is solely an
+x87 allocation fact.  The fail-first regression adds an unreachable incoming
+edge to a live floating block: it formerly raised `floating region crossing
+requires an owned frame`, and now retains the ordinary straight stack path.
+The same matrix continues to refuse a reachable fork and a value unavailable
+at the entry, so this does not claim general stack reconciliation across real
+joins.
+
+This advances Phase 4's global-x87 prerequisite but leaves canonical stack
+states, edge shuffles, and live values at genuine CFG joins open.  GCC and
+LLVM remain best-case flat-i386 structural listings only; BCC/WC medium-model
+output remains the ABI, segmentation, and legal-addressing authority.

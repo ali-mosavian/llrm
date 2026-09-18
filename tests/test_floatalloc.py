@@ -663,7 +663,7 @@ def test_shared_float_crosses_only_a_unique_straight_line_edge(boundary):
     if boundary == "separated":
         blocks = (first, lir.LirBlock(80, (), ()), second)
     body = replace(body, entry=24 if boundary == "entry" else 0, blocks=blocks)
-    if boundary in {"fork", "join", "entry"}:
+    if boundary in {"fork", "entry"}:
         with pytest.raises(Unlowered):
             floatalloc.allocated(body)
         return

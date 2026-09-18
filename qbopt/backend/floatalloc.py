@@ -149,6 +149,26 @@ def _two_values(what: ir.Semantics | None) -> "tuple[str, ir.Held, ir.Held] | No
     return (name, left, right) if name in _ARITHMETIC else None
 
 
+def _reachable_blocks(blocks: tuple[lir.LirBlock, ...], entry: int) -> frozenset[int]:
+    """The CFG blocks execution can enter from this body's entry.
+
+    Stack state is a property of an executed edge.  A syntactic predecessor
+    in dead code cannot arrive at a join or require an x87 bridge; treating
+    it as one made an otherwise straight live edge spill an extended value.
+    Keep the dead block for layout and ordinary emission, but exclude its
+    edges from the allocator's live control-flow facts.
+    """
+    at_of = {block.at: block for block in blocks}
+    reached, pending = set(), [entry]
+    while pending:
+        at = pending.pop()
+        if at in reached or at not in at_of:
+            continue
+        reached.add(at)
+        pending.extend(at_of[at].succ)
+    return frozenset(reached)
+
+
 def _memory_name(name: str, cell_is_left: bool, load: lir.Insn) -> str | None:
     """The instruction computing `name` with one operand read from `load`'s cell, if x87 has one."""
     from qbopt.backend import select
@@ -704,20 +724,30 @@ def allocated(
     }
     if not floating:
         return body
+    reachable = _reachable_blocks(body.blocks, body.entry)
     predecessors = {block.at: set() for block in body.blocks}
     for block in body.blocks:
+        if block.at not in reachable:
+            continue
         for successor in block.succ:
-            if successor in predecessors:
+            if successor in reachable:
                 predecessors[successor].add(block.at)
     order = tuple(block.at for block in body.blocks)
     next_blocks = {
         block.at: block.succ[0]
         for block in body.blocks
-        if len(block.succ) == 1 and block.succ[0] != body.entry and predecessors.get(block.succ[0]) == {block.at}
+        if (
+            block.at in reachable
+            and len(block.succ) == 1
+            and block.succ[0] != body.entry
+            and block.succ[0] in reachable
+            and predecessors.get(block.succ[0]) == {block.at}
+        )
     }
     at_of = {block.at: block for block in body.blocks}
     destinations = set(next_blocks.values())
-    roots = [at for at in order if at not in destinations]
+    roots = [at for at in order if at in reachable and at not in destinations]
+    roots += [at for at in order if at not in reachable]
     scheduled, seen = [], set()
     for root in (*roots, *order):
         at = root
