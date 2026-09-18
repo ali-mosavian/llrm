@@ -30,9 +30,9 @@ from qbopt.optimize import peel
 from qbopt.analysis import avail
 from qbopt.optimize import lcssa
 from qbopt.analysis import consts
+from qbopt.optimize import profit
 from qbopt.optimize import unroll
 from qbopt.optimize import promote
-from qbopt.optimize import profit
 from qbopt.model.mir import MirBody
 from qbopt.objectfile import module
 from qbopt.optimize import strength

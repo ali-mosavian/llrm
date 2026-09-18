@@ -452,37 +452,45 @@ def test_dynamic_comparison_withholds_a_ratio_when_a_loop_is_only_profiled_by_he
     Ten visits per natural loop is useful diagnostic context, but it is not
     an execution target and must never be divided into a reference estimate.
     """
-    reports = [{
-        "source": "bench/c/nbody.c",
-        "cpu": "386",
-        "functions": [{
-            "name": "_bench_nbody",
-            "instructions": 138,
-            "loads": 62,
-            "stores": 20,
-            "branches": 5,
-            "calls": 0,
-            "address_calculations": 0,
-            "dynamic_operations": 13652.0,
-            "dynamic_status": "estimated: CFG branches, otherwise ten iterations per natural loop",
-        }],
-    }]
-    references = [{
-        "source": "bench/c/nbody.c",
-        "compiler": "clang",
-        "assembly": "build/nbody-clang.s",
-        "functions": [{
-            "name": "bench_nbody",
-            "instructions": 267,
-            "loads": 20,
-            "stores": 10,
-            "branches": 1,
-            "calls": 0,
-            "address_calculations": 0,
-            "dynamic_operations": 1174.0,
-            "dynamic_status": "estimated: CFG branches and ten iterations per natural loop",
-        }],
-    }]
+    reports = [
+        {
+            "source": "bench/c/nbody.c",
+            "cpu": "386",
+            "functions": [
+                {
+                    "name": "_bench_nbody",
+                    "instructions": 138,
+                    "loads": 62,
+                    "stores": 20,
+                    "branches": 5,
+                    "calls": 0,
+                    "address_calculations": 0,
+                    "dynamic_operations": 13652.0,
+                    "dynamic_status": "estimated: CFG branches, otherwise ten iterations per natural loop",
+                }
+            ],
+        }
+    ]
+    references = [
+        {
+            "source": "bench/c/nbody.c",
+            "compiler": "clang",
+            "assembly": "build/nbody-clang.s",
+            "functions": [
+                {
+                    "name": "bench_nbody",
+                    "instructions": 267,
+                    "loads": 20,
+                    "stores": 10,
+                    "branches": 1,
+                    "calls": 0,
+                    "address_calculations": 0,
+                    "dynamic_operations": 1174.0,
+                    "dynamic_status": "estimated: CFG branches and ten iterations per natural loop",
+                }
+            ],
+        }
+    ]
     comparison = quality._comparisons(reports, references)[0]
     assert comparison["ratios"]["dynamic_operations"] is None
     assert comparison["dynamic_ratio_status"] == "withheld: profile-free loop heuristic"

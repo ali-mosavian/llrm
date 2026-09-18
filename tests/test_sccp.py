@@ -74,26 +74,42 @@ def diamond():
     left, right, joined = (mir.Value(index, 0) for index in range(1, 4))
 
     def copy(at, value, number):
-        return mir.Op(at, ir.Operation.MOVE, "mov", (value,), (), kind=mir.Kind.COPY,
-                      args=(mir.Const(number, 4),), results=(mir.Held(value, 4),))
+        return mir.Op(
+            at,
+            ir.Operation.MOVE,
+            "mov",
+            (value,),
+            (),
+            kind=mir.Kind.COPY,
+            args=(mir.Const(number, 4),),
+            results=(mir.Held(value, 4),),
+        )
 
     def branch(at, first, second, target):
         flags = mir.Value(at + 100, at, True)
         uses = (first.value,) if isinstance(first, mir.Held) else ()
-        compare = mir.Op(at, ir.Operation.COMPARE, "cmp", (flags,), uses, kind=mir.Kind.SUB,
-                         args=(first, second))
-        jump = mir.Op(at + 1, ir.Operation.BRANCH, "", (), (flags,), kind=mir.Kind.BRANCH,
-                      test=mir.Kind.EQ, target=target)
+        compare = mir.Op(at, ir.Operation.COMPARE, "cmp", (flags,), uses, kind=mir.Kind.SUB, args=(first, second))
+        jump = mir.Op(
+            at + 1, ir.Operation.BRANCH, "", (), (flags,), kind=mir.Kind.BRANCH, test=mir.Kind.EQ, target=target
+        )
         return compare, jump
 
-    return mir.MirBody(0, (
-        mir.MirBlock(0, (), branch(0, mir.Const(1, 4), mir.Const(1, 4), 10), (10, 20)),
-        mir.MirBlock(10, (), (copy(10, left, 7),), (30,)),
-        mir.MirBlock(20, (), (copy(20, right, 9),), (30,)),
-        mir.MirBlock(30, (mir.Phi(joined, {10: left, 20: right}),),
-                     branch(30, mir.Held(joined, 4), mir.Const(7, 4), 40), (40, 50)),
-        mir.MirBlock(40, (), (), ()), mir.MirBlock(50, (), (), ()),
-    ))
+    return mir.MirBody(
+        0,
+        (
+            mir.MirBlock(0, (), branch(0, mir.Const(1, 4), mir.Const(1, 4), 10), (10, 20)),
+            mir.MirBlock(10, (), (copy(10, left, 7),), (30,)),
+            mir.MirBlock(20, (), (copy(20, right, 9),), (30,)),
+            mir.MirBlock(
+                30,
+                (mir.Phi(joined, {10: left, 20: right}),),
+                branch(30, mir.Held(joined, 4), mir.Const(7, 4), 40),
+                (40, 50),
+            ),
+            mir.MirBlock(40, (), (), ()),
+            mir.MirBlock(50, (), (), ()),
+        ),
+    )
 
 
 def test_conditional_phi_decides_following_branch_in_one_round():
@@ -106,8 +122,7 @@ def test_conditional_phi_decides_following_branch_in_one_round():
 def test_runtime_condition_preserves_both_phi_inputs():
     body = diamond()
     entry = body.blocks[0]
-    compare = replace(entry.ops[0], args=(mir.Held(mir.Value(999, 0), 4), mir.Const(1, 4)),
-                      uses=(mir.Value(999, 0),))
+    compare = replace(entry.ops[0], args=(mir.Held(mir.Value(999, 0), 4), mir.Const(1, 4)), uses=(mir.Value(999, 0),))
     body = replace(body, blocks=(replace(entry, ops=(compare, entry.ops[1])), *body.blocks[1:]))
     result = transform.decided(body, frozenset(), {})
     assert next(block for block in result.blocks if block.at == 30).succ == (40, 50)
@@ -169,8 +184,7 @@ def test_pure_constant_expression_folds_on_each_phi_edge():
     folded = join.phis[-1]
     assert folded.result == answer
     constants = {
-        at: next(op.args[0].n for op in result.block(at).ops if folded.incoming[at] in op.defines)
-        for at in (10, 20)
+        at: next(op.args[0].n for op in result.block(at).ops if folded.incoming[at] in op.defines) for at in (10, 20)
     }
     assert constants == {10: 8, 20: 10}
 
@@ -226,13 +240,34 @@ def test_unresolved_successor_callback_cannot_drop_edges():
 
 def test_new_backedge_invalidates_an_optimistic_loop_constant():
     start, joined, advanced = (mir.Value(index, 0) for index in range(1, 4))
-    seed = mir.Op(0, ir.Operation.MOVE, "mov", (start,), (), kind=mir.Kind.COPY,
-                  args=(mir.Const(7, 4),), results=(mir.Held(start, 4),))
-    update = mir.Op(11, ir.Operation.BINARY, "add", (advanced,), (joined,), kind=mir.Kind.ADD,
-                    args=(mir.Held(joined, 4), mir.Const(1, 4)), results=(mir.Held(advanced, 4),))
-    body = mir.MirBody(0, (mir.MirBlock(0, (), (seed,), (10,)),
-                          mir.MirBlock(10, (mir.Phi(joined, {0: start, 10: advanced}),), (update,), (10, 20)),
-                          mir.MirBlock(20, (), (), ())))
+    seed = mir.Op(
+        0,
+        ir.Operation.MOVE,
+        "mov",
+        (start,),
+        (),
+        kind=mir.Kind.COPY,
+        args=(mir.Const(7, 4),),
+        results=(mir.Held(start, 4),),
+    )
+    update = mir.Op(
+        11,
+        ir.Operation.BINARY,
+        "add",
+        (advanced,),
+        (joined,),
+        kind=mir.Kind.ADD,
+        args=(mir.Held(joined, 4), mir.Const(1, 4)),
+        results=(mir.Held(advanced, 4),),
+    )
+    body = mir.MirBody(
+        0,
+        (
+            mir.MirBlock(0, (), (seed,), (10,)),
+            mir.MirBlock(10, (mir.Phi(joined, {0: start, 10: advanced}),), (update,), (10, 20)),
+            mir.MirBlock(20, (), (), ()),
+        ),
+    )
     visited = []
 
     def successors(block, facts, states):
@@ -252,17 +287,29 @@ def test_block_order_does_not_change_conditional_results():
     body = diamond()
     other = replace(body, blocks=tuple(reversed(body.blocks)))
     assert {block.at: block for block in transform.decided(body, frozenset(), {}).blocks} == {
-        block.at: block for block in transform.decided(other, frozenset(), {}).blocks}
+        block.at: block for block in transform.decided(other, frozenset(), {}).blocks
+    }
 
 
 def test_entry_phi_keeps_unknown_caller_input():
     incoming, joined, returned = (mir.Value(index, 0) for index in range(1, 4))
-    copy = mir.Op(10, ir.Operation.MOVE, "mov", (returned,), (), kind=mir.Kind.COPY,
-                  args=(mir.Const(7, 4),), results=(mir.Held(returned, 4),))
-    body = mir.MirBody(0, (
-        mir.MirBlock(0, (mir.Phi(joined, {-1: incoming, 10: returned}),), (), (10,)),
-        mir.MirBlock(10, (), (copy,), (0,)),
-    ))
+    copy = mir.Op(
+        10,
+        ir.Operation.MOVE,
+        "mov",
+        (returned,),
+        (),
+        kind=mir.Kind.COPY,
+        args=(mir.Const(7, 4),),
+        results=(mir.Held(returned, 4),),
+    )
+    body = mir.MirBody(
+        0,
+        (
+            mir.MirBlock(0, (mir.Phi(joined, {-1: incoming, 10: returned}),), (), (10,)),
+            mir.MirBlock(10, (), (copy,), (0,)),
+        ),
+    )
     facts = constant_cycles.propagated(body, {}, lambda block, facts, states: block.succ)
     assert joined not in facts
 
@@ -288,9 +335,7 @@ def test_module_constant_returns_require_every_exit_to_agree():
     agrees = _returned(37)
     left, right = agrees.blocks[0], _returned(38, at=10).blocks[0]
     disagrees = replace(agrees, blocks=(replace(left, succ=(10,)), right))
-    assert interprocedural.constant_returns({"yes": agrees, "no": disagrees}) == {
-        "yes": (mir.Const(37, 2),)
-    }
+    assert interprocedural.constant_returns({"yes": agrees, "no": disagrees}) == {"yes": (mir.Const(37, 2),)}
 
 
 def test_parameter_specialization_requires_every_call_to_agree():
@@ -302,9 +347,7 @@ def test_parameter_specialization_requires_every_call_to_agree():
     }
     assert interprocedural.constant_parameters(procedures, frozenset({"leaf"})) == {}
     procedures["b"] = ({2: "leaf"}, {2: (seven,)})
-    assert interprocedural.constant_parameters(procedures, frozenset({"leaf"})) == {
-        "leaf": (seven,)
-    }
+    assert interprocedural.constant_parameters(procedures, frozenset({"leaf"})) == {"leaf": (seven,)}
 
 
 def test_current_parameter_constants_reads_a_sccp_returned_actual():
@@ -375,13 +418,16 @@ def test_current_call_constants_keeps_a_per_call_fact_when_another_call_is_dynam
         2: (mir.Const(4, 2),),
         4: (None,),
     }
-    assert interprocedural.current_parameter_constants(
-        {"caller": body},
-        {"caller": calls},
-        {"caller": arguments},
-        {"choose": (parameter,)},
-        frozenset({"choose"}),
-    ) == {}
+    assert (
+        interprocedural.current_parameter_constants(
+            {"caller": body},
+            {"caller": calls},
+            {"caller": arguments},
+            {"choose": (parameter,)},
+            frozenset({"choose"}),
+        )
+        == {}
+    )
 
 
 def test_pure_call_removal_drops_its_exact_argument_pushes():
@@ -553,7 +599,10 @@ def test_noreturn_scc_rejects_a_member_with_a_normal_return():
     first = mir.MirBody(1, (mir.MirBlock(1, (), (call_b,), ()),), sealed=True)
     second = mir.MirBody(3, (mir.MirBlock(3, (), (returned,), ()),), sealed=True)
 
-    assert interprocedural.noreturn_procedures(
-        {"first": (first, {2: "second"}), "second": (second, {})},
-        frozenset({"first", "second"}),
-    ) == frozenset()
+    assert (
+        interprocedural.noreturn_procedures(
+            {"first": (first, {2: "second"}), "second": (second, {})},
+            frozenset({"first", "second"}),
+        )
+        == frozenset()
+    )
