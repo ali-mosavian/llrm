@@ -1084,12 +1084,15 @@ def addresses(body: lir.LirBody, *, cpu: str | targets.Profile = "386") -> lir.L
                 index += 3
             else:
                 pair = block.insns[index : index + 2]
-                combined = _shift_address(pair, cpu=target_cpu) if len(pair) == 2 and id(pair[1]) in dead else None
+                combined = _sum_address(pair, cpu=target_cpu) if len(pair) == 2 and id(pair[1]) in dead else None
+                if combined is None:
+                    combined = _shift_address(pair, cpu=target_cpu) if len(pair) == 2 and id(pair[1]) in dead else None
                 if combined is not None:
+                    removed = pair[1]
                     folded = (
                         [combined]
-                        if pair[0].covers == (pair[1].at, pair[1].at)
-                        else lir.without((combined, pair[1]), lambda one: one is pair[1])
+                        if pair[0].covers == (removed.at, removed.at)
+                        else lir.without((combined, removed), lambda one, removed=removed: one is removed)
                     )
                     if len(folded) == 1:
                         insns.extend(folded)
@@ -1099,6 +1102,75 @@ def addresses(body: lir.LirBody, *, cpu: str | targets.Profile = "386") -> lir.L
                 index += 1
         blocks.append(replace(block, insns=tuple(insns)))
     return replace(body, blocks=tuple(blocks))
+
+
+def _sum_address(parts: tuple[lir.Insn, ...], *, cpu: str | targets.Profile = "386") -> lir.Insn | None:
+    """Fold ``mov result,left; add result,right`` into one 67h LEA.
+
+    This is ordinary three-address addition after physical allocation, not a
+    source-level pointer operation.  LEA is useful only when the ADD's flags
+    are dead (proved by the caller) and when it removes a real copy.  The
+    address-size override is the secondary legal form in 16-bit mode.
+    """
+    if len(parts) != 2 or any(
+        one.what is None
+        or one.clobbers
+        or one.clobbers_high
+        or one.symbol is True
+        or one.spread
+        or one.group is not None
+        or one.frame_adjust
+        for one in parts
+    ):
+        return None
+    copy, addition = parts
+    match copy.what, addition.what:
+        case (
+            ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg() as dest,), (ir.Reg() as left,)),
+            ir.Semantics(ir.Operation.BINARY, "add", (written,), (read, ir.Reg() as right)),
+        ):
+            if written != dest or read != dest:
+                return None
+        case _:
+            return None
+    if (
+        not (dest.width == left.width == right.width)
+        or dest.width not in {2, 4}
+        or any(one.register not in target.WIDTHS for one in (dest, left, right))
+        or RegisterExt.full_register32(dest.register) == RegisterExt.full_register32(left.register)
+    ):
+        return None
+
+    # If ADD names the just-written destination as its second operand, it is
+    # the copied left value at that point.  Otherwise it is the independent
+    # right input.  SIB cannot use ESP as an index, but its two inputs are
+    # commutative, so put ESP in the base position where possible.
+    base = RegisterExt.full_register32(left.register)
+    repeated = RegisterExt.full_register32(right.register) == RegisterExt.full_register32(dest.register)
+    index = base if repeated else RegisterExt.full_register32(right.register)
+    if index == Register.ESP:
+        base, index = index, base
+    if index == Register.ESP:
+        return None
+    target_cpu = targets.profile(cpu)
+    if not _sum_address_is_cheaper((left, left if repeated else right), target_cpu):
+        return None
+
+    what = ir.Semantics(ir.Operation.ADDRESS, "lea", (dest,), (ir.Address(None, through=base, index=index),))
+    intermediate = set(copy.defines)
+    uses = tuple(dict.fromkeys((*copy.uses, *(value for value in addition.uses if value not in intermediate))))
+    live = set(uses) | set(addition.defines)
+    widths = tuple(dict.fromkeys(pair for pair in (*copy.widths, *addition.widths) if pair[0] in live))
+    owner = addition if copy.covers == (addition.at, addition.at) else copy
+    return replace(
+        owner,
+        what=what,
+        defines=addition.defines,
+        uses=uses,
+        widths=widths,
+        requires=tuple(dict.fromkeys((*copy.requires, *addition.requires))),
+        delivers=tuple(dict.fromkeys((*copy.delivers, *addition.delivers))),
+    )
 
 
 def _shift_address(parts: tuple[lir.Insn, ...], *, cpu: str | targets.Profile = "386") -> lir.Insn | None:
@@ -1147,6 +1219,15 @@ def _scaled_address_is_cheaper(source: ir.Reg, replaced: int, cpu: targets.Profi
     new = cpu.operations.address + cpu.operations.prefix
     if source.width < 4:
         new += cpu.partial_register_stall
+    return new <= old
+
+
+def _sum_address_is_cheaper(sources: tuple[ir.Reg, ir.Reg], cpu: targets.Profile) -> bool:
+    """Whether one 67h LEA beats keeping a copied two-address ADD."""
+    old = cpu.operations.move + cpu.operations.add
+    new = cpu.operations.address + cpu.operations.prefix
+    partial_roots = {RegisterExt.full_register32(source.register) for source in sources if source.width < 4}
+    new += len(partial_roots) * cpu.partial_register_stall
     return new <= old
 
 

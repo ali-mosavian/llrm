@@ -24,7 +24,7 @@ class Profile:
     register_capacity: int = 6
     call_register_capacity: int = 2
     # Preferred forms only. The complete legal set, including the costed
-    # address-size-prefixed fallback, is in ``address_forms`` below.
+    # secondary address-size-prefixed form, is in ``address_forms`` below.
     address_scales: frozenset[int] = frozenset({1})
     _costs: tuple[tuple[str, int], ...] = ()
     _latencies: tuple[tuple[str, int], ...] = ()
@@ -37,7 +37,8 @@ class Profile:
     pentium_pairing: bool = False
     # Appended to retain the public positional shape above. 16-bit medium
     # model can use 386 32-bit SIB addressing through an address-size prefix;
-    # it is legal but never silently promoted to a native/free scale.
+    # it is legal but never silently promoted to a native/free scale. The
+    # field name ``fallback`` means non-native, not "after spill/recompute".
     address_forms: tuple[AddressForm, ...] = ()
 
     def cost(self, operation: str) -> int:
@@ -135,7 +136,7 @@ def _operation_costs(costs: dict[str, int], prefix: int) -> OperationCosts:
 
 
 def _address_forms(costs: OperationCosts, prefix: int) -> tuple[AddressForm, ...]:
-    """Native medium-model addressing, then the legal 67h fallback."""
+    """Native medium-model addressing, then the legal secondary 67h form."""
     return (
         AddressForm(2, frozenset({1})),
         AddressForm(

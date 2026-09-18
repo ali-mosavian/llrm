@@ -20,7 +20,7 @@ iteration updates this file in the same commit.
 
 | Phase | State | Current boundary |
 |---|---|---|
-| Per-CPU measurement | in progress | CPU profiles distinguish native medium-model addressing from the complete costed 67h fallback; the C corpus, static/dynamic metrics and reference listings exist, and rotated symbolic sentinels and guarded post-tests retain comparable trip estimates; audited targets remain. |
+| Per-CPU measurement | in progress | CPU profiles distinguish native medium-model addressing from the complete costed secondary 67h form; the C corpus, static/dynamic metrics and reference listings exist, and rotated symbolic sentinels and guarded post-tests retain comparable trip estimates; audited targets remain. |
 | MIR/LIR provenance and fresh OMF | complete in production | allocated LIR emits directly with external source maps/allocation hints; the remaining compatibility views are test-only and cannot route a compilation through record rewriting. |
 | SROA and scalar promotion | partial | fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies can now expand into exact leaves, while far, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, dying-base indexed-form unfolding, and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
@@ -29,6 +29,57 @@ iteration updates this file in the same commit.
 | Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing, target-priced 67h LEA selection, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 100. Fold allocated sums through the secondary 67h form — 2026-09-18
+
+The refreshed C comparison showed that nbody's normalized instruction count
+was already between Clang and GCC (`277` versus `290` and `263`), despite its
+different x87 memory balance. Mandelbrot retained a smaller but concrete
+machine-form gap shared by both references: qbopt emitted `mov edi,edx / add
+edi,esi / cmp edi,1024`, while GCC and Clang both emitted one LEA for the
+dead-flags sum.
+
+The post-allocation address selector now recognizes the general three-address
+shape `result := left + right` after two-address allocation has spelled it as
+a copy followed by ADD. When ADD's flags are dead, both operands are exact
+same-width allocated registers, and the selected CPU prices the replacement
+no higher, it emits one 32-bit-address LEA. In 16-bit code this is the legal
+`67h` form. Word results remain exact because the low sixteen bits of the
+32-bit effective-address sum equal modulo-16-bit addition; profile-specific
+partial-register penalties are charged for each distinct word input.
+
+This is a secondary address form, not a last-resort spill form. Native 16-bit
+addressing remains preferred where it can express the operation. The complete
+loop-form ordering established in iteration 95 is unchanged: native form,
+then legal costed `67h`, then spill or recomputation. This iteration applies
+the same legal form to a sum exposed only after physical allocation. It rejects
+live flags, stack-pointer indexes, mismatched widths, relocation ownership,
+parallel copies, frame adjustments, clobbers, and nontrivial source spans.
+
+```asm
+; before
+mov edi,edx
+add edi,esi
+cmp edi,1024
+
+; after
+lea edi,[edx+esi]       ; address-size override 67h
+cmp edi,1024
+```
+
+The fail-first Tier 1 regression initially retained MOV/ADD for both word and
+dword sums. It now verifies one LEA, both SSA inputs and the final definition,
+the actual `67h` prefix, and the word/dword forms; a companion regression
+proves that a conditional branch observing ADD's flags retains the original
+instructions. The emitted 386 Mandelbrot body changes `202 -> 201` bytes,
+`56 -> 55` raw instructions, and weighted cost `287 -> 285`. Its normalized
+body changes `48 -> 47` instructions, against the unchanged advisory Clang
+`52` and i686 GCC `45` listings. The first changed stage is post-allocation
+Peephole. No hard candidate-ABI target is registered by this comparison.
+
+GCC/LLVM listings remain best-case flat-i386 structural references; BCC/WC
+remain authoritative for medium-model ABI, segment, and legal-address
+semantics.
 
 ### 99. Count dead dynamic induction variables down on their flags — 2026-09-18
 
@@ -287,7 +338,7 @@ not a final parity claim. GCC/LLVM listings remain best-case flat-i386
 structural references; BCC/WC remain authoritative for the medium-model ABI,
 segments, and legal address semantics.
 
-### 95. Costed 67h addressing before spill/recompute — 2026-09-18
+### 95. Costed secondary 67h addressing before spill/recompute — 2026-09-18
 
 The preceding medium-model audit had conflated “not a native 16-bit
 effective-address form” with “not legal.” On a 386 target, address-size
@@ -298,15 +349,15 @@ counter in a frame slot or rebuilding the complete address every iteration.
 
 The immutable CPU profile now exposes both families to MIR in machine-neutral
 terms: index width, legal scales, extra bytes, per-use cost, extension cost,
-and whether the family is a fallback. The preferred compatibility view
+and whether the family is secondary. The preferred compatibility view
 remains native `{1}`; C, object, and recursive unswitch optimization now
 receive the complete form tuple. MIR still sees neither `67h`, SIB, opcodes,
 nor physical register names.
 
 Strength formula selection now keeps native indexed leaves free, admits
 register-resident recurrences that fit the pressure budget, then activates
-the cheapest legal fallback addresses for any overflow. Only overflow that
-has no legal fallback reaches sibling collapse and spill/recompute pricing.
+the cheapest legal secondary addresses for any overflow. Only overflow that
+has no legal secondary form reaches sibling collapse and spill/recompute pricing.
 A 32-bit-index form still requires the existing exactness proof: zero start,
 unit step, a known nonwrapping last counter, and a bounded far allocation.
 The proof is now requested for the particular induction value being selected,

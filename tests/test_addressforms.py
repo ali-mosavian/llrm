@@ -6,14 +6,90 @@ from iced_x86 import Register
 
 from tests import corpus
 from qbopt.model import ir
+from qbopt.model import lir
 from qbopt.model import mir
 from qbopt.backend import lower
 from qbopt.backend import select
 from qbopt.frontend import blocks
+from qbopt.backend import peephole
 from qbopt.backend import addressforms
 from qbopt.frontend.declen import decode
 from qbopt.objectfile.module import Addr
 from qbopt.objectfile.module import Space
+
+
+@pytest.mark.parametrize("width", [2, 4])
+def test_mandel_sum_uses_67h_lea_before_preserving_a_copy(width: int) -> None:
+    """Mandelbrot emitted ``mov sum,xx; add sum,yy`` before its escape test.
+
+    Both GCC and Clang spell the dead-flags sum as one LEA. In 16-bit mode
+    the dword form needs 67h, but that is still cheaper than preserving and
+    updating a third value; the word form has the same modulo-16-bit result.
+    """
+    registers = (Register.DI, Register.DX, Register.SI) if width == 2 else (Register.EDI, Register.EDX, Register.ESI)
+    dest, left, right = (ir.Reg(register, width) for register in registers)
+    copy = lir.Insn(
+        47,
+        (47, 47),
+        ir.Semantics(ir.Operation.MOVE, "mov", (dest,), (left,)),
+        (3,),
+        (1,),
+        widths=((1, width), (3, width)),
+    )
+    addition = lir.Insn(
+        47,
+        (47, 48),
+        ir.Semantics(ir.Operation.BINARY, "add", (dest,), (dest, right)),
+        (4,),
+        (3, 2),
+        widths=((2, width), (3, width), (4, width)),
+    )
+    compare = lir.Insn(
+        48,
+        (48, 48),
+        ir.Semantics(ir.Operation.COMPARE, "cmp", (), (dest, ir.Imm(1024, width))),
+        (),
+        (4,),
+        widths=((4, width),),
+    )
+    body = lir.LirBody("mandel", 47, (lir.LirBlock(47, (copy, addition, compare), ()),), {}, {})
+
+    result = peephole.addresses(body, cpu="386").insns
+
+    assert [one.what.name for one in result] == ["lea", "cmp"]
+    assert result[0].defines == (4,)
+    assert result[0].uses == (1, 2)
+    assert result[0].widths == ((1, width), (2, width), (4, width))
+    address = result[0].what.sources[0]
+    assert isinstance(address, ir.Address)
+    assert {address.through, address.index} == {Register.EDX, Register.ESI}
+    encoded = select.emit(result[0].what)
+    assert encoded is not None and 0x67 in encoded.code[:2]
+
+
+def test_sum_lea_preserves_observed_add_flags() -> None:
+    """A conditional branch after the sum still reads ADD's flags."""
+    dest, left, right = (ir.Reg(register, 4) for register in (Register.EDI, Register.EDX, Register.ESI))
+    copy = lir.Insn(
+        47,
+        (47, 47),
+        ir.Semantics(ir.Operation.MOVE, "mov", (dest,), (left,)),
+        (3,),
+        (1,),
+    )
+    addition = lir.Insn(
+        47,
+        (47, 48),
+        ir.Semantics(ir.Operation.BINARY, "add", (dest,), (dest, right)),
+        (4,),
+        (3, 2),
+    )
+    branch = lir.Insn(48, (48, 48), ir.Semantics(ir.Operation.BRANCH, "je", (), (), 60), (), ())
+    body = lir.LirBody("flagged", 47, (lir.LirBlock(47, (copy, addition, branch), (60,)),), {}, {})
+
+    result = peephole.addresses(body, cpu="386").insns
+
+    assert [one.what.name for one in result] == ["mov", "add", "je"]
 
 
 @pytest.mark.parametrize("offset", [4, 8, -12, 65535])
