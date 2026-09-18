@@ -244,21 +244,68 @@ def _rereadable(sequence: list[lir.Insn], position: int, reads: deque) -> bool:
     return True
 
 
+def _equivalent_loads(sequence: list[lir.Insn]) -> dict[int, int]:
+    """Map each repeated stable x87 cell read to the first still-current value.
+
+    Lowering names every ``fld`` with a fresh SSA value.  That is right at
+    the MIR/LIR boundary, but loses the fact that two loads of the same stable
+    cell, with no intervening write, read one x87 value.  Keep that fact here,
+    where the stack allocator can decide whether retaining the value costs
+    less than rereading it.  A call, opaque instruction, address redefinition,
+    or possibly-aliasing store invalidates the remembered cell through
+    ``_may_write``; this is deliberately the same memory proof used by the
+    existing memory-operand reuse path.
+    """
+    available: dict[tuple[str, ir.Mem], int] = {}
+    aliases: dict[int, int] = {}
+    for one in sequence:
+        # A volatile load is observable and may be backed by changing device
+        # state.  It must neither be removed nor let an earlier ordinary read
+        # stand for a later one.
+        if getattr(one.op, "volatile", False):
+            available.clear()
+            continue
+        for key in tuple(available):
+            if _may_write(one, key[1]):
+                del available[key]
+        what = one.what
+        if not _loads_memory(what) or one.delivers:
+            continue
+        cell, result = what.sources[0], what.dests[0]
+        # An m80 value is the allocator's extended-precision spill format,
+        # and distinct loads can deliberately denote distinct stack values.
+        # Rounded scalar cells and integer conversions are ordinary source
+        # memory values, so their unchanged reloads are equivalent.
+        if cell.width == 10 or not _stable(cell):
+            continue
+        key = what.name, cell
+        if key in available:
+            aliases[result.value] = available[key]
+        else:
+            available[key] = result.value
+    return aliases
+
+
 def _region(blocks: tuple[lir.LirBlock, ...], index: int, offset: int, continues: set[int]):
     """The instructions from here to the region's end, and where each floating value is read among them."""
     from qbopt.backend.floatregions import boundary
 
-    sequence, reads = [], defaultdict(deque)
+    def finished(sequence: list[lir.Insn]):
+        aliases, reads = _equivalent_loads(sequence), defaultdict(deque)
+        for position, instruction in enumerate(sequence):
+            for arg in instruction.what.sources:
+                if _floating(arg):
+                    reads[aliases.get(arg.value, arg.value)].append(position)
+        return sequence, reads, aliases
+
+    sequence = []
     while True:
         for instruction in blocks[index].insns[offset:]:
             if boundary(instruction):
-                return sequence, reads
-            for arg in instruction.what.sources:
-                if _floating(arg):
-                    reads[arg.value].append(len(sequence))
+                return finished(sequence)
             sequence.append(instruction)
         if index not in continues:
-            return sequence, reads
+            return finished(sequence)
         index, offset = index + 1, 0
 
 
@@ -277,19 +324,33 @@ class _Stack:
         self.defined: dict[int, int] = {}
         self.sequence: list[lir.Insn] = []
         self.reads: defaultdict = defaultdict(deque)
+        self.aliases: dict[int, int] = {}
         self.here = -1
         self.out: list[lir.Insn] = []
         self.one: lir.Insn | None = None
         self.keep: set[int] = set()
         self.vacated: set[int] = set()
 
-    def region(self, sequence: list[lir.Insn], reads: defaultdict) -> None:
+    def region(self, sequence: list[lir.Insn], reads: defaultdict, aliases: dict[int, int]) -> None:
         self.sequence, self.reads, self.here = sequence, reads, -1
+        self.aliases = aliases
         self.home.clear()
+
+    def canonical(self, value: int) -> int:
+        while value in self.aliases:
+            value = self.aliases[value]
+        return value
+
+    def semantics(self, what: ir.Semantics) -> ir.Semantics:
+        """Replace a repeated direct cell read with its canonical stack value."""
+        sources = tuple(
+            replace(arg, value=self.canonical(arg.value)) if _floating(arg) else arg for arg in what.sources
+        )
+        return replace(what, sources=sources) if sources != what.sources else what
 
     def pending(self, value: int) -> deque:
         """Where the value is read after this instruction."""
-        reads = self.reads[value]
+        reads = self.reads[self.canonical(value)]
         while reads and reads[0] <= self.here:
             reads.popleft()
         return reads
@@ -305,7 +366,8 @@ class _Stack:
         if found is None:
             return False
         name, left, right = found
-        return left != right and _memory_name(name, left.value == value, self.home[value]) is not None
+        left, right = self.canonical(left.value), self.canonical(right.value)
+        return left != right and _memory_name(name, left == value, self.home[value]) is not None
 
     def insert(self, what: ir.Semantics) -> None:
         at = self.one.at
@@ -396,10 +458,17 @@ class _Stack:
 
         if self.sequence[self.here] is not one:
             raise Unlowered("floating region positions disagree")
-        self.one, what = one, one.what
+        self.one, what = one, self.semantics(one.what)
         operands = [arg.value for arg in what.sources if _floating(arg)]
         results = [arg.value for arg in what.dests if _floating(arg)]
         self.keep = set(operands)
+        if (
+            _loads_memory(one.what)
+            and len(results) == 1
+            and self.canonical(results[0]) != results[0]
+        ):
+            self.vacate()
+            return
         if len(results) > 1 or any(result in self.values for result in results):
             raise Unlowered("floating stack result is not a fresh value")
         for result in results:

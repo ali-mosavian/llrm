@@ -1311,3 +1311,37 @@ The report embeds the `best-case-flat-i386-structural-reference` contract,
 source hash, compiler versions, listing paths, and stage attribution.  It is
 Phase-1 measurement evidence only; BCC/WC medium-model listings remain the
 hard authority before any target or timing claim is registered.
+
+### 60. x87 rounded-cell equivalence — 2026-09-18
+
+The stage trace behind the remaining nbody memory gap showed that the issue
+was not an allocator preference for reloading a value with many readers.
+After MIR cloning, each `fld` result has exactly one reader, even when the
+same rounded frame temporary is loaded repeatedly.  The existing x87 stack
+allocator can retain one SSA value across consumers, but had no way to know
+that those separately named direct loads read the same current scalar cell.
+
+`FloatAlloc` now derives a region-local equivalence map for direct `fld` and
+`fild` reads of a stable 32- or 64-bit cell.  A later load joins the first
+value only while no opaque operation, address redefinition, possibly-aliasing
+write, or volatile access crosses it.  The allocator then uses its ordinary
+live-value, duplication, spill, and memory-operand logic; it does not add a
+new LIR optimization tier or expose a machine fact to MIR.  Extended 80-bit
+loads remain distinct because they are the allocator's precision-preserving
+spill representation, and the existing stack tests demonstrate that they
+must not be conflated.
+
+The primary regression was written fail-first: two independently named `fld`
+results from one unchanged rounded frame cell previously emitted two direct
+memory loads, and now emit one while preserving both arithmetic results.  The
+same commit adds negative checks for an intervening cell write and a volatile
+read.  The float allocator suite passes (`75 passed`, `0.11s`) and the
+independent DOS nbody oracle still returns `4774160` (`1 passed`, `13.81s`).
+
+The provisional fresh nbody quality listing is 1,071 bytes / 280 raw
+instructions / 146 loads / 85 stores / weighted cost 4,625, versus 1,095 /
+280 / 158 / 85 / 4,721 before this iteration.  This is a static candidate
+measurement, not a runtime target or a comparison against an ABI-incompatible
+listing.  GCC/LLVM remain best-case flat-i386 structural references for loop
+and traffic audits; BCC/WC medium-model output remains the authority for
+segments, legal address forms, ABI costs, and hard targets.

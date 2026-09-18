@@ -1,6 +1,7 @@
 """Floating allocation consumes values without changing arithmetic order."""
 
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 from iced_x86 import Register
@@ -839,6 +840,65 @@ def test_shared_producer_is_kept_across_two_arithmetic_consumers():
     assert select.emit(duplicate.what).code == bytes.fromhex("d9c0")
     assert duplicate.covers == (8, 8) and duplicate.op is None
     assert result.insns[4].what.sources == (ir.St(0), cell)
+
+
+def test_repeated_stable_float_cell_load_is_kept_across_consumers():
+    """C nbody reloaded one rounded frame temporary for every force term.
+
+    Two distinct LIR ``fld`` values read the same frame cell, with no write
+    between them.  They are one floating value: retain the first stack copy
+    across the first multiply rather than issue a second ``fld``.
+    """
+    cell, factor, first_out, second_out = _cells(-4, -8, -12, -16)
+    first_load, second_load, first_product, second_product = (ir.Held(index, 10) for index in (1, 3, 5, 6))
+    body = _body(
+        [
+            _load(first_load, cell),
+            _arithmetic("fmul", first_product, first_load, factor),
+            _store(first_out, first_product),
+            _load(second_load, cell),
+            _arithmetic("fmul", second_product, second_load, factor),
+            _store(second_out, second_product),
+        ]
+    )
+
+    result = floatalloc.allocated(body)
+
+    assert sum(one.what.name == "fld" and one.what.sources == (cell,) for one in result.insns) == 1
+    memory, stack = _x87(result.insns, {cell: 7, factor: 3})
+    assert memory[first_out] == memory[second_out] == 21 and not stack
+
+
+def test_float_cell_write_breaks_reload_equivalence():
+    """A changed frame temporary must be loaded again, not reused from x87."""
+    cell, out = _cells(-4, -8)
+    first_load, negated, second_load = (ir.Held(index, 10) for index in range(1, 4))
+    body = _body(
+        [
+            _load(first_load, cell),
+            ir.Semantics(ir.Operation.FLOAT_UNARY, "fchs", (negated,), (first_load,)),
+            _store(cell, negated),
+            _load(second_load, cell),
+            _store(out, second_load),
+        ]
+    )
+
+    result = floatalloc.allocated(body)
+
+    assert sum(one.what.name == "fld" and one.what.sources == (cell,) for one in result.insns) == 2
+    memory, stack = _x87(result.insns, {cell: 7})
+    assert memory[cell] == memory[out] == -7 and not stack
+
+
+def test_volatile_float_load_breaks_reload_equivalence():
+    """A volatile scalar read is observable and may see device state change."""
+    cell = _cells(-4)[0]
+    first, volatile, later = (ir.Held(index, 10) for index in range(1, 4))
+    body = _body([_load(first, cell), _load(volatile, cell), _load(later, cell)])
+    insns = list(body.insns)
+    insns[1] = replace(insns[1], op=SimpleNamespace(volatile=True))
+
+    assert floatalloc._equivalent_loads(insns) == {}
 
 
 @pytest.mark.parametrize("live", ["left", "right", "both", "same", "same_dead"])
