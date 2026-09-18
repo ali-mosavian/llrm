@@ -220,6 +220,76 @@ def test_offset_composition_preserves_modular_values_and_observers(kind, guard):
         assert (((value + 65530) & 65535) + delta) & 65535 == (value + done.args[1].n) & 65535
 
 
+@pytest.mark.parametrize(
+    ("kind", "first", "last", "combined"),
+    [
+        (mir.Kind.AND, 0xF0F3, 0x3FFF, 0x30F3),
+        (mir.Kind.OR, 0xF003, 0x0F30, 0xFF33),
+        (mir.Kind.XOR, 0xFFFF, 0x0031, 0xFFCE),
+    ],
+)
+@pytest.mark.parametrize("guard", ["none", "first_flags", "last_flags", "shared", "width", "merge", "memory"])
+def test_associative_bitwise_constants_combine_without_losing_observers(
+    kind: mir.Kind, first: int, last: int, combined: int, guard: str
+) -> None:
+    """CRC began with two XOR immediates although their middle value was private.
+
+    Associative bitwise chains may combine constants at an unchanged modular
+    width, but not when flags, memory, merges, or the intermediate are visible.
+    """
+    source, middle, result = (mir.Value(index, 0) for index in range(1, 4))
+    flags = mir.Value(4, 0, flags=True)
+    first_op = mir.Op(
+        0,
+        ir.Operation.BINARY,
+        kind.value,
+        (middle,),
+        (source,),
+        kind=kind,
+        args=(mir.Held(source, 2), mir.Const(first, 2)),
+        results=(mir.Held(middle, 2),),
+    )
+    last_op = mir.Op(
+        1,
+        ir.Operation.BINARY,
+        kind.value,
+        (result,),
+        (middle,),
+        kind=kind,
+        args=(mir.Held(middle, 2), mir.Const(last, 2)),
+        results=(mir.Held(result, 2),),
+    )
+    if guard == "first_flags":
+        first_op = replace(first_op, defines=(middle, flags))
+    elif guard == "last_flags":
+        last_op = replace(last_op, defines=(result, flags))
+    elif guard == "width":
+        last_op = replace(last_op, results=(mir.Held(result, 4),))
+    elif guard == "merge":
+        last_op = replace(last_op, merges={middle: result})
+    elif guard == "memory":
+        first_op = replace(first_op, loads=(mir.MemRef(None, 2),))
+
+    uses = Counter({middle: 2 if guard == "shared" else 1})
+    changed = algebraic._bitwise_chain(last_op, {middle: first_op}, {flags}, uses)
+    if guard not in {"none", "last_flags"}:
+        assert changed == last_op
+        return
+    assert changed.args == (mir.Held(source, 2), mir.Const(combined, 2))
+    assert changed.defines == last_op.defines
+    for value in (0, 1, 0x7FFF, 0x8000, 0xFFFF):
+        if kind is mir.Kind.AND:
+            expected = (value & first) & last
+            actual = value & combined
+        elif kind is mir.Kind.OR:
+            expected = (value | first) | last
+            actual = value | combined
+        else:
+            expected = (value ^ first) ^ last
+            actual = value ^ combined
+        assert expected == actual
+
+
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_addrm_reuses_word_scale_for_long_address(tag):
     """ADDRM rebuilt i*4 after using i*2, paying another copy and a larger shift each iteration."""

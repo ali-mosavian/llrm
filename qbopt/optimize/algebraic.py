@@ -29,6 +29,7 @@ def simplified(body: mir.MirBody, wanted: set[mir.Value], wide: set[mir.Value]) 
         op = _product(op, wanted | mentioned, wide)
         op = _scaled_chain(op, definitions, wanted | mentioned, uses)
         op = _offset_chain(op, definitions, wanted | mentioned, uses)
+        op = _bitwise_chain(op, definitions, wanted | mentioned, uses)
         return _simplified(op, wanted | mentioned, wide)
 
     changed = replace(
@@ -196,6 +197,67 @@ def _offset_chain(op: mir.Op, definitions: dict, wanted: set[mir.Value], uses: C
     return replace(op, kind=mir.Kind.ADD, name="add", op=ir.Operation.BINARY,
                    args=(source, mir.Const(amount, source.width)),
                    defines=(op.results[0].value,), uses=(source.value,), source_backed=False, raised=None)
+
+
+_ASSOCIATIVE_BITS = frozenset({mir.Kind.AND, mir.Kind.OR, mir.Kind.XOR})
+
+
+def _bitwise(
+    op: mir.Op, wanted: set[mir.Value], *, preserve_flags: bool = False
+) -> tuple[mir.Held, int] | None:
+    """A pure fixed-width bitwise operation with one constant operand."""
+    if (
+        op.kind not in _ASSOCIATIVE_BITS
+        or op.loads
+        or op.stores
+        or op.barrier
+        or op.merges
+        or len(op.args) != 2
+        or len(op.results) != 1
+        or not isinstance(op.results[0], mir.Held)
+    ):
+        return None
+    extra = tuple(value for value in op.defines if value != op.results[0].value)
+    if any(not value.flags for value in extra) or (not preserve_flags and any(value in wanted for value in extra)):
+        return None
+    source, constant = op.args
+    if isinstance(source, mir.Const):
+        source, constant = constant, source
+    result = op.results[0]
+    if (
+        not isinstance(source, mir.Held)
+        or not isinstance(constant, mir.Const)
+        or source.width != constant.width
+        or source.width != result.width
+    ):
+        return None
+    return source, consts.masked(constant.n, source.width)
+
+
+def _bitwise_chain(op: mir.Op, definitions: dict, wanted: set[mir.Value], uses: Counter) -> mir.Op:
+    """Compose single-use associative bitwise constants at one modular width."""
+    # The final bitwise operation still computes identical flags from its
+    # identical result.  An intermediate's flags would disappear and are only
+    # admissible when unobserved.
+    last = _bitwise(op, wanted, preserve_flags=True)
+    if last is None:
+        return op
+    middle, constant = last
+    previous = definitions.get(middle.value)
+    if previous is None or previous.kind is not op.kind or uses[middle.value] != 1 or previous.results != (middle,):
+        return op
+    first = _bitwise(previous, wanted)
+    if first is None:
+        return op
+    source, initial = first
+    combined = consts.masked(consts.ARITH[op.kind](initial, constant), source.width)
+    return replace(
+        op,
+        args=(source, mir.Const(combined, source.width)),
+        uses=(source.value,),
+        source_backed=False,
+        raised=None,
+    )
 
 
 def _recombined(op: mir.Op, definitions: dict) -> mir.Op:

@@ -190,6 +190,11 @@ def test_c_crc_specializes_constant_outer_bytes_and_keeps_inner_result() -> None
 
     assert sum(mnemonic == "shr" for _raw, mnemonic, _operands in rows) >= 8
     assert any("EDB88320" in operands.upper() for _raw, _mnemonic, operands in rows)
+    assert any(mnemonic == "xor" and "0ffffffceh" in operands for _raw, mnemonic, operands in rows)
+    assert not any(
+        first[1] == second[1] == "xor" and "0ffffffffh" in first[2] and second[2].endswith(",31h")
+        for first, second in zip(rows, rows[1:], strict=False)
+    )
     assert not any(mnemonic.startswith("j") for _raw, mnemonic, _operands in rows)
     assert loads == 1
 

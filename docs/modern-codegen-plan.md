@@ -24,11 +24,75 @@ iteration updates this file in the same commit.
 | MIR/LIR provenance and fresh OMF | complete in production | allocated LIR emits directly with external source maps/allocation hints; the remaining compatibility views are test-only and cannot route a compilation through record rewriting. |
 | SROA and scalar promotion | partial | fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies expand into exact leaves, and structural candidates transact leaves made singleton by scalar convergence with finite-capacity pressure pricing; far, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, dying-base indexed-form unfolding, and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
-| Loop optimization | partial | exact pre/post-tested recurrences and symbolic sentinels, target-priced exact nested-recurrence rewind, complete nested-initializer LICM, dead-control countdowns with zero-trip guards, complete-affine spill/recompute pricing, precise-volatile-aware LICM, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling with exact-trip-amortized bounded growth and machine-neutral whole-range pressure forecasting exist; versioning, partial unrolling, and constraint-complete candidate-set forecasting remain. |
+| Loop optimization | partial | exact pre/post-tested recurrences and symbolic sentinels, target-priced exact nested-recurrence rewind, complete nested-initializer LICM, dead-control countdowns with zero-trip guards, complete-affine spill/recompute pricing, precise-volatile-aware LICM, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling with exact-trip-amortized bounded growth, post-specialization associative integer constant composition, and machine-neutral whole-range pressure forecasting exist; versioning, partial unrolling, and constraint-complete candidate-set forecasting remain. |
 | Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs (including closed recursive SCCs in C and object paths), constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, post-inline constant folding through phi edges and linear corridors, private immutable numeric-data initializer facts, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
 | Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing and byte-neutral source-unowned terminal-return duplication, dead-register frame-copy shuttles, dying-input commutative result transfer, synthetic high-word reload narrowing, target-priced 67h LEA selection including source-owned loaded scale/add tails and constant/register sums, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 117. Compose associative bitwise constants — 2026-09-18
+
+Specializing CRC's constant input exposed two adjacent modular XORs at the
+entry.  Both GCC and Clang combine them before their first polynomial round:
+
+```asm
+; before                              ; after, GCC and Clang
+mov eax, dword ptr [bp+6]             mov eax, dword ptr [bp+6]
+xor eax, 4294967295                   xor eax, 4294967246 ; -50
+xor eax, 49
+```
+
+The fail-first real-source regression found the two immediates in the emitted
+body.  The focused mechanism regression covers `AND`, `OR`, and `XOR` at both
+16-bit modular edges and representative interior values.  Algebraic MIR now
+composes constants through a same-kind, same-width intermediate only when that
+intermediate has one reader.  It refuses memory effects, barriers, merges,
+width changes, a shared intermediate, an observed intermediate flag, or any
+non-flag secondary result.  Final bitwise flags are retained because the final
+value and bitwise flag semantics are identical.  This is one associative
+integer rule rather than a CRC or complement idiom.
+
+That boundary matches the local compiler references.  GCC's
+`gcc/tree-ssa-reassoc.cc:is_reassociable_op` requires a single-use SSA result;
+LLVM's `llvm/lib/Transforms/Scalar/Reassociate.cpp` gives constants rank zero,
+canonicalizes them to the right, and descends through a same-op node only when
+it is reassociable.  qbopt deliberately implements the profitable two-node
+integer case rather than importing either compiler's general expression-tree
+framework or permitting floating-point reassociation.
+
+The raw candidate trace is unchanged through `candidate-unroll-r01-strength`.
+`candidate-unroll-r01-algebraic` is the first changed stage:
+
+```text
+- xor (v2, 49)          -> v9
++ xor (v1, 4294967246)  -> v9
+```
+
+The immediately following `dead` pass turns the now-unused `xor v1,-1` into
+its source anchor.  No lowering, allocation, or machine pass participates.
+Against iteration 116 on every CPU profile:
+
+| metric | before | after | change |
+|---|---:|---:|---:|
+| selected bytes | 1,680 | 1,676 | -4 |
+| static/estimated executed instructions | 450 | 449 | -1 |
+| loads / stores / branches | 1 / 0 / 0 | 1 / 0 / 0 | unchanged |
+| estimated executed 386 cost | 993 | 991 | -2 |
+
+Every other profile also improves: 486 `984→982`, P5 `899→897`, P6
+`1185→1184`, K5/K6 `307→306`, K7 `309→308`, and Core `755→754`.  The candidate
+now executes 449 instructions versus i686 GCC's 454 and Clang's 394.  Their
+flat i386 listings agree exactly on `xor input,-50`; Clang's subsequent wider
+CRC algebraic reduction remains a separate opportunity under the documented
+ABI caveat.
+
+Fresh OMF emission, the DOS linker, and a real DOS 386 return the independent
+canonical answer `3421780262` (`CBF43926`).  Candidate, fresh GCC/Clang
+listings, every MIR/LIR phase, and the all-profile report are under
+`build/quality/iter126-crc-bitwise`.  Focused checks pass (`22 passed`,
+`6.10s`) and Tier 1 passes (`250 passed`, `31 deselected`, `1.14s`).  This
+advances scalar algebraic quality without claiming arbitrary expression-tree
+reassociation, floating-point reassociation, or Clang's complete CRC lowering.
 
 ### 116. Specialize bounded constant-data loops — 2026-09-18
 
