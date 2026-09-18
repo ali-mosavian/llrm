@@ -107,6 +107,12 @@ def reduced(
     ahead: dict[int, list[Op]] = {}
     behind: dict[int, list[Op]] = {}
     replacements: dict[int, "Op | tuple[Op, ...]"] = {}
+    # A carried pointer replaces an address expression with a copy from the
+    # loop phi.  Its immediately-following memory use should name that phi
+    # directly, rather than spend a copy merely to use it as a cell base.
+    # Bindings are certified once all formula choices are known below: a
+    # value used on another block or on a loop exit must retain its copy.
+    pointer_bindings: list[tuple[Op, mir.Value, mir.Value]] = []
     wide: set[mir.Value] = set()
     facts = consts.known(body) if scales else {}
     for loop, _basics, derived in found:
@@ -251,6 +257,8 @@ def reduced(
             key = (one.of.start, one.of.step, one.by, one.offsets, one.pointer, width)
             if key in shared:
                 replacements[id(one.op)] = _copying(one.op, shared[key], answer, width)
+                if one.pointer is not None:
+                    pointer_bindings.append((one.op, answer, shared[key]))
                 continue
             if added >= room:
                 continue
@@ -272,7 +280,7 @@ def reduced(
             step = mir.Value(id=start.id + 1, at=latches[0], variable=taken, version=2)
 
             ahead.setdefault(preheader, []).extend(_starts(start, one, preheader))
-            taken += len(one.offsets) * 2
+            taken += _start_temporary_count(one)
             behind.setdefault(latches[0], []).append(
                 _made(
                     mir.Kind.PTR_OFFSET if one.pointer is not None else mir.Kind.ADD,
@@ -284,18 +292,21 @@ def reduced(
                 )
             )
             replacements[id(one.op)] = _copying(one.op, start, answer, width)
+            if one.pointer is not None:
+                pointer_bindings.append((one.op, answer, start))
             shared[key] = start
             added += 1
 
     if not replacements:
         return body
+    pointer_rebases = _local_pointer_rebases(body, pointer_bindings, replacements)
     changed = replace(
         body,
         blocks=tuple(
             replace(
                 block,
                 ops=tuple(
-                    _rebased(op, wide)
+                    _rebased(ssa.substituted(op, pointer_rebases.get(id(op), {})), wide)
                     for op in _woven(block, ahead.get(block.at, []), behind.get(block.at, []), replacements)
                 ),
             )
@@ -462,14 +473,19 @@ def _starts(into: mir.Value, one: induction.Derived, preheader: int, counted: bo
 
     Not `counted`, the offsets alone: the base an index is added to.
     """
-    if one.pointer is not None:
+    # The direct pointer form is ``base + i``.  A composed offset has the
+    # same recurrence but needs its initial ``i * scale + invariant`` built
+    # before adding it to the invariant pointer; falling back to the direct
+    # form would silently drop that scale or offset.
+    if one.pointer is not None and isinstance(one.by, mir.Const) and one.by.n == 1 and not one.offsets:
         return [_made(mir.Kind.PTR_OFFSET, "", into, (one.pointer, one.of.start), preheader, one.op)]
-    if not one.offsets:
+    if one.pointer is None and not one.offsets:
         return [_start(into, one, preheader)]
     width = _width(one.op)
+    count = _start_temporary_count(one, counted)
     temporaries = iter(
         mir.Value(into.id + 2 + number, preheader, variable=into.variable + 1 + number, version=1)
-        for number in range(len(one.offsets) * 2)
+        for number in range(count)
     )
     current = None
     operations = []
@@ -490,14 +506,53 @@ def _starts(into: mir.Value, one: induction.Derived, preheader: int, counted: bo
                 )
             )
             offset = mir.Held(product, width)
-        result = into if index == len(one.offsets) - 1 else next(temporaries)
+        result = (
+            next(temporaries)
+            if one.pointer is not None or index != len(one.offsets) - 1
+            else into
+        )
         if current is None:
             kind = mir.Kind.LOAD if isinstance(offset, mir.Cell) else mir.Kind.COPY
             operations.append(_made(kind, "mov", result, (offset,), preheader, one.op))
         else:
             operations.append(_made(mir.Kind.ADD, "add", result, (mir.Held(current, width), offset), preheader, one.op))
         current = result
+    if one.pointer is not None:
+        assert current is not None
+        operations.append(
+            _made(
+                mir.Kind.PTR_OFFSET,
+                "",
+                into,
+                (one.pointer, mir.Held(current, width)),
+                preheader,
+                one.op,
+            )
+        )
     return operations
+
+
+def _start_temporary_count(one: induction.Derived, counted: bool = True) -> int:
+    """Every temporary `_starts` needs for this complete affine formula.
+
+    A pointer result cannot reuse ``into`` for its final offset sum: ``into``
+    is the final `PTR_OFFSET`, not a numerical offset.  Count each product
+    and intermediate sum directly rather than assuming two slots per
+    invariant; a scaled invariant needs both, and the counter itself is a
+    separate temporary when it is materialized here.
+    """
+    direct_pointer = (
+        one.pointer is not None
+        and isinstance(one.by, mir.Const)
+        and one.by.n == 1
+        and not one.offsets
+    )
+    if direct_pointer or one.pointer is None and not one.offsets:
+        return 0
+    return int(counted) + sum(
+        int(coefficient != 1) + int(one.pointer is not None or index != len(one.offsets) - 1)
+        for index, (_offset, coefficient) in enumerate(one.offsets)
+    )
 
 
 def _answer(body: MirBody, op: Op) -> "mir.Value | None":
@@ -556,6 +611,66 @@ def _woven(block, ahead: list, behind: list, replacements: dict[int, Op]) -> lis
         inserted = [replace(op, at=at, absorbed=()) for op in (*ahead, *behind)]
         kept = kept[:cut] + inserted + kept[cut:]
     return kept
+
+
+def _local_pointer_rebases(
+    body: MirBody,
+    bindings: list[tuple[Op, mir.Value, mir.Value]],
+    replacements: dict[int, "Op | tuple[Op, ...]"],
+) -> dict[int, dict[int, mir.Value]]:
+    """The same-block memory users that may name a new pointer phi directly.
+
+    A derived pointer's original value may be visible after the loop, through
+    a join, or in a different loop block.  Replacing it globally with the
+    carried recurrence would then lose the value needed on that path.  The
+    narrow, generally-valid form is a use after its defining PTR_OFFSET in
+    the same block: the new recurrence has already produced the identical
+    address before that operation runs.  Any broader rewrite needs dominance
+    and exit reconstruction, so it deliberately remains a copy for now.
+    """
+    where = {
+        id(op): (block.at, index)
+        for block in body.blocks
+        for index, op in enumerate(block.ops)
+    }
+    users: dict[int, list[Op]] = {}
+    for block in body.blocks:
+        for op in block.ops:
+            for value in op.uses:
+                users.setdefault(value.id, []).append(op)
+    phi_inputs = {
+        value.id
+        for block in body.blocks
+        for phi in block.phis
+        for value in phi.incoming.values()
+    }
+    rebases: dict[int, dict[int, mir.Value]] = {}
+    for source, answer, carried in bindings:
+        source_at, source_index = where[id(source)]
+        uses = users.get(answer.id, [])
+        if (
+            answer.id in phi_inputs
+            or not uses
+            or any(
+                id(user) in replacements
+                or where[id(user)][0] != source_at
+                or where[id(user)][1] <= source_index
+                for user in uses
+            )
+        ):
+            continue
+        # A consumer with two independent carried-pointer bases must retain
+        # both identities unless they agree.  That makes the substitution a
+        # local value rename rather than an address-specific special case.
+        if any(
+            answer.id in rebases.get(id(user), {})
+            and rebases[id(user)][answer.id] != carried
+            for user in uses
+        ):
+            continue
+        for user in uses:
+            rebases.setdefault(id(user), {})[answer.id] = carried
+    return rebases
 
 
 def _replaced(one: "Op | tuple[Op, ...]") -> tuple[Op, ...]:

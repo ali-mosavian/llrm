@@ -24,7 +24,7 @@ iteration updates this file in the same commit.
 | MIR/LIR provenance and fresh OMF | largely complete | allocated LIR emits directly with external source maps/allocation hints; legacy object-rewrite compatibility remains. |
 | SROA and scalar promotion | partial | fixed/disjoint leaves and some indexed leaves promote; general aggregate/copy decomposition remains. |
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection and local rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
-| Loop optimization | partial | exact recurrences, formula costing, specialization, peeling and exact unrolling exist; versioning, rotation and broad pressure forecasting remain. |
+| Loop optimization | partial | exact recurrences, composed pointer recurrences, formula costing, specialization, peeling and exact unrolling exist; versioning, rotation and broad pressure forecasting remain. |
 | Whole-module optimization | partial | summaries, constant returns, private inlining and private procedure DCE exist; full IPSCCP/cloning and private-data DCE remain. |
 | Post-allocation quality | partial | copy propagation, machine CSE/DCE and C-path tail sharing exist; source-map-aware BC tail sharing and CPU scheduling remain. |
 
@@ -703,3 +703,30 @@ byte roles.  Each form must include the exact legal 16-bit addressing classes
 and all reload/spill traffic.  Trying to retain one more value or reserving BX
 for this loop would only convert this honest refusal into a hidden special
 case.  No production code changed in this evidence iteration.
+
+### 35. Composed pointer-recurrence basis — 2026-09-18
+
+The loop analysis now recognizes a pointer offset whose offset operand is an
+already-proven affine formula, rather than only the direct `base + i` form.
+Strength reduction initializes the complete `base + (start * scale +
+invariants)` formula in the preheader, advances that whole pointer at the
+latch, and uses the carried phi as the address base for eligible same-block
+memory users.  The latter is deliberately local: any use in another block,
+at a join, or after loop exit retains the value-producing copy until a later
+dominance-and-exit reconstruction implementation proves a wider replacement.
+
+The fail-first regression models `base + (i * 2 + 6)`, requires the derived
+pointer formula, and verifies that the store addresses the carried phi rather
+than a redundant copy.  During this implementation the shared SSA substitute
+helper was found to rename ordinary load/store cells but not `memory_values`;
+it now renames that MIR memory-bearing form too, with a pointer regression.
+The focused composed-address and pointer-substitution checks pass in `0.04s`.
+
+The original NDARR xfail remains intentionally unresolved.  Its pointer
+offset starts from a sign-extended narrow counter for which the loop bound
+does not prove no wrap, so treating it as one monotonic long pointer would be
+a miscompile.  This iteration supplies the general path for formulas already
+proved wide and affine; extending the narrow-to-wide proof requires an exact
+trip-bound proof first.  GCC and LLVM listings continue to be best-case,
+flat-i386 structural references only; BCC/WC medium-model output remains the
+source of address-form and ABI legality evidence.

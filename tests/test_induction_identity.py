@@ -560,6 +560,85 @@ def test_composed_word_address_has_one_recurrence(factor: int, expected: int) ->
     assert next(one.by for one in derived if one.op is shift) == mir.Const(expected, 2)
 
 
+def test_composed_offset_can_carry_an_invariant_pointer() -> None:
+    """NDARR rebuilt `base + (i * 2 + 6)` although the long offset is affine.
+
+    A pointer recurrence is no less valid because its byte offset passed
+    through a multiply first.  The old recognizer accepted only a raw phi as
+    PTR_OFFSET's second operand, leaving a nine-dimensional array address to
+    be rebuilt in every trip.
+    """
+    built, loop = body()
+    header = built.blocks[1]
+    counter = header.phis[0].result
+    following = header.ops[0].defines[0]
+    step = replace(
+        header.ops[0],
+        args=(mir.Held(counter, 4),),
+        results=(mir.Held(following, 4),),
+    )
+    offset = header.ops[1].defines[0]
+    multiply = replace(
+        header.ops[1],
+        uses=(counter,),
+        args=(mir.Held(counter, 4), mir.Const(2, 4)),
+        results=(mir.Held(offset, 4),),
+    )
+    base = mir.Value(40, 0, variable=40)
+    pointer = mir.Value(41, 1, variable=41)
+    displaced = mir.Value(42, 1, variable=42)
+    add = mir.Op(
+        3,
+        ir.Operation.BINARY,
+        "",
+        (displaced,),
+        (offset,),
+        kind=mir.Kind.ADD,
+        args=(mir.Held(offset, 4), mir.Const(6, 4)),
+        results=(mir.Held(displaced, 4),),
+    )
+    address = mir.Op(
+        4,
+        ir.Operation.BINARY,
+        "",
+        (pointer,),
+        (base, displaced),
+        kind=mir.Kind.PTR_OFFSET,
+        args=(mir.Held(base, 4), mir.Held(displaced, 4)),
+        results=(mir.Held(pointer, 4),),
+    )
+    phi = replace(header.phis[0], incoming={0: header.phis[0].incoming[0], 1: following})
+    built = replace(
+        built,
+        blocks=(
+            built.blocks[0],
+            replace(header, phis=(phi,), ops=(step, multiply, add, address)),
+            built.blocks[2],
+        ),
+    )
+    derived = induction.derived(built, loop)
+    carried = next(one for one in derived if one.op is address)
+    assert carried.pointer == mir.Held(base, 4)
+    assert carried.of.value == counter.id
+    assert carried.by == mir.Const(2, 4)
+    assert carried.offsets == ((mir.Const(6, 4), 1),)
+    cell = mir.MemRef(None, 2, base=pointer, base_width=4, pointer=True)
+    store = mir.Op(
+        5,
+        ir.Operation.MOVE,
+        "",
+        (),
+        (pointer,),
+        kind=mir.Kind.STORE,
+        args=(mir.Const(1, 2),),
+        stores=(cell,),
+    )
+    result = strength.reduced(replace(built, blocks=(built.blocks[0], replace(header, phis=(phi,), ops=(step, multiply, add, address, store)), built.blocks[2])))
+    pointers = {phi.result for block in result.blocks for phi in block.phis}
+    carried_store = next(ref for block in result.blocks for op in block.ops for ref in op.stores if ref.pointer)
+    assert carried_store.base in pointers
+
+
 @pytest.mark.parametrize("mismatch", ["start", "step", "unchanged", "none"])
 def test_every_incoming_path_agrees_on_the_recurrence(mismatch: str) -> None:
     built, loop = body()

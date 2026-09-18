@@ -32,6 +32,15 @@ def test_whole_pointer_is_an_ssa_dependency_not_a_register_pair():
     assert changed.loads[0].segment is None
 
 
+def test_pointer_substitution_updates_known_memory_cells():
+    """Composed pointer recurrence left CALL memory_values on its old base."""
+    op = access()
+    op = replace(op, memory_values=((op.loads[0], mir.Const(7, 2)),))
+    replacement = mir.Value(9, 4)
+    changed = ssa.substituted(op, {1: replacement})
+    assert changed.memory_values[0][0].base == replacement
+
+
 def test_pointer_identity_is_not_a_disjointness_proof():
     ref = access().loads[0]
     other = replace(ref, base=mir.Value(3, 0))

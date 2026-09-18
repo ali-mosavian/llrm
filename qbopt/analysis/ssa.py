@@ -86,6 +86,7 @@ def substituted(op: Op, swap: dict[int, mir.Value]) -> Op:
         results=tuple(operand(one) if isinstance(one, mir.Cell) else one for one in op.results),
         loads=tuple(reference(ref) for ref in op.loads),
         stores=tuple(reference(ref) for ref in op.stores),
+        memory_values=tuple((reference(ref), known) for ref, known in op.memory_values),
         merges={provider(source, swap): mask for source, mask in op.merges.items()},
     )
 

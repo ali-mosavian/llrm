@@ -561,6 +561,44 @@ def _composed(body: mir.MirBody, loop, found: dict[int, Affine], made: dict[int,
                     if extended is not None:
                         forms[op.results[0].value.id] = extended
                         changed = True
+                # A pointer offset is the same affine formula carried in a
+                # different result type.  The direct recognizer above sees
+                # `base + i`; a composed offset such as `base + (i * 2)`
+                # reaches this fixed point only after the multiply has put
+                # its result in ``forms``.  Keep the invariant pointer and
+                # the complete offset formula together so strength reduction
+                # can make one pointer recurrence instead of rebuilding its
+                # address every trip.
+                if (
+                    op.kind is mir.Kind.PTR_OFFSET
+                    and not op.loads
+                    and not op.stores
+                    and not op.barrier
+                    and not op.merges
+                    and len(op.args) == 2
+                    and len(op.results) == 1
+                ):
+                    pointer, offset = op.args
+                    result = op.results[0]
+                    form = forms.get(offset.value.id) if isinstance(offset, mir.Held) else None
+                    if (
+                        isinstance(pointer, mir.Held)
+                        and pointer.value.id in still
+                        and isinstance(offset, mir.Held)
+                        and isinstance(result, mir.Held)
+                        and pointer.width == offset.width == result.width
+                        and form is not None
+                        and form[0].start.width == result.width
+                    ):
+                        counter, scale, offsets = form
+                        out[id(op)] = Derived(
+                            op,
+                            counter,
+                            mir.Const(consts.masked(scale, result.width), result.width),
+                            offsets,
+                            pointer,
+                        )
+                    continue
                 if op.stores or op.barrier or len(op.args) != 2 or not op.results:
                     continue
                 if set(op.loads) != {arg.ref for arg in op.args if isinstance(arg, mir.Cell)}:
