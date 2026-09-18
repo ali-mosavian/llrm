@@ -103,6 +103,23 @@ def test_exact_pointer_aggregate_copy_keeps_both_address_dependencies() -> None:
     assert "word ptr [bp-6]" not in assembly
 
 
+def test_unreferenced_private_data_is_not_emitted() -> None:
+    """private_data_dce retained static ``unusedValue`` after its sole
+    externally visible function had been optimized.  An internal datum with
+    no code or data relocation pointing at it has no OMF observer and must
+    disappear, while the reachable static remains addressable.
+    """
+    source = Path("fixtures/c/private_data_dce.c")
+    assembly = cfront.compiled(cfront.recorded(source, []), source.stem, optimise=True)
+
+    assert "_unusedValue label byte" not in assembly
+    assert "_retainedPointer label byte" in assembly
+    assert "_retainedValue label byte" in assembly
+    assert "word ptr _retainedPointer" in assembly
+    unoptimised = cfront.compiled(cfront.recorded(source, []), source.stem)
+    assert "_unusedValue label byte" in unoptimised
+
+
 def test_relative_source_and_include(tmp_path, monkeypatch):
     """wccq runs in its scratch directory, where `fixtures/c/x.c` and `-I src`
     no longer resolved: E1051 unable to open."""

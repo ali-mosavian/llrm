@@ -25,7 +25,7 @@ iteration updates this file in the same commit.
 | SROA and scalar promotion | partial | fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies can now expand into exact leaves, while far, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
 | Loop optimization | partial | exact pre- and post-tested recurrences, composed pointer recurrences, formula costing, specialization, peeling and exact unrolling exist; versioning, rotation and broad pressure forecasting remain. |
-| Whole-module optimization | partial | summaries, constant returns, costed private straight-line inlining and private procedure DCE exist; full IPSCCP/cloning and private-data DCE remain. |
+| Whole-module optimization | partial | summaries, constant returns, costed private straight-line inlining, private procedure DCE, and conservative private-data DCE exist; full IPSCCP/cloning and broader global-elimination proofs remain. |
 | Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing, conservative later-core/P5 scheduling, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
@@ -1655,3 +1655,27 @@ calls with unmodelled results, effectful or floating bodies, CFG cloning, and
 private-data DCE remain outside this increment. GCC/LLVM remain best-case
 flat-i386 structural references; BCC/WC remain the medium-model ABI and
 addressing authority.
+
+### 73. Conservative private-data elimination — 2026-09-18
+
+`private_data_dce` first failed with `_unusedValue` still emitted in `_DATA`
+after its only public procedure had reached its optimized MIR body. Procedure
+reachability already removed uncalled private code, but fresh OMF emission
+unconditionally serialised every data item from the C stream.
+
+The C path now derives object spans from `DGLabel` boundaries and roots only
+labelled, non-procedure, non-imported, non-public symbols from the MIR bodies
+that will actually be lowered. It recognizes both direct relocation operands
+and memory-cell references, including far-data selector relocations. It then
+closes those roots over `DGFEPtr`/`DGBackPtr` initializer relocations and over
+the exact relocation table of any opaque inline-assembly body. Thus the
+fixture retains `_retainedPointer` and its initializer target
+`_retainedValue`, while deleting only the unreferenced `_unusedValue`.
+
+No-optimization mode retains the original data stream unchanged. Anonymous
+literal labels, public/imported data, procedures, unlabelled bytes, and any
+object outside the established OMF evidence remain conservative roots. This
+is a Phase 6 linkage-safe DCE increment, not an assumption that flat-i386
+GCC/LLVM section garbage collection is applicable to this medium-model OMF
+layout. GCC/LLVM listings remain best-case structural references; BCC/WC
+remain the authority for ABI, segment, address-form, and linkage constraints.

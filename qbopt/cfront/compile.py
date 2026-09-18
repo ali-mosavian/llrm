@@ -33,6 +33,7 @@ from qbopt.cfront import raise_hir
 from qbopt.backend import lower_int64
 from qbopt.backend import cpu as targets
 from qbopt.backend import frame as frames
+from qbopt.objectfile.module import Space
 
 WCCQ = Path(__file__).resolve().parents[2] / "owshim" / "bin" / "wccq"
 # Borland's medium model: far code, near data, cdecl, byte-packed structs,
@@ -125,6 +126,113 @@ def _reachable_procedures(
             if at in sites and target in defined and target not in reached
         )
     return frozenset(reached)
+
+
+def _data_labels(unit: hir.Unit) -> dict[int, tuple[int, int, int]]:
+    """Each named data object's `(segment, first item, after item)` span.
+
+    A `DGLabel` is the one record in the C stream that binds following bytes
+    to a source-level object.  Keeping that boundary rather than guessing
+    from byte sizes lets fresh emission delete whole private objects while
+    leaving alignment, pointers, and anonymous literal data conservative.
+    """
+    out = {}
+    for segment in unit.segments.values():
+        labels = [
+            (at, unit.backs.get(hir.handle(args[0])))
+            for at, (call, args) in enumerate(segment.items)
+            if call == "DGLabel" and args
+        ]
+        for number, (start, symbol) in enumerate(labels):
+            if symbol in unit.symbols:
+                after = labels[number + 1][0] if number + 1 < len(labels) else len(segment.items)
+                out[symbol] = (segment.id, start, after)
+    return out
+
+
+def _referenced_data(body: mir.MirBody, candidates: frozenset[int]) -> set[int]:
+    """Private data symbols that the emitted MIR directly names.
+
+    MIR represents an address both as a relocation operand and as the cell
+    it reads or writes.  Looking at both forms makes this independent of
+    folding: a surviving address calculation, load, store, or array request
+    roots the object equally.  Selector relocations are included for an
+    object in its own far-data segment.
+    """
+    found = set()
+
+    def symbol(one: mir.Symbol) -> None:
+        if one.space is Space.SEGMENT and one.index in candidates:
+            found.add(one.index)
+        if one.space is Space.GROUP and one.index - raise_hir.SELECTOR in candidates:
+            found.add(one.index - raise_hir.SELECTOR)
+
+    def ref(one: mir.MemRef) -> None:
+        if one.addr is not None:
+            symbol(mir.Symbol(one.addr.space, one.addr.index, one.addr.disp, one.width))
+        for named in (one.symbolic, one.allocation):
+            if named is not None:
+                symbol(named)
+
+    for block in body.blocks:
+        for op in block.ops:
+            for operand in (*op.args, *op.results):
+                if isinstance(operand, mir.Symbol):
+                    symbol(operand)
+                elif isinstance(operand, mir.Cell):
+                    ref(operand.ref)
+            for reference in (*op.loads, *op.stores):
+                ref(reference)
+            for reference, _value in op.memory_values:
+                ref(reference)
+            if op.array is not None:
+                symbol(op.array.descriptor)
+    return found
+
+
+def _reachable_data(unit: hir.Unit, bodies: dict[str, mir.MirBody]) -> frozenset[int]:
+    """Named data proven observable from emitted code, linkage, or data.
+
+    OMF has no private-data reachability metadata.  We therefore delete only
+    a labelled non-procedure symbol that is neither imported nor public, and
+    only after roots from every emitted body and inline-assembly relocation
+    have been closed over data-initializer pointers.  Everything unlabelled,
+    externally visible, or of unknown provenance stays emitted.
+    """
+    labels = _data_labels(unit)
+    candidates = frozenset(
+        symbol
+        for symbol in labels
+        if not unit.symbols[symbol].proc and not unit.symbols[symbol].imported and not unit.symbols[symbol].exported
+    )
+    kept = set(labels) - candidates
+    for body in bodies.values():
+        kept.update(_referenced_data(body, candidates))
+    # Inline assembly's source bytes are intentionally opaque to MIR.  Its
+    # relocation table is the exact equivalent reference evidence, so it is
+    # a root rather than a reason to disable data DCE for the whole module.
+    for symbol in unit.symbols.values():
+        if symbol.code is not None:
+            kept.update(fixup.symbol for fixup in symbol.code.fixups if fixup.symbol in candidates)
+
+    changed = True
+    while changed:
+        changed = False
+        for symbol in tuple(kept):
+            span = labels.get(symbol)
+            if span is None:
+                continue
+            segment, start, after = span
+            for call, args in unit.segments[segment].items[start:after]:
+                target = None
+                if call == "DGFEPtr":
+                    target = hir.handle(args[0])
+                elif call == "DGBackPtr":
+                    target = unit.backs.get(hir.handle(args[0]))
+                if target in candidates and target not in kept:
+                    kept.add(target)
+                    changed = True
+    return frozenset(kept)
 
 
 def recorded(source: Path, includes: list[str]) -> str:
@@ -345,7 +453,14 @@ def assembled(
         names=raise_hir.names(unit, shared),
         externs=_externs(unit) + tuple((one.object_name, "far") for one in shared.runtime.values()),
         publics=tuple(one.object_name for one in unit.symbols.values() if one.exported),
-        data=(*_data(unit), *_literals(shared)),
+        data=(
+            *(
+                _data(unit, _reachable_data(unit, {one.name: bodies[one.name] for one in raised_procedures}))
+                if optimise
+                else _data(unit)
+            ),
+            *_literals(shared),
+        ),
         procedures=tuple(procedures),
         private=frozenset(one.name for one in unit.segments.values() if one.attr & hir.PRIVATE),
     )
@@ -377,13 +492,26 @@ def _externs(unit: hir.Unit) -> tuple[tuple[str, str], ...]:
     )
 
 
-def _data(unit: hir.Unit) -> Iterator[tuple[str, tuple[masm.Datum, ...]]]:
+def _data(unit: hir.Unit, kept: frozenset[int] | None = None) -> Iterator[tuple[str, tuple[masm.Datum, ...]]]:
     """Each data segment's items."""
     for segment in unit.segments.values():
         if not segment.items or segment.attr & 0x1:  # EXEC: code has no data items
             continue
         items = []
-        for call, args in segment.items:
+        spans = _data_labels(unit)
+        dropped = {
+            start
+            for symbol, (segment_id, start, _after) in spans.items()
+            if kept is not None and segment_id == segment.id and symbol not in kept
+        }
+        skip = False
+        for at, (call, args) in enumerate(segment.items):
+            if at in dropped:
+                skip = True
+            elif call == "DGLabel":
+                skip = False
+            if skip:
+                continue
             match call, args:
                 case "DGLabel", (back,):
                     symbol = unit.backs[hir.handle(back)]
