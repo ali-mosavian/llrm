@@ -543,3 +543,22 @@ whose weighted cost falls.  It must work from LIR live ranges and target
 classes, must include the cost of any new copies/spills, and must not be an
 AX/DX rewrite keyed to this procedure or loop shape.  No code-generation
 change is claimed in this evidence-only iteration.
+
+### 27. Counter-role feasibility experiment — 2026-09-18
+
+A non-committed constrained allocation confirms the role analysis.  Pinning
+only the loop counter away from EAX produces `add dx,1`, `cmp dx,...`, and
+uses AL for the one-bit result; the form is legal and is not blocked by the
+ABI.  It still leaves the shifted face in a frame word.  When the bitmap
+index fold is withheld so that the shifted face may take EAX, allocation
+correctly reports an unplaceable short reload instead of emitting invalid
+code.
+
+That result identifies the missing complete plan.  The unshifted face must
+be split at its two constrained consumers: store it once, give the shifted
+successor EAX until it has formed the bitmap address, then reload its byte
+into CL for the mask.  This is exactly the live-range shape in BCC's listing,
+but the implementation must be a general constrained-use split and
+spill-web/home-sharing candidate, jointly evaluated with alternate loop
+counter placement.  It cannot be a counter pin or a rule for face/bitmap
+operations.  No code-generation change is claimed by this experiment.
