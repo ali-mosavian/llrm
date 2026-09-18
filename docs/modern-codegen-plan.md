@@ -30,6 +30,23 @@ iteration updates this file in the same commit.
 
 ## Iteration log
 
+### 93. Reject incomplete counter/mask role trial — 2026-09-18
+
+The compact far-load stage dump still spills the face's shifted bitmap index
+through `[bp-2]`.  A fail-first trial of soft DX-counter/AX-mask preferences
+was deliberately rejected: even after correcting the two-address update
+recognizer, its complete allocation did not lower weighted spill traffic.
+The trial and red assertion were removed; retaining a BCC-shaped register
+swap without a profitable complete recovery plan would violate the allocator
+cost rule.
+
+The evidence narrows, rather than completes, Phase 4: a future role candidate
+must model the header comparison, latch increment, counted-shift mask, and
+far-address index as one full natural-loop allocation, including the required
+constrained-use split and its recovery cost.  The existing far-owner regression
+passes again (`1 passed`, `0.25s`).  GCC/LLVM remain best-case structural
+references; BCC/WC medium-model output remains the ABI and legal-form target.
+
 ### 92. Split local gaps across block boundaries — 2026-09-18
 
 The allocator's local split rung was described as a single-block mechanism,
