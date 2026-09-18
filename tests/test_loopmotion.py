@@ -43,34 +43,26 @@ def test_indexed_record_accumulators_store_only_after_loop(tag):
     ]
 
 
-@pytest.mark.parametrize(
-    "address",
-    [
-        pytest.param(
-            "invariant",
-            marks=pytest.mark.xfail(
-                reason="UDTRNG's guarded record fields are still loaded and stored inside the loop", strict=True
-            ),
-        ),
-        "counter",
-        "undefined",
-    ],
-)
-def test_indexed_exit_store_requires_a_dominating_invariant_address(monkeypatch, address):
+@pytest.mark.parametrize("address", ["invariant", "counter", "undefined"])
+def test_indexed_exit_store_requires_a_dominating_invariant_address(address):
     """UDTRNG's final store may use its pre-loop address, never a changing or uncomputed index."""
     from qbopt import wholeseg
 
-    states = []
-
     def watch(stage, name, body):
-        if isinstance(body, mir.MirBody):
-            states.append(body)
+        nonlocal captured
+        if stage == "mir-r02-hoist" and isinstance(body, mir.MirBody):
+            captured = body
 
-    with monkeypatch.context() as context:
-        context.setattr(loopmotion, "sunk_stores", lambda body, *args: body)
+    captured = None
+    with pytest.MonkeyPatch.context() as patch:
+        # Capture after scalar promotion made the record fields independent
+        # recurrences, but before the automatic sink or later exact-loop
+        # cloning erases the CFG.
+        patch.setattr(loopmotion, "sunk_stores", lambda body, *args: body)
         result = wholeseg.emitted(Path("fixtures/regressions/udtrng-p-g2.obj").read_bytes(), watch=watch)
     assert result.outcome is wholeseg.Emission.LIR, result.reason
-    body = states[-1]
+    assert captured is not None
+    body = captured
     (loop,) = loops.loops(body.blocks, body.entry)
     store = [
         op

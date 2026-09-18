@@ -904,3 +904,27 @@ loop algebra: the general exit-evaluation mechanism already has dedicated
 hazard and LCSSA regressions.  GCC/LLVM output remains best-case flat-i386
 structural evidence only; BCC/WC medium-model code remains the address-form
 and ABI authority.
+
+### 43. Guarded-record sink staging — 2026-09-18
+
+The UDTRNG dominating-address xfail was first run fail-first and exposed two
+different test-stage mistakes.  Capturing final MIR saw no loop because later
+exact cloning had already removed it.  Capturing before promotion retained
+the loop but correctly refused the field stores: each iteration still loaded
+the preceding field value, so moving only the store would change the next
+iteration.  Neither result was evidence against the sink mechanism.
+
+The regression now deliberately disables only the automatic sink and captures
+round-two MIR immediately after LICM.  At that structural point scalar
+promotion has made the guarded `Coord` fields independent recurrences, LICM
+has put the runtime-selected slot address in the preheader, and the loop CFG
+still exists.  The test invokes the sink explicitly: the dominating address
+case moves the final store, while a header-phi (changing) base and an
+uncomputed base remain.  The former strict xfail is active and all three
+cases pass (`3 passed`, `2.15s`).
+
+This confirms the intended Phase-3-to-Phase-5 composition—scalar promotion,
+invariant address formation, then exit-store sinking—without treating a
+post-unroll listing as the proof.  GCC/LLVM listings remain advisory flat
+i386 structural references; BCC/WC medium-model output remains the legality
+authority for the emitted addressing form.
