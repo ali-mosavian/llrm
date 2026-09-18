@@ -12,6 +12,32 @@ from qbopt.backend import lower_floats
 from qbopt import wholeseg
 
 
+def test_c_float_loop_keeps_its_nonvolatile_bound_outside_the_volatile_loop() -> None:
+    """C floats loaded ``iterations`` from ``[bp+6]`` on every trip.
+
+    The volatile double forces each x87 store to remain in the loop, but the
+    immutable scalar argument is disjoint and should be loaded once before
+    entering it, as in both the GCC and Clang references.
+    """
+    from qbopt.analysis import loops
+    from qbopt.cfront import compile as cfront
+
+    source = Path("bench/c/floats.c")
+    module = cfront.assembled(cfront.recorded(source, []), source.stem, optimise=True)
+    procedure = next(one for one in module.procedures if one.name == "_bench_floats")
+    inside = {at for loop in loops.loops(procedure.body.blocks, procedure.body.entry) for at in loop.body}
+    argument_loads = [
+        block.at
+        for block in procedure.body.blocks
+        for insn in block.insns
+        if insn.what is not None
+        and any("[bp+0x6]" in str(operand) for operand in (*insn.what.dests, *insn.what.sources))
+    ]
+
+    assert len(argument_loads) == 1, argument_loads
+    assert argument_loads[0] not in inside
+
+
 def test_qrender_word_conversion_lowers_without_extracting_a_word_from_a_word():
     """ENT_CHECK_TELEPORT refused FIS2 at 0xae9: a 16-bit result was treated as a long pair."""
     from qbopt.abi import runtime

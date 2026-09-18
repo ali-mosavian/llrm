@@ -1068,7 +1068,15 @@ def _invariant_run(
     divide folds to a copy and the copy still stands at `B$RMI4`'s
     address. What an operation is, is the operation's to say.
     """
-    if any(one.kind in (mir.Kind.CALL, mir.Kind.ESCAPE) or one.barrier for one in ops):
+    # An opaque machine barrier makes every unmodelled resource observable,
+    # so no operation may cross it.  A source-language volatile access is
+    # different: its explicit memory footprint is complete, and only that
+    # access must remain ordered with the other volatile accesses.  Pure,
+    # nonvolatile work on proven-disjoint storage may move around it without
+    # changing the observable volatile sequence.  Treating both as the same
+    # blanket refusal kept C's immutable frame arguments inside every
+    # volatile loop even though their cells cannot alias the volatile object.
+    if any(one.kind in (mir.Kind.CALL, mir.Kind.ESCAPE) or (one.barrier and not one.volatile) for one in ops):
         return []
     made: set = set()
     run: list = []

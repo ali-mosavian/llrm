@@ -776,6 +776,55 @@ def test_an_operand_nothing_writes_down_may_leave_with_its_run() -> None:
     assert widening in run, "and the multiply behind it leaves with it"
 
 
+def test_a_precise_volatile_access_does_not_block_disjoint_invariant_work() -> None:
+    """C floats reloaded its nonvolatile argument on every volatile iteration.
+
+    Volatile accesses themselves stay ordered and observable.  They do not
+    make a disjoint frame-argument load observable, while a genuine opaque
+    machine barrier must continue to refuse the entire motion candidate.
+    """
+    from dataclasses import replace
+
+    from qbopt.model import ir
+    from qbopt.model import mir
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
+
+    argument = mir.MemRef(Addr(Space.FRAME, 6), 2, space=Space.FRAME)
+    local = mir.MemRef(Addr(Space.FRAME, -8), 8, space=Space.FRAME, volatile=True)
+    value = mir.Value(1, 0x10)
+    load = mir.Op(
+        0x10,
+        ir.Operation.MOVE,
+        "mov",
+        (value,),
+        (),
+        kind=mir.Kind.LOAD,
+        args=(mir.Cell(argument),),
+        results=(mir.Held(value, 2),),
+        loads=(argument,),
+    )
+    observable = mir.Op(
+        0x12,
+        ir.Operation.MOVE,
+        "fstp",
+        (),
+        (),
+        kind=mir.Kind.FSTORE,
+        args=(mir.Const(0, 8),),
+        results=(mir.Cell(local),),
+        stores=(local,),
+        volatile=True,
+        memory_complete=True,
+        reads_complete=True,
+    )
+    stores = [(local, None)]
+
+    assert transform._invariant_run([load, observable], set(), stores, frozenset(), {}, []) == [load]
+    opaque = replace(observable, op=ir.Operation.BARRIER, volatile=False)
+    assert transform._invariant_run([load, opaque], set(), stores, frozenset(), {}, []) == []
+
+
 def test_a_definition_a_phi_carries_and_the_loop_rewrites_does_not_leave_it() -> None:
     """`mov ax,1` starting an inner counter is invariant, and must not move.
 

@@ -24,11 +24,61 @@ iteration updates this file in the same commit.
 | MIR/LIR provenance and fresh OMF | complete in production | allocated LIR emits directly with external source maps/allocation hints; the remaining compatibility views are test-only and cannot route a compilation through record rewriting. |
 | SROA and scalar promotion | partial | fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies can now expand into exact leaves, while far, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, dying-base indexed-form unfolding, and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
-| Loop optimization | partial | exact pre/post-tested recurrences and symbolic sentinels, complete-affine spill/recompute pricing, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling exist; versioning and complete candidate-set pressure forecasting remain. |
+| Loop optimization | partial | exact pre/post-tested recurrences and symbolic sentinels, complete-affine spill/recompute pricing, precise-volatile-aware LICM, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling exist; versioning and complete candidate-set pressure forecasting remain. |
 | Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs (including closed recursive SCCs in C and object paths), constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
 | Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing, target-priced 67h LEA selection, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 98. Hoist disjoint work around precise volatile accesses — 2026-09-18
+
+The next raw C/reference comparison found a concrete loop miss in `floats`.
+qbopt loaded the immutable `iterations` argument from `[bp+6]` at every trip;
+GCC retains the bound in a register and Clang converts the loop to a
+countdown.  The x87 body uses no general registers, so this was neither
+medium-model pressure nor an ABI limitation.
+
+Adjacent MIR dumps first differ at `r01-hoist`.  Before the change that pass
+is a no-op: `_invariant_run` refuses the entire loop as soon as it sees the
+volatile double store.  MIR already distinguishes a source-language volatile
+access, whose explicit memory footprint is complete, from an opaque machine
+barrier.  The LICM gate had collapsed them back together.  It now retains the
+blanket refusal for calls, escapes, and genuine opaque barriers, while allowing
+pure nonvolatile work on proven-disjoint storage to be considered around a
+precise volatile access.  The volatile operation itself remains immovable, so
+the observable volatile sequence is unchanged.
+
+The fail-first MIR regression requires a disjoint frame load to leave a loop
+containing a precise volatile store and, in the same test, proves that replacing
+the store with an opaque machine barrier still refuses the move.  The compiled
+C regression checks the emitted argument cell occurs exactly once and outside
+every natural loop.  The resulting change is intentionally small:
+
+```asm
+; before
+loop_test:
+    mov bx,word ptr [bp+6]
+    cmp ax,bx
+    jb loop_body
+
+; after
+    mov bx,word ptr [bp+6]
+loop_test:
+    cmp ax,bx
+    jb loop_body
+```
+
+Bytes, static instructions, static weighted costs, loads, stores, branches,
+peak live values and spill counts are unchanged on all eight CPUs.  Under the
+quality tool's explicit ten-trip convention for this input-dependent loop,
+estimated executed instructions fall `105 -> 96`: exactly nine avoided loads.
+Every CPU emits the same placement, so none regresses.  GCC and Clang are
+structural evidence for retaining or consuming the bound; they remain flat
+i386 references rather than medium-model targets.
+
+The independent DOS known-answer run still returns `162635`.  Both fail-first
+checks pass (`2 passed`, `0.19s`), and Tier 1 passes (`210 passed`, `31
+deselected`, `1.51s`).  No phase-boundary full suite was run.
 
 ### 97. Carry profitable complete affine formulas through pressure — 2026-09-18
 
