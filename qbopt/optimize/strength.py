@@ -41,6 +41,7 @@ from dataclasses import replace
 from qbopt.model import ir
 from qbopt.model import mir
 from qbopt.analysis import ssa
+from qbopt.analysis import loops as loopy
 from qbopt.model.mir import Op
 from qbopt.analysis import consts
 from qbopt.model.mir import MirBody
@@ -620,44 +621,41 @@ def _local_pointer_rebases(
 ) -> dict[int, dict[int, mir.Value]]:
     """The same-block memory users that may name a new pointer phi directly.
 
-    A derived pointer's original value may be visible after the loop, through
-    a join, or in a different loop block.  Replacing it globally with the
-    carried recurrence would then lose the value needed on that path.  The
-    narrow, generally-valid form is a use after its defining PTR_OFFSET in
-    the same block: the new recurrence has already produced the identical
-    address before that operation runs.  Any broader rewrite needs dominance
-    and exit reconstruction, so it deliberately remains a copy for now.
+    A derived pointer's original value may be visible through a join or on a
+    path which did not execute its defining PTR_OFFSET.  Replacing it
+    globally with the carried recurrence would then invent an address.  A
+    direct operation use is safe when the definition dominates its block (or
+    follows it in the same block): the new recurrence has produced exactly
+    that address before the use runs.  Phi inputs retain the original copy;
+    their individual incoming edges need a separate reconstruction rule.
     """
     where = {
         id(op): (block.at, index)
         for block in body.blocks
         for index, op in enumerate(block.ops)
     }
+    dominators = loopy.dominators(body.blocks, body.entry)
     users: dict[int, list[Op]] = {}
     for block in body.blocks:
         for op in block.ops:
             for value in op.uses:
                 users.setdefault(value.id, []).append(op)
-    phi_inputs = {
-        value.id
-        for block in body.blocks
-        for phi in block.phis
-        for value in phi.incoming.values()
-    }
     rebases: dict[int, dict[int, mir.Value]] = {}
     for source, answer, carried in bindings:
         source_at, source_index = where[id(source)]
         uses = users.get(answer.id, [])
-        if (
-            answer.id in phi_inputs
-            or not uses
-            or any(
-                id(user) in replacements
-                or where[id(user)][0] != source_at
-                or where[id(user)][1] <= source_index
-                for user in uses
+        uses = [
+            user
+            for user in uses
+            if id(user) not in replacements
+            and (
+                where[id(user)][0] != source_at
+                and source_at in dominators.get(where[id(user)][0], frozenset())
+                or where[id(user)][0] == source_at
+                and where[id(user)][1] > source_index
             )
-        ):
+        ]
+        if not uses:
             continue
         # A consumer with two independent carried-pointer bases must retain
         # both identities unless they agree.  That makes the substitution a

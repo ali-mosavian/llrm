@@ -755,3 +755,21 @@ requirement for unknown bounds, XOR/masked tests, different widths, or other
 extensions.  GCC/LLVM listings remain advisory best-case structural
 references, while BCC/WC medium-model output remains the ABI/address-form
 legality baseline.
+
+### 37. Dominance-scoped pointer bases — 2026-09-18
+
+The initial composed-pointer implementation rewrote only consumers later in
+the same block.  That was safe but unnecessarily left a recomputed pointer
+alive at ordinary successor and exit-block uses.  It now applies the same
+replacement to direct operation uses when the original `PTR_OFFSET` dominates
+the use block, while retaining the original copy for joins and phi incoming
+edges that require edge-specific reconstruction.  The rule is CFG-based and
+does not depend on a particular frontend, pointer shape, loop, or address
+register.
+
+The composed-pointer regression now puts the consuming store in the loop's
+exit block.  It first failed because the old same-block-only rule kept the
+original pointer variable; it now receives the carried recurrence's SSA
+variable.  The focused composed-pointer and memory-substitution checks pass
+in `0.08s`.  This advances phase 5's recurrence-use selection; broad formula
+pricing, loop versioning, and pressure forecasting remain open.

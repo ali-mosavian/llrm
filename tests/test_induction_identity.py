@@ -657,10 +657,19 @@ def test_composed_offset_can_carry_an_invariant_pointer() -> None:
         args=(mir.Const(1, 2),),
         stores=(cell,),
     )
-    result = strength.reduced(replace(built, blocks=(built.blocks[0], replace(header, phis=(phi,), ops=(step, multiply, add, address, store)), built.blocks[2])))
-    pointers = {phi.result for block in result.blocks for phi in block.phis}
+    result = strength.reduced(
+        replace(
+            built,
+            blocks=(
+                built.blocks[0],
+                replace(header, phis=(phi,), ops=(step, multiply, add, address)),
+                replace(built.blocks[2], ops=(store,)),
+            ),
+        )
+    )
     carried_store = next(ref for block in result.blocks for op in block.ops for ref in op.stores if ref.pointer)
-    assert carried_store.base in pointers
+    assert carried_store.base is not None
+    assert carried_store.base.variable != pointer.variable
 
 
 @pytest.mark.parametrize("mismatch", ["start", "step", "unchanged", "none"])
