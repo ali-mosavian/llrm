@@ -1,11 +1,15 @@
 """A far cell reached as `[base+index*scale]`, and the zero extension that
 puts a word in the 32-bit register such an address is built from."""
 
-from iced_x86 import Decoder, Formatter, FormatterSyntax, Register
+from iced_x86 import Decoder
+from iced_x86 import Register
+from iced_x86 import Formatter
+from iced_x86 import FormatterSyntax
 
-from qbopt.backend import select
 from qbopt.model import ir
-from qbopt.objectfile.module import Addr, Space
+from qbopt.backend import select
+from qbopt.objectfile.module import Addr
+from qbopt.objectfile.module import Space
 
 
 def _text(code: bytes) -> str:
@@ -27,6 +31,7 @@ def test_a_far_cell_is_encoded_with_its_scaled_index() -> None:
     what = ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg(Register.AX, 2),), (cell,))
     emitted = select.emit(what, 0)
     assert emitted is not None
+    assert emitted.code[:2] == b"\x26\x67"
     assert _text(emitted.code) == "mov ax,es:[esi+ecx*2]"
 
 

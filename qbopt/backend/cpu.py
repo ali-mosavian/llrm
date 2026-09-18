@@ -10,6 +10,7 @@ contains the smaller audited subset used for legality-changing decisions.
 from dataclasses import dataclass
 
 from qbopt.cycles import timings
+from qbopt.model.passes import AddressForm
 from qbopt.model.passes import OperationCosts
 
 
@@ -22,9 +23,8 @@ class Profile:
     partial_register_stall: int
     register_capacity: int = 6
     call_register_capacity: int = 2
-    # The CPU executes 386 instructions, but this compiler's medium-model
-    # ABI uses 16-bit effective addresses.  That encoding has [base+index]
-    # only; 32-bit SIB scales would require a different address-size model.
+    # Preferred forms only. The complete legal set, including the costed
+    # address-size-prefixed fallback, is in ``address_forms`` below.
     address_scales: frozenset[int] = frozenset({1})
     _costs: tuple[tuple[str, int], ...] = ()
     _latencies: tuple[tuple[str, int], ...] = ()
@@ -35,6 +35,10 @@ class Profile:
     # forms.  This is deliberately distinct from generic issue width and is
     # appended for the same positional compatibility as ``operations``.
     pentium_pairing: bool = False
+    # Appended to retain the public positional shape above. 16-bit medium
+    # model can use 386 32-bit SIB addressing through an address-size prefix;
+    # it is legal but never silently promoted to a native/free scale.
+    address_forms: tuple[AddressForm, ...] = ()
 
     def cost(self, operation: str) -> int:
         """The existing target-ranking cost for one named instruction form."""
@@ -126,24 +130,43 @@ def _operation_costs(costs: dict[str, int], prefix: int) -> OperationCosts:
         float_divide=costs["x87_div"],
         float_load=costs["x87_load"],
         float_store=costs["x87_store"],
+        extend=costs["movzx"],
+    )
+
+
+def _address_forms(costs: OperationCosts, prefix: int) -> tuple[AddressForm, ...]:
+    """Native medium-model addressing, then the legal 67h fallback."""
+    return (
+        AddressForm(2, frozenset({1})),
+        AddressForm(
+            4,
+            frozenset({1, 2, 4, 8}),
+            extra_bytes=1,
+            use_cost=prefix,
+            extension_cost=costs.extend,
+            fallback=True,
+        ),
     )
 
 
 def _profile(name: str) -> Profile:
     if name == "386":
         costs = dict(_I386_COSTS)
+        operations = _operation_costs(costs, 0)
         return Profile(
             name,
             1,
             True,
             0,
             0,
-            operations=_operation_costs(costs, 0),
+            operations=operations,
             _costs=tuple(costs.items()),
             _latencies=tuple(costs.items()),
+            address_forms=_address_forms(operations, 0),
         )
     at = timings.ARCHS.index(name)
     costs = {operation: values[at] for operation, values in timings.COST.items()}
+    operations = _operation_costs(costs, timings.PREFIX[at])
     return Profile(
         name,
         timings.ISSUE[at],
@@ -151,9 +174,10 @@ def _profile(name: str) -> Profile:
         timings.PREFIX[at],
         timings.PARTIAL_STALL[at],
         pentium_pairing=name == "P5",
-        operations=_operation_costs(costs, timings.PREFIX[at]),
+        operations=operations,
         _costs=tuple(costs.items()),
         _latencies=tuple((operation, values[at]) for operation, values in timings.LATENCY.items()),
+        address_forms=_address_forms(operations, timings.PREFIX[at]),
     )
 
 

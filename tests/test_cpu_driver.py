@@ -1,9 +1,11 @@
 """A tuning target must reach emission and survive the finalisation marker."""
+
 import json
 from pathlib import Path
 
 import pytest
 from iced_x86 import Mnemonic
+
 import corpus
 from qbopt import rewrite
 from qbopt.backend import cpu
@@ -36,12 +38,16 @@ def test_default_marker_means_386_not_unspecified():
 
 
 def test_e2e_cli_passes_cpu_to_rewrite(monkeypatch):
-    import e2e
     from types import SimpleNamespace
+
+    import e2e
+
     observed = []
+
     def run(*args, transform, **kwargs):
         observed.append(transform(FIXTURE.read_bytes()))
         return SimpleNamespace(verdicts=[], ok=True)
+
     monkeypatch.setattr(e2e, "run", run)
     assert e2e.main(["p-g2", "--prog", "lngmxx", "--cpu", "P5"]) == 0
     assert observed == [rewrite.rewrite(FIXTURE.read_bytes(), dry_run=False, cpu="P5")[0]]
@@ -53,12 +59,13 @@ def test_object_frontend_threads_machine_neutral_cpu_costs_to_mir(monkeypatch):
     real = transform.applied
 
     def recording(*args, **kwargs):
-        observed.append((kwargs.get("costs"), kwargs.get("index_scales")))
+        observed.append((kwargs.get("costs"), kwargs.get("index_scales"), kwargs.get("address_forms")))
         return real(*args, **kwargs)
 
     monkeypatch.setattr(transform, "applied", recording)
     rewrite.rewrite(FIXTURE.read_bytes(), dry_run=False, cpu="K6")
 
     assert observed
-    assert {costs for costs, _scales in observed} == {cpu.profile("K6").operations}
-    assert {scales for _costs, scales in observed} == {cpu.profile("K6").address_scales}
+    assert {costs for costs, _scales, _forms in observed} == {cpu.profile("K6").operations}
+    assert {scales for _costs, scales, _forms in observed} == {cpu.profile("K6").address_scales}
+    assert {forms for _costs, _scales, forms in observed} == {cpu.profile("K6").address_forms}

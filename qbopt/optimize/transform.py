@@ -40,6 +40,7 @@ from qbopt.optimize import algebraic
 from qbopt.optimize import loopmotion
 from qbopt.optimize import loopsimplify
 from qbopt.analysis import loops as loopy
+from qbopt.model.passes import AddressForm
 from qbopt.model.passes import MIRTransform
 from qbopt.model.passes import OperationCosts
 from qbopt.analysis import liveness as alive_at
@@ -2763,6 +2764,7 @@ def applied(
     registers: int | None = None,
     call_registers: int = 0,
     index_scales: frozenset[int] | None = None,
+    address_forms: tuple[AddressForm, ...] | None = None,
     costs: OperationCosts | None = None,
     coverage: dict[int, tuple[tuple[int, int], ...]] | None = None,
     watch=None,
@@ -2813,11 +2815,11 @@ def applied(
         # is. It belongs to the caller once the drivers thread it.
         registers=len(mir.TRACKED) if registers is None else registers,
         call_registers=call_registers,
-        # Existing callers target the same 386 *medium-model* address space
-        # as the public frontends.  A 16-bit effective address can add a
-        # base and index, but has no encoded scale; advertising a flat SIB
-        # form here lets a direct MIR client price code lowering cannot emit.
+        # Existing direct MIR callers retain native medium-model addressing.
+        # Public frontends pass the complete, costed form set: 386 SIB is
+        # legal through 67h, but is not silently treated as native or free.
         index_scales=frozenset({1}) if index_scales is None else index_scales,
+        address_forms=() if address_forms is None else address_forms,
         costs=costs or OperationCosts(),
     )
     # These names were public debugging selectors before value reuse became
@@ -2921,6 +2923,7 @@ def applied(
             registers=where.registers,
             call_registers=where.call_registers,
             index_scales=where.index_scales,
+            address_forms=where.address_forms,
             costs=where.costs,
             watch=watch,
         )

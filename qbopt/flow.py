@@ -43,8 +43,8 @@ from qbopt.backend import allocate
 from qbopt.backend import coalesce
 from qbopt.backend import omfwrite
 from qbopt.backend import peephole
-from qbopt.backend import schedule
 from qbopt.backend import prologue
+from qbopt.backend import schedule
 from qbopt.objectfile import module
 from qbopt.optimize import transform
 from qbopt.backend import cpu as targets
@@ -144,6 +144,7 @@ def run(
                 registers=target.register_capacity,
                 call_registers=target.call_register_capacity,
                 index_scales=target.address_scales,
+                address_forms=target.address_forms,
                 costs=target.operations,
                 coverage=source.coverage,
             )

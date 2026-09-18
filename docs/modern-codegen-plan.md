@@ -20,15 +20,59 @@ iteration updates this file in the same commit.
 
 | Phase | State | Current boundary |
 |---|---|---|
-| Per-CPU measurement | in progress | CPU profiles, C corpus, static/dynamic metrics and reference listings exist; audited targets remain. |
+| Per-CPU measurement | in progress | CPU profiles now distinguish native medium-model addressing from the complete costed 67h fallback, and the C corpus, static/dynamic metrics and reference listings exist; audited targets remain. |
 | MIR/LIR provenance and fresh OMF | complete in production | allocated LIR emits directly with external source maps/allocation hints; the remaining compatibility views are test-only and cannot route a compilation through record rewriting. |
 | SROA and scalar promotion | partial | fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies can now expand into exact leaves, while far, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
-| Loop optimization | partial | exact pre- and post-tested recurrences, composed pointer recurrences, target-priced spill-aware formula rejection, specialization, rotation, peeling and exact unrolling exist; versioning and complete candidate-set pressure forecasting remain. |
+| Loop optimization | partial | exact pre- and post-tested recurrences, composed pointer recurrences, target-priced spill-aware formula rejection, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling exist; versioning and complete candidate-set pressure forecasting remain. |
 | Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs (including closed recursive SCCs in C and object paths), constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
 | Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 95. Costed 67h addressing before spill/recompute — 2026-09-18
+
+The preceding medium-model audit had conflated “not a native 16-bit
+effective-address form” with “not legal.” On a 386 target, address-size
+override `67h` permits a 32-bit SIB address in 16-bit code. It is not free: it
+adds one byte, may carry a profile-specific prefix cost, and requires exact
+32-bit base/index values. But those costs come before updating a derived
+counter in a frame slot or rebuilding the complete address every iteration.
+
+The immutable CPU profile now exposes both families to MIR in machine-neutral
+terms: index width, legal scales, extra bytes, per-use cost, extension cost,
+and whether the family is a fallback. The preferred compatibility view
+remains native `{1}`; C, object, and recursive unswitch optimization now
+receive the complete form tuple. MIR still sees neither `67h`, SIB, opcodes,
+nor physical register names.
+
+Strength formula selection now keeps native indexed leaves free, admits
+register-resident recurrences that fit the pressure budget, then activates
+the cheapest legal fallback addresses for any overflow. Only overflow that
+has no legal fallback reaches sibling collapse and spill/recompute pricing.
+A 32-bit-index form still requires the existing exactness proof: zero start,
+unit step, a known nonwrapping last counter, and a bounded far allocation.
+The proof is now requested for the particular induction value being selected,
+rather than accidentally widening the first qualifying counter in the loop.
+
+The fail-first policy regression initially failed because no fallback-form
+selection existed. It now proves that a scale-two far index at zero recurrence
+capacity selects the fallback rather than disappearing into recomputation.
+The profile regression separately proves every CPU has native 16-bit and
+costed 32-bit `{1,2,4,8}` families, and the backend regression verifies the
+actual far scaled load begins `26 67` (`26 67 8b 04 4e`,
+`mov ax,es:[esi+ecx*2]`). Focused profile/driver/unswitch checks pass
+(`12 passed`, `21 deselected`, `0.39s`); the full-tier encoding check passes
+(`1 passed`, `0.06s`), and Tier 1 passes (`209 passed`, `31 deselected`,
+`1.80s`).
+
+The dynamic-bound `farloadloop` listing remains unchanged. Its `first`/`last`
+range and pointer-field allocation do not prove that 32-bit address arithmetic
+is equivalent to the source's 16-bit wrapping offset, so using `67h` there
+would be an unsound response to pressure. This iteration corrects the legal
+candidate set and its selection order; it does not claim a production-corpus
+speedup. GCC/LLVM SIB listings remain best-case structural references, while
+BCC/WC remain authoritative for the medium-model ABI and segment semantics.
 
 ### 94. Spill-aware induction formula rejection — 2026-09-18
 
@@ -36,8 +80,9 @@ The compact far-load loop was reconsidered from the raw GCC 16.2 and Clang
 21 listings rather than from BCC's register assignment.  Both flat-i386
 references carry one induction variable, while qbopt carried the source
 counter and a derived `i * 2` recurrence.  Their exact forms are not directly
-portable: Clang uses an unavailable SIB scale, and GCC carries a 32-bit byte
-offset and reconstructs the dynamic exit.  Replacing that with a 16-bit
+portable: Clang uses a 67h SIB scale that needs exact 32-bit-address proofs,
+and GCC carries a 32-bit byte offset and reconstructs the dynamic exit.
+Replacing that with a 16-bit
 equality recurrence would be unsound because a step of two repeats after
 32,768 iterations.  The transferable result is therefore the candidate-set
 rule—choose one profitable complete IV set—not either reference's encoding.
@@ -669,16 +714,17 @@ the winning formula and then make `strength` choose it by target cost.
 ### 9. Medium-model address-form legality — 2026-09-18
 
 The pressure investigation found that every CPU profile advertised flat-386
-scaled address forms `{1,2,4,8}` to MIR.  This compiler emits 16-bit
-medium-model effective addresses, whose legal indexed form is only
-`[base+index]`; a 32-bit SIB scale would require a different address-size and
-pointer model.  The profiles now expose `{1}` consistently.  The new
+scaled address forms `{1,2,4,8}` to MIR as though they were native and free.
+The ordinary 16-bit medium-model effective address is only `[base+index]`;
+32-bit SIB requires a costed `67h` address-size form and exact widened-address
+proofs that this iteration did not yet model. The preferred profile view was
+therefore reduced to native `{1}` consistently. The new
 fail-first CPU-profile regression verifies that contract for every supported
 CPU, and the focused profile plus C RMW tests pass.
 
 This corrects the target interface rather than choosing a QCport formula.  It
 does not itself remove `r_walk`'s word-offset recurrence: that recurrence is
-the legal fallback for `i * 2` under 16-bit addressing.  The next iteration
+the then-modelled fallback for `i * 2` under native 16-bit addressing. The next iteration
 still needs pressure-aware selection between that register recurrence and a
 stack/recomputed offset, with BCC's medium-model listing as the ABI reference.
 
@@ -686,10 +732,11 @@ stack/recomputed offset, with BCC's medium-model listing as the ABI reference.
 
 The clean paired `r_walk` build at qbopt `a8eb96e` keeps the same qbopt listing
 hash, `ccbacccfc7ff5f46553d0e8b41dd78652f7bb7ad8ad7aa486dc629c92511badc`.
-That is the expected result for this loop: `i * 2` has no legal scaled
-16-bit address form, so the existing strength reducer already chose its
-register-recurrence fallback.  The profile correction prevents future MIR
-formula selection from incorrectly pricing a SIB-scale option; it is not
+That is the expected result for this loop: `i * 2` has no native scaled
+16-bit address form, and its dynamic bounds did not prove a safe widened
+67h address, so the existing strength reducer chose its register-recurrence
+fallback. The profile correction prevents future MIR formula selection from
+incorrectly pricing SIB as native/free; it is not
 claimed as a performance change here.
 
 ### 11. Pre-allocation far-pointer load selection — 2026-09-18
@@ -1646,13 +1693,15 @@ address-form authority.
 
 ### 54. Medium-model default address-form gate — 2026-09-18
 
-The shared `transform.applied()` boundary still supplied `{1,2,4,8}` when a
+The shared `transform.applied()` boundary still supplied `{1,2,4,8}` as a
+native/free set when a
 direct MIR caller omitted CPU form facts, despite every public CPU profile and
 both production frontends correctly supplying `{1}`.  That was a target-model
-leak: a 16-bit medium-model effective address can combine a base and index but
-cannot encode a flat 32-bit scaled-index form.  Such a caller could therefore
-make a formula decision using a price for code the emitter cannot legally
-produce.
+leak: a native 16-bit medium-model effective address can combine a base and
+index, while a 32-bit scaled-index form needs a costed `67h` form and
+widened-address proof. Such a caller could therefore make a formula decision
+using a free price for code the emitter could encode only with work the
+decision had not represented.
 
 The default is now `{1}`.  The regression first observed the old flat set at
 the `Strength` boundary and now proves an omitted profile has exactly the same

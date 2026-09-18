@@ -68,6 +68,27 @@ class LIRTransform:
 
 
 @dataclass(frozen=True, slots=True)
+class AddressForm:
+    """One legal indexed-address family and its costs above the native form.
+
+    This is deliberately machine-neutral.  MIR may know that an address can
+    use a four-byte index with scales 1/2/4/8, and what widening/setup and
+    per-use costs that choice carries; it never learns that x86 spells the
+    choice with an address-size prefix or which physical registers encode it.
+    ``extra_bytes`` is separate from execution cost so a zero-cycle prefix
+    still participates in code-size decisions without being invented as
+    processor latency.
+    """
+
+    index_width: int
+    scales: frozenset[int]
+    extra_bytes: int = 0
+    use_cost: int = 0
+    extension_cost: int = 0
+    fallback: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class OperationCosts:
     """Machine-neutral costs a MIR profitability decision may compare.
 
@@ -95,6 +116,7 @@ class OperationCosts:
     float_divide: int = 1
     float_load: int = 1
     float_store: int = 1
+    extend: int = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,6 +168,10 @@ class Where:
     # no register: a pass told "an address may be base + index*2" still
     # knows nothing about how that is spelt.
     index_scales: frozenset[int] = frozenset()
+    # Complete legal indexed-address families. ``index_scales`` remains the
+    # preferred/native compatibility view; fallback forms are not implicitly
+    # free merely because the emitter can encode them.
+    address_forms: tuple[AddressForm, ...] = ()
     # Semantic work only. The profile boundary translates instruction forms
     # once; no MIR pass can recover an opcode or register from these prices.
     costs: OperationCosts = OperationCosts()

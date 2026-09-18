@@ -49,6 +49,7 @@ from qbopt.analysis import induction
 from qbopt.model.passes import Where
 from qbopt.analysis import loops as loopy
 from qbopt.objectfile.module import Space
+from qbopt.model.passes import AddressForm
 from qbopt.model.passes import MIRTransform
 from qbopt.model.passes import OperationCosts
 
@@ -76,6 +77,7 @@ class Strength(MIRTransform):
             self.where.index_scales,
             self.where.call_registers,
             self.where.costs,
+            address_forms=self.where.address_forms,
         )
         body = exitsink.sunk(transform.dead(ivshare.shared(body)))
         body = loopexit.evaluated(body)
@@ -91,6 +93,7 @@ def reduced(
     scales: frozenset[int] = frozenset(),
     call_registers: int = 0,
     costs: OperationCosts = _DEFAULT_COSTS,
+    address_forms: tuple[AddressForm, ...] = (),
 ) -> MirBody:
     """`body` with every multiply of a counter by an invariant made an add."""
     from qbopt.optimize import transform as passes
@@ -118,7 +121,7 @@ def reduced(
     # value used on another block or on a loop exit must retain its copy.
     pointer_bindings: list[tuple[Op, mir.Value, mir.Value]] = []
     wide: set[mir.Value] = set()
-    facts = consts.known(body) if scales else {}
+    facts = consts.known(body) if scales or address_forms else {}
     for loop, _basics, derived in found:
         preheader = passes._preheader(body, loop)
         latches = [at for at in loop.latches if at in at_of]
@@ -157,7 +160,42 @@ def reduced(
         # promoted loop legitimately carries more than the register file,
         # and harr's loops report nine.
         leaves = _formula_set(candidates)
-        free = {id(one.op) for one in leaves if _indexable(body, loop, one, scales, facts) is not None}
+        widened: dict[int, list[tuple[Op, Op]] | None] = {}
+        native_forms = tuple(form for form in address_forms if not form.fallback)
+        if not native_forms:
+            native_forms = (AddressForm(2, scales),)
+        fallback_forms = tuple(form for form in address_forms if form.fallback)
+        native = {
+            id(one.op): indexed
+            for one in leaves
+            if (
+                indexed := next(
+                    (
+                        found
+                        for form in native_forms
+                        if (found := _legal_form(body, loop, one, form, facts, widened)) is not None
+                    ),
+                    None,
+                )
+            )
+            is not None
+        }
+        fallbacks = {
+            id(one.op): indexed
+            for one in leaves
+            if id(one.op) not in native
+            and (
+                indexed := next(
+                    (
+                        found
+                        for form in fallback_forms
+                        if (found := _legal_form(body, loop, one, form, facts, widened)) is not None
+                    ),
+                    None,
+                )
+            )
+            is not None
+        }
         room = len(candidates)
         capacity = registers
         if call_registers and any(op.kind is mir.Kind.CALL for at in loop.body for op in at_of[at].ops):
@@ -177,9 +215,19 @@ def reduced(
                     capacity - liveness.pressure(body, live, loop.body),
                 ),
             )
+        fallback_indexes = _fallback_indexes(
+            leaves,
+            room,
+            frozenset(native),
+            fallbacks,
+            references=references,
+        )
+        free = frozenset(native) | fallback_indexes
         candidates = _formula_set(candidates, room, free, costs=costs, references=references)
         indexes = {
-            id(one.op): scale for one in candidates if (scale := _indexable(body, loop, one, scales, facts)) is not None
+            id(one.op): (native | fallbacks)[id(one.op)]
+            for one in candidates
+            if id(one.op) in native or id(one.op) in fallback_indexes
         }
         # Only a counter every address indexes. One pointer left beside it can
         # end the loop in its place, and the index then costs the register
@@ -190,16 +238,16 @@ def reduced(
             for one in candidates
             if id(one.op) in indexes and one.of.value not in stepped
         }
-        counter_ops = _widened(body, loop, facts) if any(scale > 1 for scale in indexes.values()) else None
-        if counter_ops is None:
-            indexes = {key: scale for key, scale in indexes.items() if scale == 1}
-        else:
-            for op, widened in counter_ops:
-                replacements.setdefault(id(op), widened)
+        for value in {
+            one.of.value for one in candidates if id(one.op) in indexes and indexes[id(one.op)][1].index_width > 2
+        }:
+            for op, widened_op in widened[value] or ():
+                replacements.setdefault(id(op), widened_op)
         for one in candidates:
             if id(one.op) not in indexes or id(one.op) in replacements:
                 continue
-            scale, answer = indexes[id(one.op)], _answer(body, one.op)
+            scale, form = indexes[id(one.op)]
+            answer = _answer(body, one.op)
             counter = next(phi.result for phi in at_of[loop.header].phis if phi.result.id == one.of.value)
             taken += 1
             base = mir.Value(id=_next(body, taken), at=preheader, variable=taken, version=1)
@@ -216,7 +264,7 @@ def reduced(
                 merges={},
                 symbol=False,
             )
-            if scale == 1:
+            if form.index_width == 2:
                 replacements[id(one.op)] = replace(
                     one.op,
                     uses=(base, counter),
@@ -230,7 +278,7 @@ def reduced(
             ahead[preheader].append(
                 replace(
                     _made(mir.Kind.ZERO_EXTEND, "movzx", extended, (mir.Held(base, 2),), preheader, one.op),
-                    results=(mir.Held(extended, 4),),
+                    results=(mir.Held(extended, form.index_width),),
                 )
             )
             taken += 1
@@ -239,7 +287,7 @@ def reduced(
                 mir.Kind.SHL,
                 "shl",
                 product,
-                (mir.Held(counter, 4), mir.Const(scale.bit_length() - 1, 1)),
+                (mir.Held(counter, form.index_width), mir.Const(scale.bit_length() - 1, 1)),
                 one.op.at,
                 one.op,
             )
@@ -248,8 +296,8 @@ def reduced(
                 replace(
                     one.op,
                     uses=(extended, product),
-                    args=(mir.Held(extended, 4), mir.Held(product, 4)),
-                    results=(mir.Held(answer, 4),),
+                    args=(mir.Held(extended, form.index_width), mir.Held(product, form.index_width)),
+                    results=(mir.Held(answer, form.index_width),),
                     **address,
                 ),
             )
@@ -435,6 +483,41 @@ def _formula_set(
         selected.remove(id(loser.op))
 
     return [one for one in candidates if id(one.op) in selected]
+
+
+def _fallback_indexes(
+    candidates: list[induction.Derived],
+    room: int,
+    native: frozenset[int],
+    fallbacks: dict[int, tuple[int, AddressForm]],
+    *,
+    references: dict[int, int] | None = None,
+) -> frozenset[int]:
+    """Activate costed address forms before overflowing recurrence storage.
+
+    Native indexed leaves consume no recurrence slot. Other leaves may occupy
+    the available register budget. If those leaves overflow it, a legal
+    fallback address is the next representation to try: it spends encoding
+    bytes and a target-specific per-use cost, but it does not create the
+    loop-carried value that allocation would otherwise spill. Only the
+    remaining overflow reaches sibling collapse and spill/recompute pricing.
+    """
+    references = references or {}
+    slots = [one for one in candidates if id(one.op) not in native]
+    overflow = max(0, len(slots) - room)
+    choices = []
+    for order, one in enumerate(slots):
+        indexed = fallbacks.get(id(one.op))
+        if indexed is None:
+            continue
+        _scale, form = indexed
+        result = one.op.results[0].value if one.op.results and isinstance(one.op.results[0], mir.Held) else None
+        uses = references.get(result.id, 1) if result is not None else 1
+        # Extension is loop setup; prefix cost is paid by each addressed use.
+        # Extra bytes break equal execution-cost choices without pretending
+        # that code size is processor latency.
+        choices.append((form.extension_cost + uses * form.use_cost, form.extra_bytes * uses, order, id(one.op)))
+    return frozenset(choice[3] for choice in sorted(choices)[:overflow])
 
 
 def _recompute_cost(one: induction.Derived, costs: OperationCosts) -> int:
@@ -710,6 +793,25 @@ def _replaced(one: "Op | tuple[Op, ...]") -> tuple[Op, ...]:
     return one if isinstance(one, tuple) else (one,)
 
 
+def _legal_form(
+    body: MirBody,
+    loop,
+    one: induction.Derived,
+    form: AddressForm,
+    facts: dict,
+    widened: dict[int, list[tuple[Op, Op]] | None],
+) -> tuple[int, AddressForm] | None:
+    """This derived address in one form, including exact-width proof."""
+    scale = _indexable(body, loop, one, form.scales, facts)
+    if scale is None:
+        return None
+    if form.index_width > 2:
+        widened.setdefault(one.of.value, _widened(body, loop, facts, one.of.value))
+        if widened[one.of.value] is None:
+            return None
+    return scale, form
+
+
 def _indexable(body: MirBody, loop, one: induction.Derived, scales: frozenset[int], facts: dict) -> "int | None":
     """The scale this address is its counter times, where the counter can index it.
 
@@ -784,7 +886,7 @@ def _addressed(body: MirBody, value: mir.Value) -> "list[mir.MemRef] | None":
     return refs
 
 
-def _widened(body: MirBody, loop, facts: dict) -> "list[tuple[Op, Op]] | None":
+def _widened(body: MirBody, loop, facts: dict, value: int | None = None) -> "list[tuple[Op, Op]] | None":
     """The ops setting and advancing this loop's counter, rewritten as dwords.
 
     Exact where the counter starts at a word constant no less than zero and
@@ -798,6 +900,8 @@ def _widened(body: MirBody, loop, facts: dict) -> "list[tuple[Op, Op]] | None":
     while grown := {value for phi in phis if phi.result in read for value in phi.incoming.values()} - read:
         read |= grown
     for affine in induction.basics(body, loop).values():
+        if value is not None and affine.value != value:
+            continue
         if induction._signed(affine.start, facts, 2) != 0 or induction._signed(affine.step, facts, 2) != 1:
             continue
         if induction._last_counter(body, loop, affine, facts, 2) is None:

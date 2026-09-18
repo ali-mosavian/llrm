@@ -1,24 +1,27 @@
 """IVARM's invariant choice should be tested once, not on all ten iterations."""
 
-from dataclasses import replace
 from pathlib import Path
+from dataclasses import replace
 
 import pytest
 
-from qbopt.analysis import loops
-from qbopt.frontend import blocks
 from qbopt.model import ir
 from qbopt.model import mir
-from qbopt.model.passes import OperationCosts
+from qbopt.analysis import loops
+from qbopt.optimize import edges
+from qbopt.frontend import blocks
 from qbopt.objectfile import module
-from qbopt.optimize import edges, transform, unswitch
+from qbopt.optimize import unswitch
+from qbopt.optimize import transform
+from qbopt.model.passes import AddressForm
+from qbopt.model.passes import OperationCosts
 
 
 @pytest.mark.parametrize("tag", ["q-O", "p-g2", "v-g3"])
 def test_production_ivarm_has_no_loop_and_stores_last_value(tag):
     """IVARM should branch once and store 34; its final counter remains 37."""
-    from qbopt import wholeseg
     import corpus
+    from qbopt import wholeseg
 
     result = wholeseg.emitted(Path(f"fixtures/regressions/ivarm-{tag}.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
@@ -31,13 +34,15 @@ def test_production_ivarm_has_no_loop_and_stores_last_value(tag):
 @pytest.mark.parametrize("tag", ["q-O", "p-g2", "v-g3"])
 def test_specialized_main_and_legacy_procedure_emit_together(tag):
     """IVPROC refused mixed body layouts instead of removing IVARM's loop beside ANNOUNCE."""
-    from qbopt import wholeseg
     import corpus
+    from qbopt import wholeseg
 
     states = []
+
     def watch(stage, name, body):
         if stage == "mir-widen":
             states.append(body)
+
     result = wholeseg.emitted(Path(f"fixtures/regressions/ivproc-{tag}.obj").read_bytes(), watch=watch)
     assert any(body.cloned for body in states) and any(not body.cloned for body in states)
     assert result.outcome is wholeseg.Emission.LIR, result.reason
@@ -83,6 +88,7 @@ def test_unswitch_reoptimization_preserves_mir_target_costs(monkeypatch):
     """Specializing IVARM used to restart optimization with default tuning."""
     found, body = original("p-g2")
     costs = OperationCosts(add=97, address=89, load=83)
+    forms = (AddressForm(2, frozenset({1})), AddressForm(4, frozenset({1, 2}), fallback=True))
     observed = []
     real = transform.applied
 
@@ -92,6 +98,7 @@ def test_unswitch_reoptimization_preserves_mir_target_costs(monkeypatch):
                 kwargs.get("registers"),
                 kwargs.get("call_registers"),
                 kwargs.get("index_scales"),
+                kwargs.get("address_forms"),
                 kwargs.get("costs"),
             )
         )
@@ -105,10 +112,11 @@ def test_unswitch_reoptimization_preserves_mir_target_costs(monkeypatch):
         registers=5,
         call_registers=2,
         index_scales=frozenset({1, 2}),
+        address_forms=forms,
         costs=costs,
     )
 
-    assert observed == [(5, 2, frozenset({1, 2}), costs)]
+    assert observed == [(5, 2, frozenset({1, 2}), forms, costs)]
 
 
 def test_unswitch_rejects_lower_count_but_higher_target_cost(monkeypatch):
@@ -155,9 +163,9 @@ def test_unswitch_rejects_semantic_work_without_a_target_price(monkeypatch):
 def test_implicit_edge_bridge_does_not_retarget_the_taken_arm():
     """IVARM's dispatch needs distinct preheaders on both sides of its condition."""
     _, body = original("p-g2")
-    loop, = loops.loops(body.blocks, body.entry)
+    (loop,) = loops.loops(body.blocks, body.entry)
     header = body.block(loop.header)
-    target, = set(header.succ) - {header.ops[-1].target}
+    (target,) = set(header.succ) - {header.ops[-1].target}
     label = edges.fresh(body)
     result = edges.split(body, header.at, target, label, ())
     assert result.block(header.at).ops[-1].target == header.ops[-1].target
@@ -168,15 +176,16 @@ def test_implicit_edge_bridge_does_not_retarget_the_taken_arm():
 @pytest.mark.parametrize("variant", ["memory", "variant"])
 def test_condition_must_be_pure_and_loop_invariant(variant):
     _, body = original("p-g2")
-    loop, = loops.loops(body.blocks, body.entry)
-    selected = next(block for block in body.blocks
-                    if block.at in loop.body and block.at != loop.header and len(block.succ) == 2)
+    (loop,) = loops.loops(body.blocks, body.entry)
+    selected = next(
+        block for block in body.blocks if block.at in loop.body and block.at != loop.header and len(block.succ) == 2
+    )
     index, compare = transform._comparison(selected, selected.ops[-1])
     if variant == "memory":
         compare = replace(compare, loads=(mir.MemRef(None, 2),))
     else:
         carried = body.block(loop.header).phis[0].result
         compare = replace(compare, args=(mir.Held(carried, 2), mir.Const(0, 2)), uses=(carried,))
-    selected = replace(selected, ops=(*selected.ops[:index], compare, *selected.ops[index + 1:]))
+    selected = replace(selected, ops=(*selected.ops[:index], compare, *selected.ops[index + 1 :]))
     body = replace(body, blocks=tuple(selected if block.at == selected.at else block for block in body.blocks))
     assert unswitch.specialized(body) is body

@@ -15,6 +15,7 @@ from qbopt.analysis import induction
 from qbopt.backend import floatalloc
 from qbopt.optimize import transform
 from qbopt.cfront import compile as cfront
+from qbopt.model.passes import AddressForm
 from qbopt.model.passes import OperationCosts
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "c"
@@ -54,24 +55,30 @@ def test_operation_costs_do_not_change_the_existing_profile_positional_shape() -
     assert not target.pentium_pairing
 
 
-def test_medium_model_profiles_only_offer_unscaled_index_addressing() -> None:
-    """The old profile offered 386's flat 32-bit scales to 16-bit medium code.
+def test_medium_model_profiles_distinguish_native_and_67h_addressing() -> None:
+    """Scaled addressing is legal through 67h, but is not a free native form.
 
-    Our ABI has only the 16-bit ``[base+index]`` form.  Advertising scaled
-    forms let MIR formula selection price encodings lowering cannot legally
-    use, exactly the wrong reference model for the QCport loop audit.
+    The former profile called scales 2/4/8 illegal to stop formula selection
+    treating flat-i386 SIB addressing as free.  Preserve that preference while
+    representing the real 386 fallback and all of its extra costs explicitly.
     """
-    assert {target.address_scales for target in map(cpu.profile, cpu.names())} == {frozenset({1})}
+    for target in map(cpu.profile, cpu.names()):
+        native, fallback = target.address_forms
+        assert target.address_scales == native.scales == frozenset({1})
+        assert native.index_width == 2 and not native.fallback
+        assert fallback.index_width == 4 and fallback.scales == frozenset({1, 2, 4, 8})
+        assert fallback.fallback and fallback.extra_bytes == 1
+        assert fallback.use_cost == target.prefix_cost
+        assert fallback.extension_cost == target.operations.extend
 
 
 def test_direct_mir_default_keeps_medium_model_address_legality(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A direct MIR caller priced a flat ``index * 4`` address after profiles
-    had correctly stopped offering one.
+    """A direct MIR caller priced ``index * 4`` as a free native address.
 
     ``transform.applied()`` is public test/tooling infrastructure as well as
     the common optimization boundary.  Omitting its optional CPU details must
-    mean the same default 386 medium-model target as the frontends, not revive
-    an illegal flat-addressing formula behind their backs.
+    retain native 16-bit addressing, not silently use a costless 67h form
+    without receiving the complete target profile.
     """
     observed = []
     real = strength.reduced
@@ -135,15 +142,16 @@ def test_c_frontend_threads_machine_neutral_cpu_costs_to_mir(monkeypatch: pytest
     real = transform.applied
 
     def recording(*args, **kwargs):
-        observed.append((kwargs.get("costs"), kwargs.get("index_scales")))
+        observed.append((kwargs.get("costs"), kwargs.get("index_scales"), kwargs.get("address_forms")))
         return real(*args, **kwargs)
 
     monkeypatch.setattr(transform, "applied", recording)
     cfront.compiled((FIXTURES / "halve.cgs").read_text(), "halve", optimise=True, cpu="P5")
 
     assert observed
-    assert {costs for costs, _scales in observed} == {cpu.profile("P5").operations}
-    assert {scales for _costs, scales in observed} == {cpu.profile("P5").address_scales}
+    assert {costs for costs, _scales, _forms in observed} == {cpu.profile("P5").operations}
+    assert {scales for _costs, scales, _forms in observed} == {cpu.profile("P5").address_scales}
+    assert {forms for _costs, _scales, forms in observed} == {cpu.profile("P5").address_forms}
 
 
 def test_formula_selection_prices_complete_sibling_groups() -> None:
@@ -226,3 +234,45 @@ def test_formula_selection_recomputes_a_cheap_scaled_index_under_pressure() -> N
     assert strength._formula_set(
         [formula(mir.Held(mir.Value(12, 0), 2))], room=0, costs=costs, references={answer.id: 1}
     )
+
+
+def test_formula_selection_uses_67h_before_spilling_or_recomputing() -> None:
+    """A scaled far index overflowed the register budget and was recomputed.
+
+    In 16-bit mode the 386 address-size override is a legal SIB form.  It
+    costs a byte and a target-specific prefix penalty, but no loop-carried
+    register; select it before either a frame-backed recurrence or rebuilding
+    the scale and address in every iteration.
+    """
+    counter = mir.Value(10, 0)
+    answer = mir.Value(11, 1)
+    affine = induction.Affine(counter.id, mir.Const(0, 2), mir.Const(1, 2), 1)
+    multiply = mir.Op(
+        1,
+        ir.Operation.MULTIPLY,
+        "imul",
+        (answer,),
+        (counter,),
+        kind=mir.Kind.MUL,
+        args=(mir.Held(counter, 2), mir.Const(2, 2)),
+        results=(mir.Held(answer, 2),),
+    )
+    formula = induction.Derived(multiply, affine, mir.Const(2, 2))
+    fallback = AddressForm(
+        4,
+        frozenset({1, 2, 4, 8}),
+        extra_bytes=1,
+        use_cost=1,
+        extension_cost=4,
+        fallback=True,
+    )
+
+    activated = strength._fallback_indexes(
+        [formula],
+        room=0,
+        native=frozenset(),
+        fallbacks={id(multiply): (2, fallback)},
+        references={answer.id: 1},
+    )
+
+    assert activated == {id(multiply)}

@@ -23,13 +23,13 @@ from qbopt.cfront import hir
 from qbopt.backend import masm
 from qbopt.backend import jumps
 from qbopt.backend import lower
-from qbopt.backend import machinedce
 from qbopt.cfront import stream
 from qbopt.cfront import libfunc
 from qbopt.backend import phielim
 from qbopt.backend import omfwrite
 from qbopt.backend import prologue
 from qbopt.cfront import raise_hir
+from qbopt.backend import machinedce
 from qbopt.backend import lower_int64
 from qbopt.backend import cpu as targets
 from qbopt.backend import frame as frames
@@ -97,9 +97,7 @@ def _address_taken_procedures(unit: hir.Unit) -> frozenset[str]:
         symbol.object_name
         for segment in unit.segments.values()
         for call, args in segment.items
-        if call == "DGFEPtr"
-        and (symbol := unit.symbols.get(hir.handle(args[0]))) is not None
-        and symbol.proc
+        if call == "DGFEPtr" and (symbol := unit.symbols.get(hir.handle(args[0]))) is not None and symbol.proc
     )
     return frozenset(taken)
 
@@ -318,6 +316,7 @@ def assembled(
             registers=target.register_capacity,
             call_registers=target.call_register_capacity,
             index_scales=target.address_scales,
+            address_forms=target.address_forms,
             costs=target.operations,
             watch=observe if dump is not None or watch is not None else None,
         )
