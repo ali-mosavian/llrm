@@ -30,6 +30,34 @@ iteration updates this file in the same commit.
 
 ## Iteration log
 
+### 90. Normalize terminal-detached byte owners — 2026-09-18
+
+The shared no-return cleanup removed an edge after a proven terminal call,
+but the object path invokes it after its ordinary MIR fixed point.  A
+successor reachable only through that edge could therefore still hold an
+executable store and be lowered despite being dead.  This was a real
+control-flow quality and object-emission provenance gap, not an excuse to
+borrow a flat-i386 calling convention from a reference listing.
+
+After trimming a terminal block, `noreturn.after_terminal_calls()` now hands
+the changed body to the established source-map-preserving unreachable-block
+normalizer.  Dead blocks retain their original byte ownership as complete
+inert MIR markers, but have no executable operations, edges, phis, or
+lowerable stores.  The shared operation therefore gives C and the object
+pipeline the same post-terminal CFG result without inventing a frontend
+special case.
+
+The fail-first regression constructed a terminal call with a successor store:
+before the change that store remained executable; afterward the successor is
+an inert owner.  Object no-return checks pass (`4 passed`, `5.10s`) and the
+C/MIR terminal subset passes (`4 passed`, `0.04s`); Tier 1 also passes
+(`198 passed`, `31 deselected`, `1.80s`).  This advances Phase 6's
+terminal control-flow cleanup only; recursive/full IPSCCP, broader
+global-elimination proofs, and complete CFG cleanup remain open.  GCC and
+LLVM listings remain best-case structural references; BCC/WC medium-model
+listings remain the hard authority for ABI, segment semantics, legal address
+forms, and performance targets.
+
 ### 89. Shared terminal-call MIR cleanup — 2026-09-18
 
 The object path previously used no-return only to choose a lower-level frame

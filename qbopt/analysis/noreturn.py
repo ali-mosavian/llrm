@@ -73,4 +73,14 @@ def after_terminal_calls(body: mir.MirBody, terminal_calls: frozenset[int]) -> m
             continue
         blocks.append(replace(block, ops=ops, succ=()))
         changed = True
-    return replace(body, blocks=tuple(blocks)) if changed else body
+    if not changed:
+        return body
+
+    # This runs after the object path's ordinary fixed point.  A block which
+    # was reachable only through the just-removed edge must therefore be
+    # normalized here, rather than left as executable work for lowering.  The
+    # shared CFG normalizer retains its source-byte owner as inert MIR, which
+    # is the required object-emission provenance contract.
+    from qbopt.optimize import transform
+
+    return transform._unreachable(replace(body, blocks=tuple(blocks)))
