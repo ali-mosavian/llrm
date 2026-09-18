@@ -140,6 +140,17 @@ def test_constant_private_call_specializes_without_changing_dynamic_call() -> No
     assert "add ax, 3" in dynamic
 
 
+def test_returned_constant_specializes_the_next_private_call() -> None:
+    """ipconst_chain kept a branchy private choose call after seed had already summarized to 4."""
+    source = Path("fixtures/c/ipconst_chain.c")
+    assembly = cfront.compiled(cfront.recorded(source, []), source.stem, optimise=True)
+    chained = assembly[assembly.index("_chainedConstant proc far") : assembly.index("_chainedConstant endp")]
+
+    assert "call _choose" not in chained
+    assert "mov ax, 11" in chained
+    assert "_choose proc near" not in assembly
+
+
 def test_relative_source_and_include(tmp_path, monkeypatch):
     """wccq runs in its scratch directory, where `fixtures/c/x.c` and `-I src`
     no longer resolved: E1051 unable to open."""

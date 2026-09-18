@@ -25,10 +25,38 @@ iteration updates this file in the same commit.
 | SROA and scalar promotion | partial | fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies can now expand into exact leaves, while far, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
 | Loop optimization | partial | exact pre- and post-tested recurrences, composed pointer recurrences, formula costing, specialization, peeling and exact unrolling exist; versioning, rotation and broad pressure forecasting remain. |
-| Whole-module optimization | partial | summaries, constant returns, whole-body and constant-call-site specialization, costed private inlining, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
+| Whole-module optimization | partial | summaries, constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, costed private inlining, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
 | Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing, conservative later-core/P5 scheduling, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 78. Direct-call IPSCCP fixed point — 2026-09-18
+
+`ipconst_chain` first left a call to branchy private `choose` after the
+private `seed` call had already been summarized to the constant `4`.  The
+original parameter-specialization proof read only source-time literal facts,
+so the newly materialized MIR argument could never seed `choose`; it was a
+one-pass boundary in what must be a direct-call fixed point.
+
+The interprocedural analysis now reads the current surviving `CALL` and its
+contract-owned `ARG` operations, asks SCCP for each actual's value, and
+requires every direct private call to agree before seeding a formal.  A
+missing contract, malformed argument sequence, dynamic actual, public or
+address-taken target is an unknown fact, never a specialization permission.
+Return propagation and this parameter proof alternate while either discovers
+a new fact; their per-call and per-entry seeds are idempotent.  Thus a
+constant may traverse arbitrarily many acyclic direct private calls without
+duplicating copies or making a source-name exception.
+
+The fail-first C regression now proves `chainedConstant` returns `11` with no
+`_choose` call or body.  Its Tier 1 MIR companion proves the returned-value
+case independently.  Focused checks pass (`2 passed`, `0.17s`), and Tier 1
+passes (`190 passed`, `31 deselected`, `1.19s`).  This advances Phase 6 direct-call IPSCCP only: recursive SCC
+summaries, public/address-taken specialization, indirect calls, and broader
+interprocedural global elimination remain conservative.  GCC/LLVM listings
+remain best-case flat-i386 structural references; BCC/WC medium-model
+listings remain authoritative for ABI, segments, legal address forms and OMF
+linkage.
 
 ### 77. Direct allocated-LIR OMF emission audit — 2026-09-18
 

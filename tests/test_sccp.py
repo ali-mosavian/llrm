@@ -245,6 +245,48 @@ def test_parameter_specialization_requires_every_call_to_agree():
     }
 
 
+def test_current_parameter_constants_reads_a_sccp_returned_actual():
+    """A prior private return made choose's actual 4 after raising, not in source facts."""
+    value = mir.Value(1, 1, variable=1, version=1)
+    argument = mir.Op(
+        1,
+        ir.Operation.NOTHING,
+        "",
+        (),
+        (),
+        kind=mir.Kind.ARG,
+        args=(mir.Held(value, 2),),
+    )
+    call = mir.Op(2, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.CALL)
+    body = mir.MirBody(
+        1,
+        (mir.MirBlock(1, (), (argument, call), ()),),
+        initial=(),
+        sealed=True,
+    )
+    # The copy is deliberately inserted before the argument: it models the
+    # result materialized from seed() by interprocedural return propagation.
+    materialized = mir.Op(
+        0,
+        ir.Operation.NOTHING,
+        "",
+        (value,),
+        (),
+        kind=mir.Kind.COPY,
+        args=(mir.Const(4, 2),),
+        results=(mir.Held(value, 2),),
+    )
+    body = replace(body, blocks=(replace(body.blocks[0], ops=(materialized, argument, call)),))
+    parameter = mir.MemRef(Addr(Space.FRAME, 0, 1), 2, space=Space.FRAME)
+    assert interprocedural.current_parameter_constants(
+        {"caller": body},
+        {"caller": {2: "choose"}},
+        {"caller": {2: frozenset({1})}},
+        {"choose": (parameter,)},
+        frozenset({"choose"}),
+    ) == {"choose": (mir.Const(4, 2),)}
+
+
 def test_pure_call_removal_drops_its_exact_argument_pushes():
     """Deleting a cdecl call must drop its ARG but keep same-site facts.
 

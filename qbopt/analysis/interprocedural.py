@@ -47,6 +47,63 @@ def constant_parameters(
             if target in actuals and at in constants:
                 actuals[target].append(constants[at])
 
+    return _agreed_parameters(actuals)
+
+
+def current_parameter_constants(
+    bodies: dict[str, mir.MirBody],
+    calls: dict[str, dict[int, str]],
+    arguments: dict[str, dict[int, frozenset[int]]],
+    parameters: dict[str, tuple[mir.MemRef, ...]],
+    eligible: frozenset[str],
+) -> Parameters:
+    """Parameter constants proved at every *surviving* private call.
+
+    Source-time facts are enough for a literal call, but not for a call whose
+    actual becomes constant only after another private return is summarized.
+    Read the current MIR instead: SCCP owns the value fact, while the C call
+    contract supplies the exact ARG operations belonging to each call.  A
+    missing or malformed contract is an unknown call, rather than permission
+    to specialize a body that may still receive a different value.
+    """
+    actuals: dict[str, list[tuple[mir.Const | None, ...]]] = {name: [] for name in eligible}
+    for owner, body in bodies.items():
+        facts = consts.known(body)
+        for block in body.blocks:
+            for index, call in enumerate(block.ops):
+                if call.kind is not mir.Kind.CALL:
+                    continue
+                target = calls.get(owner, {}).get(call.at)
+                if target not in actuals:
+                    continue
+                width = len(parameters[target])
+                sites = arguments.get(owner, {}).get(call.at)
+                selected = (
+                    [op for op in block.ops[:index] if op.kind is mir.Kind.ARG and op.at in sites and len(op.args) == 1]
+                    if sites is not None
+                    else []
+                )
+                # cdecl lays down the final source argument first.
+                values = tuple(_constant_argument(op.args[0], facts) for op in reversed(selected))
+                actuals[target].append(values if len(values) == width else (None,) * width)
+
+    return _agreed_parameters(actuals)
+
+
+def _constant_argument(argument: object, facts: dict[mir.Value, consts.Known]) -> mir.Const | None:
+    if isinstance(argument, mir.Const):
+        return mir.Const(consts.masked(argument.n, argument.width), argument.width)
+    if (
+        isinstance(argument, mir.Held)
+        and (fact := facts.get(argument.value)) is not None
+        and fact.width >= argument.width
+    ):
+        return mir.Const(consts.masked(fact.n, argument.width), argument.width)
+    return None
+
+
+def _agreed_parameters(actuals: dict[str, list[tuple[mir.Const | None, ...]]]) -> Parameters:
+    """Facts shared by every call in an already-normalized actual map."""
     out: Parameters = {}
     for name, sites in actuals.items():
         if not sites or len({len(site) for site in sites}) != 1:
@@ -71,7 +128,8 @@ def specialize_parameters(
         for ref, constant in zip(parameters, constants, strict=False)
         if constant is not None and constant.width == ref.width
     )
-    return replace(body, initial=(*body.initial, *known)) if known else body
+    added = tuple(one for one in known if one not in body.initial)
+    return replace(body, initial=(*body.initial, *added)) if added else body
 
 
 def constant_returns(bodies: dict[str, mir.MirBody]) -> Returns:

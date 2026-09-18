@@ -373,21 +373,57 @@ def assembled(
                 break
 
         propagated = {one.name: frozenset() for one in raised_procedures}
-        round_ = 0
+        return_round = 0
+
+        def propagate_constant_returns() -> None:
+            """Materialize every newly constant result, retaining seen calls."""
+            nonlocal return_round
+            while True:
+                returns = interprocedural.constant_returns(bodies)
+                changed = False
+                for raised in raised_procedures:
+                    before = bodies[raised.name]
+                    after, done = interprocedural.propagate_returns(
+                        before, raised.calls, returns, propagated[raised.name]
+                    )
+                    propagated[raised.name] = done
+                    if after is before:
+                        continue
+                    bodies[raised.name] = run_optimiser(raised, after, f"ipa{return_round}.")
+                    changed = True
+                if not changed:
+                    return
+                return_round += 1
+
+        # A return fact may make the actual of a different direct call
+        # constant.  Alternate that current-MIR proof with return propagation
+        # until neither side discovers a new fact; source-side constants alone
+        # cannot close this chain.
+        propagate_constant_returns()
+        argument_round = 0
         while True:
-            returns = interprocedural.constant_returns(bodies)
+            constants = interprocedural.current_parameter_constants(
+                bodies,
+                {one.name: one.calls for one in raised_procedures},
+                call_arguments,
+                {one.name: one.parameters for one in raised_procedures},
+                private,
+            )
             changed = False
             for raised in raised_procedures:
+                constants_for_body = constants.get(raised.name)
+                if constants_for_body is None:
+                    continue
                 before = bodies[raised.name]
-                after, done = interprocedural.propagate_returns(before, raised.calls, returns, propagated[raised.name])
-                propagated[raised.name] = done
+                after = interprocedural.specialize_parameters(before, raised.parameters, constants_for_body)
                 if after is before:
                     continue
-                bodies[raised.name] = run_optimiser(raised, after, f"ipa{round_}.")
+                bodies[raised.name] = run_optimiser(raised, after, f"ipa-args{argument_round}.")
                 changed = True
             if not changed:
                 break
-            round_ += 1
+            argument_round += 1
+            propagate_constant_returns()
         pure = interprocedural.pure_procedures({one.name: (bodies[one.name], one.calls) for one in raised_procedures})
         for raised in raised_procedures:
             before = bodies[raised.name]
