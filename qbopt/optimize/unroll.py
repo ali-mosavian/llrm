@@ -181,11 +181,17 @@ def _rejection(
         return "unpriced"
     if dynamic_after >= dynamic_before:
         return "no-saving"
+    total_before = profit.pressure_adjusted(before, where.costs, where.registers, {latch: count})
+    total_after = profit.pressure_adjusted(after, where.costs, where.registers)
+    if total_before is None or total_after is None:
+        return "unpriced"
+    if total_after >= total_before:
+        return "pressure"
     # MIR cannot know final encoding bytes. Charge one register move per added
     # semantic operation: target-priced, bounded, and never an implicit free
     # expansion. Later selection still supplies the exact size measurement.
     growth = max(0, _size(after) - _size(before)) * where.costs.move
-    return "growth" if dynamic_before - dynamic_after <= growth else None
+    return "growth" if total_before - total_after <= growth else None
 
 
 def optimized(body: mir.MirBody, where: Where, *, optimize, watch=None) -> mir.MirBody:

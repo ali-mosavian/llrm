@@ -22,13 +22,93 @@ iteration updates this file in the same commit.
 |---|---|---|
 | Per-CPU measurement | in progress | CPU profiles distinguish native medium-model addressing from the complete costed secondary 67h form and now carry the complete-peel iteration budget; the C corpus, static/dynamic metrics and reference listings exist, and exact counts survive recurrence rewinds, loop rotation, and zero-byte-header threading; audited targets remain. |
 | MIR/LIR provenance and fresh OMF | complete in production | allocated LIR emits directly with external source maps/allocation hints; the remaining compatibility views are test-only and cannot route a compilation through record rewriting. |
-| SROA and scalar promotion | partial | fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies can now expand into exact leaves, while far, overlap, volatile, bounded indexed-array constants, general indexed copies and broader aggregate decomposition remain. |
+| SROA and scalar promotion | partial | fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies expand into exact leaves, and structural candidates transact leaves made singleton by scalar convergence with finite-capacity pressure pricing; far, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, dying-base indexed-form unfolding, and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
-| Loop optimization | partial | exact pre/post-tested recurrences and symbolic sentinels, target-priced exact nested-recurrence rewind, complete nested-initializer LICM, dead-control countdowns with zero-trip guards, complete-affine spill/recompute pricing, precise-volatile-aware LICM, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling with bounded full-growth exist; versioning, partial unrolling, and complete candidate-set pressure forecasting remain. |
+| Loop optimization | partial | exact pre/post-tested recurrences and symbolic sentinels, target-priced exact nested-recurrence rewind, complete nested-initializer LICM, dead-control countdowns with zero-trip guards, complete-affine spill/recompute pricing, precise-volatile-aware LICM, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling with bounded full-growth and machine-neutral whole-range pressure forecasting exist; versioning, partial unrolling, and constraint-complete candidate-set forecasting remain. |
 | Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs (including closed recursive SCCs in C and object paths), constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
 | Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing, dead-register frame-copy shuttles, target-priced 67h LEA selection including globally-dead shifted reload tails, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 107. Transact converged aggregate leaves with register pressure — 2026-09-18
+
+Matmul's exact structural clone crossed SROA before scalar convergence.  The
+convergence itself made another set of indexed aggregate accesses singleton,
+so the candidate was priced before those leaves existed and committed in a
+different memory shape.  The structural transaction now crosses SROA again,
+reconverges scalar MIR without opening another structural search, and prices
+the settled result before accepting it.
+
+The first implementation exposed why this must be a pressure-aware
+transaction rather than an unconditional second SROA run.  It produced MIR
+with one load and no stores, then allocation recreated 576 loads and 383
+stores: 846 final instructions at a 4,803 weighted 386 cost, worse than the
+3,396 baseline.  A single maximum pressure peak did not see the defect because
+matmul has successive disjoint groups of leaves.  The machine-neutral model
+now retains each cheapest whole-live-range spill choice across program points;
+overlapping peaks share that choice, while disjoint waves pay for independent
+stores/reloads.  Literal and fixed-address reconstruction retain their cheaper
+rematerialization price.
+
+SROA profitability is intentionally asymmetric.  The unscalarized side pays
+its explicit aggregate loads and stores through ordinary semantic cost; also
+charging every address and stored value as a full-lived register double-counted
+that memory representation (8,815 estimated versus 3,396 after allocation).
+The settled side has removed those homes and therefore adds finite-capacity
+whole-range spill traffic.  This is an aggregate-replacement rule, not a
+matmul name, array-size threshold, register name, or CPU allow-list.
+
+```asm
+; before: first of eight cloned row bodies (the next begins immediately)
+movsx eax, word ptr [bp-132]
+movsx ebx, word ptr [bp-130]
+mov dword ptr [bp-520], ebx
+; ... seven specialized column expressions ...
+mov dword ptr [bp-516], edx
+
+; after: one row loop, eight specialized column expressions
+mov bx, word ptr [bp-518]
+shl bx, 5
+movsx ecx, word ptr ss:[si]
+movsx eax, word ptr ss:[si+2]
+lea eax, [ecx+ecx]
+add eax, dword ptr [bp-526]
+mov dword ptr ss:[bx], eax
+add word ptr [bp-518], 1
+cmp word ptr [bp-518], 8
+jb  L0_68
+```
+
+On 386, qbopt changes from `3644/906/3396` to `1655/451/1898`
+bytes/instructions/weighted cost.  Loads fall `305 -> 108`, stores
+`192 -> 88`, spill reloads `0 -> 4`, and spill stores `56 -> 9`.  The selected
+row loop raises the exact/profile-free dynamic estimate `906 -> 1067`
+(+17.8%) while lowering target-weighted cost 44.1%; this is an explicit
+386 memory-traffic tradeoff rather than a claim that every instruction has
+equal runtime cost.
+
+Clang's current flat-i386 reference makes the same broad row-loop choice and
+reports 356 normalized static instructions, 81 loads, 78 stores, and 879
+estimated dynamic instructions.  qbopt is now 1.24x/1.33x/1.13x on the first
+three structural measures; the dynamic comparison remains withheld because
+the reference uses a heuristic trip count.  GCC instead nearly expands the
+nest and reports 849 normalized instructions, so qbopt is 0.52x its static
+count.  Neither flat ABI is promoted to a medium-model hard target.
+
+The authoritative artifacts are `build/quality/iter109/report.json` and its
+raw qbopt/GCC/Clang listings.  Assembling the saved qbopt listing, linking it
+with the VBDOS linker, and executing it on the real DOS 386 returned the
+independent matmul result `353712` (`b0 65 05 00`).  Fail-first regressions
+cover leaves exposed only after scalar convergence, a settled SROA pressure
+loss, one unavoidable pressure peak, two independent spill waves, and the
+separate x87 value class not consuming integer-register capacity.
+
+The instrumented quality run still takes 3:43 for this pathological candidate.
+An attempted immediate post-SROA rejection reduced compile time but restored
+the inferior 3,396-cost body because DSE and scalar folding had not yet exposed
+the candidate's benefit; it was discarded.  The next compile-time iteration
+must accelerate or cache the settled fixed point rather than reject it before
+its semantics are visible.
 
 ### 106. Fold terminal offsets without forcing a worse address class — 2026-09-18
 

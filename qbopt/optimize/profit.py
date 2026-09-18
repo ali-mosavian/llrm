@@ -7,6 +7,7 @@ frequency.  A kind without a price makes the answer unknown rather than cheap.
 
 from qbopt.model import mir
 from qbopt.analysis import loops
+from qbopt.analysis import liveness
 from qbopt.model.passes import OperationCosts
 
 
@@ -112,13 +113,8 @@ def static(body: mir.MirBody, costs: OperationCosts) -> int | None:
     return None if any(one is None for one in priced) else sum(one for one in priced if one is not None)
 
 
-def weighted(body: mir.MirBody, costs: OperationCosts, trips: dict[int, int] | None = None) -> int | None:
-    """Profile-free expected work, using exact or ten trips per loop level.
-
-    ``trips`` keys a proven count by latch address.  This lets full unrolling
-    compare against the trip count it proved instead of pretending every loop
-    runs ten times; every other loop retains the conventional factor of ten.
-    """
+def _frequencies(body: mir.MirBody, trips: dict[int, int] | None = None) -> dict[int, int] | None:
+    """Profile-free block frequencies, or ``None`` for conflicting proofs."""
     frequency = {block.at: 1 for block in body.blocks}
     trips = trips or {}
     for loop in loops.loops(body.blocks, body.entry):
@@ -129,6 +125,19 @@ def weighted(body: mir.MirBody, costs: OperationCosts, trips: dict[int, int] | N
         for at in loop.body:
             if at in frequency:
                 frequency[at] *= factor
+    return frequency
+
+
+def weighted(body: mir.MirBody, costs: OperationCosts, trips: dict[int, int] | None = None) -> int | None:
+    """Profile-free expected work, using exact or ten trips per loop level.
+
+    ``trips`` keys a proven count by latch address.  This lets full unrolling
+    compare against the trip count it proved instead of pretending every loop
+    runs ten times; every other loop retains the conventional factor of ten.
+    """
+    frequency = _frequencies(body, trips)
+    if frequency is None:
+        return None
     total = 0
     for block in body.blocks:
         priced = _block(block, costs)
@@ -136,3 +145,120 @@ def weighted(body: mir.MirBody, costs: OperationCosts, trips: dict[int, int] | N
             return None
         total += frequency[block.at] * priced
     return total
+
+
+def spill_risk(
+    body: mir.MirBody,
+    costs: OperationCosts,
+    capacity: int,
+    trips: dict[int, int] | None = None,
+) -> int | None:
+    """Whole-live-range traffic needed to fit MIR within ``capacity``.
+
+    This models the integer capacity supplied by :class:`Where`; x87 values
+    have a separate stack allocator and do not consume it.  It walks every
+    program point, chooses the cheapest still-resident values needed to relieve that
+    point, and retains those choices for the rest of the body.  Retention is
+    essential: one chosen live range may relieve several overlapping peaks,
+    while disjoint pressure waves necessarily choose and pay for different
+    values.  Pricing definitions and uses makes the result the cost of those
+    whole-range choices rather than a count of pressure points.
+
+    Literal and fixed-address values use their cheaper reconstruction price,
+    matching the allocator's existing rematerialization rather than charging
+    them a fictitious frame slot.  Everything is expressed in MIR values and
+    machine-neutral target costs.
+    """
+    if capacity <= 0:
+        return 0
+    frequency = _frequencies(body, trips)
+    if frequency is None:
+        return None
+    definitions: dict[mir.Value, int] = {}
+    uses: dict[mir.Value, int] = {}
+    recipes: dict[mir.Value, list[mir.Op]] = {}
+    floating: set[mir.Value] = set()
+    for block in body.blocks:
+        each = frequency[block.at]
+        for phi in block.phis:
+            definitions[phi.result] = definitions.get(phi.result, 0) + each
+            for value in phi.incoming.values():
+                uses[value] = uses.get(value, 0) + each
+        for op in block.ops:
+            floating.update(
+                arg.value
+                for arg in (*op.args, *op.results)
+                if isinstance(arg, mir.Held) and arg.width == 10
+            )
+            for value in op.defines:
+                definitions[value] = definitions.get(value, 0) + each
+                recipes.setdefault(value, []).append(op)
+            for value in op.uses:
+                uses[value] = uses.get(value, 0) + each
+
+    while True:
+        before = len(floating)
+        for block in body.blocks:
+            for phi in block.phis:
+                if phi.result in floating or any(value in floating for value in phi.incoming.values()):
+                    floating.add(phi.result)
+                    floating.update(phi.incoming.values())
+        if len(floating) == before:
+            break
+
+    def reconstruction(value: mir.Value) -> int | None:
+        found = recipes.get(value, ())
+        if len(found) != 1:
+            return None
+        op = found[0]
+        if op.loads or op.stores or op.barrier or len(op.results) != 1:
+            return None
+        if op.kind is mir.Kind.COPY and len(op.args) == 1 and isinstance(op.args[0], mir.Const):
+            return costs.move
+        if op.kind is mir.Kind.ADDRESS and len(op.args) == 1 and isinstance(
+            op.args[0], (mir.FrameAddress, mir.Symbol)
+        ):
+            return costs.address
+        return None
+
+    traffic = {}
+    for value in definitions.keys() | uses.keys():
+        slot = definitions.get(value, 0) * costs.store + uses.get(value, 0) * costs.load
+        rematerialize = reconstruction(value)
+        traffic[value] = slot if rematerialize is None else min(slot, uses.get(value, 0) * rematerialize)
+
+    found = liveness.live(body)
+    spilled: set[mir.Value] = set()
+    risk = 0
+
+    def account(alive: set[mir.Value]) -> None:
+        nonlocal risk
+        values = [
+            value for value in alive if not value.flags and value not in floating and value not in spilled
+        ]
+        excess = len(values) - capacity
+        if excess > 0:
+            selected = sorted(values, key=lambda value: (traffic.get(value, 0), value.id))[:excess]
+            spilled.update(selected)
+            risk += sum(traffic.get(value, 0) for value in selected)
+
+    for block in body.blocks:
+        alive = set(found.live_out[block.at])
+        account(alive)
+        for op in reversed(block.ops):
+            alive.difference_update(op.defines)
+            alive.update(op.uses)
+            account(alive)
+    return risk
+
+
+def pressure_adjusted(
+    body: mir.MirBody,
+    costs: OperationCosts,
+    capacity: int,
+    trips: dict[int, int] | None = None,
+) -> int | None:
+    """Semantic work plus finite-capacity whole-range spill traffic."""
+    work = weighted(body, costs, trips)
+    pressure = spill_risk(body, costs, capacity, trips)
+    return None if work is None or pressure is None else work + pressure

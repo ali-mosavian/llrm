@@ -32,6 +32,7 @@ from qbopt.optimize import lcssa
 from qbopt.analysis import consts
 from qbopt.optimize import unroll
 from qbopt.optimize import promote
+from qbopt.optimize import profit
 from qbopt.model.mir import MirBody
 from qbopt.objectfile import module
 from qbopt.optimize import strength
@@ -2922,8 +2923,9 @@ def applied(
                 state = unroll.optimized(
                     state,
                     where,
-                    optimize=lambda candidate: fixed(
-                        scalarized(candidate, f"{prefix}candidate-unroll"),
+                    optimize=lambda candidate: structural_candidate(
+                        candidate,
+                        stage=f"{prefix}candidate-unroll",
                         prefix=f"{prefix}candidate-unroll-",
                     ),
                     watch=(None if watch is None else lambda stage, candidate: watch(f"{prefix}{stage}", candidate)),
@@ -2940,13 +2942,52 @@ def applied(
             history.append(state)
         raise RuntimeError(f"MIR optimization did not converge after {limit} size-scaled rounds")
 
+    def structural_candidate(
+        candidate: MirBody,
+        *,
+        stage: str,
+        prefix: str,
+        consider_unroll: bool = False,
+    ) -> MirBody:
+        """Settle newly exact aggregate leaves before pricing a CFG clone.
+
+        Structural cloning crosses SROA before scalar convergence.  That
+        convergence can itself make indexed accesses singleton leaves, so a
+        second boundary is part of the same candidate transaction.  Only
+        scalar MIR reconverges after that boundary: a further structural
+        choice belongs to the next independently priced transaction.
+        """
+        state = fixed(
+            scalarized(candidate, stage),
+            consider_unroll=consider_unroll,
+            prefix=prefix,
+        )
+        scalar = scalarized(state, f"{stage}-settled")
+        if scalar == state:
+            return state
+        # The unscalarized side already pays for each explicit aggregate
+        # load/store.  Charging its address and stored values as full-lived
+        # register residents as well counted the same memory representation
+        # twice (matmul: estimated 8,815 versus 3,396 after allocation).
+        # Once SROA removes those homes, however, every retained SSA leaf has
+        # to fit the finite register file or be recreated in a spill slot.
+        before = profit.weighted(state, where.costs)
+        settled = fixed(scalar, prefix=f"{prefix}settled-")
+        after = profit.pressure_adjusted(settled, where.costs, where.registers)
+        if before is not None and after is not None and after > before:
+            if watch is not None:
+                watch(f"{stage}-settled-rejected-pressure", settled)
+            return state
+        return settled
+
     body = fixed(body, consider_unroll=bool(unrollers))
     if peelers:
         body = peel.optimized(
             body,
             where,
-            optimize=lambda candidate: fixed(
-                scalarized(candidate, "candidate-peel"),
+            optimize=lambda candidate: structural_candidate(
+                candidate,
+                stage="candidate-peel",
                 consider_unroll=bool(unrollers),
                 prefix="candidate-peel-",
             ),

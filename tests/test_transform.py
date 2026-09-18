@@ -481,8 +481,8 @@ def test_sroa_runs_once_before_the_scalar_fixed_point(monkeypatch: pytest.Monkey
     assert calls == 1
 
 
-def test_sroa_reruns_once_after_structural_specialization(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Matmul exposed 64 constant aggregate leaves only after exact-loop peeling."""
+def test_sroa_crosses_both_structural_candidate_boundaries(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Matmul exposed aggregate leaves both at cloning and after scalar convergence."""
     from dataclasses import replace
 
     from qbopt.model.passes import Where
@@ -508,7 +508,104 @@ def test_sroa_reruns_once_after_structural_specialization(monkeypatch: pytest.Mo
     result = transform.applied(body, frozenset(), {})
 
     assert result.cloned
-    assert seen == [False, True]
+    assert seen == [False, True, True]
+
+
+def test_structural_profitability_prices_leaves_exposed_by_scalar_convergence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Matmul's cloned loop made aggregate indexes exact during its scalar
+    fixed point, after the candidate's first SROA boundary.
+
+    Accepting that candidate and only then rerunning SROA priced one body but
+    committed a different one: the retained row loop became slower than the
+    fully expanded baseline.  The transaction must scalarize the newly exact
+    leaves and reconverge scalar MIR before structural profitability sees it.
+    """
+    from dataclasses import replace
+
+    from qbopt.model.passes import Where
+    from qbopt.optimize import peel
+    from qbopt.optimize import promote
+
+    seen = []
+    scalarizer = promote.Sroa(Where())
+    structural = peel.Peel(Where())
+
+    class ExposeLeaves:
+        name = "expose_leaves"
+
+        def transform(self, body: mir.MirBody) -> mir.MirBody:
+            if body.cloned and not body.repetitions:
+                return replace(body, repetitions=((1, 1),))
+            return body
+
+    def sroa(body: mir.MirBody) -> mir.MirBody:
+        seen.append((body.cloned, bool(body.repetitions)))
+        return replace(body, sealed=True) if body.cloned and body.repetitions else body
+
+    def specialized(body, _where, *, optimize, watch=None):
+        return optimize(replace(body, cloned=True))
+
+    monkeypatch.setattr(scalarizer, "transform", sroa)
+    monkeypatch.setattr(peel, "optimized", specialized)
+    monkeypatch.setattr(transform, "pipeline", lambda *_args, **_kwargs: [scalarizer, ExposeLeaves(), structural])
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (), ()),))
+
+    result = transform.applied(body, frozenset(), {})
+
+    assert result.sealed
+    assert seen == [(False, False), (True, False), (True, True)]
+
+
+def test_structural_candidate_refuses_a_pressure_regression_after_settled_sroa(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Matmul's second SROA boundary removed semantic work but cost 1,407
+    weighted 386 cycles after its independent scalar leaves were allocated.
+
+    Price the settled aggregate replacement against the already-converged
+    representation of the same structural candidate, so loop savings cannot
+    hide a local scalarization loss.
+    """
+    from dataclasses import replace
+
+    from qbopt.model.passes import Where
+    from qbopt.optimize import peel
+    from qbopt.optimize import profit
+    from qbopt.optimize import promote
+
+    scalarizer = promote.Sroa(Where())
+    structural = peel.Peel(Where())
+
+    class ExposeLeaves:
+        name = "expose_leaves"
+
+        def transform(self, body: mir.MirBody) -> mir.MirBody:
+            if body.cloned and not body.repetitions:
+                return replace(body, repetitions=((1, 1),))
+            return body
+
+    def sroa(body: mir.MirBody) -> mir.MirBody:
+        return replace(body, sealed=True) if body.cloned and body.repetitions else body
+
+    def specialized(body, _where, *, optimize, watch=None):
+        return optimize(replace(body, cloned=True))
+
+    def cost(body: mir.MirBody, *_args, **_kwargs) -> int:
+        return 2 if body.sealed else 1
+
+    monkeypatch.setattr(scalarizer, "transform", sroa)
+    monkeypatch.setattr(peel, "optimized", specialized)
+    monkeypatch.setattr(profit, "pressure_adjusted", cost)
+    monkeypatch.setattr(transform, "pipeline", lambda *_args, **_kwargs: [scalarizer, ExposeLeaves(), structural])
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (), ()),))
+
+    result = transform.applied(body, frozenset(), {})
+
+    assert result.cloned
+    assert result.repetitions
+    assert not result.sealed
 
 
 def test_the_rename_alone_is_what_was_unsound() -> None:
