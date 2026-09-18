@@ -20,11 +20,11 @@ is covered. Unknown and overlapping writes still invalidate the cell facts.
 Phi inputs and memory facts meet on agreement across incoming paths.
 """
 
+from dataclasses import replace
+from dataclasses import dataclass
+from contextvars import ContextVar
 from collections.abc import Iterator
 from contextlib import contextmanager
-from contextvars import ContextVar
-from dataclasses import dataclass
-from dataclasses import replace
 
 from qbopt.model import ir
 from qbopt.model import mir

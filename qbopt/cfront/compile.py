@@ -12,8 +12,8 @@ import os
 import argparse
 import tempfile
 import subprocess
-from dataclasses import replace
 from pathlib import Path
+from dataclasses import replace
 from collections.abc import Callable
 from collections.abc import Iterator
 
@@ -33,8 +33,8 @@ from qbopt.cfront import raise_hir
 from qbopt.backend import machinedce
 from qbopt.backend import lower_int64
 from qbopt.backend import cpu as targets
-from qbopt.backend import frame as frames
 from qbopt.objectfile.module import Addr
+from qbopt.backend import frame as frames
 from qbopt.objectfile.module import Space
 
 WCCQ = Path(__file__).resolve().parents[2] / "owshim" / "bin" / "wccq"

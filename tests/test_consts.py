@@ -22,12 +22,22 @@ def test_pointer_displacement_constants_preserve_order_and_width(width):
     """NDMAX's zero displacement should fold without interpreting its base as an integer offset."""
     pointer, displacement, result = (mir.Value(index, 0) for index in (990, 991, 992))
     args = (mir.Held(pointer, 4), mir.Held(displacement, 4))
-    op = mir.Op(0, ir.Operation.NOTHING, "", (result,), (pointer, displacement),
-                kind=mir.Kind.PTR_OFFSET, args=args, results=(mir.Held(result, 4),))
-    changed = transform._constant_operands(op, {
-        pointer: consts.Known(0x12340000, 4), displacement: consts.Known(0, width)})
+    op = mir.Op(
+        0,
+        ir.Operation.NOTHING,
+        "",
+        (result,),
+        (pointer, displacement),
+        kind=mir.Kind.PTR_OFFSET,
+        args=args,
+        results=(mir.Held(result, 4),),
+    )
+    changed = transform._constant_operands(
+        op, {pointer: consts.Known(0x12340000, 4), displacement: consts.Known(0, width)}
+    )
     assert changed.args == (args[0], mir.Const(0, 4) if width == 4 else args[1])
     assert pointer in changed.uses
+
 
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 
@@ -123,12 +133,21 @@ def test_constant_analysis_scope_reuses_an_unchanged_body_without_sharing_mutati
 def test_signed_widening_produces_a_whole_long_constant(number):
     """ADDRM's explicit word-to-long conversion could not fold even with a known input."""
     source, result = mir.Value(1, 0), mir.Value(2, 0)
-    op = mir.Op(0, ir.Operation.EXTEND, "", (result,), (source,),
-                kind=mir.Kind.SIGN_EXTEND, args=(mir.Held(source, 2),), results=(mir.Held(result, 4),))
-    expected = ((number ^ 0x8000) - 0x8000) & 0xffffffff
+    op = mir.Op(
+        0,
+        ir.Operation.EXTEND,
+        "",
+        (result,),
+        (source,),
+        kind=mir.Kind.SIGN_EXTEND,
+        args=(mir.Held(source, 2),),
+        results=(mir.Held(result, 4),),
+    )
+    expected = ((number ^ 0x8000) - 0x8000) & 0xFFFFFFFF
     assert consts._result(op, {source: consts.Known(number, 2)}) == consts.Known(expected, 4)
     assert consts._result(op, {source: consts.Known(number, 1)}) is None
     from dataclasses import replace
+
     literal = replace(op, args=(mir.Const(number, 2),), uses=())
     body = mir.MirBody(0, (mir.MirBlock(0, (), (literal,), ()),))
     folded = transform.folded(body, frozenset(), {})
@@ -181,13 +200,20 @@ def test_extension_of_a_known_memory_cell_folds_to_the_extended_value() -> None:
     assert consts._result(op, {}, here={(ref.addr, 1): consts.Known(0xF1, 1)}) == consts.Known(0xF1, 4)
 
 
-@pytest.mark.parametrize(("high", "low", "answer"), [(4, 0, 262144), (0, 512, 512), (-1, -1, 0xffffffff)])
+@pytest.mark.parametrize(("high", "low", "answer"), [(4, 0, 262144), (0, 512, 512), (-1, -1, 0xFFFFFFFF)])
 def test_recovered_argument_constants(high: int, low: int, answer: int) -> None:
     """Nbody kept its 262144 and 512 divisors hidden behind recovered word copies."""
     upper, bottom, result = (mir.Value(index, 0) for index in range(1, 4))
-    op = mir.Op(0, mir.Synth.CONCAT_LOW, "concat", (result,), (upper, bottom),
-                kind=mir.Kind.CONCAT, args=(mir.Held(upper, 2), mir.Held(bottom, 2)),
-                results=(mir.Held(result, 4),))
+    op = mir.Op(
+        0,
+        mir.Synth.CONCAT_LOW,
+        "concat",
+        (result,),
+        (upper, bottom),
+        kind=mir.Kind.CONCAT,
+        args=(mir.Held(upper, 2), mir.Held(bottom, 2)),
+        results=(mir.Held(result, 4),),
+    )
     facts = {upper: consts.Known(high, 2), bottom: consts.Known(low, 2)}
     assert consts._result(op, facts) == consts.Known(answer, 4)
     facts[upper] = consts.Known(high, 1)
@@ -214,9 +240,15 @@ def test_folded_extraction_has_no_implicit_machine_result() -> None:
     folded = transform.folded(body, found.dgroup, found.calls)
     folded = transform.folded(folded, found.dgroup, found.calls)
     extracts = {op.results[0].value for block in body.blocks for op in block.ops if op.kind is mir.Kind.EXTRACT}
-    copies = [op for block in folded.blocks for op in block.ops
-              if op.kind is mir.Kind.COPY and op.results and op.results[0].value in extracts
-              and isinstance(op.args[0], mir.Const)]
+    copies = [
+        op
+        for block in folded.blocks
+        for op in block.ops
+        if op.kind is mir.Kind.COPY
+        and op.results
+        and op.results[0].value in extracts
+        and isinstance(op.args[0], mir.Const)
+    ]
     assert copies
     lowering = lower.Lowering(folded, {value.id for value in extracts}, {}, ())
     for op in copies:
@@ -280,8 +312,14 @@ def test_constant_subtraction_preserves_operand_order(constant_first: bool, same
     if constant_first:
         args = args[::-1]
     op = mir.Op(
-        1, ir.Operation.COMPARE, "cmp", (result,), tuple(dict.fromkeys((source, bound))),
-        kind=mir.Kind.SUB, args=args, results=(),
+        1,
+        ir.Operation.COMPARE,
+        "cmp",
+        (result,),
+        tuple(dict.fromkeys((source, bound))),
+        kind=mir.Kind.SUB,
+        args=args,
+        results=(),
     )
     changed = transform._constant_operands(op, {bound: consts.Known(5, 2)})
     expected = (args[0], mir.Const(5, 2)) if not constant_first or same else args
@@ -295,8 +333,15 @@ def test_constant_operand_keeps_its_memory_address_dependency(address_part: str)
     pointer, result = mir.Value(920, 0), mir.Value(921, 1)
     ref = mir.MemRef(None, 2, **{address_part: pointer})
     op = mir.Op(
-        1, ir.Operation.BINARY, "sub", (result,), (pointer,), kind=mir.Kind.SUB,
-        args=(mir.Cell(ref), mir.Held(pointer, 2)), results=(mir.Held(result, 2),), loads=(ref,),
+        1,
+        ir.Operation.BINARY,
+        "sub",
+        (result,),
+        (pointer,),
+        kind=mir.Kind.SUB,
+        args=(mir.Cell(ref), mir.Held(pointer, 2)),
+        results=(mir.Held(result, 2),),
+        loads=(ref,),
     )
     changed = transform._constant_operands(op, {pointer: consts.Known(16, 2)})
     assert changed.args == (mir.Cell(ref), mir.Const(16, 2))

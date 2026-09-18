@@ -51,16 +51,17 @@ def expanded(
         exits = set(header.succ) - loop.body
         if len(outside) != 1 or len(exits) != 1 or latch.phis:
             continue
-        entry, = outside
-        exit_at, = exits
-        if (set(predecessors[exit_at]) != {header.at}
-            or any(set(phi.incoming) != {header.at} for phi in blocks[exit_at].phis)):
+        (entry,) = outside
+        (exit_at,) = exits
+        if set(predecessors[exit_at]) != {header.at} or any(
+            set(phi.incoming) != {header.at} for phi in blocks[exit_at].phis
+        ):
             continue
         bridges = [blocks[at] for at in loop.body if at not in (header.at, latch.at)]
         if any(block.phis or len(block.succ) != 1 for block in bridges):
             continue
         path = []
-        at, = set(header.succ) & loop.body
+        (at,) = set(header.succ) & loop.body
         while at != latch.at and at not in path:
             path.append(at)
             at = blocks[at].succ[0]
@@ -88,10 +89,19 @@ def expanded(
         invalid_latch = (
             any(op.barrier or op.kind in (mir.Kind.OPAQUE, mir.Kind.BRANCH, mir.Kind.JUMP) for op in repeated_ops)
             if floating_loop
-            else any(op.barrier or op.kind in (
-                mir.Kind.OPAQUE, mir.Kind.CALL, mir.Kind.RETURN,
-                mir.Kind.BRANCH, mir.Kind.JUMP, mir.Kind.SWITCH,
-            ) for op in repeated_ops)
+            else any(
+                op.barrier
+                or op.kind
+                in (
+                    mir.Kind.OPAQUE,
+                    mir.Kind.CALL,
+                    mir.Kind.RETURN,
+                    mir.Kind.BRANCH,
+                    mir.Kind.JUMP,
+                    mir.Kind.SWITCH,
+                )
+                for op in repeated_ops
+            )
         )
         if invalid_latch:
             continue
@@ -102,13 +112,30 @@ def expanded(
         # may be repeated there.  A new integer expansion accepts any pure
         # value computation and refuses observable memory/control effects.
         invalid_header = (
-            any(op.kind not in (mir.Kind.NOTHING, mir.Kind.STORE, mir.Kind.SUB, mir.Kind.BRANCH)
-                or op.barrier or op.floating for op in header.ops)
+            any(
+                op.kind not in (mir.Kind.NOTHING, mir.Kind.STORE, mir.Kind.SUB, mir.Kind.BRANCH)
+                or op.barrier
+                or op.floating
+                for op in header.ops
+            )
             if floating_loop
-            else any(op.barrier or op.stores or op.kind in (
-                mir.Kind.OPAQUE, mir.Kind.CALL, mir.Kind.RETURN, mir.Kind.BRANCH,
-                mir.Kind.JUMP, mir.Kind.SWITCH, mir.Kind.ARG, mir.Kind.RESULT, mir.Kind.ESCAPE,
-            ) for op in header.ops[:-1])
+            else any(
+                op.barrier
+                or op.stores
+                or op.kind
+                in (
+                    mir.Kind.OPAQUE,
+                    mir.Kind.CALL,
+                    mir.Kind.RETURN,
+                    mir.Kind.BRANCH,
+                    mir.Kind.JUMP,
+                    mir.Kind.SWITCH,
+                    mir.Kind.ARG,
+                    mir.Kind.RESULT,
+                    mir.Kind.ESCAPE,
+                )
+                for op in header.ops[:-1]
+            )
         )
         if invalid_header:
             continue
@@ -127,8 +154,13 @@ def expanded(
         candidate = _expanded(body, loop, header, latch, bridge_ops, latch_ops, exit_at, entry, count)
         if count > 4 and floating_loop:
             exact = floatfacts.known(candidate, dgroup, calls)
-            results = [arg.value for op in candidate.block(latch.at).ops if op.floating
-                       for arg in op.results if isinstance(arg, mir.Held) and arg.width == 10]
+            results = [
+                arg.value
+                for op in candidate.block(latch.at).ops
+                if op.floating
+                for arg in op.results
+                if isinstance(arg, mir.Held) and arg.width == 10
+            ]
             if not results or any(value not in exact for value in results):
                 continue
         return candidate
@@ -165,11 +197,7 @@ def _rejection(
     """
     if len(loops.loops(after.blocks, after.entry)) >= len(loops.loops(before.blocks, before.entry)):
         return "residual-loops"
-    if (
-        where.max_unroll_iterations
-        and count > where.max_unroll_iterations
-        and _size(after) > _size(before)
-    ):
+    if where.max_unroll_iterations and count > where.max_unroll_iterations and _size(after) > _size(before):
         # A large exact loop may still be an excellent constant-folding
         # vehicle: allow it when scalar optimization erases all expansion
         # growth. Otherwise obey the target's complete-peel budget before an
@@ -246,11 +274,18 @@ def _expanded(body, loop, header, latch, bridge_ops, latch_ops, exit_at, entry, 
             defined[value.id] = fresh
         copies.append(defined)
         swap.update(defined)
-        results = tuple(replace(arg, value=defined.get(arg.value.id, arg.value))
-                        if isinstance(arg, mir.Held) else arg for arg in read.results)
-        return replace(read, defines=tuple(defined[value.id] for value in op.defines), results=results,
-                       absorbed=op.absorbed if owns else (), raised=None,
-                       symbol=op.symbol if owns else op.symbol is not False)
+        results = tuple(
+            replace(arg, value=defined.get(arg.value.id, arg.value)) if isinstance(arg, mir.Held) else arg
+            for arg in read.results
+        )
+        return replace(
+            read,
+            defines=tuple(defined[value.id] for value in op.defines),
+            results=results,
+            absorbed=op.absorbed if owns else (),
+            raised=None,
+            symbol=op.symbol if owns else op.symbol is not False,
+        )
 
     expanded = []
     for iteration in range(count):
@@ -262,10 +297,27 @@ def _expanded(body, loop, header, latch, bridge_ops, latch_ops, exit_at, entry, 
         swap.update(carried)
     expanded.extend(clone(op, False) for op in header.ops[:-1])
     anchor = latch.ops[-1].at
-    expanded.append(replace(header.ops[-1], at=anchor, kind=mir.Kind.JUMP, name="",
-                            args=(), results=(), uses=(), defines=(), loads=(), stores=(),
-                            merges={}, source_backed=False, raised=((), ()), absorbed=(),
-                            target=exit_at, test=None, symbol=False))
+    expanded.append(
+        replace(
+            header.ops[-1],
+            at=anchor,
+            kind=mir.Kind.JUMP,
+            name="",
+            args=(),
+            results=(),
+            uses=(),
+            defines=(),
+            loads=(),
+            stores=(),
+            merges={},
+            source_backed=False,
+            raised=((), ()),
+            absorbed=(),
+            target=exit_at,
+            test=None,
+            symbol=False,
+        )
+    )
     changed = []
     dominators = loops.dominators(body.blocks, body.entry)
     for block in body.blocks:
@@ -285,19 +337,34 @@ def _expanded(body, loop, header, latch, bridge_ops, latch_ops, exit_at, entry, 
             # it.  An enclosing loop's header is not dominated by this exit,
             # but its backedge predecessor can be; substitute precisely those
             # edge uses. Ordinary operations still require block dominance.
-            phis = tuple(replace(phi, incoming={
-                at: ssa.provider(value, swap) if exit_at in dominators.get(at, ()) else value
-                for at, value in phi.incoming.items()
-            }) for phi in block.phis)
+            phis = tuple(
+                replace(
+                    phi,
+                    incoming={
+                        at: ssa.provider(value, swap) if exit_at in dominators.get(at, ()) else value
+                        for at, value in phi.incoming.items()
+                    },
+                )
+                for phi in block.phis
+            )
             if block.at == exit_at:
                 # The entry test still owns its exit edge until branch folding.
                 # The expanded latch reaches the exit with the final iteration.
-                phis = tuple(replace(phi, incoming={
-                    header.at: ssa.provider(phi.incoming[header.at], initial),
-                    latch.at: ssa.provider(phi.incoming[header.at], swap),
-                }) for phi in block.phis)
-            ops = (tuple(ssa.substituted(op, swap) for op in block.ops)
-                   if exit_at in dominators.get(block.at, ()) else block.ops)
+                phis = tuple(
+                    replace(
+                        phi,
+                        incoming={
+                            header.at: ssa.provider(phi.incoming[header.at], initial),
+                            latch.at: ssa.provider(phi.incoming[header.at], swap),
+                        },
+                    )
+                    for phi in block.phis
+                )
+            ops = (
+                tuple(ssa.substituted(op, swap) for op in block.ops)
+                if exit_at in dominators.get(block.at, ())
+                else block.ops
+            )
             block = replace(block, ops=ops, phis=phis)
         changed.append(block)
     pointer_values, pointer_seeds = ssa.cloned_pointer_metadata(body, iter(copies))

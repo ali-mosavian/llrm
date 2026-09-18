@@ -117,15 +117,16 @@ def test_peel_bounds_conditional_floating_clone_work(monkeypatch) -> None:
     """
     from dataclasses import replace
 
-    from qbopt.analysis import induction
-    from qbopt.model import ir
-    from qbopt.model.floating import Format
-    from qbopt.model.floating import Precision
-    from qbopt.model.floating import Rounding
-    from qbopt.model.floating import Semantics
-    from qbopt.optimize import loopclone
-    from qbopt.optimize import peel
     from test_loopclone import diamond
+
+    from qbopt.model import ir
+    from qbopt.optimize import peel
+    from qbopt.analysis import induction
+    from qbopt.optimize import loopclone
+    from qbopt.model.floating import Format
+    from qbopt.model.floating import Rounding
+    from qbopt.model.floating import Precision
+    from qbopt.model.floating import Semantics
 
     body, _ = diamond()
     work = body.block(3)
@@ -241,11 +242,22 @@ def test_dead_inserted_store_needs_no_neighbor_to_take_its_bytes(checkpoint):
     from qbopt.model import ir
     from qbopt.objectfile.module import Addr
     from qbopt.objectfile.module import Space
+
     cell = mir.MemRef(Addr(Space.SEGMENT, 0, 5), 4)
+
     def store(at, value):
-        return mir.Op(at, ir.Operation.MOVE, "", (), (), kind=mir.Kind.STORE,
-                      args=(mir.Const(value, 4),), results=(mir.Cell(cell),),
-                      stores=(cell,))
+        return mir.Op(
+            at,
+            ir.Operation.MOVE,
+            "",
+            (),
+            (),
+            kind=mir.Kind.STORE,
+            args=(mir.Const(value, 4),),
+            results=(mir.Cell(cell),),
+            stores=(cell,),
+        )
+
     first, last = store(10, 1), store(20, 2)
     middle = (mir.Op(15, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.FCHECK),) if checkpoint else ()
     body = mir.MirBody(0, (mir.MirBlock(0, (), (first, *middle, last), ()),))
@@ -273,6 +285,7 @@ def body():
 def test_production_fpdeep_unrolls_through_lcssa_exits(tag):
     """PDS/VBDOS FPDEEP retained three iterations because its LCSSA exit phis blocked unrolling."""
     from tools.stages import _bodies
+
     found, bodies, _ = _bodies(Path(f"fixtures/omf/fpdeep-{tag}.obj").read_bytes())
     partition = corpus.partitioned(Path(f"fixtures/omf/fpdeep-{tag}.obj"))
     original = transform.applied(
@@ -285,8 +298,8 @@ def test_production_fpdeep_unrolls_through_lcssa_exits(tag):
         peel_=False,
         unroll_=False,
     )
-    loop, = loops.loops(original.blocks, original.entry)
-    exit_at, = set(original.block(loop.header).succ) - loop.body
+    (loop,) = loops.loops(original.blocks, original.entry)
+    (exit_at,) = set(original.block(loop.header).succ) - loop.body
     assert original.block(exit_at).phis
     changed = unroll.expanded(original, found.dgroup, found.calls)
     assert changed is not original
@@ -320,9 +333,13 @@ def test_fpcse_exact_ten_iteration_sum_folds_in_source_order():
     assert not loops.loops(changed.blocks, changed.entry)
     assert not any(op.floating for block in changed.blocks for op in block.ops)
     import struct
+
     bits = int.from_bytes(struct.pack("<f", 487.5), "little")
-    assert any(op.kind is mir.Kind.STORE and op.at == 0xa1 and op.args == (mir.Const(bits, 4),)
-               for block in changed.blocks for op in block.ops)
+    assert any(
+        op.kind is mir.Kind.STORE and op.at == 0xA1 and op.args == (mir.Const(bits, 4),)
+        for block in changed.blocks
+        for op in block.ops
+    )
     lower_floats.checked(changed)
 
 
@@ -338,7 +355,7 @@ def test_runtime_input_loop_is_not_expanded_without_exact_folding():
 
 def test_fpdeep_unroll_preserves_order_and_fresh_definitions():
     found, original = body()
-    loop, = loops.loops(original.blocks, original.entry)
+    (loop,) = loops.loops(original.blocks, original.entry)
     latch = original.block(next(iter(loop.latches)))
     changed = unroll.expanded(original, found.dgroup, found.calls)
     assert not loops.loops(changed.blocks, changed.entry)
@@ -353,7 +370,7 @@ def test_fpdeep_unroll_preserves_order_and_fresh_definitions():
 def test_unrolled_latch_explicitly_skips_the_original_header():
     """FPDEEP fell through to its original header and started the expanded body again."""
     found, original = body()
-    loop, = loops.loops(original.blocks, original.entry)
+    (loop,) = loops.loops(original.blocks, original.entry)
     changed = unroll.expanded(original, found.dgroup, found.calls)
     latch = changed.block(next(iter(loop.latches)))
     assert latch.ops[-1].kind is mir.Kind.JUMP
@@ -366,9 +383,13 @@ def test_fpdeep_expansion_exposes_exact_array_arithmetic():
     found, original = body()
     changed = unroll.expanded(original, found.dgroup, found.calls)
     facts = floatfacts.known(changed, found.dgroup, found.calls)
-    for address, expected in ((0x9c, [144, 784, 3600]), (0xe4, [6, 14, 30])):
-        values = [facts.get(op.args[0].value) for block in changed.blocks for op in block.ops
-                  if op.at == address and op.kind is mir.Kind.FSTORE and not op.stores]
+    for address, expected in ((0x9C, [144, 784, 3600]), (0xE4, [6, 14, 30])):
+        values = [
+            facts.get(op.args[0].value)
+            for block in changed.blocks
+            for op in block.ops
+            if op.at == address and op.kind is mir.Kind.FSTORE and not op.stores
+        ]
         assert all(value is not None for value in values)
         assert [value.value for value in values] == expected
 
@@ -377,15 +398,19 @@ def test_fpdeep_exact_integer_arguments_keep_floating_checkpoints(monkeypatch):
     """FPDEEP kept reading converted square/ratio temporaries instead of known answers."""
     found, original = body()
     from qbopt.optimize import floatfold
+
     monkeypatch.setattr(floatfold, "stored", lambda body, facts: body)
     expanded = unroll.expanded(original, found.dgroup, found.calls)
     converted = floatfacts.converted(expanded, found.dgroup, found.calls)
     assert {6, 14, 30, 144, 784, 3600} <= {value.n for value in converted.values()}
     folded = transform.folded(expanded, found.dgroup, found.calls)
     lower_floats.checked(folded)
-    arguments = [op.args[0].n for block in folded.blocks for op in block.ops
-                 if op.kind is mir.Kind.ARG and op.at in (0xa1, 0xe9)
-                 and isinstance(op.args[0], mir.Const)]
+    arguments = [
+        op.args[0].n
+        for block in folded.blocks
+        for op in block.ops
+        if op.kind is mir.Kind.ARG and op.at in (0xA1, 0xE9) and isinstance(op.args[0], mir.Const)
+    ]
     assert arguments == [144, 6, 784, 14, 3600, 30]
     for block in folded.blocks:
         for op in block.ops:
@@ -398,30 +423,36 @@ def test_fpdeep_exact_stores_remove_their_arithmetic_chains():
     from fractions import Fraction
 
     from qbopt.model.floating import Format
+
     found, original = body()
     expanded = unroll.expanded(original, found.dgroup, found.calls)
     folded = transform.folded(expanded, found.dgroup, found.calls)
-    values = [floatfacts.decoded(op.args[0].n, Format.BINARY32).value
-              for block in folded.blocks for op in block.ops
-              if op.kind is mir.Kind.STORE and op.at in (0x77, 0xbf, 0x107)]
+    values = [
+        floatfacts.decoded(op.args[0].n, Format.BINARY32).value
+        for block in folded.blocks
+        for op in block.ops
+        if op.kind is mir.Kind.STORE and op.at in (0x77, 0xBF, 0x107)
+    ]
     assert values == [144, 6, Fraction(1, 2), 784, 14, Fraction(3, 4), 3600, 30, Fraction(7, 8)]
     calls = lambda body: [op for block in body.blocks for op in block.ops if op.kind is mir.Kind.CALL]
     assert calls(expanded) == calls(folded)
     lower_floats.checked(folded)
 
 
-@pytest.mark.parametrize("number,expected", [(-6, 0xfffffffa), (2147483647, 2147483647),
-                                             (2147483648, None), ("1/3", None)])
+@pytest.mark.parametrize(
+    "number,expected", [(-6, 0xFFFFFFFA), (2147483647, 2147483647), (2147483648, None), ("1/3", None)]
+)
 def test_integer_conversion_facts_require_exact_in_range_values(monkeypatch, number, expected):
     """FPDEEP's conversion facts must not invent a rounded or overflowing print argument."""
     from fractions import Fraction
     from dataclasses import replace
+
     found, original = body()
-    op = next(op for block in original.blocks for op in block.ops
-              if op.kind is mir.Kind.FSTORE and op.at == 0x9c)
+    op = next(op for block in original.blocks for op in block.ops if op.kind is mir.Kind.FSTORE and op.at == 0x9C)
     isolated = replace(original, blocks=(mir.MirBlock(original.entry, (), (op,), ()),))
-    monkeypatch.setattr(floatfacts, "known", lambda *args, **kwargs:
-                        {op.args[0].value: floatfacts.Finite(Fraction(number))})
+    monkeypatch.setattr(
+        floatfacts, "known", lambda *args, **kwargs: {op.args[0].value: floatfacts.Finite(Fraction(number))}
+    )
     facts = floatfacts.converted(isolated, found.dgroup, found.calls)
     assert (facts[op.results[0].value].n if facts else None) == expected
 
@@ -429,20 +460,26 @@ def test_integer_conversion_facts_require_exact_in_range_values(monkeypatch, num
 @pytest.mark.parametrize("damage", ["duplicate"])
 def test_expansion_provenance_does_not_allow_arbitrary_float_sequences(damage):
     from dataclasses import replace
+
     found, original = body()
     changed = unroll.expanded(original, found.dgroup, found.calls)
     at, count = changed.repetitions[0]
     block = changed.block(at)
     positions = [index for index, op in enumerate(block.ops) if op.floating]
     match damage:
-        case "count": changed = replace(changed, repetitions=((at, count - 1),))
-        case "duplicate": changed = replace(changed, repetitions=changed.repetitions * 2)
+        case "count":
+            changed = replace(changed, repetitions=((at, count - 1),))
+        case "duplicate":
+            changed = replace(changed, repetitions=changed.repetitions * 2)
         case _:
             ops = list(block.ops)
             first, second = positions[:2]
-            if damage == "missing": del ops[first]
-            else: ops[first], ops[second] = ops[second], ops[first]
-            changed = replace(changed, blocks=tuple(replace(one, ops=tuple(ops)) if one.at == at else one
-                                                   for one in changed.blocks))
+            if damage == "missing":
+                del ops[first]
+            else:
+                ops[first], ops[second] = ops[second], ops[first]
+            changed = replace(
+                changed, blocks=tuple(replace(one, ops=tuple(ops)) if one.at == at else one for one in changed.blocks)
+            )
     with pytest.raises(lower.Unlowered):
         lower_floats.checked(changed)
