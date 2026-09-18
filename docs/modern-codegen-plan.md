@@ -30,6 +30,34 @@ iteration updates this file in the same commit.
 
 ## Iteration log
 
+### 83. Refreshed compact far-load quality evidence — 2026-09-18
+
+The current 386 quality report for `fixtures/c/farloadloop.c` is pinned to
+`b510ab4`, source SHA-256
+`db481a6d48836c17a464a313401e8fe9486a7b370a08c852d331cdf999fd61d8`.
+`_mark` emits 75 bytes / 30 raw instructions / weighted cost 141.  After the
+report's ABI boilerplate normalization, qbopt has 22 instructions, 13 loads,
+6 stores and two branches.  Clang 21 has 21/8/1/2; installed i686 GCC 16.2
+has 33/12/5/2.  The dynamic ratios are correctly withheld because the loop
+weight remains a profile-free heuristic rather than an execution trace.
+
+The raw listings explain the qualified result.  Both flat references are
+best-case structural evidence only: their SIB addressing, 32-bit pointers,
+flat frame and no segment loads cannot be adopted by the medium-model target.
+The matching target concern is instead qbopt's carried scaled offset and
+shifted face falling into frame slots.  The report attributes the excess
+loads/stores against both references first to `lir-regalloc`; it attributes
+the small Clang instruction excess first to `lir-phielim`.  It reports no
+branch/call excess and does not manufacture a hard target.
+
+This is Phase 1 measurement evidence for the existing joint role-plan work,
+not a performance claim or a source-specific allocator rule.  The next
+implementation must price and compare complete legal medium-model allocations
+for an induction counter, shift/byte temporary, far base and index—not copy a
+flat compiler's register spelling.  GCC/LLVM remain best-case listing
+references; BCC/WC remains the hard authority for ABI, segments, legal
+addresses and any registered target.
+
 ### 82. Pentium LEA pairing audit correction — 2026-09-18
 
 The first frame-LEA scheduling increment classified every LEA as P5 U-only.
