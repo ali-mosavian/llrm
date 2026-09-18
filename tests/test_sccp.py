@@ -113,6 +113,68 @@ def test_runtime_condition_preserves_both_phi_inputs():
     assert next(block for block in result.blocks if block.at == 30).succ == (40, 50)
 
 
+def test_pure_constant_expression_folds_on_each_phi_edge():
+    """choose kept ``phi(7, 9) + 1`` as runtime arithmetic after inlining.
+
+    The phi is not one constant, but its arithmetic result is constant on
+    every incoming edge: 8 on the first and 10 on the second.
+    """
+    body = diamond()
+    entry = body.block(0)
+    unknown = mir.Value(999, 0)
+    compare = replace(
+        entry.ops[0],
+        args=(mir.Held(unknown, 4), mir.Const(1, 4)),
+        uses=(unknown,),
+    )
+    joined = body.block(30).phis[0].result
+    answer = mir.Value(1000, 30, variable=1000, version=1)
+    add = mir.Op(
+        30,
+        ir.Operation.BINARY,
+        "add",
+        (answer,),
+        (joined,),
+        kind=mir.Kind.ADD,
+        args=(mir.Held(joined, 4), mir.Const(1, 4)),
+        results=(mir.Held(answer, 4),),
+    )
+    returned = mir.Op(
+        31,
+        ir.Operation.NOTHING,
+        "",
+        (),
+        (answer,),
+        kind=mir.Kind.RETURN,
+        args=(mir.Held(answer, 4),),
+        exits=(answer,),
+    )
+    body = replace(
+        body,
+        blocks=(
+            replace(entry, ops=(compare, entry.ops[1])),
+            body.block(10),
+            body.block(20),
+            replace(body.block(30), ops=(add, returned), succ=()),
+            body.block(40),
+            body.block(50),
+        ),
+    )
+
+    result = transform.folded(body, frozenset(), {})
+
+    assert not mir.verify(result)
+    join = result.block(30)
+    assert all(op.kind is not mir.Kind.ADD for op in join.ops)
+    folded = join.phis[-1]
+    assert folded.result == answer
+    constants = {
+        at: next(op.args[0].n for op in result.block(at).ops if folded.incoming[at] in op.defines)
+        for at in (10, 20)
+    }
+    assert constants == {10: 8, 20: 10}
+
+
 def test_nullable_pointer_parameter_keeps_both_null_test_edges():
     """Object addresses are non-null, but an incoming pointer still may be null."""
     pointer = mir.Value(1, 0, variable=1, version=1)

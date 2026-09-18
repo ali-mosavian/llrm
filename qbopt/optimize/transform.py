@@ -46,6 +46,7 @@ from qbopt.model.passes import MIRTransform
 from qbopt.model.passes import OperationCosts
 from qbopt.analysis import liveness as alive_at
 from qbopt.analysis.ssa import provider as _provider
+from qbopt.analysis.ssa import values as _ssa_values
 from qbopt.analysis.ssa import pruned_phis as _pruned_phis
 from qbopt.analysis.ssa import substituted as _substituted
 
@@ -2004,6 +2005,146 @@ def _folded_division(op: Op, numbers: tuple[int, int], wanted: set) -> tuple[Op,
     )
 
 
+_EDGE_FOLDABLE = _PURE - frozenset(
+    {
+        # A copy removes no computation.  Addresses and pointer offsets carry
+        # provenance, while division and remainder may trap.  None is a pure
+        # integer expression that this first, deliberately strict form may
+        # speculate separately on incoming edges.
+        mir.Kind.COPY,
+        mir.Kind.ADDRESS,
+        mir.Kind.PTR_OFFSET,
+        mir.Kind.DIV,
+        mir.Kind.REM,
+    }
+)
+
+
+def _folded_phi_edges(body: MirBody, facts: dict, wanted: set) -> MirBody:
+    """Fold one pure join expression independently on every incoming edge.
+
+    A phi is not itself constant when its arms differ, so ordinary SCCP quite
+    correctly leaves ``phi(7, 9) + 1`` alone.  Each use is nevertheless a
+    constant on the edge which supplies it.  Translate the expression through
+    every complete phi, evaluate it there, and join the resulting constants.
+
+    Only unconditional edges are used.  Splitting a conditional edge belongs
+    to CFG construction, and moving observable or trapping work there would
+    change the program.  One expression is handled per call so the ordinary
+    MIR fixed point and dead-code pass expose and clean up each subsequent
+    opportunity.
+    """
+    predecessors = loopy.predecessors(body.blocks)
+    by_at = {block.at: block for block in body.blocks}
+    pointer_values = set(body.pointer_values)
+    values = tuple(_ssa_values(body))
+    serial = max((value.id for value in values), default=0) + 1
+    variable = max((value.variable for value in values), default=0) + 1
+
+    for block in body.blocks:
+        parents = predecessors.get(block.at, frozenset())
+        if len(parents) < 2 or not block.phis:
+            continue
+        parent_blocks = {at: by_at.get(at) for at in parents}
+        if any(parent is None or parent.succ != (block.at,) for parent in parent_blocks.values()):
+            continue
+        # A terminal conditional with one surviving CFG successor still has
+        # path semantics which are not represented by that tuple alone.
+        if any(
+            parent.ops and parent.ops[-1].kind in (mir.Kind.BRANCH, mir.Kind.SWITCH, mir.Kind.RETURN)
+            for parent in parent_blocks.values()
+        ):
+            continue
+        phis = {phi.result: phi for phi in block.phis if set(phi.incoming) == set(parents)}
+        if not phis:
+            continue
+
+        corridor = [block]
+        seen = {block.at}
+        while len(corridor[-1].succ) == 1:
+            successor = by_at.get(corridor[-1].succ[0])
+            if (
+                successor is None
+                or successor.at in seen
+                or predecessors.get(successor.at, frozenset()) != frozenset({corridor[-1].at})
+            ):
+                break
+            corridor.append(successor)
+            seen.add(successor.at)
+
+        for operation_block in corridor:
+            for index, op in enumerate(operation_block.ops):
+                if (
+                    op.kind not in _EDGE_FOLDABLE
+                    or not mir.instruction(op)
+                    or op.barrier
+                    or op.loads
+                    or op.stores
+                    or op.floating is not None
+                    or op.stack is not None
+                    or op.merges
+                    or op.opaque_defs != frozenset()
+                    or op.opaque_uses != frozenset()
+                    or mir.partial(op)
+                ):
+                    continue
+                target = consts._defined(op)
+                results = [result for result in op.results if isinstance(result, mir.Held)]
+                if (
+                    target is None
+                    or len(results) != 1
+                    or results[0].value != target
+                    or target in pointer_values
+                    or any(value != target and value in wanted for value in op.defines)
+                ):
+                    continue
+                used = {arg.value for arg in op.args if isinstance(arg, mir.Held)}
+                if not used.intersection(phis):
+                    continue
+
+                width = results[0].width
+                numbers: dict[int, int] = {}
+                for parent in parents:
+                    swap = {result.id: phi.incoming[parent] for result, phi in phis.items()}
+                    fact = consts._result(_substituted(op, swap), facts)
+                    if fact is None or fact.width < width:
+                        break
+                    numbers[parent] = consts.masked(fact.n, width)
+                if len(numbers) != len(parents):
+                    continue
+
+                changed = dict(by_at)
+                incoming: dict[int, mir.Value] = {}
+                for offset, parent_at in enumerate(sorted(parents)):
+                    parent = parent_blocks[parent_at]
+                    edge_value = mir.Value(serial + offset, parent.at, variable=variable + offset, version=1)
+                    incoming[parent_at] = edge_value
+                    copy = mir.Op(
+                        parent.at,
+                        ir.Operation.MOVE,
+                        "mov",
+                        (edge_value,),
+                        (),
+                        kind=mir.Kind.COPY,
+                        args=(mir.Const(numbers[parent_at], width),),
+                        results=(mir.Held(edge_value, width),),
+                        source_backed=False,
+                    )
+                    ops = list(parent.ops)
+                    position = len(ops) - 1 if ops and ops[-1].kind is mir.Kind.JUMP else len(ops)
+                    ops.insert(position, copy)
+                    changed[parent_at] = replace(parent, ops=tuple(ops))
+
+                join = changed[block.at]
+                changed[block.at] = replace(join, phis=(*join.phis, mir.Phi(target, incoming)))
+                owner = changed[operation_block.at]
+                ops = list(owner.ops)
+                ops[index] = _empty_operation(op)
+                changed[operation_block.at] = replace(owner, ops=tuple(ops))
+                return replace(body, blocks=tuple(changed[one.at] for one in body.blocks))
+    return body
+
+
 def folded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirBody:
     """An operation whose result is a number, replaced by that number.
 
@@ -2066,6 +2207,7 @@ def folded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirB
     from qbopt.optimize import floatfold
 
     result = replace(body, blocks=tuple(out)) if changed else body
+    result = _folded_phi_edges(result, facts, wanted)
     # An exact exit fact describes only the path leaving a numeric loop.  It
     # may fold a successor load, but it is not permission for ordinary
     # constant folding to replace the loop's strict x87 operations and their

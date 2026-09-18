@@ -25,10 +25,63 @@ iteration updates this file in the same commit.
 | SROA and scalar promotion | partial | fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies expand into exact leaves, and structural candidates transact leaves made singleton by scalar convergence with finite-capacity pressure pricing; far, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, dying-base indexed-form unfolding, and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
 | Loop optimization | partial | exact pre/post-tested recurrences and symbolic sentinels, target-priced exact nested-recurrence rewind, complete nested-initializer LICM, dead-control countdowns with zero-trip guards, complete-affine spill/recompute pricing, precise-volatile-aware LICM, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling with bounded full-growth and machine-neutral whole-range pressure forecasting exist; versioning, partial unrolling, and constraint-complete candidate-set forecasting remain. |
-| Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs (including closed recursive SCCs in C and object paths), constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
+| Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs (including closed recursive SCCs in C and object paths), constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, post-inline constant folding through phi edges and linear corridors, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
 | Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing, dead-register frame-copy shuttles, target-priced 67h LEA selection including source-owned loaded scale/add tails and constant/register sums, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 111. Fold pure constants through phi edges — 2026-09-18
+
+The real C fixture `choose.c` reduced two private helpers to a conditional
+choice followed by one add, but ordinary SCCP correctly did not call
+`phi(7, 9)` a single constant.  The final medium-model listing therefore did
+runtime work whose answer was already known on each incoming edge:
+
+```asm
+; before                         ; after
+mov ax, 7                        mov ax, 8
+L0_16:                           L0_16:
+add ax, 1                        pop bp
+pop bp                           retf
+retf
+                                 ; other edge
+mov ax, 9                        mov ax, 10
+jmp L0_16                       jmp L0_16
+```
+
+Fold now translates one pure integer expression through every complete phi,
+evaluates it independently for each incoming value, and joins fresh constants
+at the original phi block.  It follows only a single-entry/single-exit linear
+corridor from that join; the arithmetic's inert marker stays at its original
+source position.  Every incoming edge must be unconditional.  Memory,
+volatile and opaque effects, pointer provenance, floating semantics, partial
+writes, live secondary results, division and remainder remain refused.  This
+is edge-sensitive constant propagation in MIR, not an instruction or register
+special case.
+
+The source-level fail-first regression originally observed `mov ax, 7/9;
+add ax, 1`; the focused MIR regression independently constructs the same
+diamond and verifies SSA after producing 8 and 10.  The stage dump identified
+`fold` as the first changed pass after inlining and CFG cleanup exposed the
+linear corridor.
+
+On the exact `386` candidate, `_choose` changes from 23 to 20 bytes, from 8
+to 7 ABI-normalized instructions, and from 9.5 to 8.5 frequency-weighted
+instructions.  The dynamic structural ratio improves from 1.36x to 1.21x
+against i686 GCC and from 1.90x to 1.70x against Clang.  GCC duplicates the
+small return tail and emits direct 8/10 returns; Clang if-converts the result
+to `sete; lea`.  Those remain best-case flat-i386 references: duplicating the
+medium-model frame teardown is not yet a static-size win, and a target-costed
+if-conversion mechanism has not been implemented.
+
+The candidate and both raw reference listings are in
+`build/quality/iter118-choose`; the source SHA-256 is
+`84551e148b8a0517c83840c2d800c0157b32eb425f1464fd3256a939709ab5cf`.
+The report records Apple Clang 21.0.0 and i686-elf GCC 16.2.0.  Focused
+MIR and emitted-C regressions pass (`1 passed` each, `0.24s` and `0.82s`),
+and Tier 1 passes (`236 passed`, `31 deselected`, `4.90s`).  This advances
+Phase 6's post-inline optimization without claiming a hand-audited target or
+final acceptance.
 
 ### 110. Weight memory and control traffic by CFG execution — 2026-09-18
 
