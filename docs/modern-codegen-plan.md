@@ -620,3 +620,30 @@ DX case still falls back, proving this did not turn a role preference into an
 ABI constraint.  Focused allocator checks pass in `0.06s`.  GCC/LLVM i686
 listings remain best-case structural references; BCC's medium-model listing
 continues to constrain only legal ABI/address forms, not register spelling.
+
+### 31. Constrained-reload stage trace — 2026-09-18
+
+The next fail-first-style diagnostic used the normal spill machinery on the
+unshifted face, withheld only the competing index fold, and asked for the
+otherwise legal DX counter role.  It does **not** establish a production
+candidate: allocation correctly ends with `Unplaced: value#1061 cannot be
+spilled and no register is free for it`.
+
+The adjacent LIR dumps identify why.  The existing generic direct-move fold
+already produces the desirable first half of the split: it stores the face
+once, then emits `v70 <- [face-slot]` directly before `sar v70,3`.  The
+remaining byte use is different.  It first creates a fresh `v1046 <- byte
+[face-slot]`, then passes that value through the semantic-less transfer into
+the pre-existing shift-count child `v1036`, whose actual use requires CL.
+When pressure spills that new reload, the next required child is the
+unplaceable `v1061`.
+
+The missing general phase-4 operation is therefore a **constrained reload
+fold**, not a counter rule: where a spill-cell read feeds an immediately
+following value-transfer whose destination has a fixed one-instruction use,
+materialize the legal width slice directly into that constrained child.  It
+must be proved over LIR transfer edges, register requirements, slot width and
+partial-register interference; it must not mention this loop, CL, AX, or DX.
+The corresponding regression must first reproduce the unplaceable reload,
+then assert one direct constrained load and a complete legal allocation.  No
+code-generation or performance claim is made by this diagnostic commit.
