@@ -441,3 +441,29 @@ def test_noreturn_summary_does_not_make_an_exported_body_a_private_fact():
     spin = mir.MirBody(1, (mir.MirBlock(1, (), (), (1,)),), sealed=True)
 
     assert interprocedural.noreturn_procedures({"exported": (spin, {})}, frozenset()) == frozenset()
+
+
+def test_mutually_recursive_private_terminal_bodies_are_noreturn():
+    """ipa_noreturn missed a private a→b→a cycle because neither callee started proven."""
+    call_b = mir.Op(2, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.CALL)
+    call_a = mir.Op(4, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.CALL)
+    first = mir.MirBody(1, (mir.MirBlock(1, (), (call_b,), ()),), sealed=True)
+    second = mir.MirBody(3, (mir.MirBlock(3, (), (call_a,), ()),), sealed=True)
+
+    assert interprocedural.noreturn_procedures(
+        {"first": (first, {2: "second"}), "second": (second, {4: "first"})},
+        frozenset({"first", "second"}),
+    ) == frozenset({"first", "second"})
+
+
+def test_noreturn_scc_rejects_a_member_with_a_normal_return():
+    """A private a→b edge remains returning when b can reach an actual return."""
+    call_b = mir.Op(2, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.CALL)
+    returned = mir.Op(4, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.RETURN)
+    first = mir.MirBody(1, (mir.MirBlock(1, (), (call_b,), ()),), sealed=True)
+    second = mir.MirBody(3, (mir.MirBlock(3, (), (returned,), ()),), sealed=True)
+
+    assert interprocedural.noreturn_procedures(
+        {"first": (first, {2: "second"}), "second": (second, {})},
+        frozenset({"first", "second"}),
+    ) == frozenset()

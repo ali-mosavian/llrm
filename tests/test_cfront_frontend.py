@@ -193,6 +193,17 @@ def test_private_nonreturn_call_prunes_its_unreachable_caller_tail() -> None:
     assert "ret" not in caller
 
 
+def test_private_terminal_recursion_prunes_its_callers_tail() -> None:
+    """ipa_noreturn missed a→b→a and emitted `mov ax, 9; retf` in its caller."""
+    source = Path("fixtures/c/ipa_noreturn_scc.c")
+    assembly = cfront.compiled(cfront.recorded(source, []), source.stem, optimise=True)
+    caller = assembly[assembly.index("_entersRecursiveSpin proc far") : assembly.index("_entersRecursiveSpin endp")]
+
+    assert "call _spinFirst" in caller
+    assert "mov ax, 9" not in caller
+    assert "ret" not in caller
+
+
 def test_relative_source_and_include(tmp_path, monkeypatch):
     """wccq runs in its scratch directory, where `fixtures/c/x.c` and `-I src`
     no longer resolved: E1051 unable to open."""

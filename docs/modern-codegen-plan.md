@@ -25,10 +25,38 @@ iteration updates this file in the same commit.
 | SROA and scalar promotion | partial | fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies can now expand into exact leaves, while far, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
 | Loop optimization | partial | exact pre- and post-tested recurrences, composed pointer recurrences, formula costing, specialization, rotation, peeling and exact unrolling exist; versioning and broad pressure forecasting remain. |
-| Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs, constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
+| Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs (including closed recursive SCCs), constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
 | Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 87. Closed private no-return SCCs — 2026-09-18
+
+The earlier no-return summary used a least fixed point.  That correctly found
+an independently terminal body, but missed a closed private `a → b → a`
+cycle: neither callee was initially proven, although a normal return is
+impossible through the complete SCC.  This was a real Phase 6 recursive
+summary omission, not a reason to treat GCC/LLVM's flat calling convention as
+applicable to the medium-model ABI.
+
+The summary now begins with all eligible private bodies and monotonically
+removes a body if MIR control can reach a normal return without first passing
+through a currently terminal direct private call.  The resulting greatest
+fixed point proves a closed recursive SCC only when every member has no such
+escape.  Unknown, external, exported, address-taken, or returning edges are
+not candidates and therefore make their callers returning.  The physical
+calls remain; ordinary MIR cleanup cuts only code after an established
+terminal call.
+
+The fail-first MIR regression records the former empty result for the mutual
+cycle; a companion rejects a cycle member with an actual `RETURN`.  The C
+fixture checks that `entersRecursiveSpin` keeps `call _spinFirst` but no
+longer emits `mov ax, 9; retf`.  Focused checks pass (`6 passed`, `0.22s`).
+This advances only private no-return SCC summaries: recursive IPSCCP,
+public/address-taken, indirect/external call facts, and broad global
+elimination remain unfinished.  GCC/LLVM remain best-case flat-i386 listing
+references; BCC/WC medium-model output remains the hard authority for ABI,
+segments, legal address forms, and performance targets.
 
 ### 86. Reconcile loop-rotation plan state — 2026-09-18
 

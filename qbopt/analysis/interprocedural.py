@@ -373,15 +373,17 @@ def noreturn_procedures(
     """Direct private procedures that cannot reach a normal return.
 
     This is the named-body spelling of the shared MIR control proof used by
-    the object path.  A callee joins the terminal set only after every path in
-    its body is already terminal, so mutually recursive procedures do not
-    bootstrap one another into a no-return claim.
+    the object path.  Start with all private candidates and remove a body
+    only when a normal return remains reachable.  This greatest fixed point
+    proves a closed recursive SCC terminal when every member stops through a
+    member of that same SCC; an unknown, external, public, or returning edge
+    removes its owner instead of being assumed terminal.
     """
     from qbopt.analysis import noreturn
 
-    proven: frozenset[str] = frozenset()
+    proven = frozenset(name for name in eligible if name in procedures)
     while True:
-        found = proven | frozenset(
+        found = frozenset(
             name
             for name, (body, calls) in procedures.items()
             if name in eligible
