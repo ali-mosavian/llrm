@@ -110,27 +110,30 @@ def test_pentium_orders_a_prefixed_move_before_its_uv_pair() -> None:
     assert [one.what.dests[0].register for one in result.insns] == [Register.EAX, Register.DI]
 
 
-def test_pentium_pairs_a_frame_lea_before_an_independent_register_move() -> None:
-    """P5 left ``mov di,si; lea bx,[bp-4]`` unpaired by treating LEA as a load."""
-    move = _insn(
-        0,
-        ir.Operation.MOVE,
-        "mov",
-        (ir.Reg(Register.DI, 2),),
-        (ir.Reg(Register.SI, 2),),
-    )
+def test_pentium_pairs_a_frame_lea_after_an_independent_prefixed_move() -> None:
+    """P5 left ``lea bx,[bp-4]; mov eax,ecx`` unpaired by treating LEA as a load."""
     address = ir.Address(Addr(Space.FRAME, -4), Register.BP, offset=-4, disp_width=1)
     lea = _insn(
-        1,
+        0,
         ir.Operation.ADDRESS,
         "lea",
         (ir.Reg(Register.BX, 2),),
         (address,),
     )
+    # The 32-bit move has the operand-size prefix in this 16-bit mode and
+    # consequently consumes P5's U pipe. GCC's Pentium model classifies a
+    # non-prefixed LEA as U/V, so it may issue in the second V slot.
+    move = _insn(
+        1,
+        ir.Operation.MOVE,
+        "mov",
+        (ir.Reg(Register.EAX, 4),),
+        (ir.Reg(Register.ECX, 4),),
+    )
 
-    result = schedule.scheduled(_body(move, lea), cpu.profile("P5"))
+    result = schedule.scheduled(_body(lea, move), cpu.profile("P5"))
 
-    assert [one.what.name for one in result.insns] == ["lea", "mov"]
+    assert [one.what.dests[0].register for one in result.insns] == [Register.EAX, Register.BX]
 
 
 def test_scheduler_keeps_symbolic_or_nonframe_addresses_out_of_its_window() -> None:

@@ -30,24 +30,43 @@ iteration updates this file in the same commit.
 
 ## Iteration log
 
+### 82. Pentium LEA pairing audit correction — 2026-09-18
+
+The first frame-LEA scheduling increment classified every LEA as P5 U-only.
+Before relying on that inference, the local GCC source was checked directly:
+`gcc/config/i386/pentium.md` includes non-prefixed `lea` in its U/V pairing
+class, while prefixes make an instruction U-only.  The safe LIR boundary was
+correct; the pipe category was not.
+
+The scheduler now models frame LEA as U/V.  The regression uses the form that
+actually benefits: it starts with `lea bx,[bp-4]; mov eax,ecx`, where the
+operand-size-prefixed move must occupy U, and verifies the scheduler emits the
+move first so the LEA can take V.  The existing symbolic/non-frame negative
+case remains.  Focused scheduler checks pass (`8 passed`, `0.05s`); the
+bounded Tier 1 rerun passes (`194 passed`, `31 deselected`, `1.65s`).  This is a profile-audit
+correction to Phase 7, not a new claim about memory pairing, x87/segment work,
+or full issue modelling.  GCC is evidence for the CPU issue model here;
+BCC/WC remain the authority for medium-model address legality and ABI.
+
 ### 81. Frame-LEA scheduling — 2026-09-18
 
 The P5 scheduler treated every `lea` as a memory boundary, leaving
-`mov di,si; lea bx,[bp-4]` in source order even though the LEA reads only BP,
-writes BX, and can issue in Pentium's U pipe alongside the independent V-pipe
-move.  That was an over-conservative representation boundary: unlike a load,
+`lea bx,[bp-4]; mov eax,ecx` unpaired even though the LEA reads only BP,
+writes BX, and can issue in Pentium's U/V slot.  That was an
+over-conservative representation boundary: unlike a load,
 the selected frame-address LEA has no memory, segment-state, fault, or
 relocation effect.
 
 The safe scheduler window now admits exactly a one-source, non-relocated
 `FRAME` address LEA with ordinary GPR base/index lanes.  Its latency uses the
-audited `lea` profile entry and P5 classifies it as U-only.  Symbolic,
+audited `lea` profile entry and P5 classifies an unprefixed LEA as U/V, as in
+GCC's local Pentium scheduler model.  Symbolic,
 non-frame, far/segment-selected, stack, memory, call, x87, source-mapped
 allocator-artifact, and control forms remain boundaries.  Thus this is a
 physical LIR dependency fact; no MIR pass gains an opcode or register name.
 
-The fail-first scheduler regression now places the frame LEA before its
-independent move on P5, making the pair eligible.  Its negative companion
+The fail-first scheduler regression now places an independent prefixed U-only
+move before a frame LEA on P5, making the pair eligible.  Its negative companion
 proves a non-frame symbolic address is still refused.  Focused scheduler
 checks pass (`8 passed`, `0.05s`), and Tier 1 passes (`194 passed`, `31
 deselected`, `1.67s`).  This is a narrow Phase 7 scheduling increment, not a claim of memory

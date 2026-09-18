@@ -211,8 +211,6 @@ def _pair_class(one: lir.Insn) -> str:
         return "u"
     if one.what.name == "imul" or any(isinstance(where, ir.Imm) for where in one.what.sources):
         return "np"
-    if one.what.op is ir.Operation.ADDRESS:
-        return "u"
     if one.what.name in {"shl", "shr", "sar", "rol", "ror"}:
         return "u"
     return "uv"
