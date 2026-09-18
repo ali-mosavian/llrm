@@ -92,6 +92,101 @@ def test_sum_lea_preserves_observed_add_flags() -> None:
     assert [one.what.name for one in result] == ["mov", "add", "je"]
 
 
+def _constant_sum_body(amount: int, *, symbolic_add: bool = False) -> lir.LirBody:
+    dest = ir.Reg(Register.BX, 2)
+    source = ir.Reg(Register.AX, 2)
+    copy = lir.Insn(
+        10,
+        (10, 10),
+        ir.Semantics(ir.Operation.MOVE, "mov", (dest,), (source,)),
+        (3,),
+        (1,),
+        widths=((1, 2), (3, 2)),
+    )
+    addition = lir.Insn(
+        10,
+        (10, 11),
+        ir.Semantics(ir.Operation.BINARY, "add", (dest,), (dest, ir.Imm(amount, 2))),
+        (4,),
+        (3,),
+        widths=((3, 2), (4, 2)),
+        symbol=True if symbolic_add else None,
+    )
+    store = lir.Insn(
+        11,
+        (11, 11),
+        ir.Semantics(
+            ir.Operation.MOVE,
+            "mov",
+            (ir.Mem(Addr(Space.FRAME, -4), 2, through=Register.BP, offset=-4),),
+            (dest,),
+        ),
+        (),
+        (4,),
+        widths=((4, 2),),
+    )
+    compare = lir.Insn(
+        12,
+        (12, 12),
+        ir.Semantics(ir.Operation.COMPARE, "cmp", (), (source, ir.Imm(0, 2))),
+        (),
+        (1,),
+        widths=((1, 2),),
+    )
+    return lir.LirBody("constant_sum", 10, (lir.LirBlock(10, (copy, addition, store, compare), ()),), {}, {})
+
+
+@pytest.mark.parametrize("amount,displacement", [(1, 1), (0xFFFF, -1)])
+def test_constant_sum_uses_67h_lea_without_code_growth(amount: int, displacement: int) -> None:
+    """Matmul initialized each local element with ``mov bx,ax; add bx,1``.
+
+    The ADD flags die at the following store.  A word destination takes the
+    low sixteen bits of the 32-bit effective address, so one 67h LEA has the
+    same wrapping result while removing the copied two-address operation.
+    """
+    body = _constant_sum_body(amount)
+
+    result = peephole.addresses(body, cpu="386").insns
+
+    assert [one.what.name for one in result] == ["lea", "mov", "cmp"]
+    assert result[0].what.sources == (ir.Address(None, through=Register.EAX, offset=displacement),)
+    encoded = select.emit(result[0].what)
+    assert encoded is not None and 0x67 in encoded.code[:2]
+
+
+def test_constant_sum_keeps_a_shorter_move_add_encoding() -> None:
+    """A 32-bit LEA displacement must not grow a shorter word-immediate pair."""
+    result = peephole.addresses(_constant_sum_body(0x1234), cpu="386").insns
+
+    assert [one.what.name for one in result] == ["mov", "add", "mov", "cmp"]
+
+
+def test_constant_sum_preserves_unrolled_source_anchor_on_lea() -> None:
+    """Matmul's unrolled ADD clone owned its conservative source anchor.
+
+    The first constant-LEA regression used an ordinary LIR instruction, so
+    it passed while every production candidate was rejected.  The ADD itself
+    survives as the equivalent LEA and must keep that ownership marker; the
+    copied predecessor may still be removed.
+    """
+    result = peephole.addresses(_constant_sum_body(1, symbolic_add=True), cpu="386").insns
+
+    assert [one.what.name for one in result] == ["lea", "mov", "cmp"]
+    assert result[0].symbol is True
+
+
+def test_constant_sum_does_not_drop_a_predecessor_source_anchor() -> None:
+    """A fold cannot discard source ownership held by the removed copy."""
+    body = _constant_sum_body(1)
+    block = body.blocks[0]
+    body = replace(body, blocks=(replace(block, insns=(replace(block.insns[0], symbol=True), *block.insns[1:])),))
+
+    result = peephole.addresses(body, cpu="386").insns
+
+    assert [one.what.name for one in result] == ["mov", "add", "mov", "cmp"]
+    assert result[0].symbol is True
+
+
 @pytest.mark.parametrize("offset", [4, 8, -12, 65535])
 @pytest.mark.full
 def test_far_float_address_folds_offset_without_changing_selector(offset: int) -> None:

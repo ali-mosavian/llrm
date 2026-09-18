@@ -1307,7 +1307,7 @@ def addresses(body: lir.LirBody, *, cpu: str | targets.Profile = "386") -> lir.L
 
 
 def _sum_address(parts: tuple[lir.Insn, ...], *, cpu: str | targets.Profile = "386") -> lir.Insn | None:
-    """Fold ``mov result,left; add result,right`` into one 67h LEA.
+    """Fold ``mov result,left; add result,term`` into one 67h LEA.
 
     This is ordinary three-address addition after physical allocation, not a
     source-level pointer operation.  LEA is useful only when the ADD's flags
@@ -1318,7 +1318,6 @@ def _sum_address(parts: tuple[lir.Insn, ...], *, cpu: str | targets.Profile = "3
         one.what is None
         or one.clobbers
         or one.clobbers_high
-        or one.symbol is True
         or one.spread
         or one.group is not None
         or one.frame_adjust
@@ -1329,41 +1328,71 @@ def _sum_address(parts: tuple[lir.Insn, ...], *, cpu: str | targets.Profile = "3
     match copy.what, addition.what:
         case (
             ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg() as dest,), (ir.Reg() as left,)),
-            ir.Semantics(ir.Operation.BINARY, "add", (written,), (read, ir.Reg() as right)),
+            ir.Semantics(ir.Operation.BINARY, "add", (written,), (read, right)),
         ):
             if written != dest or read != dest:
                 return None
         case _:
             return None
     if (
-        not (dest.width == left.width == right.width)
+        dest.width != left.width
         or dest.width not in {2, 4}
-        or any(one.register not in target.WIDTHS for one in (dest, left, right))
+        or any(one.register not in target.WIDTHS for one in (dest, left))
         or RegisterExt.full_register32(dest.register) == RegisterExt.full_register32(left.register)
     ):
         return None
 
-    # If ADD names the just-written destination as its second operand, it is
-    # the copied left value at that point.  Otherwise it is the independent
-    # right input.  SIB cannot use ESP as an index, but its two inputs are
-    # commutative, so put ESP in the base position where possible.
     base = RegisterExt.full_register32(left.register)
-    repeated = RegisterExt.full_register32(right.register) == RegisterExt.full_register32(dest.register)
-    index = base if repeated else RegisterExt.full_register32(right.register)
-    if index == Register.ESP:
-        base, index = index, base
-    if index == Register.ESP:
+    size_neutral = False
+    if isinstance(right, ir.Reg):
+        if right.width != dest.width or right.register not in target.WIDTHS:
+            return None
+        # If ADD names the just-written destination as its second operand, it
+        # is the copied left value at that point. Otherwise it is the
+        # independent right input. SIB cannot use ESP as an index, but its
+        # two inputs are commutative, so put ESP in the base position.
+        repeated = RegisterExt.full_register32(right.register) == RegisterExt.full_register32(dest.register)
+        index = base if repeated else RegisterExt.full_register32(right.register)
+        if index == Register.ESP:
+            base, index = index, base
+        if index == Register.ESP:
+            return None
+        inputs = (left, left if repeated else right)
+        address = ir.Address(None, through=base, index=index)
+    elif isinstance(right, ir.Imm) and right.width == dest.width and right.address is None:
+        bits = dest.width * 8
+        displacement = (right.value + (1 << (bits - 1))) % (1 << bits) - (1 << (bits - 1))
+        inputs = (left,)
+        address = ir.Address(None, through=base, offset=displacement)
+        size_neutral = True
+    else:
         return None
     target_cpu = targets.profile(cpu)
-    if not _sum_address_is_cheaper((left, left if repeated else right), target_cpu):
+    if not _sum_address_is_cheaper(inputs, target_cpu):
         return None
 
-    what = ir.Semantics(ir.Operation.ADDRESS, "lea", (dest,), (ir.Address(None, through=base, index=index),))
+    what = ir.Semantics(ir.Operation.ADDRESS, "lea", (dest,), (address,))
+    if size_neutral:
+        from qbopt.backend import select
+
+        old = tuple(select.emit(one.what) for one in parts)
+        new = select.emit(what)
+        if new is None or any(one is None for one in old):
+            return None
+        if len(new.code) > sum(len(one.code) for one in old if one is not None):
+            return None
     intermediate = set(copy.defines)
     uses = tuple(dict.fromkeys((*copy.uses, *(value for value in addition.uses if value not in intermediate))))
     live = set(uses) | set(addition.defines)
     widths = tuple(dict.fromkeys(pair for pair in (*copy.widths, *addition.widths) if pair[0] in live))
     owner = addition if copy.covers == (addition.at, addition.at) else copy
+    symbolic = tuple(one for one in parts if one.symbol is True)
+    # A cloned source operation conservatively claims its source-map anchor
+    # even when its allocated form has no relocated operand.  Folding is
+    # still safe when that exact owner survives as the LEA; dropping it or
+    # trying to combine two independently owned operands is not.
+    if symbolic and (len(symbolic) != 1 or symbolic[0] is not owner):
+        return None
     return replace(
         owner,
         what=what,
@@ -1424,7 +1453,7 @@ def _scaled_address_is_cheaper(source: ir.Reg, replaced: int, cpu: targets.Profi
     return new <= old
 
 
-def _sum_address_is_cheaper(sources: tuple[ir.Reg, ir.Reg], cpu: targets.Profile) -> bool:
+def _sum_address_is_cheaper(sources: tuple[ir.Reg, ...], cpu: targets.Profile) -> bool:
     """Whether one 67h LEA beats keeping a copied two-address ADD."""
     old = cpu.operations.move + cpu.operations.add
     new = cpu.operations.address + cpu.operations.prefix

@@ -26,9 +26,63 @@ iteration updates this file in the same commit.
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, dying-base indexed-form unfolding, and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
 | Loop optimization | partial | exact pre/post-tested recurrences and symbolic sentinels, target-priced exact nested-recurrence rewind, complete nested-initializer LICM, dead-control countdowns with zero-trip guards, complete-affine spill/recompute pricing, precise-volatile-aware LICM, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling with bounded full-growth and machine-neutral whole-range pressure forecasting exist; versioning, partial unrolling, and constraint-complete candidate-set forecasting remain. |
 | Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs (including closed recursive SCCs in C and object paths), constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
-| Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing, dead-register frame-copy shuttles, target-priced 67h LEA selection including globally-dead shifted reload tails, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
+| Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing, dead-register frame-copy shuttles, target-priced 67h LEA selection including globally-dead shifted reload tails and source-owned constant/register sums, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 108. Select source-owned constant sums as costed 67h LEAs — 2026-09-18
+
+The retained-row matmul listing still initialized 28 scalar cells with a
+copied two-address add.  Clang's flat-i386 best-case listing uses one LEA for
+every corresponding expression.  A 16-bit destination makes the low word of
+the 32-bit effective address exactly the required wrapping result, and the
+address-size override remains cheaper and one byte smaller than the pair:
+
+```asm
+; before (5 bytes, two priced operations)
+mov bx, ax
+add bx, 1
+
+; after (4 bytes, one priced operation; 67h is emitted)
+lea bx, [eax+1]
+
+; Clang's best-case flat-i386 structural reference
+lea ecx, [eax+1]
+```
+
+The first fail-first regression established constant displacement selection,
+signed modulo normalization (`65535` is displacement `-1`), and a byte-growth
+guard for larger immediates.  That synthetic case passed while the production
+listing did not change, so the instrument was wrong before the subject was:
+the test omitted the conservative source-map marker carried by every unrolled
+ADD clone.  A second fail-first regression reproduces that exact ownership.
+The fold now proceeds only when the one symbolic owner is the instruction
+that survives as the LEA; ownership on the removed copy, or two independent
+owners, remains a rejection.  Thus no relocation or source anchor is silently
+dropped merely to obtain the shorter form.
+
+The same ownership rule also exposes one existing register-sum opportunity,
+so the authoritative matmul listing replaces 29 `mov; add` pairs in total.
+On 386 it changes from `1655/451/1898` to `1626/422/1840`
+bytes/instructions/weighted cost.  The profile-free dynamic estimate falls
+`1067 -> 1031`; loads, stores, spill traffic, calls, and branches are
+unchanged.  ABI-normalized static instructions fall `443 -> 414`, putting
+qbopt at 1.16x Clang's 356-instruction structural reference (previously
+1.24x).  Its 108 loads and 88 stores remain 1.33x and 1.13x Clang's 81 and
+78; dynamic comparison remains withheld because the reference trip count is
+heuristic.  GCC's structurally different near-expansion remains advisory, not
+a target.
+
+The authoritative candidate artifact is
+`build/quality/iter111/report.json`; the unchanged GCC/Clang source listings
+are retained under `build/quality/iter109`.  The saved qbopt listing assembled
+with JWasm, linked with the VBDOS linker, and executed under DOSBox-X returns
+the independent result `353712` (`b0 65 05 00`).  The focused address-form
+file passes (`17 passed`, `4 deselected`, `0.06s`) and Tier 1 passes
+(`235 passed`, `31 deselected`, `1.96s`).  This advances Phase 7 without
+claiming that 67h always wins: the selected CPU profile, partial-register
+penalty, exact encoding length, dead flags, and source ownership all remain
+hard profitability or legality gates.
 
 ### 107. Transact converged aggregate leaves with register pressure — 2026-09-18
 
