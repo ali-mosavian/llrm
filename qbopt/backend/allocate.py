@@ -463,6 +463,18 @@ def allocate(
         if mine is None:
             continue
         order = target.order(confined.get(value)) if value not in fixed else (fixed[value],)
+        # A 16-bit `[base+index]` form has a non-interchangeable base role:
+        # only BX can carry it, while SI/DI carry the index.  A protected
+        # loop-scoped address owner is deliberately long-lived over the hot
+        # region, so assigning it BX first can make every short field base
+        # unplaceable even though SI/DI leave the transient role free.  This
+        # is an allocation order, not a pin: BX remains available when the
+        # other address registers cannot hold the complete plan.
+        if value in (protected or ()) and _reserves_word_base(body, value, confined):
+            word = frozenset(_whole(one) for one in target.WORD_BASES)
+            order = tuple(one for one in order if _whole(one) not in word) + tuple(
+                one for one in order if _whole(one) in word
+            )
         if value not in fixed:
             votes = Counter(
                 _whole(register)
@@ -564,6 +576,30 @@ def _priority(one: "ranges.Interval | None", at: Stage) -> float:
     if one is None:
         return 0.0
     return one.size + (1e6 if at is not Stage.ASSIGN else 0.0)
+
+
+def _reserves_word_base(body: lir.LirBody, value: int, confined: dict[int, frozenset[Register_]]) -> bool:
+    """Whether an address-class value should leave a 16-bit word base free.
+
+    The proof is structural and target-wide: a protected address value may
+    prefer SI/DI only when this body also has a distinct indexed memory base
+    that needs the target's unique word-base class.  It does not inspect a
+    procedure name, source location, or an assigned register.
+    """
+    choices = confined.get(value)
+    if not choices or not choices <= target.ADDRESSING:
+        return False
+    return any(
+        isinstance(where, ir.Mem)
+        and isinstance(where.base, ir.Held)
+        and isinstance(where.index, ir.Held)
+        and where.base.value != value
+        and where.index.value != value
+        and where.scale == 1
+        for one in body.insns
+        if one.what is not None
+        for where in (*one.what.dests, *one.what.sources)
+    )
 
 
 def _widest(body: lir.LirBody) -> dict[int, int]:
@@ -837,26 +873,70 @@ class RegAlloc(LIRTransform):
             self.pinned = {**prefer, **constrain.required(body)}
             got = assigned(body)
             if not retained and got.spilled:
-                keep = _retainable_bases(body, got.spilled)
+                # A value live from a cold prelude through a later call can
+                # still be the base of every memory access in one hot natural
+                # loop.  Whole-range protection prices the later call against
+                # every trip through that loop.  Carve the loop-only piece
+                # first, then evaluate the same complete recovery rule used
+                # for a whole invariant: no choice of source procedure or
+                # physical register is involved.
+                scoped, keep = splitkit.loop_bases(body, got.spilled)
                 if keep:
+                    # The natural companion to an address owner is a dying
+                    # word index in the same loop.  Materialize that fold
+                    # before the trial, not afterwards: its SI/DI is exactly
+                    # what lets the retained owners leave BX available for
+                    # the transient far-field base.  `spilled()` proves the
+                    # fold's lifetime and address legality; values outside a
+                    # loop that actually uses a fresh owner are not offered.
+                    folded = _scoped_foldable_indexes(scoped, keep)
+                    prepared, made = (
+                        spiller.spilled(scoped, folded, self.frame) if folded else (scoped, frozenset())
+                    )
                     try:
-                        trial = allocate(body, self.pinned, reloads, protected=keep, cpu=self.cpu)
+                        trial = allocate(prepared, self.pinned, reloads | made, protected=keep, cpu=self.cpu)
                     except Unplaced:
                         trial = None
-                    # A retained invariant is accepted only when every new
-                    # spill has a target-legal direct recovery: it is either
-                    # rematerialized, or its word index folds into the base
-                    # that access kills.  This compares whole allocations,
-                    # rather than raising an owner's priority and hoping the
-                    # spiller later finds room for whatever it displaced.
                     if (
                         trial is not None
                         and keep.isdisjoint(trial.spilled)
-                        and trial.spilled
-                        <= spiller.rematerializable(body, trial.spilled)
-                        | spiller.foldable_indexes(body, trial.spilled)
+                        # The candidate may spill ordinary cold values into
+                        # their normal slots; unlike the former whole-range
+                        # plan it has already shortened the retained values.
+                        # Admit it only when the complete pre-folded trial
+                        # lowers weighted dynamic spill traffic, rather than
+                        # treating an arbitrary protected assignment as a
+                        # gain because its preferred bases happened to fit.
+                        and _traffic(prepared, trial.spilled) < _traffic(body, got.spilled)
                     ):
-                        retained, got = keep, trial
+                        body, retained, got, reloads = prepared, keep, trial, reloads | made
+                # The global version is useful where a source cell is stable
+                # over the whole body.  Keep it as a separate candidate: a
+                # loop-scoped split is not a reason to make a once-used owner
+                # live through unrelated cold code.
+                if retained:
+                    pass
+                else:
+                    keep = _retainable_bases(body, got.spilled)
+                    if keep:
+                        try:
+                            trial = allocate(body, self.pinned, reloads, protected=keep, cpu=self.cpu)
+                        except Unplaced:
+                            trial = None
+                        # A retained invariant is accepted only when every new
+                        # spill has a target-legal direct recovery: it is either
+                        # rematerialized, or its word index folds into the base
+                        # that access kills.  This compares whole allocations,
+                        # rather than raising an owner's priority and hoping the
+                        # spiller later finds room for whatever it displaced.
+                        if (
+                            trial is not None
+                            and keep.isdisjoint(trial.spilled)
+                            and trial.spilled
+                            <= spiller.rematerializable(body, trial.spilled)
+                            | spiller.foldable_indexes(body, trial.spilled)
+                        ):
+                            retained, got = keep, trial
             if not got.spilled:
                 return applied(body, got)
             # A retained-base plan is admitted only when every displaced
@@ -1027,6 +1107,42 @@ def _retainable_bases(body: lir.LirBody, spilled: "frozenset[int]") -> frozenset
         if isinstance(where, ir.Mem) and isinstance(where.base, ir.Held)
     }
     return stable & hot_bases
+
+
+def _scoped_foldable_indexes(body: lir.LirBody, bases: frozenset[int]) -> frozenset[int]:
+    """Dying word indexes in a natural loop that actually uses ``bases``.
+
+    This is deliberately narrower than every foldable index in the body.
+    A pre-allocation fold is part of an evaluated loop pressure plan only
+    when its loop contains one of that plan's freshly scoped owners.  The
+    general legality proof remains in ``spiller.foldable_indexes``.
+    """
+    if not bases:
+        return frozenset()
+    from qbopt.analysis import loops
+
+    blocks = {block.at: block for block in body.blocks}
+    indexes: set[int] = set()
+    for loop in loops.loops(body.blocks, body.entry):
+        inside = (blocks[at] for at in loop.body)
+        cells = [
+            where
+            for block in inside
+            for one in block.insns
+            if one.what is not None
+            for where in (*one.what.dests, *one.what.sources)
+            if isinstance(where, ir.Mem)
+        ]
+        if not any(isinstance(where.base, ir.Held) and where.base.value in bases for where in cells):
+            continue
+        indexes.update(
+            where.index.value
+            for where in cells
+            if isinstance(where.index, ir.Held) and where.scale == 1
+        )
+    from qbopt.backend import spiller
+
+    return spiller.foldable_indexes(body, frozenset(indexes))
 
 
 def _fold_discount(one: lir.Insn, profile: targets.Profile) -> float:

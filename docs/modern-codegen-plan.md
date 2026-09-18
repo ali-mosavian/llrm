@@ -457,3 +457,39 @@ stable source cells; it may not name `r_walk`, its arguments, or BCC's DI/SI
 assignment.  The compact loop remains the positive regression; the clean
 QCport listing is the real-world negative acceptance evidence for the next
 iteration.
+
+### 24. Loop-scoped pressure plan and exit-edge restoration — 2026-09-18
+
+The missing phase-4 mechanism is now implemented in the allocator.  For a
+spilled value that is both a memory base in a natural loop and used outside
+it, `splitkit.loop_bases()` creates a loop-only value.  The copy-in is placed
+on the preheader edge; a mixed latch/exit block restores the original through
+a newly split exit edge, so restoration is paid once when leaving the loop
+rather than once per trip.  The focused regression was fail-first: the old
+split put the restore immediately before the loop branch, while the new test
+requires the loop to keep the fresh value and the bridge to own the restore.
+
+The allocator evaluates this scoped alternative as a whole.  It first folds
+only dying word indexes belonging to a natural loop that actually uses one
+of the fresh bases.  It also orders protected address owners after the
+target's unique 16-bit word-base role where indexed memory needs that role:
+SI/DI are tried before BX, but BX remains legal if necessary.  This is an
+encoding-capacity rule from the target model, not an r_walk register hint.
+The candidate is admitted only when its complete pre-folded allocation keeps
+the fresh bases and strictly reduces loop-weighted spill traffic.
+
+On the clean QCport probe, the baseline allocation's weighted spill traffic
+is `79`; the scoped, pre-folded candidate is `59`.  The emitted marked-face
+loop now begins `les bx,[si+38]`, then later `les bx,[di+1014]`: no
+`[bp+6]`/`[bp+8]` owner reload remains in the loop.  It retains two remaining
+differences from BCC that are intentionally not disguised as parity: the
+loaded face value and one-bit mask still use frame temporaries, and BCC's
+particular AL/CL reuse has not yet been selected.  GCC/LLVM remain the
+best-case flat-i386 structural references; the BCC listing remains the
+medium-model legality reference.  This is phase-4 progress, not a completed
+code-quality gate.
+
+Focused split, far-load, and dead-index-fold regressions pass in `0.22s`.
+The broader allocator group was deliberately stopped while still running to
+honour the development test-time budget; it is a phase-boundary suite, not a
+claimed green gate for this iteration.

@@ -249,6 +249,50 @@ def test_a_cut_range_renames_the_cell_it_is_the_base_of() -> None:
     )
 
 
+def test_a_loop_scoped_base_piece_enters_once_and_leaves_after_the_loop() -> None:
+    """r_walk's owner crossed a later call, so whole-range retention
+    rematerialized it at every loop access.  The allocator needs a distinct
+    loop piece: entering through the preheader once, then restoring the
+    original for the later use instead of copying into the loop body on each
+    back edge.
+    """
+    cut, kept = splitkit.loop_bases(_pointer_across_a_loop(), frozenset({3}))
+    assert len(kept) == 1
+    fresh = next(iter(kept))
+    blocks = {block.at: block for block in cut.blocks}
+    assert any(one.defines == (fresh,) and one.uses == (3,) for one in blocks[0].insns)
+    assert any(
+        one.defines == (3,) and one.uses == (fresh,)
+        for block in cut.blocks
+        if block.at not in {0, 0x10, 0x20}
+        for one in block.insns
+    )
+    loop_cells = [
+        where
+        for one in blocks[0x10].insns
+        if one.what is not None
+        for where in (*one.what.dests, *one.what.sources)
+        if isinstance(where, ir.Mem)
+    ]
+    assert loop_cells and {one.base.value for one in loop_cells} == {fresh}
+
+
+def test_a_loop_piece_restores_only_on_its_exiting_edge() -> None:
+    """r_walk's loop header both returns to the body and exits it.
+
+    A regional split used to restore the original base immediately before
+    that header's branch, storing it on every face.  The copy belongs to the
+    one outgoing edge instead; the fall-through edge must be redirected
+    through a bridge and the loop block must retain the fresh value.
+    """
+    cut = splitkit._carved(_pointer_across_a_loop(), 3, 9, 2, splitkit.Region(frozenset({0x10}), None))
+    loop = next(block for block in cut.blocks if block.at == 0x10)
+    assert not any(one.defines == (3,) and one.uses == (9,) for one in loop.insns)
+    bridge = next(block for block in cut.blocks if block.at not in {0, 0x10, 0x20})
+    assert bridge.succ == (0x20,)
+    assert bridge.insns[0].defines == (3,) and bridge.insns[0].uses == (9,)
+
+
 def _counting_loop() -> lir.LirBody:
     """v4 counts to 10: set before the loop, tested in its header, bumped in its latch, read after."""
     return lir.LirBody(

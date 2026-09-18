@@ -112,6 +112,62 @@ def split(
     return cut
 
 
+def loop_bases(body: lir.LirBody, values: frozenset[int]) -> tuple[lir.LirBody, frozenset[int]]:
+    """Carve spilled address bases into the natural loops that reuse them.
+
+    An address owner can be inexpensive to recreate in cold code and still
+    be the wrong value to recreate for every trip through a loop.  Its normal
+    live range may also cross a call after that loop, making a whole-range
+    register preference prohibitively expensive.  This is the middle rung:
+    copy the owner at the loop entry, use the short value throughout the
+    natural loop, and restore the original only where code outside the loop
+    still needs it.
+
+    The caller decides whether the fresh pieces actually receive registers;
+    this helper only establishes the control-flow-correct split.  Candidates
+    are restricted to values which are both memory bases in the loop and
+    referenced outside it.  A one-use address or a value confined to the
+    loop cannot recover the copy cost, so it belongs to ordinary allocation.
+    """
+    if not values:
+        return body, frozenset()
+    from qbopt.analysis import loops
+
+    result = body
+    kept: set[int] = set()
+    for loop in loops.loops(result.blocks, result.entry):
+        inside = loop.body
+        references = {value: _references(result, value) for value in values}
+        candidates = {
+            value
+            for value, found in references.items()
+            if any(at in inside for at in found)
+            and any(at not in inside for at in found)
+            and any(
+                isinstance(where, ir.Mem)
+                and isinstance(where.base, ir.Held)
+                and where.base.value == value
+                for block in result.blocks
+                if block.at in inside
+                for one in block.insns
+                if one.what is not None
+                for where in (*one.what.dests, *one.what.sources)
+            )
+        }
+        for value in sorted(candidates):
+            widths = _widths(result)
+            width = widths.get(value)
+            if width is None:
+                continue
+            fresh = _next_value(result)
+            carved = _carved(result, value, fresh, width, Region(inside, None))
+            if carved is result:
+                continue
+            result = carved
+            kept.add(fresh)
+    return result, frozenset(kept)
+
+
 def _fits(value: int, region: "Region", live: dict, index, where: "dict | None", confined: dict) -> bool:
     """Whether some register is free, in the allocation that failed, for the piece `region` carves.
 
@@ -265,6 +321,7 @@ def _carved(body: lir.LirBody, value: int, fresh: int, width: int, region: Regio
         return body  # entered with no outside predecessor to hold the copy
     blocks = []
     changed = False
+    deferred: list[tuple[int, int, lir.Insn]] = []
     for block in body.blocks:
         if block.at in feeding:
             insns = list(block.insns)
@@ -277,7 +334,8 @@ def _carved(body: lir.LirBody, value: int, fresh: int, width: int, region: Regio
             blocks.append(block)
             continue
         start = region.starts_at if region.starts_at is not None else 0
-        leaves = region.starts_at is not None or any(where not in region.blocks for where in block.succ)
+        outside = tuple(where for where in block.succ if where not in region.blocks)
+        leaves = region.starts_at is not None or bool(outside)
         insns = list(block.insns[:start])
         interior = [_renamed(one, {value: fresh}) for one in block.insns[start:]]
         if not interior:
@@ -290,7 +348,13 @@ def _carved(body: lir.LirBody, value: int, fresh: int, width: int, region: Regio
         # Only where the original is wanted again. A value whose last
         # reference is inside the region has nothing to restore, and the
         # copy back would be a definition nothing reads.
-        if leaves and (block.at in live_out or region.starts_at is not None):
+        # A block which both continues around the loop and exits it must not
+        # restore the original unconditionally: that puts a store/copy on
+        # every trip just to satisfy the one exit.  Split its leaving edges
+        # below, where the copy executes only on the way out.  An ordinary
+        # one-successor exit keeps the compact in-block form.
+        edge_exit = region.starts_at is None and outside and len(outside) < len(block.succ)
+        if leaves and (block.at in live_out or region.starts_at is not None) and not edge_exit:
             back = _copy(interior[-1], value, fresh, width)
             place = len(insns) - 1 if _terminates(insns[-1]) else len(insns)
             # After the last use where every way out leaves the region:
@@ -300,8 +364,44 @@ def _carved(body: lir.LirBody, value: int, fresh: int, width: int, region: Regio
                 place = min(place, _after_last(insns, fresh))
             insns.insert(place, back)
             changed = True
+        elif edge_exit and (block.at in live_out):
+            deferred.extend((block.at, where, interior[-1]) for where in outside)
         blocks.append(replace(block, insns=tuple(insns)))
-    return replace(body, blocks=tuple(blocks)) if changed else body
+    if not changed and not deferred:
+        return body
+    # The bridge owns an exit edge, so the original value is restored only
+    # for paths that actually leave the region.  It is deliberately a LIR
+    # CFG edit: no MIR fact or source byte is involved, and later layout
+    # decides its physical fall-through just like every other block.
+    by_at = {block.at: block for block in blocks}
+    bridges = []
+    next_at = max((block.at for block in body.blocks), default=0) + 1
+    for source, outside, beside in deferred:
+        bridge = next_at
+        next_at += 1
+        original = by_at[source]
+        rewritten = []
+        for one in original.insns:
+            what = one.what
+            if what is not None and what.target == outside:
+                one = replace(one, what=replace(what, target=bridge))
+            rewritten.append(one)
+        by_at[source] = replace(
+            original,
+            insns=tuple(rewritten),
+            succ=tuple(bridge if one == outside else one for one in original.succ),
+        )
+        back = _copy(beside, value, fresh, width)
+        jump = lir.Insn(
+            at=beside.at,
+            covers=(beside.at, beside.at),
+            what=ir.Semantics(ir.Operation.JUMP, "jmp", (), (), outside),
+            defines=(),
+            uses=(),
+            op=beside.op,
+        )
+        bridges.append(lir.LirBlock(at=bridge, insns=(back, jump), succ=(outside,)))
+    return replace(body, blocks=tuple(by_at[block.at] for block in blocks) + tuple(bridges))
 
 
 def _entries(body: lir.LirBody, region: Region) -> set[int]:
