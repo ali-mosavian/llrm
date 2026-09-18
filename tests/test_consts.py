@@ -158,6 +158,29 @@ def test_word_extension_to_int64_preserves_signedness(kind, number, expected):
     assert consts._result(op, {source: consts.Known(number, 2)}) == consts.Known(expected, 8)
 
 
+def test_extension_of_a_known_memory_cell_folds_to_the_extended_value() -> None:
+    """CRC knew each private constant byte but retained nine MOVZX loads.
+
+    A cell proven by the ordinary memory lattice is the same scalar operand
+    as a held value or literal for signedness-preserving extension.
+    """
+    result = mir.Value(1, 0)
+    ref = mir.MemRef(Addr(Space.SEGMENT, 0, 7), 1)
+    op = mir.Op(
+        0,
+        ir.Operation.EXTEND,
+        "",
+        (result,),
+        (),
+        kind=mir.Kind.ZERO_EXTEND,
+        args=(mir.Cell(ref),),
+        results=(mir.Held(result, 4),),
+        loads=(ref,),
+    )
+
+    assert consts._result(op, {}, here={(ref.addr, 1): consts.Known(0xF1, 1)}) == consts.Known(0xF1, 4)
+
+
 @pytest.mark.parametrize(("high", "low", "answer"), [(4, 0, 262144), (0, 512, 512), (-1, -1, 0xffffffff)])
 def test_recovered_argument_constants(high: int, low: int, answer: int) -> None:
     """Nbody kept its 262144 and 512 divisors hidden behind recovered word copies."""

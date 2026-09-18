@@ -12,6 +12,9 @@ from qbopt.cfront.stream import Record
 
 # fe_attr (bld/cg/h/cg.h)
 FE_PROC = 0x1
+FE_CONSTANT = 0x10
+FE_VOLATILE = 0x800
+FE_INTERNAL = 0x1000
 FE_GLOBAL = 0x4
 FE_IMPORT = 0x8
 PRIVATE = 0x40  # a segment of its own, outside DGROUP
@@ -80,6 +83,18 @@ class Symbol:
     @property
     def imported(self) -> bool:
         return bool(self.attr & FE_IMPORT)
+
+    @property
+    def constant(self) -> bool:
+        return bool(self.attr & FE_CONSTANT)
+
+    @property
+    def volatile(self) -> bool:
+        return bool(self.attr & FE_VOLATILE)
+
+    @property
+    def internal(self) -> bool:
+        return bool(self.attr & FE_INTERNAL)
 
     @property
     def exported(self) -> bool:

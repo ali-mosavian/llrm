@@ -167,12 +167,15 @@ def test_c_matmul_unrolls_exact_multiblock_loops() -> None:
     assert dynamic is not None and dynamic < 6_000
 
 
-def test_c_crc_unroll_keeps_the_inner_result_on_the_outer_backedge() -> None:
-    """CRC returned ``salt ^ ~0`` after its eight-round inner loop was unrolled.
+def test_c_crc_specializes_constant_outer_bytes_and_keeps_inner_result() -> None:
+    """CRC retained 9 branches/10 loads after its inner loop was unrolled.
 
     The inner loop's final CRC value feeds a phi on the enclosing loop's
     backedge.  Dropping that edge use made the whole polynomial calculation
     dead, leaving four instructions that returned the initial complement.
+    Keeping the outer loop instead emitted 487 dynamic instructions and read
+    every byte of its private constant table at run time; exact peeling must
+    preserve that live-out while exposing all nine loader bytes to folding.
     """
     from tools import quality
     from qbopt.cfront import compile as cfront
@@ -182,9 +185,12 @@ def test_c_crc_unroll_keeps_the_inner_result_on_the_outer_backedge() -> None:
     module = cfront.assembled(stream, source.stem, optimise=True)
     procedure = next(one for one in module.procedures if one.name == "_bench_crc")
     rows = quality._rows(quality._blob(module, procedure, 0))
+    loads, _stores = quality._memory(rows)
 
     assert sum(mnemonic == "shr" for _raw, mnemonic, _operands in rows) >= 8
     assert any("EDB88320" in operands.upper() for _raw, _mnemonic, operands in rows)
+    assert not any(mnemonic.startswith("j") for _raw, mnemonic, _operands in rows)
+    assert loads == 1
 
 
 def test_c_nbody_peels_the_fixed_triangular_interaction_loop() -> None:

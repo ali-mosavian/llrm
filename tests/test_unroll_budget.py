@@ -134,6 +134,20 @@ def test_large_complete_peel_must_erase_its_growth_to_cross_the_profile_budget()
     assert unroll._rejection(original, _straight(3), 1, 16, where) is None
 
 
+def test_bounded_complete_peel_amortizes_growth_over_its_exact_trip_count() -> None:
+    """CRC retained its nine-trip outer loop and reloaded every constant byte.
+
+    The specialized straight-line body saves 38% of the target-priced dynamic
+    work, but charging every clone as though code growth executed once per
+    iteration rejected it.  A proven bounded trip count amortizes that static
+    cost; the profile iteration ceiling remains the independent size guard.
+    """
+    costs = OperationCosts(add=2, branch=7, move=2)
+    where = Where(costs=costs, registers=6, max_unroll_iterations=16)
+
+    assert unroll._rejection(_loop(), _straight(25), 1, 9, where) is None
+
+
 def test_structural_saving_must_pay_for_unavoidable_pressure() -> None:
     """Matmul saved 60 final instructions but raised 386 cost by 1,407.
 

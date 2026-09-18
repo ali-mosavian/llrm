@@ -188,9 +188,14 @@ def _rejection(
     if total_after >= total_before:
         return "pressure"
     # MIR cannot know final encoding bytes. Charge one register move per added
-    # semantic operation: target-priced, bounded, and never an implicit free
-    # expansion. Later selection still supplies the exact size measurement.
+    # semantic operation, amortized over the exact executions whose dynamic
+    # work the expansion removes.  Charging every clone once *per invocation*
+    # made a nine-trip loop pay its whole static growth nine times while its
+    # saved work was correctly counted across all nine trips.  The profile's
+    # complete-peel count and the builder's operation ceiling independently
+    # bound code growth; later selection still supplies exact size evidence.
     growth = max(0, _size(after) - _size(before)) * where.costs.move
+    growth = (growth + count - 1) // count
     return "growth" if total_before - total_after <= growth else None
 
 

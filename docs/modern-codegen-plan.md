@@ -24,11 +24,93 @@ iteration updates this file in the same commit.
 | MIR/LIR provenance and fresh OMF | complete in production | allocated LIR emits directly with external source maps/allocation hints; the remaining compatibility views are test-only and cannot route a compilation through record rewriting. |
 | SROA and scalar promotion | partial | fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies expand into exact leaves, and structural candidates transact leaves made singleton by scalar convergence with finite-capacity pressure pricing; far, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, dying-base indexed-form unfolding, and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
-| Loop optimization | partial | exact pre/post-tested recurrences and symbolic sentinels, target-priced exact nested-recurrence rewind, complete nested-initializer LICM, dead-control countdowns with zero-trip guards, complete-affine spill/recompute pricing, precise-volatile-aware LICM, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling with bounded full-growth and machine-neutral whole-range pressure forecasting exist; versioning, partial unrolling, and constraint-complete candidate-set forecasting remain. |
-| Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs (including closed recursive SCCs in C and object paths), constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, post-inline constant folding through phi edges and linear corridors, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
+| Loop optimization | partial | exact pre/post-tested recurrences and symbolic sentinels, target-priced exact nested-recurrence rewind, complete nested-initializer LICM, dead-control countdowns with zero-trip guards, complete-affine spill/recompute pricing, precise-volatile-aware LICM, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling with exact-trip-amortized bounded growth and machine-neutral whole-range pressure forecasting exist; versioning, partial unrolling, and constraint-complete candidate-set forecasting remain. |
+| Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs (including closed recursive SCCs in C and object paths), constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, post-inline constant folding through phi edges and linear corridors, private immutable numeric-data initializer facts, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
 | Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing and byte-neutral source-unowned terminal-return duplication, dead-register frame-copy shuttles, dying-input commutative result transfer, synthetic high-word reload narrowing, target-priced 67h LEA selection including source-owned loaded scale/add tails and constant/register sums, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 116. Specialize bounded constant-data loops — 2026-09-18
+
+CRC's eight-round inner loop was already completely expanded, but its exact
+nine-trip outer loop survived and read the same private constant table on every
+function call:
+
+```asm
+; before                              ; after (first two source bytes)
+xor bx, bx                            xor eax, 49
+Louter:                               ; eight polynomial rounds
+movzx ecx, byte ptr _data[bx]         xor eax, 50
+xor eax, ecx                          ; eight polynomial rounds
+; eight polynomial rounds
+add bx, 1
+cmp bx, 9
+jb Louter
+```
+
+The first fail-first policy regression returned `growth`; the real-source
+regression independently found nine dynamic branches and ten loads.  The raw
+MIR trace showed an outer candidate simplifying from 418 to 405 operations and
+saving target-priced 386 work (`1180→947`), then losing because all 346 added
+operations were charged once against work already counted across all nine
+executions.  Static clone cost is now amortized over the proven trip count.
+The profile's independent 16-iteration ceiling, the builder's 512-operation
+resource bound, dynamic target cost, register-pressure price, and strict
+positive-savings gates remain.  A two-trip loop whose saved branch does not pay
+even the amortized growth is still rejected.
+
+This follows the structure of GCC's
+`gcc/tree-ssa-loop-ivcanon.cc`: complete peeling has independent iteration and
+expanded-body ceilings, rejects calls/branchy candidates, and permits bounded
+straight-line specialization rather than requiring dynamic savings to exceed
+the complete static clone on every invocation.  Both fresh `-O3 -march=i386`
+i686 GCC and Clang listings completely specialize these nine bytes.
+
+Expansion alone exposed a second issue.  Open Watcom records `_data` as
+`FE_CONSTANT|FE_INTERNAL` and supplies all ten bytes, but the C path left
+`MirBody.initial` empty.  The frontend now transfers complete numeric bytes of
+private, nonvolatile constant objects into that existing loader-fact side
+table.  Mutable, exported/imported, volatile, relocatable, partially
+understood, or inline-assembly-referenced objects are refused.  Ordinary
+MemorySSA/alias effects remain responsible for invalidation, and each body
+receives facts only for objects it directly names so a large qcport table does
+not enlarge unrelated SCCP problems.  Optimization passes receive only MIR
+facts, not HIR records.  The first candidate `Fold`
+already resolved each indexed address to the correct byte, but constant
+evaluation accepted extension from held values and literals only.  Its scalar
+rule now also accepts a memory cell proved by the same lattice, after which
+dead code removes every table address and load.
+
+Against the immediately preceding committed build on 386:
+
+| metric | before | after | change |
+|---|---:|---:|---:|
+| selected bytes | 225 | 1,680 | explicit speed/size tradeoff |
+| static instructions | 63 | 450 | full specialization |
+| estimated executed instructions | 487 | 450 | -7.6% |
+| estimated executed loads | 10 | 1 | -90.0% |
+| estimated executed branches | 9 | 0 | -100% |
+| estimated executed 386 cost | 1,130 | 993 | -12.1% |
+
+Every CPU profile improves dynamically: 386 `1130→993`, 486 `1066→984`, P5
+`963→899`, P6 `1212→1185`, K5/K6 `334→307`, K7 `336→309`, and Core
+`782→755`.  The code-size increase is intentional and audited against the
+requested speed objective: the candidate executes 450 instructions with one
+load and no stores, versus i686 GCC's `454/1/0` and Clang's `394/2/1`.  Flat
+reference byte sizes remain non-comparable to operand-prefixed medium-model
+code; a candidate-ABI size target is still not registered.
+
+Fresh OMF emission, the DOS linker, and a real DOS 386 return `3421780262`
+(`CBF43926`) for the independent canonical input.  Candidate, GCC, Clang and
+stage evidence are under `build/quality/iter125-crc-final`; the all-profile
+candidate report is `all.json`.  The baseline report proves CRC was the only C
+corpus program with a growth-rejected unroll candidate; floats and Mandel are
+byte-identical in the interrupted corpus audit, and the remaining programs
+contain neither such a candidate nor a private constant initializer.  Focused
+checks pass (`6 passed`, `9.49s`) and Tier 1 passes (`250 passed`, `31
+deselected`, `3.78s`).  This advances loop and
+whole-module phases without claiming partial unrolling, arbitrary readonly
+external memory, Clang's CRC algebraic reduction, or final acceptance.
 
 ### 115. Narrow synthetic high-word reloads — 2026-09-18
 

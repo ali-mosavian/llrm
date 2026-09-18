@@ -88,6 +88,81 @@ def test_negative_data_fits_its_width():
     assert dict(cfront._data(unit))["_DATA"] == (b"\xff\xff",)
 
 
+def test_private_constant_data_seeds_complete_loader_bytes_only() -> None:
+    """CRC's constant byte table reached MIR with no initializer facts.
+
+    Numeric bytes of a private immutable object are loader-established facts;
+    mutable, volatile, relocatable, or inline-assembly-visible objects are not.
+    """
+    unit = cfront.hir.Unit()
+    unit.symbols[1] = cfront.hir.Symbol(
+        1,
+        "table",
+        "table",
+        "_*",
+        cfront.hir.FE_CONSTANT | cfront.hir.FE_INTERNAL,
+        segment=1,
+    )
+    unit.backs[1] = 1
+    unit.segments[1] = cfront.hir.Segment(
+        1,
+        "CONST2",
+        0,
+        [
+            ("DGLabel", ("b1",)),
+            ("DGBytes", ("2", "3132")),
+            ("DGIBytes", ("2", "255")),
+            ("DGInteger", ("4660", "TY_UINT_2")),
+        ],
+    )
+
+    assert cfront._constant_initializers(unit) == tuple(
+        (
+            cfront.mir.MemRef(cfront.Addr(cfront.Space.SEGMENT, offset, 1), 1),
+            cfront.mir.Const(byte, 1),
+        )
+        for offset, byte in enumerate(b"12\xff\xff\x34\x12")
+    )
+
+    unit.symbols[1].attr &= ~cfront.hir.FE_CONSTANT
+    assert not cfront._constant_initializers(unit)
+    unit.symbols[1].attr |= cfront.hir.FE_CONSTANT | cfront.hir.FE_VOLATILE
+    assert not cfront._constant_initializers(unit)
+    unit.symbols[1].attr &= ~cfront.hir.FE_VOLATILE
+    unit.segments[1].items.append(("DGFEPtr", ("y1", "TY_NEAR_POINTER", "0")))
+    assert not cfront._constant_initializers(unit)
+
+    unit.segments[1].items.pop()
+    unit.symbols[2] = cfront.hir.Symbol(2, "inline", "inline", "_*", cfront.hir.FE_PROC)
+    unit.symbols[2].code = cfront.hir.Code(b"\x90\x90", (cfront.hir.Fixup(0, "offset", 1, 0),))
+    assert not cfront._constant_initializers(unit)
+
+
+def test_constant_loader_facts_are_local_to_referencing_bodies() -> None:
+    """A large qcport lookup table must not enlarge SCCP in every procedure.
+
+    Module initializer facts belong only to bodies that directly name their
+    object; unrelated functions previously received every byte in the module.
+    """
+    first = cfront.mir.MemRef(cfront.Addr(cfront.Space.SEGMENT, 0, 7), 1)
+    second = cfront.mir.MemRef(cfront.Addr(cfront.Space.SEGMENT, 0, 8), 1)
+    initial = ((first, cfront.mir.Const(1, 1)), (second, cfront.mir.Const(2, 1)))
+    loaded = cfront.mir.Value(1, 1)
+    load = cfront.mir.Op(
+        1,
+        cfront.raise_hir.ir.Operation.NOTHING,
+        "",
+        (loaded,),
+        (),
+        kind=cfront.mir.Kind.LOAD,
+        loads=(first,),
+        results=(cfront.mir.Held(loaded, 1),),
+    )
+    body = cfront.mir.MirBody(1, (cfront.mir.MirBlock(1, (), (load,), ()),))
+
+    assert cfront._body_initializers(body, initial) == (initial[0],)
+
+
 def test_float_moves_as_its_bits():
     """`ls_animate(&ls, 0.05f)` pushes the single's four bytes; CGFloat was refused."""
     unit = cfront.hir.unit(cfront.stream.parse((FIXTURES / "ls.cgs").read_text()))

@@ -12,6 +12,7 @@ import os
 import argparse
 import tempfile
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 from collections.abc import Callable
 from collections.abc import Iterator
@@ -33,6 +34,7 @@ from qbopt.backend import machinedce
 from qbopt.backend import lower_int64
 from qbopt.backend import cpu as targets
 from qbopt.backend import frame as frames
+from qbopt.objectfile.module import Addr
 from qbopt.objectfile.module import Space
 
 WCCQ = Path(__file__).resolve().parents[2] / "owshim" / "bin" / "wccq"
@@ -148,6 +150,68 @@ def _data_labels(unit: hir.Unit) -> dict[int, tuple[int, int, int]]:
     return out
 
 
+def _constant_initializers(unit: hir.Unit) -> tuple[tuple[mir.MemRef, mir.Const], ...]:
+    """Exact loader bytes for private immutable C objects.
+
+    `MirBody.initial` already models bytes established by the loader and lets
+    the ordinary memory analysis resolve indexed reads after an induction
+    value becomes constant.  The C path previously left it empty even when
+    Open Watcom supplied both `FE_CONSTANT` and the complete initializer.
+
+    Only an internal, nonvolatile object whose entire span is numeric is
+    admitted.  Relocations, alignment directives, unknown records, and an
+    inline-assembly reference reject the whole object; a partial initializer
+    must never become a partial proof about pointer or layout bytes.
+    """
+    labels = _data_labels(unit)
+    assembly_references = {
+        fixup.symbol for symbol in unit.symbols.values() if symbol.code is not None for fixup in symbol.code.fixups
+    }
+    out = []
+    for symbol_id, (segment_id, start, after) in labels.items():
+        symbol = unit.symbols[symbol_id]
+        if (
+            not symbol.constant
+            or not symbol.internal
+            or symbol.volatile
+            or symbol.imported
+            or symbol.proc
+            or symbol_id in assembly_references
+        ):
+            continue
+        data = bytearray()
+        complete = True
+        for call, args in unit.segments[segment_id].items[start + 1 : after]:
+            match call, args:
+                case "DGBytes", (size, raw):
+                    added = bytes.fromhex(raw)
+                    if len(added) != int(size):
+                        complete = False
+                        break
+                    data.extend(added)
+                case "DGIBytes", (size, byte):
+                    data.extend((int(byte) & 0xFF).to_bytes(1, "little") * int(size))
+                case "DGUBytes", (size,):
+                    data.extend(bytes(int(size)))
+                case "DGInteger", (value, type_):
+                    width = raise_hir.WIDTHS.get(type_, 2)
+                    number = int(value) & ((1 << (8 * width)) - 1)
+                    data.extend(number.to_bytes(width, "little"))
+                case _:
+                    complete = False
+                    break
+        if not complete:
+            continue
+        out.extend(
+            (
+                mir.MemRef(Addr(Space.SEGMENT, offset, symbol_id), 1),
+                mir.Const(byte, 1),
+            )
+            for offset, byte in enumerate(data)
+        )
+    return tuple(out)
+
+
 def _referenced_data(body: mir.MirBody, candidates: frozenset[int]) -> set[int]:
     """Private data symbols that the emitted MIR directly names.
 
@@ -186,6 +250,27 @@ def _referenced_data(body: mir.MirBody, candidates: frozenset[int]) -> set[int]:
             if op.array is not None:
                 symbol(op.array.descriptor)
     return found
+
+
+def _body_initializers(
+    body: mir.MirBody, initial: tuple[tuple[mir.MemRef, mir.Const], ...]
+) -> tuple[tuple[mir.MemRef, mir.Const], ...]:
+    """Loader facts for immutable objects directly named by one body.
+
+    A large constant table is a module fact, but copying every byte into every
+    procedure makes each local SCCP problem grow with unrelated module data.
+    Retain whole-object facts only for symbols this body can actually name;
+    folding and data reachability then remain ordinary MIR operations.
+    """
+    candidates = frozenset(
+        ref.addr.index for ref, _value in initial if ref.addr is not None and ref.addr.space is Space.SEGMENT
+    )
+    referenced = _referenced_data(body, candidates)
+    return tuple(
+        fact
+        for fact in initial
+        if fact[0].addr is not None and fact[0].addr.space is Space.SEGMENT and fact[0].addr.index in referenced
+    )
 
 
 def _reachable_data(unit: hir.Unit, bodies: dict[str, mir.MirBody]) -> frozenset[int]:
@@ -268,7 +353,11 @@ def assembled(
     aliases = {one.name: alias.Procedure(one.body, one.calls, one.arguments) for one in raised_procedures}
     callees = {name for one in raised_procedures for name in one.calls.values()}
     modref = alias.summaries(aliases, libfunc.summaries(callees))
-    bodies = {one.name: alias.calls_annotated(aliases[one.name], modref) for one in raised_procedures}
+    initial = _constant_initializers(unit)
+    bodies = {}
+    for one in raised_procedures:
+        body = alias.calls_annotated(aliases[one.name], modref)
+        bodies[one.name] = replace(body, initial=_body_initializers(body, initial))
     from qbopt.analysis import interprocedural
 
     address_taken = _address_taken_procedures(unit)

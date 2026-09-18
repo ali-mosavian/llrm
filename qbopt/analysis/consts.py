@@ -496,16 +496,17 @@ def _result(
         return None
     if op.kind in (mir.Kind.SIGN_EXTEND, mir.Kind.ZERO_EXTEND) and len(parts) == len(op.results) == 1:
         source, result = op.args[0], op.results[0]
+        source_width = source.ref.width if isinstance(source, mir.Cell) else getattr(source, "width", 0)
         if (
-            not isinstance(source, (mir.Held, mir.Const))
+            not isinstance(source, (mir.Held, mir.Const, mir.Cell))
             or not isinstance(result, mir.Held)
-            or not 0 < source.width < result.width <= 8
-            or parts[0].width < source.width
+            or not 0 < source_width < result.width <= 8
+            or parts[0].width < source_width
         ):
             return None
-        number = masked(parts[0].n, source.width)
+        number = masked(parts[0].n, source_width)
         if op.kind is mir.Kind.SIGN_EXTEND:
-            sign = 1 << (source.width * 8 - 1)
+            sign = 1 << (source_width * 8 - 1)
             number = (number ^ sign) - sign
         return Known(masked(number, result.width), result.width)
     if op.kind is mir.Kind.CONCAT and len(parts) == 2 and len(op.results) == 1:
