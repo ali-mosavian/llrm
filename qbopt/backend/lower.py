@@ -878,6 +878,15 @@ def _extract(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...]:
             0,
             16,
         ):
+            # The low word of a dword register is itself an encodable word
+            # operand.  Keep the source's value identity but ask for its
+            # low-width view; allocation still chooses the physical root and
+            # the emitter resolves that view to AX/BX/CX/DX as appropriate.
+            # A push/pop round trip is needed only for the high word below.
+            if offset == 0:
+                return (
+                    ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(result.id, 2),), (ir.Held(source.id, 2),)),
+                )
             # The halves of a sign extension are the word itself and its sign,
             # and x86 has an instruction for the second. Going through the
             # stack instead cost stride's loop four instructions for what

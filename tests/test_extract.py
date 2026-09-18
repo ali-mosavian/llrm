@@ -95,6 +95,44 @@ def test_high_word_extraction_lowers_without_clobbering_flags() -> None:
     assert expanded[1].covers == (10, 10)
 
 
+def test_low_word_extraction_is_a_plain_word_move() -> None:
+    """A low-half view of a dword took push/pop transfers through the stack.
+
+    The low 16 bits of every allocated 32-bit general register are directly
+    addressable in the medium-model instruction set.  This is a value-width
+    selection choice, not an allocator register choice: lowering may name
+    the source held value at word width and leave allocation to choose its
+    physical root.
+    """
+    source, result = mir.Value(1, 0), mir.Value(2, 1)
+    op = mir.Op(
+        10,
+        ir.Operation.RESTORE,
+        "extract",
+        (result,),
+        (source,),
+        kind=mir.Kind.EXTRACT,
+        args=(mir.Held(source, 4), mir.Const(0, 4)),
+        results=(mir.Held(result, 2),),
+        absorbed=(10,),
+    )
+    body = mir.MirBody(10, (mir.MirBlock(10, (), (op,), ()),))
+
+    expanded = lower.Lowering(
+        body,
+        {source.id, result.id},
+        {},
+        (),
+        occurrences={10: ((10, 14),)},
+    ).expand(op)
+
+    assert [one.what.name if one.what else None for one in expanded] == ["mov"]
+    assert expanded[0].what.sources == (ir.Held(source.id, 2),)
+    assert expanded[0].what.dests == (ir.Held(result.id, 2),)
+    assert expanded[0].uses == (source.id,)
+    assert expanded[0].defines == (result.id,)
+
+
 def test_inserted_move_does_not_inherit_disjoint_input_bytes() -> None:
     """LNGMIX deletion refused because an inserted move also claimed 12 push bytes."""
     parent = mir.Op(0x71, ir.Operation.MOVE, "mov", (), (), id=14, absorbed=(13, 14))

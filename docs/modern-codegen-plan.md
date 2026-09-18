@@ -1416,3 +1416,27 @@ local-rematerialization increment, not a timing or hard-target claim.  GCC
 and LLVM remain best-case flat-i386 structural listings only; BCC/WC
 medium-model output remains the ABI, segmentation, and legal-addressing
 authority.
+
+### 64. Direct low-half extraction — 2026-09-18
+
+The mixed-width aggregate-copy audit also exposed a general lowering cost:
+MIR's exact `EXTRACT(v32, 0)` was expanded as `push dword` followed by two
+word pops, even though the low word of every 32-bit general register is a
+directly encodable operand.  This was not an SROA reason to split aggregate
+copies indiscriminately—the high-half form still needs a separately costed
+representation—but a target-lowering gap shared by long-pair and scalarized
+code.
+
+Lowering now spells the low-half view as one word `mov`, retaining the same
+abstract source value at word width.  No MIR pass names a register and no
+allocation choice is made here; allocation resolves the value's physical root
+and the emitter uses its AX/BX/CX/DX low-word view.  The focused regression
+was run fail-first: it formerly emitted `push`, `pop`, `pop`; it now proves
+the single move's operands, definition, and use are exact.  The existing
+high-half regression continues to prove that its stack transfer leaves flags
+untouched.
+
+This advances the shared Phase-3 scalarization substrate and Phase-4 pressure
+work without registering a performance target.  GCC and LLVM remain best-case
+flat-i386 structural listings only; BCC/WC medium-model output remains the
+ABI, segmentation, and legal-addressing authority.
