@@ -287,6 +287,41 @@ def test_current_parameter_constants_reads_a_sccp_returned_actual():
     ) == {"choose": (mir.Const(4, 2),)}
 
 
+def test_current_call_constants_keeps_a_per_call_fact_when_another_call_is_dynamic():
+    """One summarized actual may drive call-site cloning but not body-wide specialization."""
+    constant = mir.Value(1, 0, variable=1, version=1)
+    dynamic = mir.Value(2, 0, variable=2, version=1)
+    known = mir.Op(
+        0,
+        ir.Operation.NOTHING,
+        "",
+        (constant,),
+        (),
+        kind=mir.Kind.COPY,
+        args=(mir.Const(4, 2),),
+        results=(mir.Held(constant, 2),),
+    )
+    first = mir.Op(1, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.ARG, args=(mir.Held(constant, 2),))
+    first_call = mir.Op(2, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.CALL)
+    second = mir.Op(3, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.ARG, args=(mir.Held(dynamic, 2),))
+    second_call = mir.Op(4, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.CALL)
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (known, first, first_call, second, second_call), ()),), sealed=True)
+    parameter = mir.MemRef(Addr(Space.FRAME, 0, 1), 2, space=Space.FRAME)
+    calls = {2: "choose", 4: "choose"}
+    arguments = {2: frozenset({1}), 4: frozenset({3})}
+    assert interprocedural.current_call_constants(body, calls, arguments, {"choose": (parameter,)}) == {
+        2: (mir.Const(4, 2),),
+        4: (None,),
+    }
+    assert interprocedural.current_parameter_constants(
+        {"caller": body},
+        {"caller": calls},
+        {"caller": arguments},
+        {"choose": (parameter,)},
+        frozenset({"choose"}),
+    ) == {}
+
+
 def test_pure_call_removal_drops_its_exact_argument_pushes():
     """Deleting a cdecl call must drop its ARG but keep same-site facts.
 

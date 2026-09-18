@@ -68,26 +68,45 @@ def current_parameter_constants(
     """
     actuals: dict[str, list[tuple[mir.Const | None, ...]]] = {name: [] for name in eligible}
     for owner, body in bodies.items():
-        facts = consts.known(body)
-        for block in body.blocks:
-            for index, call in enumerate(block.ops):
-                if call.kind is not mir.Kind.CALL:
-                    continue
-                target = calls.get(owner, {}).get(call.at)
-                if target not in actuals:
-                    continue
-                width = len(parameters[target])
-                sites = arguments.get(owner, {}).get(call.at)
-                selected = (
-                    [op for op in block.ops[:index] if op.kind is mir.Kind.ARG and op.at in sites and len(op.args) == 1]
-                    if sites is not None
-                    else []
-                )
-                # cdecl lays down the final source argument first.
-                values = tuple(_constant_argument(op.args[0], facts) for op in reversed(selected))
-                actuals[target].append(values if len(values) == width else (None,) * width)
+        for at, values in current_call_constants(
+            body, calls.get(owner, {}), arguments.get(owner, {}), parameters
+        ).items():
+            target = calls.get(owner, {}).get(at)
+            if target in actuals:
+                actuals[target].append(values)
 
     return _agreed_parameters(actuals)
+
+
+def current_call_constants(
+    body: mir.MirBody,
+    calls: dict[int, str],
+    arguments: dict[int, frozenset[int]],
+    parameters: dict[str, tuple[mir.MemRef, ...]],
+) -> dict[int, tuple[mir.Const | None, ...]]:
+    """Current SCCP facts for every direct call with a known C contract.
+
+    The result is deliberately per-call instead of per-callee: a costed
+    inlining decision may use one constant call even when a second dynamic
+    call prevents whole-body parameter specialization.
+    """
+    facts = consts.known(body)
+    out = {}
+    for block in body.blocks:
+        for index, call in enumerate(block.ops):
+            if call.kind is not mir.Kind.CALL or (target := calls.get(call.at)) not in parameters:
+                continue
+            width = len(parameters[target])
+            sites = arguments.get(call.at)
+            selected = (
+                [op for op in block.ops[:index] if op.kind is mir.Kind.ARG and op.at in sites and len(op.args) == 1]
+                if sites is not None
+                else []
+            )
+            # cdecl lays down the final source argument first.
+            values = tuple(_constant_argument(op.args[0], facts) for op in reversed(selected))
+            out[call.at] = values if len(values) == width else (None,) * width
+    return out
 
 
 def _constant_argument(argument: object, facts: dict[mir.Value, consts.Known]) -> mir.Const | None:

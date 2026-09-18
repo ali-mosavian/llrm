@@ -25,10 +25,39 @@ iteration updates this file in the same commit.
 | SROA and scalar promotion | partial | fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies can now expand into exact leaves, while far, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
 | Loop optimization | partial | exact pre- and post-tested recurrences, composed pointer recurrences, formula costing, specialization, peeling and exact unrolling exist; versioning, rotation and broad pressure forecasting remain. |
-| Whole-module optimization | partial | summaries, constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, costed private inlining, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
+| Whole-module optimization | partial | summaries, constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
 | Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing, conservative later-core/P5 scheduling, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 79. MIR-derived constant call-site cloning — 2026-09-18
+
+`ipconst_return_site` first retained `choose(4)` after `seed()` had already
+produced its interprocedural result.  A second, dynamic caller correctly
+prevented whole-body specialization; the source-literal-only call-site
+inliner therefore had no safe way to exploit the one current-MIR constant
+call.
+
+The reusable direct-call fact analysis now exposes facts per surviving call,
+not only their all-callers agreement.  The ordinary target-costed private
+leaf inliner consumes those facts after each IPSCCP return round.  It clones
+only the known call, reuses the existing MIR pipeline to fold it, and then
+repeats the direct-call fixed point.  The dynamic call stays semantically
+dynamic; once the constant clone is gone, the pre-existing one-use policy may
+inline its remaining private body, but its emitted comparison and `+29`
+fallback remain.
+
+The fail-first output regression proves both facts: `returnedConstantChoose`
+is `mov ax, 11`, while `dynamicChoose` retains `cmp ax, 4` and `add ax, 29`.
+Its Tier 1 companion proves that one unknown call blocks body-wide parameter
+specialization while preserving the separate constant call fact.  Focused
+checks pass (`3 passed`, `0.22s`), and Tier 1 passes (`191 passed`, `31
+deselected`, `1.24s`).  This extends Phase 6's direct-call IPSCCP/inlining boundary only.
+Recursive SCCs, indirect calls, public/address-taken functions, floating or
+effectful clone candidates, and broader global elimination remain
+conservative.  GCC/LLVM listings remain best-case flat-i386 structural
+references; BCC/WC medium-model listings remain authoritative for ABI,
+segments, legal forms and OMF linkage.
 
 ### 78. Direct-call IPSCCP fixed point — 2026-09-18
 

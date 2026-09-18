@@ -151,6 +151,21 @@ def test_returned_constant_specializes_the_next_private_call() -> None:
     assert "_choose proc near" not in assembly
 
 
+def test_returned_constant_inlines_one_call_without_specializing_dynamic_callers() -> None:
+    """ipconst_return_site kept a call to branchy choose after seed summarized to 4."""
+    source = Path("fixtures/c/ipconst_return_site.c")
+    assembly = cfront.compiled(cfront.recorded(source, []), source.stem, optimise=True)
+    returned = assembly[
+        assembly.index("_returnedConstantChoose proc far") : assembly.index("_returnedConstantChoose endp")
+    ]
+    dynamic = assembly[assembly.index("_dynamicChoose proc far") : assembly.index("_dynamicChoose endp")]
+
+    assert "call _choose" not in returned
+    assert "mov ax, 11" in returned
+    assert "cmp ax, 4" in dynamic
+    assert "add ax, 29" in dynamic
+
+
 def test_relative_source_and_include(tmp_path, monkeypatch):
     """wccq runs in its scratch directory, where `fixtures/c/x.c` and `-I src`
     no longer resolved: E1051 unable to open."""

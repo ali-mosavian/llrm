@@ -420,10 +420,50 @@ def assembled(
                     continue
                 bodies[raised.name] = run_optimiser(raised, after, f"ipa-args{argument_round}.")
                 changed = True
-            if not changed:
+            if changed:
+                argument_round += 1
+                propagate_constant_returns()
+
+            # A single current-MIR constant may be worth cloning even where
+            # another caller keeps the private body dynamic.  This is the
+            # same costed call-site policy used for source literals, with its
+            # facts now coming from the interprocedural fixed point.
+            counts = inline.call_counts(bodies, {one.name: one.calls for one in raised_procedures})
+            available = inline.candidates(
+                bodies,
+                {one.name: one.parameters for one in raised_procedures},
+                counts,
+                private,
+                pure,
+                target.cost("call_far"),
+            )
+            inlined = False
+            for raised in raised_procedures:
+                before = bodies[raised.name]
+                current = interprocedural.current_call_constants(
+                    before,
+                    raised.calls,
+                    call_arguments[raised.name],
+                    {one.name: one.parameters for one in raised_procedures},
+                )
+                constant = inline.constant_sites(
+                    bodies,
+                    {one.name: one.parameters for one in raised_procedures},
+                    raised.calls,
+                    current,
+                    private,
+                    pure,
+                    target.cost("call_far"),
+                )
+                after = inline.expanded(before, raised.calls, call_arguments[raised.name], available, constant)
+                if after is before:
+                    continue
+                bodies[raised.name] = run_optimiser(raised, after, f"ipa-inline{argument_round}.")
+                inlined = True
+            if inlined:
+                propagate_constant_returns()
+            if not changed and not inlined:
                 break
-            argument_round += 1
-            propagate_constant_returns()
         pure = interprocedural.pure_procedures({one.name: (bodies[one.name], one.calls) for one in raised_procedures})
         for raised in raised_procedures:
             before = bodies[raised.name]
