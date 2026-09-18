@@ -249,9 +249,8 @@ def test_nested_accumulator_seed_follows_outer_phi(monkeypatch, initialized: boo
     assert any(accumulator in op.stores for op in inner.ops) is not initialized
 
 
-@pytest.mark.xfail(reason="NESTED's t is still stored once per row (0x8f), not after the outer loop", strict=True)
 def test_nested_accumulator_is_stored_only_after_the_outer_loop() -> None:
-    """NESTED wrote its sum once per row after inner-loop sinking; only the exit needs it."""
+    """NESTED's accumulator is sunk past the outer loop or folded to its final 675."""
     from qbopt.optimize import transform
 
     path = Path("fixtures/omf/nested-p-g2.obj")
@@ -263,6 +262,18 @@ def test_nested_accumulator_is_stored_only_after_the_outer_loop() -> None:
     hot = {at for loop in loops.loops(body.blocks, body.entry) for at in loop.body}
     writes = [block.at for block in body.blocks for op in block.ops if accumulator in op.stores]
     assert not hot.intersection(writes)
+    if not hot:
+        assert not writes
+        assert any(
+            arg == mir.Const(675, arg.width)
+            for block in body.blocks
+            for op in block.ops
+            if op.kind is mir.Kind.ARG
+            for arg in op.args
+            if isinstance(arg, mir.Const)
+        )
+        assert any(count == 6 for _, count in body.repetitions)
+        return
     assert writes == [body.entry, 0x9C]
 
 

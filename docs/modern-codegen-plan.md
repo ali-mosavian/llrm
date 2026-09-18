@@ -1023,3 +1023,20 @@ frontends/layouts.  It does not expand the proof to unknown initial memory or
 relax the storage-rounding and exception constraints.  GCC/LLVM remains
 advisory flat-i386 structural evidence; BCC/WC medium-model output remains
 the ABI/address-form legality authority.
+
+### 49. NESTED outer-accumulator regression audit — 2026-09-18
+
+The NESTED outer-store xfail was re-run fail-first and showed no remaining
+store in any loop—or at entry/exit—because the literal nested program now
+fully evaluates to its final `T=675` PRINT argument.  Its former requirement
+for stores at the entry and offset `0x9c` described only the weaker retained
+loop shape, not the semantic requirement.
+
+The active regression now requires no accumulator write in any retained loop.
+If the loops are fully eliminated, it requires no accumulator store, the
+constant 675 output, and the retained six-trip measurement marker; otherwise
+it requires the previous entry/outer-exit store placement.  It passes (`1
+passed`, `4.07s`).  This is a Phase-5 test/measurement correction; dynamic
+nested loops still require pressure-aware formula selection.  GCC/LLVM
+listings remain advisory flat-i386 structural references, and BCC/WC
+medium-model output remains the legality baseline.
