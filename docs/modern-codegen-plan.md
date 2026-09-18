@@ -647,3 +647,20 @@ partial-register interference; it must not mention this loop, CL, AX, or DX.
 The corresponding regression must first reproduce the unplaceable reload,
 then assert one direct constrained load and a complete legal allocation.  No
 code-generation or performance claim is made by this diagnostic commit.
+
+### 32. Refreshed GCC/LLVM best-case listing evidence — 2026-09-18
+
+`tools/quality.py --references` now has fresh, generated listings for the
+compact far-load loop from Apple Clang 21 and the installed `i686-elf-gcc`
+16.2.0.  The report retains their raw paths, exact flags, compiler versions,
+source hash, and the `best-case-flat-i386-structural-reference` contract.
+
+The references differ in static shape—Clang reports 21 normalized
+instructions, GCC 33—but agree on the important direction: qbopt's dynamic
+operation estimate remains about `2.03x` Clang and `1.72x` GCC.  Both reports
+attribute the first excess loads and stores to `lir-regalloc`.  This supports
+the constrained-reload/pressure investigation but is **not** a performance
+target: both references use a 32-bit flat ABI and omit our segment selection,
+far-pointer traffic, restricted 16-bit address forms, and far-call frame
+contract.  A hard target still requires an independently hand-derived
+medium-model listing.
