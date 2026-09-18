@@ -7,7 +7,10 @@ from iced_x86 import Register
 
 from qbopt.model import ir
 from qbopt.model import lir
+from qbopt.model import mir
 from qbopt.backend import peephole
+from qbopt.objectfile.module import Addr
+from qbopt.objectfile.module import Space
 
 
 def _pair(operation: ir.Operation, name: str, tail: tuple[lir.Insn, ...]) -> tuple[lir.LirBody, lir.Insn]:
@@ -103,3 +106,106 @@ def test_commutative_result_copy_keeps_source_owned_copy_bytes() -> None:
     body = replace(body, blocks=(replace(body.blocks[0], insns=(body.insns[0], owned, overwrite)),))
 
     assert peephole.transferred(body) == body
+
+
+def _high_extract(tail: tuple[lir.Insn, ...]) -> lir.LirBody:
+    value = mir.Value(1, 1)
+    source = mir.Value(2, 1)
+    operation = mir.Op(
+        1,
+        ir.Operation.BINARY,
+        "shr",
+        (value,),
+        (source,),
+        kind=mir.Kind.SHR,
+        args=(mir.Held(source, 4), mir.Const(16, 1)),
+        results=(mir.Held(value, 4),),
+    )
+    wide = ir.Reg(Register.EDX, 4)
+    cell = ir.Mem(Addr(Space.FRAME, -4), 4, through=Register.BP)
+    load = lir.Insn(
+        1,
+        (1, 1),
+        ir.Semantics(ir.Operation.MOVE, "mov", (wide,), (cell,)),
+        (1,),
+        (),
+        op=operation,
+        symbol=False,
+    )
+    shift = lir.Insn(
+        1,
+        (1, 1),
+        ir.Semantics(ir.Operation.BINARY, "shr", (wide,), (wide, ir.Imm(16, 1))),
+        (1,),
+        (1,),
+        op=operation,
+    )
+    return lir.LirBody("extract", 0, (lir.LirBlock(0, (load, shift, *tail), ()),), {}, {})
+
+
+def _return_high() -> lir.Insn:
+    value = mir.Value(1, 1)
+    operation = mir.Op(
+        2,
+        ir.Operation.RETURN,
+        "",
+        (),
+        (value,),
+        kind=mir.Kind.RETURN,
+        args=(mir.Held(value, 2),),
+        reads_complete=True,
+    )
+    return lir.Insn(
+        2,
+        (2, 3),
+        ir.Semantics(ir.Operation.RETURN, "retf", (), ()),
+        (),
+        (1,),
+        op=operation,
+        requires=((ir.Held(1, 2), Register.DX),),
+    )
+
+
+def test_synthetic_high_extract_loads_only_the_high_word() -> None:
+    """Mandel loaded a spilled dword and shifted it solely to return the high word."""
+    low = ir.Reg(Register.DX, 2)
+    returned = _return_high()
+
+    result = peephole.high_extracts(_high_extract((returned,)))
+
+    load, anchor = result.insns[:2]
+    assert load.what == ir.Semantics(
+        ir.Operation.MOVE,
+        "mov",
+        (low,),
+        (ir.Mem(Addr(Space.FRAME, -2), 2, through=Register.BP),),
+    )
+    assert anchor.what.op is ir.Operation.NOTHING
+    assert anchor.defines == (1,)
+    assert result.insns[2:] == (returned,)
+
+
+@pytest.mark.parametrize("hazard", ["full-result", "flags", "source-load"])
+def test_high_extract_keeps_observable_wide_load_or_shift_effects(hazard: str) -> None:
+    """Narrowing is legal only for a synthetic load with dead upper lanes and flags."""
+    if hazard == "full-result":
+        tail = (
+            lir.Insn(
+                2,
+                (2, 4),
+                ir.Semantics(ir.Operation.COMPARE, "cmp", (), (ir.Reg(Register.EDX, 4), ir.Imm(0, 4))),
+                (),
+                (1,),
+            ),
+            _return_high(),
+        )
+    elif hazard == "flags":
+        tail = (lir.Insn(2, (2, 4), ir.Semantics(ir.Operation.BRANCH, "je", (), (), 9), (), ()),)
+    else:
+        tail = (_return_high(),)
+    body = _high_extract(tail)
+    if hazard == "source-load":
+        load = replace(body.insns[0], covers=(1, 3), symbol=None)
+        body = replace(body, blocks=(replace(body.blocks[0], insns=(load, *body.insns[1:])),))
+
+    assert peephole.high_extracts(body) == body

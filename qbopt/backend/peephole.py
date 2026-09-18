@@ -47,7 +47,7 @@ class Peephole(LIRTransform):
         body = spillforward.forwarded(body)
         body = storecombine.combined(body)
         body = pushed_constants(body)
-        body = far_loads(fused(overwritten(shuttles(transferred(commuted(constants(pushes(body))))))))
+        body = far_loads(fused(overwritten(shuttles(high_extracts(transferred(commuted(constants(pushes(body)))))))))
         body = machinecse.eliminated(addresses(body, cpu=self.cpu))
         body = waits(zero_compares(tested(zeroes(body))))
         return self._frame(machinedce.eliminated(body))
@@ -586,6 +586,107 @@ def _transferred(parts: tuple[lir.Insn, ...], dead_after: dict[int, set]) -> tup
     if before is None or after is None or len(before.code) != len(after.code):
         return None
     return replace(combined, what=what), lir.anchor(copied)
+
+
+def high_extracts(body: lir.LirBody) -> lir.LirBody:
+    """Narrow a synthetic dword reload shifted down to its high word.
+
+    A spilled value's high-half extraction can reach allocated LIR as
+    ``mov R32,[slot]; shr R32,16``.  When only R16 survives, reading
+    ``word [slot+2]`` computes the same value without the shift.  The proof is
+    necessarily physical: the preserved upper register lanes and every flag
+    the shift would write must both be dead.
+    """
+    from qbopt.backend import liveness
+    from qbopt.backend import regthrash
+
+    exits = liveness.dead_at_exit(body)
+    blocks = []
+    for block in body.blocks:
+        dead_after = regthrash._dead_after(block, set(exits[block.at]))
+        insns = []
+        index = 0
+        while index < len(block.insns):
+            pair = block.insns[index : index + 2]
+            changed = _high_extract(pair, dead_after) if len(pair) == 2 else None
+            if changed is not None:
+                insns.extend(changed)
+                index += 2
+                continue
+            insns.append(block.insns[index])
+            index += 1
+        blocks.append(replace(block, insns=tuple(insns)))
+    return replace(body, blocks=tuple(blocks))
+
+
+def _high_extract(parts: tuple[lir.Insn, ...], dead_after: dict[int, set]) -> tuple[lir.Insn, lir.Insn] | None:
+    load, shift = parts
+    if any(
+        one.what is None
+        or one.clobbers
+        or one.clobbers_high
+        or one.requires
+        or one.delivers
+        or one.spread
+        or one.group is not None
+        or one.symbol is True
+        or one.frame_adjust
+        or one.spill_store
+        for one in parts
+    ):
+        return None
+    # Only a synthetic reload may be narrowed.  A source memory operation can
+    # be volatile, fault on bytes no longer read, or otherwise make its full
+    # access width observable.
+    source = load.op
+    if (
+        not load.inserted
+        or load.symbol is not False
+        or source is None
+        or getattr(source, "source_backed", True)
+        or getattr(source, "loads", ())
+        or getattr(source, "stores", ())
+        or getattr(source, "volatile", False)
+    ):
+        return None
+    match load.what, shift.what:
+        case (
+            ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg(width=4) as wide,), (ir.Mem(width=4) as cell,)),
+            ir.Semantics(
+                ir.Operation.BINARY,
+                "shr",
+                (ir.Reg(width=4) as destination,),
+                (ir.Reg(width=4) as shifted, ir.Imm(value=16)),
+            ),
+        ):
+            if (
+                destination != wide
+                or shifted != wide
+                or not _frame_cell(cell)
+                or cell.addr is None
+                or cell.index is not None
+                or cell.selector is not None
+            ):
+                return None
+        case _:
+            return None
+
+    low = ir.Reg(target.named(wide.register, 2), 2)
+    preserved = _lanes(wide.register) - _lanes(low.register)
+    effects = _register_effects(shift, flags=True)
+    if effects is None:
+        return None
+    flags = effects[1] & _flag_lanes(0xFFFFFFFF)
+    if not (preserved | flags) <= dead_after[id(shift)]:
+        return None
+
+    high = replace(cell, addr=replace(cell.addr, disp=cell.addr.disp + 2), width=2, offset=cell.offset + 2)
+    what = ir.Semantics(ir.Operation.MOVE, "mov", (low,), (high,))
+    from qbopt.backend import select
+
+    if select.emit(what) is None:
+        return None
+    return replace(load, what=what), lir.anchor(shift)
 
 
 def shuttles(body: lir.LirBody) -> lir.LirBody:

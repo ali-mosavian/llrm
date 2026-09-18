@@ -250,7 +250,13 @@ def test_return_duplication_rejects_growth_and_source_owned_tails() -> None:
 
 
 def test_qglsurf_shares_all_three_zero_result_tails() -> None:
-    """QGL surface failure exits fell from 71 to 65 emitted instructions."""
+    """QGL surface failure exits share one zero store and emit 56 instructions.
+
+    The zero can be materialised as either `xor r,r` or `mov r,0`; the tail
+    sharing is the property this regression protects, not that local encoding
+    choice.  Narrowing the synthetic high-word return reload removed the 57th
+    instruction.
+    """
     source = Path("fixtures/c/qglsurf.cgs")
     module = cfront.assembled(source.read_text(), source.stem, optimise=True)
     (procedure,) = module.procedures
@@ -261,16 +267,26 @@ def test_qglsurf_shares_all_three_zero_result_tails() -> None:
         if one.what is not None and one.what.op is not ir.Operation.NOTHING
     ]
 
-    assert len(physical) == 57
+    assert len(physical) == 56
     zero_tails = 0
     for block in procedure.body.blocks:
         real = [one.what for one in block.insns if one.what is not None and one.what.op is not ir.Operation.NOTHING]
         if len(real) not in {2, 3} or (len(real) == 3 and real[-1].op is not ir.Operation.JUMP):
             continue
         zero, store = real[:2]
-        if (
+        zeroed = (
             zero.op is ir.Operation.BINARY
             and zero.name == "xor"
+            and len(zero.sources) == 2
+            and zero.sources[0] == zero.sources[1]
+        ) or (
+            zero.op is ir.Operation.MOVE
+            and len(zero.sources) == 1
+            and isinstance(zero.sources[0], ir.Imm)
+            and zero.sources[0].value == 0
+        )
+        if (
+            zeroed
             and store.op is ir.Operation.MOVE
             and store.dests
             and isinstance(store.dests[0], ir.Mem)

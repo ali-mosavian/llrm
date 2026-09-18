@@ -527,25 +527,39 @@ def test_c_mandel_reuses_coordinate_recurrences_for_both_outer_loops() -> None:
         if mnemonic == "shl" and operands.lstrip().startswith("dword ptr [bp-")
     ]
     copied_commutative_results = []
+    widened_high_extracts = []
     for first, second in zip(rows, rows[1:], strict=False):
         _raw, mnemonic, operands = first
         _next_raw, next_mnemonic, next_operands = second
-        multiply = [operand.strip() for operand in operands.split(",")]
+        first_operands = [operand.strip() for operand in operands.split(",")]
         copied = [operand.strip() for operand in next_operands.split(",")]
         if (
             mnemonic == "imul"
-            and len(multiply) == 2
+            and len(first_operands) == 2
             and next_mnemonic == "mov"
             and len(copied) == 2
-            and copied == [multiply[1], multiply[0]]
+            and copied == [first_operands[1], first_operands[0]]
         ):
             copied_commutative_results.append((first, second))
+        shifted = [operand.strip() for operand in next_operands.split(",")]
+        if (
+            mnemonic == "mov"
+            and len(first_operands) == 2
+            and first_operands[0] in {"eax", "ebx", "ecx", "edx", "esi", "edi"}
+            and "[" in first_operands[1]
+            and next_mnemonic == "shr"
+            and len(shifted) == 2
+            and shifted[0] == first_operands[0]
+            and immediate(next_operands) == 16
+        ):
+            widened_high_extracts.append((first, second))
 
     assert len(unit_steps) == 1, unit_steps
     assert "[" not in unit_steps[0][1]
     assert len(coordinate_steps) == 2, coordinate_steps
     assert not frame_shifts, frame_shifts
     assert not copied_commutative_results, copied_commutative_results
+    assert not widened_high_extracts, widened_high_extracts
 
 
 def _trip_counts(data: bytes) -> list[int]:

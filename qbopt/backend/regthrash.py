@@ -81,8 +81,15 @@ def _dead_after(block: lir.LirBlock, dead: set) -> "dict[int, set] | None":
             continue
         effects = _register_effects(one, flags=True)
         if effects is None:
-            dead.clear()
-            continue
+            # The whole-body liveness solver already has an exact fallback
+            # for fully described returns and call register masks.  Use the
+            # same contract locally: treating a complete return as opaque
+            # made every lane look live immediately before it and hid legal
+            # result-register cleanup.
+            effects = liveness._declared(one)
+            if effects is None:
+                dead.clear()
+                continue
         reads, writes = effects
         dead = (dead | writes) - reads
     return out

@@ -26,9 +26,69 @@ iteration updates this file in the same commit.
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, dying-base indexed-form unfolding, and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
 | Loop optimization | partial | exact pre/post-tested recurrences and symbolic sentinels, target-priced exact nested-recurrence rewind, complete nested-initializer LICM, dead-control countdowns with zero-trip guards, complete-affine spill/recompute pricing, precise-volatile-aware LICM, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling with bounded full-growth and machine-neutral whole-range pressure forecasting exist; versioning, partial unrolling, and constraint-complete candidate-set forecasting remain. |
 | Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs (including closed recursive SCCs in C and object paths), constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, post-inline constant folding through phi edges and linear corridors, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
-| Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing and byte-neutral source-unowned terminal-return duplication, dead-register frame-copy shuttles, dying-input commutative result transfer, target-priced 67h LEA selection including source-owned loaded scale/add tails and constant/register sums, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
+| Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing and byte-neutral source-unowned terminal-return duplication, dead-register frame-copy shuttles, dying-input commutative result transfer, synthetic high-word reload narrowing, target-priced 67h LEA selection including source-owned loaded scale/add tails and constant/register sums, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 115. Narrow synthetic high-word reloads — 2026-09-18
+
+After iteration 114, Mandel's medium-model long return still widened a frame
+reload solely to throw its low half away:
+
+```asm
+; before                              ; after
+mov edx, dword ptr [bp-4]             mov dx, word ptr [bp-2]
+shr edx, 16
+mov ax, word ptr [bp-4]               mov ax, word ptr [bp-4]
+```
+
+The first unit-only attempt passed but the production listing did not change.
+The raw allocated LIR showed why: the local dead-lane walker cleared all facts
+at `retf`, although whole-CFG liveness already had the return's complete ABI
+read contract.  Treating that passing unit as proof would have repeated the
+measurement failure this project explicitly guards against.  The regression
+now uses the real complete return contract, failed with the wide load intact,
+and `regthrash._dead_after` now consumes the same declared return/call effects
+as the whole-body solver.
+
+The physical cleanup recognizes only a zero-byte, non-source-backed frame
+reload followed immediately by an unsigned 16-bit shift of the same dword
+register.  It reads the high word directly only when the register's preserved
+upper lanes and every flag the shift modifies are dead.  It refuses source
+memory operations, volatile or declared loads/stores, live full-width results,
+live flags, relocations, indirect/indexed cells, clobbers, constraints, groups,
+spread ownership and spill stores.  The removed shift remains a virtual
+anchor.  This is a general extract-from-compiler-storage fold; it does not name
+Mandel, a return register, or one frame offset.
+
+Stage files are identical through `ParallelCopy`; `Peephole` is the first
+changed phase.  Against the immediately preceding committed listing:
+
+| metric | before | after | change |
+|---|---:|---:|---:|
+| bytes | 196 | 191 | -2.6% |
+| instructions | 54 | 53 | -1 |
+| ABI-normalized instructions | 46 | 45 | -1 |
+| static 386 cost | 283 | 280 | -1.1% |
+| estimated executed instructions | 71,565 | 71,564 | -1 |
+| estimated executed 386 cost | 452,811.63 | 452,808.63 | -3 |
+
+The isolated form shrinks from eight bytes to three and improves on every
+profile: 386 `7→4`, 486 `5→1`, P5 `4→1`, P6 `4→3`, K5 `3→2`, K6 `3→2`, K7
+`4→3`, and Core `5→4`.  The candidate is now exactly `1.00×` i686 GCC's 45
+ABI-normalized instructions and `0.87×` Clang's 52.  The flat references return
+the long in EAX, so they are structural evidence that no extraction shift is
+needed, not an ABI-equivalent prescription for DX:AX.
+
+Real `xOffset=0` again passes through fresh OMF, the DOS linker and a DOS 386
+and returns the independent oracle `8873`.  Candidate, GCC, Clang and stage
+listings are under `build/quality/iter124-mandel-highword`.  Focused physical
+liveness/folding checks pass (`17 passed`, `0.12s`), the real-source regression
+passes (`1 passed`, `48.30s`), and Tier 1 passes (`249 passed`, `31 deselected`,
+`3.74s`).
+This advances Phase 7 without claiming arbitrary source-load narrowing,
+non-adjacent extraction folding, fewer accumulator spills, or final
+acceptance.
 
 ### 114. Transfer commutative results into a dying input — 2026-09-18
 
