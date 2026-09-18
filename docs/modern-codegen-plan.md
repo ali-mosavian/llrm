@@ -25,7 +25,7 @@ iteration updates this file in the same commit.
 | SROA and scalar promotion | partial | fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies can now expand into exact leaves, while far, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
 | Loop optimization | partial | exact pre- and post-tested recurrences, composed pointer recurrences, formula costing, specialization, peeling and exact unrolling exist; versioning, rotation and broad pressure forecasting remain. |
-| Whole-module optimization | partial | summaries, constant returns, private inlining and private procedure DCE exist; full IPSCCP/cloning and private-data DCE remain. |
+| Whole-module optimization | partial | summaries, constant returns, costed private straight-line inlining and private procedure DCE exist; full IPSCCP/cloning and private-data DCE remain. |
 | Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing, conservative later-core/P5 scheduling, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
@@ -1631,3 +1631,27 @@ The companion `aggregatecopybothptr` coverage keeps one exact local pointer
 on each side of the copy. It verifies that generated scalar reads and stores
 retain both address dependencies rather than silently falling back to the
 direct-address-only form.
+
+### 72. Costed repeated private-leaf inlining — 2026-09-18
+
+`inline_twice` first retained two near calls, two argument pushes, two caller
+cleanups, and its private `increment` procedure despite that helper reducing
+to one integer add after its ordinary local pipeline. The old inliner treated
+one surviving call as an absolute eligibility condition. That preserved a
+call boundary even where cloning the semantic body was decisively cheaper.
+
+The whole-module candidate policy now admits every direct call to a private,
+pure, single-block leaf when the selected CPU profile's total call cost is
+strictly greater than the MIR semantic work duplicated by cloning. Single-use
+leaves retain the existing broader CFG policy; repeated leaves with phis or
+control flow remain excluded. Thus the mechanism is target-priced and
+general, rather than an exception for one helper name or call count.
+
+The fail-first C regression now emits no `_increment` procedure or call. Its
+caller is the direct `value + 1 + value + 1` form, simplified to `add ax, 1`
+followed by `add ax, ax`. The focused inlining suite passes. This advances
+Phase 6 selective MIR inlining; recursive/public/address-taken procedures,
+calls with unmodelled results, effectful or floating bodies, CFG cloning, and
+private-data DCE remain outside this increment. GCC/LLVM remain best-case
+flat-i386 structural references; BCC/WC remain the medium-model ABI and
+addressing authority.

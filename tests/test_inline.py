@@ -3,12 +3,15 @@
 from pathlib import Path
 from collections import Counter
 
+import pytest
+
 from qbopt.model import ir
 from qbopt.model import mir
 from qbopt.model import memory
 from qbopt.analysis import alias
 from qbopt.optimize import inline
 from qbopt.cfront import compile as cfront
+from qbopt.backend import cpu
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "c"
 
@@ -114,10 +117,8 @@ def test_inline_refuses_a_live_unmodelled_call_result() -> None:
     assert inline.expanded(body, {2: "leaf"}, {2: frozenset()}, {"leaf": inline.Candidate(_leaf(), ())}) is body
 
 
-def test_inline_policy_requires_one_surviving_call() -> None:
-    """Inlining a multiply-called body duplicates it; the initial policy has
-    no pressure model strong enough to justify that expansion yet.
-    """
+def test_inline_policy_refuses_repeated_work_without_a_call_cost() -> None:
+    """A repeated body must not clone when the profile cannot price a call."""
     leaf = _leaf()
     assert (
         inline.candidates(
@@ -126,7 +127,7 @@ def test_inline_policy_requires_one_surviving_call() -> None:
             Counter({"leaf": 2}),
             frozenset({"leaf"}),
             frozenset({"leaf"}),
-            call_cost=4,
+            call_cost=0,
         )
         == {}
     )
@@ -169,3 +170,21 @@ def test_small_private_pure_helpers_inline_in_mir() -> None:
     assert not any("offset L_" in line for line in body), (
         "both inlined choices are object addresses, so their null test is true and neither address is needed"
     )
+
+
+@pytest.mark.parametrize("target", cpu.names())
+def test_tiny_private_leaf_inlines_at_two_call_sites(target: str) -> None:
+    """inline_twice kept two near calls to one add-only helper.
+
+    The callee has one semantic operation, while every call has argument
+    setup, a near call, and cleanup. Keeping it out of line solely because
+    the body has two callers leaves that paid work in the caller on every
+    target profile.
+    """
+    source = FIXTURES / "inline_twice.c"
+    assembly = cfront.compiled(cfront.recorded(source, []), source.stem, optimise=True, cpu=target)
+    lines = [line.strip() for line in assembly.splitlines()]
+
+    assert "_increment proc near" not in lines
+    body = lines[lines.index("_inlineTwice proc far") : lines.index("_inlineTwice endp")]
+    assert "call _increment" not in body

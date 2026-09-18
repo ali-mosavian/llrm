@@ -5,11 +5,11 @@ call, clone the callee's blocks, bind formal parameter loads to the actual
 SSA values, and join every return back to the continuation.  The ordinary
 body pipeline then simplifies the result.
 
-The first deliberately small policy covers leaf procedures called once.
-Their original body becomes unreachable, so cloning it cannot increase
-whole-module size; removing argument setup and the call is a strict static
-and dynamic gain.  A target-supplied call cost bounds how much CFG is moved
-into the caller, without exposing opcodes or register names to MIR.
+The initial policy covered leaf procedures called once.  It also admits a
+straight-line private leaf at every direct call site when the target-priced
+call work exceeds the semantic work duplicated by cloning.  In both cases
+the ordinary body pipeline simplifies the result; MIR chooses from semantic
+costs and never sees opcodes or registers.
 """
 
 from collections import Counter
@@ -61,13 +61,14 @@ def candidates(
     pure: frozenset[str],
     call_cost: int,
 ) -> dict[str, Candidate]:
-    """Private pure leaves worth moving into their sole caller.
+    """Private pure leaves worth moving into their direct callers.
 
-    A single-use body disappears after expansion, so the profitability
-    question is only whether its CFG is small enough to expose without
-    creating an unreasonable allocation region.  The floor keeps cheap-call
-    CPUs willing to inline ordinary diamonds; expensive calls admit a little
-    more work.  Nothing machine-specific crosses this interface.
+    A single-use body disappears after expansion, so it only has to fit the
+    normal CFG budget.  A repeated body duplicates its semantic work once per
+    additional caller.  Admit that only for a straight-line leaf, and only
+    when the profile's total direct-call cost is greater than the duplicate
+    work.  This lets a short arithmetic helper disappear at every site while
+    keeping branchy or code-growing helpers out of the allocator's region.
     """
     budget = max(6, min(24, call_cost // 2))
     out = {}
@@ -79,9 +80,16 @@ def candidates(
             for block in body.blocks
             for op in block.ops
         )
-        if calls[name] == 1 and semantic <= budget and _leaf(body, parms):
+        repeated = semantic * (calls[name] - 1)
+        profitable = calls[name] == 1 or (_straight(body) and repeated < calls[name] * call_cost)
+        if calls[name] and semantic <= budget and profitable and _leaf(body, parms):
             out[name] = Candidate(body, parms)
     return out
+
+
+def _straight(body: mir.MirBody) -> bool:
+    """Whether cloning the body duplicates no control-flow structure."""
+    return len(body.blocks) == 1 and not body.blocks[0].phis and not body.blocks[0].succ
 
 
 def _parameter(op: mir.Op, parameters: tuple[mir.MemRef, ...]) -> int | None:
