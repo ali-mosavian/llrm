@@ -882,3 +882,25 @@ This advances Phase 5 LICM and Phase 4's machine-neutral value accounting.
 It does not infer a target from the result: GCC/LLVM flat-i386 listings are
 still advisory best-case structural references, while BCC/WC medium-model
 output defines the ABI, segmentation, and legal address-form constraints.
+
+### 42. ADDRM exit-sum regression audit — 2026-09-18
+
+The remaining strict ADDRM exit-sum xfail was re-run fail-first across PDS
+`/G2`, QuickBASIC `/O`, and VBDOS `/G3`.  It failed before any optimizer
+change because the assertion required one surviving natural loop, while the
+current pipeline already fully unrolls this literal 1..20 fixture.  Final
+MIR has no loop, retains a `(source-address, 20)` repetition fact for quality
+accounting, has no 32-bit ADD, and supplies the final `U=210` value as a
+constant PRINT argument.  The raw three-layout MIR inspection confirms the
+twenty `b(i)` stores still have their individual values, so this is not a
+closed-form replacement of observable per-iteration storage.
+
+The active regression now states that semantic result and permits either a
+retained store loop or complete unrolling.  In the latter case it requires
+the 20-trip repetition marker; in both forms it requires no long accumulator
+ADD and an explicit constant 210 at the output boundary.  It passes (`3
+passed`, `8.41s`).  This is a Phase-5 test/measurement correction, not new
+loop algebra: the general exit-evaluation mechanism already has dedicated
+hazard and LCSSA regressions.  GCC/LLVM output remains best-case flat-i386
+structural evidence only; BCC/WC medium-model code remains the address-form
+and ABI authority.

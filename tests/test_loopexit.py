@@ -171,14 +171,12 @@ def test_a_doubled_accumulator_is_not_a_linear_sum(monkeypatch):
     ]
 
 
-@pytest.mark.xfail(reason="addrm's long sum is no longer computed outside its store loop", strict=True)
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_addrm_long_sum_is_computed_outside_the_store_loop(tag):
-    """ADDRM accumulated 1..20 into a long every iteration even though its final sum is 210."""
+    """ADDRM's 1..20 long sum reaches PRINT as 210, with no remaining loop arithmetic."""
     import corpus
     from qbopt.model import mir
     from qbopt.analysis import loops
-    from qbopt.analysis import consts
     from qbopt.optimize import transform
 
     path = Path(f"fixtures/omf/addrm-{tag}.obj")
@@ -187,24 +185,28 @@ def test_addrm_long_sum_is_computed_outside_the_store_loop(tag):
     body = transform.applied(
         mir.bodies(found, partition)[0][1], found.dgroup, found.calls, blocks=partition, found=found
     )
-    (loop,) = loops.loops(body.blocks, body.entry)
-    stores = [op for block in body.blocks if block.at in loop.body for op in block.ops if op.stores]
-    assert sorted(ref.width for op in stores for ref in op.stores) == [2, 4]
+    retained = loops.loops(body.blocks, body.entry)
     assert not any(
         op.kind is mir.Kind.ADD and any(result.width == 4 for result in op.results)
         for block in body.blocks
-        if block.at in loop.body
         for op in block.ops
     )
-    facts = consts.known(body)
     output = [
         op
         for block in body.blocks
-        if block.at not in loop.body
         for op in block.ops
-        if op.kind is mir.Kind.STORE and any(ref.width == 4 for ref in op.stores)
+        if op.kind is mir.Kind.ARG
     ]
-    assert any(consts._put(op, facts) == consts.Known(210, 4) for op in output)
+    assert any(arg == mir.Const(210, arg.width) for op in output for arg in op.args if isinstance(arg, mir.Const))
+    if not retained:
+        # All bounds and values are literal for this fixture, so complete
+        # unrolling is a valid stronger form.  `repetitions` keeps the
+        # source-loop extent visible for costing and diagnostics.
+        assert any(count == 20 for _, count in body.repetitions)
+        return
+    (loop,) = retained
+    stores = [op for block in body.blocks if block.at in loop.body for op in block.ops if op.stores]
+    assert sorted(ref.width for op in stores for ref in op.stores) == [2, 4]
 
 
 @pytest.mark.parametrize("hazard", ["observed-in-loop", "shared-exit"])
