@@ -39,14 +39,38 @@ def test_counter_zero_test_requires_an_unchanged_counter(kind, same, accepted):
     assert induction._counter_bound(op, branch, counter, 2) == (mir.Const(0, 2) if accepted else None)
 
 
-@pytest.mark.xfail(reason="the pointer is rebuilt by PTR_OFFSET each iteration, not carried by a phi", strict=True)
+def test_counter_zero_test_keeps_its_flags_across_a_partial_result():
+    """NDARR's `OR i,i` bound was refused because its word result retained an upper half."""
+    value, result = mir.Value(910, 0), mir.Value(911, 0)
+    flags = mir.Value(912, 0, flags=True)
+    source = mir.Held(value, 2)
+    op = mir.Op(
+        0,
+        ir.Operation.BINARY,
+        "",
+        (result, flags),
+        (value,),
+        kind=mir.Kind.OR,
+        merges={value: result},
+        args=(source, source),
+        results=(mir.Held(result, 2),),
+    )
+    branch = mir.Op(1, ir.Operation.BRANCH, "", (), (flags,), kind=mir.Kind.BRANCH)
+    counter = induction.Affine(value.id, mir.Const(-1, 2), mir.Const(1, 2), 0)
+    assert induction._counter_bound(op, branch, counter, 2) == mir.Const(0, 2)
+
+
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_nine_dimensional_loop_carries_its_pointer(tag):
     """NDARR printed 1,12,2 correctly but rebuilt its nine-dimensional pointer each iteration."""
     from qbopt import wholeseg
     states = []
     def watch(stage, name, state):
-        if stage == "mir-widen":
+        # `r02-strength` is the first pass that has both the promoted
+        # counter and its exact logical-test bound.  Later exact unrolling
+        # deliberately eliminates the phi, so it is not evidence that the
+        # address was rebuilt.
+        if stage == "mir-r02-strength":
             states.append(state)
     result = wholeseg.emitted(Path(f"fixtures/regressions/ndarr-{tag}.obj").read_bytes(), watch=watch)
     assert result.outcome is wholeseg.Emission.LIR, result.reason

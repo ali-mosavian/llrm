@@ -470,11 +470,15 @@ def _counter_bound(op, branch, counter, width, made=None):
         or op.loads
         or op.stores
         or op.barrier
-        or op.merges
         or not isinstance(op.args[0], mir.Held)
         or op.args[0].width != width
     ):
         return None
+    # A partial numeric result retains part of its destination, but the flags
+    # this branch consumes are still exactly those of the width named by the
+    # operands.  Rejecting that independent value dependency loses ordinary
+    # word `or i,i` loop tests merely because the register model tracks an
+    # upper-half merge.
     compared = _copied(op.args[0], made) if made is not None else op.args[0]
     if compared.value.id != counter.value:
         return None

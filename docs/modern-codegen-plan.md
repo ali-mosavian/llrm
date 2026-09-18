@@ -730,3 +730,28 @@ proved wide and affine; extending the narrow-to-wide proof requires an exact
 trip-bound proof first.  GCC and LLVM listings continue to be best-case,
 flat-i386 structural references only; BCC/WC medium-model output remains the
 source of address-form and ABI legality evidence.
+
+### 36. Partial-result logical loop bounds — 2026-09-18
+
+The follow-up stage dump disproved the remaining NDARR assumption: its
+`rowIndex = -1 .. 0` loop has an exact `OR i,i` zero bound and a unit stride.
+The only rejected fact was a partial-result merge on the word OR.  That merge
+records preservation of an unrelated upper half of the numeric destination;
+it cannot change the word operation's flags, which are the sole input to the
+branch.  The induction bound recognizer now accepts that general flag/value
+separation for its existing compare and self-AND/OR forms.
+
+The new fail-first unit regression uses a partial result and requires the
+zero bound.  The former NDARR strict xfail is now an active structural
+regression across PDS, QuickBASIC, and VBDOS: at `r02-strength`, where the
+promoted counter and its exact bound first coexist, every pointer store names
+a carried phi.  Later exact unrolling removes those phis by design, so final
+MIR is not the evidence point.  The targeted logical-bound and three-fixture
+checks pass (`9 passed`, `16.38s`).
+
+This closes the narrow-counter proof needed by the preceding composed-pointer
+iteration for this finite signed loop; it does not relax the non-wrapping
+requirement for unknown bounds, XOR/masked tests, different widths, or other
+extensions.  GCC/LLVM listings remain advisory best-case structural
+references, while BCC/WC medium-model output remains the ABI/address-form
+legality baseline.
