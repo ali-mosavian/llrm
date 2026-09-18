@@ -24,11 +24,28 @@ iteration updates this file in the same commit.
 | MIR/LIR provenance and fresh OMF | complete in production | allocated LIR emits directly with external source maps/allocation hints; the remaining compatibility views are test-only and cannot route a compilation through record rewriting. |
 | SROA and scalar promotion | partial | fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies can now expand into exact leaves, while far, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
-| Loop optimization | partial | exact pre- and post-tested recurrences, composed pointer recurrences, formula costing, specialization, peeling and exact unrolling exist; versioning, rotation and broad pressure forecasting remain. |
+| Loop optimization | partial | exact pre- and post-tested recurrences, composed pointer recurrences, formula costing, specialization, rotation, peeling and exact unrolling exist; versioning and broad pressure forecasting remain. |
 | Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs, constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
 | Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 86. Reconcile loop-rotation plan state — 2026-09-18
+
+The live table still listed rotation as future work.  That was stale: the
+production C and object pipelines both invoke `rotate.entered()` after the
+ordinary MIR fixed point, and the C regression verifies that `_dot` and
+`_fill` have no backward unconditional jump.  The implementation deliberately
+requires a proven nonempty loop, one latch, a test-only header, and no unsafe
+phi move; it remains a conservative general MIR transform rather than a
+frontend or source-name special case.
+
+The table now records rotation as present.  It does not claim loop work is
+finished: loop versioning, broad register-pressure forecasting, and a
+complete legal-form selector remain open.  The latest GCC/LLVM reports remain
+best-case flat-i386 structural listing evidence, while BCC/WC medium-model
+listings remain the hard ABI, segment, address-form, and performance-target
+authority.
 
 ### 85. Keep no-return summaries private — 2026-09-18
 
