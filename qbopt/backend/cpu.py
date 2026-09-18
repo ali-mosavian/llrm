@@ -31,6 +31,10 @@ class Profile:
     # Appended so the positional shape of the pre-profile interface remains
     # compatible. Drivers and MIR deliberately use this field by name.
     operations: OperationCosts = OperationCosts()
+    # P5 is in-order but can issue a U/V pair only for a restricted set of
+    # forms.  This is deliberately distinct from generic issue width and is
+    # appended for the same positional compatibility as ``operations``.
+    pentium_pairing: bool = False
 
     def cost(self, operation: str) -> int:
         """The existing target-ranking cost for one named instruction form."""
@@ -146,6 +150,7 @@ def _profile(name: str) -> Profile:
         bool(timings.INORDER[at]),
         timings.PREFIX[at],
         timings.PARTIAL_STALL[at],
+        pentium_pairing=name == "P5",
         operations=_operation_costs(costs, timings.PREFIX[at]),
         _costs=tuple(costs.items()),
         _latencies=tuple((operation, values[at]) for operation, values in timings.LATENCY.items()),

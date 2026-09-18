@@ -118,8 +118,7 @@ def _latency(one: lir.Insn, cpu: targets.Profile) -> int:
         return 1
 
 
-def _ordered(window: list[lir.Insn], cpu: targets.Profile) -> list[lir.Insn]:
-    """List-schedule one side-effect-free window by lanes and measured latency."""
+def _graph(window: list[lir.Insn]) -> "tuple[list[tuple[frozenset, frozenset]], list[set[int]], list[set[int]]]":
     effects = [_safe(one) for one in window]
     assert all(one is not None for one in effects)
     needs = [set() for _ in window]
@@ -134,6 +133,82 @@ def _ordered(window: list[lir.Insn], cpu: targets.Profile) -> list[lir.Insn]:
             if writes & (later_reads | later_writes) or reads & later_writes:
                 users[left].add(right)
                 needs[right].add(left)
+    return effects, needs, users
+
+
+def _pair_class(one: lir.Insn) -> str:
+    """The audited non-MMX Pentium U/V category for a safe register form.
+
+    GCC's local Pentium model supplies the rule, not an instruction listing:
+    operand/address-size prefixes use U only, immediate/displacement forms
+    and multiply use neither pairing slot, and the remaining register ALU or
+    move forms can issue in either pipe.  `_safe` has already ruled out memory
+    and all forms whose category is not complete here.
+    """
+    from qbopt.backend import select
+
+    assert one.what is not None
+    encoded = select.emit(one.what)
+    if encoded is None:
+        return "np"
+    if encoded.code[:1] in {b"\x66", b"\x67", b"\xf2", b"\xf3"}:
+        return "u"
+    if one.what.name == "imul" or any(isinstance(where, ir.Imm) for where in one.what.sources):
+        return "np"
+    if one.what.name in {"shl", "shr", "sar", "rol", "ror"}:
+        return "u"
+    return "uv"
+
+
+def _pentium_ordered(window: list[lir.Insn], cpu: targets.Profile) -> list[lir.Insn]:
+    """Issue independent audited U/V pairs in an in-order Pentium listing."""
+    _effects, needs, users = _graph(window)
+    ready_at = [0] * len(window)
+    left = set(range(len(window)))
+    emitted: list[lir.Insn] = []
+    clock = 0
+    while left:
+        ready = [index for index in left if not needs[index] and ready_at[index] <= clock]
+        if not ready:
+            clock = min(ready_at[index] for index in left if not needs[index])
+            continue
+        classes = {index: _pair_class(window[index]) for index in ready}
+        # A U-only form can pair only as the first instruction, while an
+        # ordinary form can be placed in U or V.  Prefer a candidate that
+        # actually makes a pair; otherwise preserve source order.
+        pair_starters = [
+            index
+            for index in ready
+            if classes[index] in {"u", "uv"}
+            and any(other != index and classes[other] == "uv" for other in ready)
+        ]
+        first = min(pair_starters or ready, key=lambda index: index)
+        emitted.append(window[first])
+        left.remove(first)
+        done = clock + _latency(window[first], cpu)
+        for user in users[first]:
+            needs[user].remove(first)
+            ready_at[user] = max(ready_at[user], done)
+
+        # The V slot may only receive a fully pairable form.  Its dependencies
+        # were already ready before the U-slot occurrence, so it cannot read
+        # a same-cycle result from that occurrence.
+        seconds = [index for index in ready if index in left and classes[index] == "uv"]
+        if seconds and classes[first] in {"u", "uv"}:
+            second = min(seconds)
+            emitted.append(window[second])
+            left.remove(second)
+            done = clock + _latency(window[second], cpu)
+            for user in users[second]:
+                needs[user].remove(second)
+                ready_at[user] = max(ready_at[user], done)
+        clock += 1
+    return emitted
+
+
+def _ordered(window: list[lir.Insn], cpu: targets.Profile) -> list[lir.Insn]:
+    """List-schedule one side-effect-free window by lanes and measured latency."""
+    _effects, needs, users = _graph(window)
     ready_at = [0] * len(window)
     left = set(range(len(window)))
     emitted: list[lir.Insn] = []
@@ -161,10 +236,9 @@ def _ordered(window: list[lir.Insn], cpu: targets.Profile) -> list[lir.Insn]:
 def scheduled(body: lir.LirBody, cpu: str | targets.Profile = "386") -> lir.LirBody:
     """Hide safe dependency gaps for an out-of-order profile, else retain order."""
     target = targets.profile(cpu)
-    # P5 needs U/V-pipe pairing constraints, not merely a generic width of
-    # two; 386/486 are in-order.  Retaining their established listing is more
-    # correct than pretending either has the later-core scheduling model.
-    if target.in_order:
+    # 386/486 are in-order.  P5's U/V pairing is its own audited profile
+    # property rather than an inference from issue width.
+    if target.in_order and not target.pentium_pairing:
         return body
     blocks = []
     changed = False
@@ -175,7 +249,7 @@ def scheduled(body: lir.LirBody, cpu: str | targets.Profile = "386") -> lir.LirB
         def flush() -> None:
             nonlocal changed, window
             if window:
-                ordered = _ordered(window, target)
+                ordered = _pentium_ordered(window, target) if target.pentium_pairing else _ordered(window, target)
                 changed |= ordered != window
                 out.extend(ordered)
                 window = []

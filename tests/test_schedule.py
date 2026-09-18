@@ -57,6 +57,28 @@ def test_in_order_profiles_keep_the_established_source_order() -> None:
     assert schedule.scheduled(original, cpu.profile("486")) is original
 
 
+def test_pentium_orders_a_prefixed_move_before_its_uv_pair() -> None:
+    """Pentium lost a U/V pair when ``mov di,si`` preceded prefixed ``mov eax,ecx``."""
+    pairable = _insn(
+        0,
+        ir.Operation.MOVE,
+        "mov",
+        (ir.Reg(Register.DI, 2),),
+        (ir.Reg(Register.SI, 2),),
+    )
+    u_only = _insn(
+        1,
+        ir.Operation.MOVE,
+        "mov",
+        (ir.Reg(Register.EAX, 4),),
+        (ir.Reg(Register.ECX, 4),),
+    )
+
+    result = schedule.scheduled(_body(pairable, u_only), cpu.profile("P5"))
+
+    assert [one.what.dests[0].register for one in result.insns] == [Register.EAX, Register.DI]
+
+
 def test_flag_writers_remain_in_program_order() -> None:
     """A flag-producing add must not cross imul before a later flag reader."""
     multiply = _latency_chain().insns[0]

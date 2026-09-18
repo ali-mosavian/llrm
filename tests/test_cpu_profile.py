@@ -39,6 +39,8 @@ def test_every_public_cpu_name_has_one_immutable_profile() -> None:
         assert target.operations.float_divide == target.cost("x87_div")
         assert target.operations.float_load == target.cost("x87_load")
         assert target.operations.float_store == target.cost("x87_store")
+    assert cpu.profile("P5").pentium_pairing
+    assert not any(cpu.profile(name).pentium_pairing for name in cpu.names() if name != "P5")
 
 
 def test_operation_costs_do_not_change_the_existing_profile_positional_shape() -> None:
@@ -49,6 +51,7 @@ def test_operation_costs_do_not_change_the_existing_profile_positional_shape() -
     assert target.call_register_capacity == 1
     assert target.address_scales == frozenset({1})
     assert target.operations == OperationCosts()
+    assert not target.pentium_pairing
 
 
 def test_medium_model_profiles_only_offer_unscaled_index_addressing() -> None:

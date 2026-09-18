@@ -26,7 +26,7 @@ iteration updates this file in the same commit.
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
 | Loop optimization | partial | exact pre- and post-tested recurrences, composed pointer recurrences, formula costing, specialization, peeling and exact unrolling exist; versioning, rotation and broad pressure forecasting remain. |
 | Whole-module optimization | partial | summaries, constant returns, private inlining and private procedure DCE exist; full IPSCCP/cloning and private-data DCE remain. |
-| Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing, and conservative out-of-order integer latency scheduling exist; source-map-aware BC tail sharing, P5 pairing, x87/segment scheduling, and full issue modelling remain. |
+| Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing, conservative out-of-order latency scheduling, and a restricted P5 U/V scheduler exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
 
@@ -1492,3 +1492,30 @@ not a performance target or a claim of P5/later-core issue-model completeness.
 GCC/LLVM listings remain best-case flat-i386 structural references for
 dependency and expression shape; BCC/WC medium-model output remains the
 authority for ABI, segment state, legal addresses, and any hard target.
+
+### 67. Audited Pentium U/V pairing — 2026-09-18
+
+The available GCC Pentium scheduling description supplies a necessary fact
+that `issue_width = 2` did not: an original non-MMX P5 has distinct U and V
+pipes.  We used that as an audit reference, not as transplanted code.  The
+immutable CPU profile now explicitly marks P5 pairing, without changing any
+existing positional caller shape.  The other seven profiles remain false.
+
+The scheduler recognizes only its existing safe register/immediate window:
+operand/address-size prefixes and immediate shifts are U-only; immediate
+forms and `imul` are unpairable; remaining plain register ALU/move forms are
+U/V eligible.  It puts an eligible U-slot form before an independent U/V form
+when that creates a pair, while the same lane RAW/WAR/WAW graph prevents a
+partial-register overlap, flags, or register dependency from crossing.  The
+fail-first regression recreates the listing symptom `mov di,si; mov eax,ecx`:
+the prefixed 32-bit move was formerly second and could not pair; P5 now emits
+it before the independent word copy.  Existing boundary checks continue to
+keep all memory, segment, x87, call, branch, relocation, and opaque work out
+of the pairing model.
+
+Focused scheduler/profile tests pass (`15 passed`, `0.19s`); Tier 1 passes
+(`180 passed`, `31 deselected`, `1.05s`).  This advances Phase 7 but does not
+claim memory pairing, complex P5 forms, x87 overlap, or a final per-CPU
+throughput model.  GCC/LLVM listings remain best-case flat-i386 structural
+references; BCC/WC medium-model output remains the ABI, segment, legal-form,
+and hard-target authority.
