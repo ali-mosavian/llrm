@@ -82,6 +82,9 @@ _I386_COSTS = {
     "push_m": 6,
     "push_i": 2,
     "pop_r": 4,
+    # Intel's 80386 instruction table: POP m16/m32 is five clocks. This is
+    # not the four-unit register form used by the compiler-tuning table.
+    "pop_m": 5,
     "pop_seg": 8,
     "mov_seg_r": 8,
     "les": 8,

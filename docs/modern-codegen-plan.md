@@ -26,9 +26,58 @@ iteration updates this file in the same commit.
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, dying-base indexed-form unfolding, and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
 | Loop optimization | partial | exact pre/post-tested recurrences and symbolic sentinels, complete nested-initializer LICM, dead-control countdowns with zero-trip guards, complete-affine spill/recompute pricing, precise-volatile-aware LICM, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling exist; versioning and complete candidate-set pressure forecasting remain. |
 | Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs (including closed recursive SCCs in C and object paths), constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
-| Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing, target-priced 67h LEA selection, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
+| Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing, dead-register frame-copy shuttles, target-priced 67h LEA selection, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 102. Shuttle spilled parallel copies through a dead register — 2026-09-18
+
+Iteration 101 exposed a post-allocation artifact in Mandelbrot's row reset.
+Parallel-copy scheduling must remain correct when all registers are live, so
+its universal frame-to-frame spelling is a balanced PUSH-memory/POP-memory.
+At this particular edge EAX is dead and immediately redefined.  LLVM's
+`TuningSlowTwoMemOps` describes the general target rule: memory PUSH/POP forms
+should be unfolded through a register where one is available.
+
+The post-allocation pass now uses whole-body physical liveness to choose a
+same-width dead GPR, verifies both selected MOV forms, and compares the four
+form costs in the selected CPU profile.  It is restricted to the synthetic
+same-address pair emitted by parallel-copy scheduling; source PUSH/POP traffic,
+live scratch lanes, flags, relocation ownership, frame adjustment, and
+non-frame operands are refused.  No register is reserved, and the stack form
+remains the correct fallback when pressure really consumes all six GPRs.
+
+```asm
+; before
+push dword ptr [bp-8]
+pop  dword ptr [bp-20]
+
+; after
+mov eax,dword ptr [bp-8]
+mov dword ptr [bp-20],eax
+```
+
+This also found a measurement defect: `cycles.classify` charged POP-memory as
+`pop_r`.  The measurement regression failed first.  The 386 and 486 entries
+now use the Intel instruction tables (5 and 6 clocks); P5/P6/K6/K7/Core use
+the local GCC scheduling descriptions, with K5 conservatively inheriting the
+K6 entry because GCC has no distinct K5 schedule.  Every CPU profile prices
+the emitted form explicitly.
+
+On 386 the row-reset pair falls from `6 + 5 = 11` weighted units to `4 + 2 =
+6`; over 24 rows that removes 120 dynamic weighted units.  Corrected whole-body
+static cost falls `290 -> 285`.  Bytes (`199`), instructions (`55`), the
+independently checked dynamic instruction estimate (`74839.105263`), loads,
+stores, and spill counts are unchanged because this is a form-quality change,
+not a MIR operation deletion.  The first changed stage is post-allocation
+Peephole.  Native BP-displacement addressing expresses both operands, so the
+secondary `67h` form is not involved; its native/secondary/spill ordering is
+unchanged.
+
+The fail-first Tier 1 regression asserts the Mandel shape and the chosen EAX
+shuttle. Companion regressions keep the stack pair when no register is dead
+and refuse a source-backed PUSH/POP pair. The Intel/GCC timing evidence and
+the classification correction are recorded in `docs/timing-audit.md`.
 
 ### 101. Hoist complete nested-loop initializers — 2026-09-18
 

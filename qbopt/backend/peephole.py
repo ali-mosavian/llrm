@@ -40,6 +40,7 @@ class Peephole(LIRTransform):
         # that can remove a copy the coalescer refused on colourability.
         body = regthrash.thrashed(phielim.unsplit(body))
         body = concatenated(body)
+        body = frame_copies(body, cpu=self.cpu)
         body = copyprop.forwarded(body)
         body = extensions(body)
         body = copysink.sunk(body)
@@ -155,6 +156,107 @@ def concatenated(body: lir.LirBody) -> lir.LirBody:
             insns[index] = lir.anchor(high_push)
             insns[index + 1] = replace(low_push, what=shifted)
             insns[index + 2] = replace(wide_pop, what=funnelled)
+        blocks.append(replace(block, insns=tuple(insns)))
+    return replace(body, blocks=tuple(blocks))
+
+
+def frame_copies(body: lir.LirBody, *, cpu: str | targets.Profile = "386") -> lir.LirBody:
+    """Use a dead GPR for an allocated frame-to-frame parallel copy.
+
+    Parallel-copy scheduling has to work even when every GPR is live, so its
+    unconditional spelling is a balanced PUSH-memory/POP-memory pair.  After
+    allocation, physical liveness can prove that a same-width register is
+    dead across a particular pair.  Two MOVs then avoid the temporary stack
+    traffic without changing flags, stack depth, or either frame address.
+    """
+    from qbopt.backend import select
+    from qbopt.backend import liveness
+    from qbopt.backend import regthrash
+
+    profile = targets.profile(cpu)
+    forms = ("push_m", "pop_m", "mov_rm", "mov_mr")
+    if not all(profile.prices(form) for form in forms):
+        return body
+    if profile.cost("mov_rm") + profile.cost("mov_mr") >= profile.cost("push_m") + profile.cost("pop_m"):
+        return body
+    if not any(
+        first.what is not None
+        and second.what is not None
+        and first.what.op is ir.Operation.PUSH
+        and second.what.op is ir.Operation.POP
+        for block in body.blocks
+        for first, second in zip(block.insns, block.insns[1:])
+    ):
+        return body  # avoid whole-body liveness when no stack shuttle exists
+
+    exits = liveness.dead_at_exit(body)
+    blocks = []
+    for block in body.blocks:
+        dead_after = regthrash._dead_after(block, set(exits[block.at]))
+        insns = list(block.insns)
+        for index in range(len(insns) - 1):
+            pushed, popped = insns[index : index + 2]
+            if any(
+                one.what is None
+                or one.clobbers
+                or one.clobbers_high
+                or one.requires
+                or one.delivers
+                or one.spread
+                or one.group is not None
+                or one.symbol is True
+                or one.frame_adjust
+                or one.spill_reload
+                or one.spill_store
+                for one in (pushed, popped)
+            ):
+                continue
+            if (
+                pushed.at != popped.at
+                or popped.covers != (pushed.at, pushed.at)
+                or popped.op is not None
+                or pushed.defines
+                or pushed.uses
+                or popped.defines
+                or popped.uses
+            ):
+                continue  # only parcopy's synthetic balanced transfer
+            match pushed.what, popped.what:
+                case (
+                    ir.Semantics(ir.Operation.PUSH, "push", (), (ir.Mem() as source,)),
+                    ir.Semantics(ir.Operation.POP, "pop", (ir.Mem() as destination,), ()),
+                ):
+                    if (
+                        source.width != destination.width
+                        or source.width not in (2, 4)
+                        or not _frame_cell(source)
+                        or not _frame_cell(destination)
+                    ):
+                        continue
+                case _:
+                    continue
+            scratch = next(
+                (
+                    target.named(register, source.width)
+                    for register in target.AVAILABLE
+                    if _lanes(target.named(register, source.width)) <= dead_after[id(popped)]
+                ),
+                None,
+            )
+            if scratch is None:
+                continue
+            temporary = ir.Reg(scratch, source.width)
+            load = replace(
+                pushed,
+                what=ir.Semantics(ir.Operation.MOVE, "mov", (temporary,), (source,)),
+            )
+            store = replace(
+                popped,
+                what=ir.Semantics(ir.Operation.MOVE, "mov", (destination,), (temporary,)),
+            )
+            if select.emit(load.what) is None or select.emit(store.what) is None:
+                continue
+            insns[index : index + 2] = load, store
         blocks.append(replace(block, insns=tuple(insns)))
     return replace(body, blocks=tuple(blocks))
 

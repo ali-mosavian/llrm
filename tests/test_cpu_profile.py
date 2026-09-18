@@ -8,6 +8,7 @@ from qbopt.model import ir
 from qbopt.model import mir
 from qbopt.backend import cpu
 from qbopt.backend import lower
+from qbopt.cycles import cycles
 from qbopt.backend import allocate
 from qbopt.backend import schedule
 from qbopt.optimize import strength
@@ -73,6 +74,13 @@ def test_medium_model_profiles_distinguish_native_and_67h_addressing() -> None:
 
     legacy = AddressForm(4, frozenset({1, 2, 4, 8}), fallback=True)
     assert legacy.secondary and legacy.fallback
+
+
+def test_memory_pop_is_not_priced_as_a_register_pop() -> None:
+    """Mandel's frame copy hid POP-memory cost behind the POP-register row."""
+    assert cycles.classify("pop", "dword [bp-4]", "668f46fc") == "pop_m"
+    assert cpu.profile("386").cost("pop_m") == 5
+    assert all(cpu.profile(name).prices("pop_m") for name in cpu.names())
 
 
 def test_direct_mir_default_keeps_medium_model_address_legality(monkeypatch: pytest.MonkeyPatch) -> None:

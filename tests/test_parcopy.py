@@ -16,8 +16,9 @@ from iced_x86 import Register
 from qbopt.model import ir
 from qbopt.model import lir
 from qbopt.backend import select
-from qbopt.backend import parcopy
 from qbopt.backend import verify
+from qbopt.backend import parcopy
+from qbopt.backend import peephole
 
 
 def _move(into, out_of, group=None, at=0x100) -> lir.Insn:
@@ -55,6 +56,83 @@ def test_frame_copy_emits_balanced_stack_transfer(width: int, prefix: bytes) -> 
     emitted = [select.emit(one.what) for one in instructions]
     assert all(one is not None for one in emitted)
     assert [one.code for one in emitted] == [prefix + b"\xff\x76\xfc", prefix + b"\x8f\x46\xf8"]
+
+
+def test_frame_copy_uses_a_dead_register_before_the_stack() -> None:
+    """Mandel reset its column recurrence with PUSH-memory/POP-memory each row."""
+    from qbopt.objectfile.module import Space
+
+    source = ir.Mem(ir.Addr(Space.FRAME, -4), 4, Register.BP, 0, 2)
+    destination = ir.Mem(ir.Addr(Space.FRAME, -8), 4, Register.BP, 0, 2)
+    reset = lir.Insn(
+        at=0x102,
+        covers=(0x102, 0x102),
+        what=ir.Semantics(
+            ir.Operation.MOVE,
+            "mov",
+            (ir.Reg(Register.EAX, 4),),
+            (ir.Imm(0, 4),),
+        ),
+        defines=(),
+        uses=(),
+    )
+    scheduled = parcopy.scheduled(_body(_move(destination, source, group=1), reset))
+
+    instructions = peephole.frame_copies(scheduled, cpu="386").blocks[0].insns
+
+    assert [one.what.name for one in instructions] == ["mov", "mov", "mov"]
+    assert instructions[0].what == ir.Semantics(
+        ir.Operation.MOVE,
+        "mov",
+        (ir.Reg(Register.EAX, 4),),
+        (source,),
+    )
+    assert instructions[1].what == ir.Semantics(
+        ir.Operation.MOVE,
+        "mov",
+        (destination,),
+        (ir.Reg(Register.EAX, 4),),
+    )
+
+
+def test_frame_copy_keeps_the_stack_when_no_register_is_dead() -> None:
+    """A scratch shuttle may not overwrite a value live out of the copy."""
+    from qbopt.objectfile.module import Space
+
+    source = ir.Mem(ir.Addr(Space.FRAME, -4), 2, Register.BP, 0, 2)
+    destination = ir.Mem(ir.Addr(Space.FRAME, -8), 2, Register.BP, 0, 2)
+    scheduled = parcopy.scheduled(_body(_move(destination, source, group=1)))
+
+    instructions = peephole.frame_copies(scheduled, cpu="386").blocks[0].insns
+
+    assert [one.what.name for one in instructions] == ["push", "pop"]
+
+
+def test_source_push_pop_is_not_treated_as_a_parallel_copy() -> None:
+    """Only parcopy's synthetic pair may lose its observable stack traffic."""
+    from qbopt.objectfile.module import Space
+
+    source = ir.Mem(ir.Addr(Space.FRAME, -4), 2, Register.BP, 0, 2)
+    destination = ir.Mem(ir.Addr(Space.FRAME, -8), 2, Register.BP, 0, 2)
+    pair = list(parcopy.scheduled(_body(_move(destination, source, group=1))).blocks[0].insns)
+    pair[1] = replace(pair[1], at=0x101, covers=(0x101, 0x102))
+    reset = lir.Insn(
+        at=0x102,
+        covers=(0x102, 0x102),
+        what=ir.Semantics(
+            ir.Operation.MOVE,
+            "mov",
+            (ir.Reg(Register.EAX, 4),),
+            (ir.Imm(0, 4),),
+        ),
+        defines=(),
+        uses=(),
+    )
+    body = _body(*pair, reset)
+
+    instructions = peephole.frame_copies(body, cpu="386").blocks[0].insns
+
+    assert [one.what.name for one in instructions[:2]] == ["push", "pop"]
 
 
 def _other(at=0x200) -> lir.Insn:

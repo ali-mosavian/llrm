@@ -139,7 +139,7 @@ def classify(mnem, ops, raw=""):
     if mnem == "push":
         return "push_m" if mem(dst) else ("push_i" if dst.isdigit() or dst.startswith("0x") else "push_r")
     if mnem == "pop":
-        return "pop_seg" if dst in SEG else "pop_r"
+        return "pop_seg" if dst in SEG else ("pop_m" if mem(dst) else "pop_r")
     if mnem == "movzx" or mnem == "movsx":
         return "movzx"
     if mnem == "xchg":
@@ -193,11 +193,24 @@ def classify(mnem, ops, raw=""):
 
 
 # Not everything can be issued one per cycle and forgotten. A divider is not
-# pipelined -- it is held for the whole division and nothing else may divide
-# meanwhile -- and a far call is microcode, not an instruction. For these the
-# cost column is already a throughput, so it is used as one; for everything
-# else the machine's width is the limit.
-NOTPIPE = {"idiv_r32", "idiv_m32", "div_r16", "call_far", "ret_far", "pop_seg", "mov_seg_r", "les", "lahf", "sahf"}
+# pipelined, a far call is microcode, and a memory PUSH/POP is multiple memory
+# operations. For these the cost column is already an occupancy/throughput
+# ranking, so it is used as one; for everything else the machine's width is
+# the limit.
+NOTPIPE = {
+    "idiv_r32",
+    "idiv_m32",
+    "div_r16",
+    "call_far",
+    "ret_far",
+    "push_m",
+    "pop_m",
+    "pop_seg",
+    "mov_seg_r",
+    "les",
+    "lahf",
+    "sahf",
+}
 
 
 def regs_of(ops):

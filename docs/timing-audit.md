@@ -197,6 +197,17 @@ uses 2 for integer add and 3 for a constant shift. Memory arithmetic in the
 qbopt profile composes those units rather than treating a memory operand as a
 register operand.
 
+POP to memory is not that register POP form. Intel's 80386 instruction table
+gives POP m16/m32 five clocks, and the Intel486 Programmer's Reference Manual
+gives POP m16/m32 six clocks versus four for POP r16/r32. The later profile
+rankings follow the checked-in GCC machine descriptions: `pentium.md`,
+`ppro.md`, `k6.md`, `athlon.md`, and `core2.md`. GCC has no distinct K5
+scheduler entry, so K5 conservatively uses K6's three-cycle form. LLVM names
+the general structural concern as `TuningSlowTwoMemOps`: CALL, PUSH, and POP
+with memory operands should be unfolded through a register on affected CPUs.
+`cycles.classify` consequently reports `pop_m` rather than silently charging
+the cheaper `pop_r` row.
+
 The x87 ranking uses GCC's `i386_cost` in
 `gcc/config/i386/x86-tune-costs.h`: 8-unit floating loads/stores and
 23/27/88-unit add/multiply/divide. A memory arithmetic form includes the

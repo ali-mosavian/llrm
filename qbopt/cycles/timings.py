@@ -52,6 +52,12 @@ COST = {
     "push_m": (4, 2, 2, 2, 2, 2, 2),
     "push_i": (1, 1, 1, 1, 1, 1, 1),
     "pop_r": (4, 1, 1, 1, 1, 1, 1),
+    # POP memory is both the implicit stack load and an explicit store. 486
+    # uses Intel's six-clock form; P5, P6, K6, K7 and Core follow GCC's
+    # pentium, ppro, k6, athlon and core2 scheduling descriptions. GCC has
+    # no distinct K5 machine description, so that column conservatively uses
+    # the documented K6 three-cycle form rather than the register cost.
+    "pop_m": (6, 1, 4, 3, 3, 4, 4),
     "pop_seg": (3, 3, 8, 3, 3, 5, 8),  # segment load, costly on P6+
     "mov_seg_r": (3, 3, 8, 3, 3, 5, 8),
     "les": (6, 4, 9, 4, 4, 6, 9),
@@ -108,6 +114,7 @@ LATENCY = {
     "push_m": (4, 2, 3, 2, 2, 2, 3),
     "push_i": (1, 1, 1, 1, 1, 1, 1),
     "pop_r": (4, 1, 3, 2, 2, 2, 3),
+    "pop_m": (6, 1, 4, 3, 3, 4, 4),
     "pop_seg": (3, 3, 8, 3, 3, 5, 8),
     "mov_seg_r": (3, 3, 8, 3, 3, 5, 8),
     "les": (6, 4, 9, 4, 4, 6, 9),
