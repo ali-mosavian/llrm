@@ -84,6 +84,25 @@ def test_exact_pointer_aggregate_copy_promotes_the_word_leaves() -> None:
     assert "word ptr [bp-12]" not in assembly
 
 
+def test_exact_pointer_destination_aggregate_copy_promotes_the_word_leaves() -> None:
+    """aggregatecopydestptr kept local word reloads despite its one-object destination proof."""
+    source = Path("fixtures/c/aggregatecopydestptr.c")
+    assembly = cfront.compiled(cfront.recorded(source, []), source.stem, optimise=True)
+
+    assert "word ptr [bp-8]" not in assembly
+    assert "word ptr [bp-6]" not in assembly
+
+
+def test_exact_pointer_aggregate_copy_keeps_both_address_dependencies() -> None:
+    """aggregatecopybothptr needs one proven local pointer on each side of its copy."""
+    source = Path("fixtures/c/aggregatecopybothptr.c")
+    assembly = cfront.compiled(cfront.recorded(source, []), source.stem, optimise=True)
+
+    assert "word ptr [bp-10]" not in assembly
+    assert "word ptr [bp-8]" not in assembly
+    assert "word ptr [bp-6]" not in assembly
+
+
 def test_relative_source_and_include(tmp_path, monkeypatch):
     """wccq runs in its scratch directory, where `fixtures/c/x.c` and `-I src`
     no longer resolved: E1051 unable to open."""

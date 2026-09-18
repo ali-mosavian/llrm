@@ -425,16 +425,18 @@ def _copy_piece(ref: mir.MemRef, whole: _Leaf, piece: _Leaf, *, low: int) -> mir
 
 
 def _split_copies(body: MirBody) -> MirBody:
-    """Expand a proven direct aggregate move into its existing scalar leaves.
+    """Expand a proven exact aggregate copy into its existing scalar leaves.
 
     This is deliberately stricter than an ordinary copy: both sides must be
-    direct exact references, their objects must be known disjoint, and the
+    exact references, their objects must be known disjoint, and the
     destination's complete byte range must already have a contiguous scalar
-    partition.  In particular it never splits a far or indexed pointer copy:
-    changing one uncertain wide access into several accesses could alter its
-    fault/tearing behaviour.  The C aggregate move has no source-byte owner;
-    source-backed object instructions stay untouched for the source-map
-    emitter.
+    partition. A destination may use one proven near pointer, but its base
+    remains an explicit use on every generated store.
+    Far, indexed, volatile, overlapping, or incompletely partitioned copies
+    stay whole: changing one uncertain wide access into several accesses
+    could alter fault or tearing behavior. The C aggregate move has no
+    source-byte owner; source-backed object instructions stay untouched for
+    the source-map emitter.
     """
     leaves = tuple(
         leaf
@@ -493,7 +495,9 @@ def _split_copies(body: MirBody) -> MirBody:
                     replace(
                         store,
                         defines=(),
-                        uses=(value,),
+                        uses=tuple(
+                            one for one in (value, destination_piece.base, destination_piece.segment) if one is not None
+                        ),
                         loads=(),
                         stores=(destination_piece,),
                         args=(held,),
@@ -512,7 +516,7 @@ def _split_copies(body: MirBody) -> MirBody:
 
 
 def _copy_candidate(load: Op, store: Op | None, leaves: tuple[_Leaf, ...]):
-    """Return the proof for one adjacent C aggregate move, otherwise ``None``."""
+    """Return the proof for one adjacent exact C aggregate copy, otherwise ``None``."""
     if (
         store is None
         or load.source_backed
@@ -539,7 +543,6 @@ def _copy_candidate(load: Op, store: Op | None, leaves: tuple[_Leaf, ...]):
         or load.results[0].value != store.args[0].value
         or load.defines != (load.results[0].value,)
         or store.defines
-        or store.uses != (store.args[0].value,)
     ):
         return None
     source, destination = load.loads[0], store.stores[0]
@@ -552,7 +555,6 @@ def _copy_candidate(load: Op, store: Op | None, leaves: tuple[_Leaf, ...]):
         or destination.volatile
         or source.pointer
         or destination.pointer
-        or destination.base is not None
         or destination.segment is not None
         or source.addr is None
         or destination.addr is None
@@ -562,7 +564,8 @@ def _copy_candidate(load: Op, store: Op | None, leaves: tuple[_Leaf, ...]):
     ):
         return None
     source_inputs = tuple(one for one in (source.base, source.segment) if one is not None)
-    if load.uses != source_inputs:
+    destination_inputs = tuple(one for one in (destination.base, destination.segment) if one is not None)
+    if load.uses != source_inputs or store.uses != (store.args[0].value, *destination_inputs):
         return None
     pieces = _copy_partition(destination, leaves)
     if pieces is None:

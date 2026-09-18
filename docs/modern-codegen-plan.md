@@ -22,7 +22,7 @@ iteration updates this file in the same commit.
 |---|---|---|
 | Per-CPU measurement | in progress | CPU profiles, C corpus, static/dynamic metrics and reference listings exist; audited targets remain. |
 | MIR/LIR provenance and fresh OMF | largely complete | allocated LIR emits directly with external source maps/allocation hints; legacy object-rewrite compatibility remains. |
-| SROA and scalar promotion | partial | fixed/disjoint and singleton-indexed leaves promote; direct, bounded C aggregate copies can now expand into exact leaves, while pointer/overlap/volatile copies and broader aggregate decomposition remain. |
+| SROA and scalar promotion | partial | fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies can now expand into exact leaves, while far, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
 | Loop optimization | partial | exact pre- and post-tested recurrences, composed pointer recurrences, formula costing, specialization, peeling and exact unrolling exist; versioning, rotation and broad pressure forecasting remain. |
 | Whole-module optimization | partial | summaries, constant returns, private inlining and private procedure DCE exist; full IPSCCP/cloning and private-data DCE remain. |
@@ -1600,3 +1600,34 @@ volatile, and incomplete aggregate copies remain memory until a comparably
 complete range and alias proof exists. GCC/LLVM remain best-case structural
 references; BCC/WC medium-model listings remain authoritative for legal
 addressing, segments, and ABI behavior.
+
+### 71. Exact pointer-destination aggregate scalarization — 2026-09-18
+
+`aggregatecopydestptr` first failed with a local pointer whose single,
+bounded frame target was known, but whose adjacent four-byte store stayed a
+wide aggregate access. The scalar reads of that local then reloaded
+`[bp-8]` and `[bp-6]`. The earlier exact-pointer rule accepted a pointer
+source only; it incorrectly treated a proven pointer destination as if it
+were necessarily an unbounded aggregate write.
+
+The aggregate-copy proof now accepts one exact, near destination pointer
+when its complete `uses` set is the copied value followed by that address
+value. Splitting carries that address use to every
+generated scalar store, so allocation and lowering cannot detach a piece
+from its proven address. The existing requirements remain unchanged: both
+references have exact canonical ranges, their objects are disjoint, the
+destination range has a complete scalar partition, and neither access is
+volatile, far, indexed, source-backed, or partially overlapping.
+
+The fail-first regression now lowers `*destination = source` to three direct
+`_source` word reads and a register sum, with no local wide copy or field
+reload. This advances Phase 3's bounded aggregate scalarization; it does not
+permit arbitrary, far, indexed, overlapping, volatile, or incompletely
+partitioned pointer copies. GCC/LLVM remain best-case flat-i386 structural
+references, while BCC/WC remain the medium-model authority for legal
+addressing, segments, ABI behavior, and hard targets.
+
+The companion `aggregatecopybothptr` coverage keeps one exact local pointer
+on each side of the copy. It verifies that generated scalar reads and stores
+retain both address dependencies rather than silently falling back to the
+direct-address-only form.
