@@ -47,7 +47,7 @@ class Peephole(LIRTransform):
         body = spillforward.forwarded(body)
         body = storecombine.combined(body)
         body = pushed_constants(body)
-        body = far_loads(fused(overwritten(shuttles(commuted(constants(pushes(body)))))))
+        body = far_loads(fused(overwritten(shuttles(transferred(commuted(constants(pushes(body))))))))
         body = machinecse.eliminated(addresses(body, cpu=self.cpu))
         body = waits(zero_compares(tested(zeroes(body))))
         return self._frame(machinedce.eliminated(body))
@@ -498,6 +498,94 @@ def commuted(body: lir.LirBody) -> lir.LirBody:
                     removed.add(id(copied))
         blocks.append(replace(block, insns=tuple(lir.without(insns, lambda one: id(one) in removed))))
     return replace(body, blocks=tuple(blocks))
+
+
+def transferred(body: lir.LirBody) -> lir.LirBody:
+    """Write a commutative result directly into its copied destination.
+
+    Once registers are assigned, a tied ``A = op(A, B); B = A`` pair can be
+    spelled ``B = op(B, A)`` when A dies at the copy.  This is the physical
+    counterpart of two-address commutation: it asks about exact register-lane
+    liveness, so doing it in MIR or before allocation would be unsound.  Keep
+    the eliminated synthetic copy as a virtual anchor for later source-map and
+    SSA consumers.
+    """
+    from qbopt.backend import liveness
+    from qbopt.backend import regthrash
+
+    exits = liveness.dead_at_exit(body)
+    blocks = []
+    for block in body.blocks:
+        dead_after = regthrash._dead_after(block, set(exits[block.at]))
+        insns = []
+        index = 0
+        while index < len(block.insns):
+            pair = block.insns[index : index + 2]
+            changed = _transferred(pair, dead_after) if len(pair) == 2 else None
+            if changed is not None:
+                insns.extend(changed)
+                index += 2
+                continue
+            insns.append(block.insns[index])
+            index += 1
+        blocks.append(replace(block, insns=tuple(insns)))
+    return replace(body, blocks=tuple(blocks))
+
+
+def _transferred(parts: tuple[lir.Insn, ...], dead_after: dict[int, set]) -> tuple[lir.Insn, lir.Insn] | None:
+    combined, copied = parts
+    if any(
+        one.what is None
+        or one.clobbers
+        or one.clobbers_high
+        or one.requires
+        or one.delivers
+        or one.spread
+        or one.group is not None
+        or one.symbol is True
+        or one.frame_adjust
+        or one.spill_reload
+        or one.spill_store
+        for one in parts
+    ):
+        return None
+    # Only an allocator/two-address copy owns no source bytes.  Removing a
+    # source instruction is a different layout transformation and must retain
+    # its own observable ownership contract.
+    if copied.covers is None or copied.covers[0] != copied.covers[1]:
+        return None
+    match combined.what, copied.what:
+        case (
+            ir.Semantics(operation, name, (ir.Reg() as destination,), (ir.Reg() as left, ir.Reg() as right)),
+            ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg() as into,), (ir.Reg() as out_of,)),
+        ):
+            commutative = (
+                operation is ir.Operation.BINARY
+                and name in {"add", "and", "or", "xor"}
+                or operation is ir.Operation.MULTIPLY
+                and name == "imul"
+            )
+            if (
+                not commutative
+                or destination != left
+                or out_of != left
+                or into != right
+                or not destination.width == left.width == right.width == into.width
+                or ir.root(left.register) == ir.root(right.register)
+                or not _lanes(left.register) <= dead_after[id(copied)]
+            ):
+                return None
+        case _:
+            return None
+
+    what = replace(combined.what, dests=(right,), sources=(right, left))
+    from qbopt.backend import select
+
+    before = select.emit(combined.what)
+    after = select.emit(what)
+    if before is None or after is None or len(before.code) != len(after.code):
+        return None
+    return replace(combined, what=what), lir.anchor(copied)
 
 
 def shuttles(body: lir.LirBody) -> lir.LirBody:

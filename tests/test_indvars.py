@@ -526,11 +526,26 @@ def test_c_mandel_reuses_coordinate_recurrences_for_both_outer_loops() -> None:
         for _raw, mnemonic, operands in rows
         if mnemonic == "shl" and operands.lstrip().startswith("dword ptr [bp-")
     ]
+    copied_commutative_results = []
+    for first, second in zip(rows, rows[1:], strict=False):
+        _raw, mnemonic, operands = first
+        _next_raw, next_mnemonic, next_operands = second
+        multiply = [operand.strip() for operand in operands.split(",")]
+        copied = [operand.strip() for operand in next_operands.split(",")]
+        if (
+            mnemonic == "imul"
+            and len(multiply) == 2
+            and next_mnemonic == "mov"
+            and len(copied) == 2
+            and copied == [multiply[1], multiply[0]]
+        ):
+            copied_commutative_results.append((first, second))
 
     assert len(unit_steps) == 1, unit_steps
     assert "[" not in unit_steps[0][1]
     assert len(coordinate_steps) == 2, coordinate_steps
     assert not frame_shifts, frame_shifts
+    assert not copied_commutative_results, copied_commutative_results
 
 
 def _trip_counts(data: bytes) -> list[int]:

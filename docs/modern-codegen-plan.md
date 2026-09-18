@@ -26,9 +26,70 @@ iteration updates this file in the same commit.
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, dying-base indexed-form unfolding, and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
 | Loop optimization | partial | exact pre/post-tested recurrences and symbolic sentinels, target-priced exact nested-recurrence rewind, complete nested-initializer LICM, dead-control countdowns with zero-trip guards, complete-affine spill/recompute pricing, precise-volatile-aware LICM, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling with bounded full-growth and machine-neutral whole-range pressure forecasting exist; versioning, partial unrolling, and constraint-complete candidate-set forecasting remain. |
 | Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs (including closed recursive SCCs in C and object paths), constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, post-inline constant folding through phi edges and linear corridors, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
-| Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing and byte-neutral source-unowned terminal-return duplication, dead-register frame-copy shuttles, target-priced 67h LEA selection including source-owned loaded scale/add tails and constant/register sums, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
+| Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing and byte-neutral source-unowned terminal-return duplication, dead-register frame-copy shuttles, dying-input commutative result transfer, target-priced 67h LEA selection including source-owned loaded scale/add tails and constant/register sums, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 114. Transfer commutative results into a dying input — 2026-09-18
+
+The C Mandelbrot inner loop first emitted a three-instruction value transfer
+even though both multiply inputs died at the operation:
+
+```asm
+; before                    ; after
+imul ebx, ecx               imul ecx, ebx
+mov  ecx, ebx
+sar  ecx, 7                 sar  ecx, 7
+```
+
+This was not a MIR algebra gap.  Stage dumps are byte-identical through
+`ParallelCopy`; `Peephole` is the first changed phase.  Allocation had already
+settled the physical fact needed for the rewrite: after
+`A = commutative(A, B); B = A`, A's register lanes are dead.  The post-allocation
+cleanup now emits `B = commutative(B, A)` directly for register `add`, `and`,
+`or`, `xor`, and two-operand `imul`.  It retains the removed synthetic move as
+a zero-byte virtual anchor, and refuses a live first operand, a source-owned
+copy, unequal widths, aliased roots, spills, implicit requirements/results,
+clobbers, groups, spread ownership, or a changed encoding length.  Thus the
+mechanism depends on exact physical liveness and commutativity, not on Mandel,
+one opcode, or one register assignment.
+
+The fail-first regression raised `AttributeError` before the mechanism existed;
+the real-source assertion independently found the adjacent
+`imul ebx,ecx; mov ecx,ebx` symptom.  Tier-1 coverage exercises all five
+commutative forms plus the live-input and source-owned refusal boundaries.
+The current Mandel listing contains `imul ecx,ebx; sar ecx,7` with no transfer.
+GCC 16.2 uses `imul ebx,eax; sar ebx,7`; Clang 21 uses
+`imul eax,edi; sar eax,7`.  Their registers differ under the flat 32-bit ABI,
+but all three now make the same dying-input choice.
+
+Disabling only this rewrite in memory gives the exact before/after result on
+the 386 candidate:
+
+| metric | before | after | change |
+|---|---:|---:|---:|
+| bytes | 199 | 196 | -1.5% |
+| instructions | 55 | 54 | -1 |
+| ABI-normalized instructions | 47 | 46 | -1 |
+| static 386 cost | 285 | 283 | -0.7% |
+| estimated executed instructions | 74,839.11 | 71,565.00 | -4.4% |
+| estimated executed 386 cost | 459,359.84 | 452,811.63 | -1.4% |
+
+The isolated pair shrinks from seven to four bytes and improves on every
+profile: 386 `24→22`, 486 `29→27`, P5 `13→11`, P6 `5→4`, K5 `5→4`, K6
+`4→3`, K7 `6→5`, and Core `4→3`.  ABI-normalized static instruction ratio
+improves from `1.04×` to `1.02×` against i686 GCC and from `0.90×` to `0.88×`
+against Clang.  Dynamic reference ratios remain withheld because the reference
+CFG estimator uses heuristic loop counts where the candidate carries two
+proved trip counts.
+
+Real input `xOffset=0` passes through fresh OMF, the DOS linker and a DOS 386
+and returns the independent result `8873`.  Raw before/after, GCC, Clang and
+stage listings are under `build/quality/iter122-mandel-transfer`.  Focused
+Tier-1 checks pass (`7 passed`, `0.11s`), the real-source regression passes
+(`1 passed`, `35.02s`), and Tier 1 passes (`245 passed`, `31 deselected`,
+`1.81s`).  This advances Phase 7; it does not claim general non-adjacent
+recolouring, memory operand commutation, or final acceptance.
 
 ### 113. Weight per-CPU cost by executed CFG paths — 2026-09-18
 
