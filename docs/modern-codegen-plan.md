@@ -685,3 +685,21 @@ particular transfer but still reaches a different unplaceable short range.
 The result is therefore a correct general cleanup, not a claim that the
 complete counter/face role plan is now accepted.  The next candidate must
 continue to price every remaining constrained range together.
+
+### 34. Remaining far-address conflict — 2026-09-18
+
+The post-byte-fold stage capture resolves the next refusal without guesswork.
+The unplaceable short value is `v1060`, the reload feeding the final far byte
+RMW's offset base.  It is not a count reload and it is not a bad fixed
+requirement: with the shifted index retained, the medium-model final operand
+needs both its unique word-base role and an independently legal word-index
+role.  The candidate already protects the loop-scoped owner, so no remaining
+address-class register can satisfy the new base reload at that point.
+
+This is the complete role-plan boundary.  The candidate must compare the
+alternative of folding the shifted index into a dying base against retaining
+the index and keeping the far offset base live, together with counter and
+byte roles.  Each form must include the exact legal 16-bit addressing classes
+and all reload/spill traffic.  Trying to retain one more value or reserving BX
+for this loop would only convert this honest refusal into a hidden special
+case.  No production code changed in this evidence iteration.
