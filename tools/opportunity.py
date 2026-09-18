@@ -714,7 +714,13 @@ def _measured(path: Path, raw: bool):
     """
     data = path.read_bytes()
     if not raw:
-        data, _regions = rewrite.rewrite(data, dry_run=False)
+        try:
+            data, _regions = rewrite.rewrite(data, dry_run=False)
+        except rewrite.Unsupported as error:
+            # A strict fresh-emitter refusal is neither BC's code nor an
+            # optimized result.  Let the target loop report this module and
+            # continue auditing the rest of the corpus.
+            raise Unmeasured(f"{path}: fresh emission refused: {error}") from error
         if omf.finalised_at(omf.parse(data)) is None:
             raise Unmeasured(f"{path}: LIR emission did not complete")
     return module.of(omf.parse(data))

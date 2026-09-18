@@ -30,6 +30,27 @@ iteration updates this file in the same commit.
 
 ## Iteration log
 
+### 75. Target-scoreboard fresh-emission refusals — 2026-09-18
+
+The complete QB target audit stopped at `ARITH` when fresh lowering refused a
+flagged widened long add. That refusal must remain visible—lowering cannot
+silently alter a condition's source-observable flags—but one unsupported
+module previously aborted the entire audit before later benchmarks could be
+measured.
+
+`tools/opportunity.py` now converts only its explicit `rewrite.Unsupported`
+fresh-emitter outcome into `Unmeasured`. The existing board loop reports that
+module as `UNMEASURED`, returns a failing status, and continues through the
+remaining corpus. It never falls back to BC bytes. The fail-first regression
+injects the exact strict-emitter exception and proves both the diagnostic and
+the non-success result. Unexpected rewrite exceptions remain exceptions, so
+instrument or programming failures are not hidden.
+
+This is Phase 1 measurement integrity, not a code-generation fix. The
+flagged-long lowering refusal remains a separately diagnosed correctness item;
+GCC/LLVM flat-i386 listings cannot justify weakening its medium-model flag
+semantics. BCC/WC remains the authority for any eventual emitted fallback.
+
 ### 1. Best-case GCC/LLVM listing contract — 2026-09-18
 
 `tools/quality.py --references` now records a formal

@@ -418,6 +418,23 @@ def test_rewrite_failure_cannot_be_scored_as_optimized_output(monkeypatch) -> No
     assert opportunity._measured(path, raw=True) is not None
 
 
+def test_fresh_emitter_refusal_is_reported_and_does_not_abort_the_board(monkeypatch, capsys) -> None:
+    """ARITH's flagged long add made fresh lowering refuse, but `--targets`
+    aborted before reporting every later fixture.  A refusal is unmeasured,
+    never fallback BC output and never a reason to hide the rest of a run.
+    """
+    monkeypatch.setattr(
+        opportunity.rewrite,
+        "rewrite",
+        lambda *args, **kwargs: (_ for _ in ()).throw(opportunity.rewrite.Unsupported("live condition")),
+    )
+    path = Path("fixtures/omf/hotlop-p-g2.obj")
+    with pytest.raises(opportunity.Unmeasured, match="fresh emission refused: live condition"):
+        opportunity._measured(path, raw=False)
+    assert opportunity.against_targets([path]) == 1
+    assert "UNMEASURED" in capsys.readouterr().out
+
+
 def test_cost_does_not_make_unknown_memory_accesses_free() -> None:
     """harr's cost changed when allocation obscured an array's address.
 
