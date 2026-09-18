@@ -45,7 +45,8 @@ that fails to return without mistaking a timeout for a wrong answer.
   `mir-{unroll,peel}-rejected-*`; the suffix names the deciding gate:
   `residual-loops`, `unpriced`, `no-saving`, or `growth`.
 - dynamic operations are a profile-free CFG estimate: ordinary branches divide
-  evenly and natural loops use the allocator's ten-iteration convention. The
+  evenly; a canonical MIR loop with a proven finite count uses that exact count;
+  all other natural loops use the allocator's ten-iteration convention. The
   same basic-block construction, natural-loop analysis and frequency solver run
   over GCC/Clang assembly, so an unrolled reference is compared with the work a
   qbopt loop executes rather than with qbopt's much smaller static body. Calls,

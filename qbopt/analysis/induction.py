@@ -282,6 +282,9 @@ def _signed(arg: mir.Arg, facts: dict, width: int) -> int | None:
 
 def _last_counter(body: mir.MirBody, loop, counter: Affine, facts: dict, width: int) -> int | None:
     """Last executed counter of a canonical pretested loop, proving its update cannot wrap."""
+    posttested = _posttested_last(body, loop, counter, facts, width)
+    if posttested is not None:
+        return posttested
     blocks = {block.at: block for block in body.blocks}
     if len(loop.latches) != 1:
         return None
@@ -296,20 +299,9 @@ def _last_counter(body: mir.MirBody, loop, counter: Affine, facts: dict, width: 
         return None
     if sum(to in inside for to in header.succ) != 1:
         return None
-    test = branch.test
-    if branch.target not in inside:
-        test = {
-            mir.Kind.LE: mir.Kind.GT,
-            mir.Kind.LT: mir.Kind.GE,
-            mir.Kind.GE: mir.Kind.LT,
-            mir.Kind.GT: mir.Kind.LE,
-            mir.Kind.BELOW: mir.Kind.ABOVE_EQ,
-            mir.Kind.BELOW_EQ: mir.Kind.ABOVE,
-            mir.Kind.ABOVE: mir.Kind.BELOW_EQ,
-            mir.Kind.ABOVE_EQ: mir.Kind.BELOW,
-            mir.Kind.EQ: mir.Kind.NE,
-            mir.Kind.NE: mir.Kind.EQ,
-        }.get(test)
+    test = _continuing_test(branch, inside)
+    if test is None:
+        return None
     made = {value.id: op for block in body.blocks for op in block.ops for value in op.defines}
     comparisons = [
         bound
@@ -351,6 +343,154 @@ def _last_counter(body: mir.MirBody, loop, counter: Affine, facts: dict, width: 
         return last if 0 <= after < 1 << (width * 8) else None
     sign = 1 << (width * 8 - 1)
     return last if -sign <= after < sign else None
+
+
+def _continuing_test(branch: mir.Op, inside: set[int]) -> mir.Kind | None:
+    """The condition under which this branch keeps executing its loop.
+
+    Conditional branches name the taken edge, while recurrence reasoning
+    names the edge that returns to the header.  Keeping that inversion here
+    lets pre-tested and rotated post-tested loops share the exact same
+    comparison semantics.
+    """
+    if branch.target in inside:
+        return branch.test
+    return {
+        mir.Kind.LE: mir.Kind.GT,
+        mir.Kind.LT: mir.Kind.GE,
+        mir.Kind.GE: mir.Kind.LT,
+        mir.Kind.GT: mir.Kind.LE,
+        mir.Kind.BELOW: mir.Kind.ABOVE_EQ,
+        mir.Kind.BELOW_EQ: mir.Kind.ABOVE,
+        mir.Kind.ABOVE: mir.Kind.BELOW_EQ,
+        mir.Kind.ABOVE_EQ: mir.Kind.BELOW,
+        mir.Kind.EQ: mir.Kind.NE,
+        mir.Kind.NE: mir.Kind.EQ,
+    }.get(branch.test)
+
+
+def _posttested_bound(op, branch, counter, width, made):
+    """Bound and final update for a post-tested affine counter, if exact.
+
+    Rotation puts a counter's update before its exit comparison.  The compare
+    therefore names the next phi value rather than the header value.  This is
+    not a special case for an ``inc`` spelling: ``mir.stepping`` supplies the
+    mathematical update for every MIR operation that can be an affine step.
+    """
+    if (
+        len(op.args) != 2
+        or op.kind is not mir.Kind.SUB
+        or op.loads
+        or op.stores
+        or op.barrier
+        or op.results
+        or len(op.defines) != 1
+        or not isinstance(op.args[0], mir.Held)
+        or op.args[0].width != width
+        or not any(value.flags and value in branch.uses for value in op.defines)
+    ):
+        return None
+    following = op.args[0]
+    definition = made.get(following.value.id)
+    if (
+        definition is None
+        or definition.loads
+        or definition.stores
+        or definition.barrier
+        or definition.merges
+        or following not in definition.results
+    ):
+        return None
+    stepped = mir.stepping(definition)
+    if stepped is None:
+        return None
+    source, delta = stepped
+    if (
+        not isinstance(source, mir.Held)
+        or not isinstance(delta, mir.Const)
+        or source.width != width
+        or delta.width != width
+        or _copied(source, made).value.id != counter.value
+    ):
+        return None
+    return op.args[1], delta
+
+
+def _posttested_last(body: mir.MirBody, loop, counter: Affine, facts: dict, width: int) -> int | None:
+    """Last header value of a canonical rotated loop, with a non-wrapping exit.
+
+    A post-tested loop executes its body once before the test.  We only prove
+    the compact canonical form: one latch updates the header recurrence,
+    compares that immediate next value, and either returns to the header or
+    leaves the loop.  Any early exit, extra latch edge, unknown bound, or
+    potentially wrapping update remains deliberately unmeasured.
+    """
+    blocks = {block.at: block for block in body.blocks}
+    if len(loop.latches) != 1:
+        return None
+    latch = blocks[next(iter(loop.latches))]
+    inside = set(loop.body)
+    if (
+        len(latch.succ) != 2
+        or loop.header not in latch.succ
+        or sum(to in inside for to in latch.succ) != 1
+        or not latch.ops
+    ):
+        return None
+    branch = latch.ops[-1]
+    if branch.kind is not mir.Kind.BRANCH or branch.target not in latch.succ:
+        return None
+    if any(
+        any(to not in inside for to in blocks[at].succ)
+        for at in inside
+        if at != latch.at
+    ):
+        return None
+    test = _continuing_test(branch, inside)
+    if test is None:
+        return None
+    made = {value.id: op for block in body.blocks for op in block.ops for value in op.defines}
+    comparisons = [
+        bound
+        for op in latch.ops[:-1]
+        if (bound := _posttested_bound(op, branch, counter, width, made)) is not None
+    ]
+    if len(comparisons) != 1:
+        return None
+    bound_arg, after_step = comparisons[0]
+    raw = tuple(_constant(arg, facts, width) for arg in (counter.start, counter.step, bound_arg, after_step))
+    if any(value is None for value in raw):
+        return None
+    raw_start, raw_step, raw_bound, raw_after = raw
+    assert raw_start is not None and raw_step is not None and raw_bound is not None and raw_after is not None
+    step = _as_signed(raw_step, width)
+    after = _as_signed(raw_after, width)
+    if step == 0 or after != step:
+        return None
+    unsigned = test in (mir.Kind.BELOW, mir.Kind.BELOW_EQ, mir.Kind.ABOVE, mir.Kind.ABOVE_EQ)
+    start = raw_start if unsigned else _as_signed(raw_start, width)
+    bound = raw_bound if unsigned else _as_signed(raw_bound, width)
+    first = start + step
+    if step > 0 and test in (mir.Kind.LT, mir.Kind.BELOW):
+        count = max(1, (bound - first) // step + 1) if first <= bound else 1
+    elif step > 0 and test in (mir.Kind.LE, mir.Kind.BELOW_EQ):
+        count = max(1, (bound - first) // step + 2) if first <= bound else 1
+    elif step < 0 and test in (mir.Kind.GT, mir.Kind.ABOVE):
+        count = max(1, (first - bound) // -step + 1) if first >= bound else 1
+    elif step < 0 and test in (mir.Kind.GE, mir.Kind.ABOVE_EQ):
+        count = max(1, (first - bound) // -step + 2) if first >= bound else 1
+    elif test is mir.Kind.NE and (bound - start) * step > 0 and (bound - start) % step == 0:
+        count = (bound - start) // step
+    else:
+        return None
+    if count <= 0:
+        return None
+    last = start + (count - 1) * step
+    next_value = last + step
+    if unsigned:
+        return last if 0 <= last < 1 << (width * 8) and 0 <= next_value < 1 << (width * 8) else None
+    sign = 1 << (width * 8 - 1)
+    return last if -sign <= last < sign and -sign <= next_value < sign else None
 
 
 def trip_count(body: mir.MirBody, loop: loopy.Loop, facts: dict) -> int | None:

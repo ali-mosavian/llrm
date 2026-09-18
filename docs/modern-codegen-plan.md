@@ -24,7 +24,7 @@ iteration updates this file in the same commit.
 | MIR/LIR provenance and fresh OMF | largely complete | allocated LIR emits directly with external source maps/allocation hints; legacy object-rewrite compatibility remains. |
 | SROA and scalar promotion | partial | fixed/disjoint leaves and some indexed leaves promote; general aggregate/copy decomposition remains. |
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection and local rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
-| Loop optimization | partial | exact recurrences, composed pointer recurrences, formula costing, specialization, peeling and exact unrolling exist; versioning, rotation and broad pressure forecasting remain. |
+| Loop optimization | partial | exact pre- and post-tested recurrences, composed pointer recurrences, formula costing, specialization, peeling and exact unrolling exist; versioning, rotation and broad pressure forecasting remain. |
 | Whole-module optimization | partial | summaries, constant returns, private inlining and private procedure DCE exist; full IPSCCP/cloning and private-data DCE remain. |
 | Post-allocation quality | partial | copy propagation, machine CSE/DCE and C-path tail sharing exist; source-map-aware BC tail sharing and CPU scheduling remain. |
 
@@ -795,3 +795,29 @@ runtime-input execution trace before it can be a target or a performance
 claim.  The next measurement iteration needs a fail-first nbody regression
 for this asymmetric fixed-loop case, then a general bound-aware dynamic
 estimator.  No optimizer change is claimed here.
+
+### 39. Canonical post-tested trip proofs — 2026-09-18
+
+The measurement follow-up first added a fail-first rotated-loop regression:
+a counter initialized to zero, incremented in its body, and tested after the
+body with unsigned `next < 4` had no exact trip count and therefore received
+the heuristic ten-trip weight.  `induction` now proves the general canonical
+post-tested form when it has one latch, no early exit, a direct immediate
+affine update, a single flags-producing comparison, an invariant bound, and a
+non-wrapping finite exit.  The recognizer asks MIR's general `stepping()`
+operation for the update; it does not name `inc`, nbody, or a frontend.
+Pre-tested loops retain the existing proof path.
+
+Exact MIR header counts now flow into lowered LIR **only as measurement
+facts**.  The CFG estimator uses them at either the header (pre-tested) or
+the unique latch (rotated post-tested), while arbitrary body exits retain the
+ten-trip fallback.  The focused MIR and estimator regressions both failed
+before their respective mechanisms and now pass (`3 passed`, `0.14s`).  On a
+fresh nbody report, `_bench_nbody` proves its fixed middle loop has four trips
+and the estimate falls from 33,632 to 13,652 operations; Clang remains 1,174
+and i686 GCC 5,131.5 under their independent CFG estimates.  The resulting
+11.63x/2.66x reference ratios are still **not performance conclusions**:
+the outer bound is an input and the remaining nested loop is not yet exactly
+profiled, while both GCC/LLVM listings are best-case flat-i386 structural
+references rather than medium-model targets.  BCC/WC listings remain the
+authority for ABI, segmentation, and legal address-form constraints.

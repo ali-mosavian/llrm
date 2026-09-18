@@ -414,6 +414,7 @@ def _transitions(body: lir.LirBody) -> dict[int, dict[int, float]]:
     """
     known = {block.at for block in body.blocks}
     natural = loops.loops(body.blocks, body.entry)
+    trip_counts = dict(body.loop_trip_counts)
     out: dict[int, dict[int, float]] = {}
     for block in body.blocks:
         successors = tuple(one for one in block.succ if one in known)
@@ -427,9 +428,20 @@ def _transitions(body: lir.LirBody) -> dict[int, dict[int, float]]:
             inside = tuple(one for one in successors if one in loop.body)
             outside = tuple(one for one in successors if one not in loop.body)
             if inside and outside:
+                # A MIR proof describes visits to the canonical header.  In
+                # pre-tested form that edge is selected at the header; after
+                # rotation it is selected at the unique latch.  Its proof
+                # rejects early exits, so those are the only two sites that
+                # can turn a header count into an exact edge probability.
+                count = (
+                    trip_counts.get(loop.header)
+                    if block.at == loop.header or block.at in loop.latches
+                    else None
+                )
+                continue_probability = (count - 1) / count if count is not None else 0.9
                 split = {
-                    **{one: 0.9 / len(inside) for one in inside},
-                    **{one: 0.1 / len(outside) for one in outside},
+                    **{one: continue_probability / len(inside) for one in inside},
+                    **{one: (1.0 - continue_probability) / len(outside) for one in outside},
                 }
                 break
         out[block.at] = split or {one: 1.0 / len(successors) for one in successors}
@@ -509,7 +521,12 @@ def _dynamic_operations(module: masm.Module, procedure: masm.Procedure, number: 
     if frequencies is None:
         return None, "unmeasured: control flow has no finite profile-free estimate"
     estimate = round(float(prologue) + sum(counts[at] * frequencies.get(at, 0.0) for at in counts), 6)
-    return estimate, "estimated: CFG branches and ten iterations per natural loop"
+    status = "estimated: CFG branches"
+    if procedure.body.loop_trip_counts:
+        status += ", exact proved trip counts where available"
+    if any(loop.header not in dict(procedure.body.loop_trip_counts) for loop in loops.loops(procedure.body.blocks, procedure.body.entry)):
+        status += ", otherwise ten iterations per natural loop"
+    return estimate, status
 
 
 def _cost_report(

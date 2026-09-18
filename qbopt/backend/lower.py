@@ -24,6 +24,9 @@ from qbopt.abi import runtime
 from qbopt.backend import target
 from qbopt.backend import division
 from qbopt.analysis import liveness
+from qbopt.analysis import consts
+from qbopt.analysis import loops
+from qbopt.analysis import induction
 from qbopt.backend import arithmetic
 from qbopt.model.floating import Format
 from qbopt.backend import cpu as targets
@@ -619,6 +622,14 @@ def lowered(
     made = {at: _immediate_arguments(insns, uses) for at, insns in made.items()}
     made = {at: _rematerialized_arguments(insns, uses, making._exposed) for at, insns in made.items()}
     live = _phis_worth_keeping(body, made)
+    facts = consts.known(body)
+    trip_counts = tuple(
+        sorted(
+            (loop.header, count)
+            for loop in loops.loops(body.blocks, body.entry)
+            if (count := induction.trip_count(body, loop, facts)) is not None
+        )
+    )
     return lir.LirBody(
         name=name,
         entry=body.entry,
@@ -641,6 +652,7 @@ def lowered(
         ),
         origin=origin,
         inputs=frozenset(value.id for value in liveness.entry_values(body) if not value.flags and value.id is not None),
+        loop_trip_counts=trip_counts,
         ordered=True,
         pins={**pins, **{value: Register.ES for value in values if origin.get(value) == Register.ES}},
     )

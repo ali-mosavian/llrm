@@ -270,6 +270,32 @@ def test_reference_dynamic_operations_count_a_natural_loop() -> None:
     assert function["dynamic_status"] == "estimated: CFG branches and ten iterations per natural loop"
 
 
+def test_dynamic_frequency_uses_a_proven_fixed_trip_count() -> None:
+    """Nbody's fixed C loops were each charged ten trips after GCC unrolled them.
+
+    A surviving canonical loop with an exact MIR trip proof has a stronger
+    fact than the fallback profile.  Its header must execute precisely that
+    many times in the dynamic structural estimate.
+    """
+    from qbopt.model import lir
+
+    body = lir.LirBody(
+        "fixed",
+        0,
+        (
+            lir.LirBlock(0, (), (1,)),
+            lir.LirBlock(1, (), (2,)),
+            lir.LirBlock(2, (), (1, 3)),
+            lir.LirBlock(3, (), ()),
+        ),
+        {},
+        {},
+        loop_trip_counts=((1, 4),),
+    )
+
+    assert quality._frequencies(body)[1] == 4
+
+
 @pytest.mark.parametrize("mnemonic", ["fld", "fsubr", "cmp", "push"])
 def test_reference_memory_sources_are_not_counted_as_stores(mnemonic: str) -> None:
     """nbody's x87 memory operands made the reference report more stores than instructions."""

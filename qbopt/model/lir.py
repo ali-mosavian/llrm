@@ -252,6 +252,12 @@ class LirBody:
     # verifier distinguish a real ABI input from a transform that lost a
     # definition.
     inputs: frozenset[int] = frozenset()
+    # Exact execution counts proved in MIR for canonical loop headers.  LIR
+    # preserves this program fact for measurement only; selection,
+    # allocation, and scheduling do not use it to change generated code.
+    # Headers without an entry retain the explicitly heuristic frequency
+    # model in tools/quality.py.
+    loop_trip_counts: tuple[tuple[int, int], ...] = ()
     ordered: bool = False
     noreturn: bool = False
 

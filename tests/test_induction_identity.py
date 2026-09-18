@@ -12,6 +12,8 @@ from qbopt.optimize import unroll
 from qbopt.optimize import indvars
 from qbopt.optimize import strength
 from qbopt.analysis import induction
+from qbopt.analysis import consts
+from qbopt.backend import lower
 from qbopt.optimize import transform
 from qbopt.objectfile.module import Addr
 from qbopt.objectfile.module import Space
@@ -58,6 +60,57 @@ def test_counter_zero_test_keeps_its_flags_across_a_partial_result():
     branch = mir.Op(1, ir.Operation.BRANCH, "", (), (flags,), kind=mir.Kind.BRANCH)
     counter = induction.Affine(value.id, mir.Const(-1, 2), mir.Const(1, 2), 0)
     assert induction._counter_bound(op, branch, counter, 2) == mir.Const(0, 2)
+
+
+def test_posttested_counter_has_an_exact_fixed_trip_count():
+    """C nbody's rotated `i < 4` loop was priced as ten trips after GCC unrolled it."""
+    start = mir.Value(920, 0, variable=1)
+    counter = mir.Value(921, 1, variable=1)
+    following = mir.Value(922, 1, variable=1)
+    flags = mir.Value(923, 2, flags=True)
+    initial = mir.Op(
+        0,
+        ir.Operation.MOVE,
+        "",
+        (start,),
+        (),
+        kind=mir.Kind.COPY,
+        args=(mir.Const(0, 2),),
+        results=(mir.Held(start, 2),),
+    )
+    increment = mir.Op(
+        1,
+        ir.Operation.UNARY,
+        "",
+        (following,),
+        (counter,),
+        kind=mir.Kind.INCREMENT,
+        args=(mir.Held(counter, 2),),
+        results=(mir.Held(following, 2),),
+    )
+    compare = mir.Op(
+        2,
+        ir.Operation.BINARY,
+        "",
+        (flags,),
+        (following,),
+        kind=mir.Kind.SUB,
+        args=(mir.Held(following, 2), mir.Const(4, 2)),
+    )
+    branch = mir.Op(3, ir.Operation.BRANCH, "", (), (flags,), kind=mir.Kind.BRANCH,
+                    test=mir.Kind.ABOVE_EQ, target=3)
+    body = mir.MirBody(
+        0,
+        (
+            mir.MirBlock(0, (), (initial,), (1,)),
+            mir.MirBlock(1, (mir.Phi(counter, {0: start, 2: following}),), (increment,), (2,)),
+            mir.MirBlock(2, (), (compare, branch), (1, 3)),
+            mir.MirBlock(3, (), (), ()),
+        ),
+    )
+    loop = loops.Loop(1, frozenset({2}), frozenset({1, 2}))
+    assert induction.trip_count(body, loop, consts.known(body)) == 4
+    assert lower.lowered("fixed", body, {}, set(), {}).loop_trip_counts == ((1, 4),)
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
