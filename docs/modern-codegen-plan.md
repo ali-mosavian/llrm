@@ -562,3 +562,22 @@ but the implementation must be a general constrained-use split and
 spill-web/home-sharing candidate, jointly evaluated with alternate loop
 counter placement.  It cannot be a counter pin or a rule for face/bitmap
 operations.  No code-generation change is claimed by this experiment.
+
+### 28. Direct move reload prerequisite — 2026-09-18
+
+The constrained-use experiment exposed and fixed one general spill-rewrite
+defect.  When a long value is spilled immediately before a short copy, the
+old rewrite loaded it into a fresh temporary and then copied again, requiring
+three registers at the very point the plan is trying to relieve pressure.
+`spiller` now folds that source directly into the move as
+`mov short,[frame-slot]`.  The fail-first regression records the r_walk
+symptom and verifies that the successor names the frame cell with no reload
+interval.
+
+This is necessary but not sufficient for the complete role plan.  Re-running
+the non-committed counter/source/index experiment still reaches a genuinely
+unplaceable short reload after the direct move is available.  The allocator
+therefore remains correct to refuse it.  The next implementation must choose
+and split the mutually dependent counter, shifted successor, and CL reload
+as one plan; this change merely removes an accidental temporary from that
+candidate and improves every frontend's ordinary move spill path.

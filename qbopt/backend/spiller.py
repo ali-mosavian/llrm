@@ -997,6 +997,11 @@ def folded_source(one: lir.Insn, values: frozenset[int]) -> "ir.Held | None":
         ):
             if dest != left:
                 return None
+        case ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held() as left,), (ir.Held() as right,)):
+            # A copy is the most useful direct reload: the destination is
+            # already the short-lived register value the following operation
+            # wants, so `mov short,[slot]` does not need a third temporary.
+            pass
         case _:
             return None
     if (
@@ -1020,9 +1025,10 @@ def _source(one, values, frame):
     cell = frame.cell(right.value, right.width)
     if cell is None:
         return None
+    sources = (cell,) if one.what.op is ir.Operation.MOVE else (left, cell)
     return replace(
         one,
-        what=replace(one.what, sources=(left, cell)),
+        what=replace(one.what, sources=sources),
         symbol=False,
         uses=tuple(value for value in one.uses if value != right.value),
     )

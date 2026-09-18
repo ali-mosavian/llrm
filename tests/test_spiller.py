@@ -41,6 +41,20 @@ def _out(body, values):
     return [one for block in got.blocks for one in block.insns]
 
 
+def test_a_spilled_move_source_loads_straight_into_its_short_successor() -> None:
+    """r_walk spilled the long-lived face before its short shifted copy.
+
+    Reloading the face into a new temporary before `mov shifted, face` made
+    three simultaneous registers necessary.  x86 can read the spill slot
+    directly into the short successor; the spill rewrite must preserve that
+    legal move form instead of introducing a reload interval.
+    """
+    insns = _out(_body(_move(1, 3, at=0x10), _move(2, 1, at=0x11)), {1})
+    copied = next(one for one in insns if one.what and one.what.dests == (ir.Held(2, 2),))
+    assert isinstance(copied.what.sources[0], ir.Mem)
+    assert copied.uses == ()
+
+
 def test_slot_is_as_wide_as_the_widest_use_of_its_value():
     """snd_mix_frame spilled a value first seen as a word, then stored all four
     bytes of it: `mov dword ptr [bp-2], eax` over the saved BP, and a 4-byte
