@@ -37,10 +37,10 @@ pytestmark = [
 ]
 
 
-def _start() -> str:
-    declarations = "\n".join(f"extrn _bench_{name}:far" for name, _file, _argument, _width in BENCHMARKS)
+def _start(benchmarks=BENCHMARKS) -> str:
+    declarations = "\n".join(f"extrn _bench_{name}:far" for name, _file, _argument, _width in benchmarks)
     calls = []
-    for index, (name, _file, argument, width) in enumerate(BENCHMARKS):
+    for index, (name, _file, argument, width) in enumerate(benchmarks):
         if width == 4:
             calls.extend((f"    mov ax, {argument >> 16}", "    push ax"))
         calls.extend((f"    mov ax, {argument & 0xffff}", "    push ax", f"    call far ptr _bench_{name}"))
@@ -65,9 +65,9 @@ def _start() -> str:
 .stack 4096
 {declarations}
 .data
-values db {len(BENCHMARKS) * 4} dup (?)
+values db {len(benchmarks) * 4} dup (?)
 filename db 'VALUE.BIN', 0
-{chr(10).join(f"markerName{index} db 'P{index}.DAT', 0" for index in range(len(BENCHMARKS)))}
+{chr(10).join(f"markerName{index} db 'P{index}.DAT', 0" for index in range(len(benchmarks)))}
 .code
 start:
     mov ax, @data
@@ -81,7 +81,7 @@ start:
     jc failed
     mov bx, ax
     mov ah, 40h
-    mov cx, {len(BENCHMARKS) * 4}
+    mov cx, {len(benchmarks) * 4}
     lea dx, values
     int 21h
     jc failed
@@ -96,16 +96,15 @@ end start
 """
 
 
-def test_optimized_c_benchmarks_return_their_independent_answers(tmp_path: Path) -> None:
-    """CRC returned FFFFFFFF when unrolling orphaned its inner-loop live-out."""
+def _answers(tmp_path: Path, benchmarks) -> dict[str, int]:
     expected = json.loads((ROOT / "bench" / "c" / "expected.json").read_text())
-    for name, filename, _argument, _width in BENCHMARKS:
+    for name, filename, _argument, _width in benchmarks:
         source = ROOT / "bench" / "c" / f"{name}.c"
         stream = cfront.recorded(source, [])
         module = cfront.assembled(stream, name, optimise=True)
         (tmp_path / f"{filename}.OBJ").write_bytes(omfwrite.written(module, source.name))
     start = tmp_path / "START.ASM"
-    start.write_text(_start())
+    start.write_text(_start(benchmarks))
     assembled = subprocess.run(
         [JWASM, "-q", "-c", "-Cp", "-Zg", "-omf", f"-Fo{tmp_path / 'START.OBJ'}", str(start)],
         capture_output=True,
@@ -117,13 +116,13 @@ def test_optimized_c_benchmarks_return_their_independent_answers(tmp_path: Path)
         tmp_path,
         CFG.mount,
         [
-            f"{CFG.link} START.OBJ+" + "+".join(f"{filename}.OBJ" for _name, filename, _argument, _width in BENCHMARKS)
+            f"{CFG.link} START.OBJ+" + "+".join(f"{filename}.OBJ" for _name, filename, _argument, _width in benchmarks)
             + ", CBENCH.EXE,,; > LINK.OUT",
             "CBENCH.EXE",
         ],
         timeout=20,
     )
-    completed = [index for index in range(len(BENCHMARKS)) if dos_file(tmp_path, f"P{index}.DAT") is not None]
+    completed = [index for index in range(len(benchmarks)) if dos_file(tmp_path, f"P{index}.DAT") is not None]
     assert run.finished and not run.timed_out, (run, completed)
     link = read_dos(tmp_path, "LINK.OUT").lower()
     assert "error l" not in link and "unresolved external" not in link, link
@@ -132,6 +131,19 @@ def test_optimized_c_benchmarks_return_their_independent_answers(tmp_path: Path)
     raw = result.read_bytes()
     observed = {
         name: int.from_bytes(raw[index * 4 : index * 4 + 4], "little")
-        for index, (name, _filename, _argument, _width) in enumerate(BENCHMARKS)
+        for index, (name, _filename, _argument, _width) in enumerate(benchmarks)
     }
-    assert observed == {name: expected[name]["result"] & 0xffffffff for name, *_rest in BENCHMARKS}
+    assert observed == {name: expected[name]["result"] & 0xffffffff for name, *_rest in benchmarks}
+    return observed
+
+
+def test_optimized_c_benchmarks_return_their_independent_answers(tmp_path: Path) -> None:
+    """CRC returned FFFFFFFF when unrolling orphaned its inner-loop live-out."""
+    _answers(tmp_path, BENCHMARKS)
+
+
+def test_cloned_c_nbody_returns_its_independent_answer(tmp_path: Path) -> None:
+    """Nbody must match its recorded 4774160 oracle through fresh OMF,
+    LINK, and a real DOS 386, rather than merely resemble GCC's listing.
+    """
+    _answers(tmp_path, (BENCHMARKS[-1],))

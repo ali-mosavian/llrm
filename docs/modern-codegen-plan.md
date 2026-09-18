@@ -1242,3 +1242,24 @@ oracle remains the required correctness gate for the new CFG clone; this
 iteration establishes only the resource mechanism and its focused regression.
 GCC/LLVM remain best-case flat-i386 structural listings, while BCC/WC
 medium-model listings remain the ABI and legal-address-form authority.
+
+### 57. C nbody oracle measurement gate — 2026-09-18
+
+The targeted DOS nbody run caught a measurement error before it became an
+optimization conclusion.  The first focused test asserted a hand-written
+result of `2`; the independent committed corpus oracle in
+`bench/c/expected.json` specifies `4774160`.  Fresh OMF emission, LINK, and a
+real DOS 386 produce that recorded value both with normal optimization and
+with optimization disabled.  Disabling unrolling independently produces the
+same result.  The earlier apparent strict-FP clone failure was therefore not
+a compiler failure and no valid candidate is withdrawn.
+
+The test now compiles only nbody but reads the same independent expected-answer
+source as the full C suite.  It would have caught either an incorrect emitted
+result or a future test that selected the wrong corpus expectation; it no
+longer duplicates an unverified number.  This is Phase 1 measurement
+hardening, not a Phase-5 code-quality claim.  The accepted nbody listing from
+iteration 55 remains provisional until its normal performance and complete
+suite gates; GCC/LLVM are best-case flat-i386 structural references, while
+BCC/WC medium-model output remains the authority for ABI, segments, and legal
+addressing.
