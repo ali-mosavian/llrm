@@ -1138,3 +1138,37 @@ measurement trustworthiness; it does not alter nbody code generation or
 create a hard target.  GCC/LLVM assembly remains best-case flat-i386
 structural evidence only, with BCC/WC medium-model output the ABI and
 address-form authority.
+
+### 54. Medium-model default address-form gate — 2026-09-18
+
+The shared `transform.applied()` boundary still supplied `{1,2,4,8}` when a
+direct MIR caller omitted CPU form facts, despite every public CPU profile and
+both production frontends correctly supplying `{1}`.  That was a target-model
+leak: a 16-bit medium-model effective address can combine a base and index but
+cannot encode a flat 32-bit scaled-index form.  Such a caller could therefore
+make a formula decision using a price for code the emitter cannot legally
+produce.
+
+The default is now `{1}`.  The regression first observed the old flat set at
+the `Strength` boundary and now proves an omitted profile has exactly the same
+legality fact as the default 386 frontend; the focused CPU-profile suite passes
+(`10 passed`, `0.34s`).  An explicit profile still owns its own machine-neutral
+capacity, costs, and legal-form facts.
+
+A fresh `bench/c/nbody.c --cpu 386 --references` run at the preceding clean
+revision generated both Apple Clang and installed `i686-elf-gcc` strict-x87
+flat-i386 listings.  qbopt remains 598 bytes / 138 static instructions;
+Clang and GCC are 0.45x and 0.49x respectively on normalized static
+instructions.  The dynamic comparison is correctly withheld because the
+runtime outer-step bound still uses the profile-free loop heuristic.  Reading
+the listings confirms the next gap is not an illegal address form: the fixed
+four-body triangular pair loop is nested inside a strict floating region.  The
+current general CFG cloner deliberately refuses a floating loop with an
+internal conditional until it has an edge-by-edge stack-equivalence proof.
+That proof, rather than a source-specific nbody unroll, is the next Phase-5
+work item.
+
+GCC and LLVM remain best-case flat-i386 structural listings only.  Their
+algorithmic loop shape and memory traffic guide the audit; BCC/WC medium-model
+listings remain the authority for ABI, segmentation, legal address forms, and
+any hard target.

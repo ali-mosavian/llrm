@@ -2810,8 +2810,11 @@ def applied(
         # is. It belongs to the caller once the drivers thread it.
         registers=len(mir.TRACKED) if registers is None else registers,
         call_registers=call_registers,
-        # Existing callers target a 386 when they omit the legal forms.
-        index_scales=frozenset({1, 2, 4, 8}) if index_scales is None else index_scales,
+        # Existing callers target the same 386 *medium-model* address space
+        # as the public frontends.  A 16-bit effective address can add a
+        # base and index, but has no encoded scale; advertising a flat SIB
+        # form here lets a direct MIR client price code lowering cannot emit.
+        index_scales=frozenset({1}) if index_scales is None else index_scales,
         costs=costs or OperationCosts(),
     )
     # These names were public debugging selectors before value reuse became

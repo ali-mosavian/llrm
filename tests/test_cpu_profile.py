@@ -59,6 +59,30 @@ def test_medium_model_profiles_only_offer_unscaled_index_addressing() -> None:
     assert {target.address_scales for target in map(cpu.profile, cpu.names())} == {frozenset({1})}
 
 
+def test_direct_mir_default_keeps_medium_model_address_legality(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A direct MIR caller priced a flat ``index * 4`` address after profiles
+    had correctly stopped offering one.
+
+    ``transform.applied()`` is public test/tooling infrastructure as well as
+    the common optimization boundary.  Omitting its optional CPU details must
+    mean the same default 386 medium-model target as the frontends, not revive
+    an illegal flat-addressing formula behind their backs.
+    """
+    observed = []
+    real = strength.reduced
+
+    def recording(*args, **kwargs):
+        observed.append(args[4])
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(strength, "reduced", recording)
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (), ()),))
+
+    transform.applied(body, frozenset(), {}, only="strength")
+
+    assert observed == [frozenset({1})]
+
+
 def test_unknown_cpu_is_rejected_at_the_shared_boundary() -> None:
     with pytest.raises(ValueError, match="unknown CPU target"):
         cpu.profile("pentium")
