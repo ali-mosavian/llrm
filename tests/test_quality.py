@@ -292,8 +292,8 @@ def test_constant_phi_exit_folds_on_each_return_edge() -> None:
     """choose returned 8 or 10 through ``mov 7/9; add 1`` and a join jump.
 
     GCC duplicates the tiny return tail and Clang goes further by if-converting
-    it.  The medium-model candidate should first fold the shared arithmetic on
-    each incoming edge while retaining one copy of its larger far-return ABI.
+    it.  Once the incoming arithmetic is folded, duplicating ``pop bp; retf``
+    exactly replaces the remaining two-byte jump and removes executed work.
     """
     source = FIXTURES / "choose.c"
     assembly = cfront.compiled(cfront.recorded(source, []), "choose_tail", optimise=True)
@@ -302,7 +302,8 @@ def test_constant_phi_exit_folds_on_each_return_edge() -> None:
     assert "mov ax, 8" in function
     assert "mov ax, 10" in function
     assert "add ax, 1" not in function
-    assert function.count("retf") == 1
+    assert "jmp " not in function
+    assert function.count("retf") == 2
 
 
 def test_dynamic_frequency_uses_a_proven_fixed_trip_count() -> None:

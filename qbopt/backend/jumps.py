@@ -233,6 +233,111 @@ def preferred(before: lir.LirBody, after: lir.LirBody) -> lir.LirBody:
     return after if after_static < before_static and after_dynamic <= before_dynamic else before
 
 
+def duplicated_returns(body: lir.LirBody, return_overhead: int = 0) -> lir.LirBody:
+    """Duplicate a terminal tail when doing so costs no bytes and removes a jump.
+
+    Frame teardown is emitted around RETURN rather than represented in LIR, so
+    its exact selected size is supplied by the emitter.  Source-owned tails are
+    deliberately excluded: duplicating them would duplicate provenance,
+    fixups, or line anchors rather than merely choosing a machine layout.
+    """
+    while True:
+        blocks = list(body.blocks)
+        by_at = {block.at: block for block in blocks}
+        predecessors = _predecessors(blocks)
+        changed = False
+        for tail in blocks:
+            parents = [by_at[at] for at in predecessors.get(tail.at, ()) if at in by_at]
+            tail_size = _duplicable_return_size(tail, return_overhead)
+            if (
+                tail.at == body.entry
+                or tail_size is None
+                or len(parents) < 2
+                or any(parent.succ != (tail.at,) for parent in parents)
+            ):
+                continue
+            prepared = [_return_parent(parent, tail.at) for parent in parents]
+            if any(one is None for one in prepared):
+                continue
+            copies = [one for one in prepared if one is not None]
+            saved = sum(jump_size for _parent, jump_size in copies)
+            if not saved or len(parents) * tail_size > tail_size + saved:
+                continue
+
+            replacement = {parent.at: _with_return(parent, tail) for parent, _jump_size in copies}
+            body = replace(
+                body,
+                blocks=tuple(replacement.get(block.at, block) for block in blocks if block.at != tail.at),
+            )
+            changed = True
+            break
+        if not changed:
+            return body
+
+
+def _duplicable_return_size(block: lir.LirBlock, return_overhead: int) -> int | None:
+    """Selected bytes in a source-unowned terminal return block."""
+    from qbopt.backend import select
+
+    real = _real(block)
+    if (
+        block.phis
+        or block.succ
+        or not real
+        or real[-1].what is None
+        or real[-1].what.op is not ir.Operation.RETURN
+        or any(
+            not one.inserted
+            or one.what is None
+            or one.symbol is True
+            or one.group is not None
+            or one.spread
+            or one.what.op
+            in {ir.Operation.BARRIER, ir.Operation.BRANCH, ir.Operation.CALL, ir.Operation.DATA, ir.Operation.JUMP}
+            for one in block.insns
+        )
+    ):
+        return None
+    emitted = [select.emit(one.what) for one in real]
+    if any(one is None for one in emitted):
+        return None
+    return return_overhead + sum(len(one.code) for one in emitted if one is not None)
+
+
+def _return_parent(block: lir.LirBlock, target: int) -> tuple[lir.LirBlock, int] | None:
+    """A dedicated edge to target and the shortest jump bytes it can save."""
+    from qbopt.backend import select
+
+    real = _real(block)
+    last = real[-1] if real else None
+    if last is None or last.what is None:
+        return None
+    if last.what.op is ir.Operation.JUMP:
+        if (
+            last.what.target != target
+            or not last.inserted
+            or last.symbol is True
+            or last.group is not None
+            or last.spread
+        ):
+            return None
+        emitted = select.emit(replace(last.what, target=2), short=True)
+        return None if emitted is None else (block, len(emitted.code))
+    if last.what.op in {ir.Operation.BRANCH, ir.Operation.CALL, ir.Operation.DATA, ir.Operation.RETURN}:
+        return None
+    return block, 0
+
+
+def _with_return(parent: lir.LirBlock, tail: lir.LirBlock) -> lir.LirBlock:
+    """Replace parent's dedicated edge with a fresh copy of tail."""
+    real = _real(parent)
+    jump = real[-1] if real and real[-1].what is not None and real[-1].what.op is ir.Operation.JUMP else None
+    anchor = jump.at if jump is not None else (parent.insns[-1].at if parent.insns else parent.at)
+    kept = tuple(one for one in parent.insns if one is not jump)
+    copies = tuple(replace(one, at=anchor, covers=(anchor, anchor), spread=()) for one in tail.insns)
+    return replace(parent, insns=(*kept, *copies), succ=tail.succ)
+
+
 def _step(body: lir.LirBody) -> tuple[lir.LirBody, bool]:
     blocks = list(body.blocks)
     at = {block.at: index for index, block in enumerate(blocks)}

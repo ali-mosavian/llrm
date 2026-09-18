@@ -121,11 +121,8 @@ def datum(item: Datum) -> list[str]:
 type Item = Label | Callee | ir.Semantics
 
 
-def listing(procedure: Procedure, number: int) -> list[Item]:
-    """The procedure as emitted, frame included: what this prints and omfwrite encodes.
-
-    A branch's target is still a block; `label(number, at)` names it.
-    """
+def _frame_parts(procedure: Procedure) -> tuple[list[ir.Semantics], list[ir.Semantics]]:
+    """The implicit entry and return sequences shared by text and OMF emission."""
     saved = [low for whole, low in SAVED.items() if whole in _roots(procedure.body)]
     reserve = procedure.reserve + (procedure.reserve & 1)
     # Inline code is bytes this printer cannot read, so it may address the frame.
@@ -138,15 +135,36 @@ def listing(procedure: Procedure, number: int) -> list[Item]:
         leave.append(ir.Semantics(ir.Operation.NOTHING, "leave"))
     elif framed:
         leave.append(ir.Semantics(ir.Operation.POP, "pop", (bp,)))
-    out: list[Item] = []
+    enter: list[ir.Semantics] = []
     if framed:
-        out += [
+        enter += [
             ir.Semantics(ir.Operation.PUSH, "push", (), (bp,)),
             ir.Semantics(ir.Operation.MOVE, "mov", (bp,), (sp,)),
         ]
     if reserve:
-        out.append(ir.Semantics(ir.Operation.BINARY, "sub", (sp,), (sp, ir.Imm(reserve, 2))))
-    out += [ir.Semantics(ir.Operation.PUSH, "push", (), (ir.Reg(one, 2),)) for one in saved]
+        enter.append(ir.Semantics(ir.Operation.BINARY, "sub", (sp,), (sp, ir.Imm(reserve, 2))))
+    enter += [ir.Semantics(ir.Operation.PUSH, "push", (), (ir.Reg(one, 2),)) for one in saved]
+    return enter, leave
+
+
+def return_overhead_bytes(procedure: Procedure) -> int:
+    """Bytes emitted before each RETURN but absent from allocated LIR."""
+    from qbopt.backend import select
+
+    _enter, leave = _frame_parts(procedure)
+    emitted = [select.emit(one) for one in leave]
+    if any(one is None for one in emitted):
+        raise Unprintable(f"{procedure.name}: implicit return sequence is not encodable")
+    return sum(len(one.code) for one in emitted if one is not None)
+
+
+def listing(procedure: Procedure, number: int) -> list[Item]:
+    """The procedure as emitted, frame included: what this prints and omfwrite encodes.
+
+    A branch's target is still a block; `label(number, at)` names it.
+    """
+    enter, leave = _frame_parts(procedure)
+    out: list[Item] = [*enter]
     blocks = procedure.body.blocks
     for index, block in enumerate(blocks):
         out.append(Label(label(number, block.at)))

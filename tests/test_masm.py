@@ -57,6 +57,23 @@ def test_reserved_frame_leaves_in_one_instruction():
     assert lines[-3:-1] == ["leave", "retf"] and "mov sp, bp" not in lines and "pop bp" not in lines
 
 
+def test_return_overhead_prices_the_implicit_frame_teardown() -> None:
+    """Return-tail layout must count the pop/leave absent from allocated LIR."""
+    through = ir.Mem(Addr(Space.FRAME, 6), 2, through=Register.BP)
+    move = lir.Insn(
+        0,
+        (0, 1),
+        ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg(Register.AX, 2),), (through,)),
+        (),
+        (),
+    )
+    returned = lir.Insn(1, (1, 1), ir.Semantics(ir.Operation.RETURN, "retf"), (), ())
+    body = lir.LirBody("get", 1, (lir.LirBlock(1, (move, returned)),), {}, {})
+
+    assert masm.return_overhead_bytes(masm.Procedure("_get", True, True, body, 0, {})) == 1
+    assert masm.return_overhead_bytes(masm.Procedure("_get", True, True, body, 4, {})) == 1
+
+
 def test_callee_saves_only_what_the_convention_keeps():
     """SI and DI were pushed and popped whole: an operand-size prefix on every save
     and restore, for upper halves no Borland caller keeps across a call."""

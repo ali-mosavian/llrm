@@ -543,15 +543,18 @@ def assembled(
             if low is before:
                 break
         low = jumps.preferred(baseline, jumps.threaded(low))
-        if watch is not None:
-            watch("lir-layout", raised.name, low)
-        lirs.append(_lir_text(raised.name + " (allocated)", low))
         reserve = -min(min(frame.slots.values(), default=0), frame.floor)
         callees = {
             at: masm.Callee(one.object_name, one.far, raised.inline.get(at, ())) for at, one in raised.callees.items()
         }
         callees.update({at: masm.Callee(legalized.calls[at], False, code) for at, code in legalized.inline.items()})
-        procedures.append(masm.Procedure(raised.name, raised.symbol.exported, raised.symbol.far, low, reserve, callees))
+        procedure = masm.Procedure(raised.name, raised.symbol.exported, raised.symbol.far, low, reserve, callees)
+        low = jumps.duplicated_returns(low, masm.return_overhead_bytes(procedure))
+        procedure = masm.Procedure(raised.name, raised.symbol.exported, raised.symbol.far, low, reserve, callees)
+        if watch is not None:
+            watch("lir-layout", raised.name, low)
+        lirs.append(_lir_text(raised.name + " (allocated)", low))
+        procedures.append(procedure)
     _write(dump, "mir", "\n".join(mirs))
     _write(dump, "lir", "\n".join(lirs))
     built = masm.Module(

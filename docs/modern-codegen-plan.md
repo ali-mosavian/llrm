@@ -26,9 +26,65 @@ iteration updates this file in the same commit.
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, dying-base indexed-form unfolding, and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
 | Loop optimization | partial | exact pre/post-tested recurrences and symbolic sentinels, target-priced exact nested-recurrence rewind, complete nested-initializer LICM, dead-control countdowns with zero-trip guards, complete-affine spill/recompute pricing, precise-volatile-aware LICM, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling with bounded full-growth and machine-neutral whole-range pressure forecasting exist; versioning, partial unrolling, and constraint-complete candidate-set forecasting remain. |
 | Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs (including closed recursive SCCs in C and object paths), constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, post-inline constant folding through phi edges and linear corridors, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
-| Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing, dead-register frame-copy shuttles, target-priced 67h LEA selection including source-owned loaded scale/add tails and constant/register sums, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
+| Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing and byte-neutral source-unowned terminal-return duplication, dead-register frame-copy shuttles, target-priced 67h LEA selection including source-owned loaded scale/add tails and constant/register sums, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 112. Duplicate byte-neutral terminal return tails — 2026-09-18
+
+After edge-sensitive folding, `choose.c` still executed one unconditional jump
+on one of its two equally likely arms.  GCC duplicates its terminal return;
+Clang if-converts the entire choice.  The candidate can take GCC's structural
+choice without spending a byte because a short jump and the medium-model
+`pop bp; retf` sequence are both two bytes:
+
+```asm
+; before                         ; after
+mov ax, 8                        mov ax, 8
+L0_16:                           pop bp
+pop bp                           retf
+retf
+                                 ; other edge
+mov ax, 10                       mov ax, 10
+jmp L0_16                        pop bp
+                                 retf
+```
+
+Final C layout now duplicates a terminal tail only when every instruction in
+it is source-unowned, it has no phi, successor, fixup, group, spread, call,
+barrier, data, branch, or jump, and every predecessor is a dedicated
+unconditional edge.  It selects the tail and the emitter's implicit frame
+teardown to exact bytes, prices the removed jump at its shortest possible
+encoding, and accepts only no-growth results that remove at least one jump.
+Larger tails and source-owned tails remain shared.  This is a general
+post-allocation layout choice; it names neither `choose` nor a register.
+
+The fail-first source regression observed `jmp L0_16` and one `retf`.  Focused
+LIR regressions cover the byte-neutral decision and both refusal cases, while
+an emitter regression proves the implicit `pop`/`leave` byte is included.
+The execution regression sends real inputs 0 and 1 through fresh OMF, the DOS
+linker, and a DOS 386 and receives the independent bytes `0a 00 08 00`.
+
+The exact `386` candidate remains 20 bytes.  Raw static instructions rise
+from 10 to 11 because the mutually exclusive `pop; retf` pair is represented
+twice, while ABI-normalized instructions stay 7.  Estimated executed
+instructions improve from 8.5 to 8.0 and branches from 1.5 to 1.0.  The
+dynamic structural ratio improves from 1.21x to 1.14x against i686 GCC and
+from 1.70x to 1.60x against Clang.  The profile-insensitive static CPU price
+sum rises 50 to 65 because it sums both mutually exclusive return copies; raw
+paths establish that no executed path gained work, so this is an explicit
+audited static/dynamic tradeoff rather than a latency claim.
+
+Candidate and raw reference listings are under
+`build/quality/iter119-choose`; the source SHA-256 remains
+`84551e148b8a0517c83840c2d800c0157b32eb425f1464fd3256a939709ab5cf`.
+The report records Apple Clang 21.0.0 and i686-elf GCC 16.2.0.  This advances
+Phase 7 without claiming if-conversion, a hand-audited target, or final
+acceptance.  Focused layout regressions pass (`2 passed`, `0.15s`), the
+emitted-source regression passes (`1 passed`, `0.35s`), the frame-price
+regression passes (`1 passed`, `0.26s`), the DOS execution regression passes
+(`1 passed`, `2.05s`), and Tier 1 passes (`238 passed`, `31 deselected`,
+`5.77s`).
 
 ### 111. Fold pure constants through phi edges — 2026-09-18
 

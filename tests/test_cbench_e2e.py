@@ -147,3 +147,71 @@ def test_cloned_c_nbody_returns_its_independent_answer(tmp_path: Path) -> None:
     LINK, and a real DOS 386, rather than merely resemble GCC's listing.
     """
     _answers(tmp_path, (BENCHMARKS[-1],))
+
+
+def test_duplicated_c_return_tail_preserves_both_answers(tmp_path: Path) -> None:
+    """Duplicating choose's terminal tail must keep inputs 0/1 returning 10/8."""
+    source = ROOT / "fixtures" / "c" / "choose.c"
+    module = cfront.assembled(cfront.recorded(source, []), "choose", optimise=True)
+    (tmp_path / "CHOOSE.OBJ").write_bytes(omfwrite.written(module, source.name))
+    start = tmp_path / "START.ASM"
+    start.write_text(
+        """\
+.model medium
+.386
+.stack 1024
+extrn _choose:far
+.data
+values dw 2 dup (?)
+filename db 'VALUE.BIN', 0
+.code
+start:
+    mov ax, @data
+    mov ds, ax
+    push 0
+    call far ptr _choose
+    add sp, 2
+    mov values, ax
+    push 1
+    call far ptr _choose
+    add sp, 2
+    mov values+2, ax
+    mov ah, 3ch
+    xor cx, cx
+    lea dx, filename
+    int 21h
+    jc failed
+    mov bx, ax
+    mov ah, 40h
+    mov cx, 4
+    lea dx, values
+    int 21h
+    jc failed
+    xor al, al
+    jmp finished
+failed:
+    mov al, 1
+finished:
+    mov ah, 4ch
+    int 21h
+end start
+"""
+    )
+    assembled = subprocess.run(
+        [JWASM, "-q", "-c", "-Cp", "-Zg", "-omf", f"-Fo{tmp_path / 'START.OBJ'}", str(start)],
+        capture_output=True,
+        text=True,
+    )
+    assert assembled.returncode == 0, assembled.stdout + assembled.stderr
+    run = launch(
+        tmp_path,
+        CFG.mount,
+        [f"{CFG.link} START.OBJ+CHOOSE.OBJ, CHOOSE.EXE,,; > LINK.OUT", "CHOOSE.EXE"],
+        timeout=10,
+    )
+    assert run.finished and not run.timed_out, run
+    link = read_dos(tmp_path, "LINK.OUT").lower()
+    assert "error l" not in link and "unresolved external" not in link, link
+    result = next((tmp_path / name for name in ("VALUE.BIN", "value.bin") if (tmp_path / name).is_file()), None)
+    assert result is not None
+    assert result.read_bytes() == bytes((10, 0, 8, 0))

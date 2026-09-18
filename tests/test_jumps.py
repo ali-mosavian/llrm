@@ -4,6 +4,7 @@ Over qcport: 335 `jcc` over a `jmp`, 262 `jmp` to the next label, 69 jumps
 to a block that only jumps.
 """
 
+from dataclasses import replace
 from pathlib import Path
 
 from iced_x86 import Register
@@ -39,6 +40,10 @@ def _move(at, source):
 
 def _return(at):
     return _insn(at, ir.Operation.RETURN, "ret")
+
+
+def _inserted(one: lir.Insn) -> lir.Insn:
+    return replace(one, covers=(one.at, one.at))
 
 
 def _printed(*blocks):
@@ -191,6 +196,57 @@ def test_tail_sharing_rejects_a_static_saving_that_adds_hot_work() -> None:
     assert jumps._work(after)[0] < jumps._work(before)[0]
     assert jumps._work(after)[1] > jumps._work(before)[1]
     assert jumps.preferred(before, after) is before
+
+
+def test_byte_neutral_return_duplication_removes_a_join_jump() -> None:
+    """choose's folded arms joined through a two-byte ``jmp`` to ``pop bp; retf``.
+
+    With the one-byte implicit frame pop included, copying the two-byte return
+    sequence into both arms is byte-neutral and removes the executed jump.
+    """
+    body = lir.LirBody(
+        "choose",
+        1,
+        (
+            lir.LirBlock(1, (_compare(1), _branch(2, "je", 20)), (20, 10)),
+            lir.LirBlock(10, (_move(10, ir.Imm(8, 2)),), (30,)),
+            lir.LirBlock(30, (_inserted(_return(30)),), ()),
+            lir.LirBlock(20, (_move(20, ir.Imm(10, 2)), _inserted(_jump(21, 30))), (30,)),
+        ),
+        {},
+        {},
+    )
+
+    result = jumps.duplicated_returns(body, return_overhead=1)
+    physical = [one.what for block in result.blocks for one in block.insns if one.what is not None]
+
+    assert all(block.at != 30 for block in result.blocks)
+    assert sum(one.op is ir.Operation.RETURN for one in physical) == 2
+    assert all(one.op is not ir.Operation.JUMP for one in physical)
+
+
+def test_return_duplication_rejects_growth_and_source_owned_tails() -> None:
+    """A larger return tail, or one owning source bytes, stays shared."""
+
+    def candidate(tail: tuple[lir.Insn, ...]) -> lir.LirBody:
+        return lir.LirBody(
+            "f",
+            1,
+            (
+                lir.LirBlock(1, (_compare(1), _branch(2, "je", 20)), (20, 10)),
+                lir.LirBlock(10, (_move(10, AX),), (30,)),
+                lir.LirBlock(30, tail, ()),
+                lir.LirBlock(20, (_move(20, BX), _inserted(_jump(21, 30))), (30,)),
+            ),
+            {},
+            {},
+        )
+
+    large = candidate((_inserted(_move(30, ir.Imm(1234, 2))), _inserted(_return(31))))
+    owned = candidate((_return(30),))
+
+    assert jumps.duplicated_returns(large, return_overhead=1) is large
+    assert jumps.duplicated_returns(owned, return_overhead=1) is owned
 
 
 def test_qglsurf_shares_all_three_zero_result_tails() -> None:
