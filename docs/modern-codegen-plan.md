@@ -664,3 +664,24 @@ target: both references use a 32-bit flat ABI and omit our segment selection,
 far-pointer traffic, restricted 16-bit address forms, and far-call frame
 contract.  A hard target still requires an independently hand-derived
 medium-model listing.
+
+### 33. Byte direct-move spill fold — 2026-09-18
+
+The constrained-reload trace identified a concrete general omission in the
+existing direct move spill fold: it admitted word and dword moves but rejected
+the identical byte form.  `mov cl, byte ptr [slot]` is a legal load just as
+`mov cx, word ptr [slot]` is, so the old gate created an unnecessary byte
+reload interval and a second copy before a constrained child.
+
+`spiller.folded_source()` now accepts width one for `MOVE` only; arithmetic
+and comparison folds retain their prior word/dword gate.  The fail-first LIR
+regression models the observed masked-count shape and requires the byte spill
+cell to become the move source directly, with no virtual reload use.  It
+failed under the old gate and the focused direct-move, byte-move, and indexed
+spill checks now pass in `0.06s`.
+
+Re-running the deliberately forced QCport pressure candidate removes that
+particular transfer but still reaches a different unplaceable short range.
+The result is therefore a correct general cleanup, not a claim that the
+complete counter/face role plan is now accepted.  The next candidate must
+continue to price every remaining constrained range together.

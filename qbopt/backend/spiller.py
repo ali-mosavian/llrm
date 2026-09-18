@@ -983,6 +983,7 @@ def folded_source(one: lir.Insn, values: frozenset[int]) -> "ir.Held | None":
     """The spilled source arithmetic or a comparison reads as its memory operand, needing no reload."""
     if one.group is not None or one.requires or one.delivers or one.clobbers:
         return None
+    widths = (2, 4)
     match one.what:
         case ir.Semantics(ir.Operation.BINARY, name, (ir.Held() as dest,), (ir.Held() as left, ir.Held() as right)):
             if name not in {"add", "sub", "and", "or", "xor"} or dest != left:
@@ -1001,11 +1002,15 @@ def folded_source(one: lir.Insn, values: frozenset[int]) -> "ir.Held | None":
             # A copy is the most useful direct reload: the destination is
             # already the short-lived register value the following operation
             # wants, so `mov short,[slot]` does not need a third temporary.
+            # The byte form is equally direct (`mov cl,byte [slot]`) and is
+            # how a spilled masked count reaches an x86 counted shift without
+            # first consuming an arbitrary byte register.
+            widths = (1, 2, 4)
             pass
         case _:
             return None
     if (
-        left.width not in (2, 4)
+        left.width not in widths
         or right.width != left.width
         or right.value not in values
         or left.value == right.value

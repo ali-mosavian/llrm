@@ -55,6 +55,37 @@ def test_a_spilled_move_source_loads_straight_into_its_short_successor() -> None
     assert copied.uses == ()
 
 
+def test_a_spilled_byte_move_loads_straight_into_its_constrained_child() -> None:
+    """r_walk reloaded a masked face byte before copying it into the shift count.
+
+    `mov cl, byte ptr [slot]` is as legal as the word direct-move fold.  The
+    old width gate instead created a byte reload interval and a second copy,
+    which became unplaceable under the loop's far-address pressure.  A spill
+    source that feeds a byte successor must therefore be folded directly too.
+    """
+    made = lir.Insn(
+        at=0x10,
+        covers=(0x10, 0x10),
+        what=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(1, 1),), (ir.Held(3, 1),)),
+        defines=(1,),
+        uses=(3,),
+        op=None,
+    )
+    child = lir.Insn(
+        at=0x11,
+        covers=(0x11, 0x11),
+        what=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(2, 1),), (ir.Held(1, 1),)),
+        defines=(2,),
+        uses=(1,),
+        op=None,
+    )
+    insns = _out(_body(made, child), {1})
+    copied = next(one for one in insns if one.what and one.what.dests == (ir.Held(2, 1),))
+    assert isinstance(copied.what.sources[0], ir.Mem)
+    assert copied.what.sources[0].width == 1
+    assert copied.uses == ()
+
+
 def test_slot_is_as_wide_as_the_widest_use_of_its_value():
     """snd_mix_frame spilled a value first seen as a word, then stored all four
     bytes of it: `mov dword ptr [bp-2], eax` over the saved BP, and a 4-byte
