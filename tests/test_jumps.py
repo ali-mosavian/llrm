@@ -91,6 +91,39 @@ def test_jump_over_a_block_nothing_reaches_is_dropped():
     ) == ["L0_1:", "mov ax, bx", "L0_9:", "ret"]
 
 
+def test_threading_preserves_an_exact_empty_loop_header() -> None:
+    """Mandel's rewound coordinate made its outer header emit no bytes.
+
+    Threading redirected the 24-row backedge through that block into the
+    32-column header, merging two natural loops in the measurement CFG.  The
+    executable bytes were sound, but the dynamic estimate fell implausibly
+    from 74,839 to 1,065 instructions.  A proved header costs no bytes and
+    must remain as a zero-length CFG anchor.
+    """
+    from qbopt.analysis import loops
+
+    body = lir.LirBody(
+        "nested",
+        1,
+        (
+            lir.LirBlock(1, (_jump(1, 8),), (8,)),
+            lir.LirBlock(8, (), (10,)),
+            lir.LirBlock(10, (_compare(10), _branch(11, "je", 20)), (14, 20)),
+            lir.LirBlock(14, (_move(14, CX), _jump(15, 10)), (10,)),
+            lir.LirBlock(20, (_compare(20), _branch(21, "jne", 8)), (8, 30)),
+            lir.LirBlock(30, (_return(30),), ()),
+        ),
+        {},
+        {},
+        loop_trip_counts=((8, 24), (10, 32)),
+    )
+
+    result = jumps.threaded(body)
+
+    assert any(block.at == 8 for block in result.blocks)
+    assert {loop.header for loop in loops.loops(result.blocks, result.entry)} == {8, 10}
+
+
 def test_a_block_that_jumps_to_itself_stays():
     """`for (;;);` -- following jumps must not go round forever."""
     assert _printed(lir.LirBlock(1, (_jump(1, 1),), (1,))) == ["L0_1:", "jmp L0_1"]

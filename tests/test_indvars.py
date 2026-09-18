@@ -6,8 +6,8 @@ import pytest
 
 import corpus
 from qbopt import wholeseg
-from qbopt.model import ir, mir
 from qbopt.analysis import loops
+from qbopt.model import ir, mir
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O"])

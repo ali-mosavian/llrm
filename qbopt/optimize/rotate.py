@@ -345,7 +345,19 @@ def _entered(
             return replace(changed, phis=entry)
         return changed
 
-    return replace(body, blocks=tuple(rewired(block) for block in body.blocks))
+    counts = dict(body.loop_trip_counts)
+    if header.at in counts:
+        count = counts.pop(header.at)
+        # Rotation makes ``first`` the natural-loop header.  Preserve an
+        # exact fact only when it does not collide with a distinct loop fact;
+        # losing a measurement is preferable to attaching the wrong count.
+        if first.at not in counts or counts[first.at] == count:
+            counts[first.at] = count
+    return replace(
+        body,
+        blocks=tuple(rewired(block) for block in body.blocks),
+        loop_trip_counts=tuple(sorted(counts.items())),
+    )
 
 
 def _cleared(op: mir.Op) -> mir.Op:

@@ -20,15 +20,77 @@ iteration updates this file in the same commit.
 
 | Phase | State | Current boundary |
 |---|---|---|
-| Per-CPU measurement | in progress | CPU profiles distinguish native medium-model addressing from the complete costed secondary 67h form; the C corpus, static/dynamic metrics and reference listings exist, and rotated symbolic sentinels and guarded post-tests retain comparable trip estimates; audited targets remain. |
+| Per-CPU measurement | in progress | CPU profiles distinguish native medium-model addressing from the complete costed secondary 67h form; the C corpus, static/dynamic metrics and reference listings exist, and exact counts now survive recurrence rewinds, loop rotation, and zero-byte-header threading; audited targets remain. |
 | MIR/LIR provenance and fresh OMF | complete in production | allocated LIR emits directly with external source maps/allocation hints; the remaining compatibility views are test-only and cannot route a compilation through record rewriting. |
 | SROA and scalar promotion | partial | fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies can now expand into exact leaves, while far, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, dying-base indexed-form unfolding, and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
-| Loop optimization | partial | exact pre/post-tested recurrences and symbolic sentinels, complete nested-initializer LICM, dead-control countdowns with zero-trip guards, complete-affine spill/recompute pricing, precise-volatile-aware LICM, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling exist; versioning and complete candidate-set pressure forecasting remain. |
+| Loop optimization | partial | exact pre/post-tested recurrences and symbolic sentinels, target-priced exact nested-recurrence rewind, complete nested-initializer LICM, dead-control countdowns with zero-trip guards, complete-affine spill/recompute pricing, precise-volatile-aware LICM, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling exist; versioning and complete candidate-set pressure forecasting remain. |
 | Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs (including closed recursive SCCs in C and object paths), constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
 | Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing, dead-register frame-copy shuttles, target-priced 67h LEA selection, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 103. Rewind exact nested recurrences by target cost — 2026-09-18
+
+Mandelbrot's column coordinate reaches `xStart + 32 * 24` on the only exit
+from every row, then the next row copied the separately saved `xStart` back
+into its frame cell.  GCC likewise reloads a saved row start; Clang rebuilds
+the coordinate from its counters.  Those flat-i386 forms are structural
+references rather than automatic winners under the six-register medium-model
+ABI.  The third general formula is to carry the completed recurrence around
+the outer backedge and subtract its proved distance once.
+
+The new MIR transform accepts only one exact inner exit contained by one
+outer loop, requires the exit value to dominate the outer latch, preserves an
+explicit loop-closed exit value, and refuses another use of the saved start.
+Pre-tested loops rewind the exiting header phi; post-tested loops rewind the
+update.  A start defined inside the outer loop or known/rematerializable as a
+constant is refused.  That last rule was found from raw production output:
+the first implementation rewound Mandel's constant `px = -16` control before
+the coordinate recurrence existed and grew P6 from `199/55/88` to
+`219/62/95` bytes/instructions/weighted cost.
+
+Profitability is semantic and per-profile.  The recurrence is considered
+only at register-capacity pressure, when ADD is no dearer than MOVE and a
+memory update is no dearer than load plus store.  Thus 386, 486, and P5 keep
+the two-MOV copy; P6, K5, K6, K7, and Core select the rewind.  This rule is
+not a CPU-name allow-list.  Address formulas continue to use the independent
+ordering native 16-bit form, then legal costed `67h`, then spill/recompute;
+this scalar recurrence has no competing address form.
+
+```asm
+; before, once per row
+mov eax,dword ptr [bp-8]
+mov dword ptr [bp-20],eax
+
+; after, once per completed row
+add dword ptr [bp-4],-768
+```
+
+The exact trip proof exposed two measurement defects.  Threading an empty
+proved outer header redirected its backedge into the inner header and merged
+two natural loops, reporting an impossible `74839 -> 1065` dynamic change.
+Exact zero-byte headers now remain CFG anchors.  Rotation then changed the
+inner header without moving its retained trip fact, producing another false
+ten-trip estimate.  MIR records exact positive counts whose syntactic proof a
+semantics-preserving transform consumed; rotation remaps the fact to its new
+header, lowering retains it only for a still-existing natural loop, and jump
+threading preserves that header without emitting a byte.  The corrected hand
+check is exact: one fewer executed instruction on each of 24 rows,
+`74839.105263 -> 74815.105263`.
+
+P6 changes `199 -> 199` bytes, `55 -> 54` instructions, and weighted cost
+`88 -> 84`.  Final all-profile results are: 386 `199/55/285`, 486
+`200/56/224`, P5 `199/55/143`, P6 `199/54/84`, K5 `199/54/37`, K6
+`199/54/37`, K7 `199/54/43`, and Core `199/54/68`.  The first semantic
+change is MIR `r03-strength`; the accepted final CFG retains outer/inner
+counts 24 and 32.  Fail-first regressions cover the pre-tested exit, the
+slower 386 refusal, the constant-control regression, exact-count retention
+through rotation, and zero-byte-header threading.  Independent hard targets
+remain unregistered, so this is an audited candidate improvement rather than
+a final parity claim.  Tier 1 remains inside its budget at 223 passes in
+1.46 seconds, and the affected fresh-OMF/link/real-386 Mandel executable
+returns its independent answer, `8873`.
 
 ### 102. Shuttle spilled parallel copies through a dead register — 2026-09-18
 

@@ -41,6 +41,7 @@ FAST_MODULES = frozenset(
         "test_parcopy.py",
         "test_phi_widths.py",
         "test_private_frame.py",
+        "test_rewind.py",
         "test_sccp.py",
         "test_schedule.py",
         "test_stack_segment.py",

@@ -7,7 +7,212 @@ from qbopt.model import mir
 from qbopt.analysis import ssa
 from qbopt.analysis import loops
 from qbopt.analysis import consts
+from qbopt.analysis import liveness
 from qbopt.analysis import induction
+from qbopt.model.passes import OperationCosts
+
+
+def rewound(
+    body: mir.MirBody,
+    registers: int = 0,
+    costs: OperationCosts | None = None,
+) -> mir.MirBody:
+    """Reuse an exact inner recurrence instead of reloading its saved start.
+
+    An inner recurrence which runs exactly ``count`` times leaves through its
+    sole exit as ``start + count * step``.  If that loop is itself repeated,
+    subtracting the proven distance on the outer backedge reconstructs the
+    next invocation's start and makes the separately saved start dead across
+    the hot inner loop.
+
+    This is deliberately a pressure-and-target decision.  In a register the
+    old copy and the rewind are equivalent work; when pressure puts both ends
+    in frame cells, the old form is a load plus a store and the new form is a
+    memory update.  The 386/486/P5 profiles price the latter higher and retain
+    the copy.  Later profiles may take it.  Nothing here names either form.
+    """
+    from qbopt.optimize import strength
+    from qbopt.optimize import transform
+
+    if costs is None:
+        costs = OperationCosts()
+    if (
+        not registers
+        or costs.add > costs.move
+        or costs.memory_update > costs.load + costs.store
+    ):
+        return body
+
+    found = loops.loops(body.blocks, body.entry)
+    if len(found) < 2:
+        return body
+    blocks = {block.at: block for block in body.blocks}
+    predecessors = loops.predecessors(body.blocks)
+    dominators = loops.dominators(body.blocks, body.entry)
+    facts = consts.known(body)
+    live = liveness.live(body)
+    values = tuple(ssa.values(body))
+    definitions = {
+        value: (block.at, op)
+        for block in body.blocks
+        for op in block.ops
+        for value in op.defines
+    }
+
+    for inner in found:
+        parents = [
+            loop
+            for loop in found
+            if inner.body < loop.body and inner.header in loop.body
+        ]
+        if not parents or len(inner.latches) != 1:
+            continue
+        parent = min(parents, key=lambda loop: len(loop.body))
+        if len(parent.latches) != 1:
+            continue
+        inner_preheader = transform._preheader(body, inner)
+        parent_preheader = transform._preheader(body, parent)
+        inner_latch = next(iter(inner.latches))
+        parent_latch = next(iter(parent.latches))
+        if (
+            inner_preheader is None
+            or parent_preheader is None
+            or inner_preheader not in parent.body
+            or blocks[inner_preheader].succ != (inner.header,)
+            or blocks[parent_preheader].succ != (parent.header,)
+            or predecessors.get(parent.header) != frozenset({parent_preheader, parent_latch})
+            or liveness.pressure(body, live, inner.body) < registers
+        ):
+            continue
+
+        exiting = [
+            (block.at, successor)
+            for block in body.blocks
+            if block.at in inner.body
+            for successor in block.succ
+            if successor in blocks and successor not in inner.body
+        ]
+        exits = {target for _source, target in exiting}
+        if len(exits) != 1:
+            continue
+        (exit_at,) = exits
+        sources = frozenset(source for source, _target in exiting)
+        if (
+            exit_at not in parent.body
+            or predecessors.get(exit_at) != sources
+            or exit_at not in dominators.get(parent_latch, frozenset())
+        ):
+            continue
+
+        count = induction.trip_count(body, inner, facts)
+        if count is None:
+            continue
+        header = blocks[inner.header]
+        basics = induction.basics(body, inner)
+        for counter in basics.values():
+            phi = next((one for one in header.phis if one.result.id == counter.value), None)
+            if phi is None or set(phi.incoming) != {inner_preheader, inner_latch}:
+                continue
+            start = phi.incoming[inner_preheader]
+            update = phi.incoming[inner_latch]
+            width = counter.start.width
+            step = induction._signed(counter.step, facts, width)
+            update_at = definitions.get(update)
+            start_definition = definitions.get(start)
+            if (
+                step is None
+                or not step
+                or update_at is None
+                or start_definition is None
+                or start_definition[0] in parent.body
+                or start in facts
+            ):
+                continue
+            # A pre-tested loop exits from its header before executing the
+            # next update.  Its phi is already ``start + count * step`` and
+            # dominates that edge.  A post-tested loop exits from the latch,
+            # where the update itself is the corresponding value.  Do not
+            # demand the latter dominate an intentionally zero-trip-capable
+            # header merely because both shapes share one recurrence proof.
+            if all(update_at[0] in dominators.get(source, frozenset()) for source in sources):
+                exit_value = update
+            elif sources == frozenset({inner.header}):
+                exit_value = phi.result
+            else:
+                continue
+            # The saved start must become dead in the enclosing loop.  Other
+            # uses would keep its live range and turn an equal-cost register
+            # rewrite into a pure code-size loss.
+            if any(
+                start in op.uses
+                for block in body.blocks
+                if block.at in parent.body
+                for op in block.ops
+            ) or any(
+                value == start and other is not phi
+                for block in body.blocks
+                if block.at in parent.body
+                for other in block.phis
+                for value in other.incoming.values()
+            ):
+                continue
+
+            mask = (1 << (width * 8)) - 1
+            distance = step * count & mask
+            if not distance:
+                continue
+            next_id = max((value.id for value in values), default=-1) + 1
+            next_variable = max((value.variable for value in values), default=-1) + 1
+            next_version = max(
+                (value.version for value in values if value.variable == exit_value.variable),
+                default=0,
+            ) + 1
+            seed = mir.Value(next_id, parent_preheader, variable=next_variable, version=1)
+            closed = mir.Value(next_id + 1, exit_at, variable=exit_value.variable, version=next_version)
+            reset = mir.Value(next_id + 2, exit_at, variable=next_variable, version=2)
+            carried = mir.Value(next_id + 3, parent.header, variable=next_variable, version=3)
+            seeded = strength._made(
+                mir.Kind.COPY,
+                "",
+                seed,
+                (mir.Held(start, width),),
+                blocks[parent_preheader].ops[-1].at if blocks[parent_preheader].ops else parent_preheader,
+                start_definition[1],
+            )
+            rewind = strength._made(
+                mir.Kind.ADD,
+                "add",
+                reset,
+                (mir.Held(closed, width), mir.Const((-distance) & mask, width)),
+                exit_at,
+                update_at[1],
+            )
+
+            changed = []
+            for block in body.blocks:
+                phis = block.phis
+                ops = list(block.ops)
+                if block.at == parent_preheader:
+                    _before_leaving(ops, [seeded])
+                if block.at == parent.header:
+                    phis = (*phis, mir.Phi(carried, {parent_preheader: seed, parent_latch: reset}))
+                if block.at == inner.header:
+                    phis = tuple(
+                        replace(
+                            other,
+                            incoming={**other.incoming, inner_preheader: carried},
+                        )
+                        if other is phi
+                        else other
+                        for other in phis
+                    )
+                if block.at == exit_at:
+                    phis = (*phis, mir.Phi(closed, {source: exit_value for source in sorted(sources)}))
+                    _before_leaving(ops, [rewind])
+                changed.append(replace(block, phis=tuple(phis), ops=tuple(ops)))
+            counts = {**dict(body.loop_trip_counts), inner.header: count}
+            return replace(body, blocks=tuple(changed), loop_trip_counts=tuple(sorted(counts.items())))
+    return body
 
 
 def simplified(body: mir.MirBody) -> mir.MirBody:

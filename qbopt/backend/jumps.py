@@ -236,13 +236,14 @@ def preferred(before: lir.LirBody, after: lir.LirBody) -> lir.LirBody:
 def _step(body: lir.LirBody) -> tuple[lir.LirBody, bool]:
     blocks = list(body.blocks)
     at = {block.at: index for index, block in enumerate(blocks)}
+    protected = frozenset(header for header, _count in body.loop_trip_counts)
     for index, block in enumerate(blocks):
         real = _real(block)
         after = blocks[index + 1].at if index + 1 < len(blocks) else None
         last = real[-1] if real else None
         if last is None or last.what.op not in (ir.Operation.BRANCH, ir.Operation.JUMP):
             continue
-        target = _through(blocks, at, last.what.target)
+        target = _through(blocks, at, last.what.target, protected)
         if target != last.what.target:
             blocks[index] = _retargeted(block, last, target)
             return _reachable(body, blocks), True
@@ -265,6 +266,7 @@ def _step(body: lir.LirBody) -> tuple[lir.LirBody, bool]:
             onward = _passage(over)
             if (
                 onward is not None
+                and over.at not in protected
                 and _real(over)
                 and last.what.target == beyond
                 and _predecessors(blocks).get(over.at) == {block.at}
@@ -301,10 +303,16 @@ def _passage(block: lir.LirBlock) -> int | None:
     return None
 
 
-def _through(blocks: list, at: dict, target: int) -> int:
-    """The first block past every block that only passes control on; unchanged on a cycle of them."""
+def _through(blocks: list, at: dict, target: int, protected: frozenset[int] = frozenset()) -> int:
+    """The first block past pure passages, retaining measured loop anchors.
+
+    An exact loop header may emit no bytes after scalar optimization.  It is
+    still a program fact: redirecting a nested backedge through it can merge
+    two natural loops in the final CFG and invalidate the trip-count metadata
+    used by measurement.  Keeping the zero-length block changes no encoding.
+    """
     start, seen = target, set()
-    while target in at and (onward := _passage(blocks[at[target]])) is not None:
+    while target not in protected and target in at and (onward := _passage(blocks[at[target]])) is not None:
         if target in seen:
             return start
         seen.add(target)

@@ -81,6 +81,7 @@ class Strength(MIRTransform):
         )
         body = exitsink.sunk(transform.dead(ivshare.shared(body)))
         body = loopexit.evaluated(body)
+        body = indvars.rewound(body, self.where.registers, self.where.costs)
         body = indvars.simplified(body)
         return indvars.zeroed(body)
 

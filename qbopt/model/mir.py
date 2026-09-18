@@ -1056,6 +1056,12 @@ class MirBody:
     # Source-language pointer facts. These are semantic metadata, not places.
     pointer_values: frozenset[Value] = frozenset()
     pointer_seeds: dict[Value, "memory.Provenance"] = field(default_factory=dict)
+    # Exact positive execution counts already proved by a MIR transform.
+    # Most counts are rediscovered from the final recurrence in lowering;
+    # transforms such as nested-recurrence rewind deliberately change that
+    # spelling while retaining the proof.  Analyses may consume this program
+    # fact; it carries no target or placement information.
+    loop_trip_counts: tuple[tuple[int, int], ...] = ()
 
     def block(self, at: int) -> MirBlock | None:
         return next((one for one in self.blocks if one.at == at), None)

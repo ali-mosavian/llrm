@@ -518,7 +518,13 @@ def trip_count(body: mir.MirBody, loop: loopy.Loop, facts: dict) -> int | None:
         if symbolic is not None:
             counts.add(symbolic)
     if len(counts) != 1:
-        return None
+        # A semantics-preserving loop transform may consume the syntactic
+        # relationship which established this fact.  Nested-recurrence
+        # rewind, for example, replaces ``start`` with an outer phi after it
+        # has proved the inner loop's exact distance.  Retain that proof at
+        # the same header so rotation and measurement do not fall back to a
+        # guessed trip count.  A newly derived disagreement is still refused.
+        return dict(body.loop_trip_counts).get(loop.header) if not counts else None
     return next(iter(counts))
 
 
