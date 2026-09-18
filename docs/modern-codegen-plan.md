@@ -520,3 +520,26 @@ temporary value, and byte/shift roles from the target register constraints
 and spill cost.  It must not merely swap AX and DX for this function.  Flat
 GCC/LLVM listings remain best-case structural references only; this BCC
 listing is the constrained ABI reference.
+
+### 26. Counter/temporary role trace — 2026-09-18
+
+The committed stage dump proves this is not a missing MIR transformation.
+Before allocation, the loop counter is a normal phi (`v347`/`v82`), the face
+load is `v64`, its shifted form is `v70`, the shift-count form is `v74`, and
+the one-bit result is `v75`; all are independent, target-legal LIR values.
+The face-to-shift copy is eligible for normal two-address coalescing and the
+counted shift already has the required CL constraint.
+
+The first unwanted decision is `04-RegAlloc`: generic allocation order gives
+the counter EAX.  The face remains in ECX for the CL use, the one-bit value
+uses DX, and the shifted face has no register left, so the existing legal
+dead-base fold turns it into `sar [frame]; add bx,[frame]`.  This explains the
+listing exactly; no source fact, alias fact, or MIR pass is missing.
+
+The next candidate is therefore a target-priced **role allocation** for a
+short loop kernel: compare counter placement together with the temporary
+chain and byte/CL requirements, then accept only a complete legal allocation
+whose weighted cost falls.  It must work from LIR live ranges and target
+classes, must include the cost of any new copies/spills, and must not be an
+AX/DX rewrite keyed to this procedure or loop shape.  No code-generation
+change is claimed in this evidence-only iteration.
