@@ -118,6 +118,42 @@ def _latency(one: lir.Insn, cpu: targets.Profile) -> int:
         return 1
 
 
+def _partial_merge_delay(window: list[lir.Insn], producer: int, consumer: int, cpu: targets.Profile) -> int:
+    """The profile's 16/8-to-32-bit merge delay on one real dependency edge.
+
+    A full write of the same root in between replaces the partial value, so
+    the later 32-bit read does not need the old upper bytes and has no merge
+    dependency.  The narrow operand check is intentionally syntactic: this
+    post-allocation phase knows exact physical roots, not source values.
+    """
+    if not cpu.partial_register_stall:
+        return 0
+    before, after = window[producer].what, window[consumer].what
+    assert before is not None and after is not None
+    partial = {
+        RegisterExt.full_register32(where.register)
+        for where in before.dests
+        if isinstance(where, ir.Reg) and where.width < 4 and RegisterExt.full_register32(where.register) in _GENERAL
+    }
+    wide = {
+        RegisterExt.full_register32(where.register)
+        for where in after.sources
+        if isinstance(where, ir.Reg) and where.width == 4 and RegisterExt.full_register32(where.register) in partial
+    }
+    if not wide:
+        return 0
+    for crossed in window[producer + 1 : consumer]:
+        what = crossed.what
+        if what is not None and any(
+            isinstance(where, ir.Reg)
+            and where.width == 4
+            and RegisterExt.full_register32(where.register) in wide
+            for where in what.dests
+        ):
+            return 0
+    return cpu.partial_register_stall
+
+
 def _graph(window: list[lir.Insn]) -> "tuple[list[tuple[frozenset, frozenset]], list[set[int]], list[set[int]]]":
     effects = [_safe(one) for one in window]
     assert all(one is not None for one in effects)
@@ -188,7 +224,7 @@ def _pentium_ordered(window: list[lir.Insn], cpu: targets.Profile) -> list[lir.I
         done = clock + _latency(window[first], cpu)
         for user in users[first]:
             needs[user].remove(first)
-            ready_at[user] = max(ready_at[user], done)
+            ready_at[user] = max(ready_at[user], done + _partial_merge_delay(window, first, user, cpu))
 
         # The V slot may only receive a fully pairable form.  Its dependencies
         # were already ready before the U-slot occurrence, so it cannot read
@@ -201,7 +237,7 @@ def _pentium_ordered(window: list[lir.Insn], cpu: targets.Profile) -> list[lir.I
             done = clock + _latency(window[second], cpu)
             for user in users[second]:
                 needs[user].remove(second)
-                ready_at[user] = max(ready_at[user], done)
+                ready_at[user] = max(ready_at[user], done + _partial_merge_delay(window, second, user, cpu))
         clock += 1
     return emitted
 
@@ -226,7 +262,7 @@ def _ordered(window: list[lir.Insn], cpu: targets.Profile) -> list[lir.Insn]:
         done = clock + _latency(window[chosen], cpu)
         for user in users[chosen]:
             needs[user].remove(chosen)
-            ready_at[user] = max(ready_at[user], done)
+            ready_at[user] = max(ready_at[user], done + _partial_merge_delay(window, chosen, user, cpu))
         # The listing has no explicit no-ops.  One issue slot was consumed;
         # skipped cycles represent hardware waiting for a dependency.
         clock += 1

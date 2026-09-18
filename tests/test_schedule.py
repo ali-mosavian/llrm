@@ -49,6 +49,35 @@ def test_out_of_order_profile_fills_an_imul_dependency_gap() -> None:
     assert [one.what.name for one in result.insns] == ["imul", "mov", "add"]
 
 
+def test_p6_partial_write_penalty_exposes_independent_work() -> None:
+    """C CRC32 emitted ``mov ax,bx; add eax,esi; mov di,si`` across P6's merge stall."""
+    partial = _insn(
+        0,
+        ir.Operation.MOVE,
+        "mov",
+        (ir.Reg(Register.AX, 2),),
+        (ir.Reg(Register.BX, 2),),
+    )
+    wide_use = _insn(
+        1,
+        ir.Operation.BINARY,
+        "add",
+        (ir.Reg(Register.EAX, 4),),
+        (ir.Reg(Register.EAX, 4), ir.Reg(Register.ESI, 4)),
+    )
+    independent = _insn(
+        2,
+        ir.Operation.MOVE,
+        "mov",
+        (ir.Reg(Register.DI, 2),),
+        (ir.Reg(Register.SI, 2),),
+    )
+
+    result = schedule.scheduled(_body(partial, wide_use, independent), cpu.profile("P6"))
+
+    assert [one.what.dests[0].register for one in result.insns] == [Register.AX, Register.DI, Register.EAX]
+
+
 def test_in_order_profiles_keep_the_established_source_order() -> None:
     """386/486 have no safe latency-hiding issue window to exploit."""
     original = _latency_chain()

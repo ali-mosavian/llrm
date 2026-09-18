@@ -26,7 +26,7 @@ iteration updates this file in the same commit.
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
 | Loop optimization | partial | exact pre- and post-tested recurrences, composed pointer recurrences, formula costing, specialization, peeling and exact unrolling exist; versioning, rotation and broad pressure forecasting remain. |
 | Whole-module optimization | partial | summaries, constant returns, private inlining and private procedure DCE exist; full IPSCCP/cloning and private-data DCE remain. |
-| Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing, conservative out-of-order latency scheduling, and a restricted P5 U/V scheduler exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
+| Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing, conservative later-core/P5 scheduling, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
 
@@ -1492,6 +1492,30 @@ not a performance target or a claim of P5/later-core issue-model completeness.
 GCC/LLVM listings remain best-case flat-i386 structural references for
 dependency and expression shape; BCC/WC medium-model output remains the
 authority for ABI, segment state, legal addresses, and any hard target.
+
+### 68. Partial-register dependency scheduling — 2026-09-18
+
+The per-CPU profile already recorded the measured 8/16-bit-to-32-bit merge
+stall, but only the offline scorer used it.  `schedule.py` now applies that
+number to the actual physical dependency edge from a byte/word GPR write to a
+later full-width read of the same root.  It is not a generic additive cost: a
+32-bit write between the two replaces the partial value and explicitly removes
+the delay.  This keeps the fact at the post-allocation boundary where register
+roots and widths are known, rather than leaking register terminology into MIR.
+
+The fail-first P6 regression recreates the CRC32 shape `mov ax,bx; add
+eax,esi; mov di,si`.  Before the edge carried only normal move latency, so the
+consumer was selected first; with P6's recorded merge delay, the independent
+word move fills the gap.  Profiles with zero partial-register penalty retain
+their existing behavior.  Register, flag, memory, segment, x87, and provenance
+boundaries remain exactly those of iterations 66–67.
+
+Focused scheduler/profile checks pass (`16 passed`, `0.20s`); Tier 1 passes
+(`181 passed`, `31 deselected`, `0.98s`).  This advances Phase 7's profile
+fidelity only; it neither claims every partial-register mitigation has been
+selected nor registers a performance target.  GCC/LLVM listings remain
+best-case flat-i386 structural references; BCC/WC medium-model output remains
+the ABI, segment, legal-form, and hard-target authority.
 
 ### 67. Audited Pentium U/V pairing — 2026-09-18
 
