@@ -77,6 +77,29 @@ def test_rematerialization_retains_other_observations(hazard):
         assert result == insns
 
 
+def test_rematerialization_keeps_value_shared_with_a_call_input():
+    """EVTRAP put the handler offset on the stack before AX held it.
+
+    B$ONTA receives that offset both as its far-address stack argument and
+    in AX.  Recreating the PUSH independently left AX to be recreated at
+    the call, reversing the required ``push cs / mov ax,offset / push ax``
+    registration sequence.
+    """
+    address = ir.Imm(0, 2, Addr(Space.SEGMENT, 0xF0, 1))
+    copy = lir.Insn(
+        0, (0, 3), ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(1, 2),), (address,)), (1,), ()
+    )
+    push = lir.Insn(3, (3, 4), ir.Semantics(ir.Operation.PUSH, "push", (), (ir.Held(1, 2),)), (), (1,))
+    call = lir.Insn(
+        4,
+        (4, 9),
+        ir.Semantics(ir.Operation.CALL, "call", (), (ir.Held(1, 2),)),
+        (),
+        (1,),
+    )
+    assert lower._rematerialized_arguments((copy, push, call), Counter({1: 2}), set()) == (copy, push, call)
+
+
 @pytest.mark.parametrize("symbolic", [False, True])
 def test_immediate_push_keeps_definition_relocation_owner(symbolic):
     owner = object()

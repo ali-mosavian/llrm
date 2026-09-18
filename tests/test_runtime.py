@@ -75,7 +75,6 @@ def test_runtime_return_interface_keeps_unknown_effects(family):
     assert replace(routine, inputs=None, evidence=runtime.worst("B$RETA").evidence) == runtime.worst("B$RETA")
 
 
-@pytest.mark.xfail(reason='EVTRAP is refused: generated data reference outside DGROUP', strict=True)
 @pytest.mark.parametrize("tag", ["p-evt", "v-evt"])
 def test_registered_handler_does_not_land_in_a_phi_edge(tag):
     """Optimized EVTRAP printed HITS=0 instead of 1: a split edge stole its entry."""
@@ -93,7 +92,6 @@ def test_registered_handler_does_not_land_in_a_phi_edge(tag):
     assert found.calls.get(second.at) == "B$ETT1" or found.calls.get(third.at) == "B$ETT1"
 
 
-@pytest.mark.xfail(reason='EVTRAP is refused: generated data reference outside DGROUP', strict=True)
 def test_handler_discovery_accepts_lowered_push_only_with_matching_relocations():
     """EVTRAP VBDOS emitted a valid handler at 0136, but discovery reported none."""
     from qbopt import wholeseg
@@ -104,10 +102,10 @@ def test_handler_discovery_accepts_lowered_push_only_with_matching_relocations()
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
     call, = (at for at, name in found.calls.items() if name == "B$ONTA")
-    assert found.code[call - 7:call] == bytes.fromhex("0e b80000 680000")
-    target = found.operands[call - 2]
+    assert found.code[call - 7:call] == bytes.fromhex("0e 680000 b80000")
+    target = found.operands[call - 5]
     assert handler_entries(found) == frozenset({target.disp})
-    mismatched = {**found.operands, call - 5: replace(target, disp=target.disp + 1)}
+    mismatched = {**found.operands, call - 2: replace(target, disp=target.disp + 1)}
     assert not handler_entries(replace(found, operands=mismatched))
 
 

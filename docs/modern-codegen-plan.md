@@ -1040,3 +1040,35 @@ passed`, `4.07s`).  This is a Phase-5 test/measurement correction; dynamic
 nested loops still require pressure-aware formula selection.  GCC/LLVM
 listings remain advisory flat-i386 structural references, and BCC/WC
 medium-model output remains the legality baseline.
+
+### 50. Fresh-OMF code-address relocation and EVTRAP registration — 2026-09-18
+
+The real PDS and VBDOS `EVTRAP` fixtures were still refused by fresh OMF
+emission: an address of code in its own code segment was mistakenly treated
+as a bare DS/DGROUP data reference merely because its instruction had no
+segment-override prefix.  That conflated the target address space with the
+machine selector spelling.  The writer now frames every non-DGROUP
+`SEGMENT` address at its target SEGDEF, while ordinary DS-relative data
+references continue to use DGROUP.
+
+The fail-first handler regression then exposed a second, independent defect.
+Constant propagation may legally make the far-address stack push immediate
+while the runtime call still requires the same logical handler address in
+AX.  The allocator materialized that AX input at the call, and a newly
+inserted symbolic `mov` retained the handler's pre-layout offset while the
+source-owned push relocation moved.  The emitted fields named different code
+addresses.  Generated in-code symbolic immediates now pass through the same
+final layout map as source-owned code relocations, and handler discovery
+accepts the equivalent `push cs / push offset / mov ax, offset` sequence
+only when both relocations resolve to the same in-module entry.
+
+The regression was first observed failing at the lower boundary and then
+after fresh emission.  It now actively covers the shared call-input case,
+both EVTRAP compiler families, relocation mismatch rejection, handler entry
+discovery, and the real event-stub path (`4 passed`, `0.71s`); the complete
+runtime-interface file also passes (`334 passed`, `1.17s`).  This advances
+Phase 2's direct-LIR fresh-OMF boundary and its relocation architecture gate;
+it is not a code-quality claim.  GCC and LLVM listings remain best-case
+flat-i386 structural references only.  BCC/WC medium-model listings remain
+the authority for segmented ABI setup, legal address forms, and emitted
+relocation semantics.

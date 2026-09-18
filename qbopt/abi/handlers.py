@@ -14,6 +14,17 @@ def registered(found: module.Module, routine: str, families: tuple[str, ...]) ->
             field = at - 2
             if found.operands.get(at - 5) != found.operands.get(field):
                 continue
+        elif found.code[max(0, at - 7):at] == b"\x0e\x68\x00\x00\xb8\x00\x00":
+            # Constant propagation may materialize the stack offset before
+            # the copy which establishes AX for the call.  The stack is
+            # already complete at that point and AX is established before
+            # CALL, so this is the same far address ABI sequence.  Require
+            # both relocations to name the identical code entry: accepting a
+            # pair of literal zeroes would instead invent a handler after
+            # LINK has supplied unrelated offsets.
+            field = at - 5
+            if found.operands.get(at - 2) != found.operands.get(field):
+                continue
         else:
             match found.code[max(0, at - 5):at]:
                 case b"\xb8\x00\x00\x0e\x50":

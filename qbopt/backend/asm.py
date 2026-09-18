@@ -959,7 +959,20 @@ def assemble(
             if addresses:
                 if len(addresses) != 1 or len(made.places) != 1:
                     return f"{op.at:#06x}: cannot bind a generated symbolic memory operand"
-                symbols.append((len(out) + made.places[0], addresses[0]))
+                address = addresses[0]
+                # A source-owned code relocation is retargeted by
+                # ``omfwrite._bc_object`` below this layer.  A symbolic
+                # immediate introduced after allocation has no source field
+                # to carry through that route, so its address must instead
+                # be rewritten here using this layout's final map.  Leaving
+                # the old offset made EVTRAP pass a stack handler address
+                # different from the AX address after its handler moved.
+                if address.space is Space.SEGMENT and address.index == found.seg:
+                    landed = moved.get(address.disp)
+                    if landed is None:
+                        return f"{op.at:#06x}: generated code address {address.disp:#x} is not placed"
+                    address = replace(address, disp=landed)
+                symbols.append((len(out) + made.places[0], address))
         out += made.code
     # Every fixup inside a surviving op's `covers` but outside its own
     # node's span belonged to something a transform folded away. One

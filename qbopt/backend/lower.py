@@ -677,6 +677,20 @@ def _rematerialized_arguments(insns, uses, exposed):
     from qbopt.model import lir
 
     literals = {}
+    # A value shared with an ordinary machine consumer is not merely a
+    # convenient literal for its PUSH sites.  In particular, a runtime ABI
+    # can require the same value in a register at the CALL: rematerializing
+    # the push lets allocation recreate that register value after the push,
+    # changing a deliberately ordered setup sequence.  Only values whose
+    # every known use is an eligible PUSH may be recreated independently.
+    pushed = Counter(
+        value
+        for one in insns
+        for value in one.uses
+        if isinstance(one.what, ir.Semantics)
+        and one.what.op is ir.Operation.PUSH
+        and one.what.sources == (ir.Held(value, one.what.sources[0].width),)
+    )
     consumed = Counter()
     out = []
     for one in insns:
@@ -684,6 +698,7 @@ def _rematerialized_arguments(insns, uses, exposed):
             case ir.Semantics(ir.Operation.PUSH, "push", (), (ir.Held(value, width),)):
                 if (
                     value in literals
+                    and uses[value] == pushed[value]
                     and not (one.clobbers or one.requires or one.delivers or one.spread)
                     and not one.defines
                     and one.uses == (value,)

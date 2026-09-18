@@ -138,17 +138,23 @@ def written_bc(
     for new, old in laid.relocations:
         relocations.setdefault(old, []).append(kept + new)
     groups = list(omf.groups(records))
-    group_framed = [address for _offset, address in laid.symbols if address.segment == Register.NONE]
+    # A SEGMENT-space address outside DGROUP is an offset in its owning
+    # segment, even when the instruction carries no explicit segment
+    # override.  ``segment`` records the latter machine detail; it does not
+    # turn a code or private-data symbol into a DGROUP address.  Fresh OMF
+    # therefore frames those references at their target segment.
+    target_segment = lambda address: address.space is Space.SEGMENT and address.index not in found.dgroup
+    group_framed = [
+        address for _offset, address in laid.symbols if address.segment == Register.NONE and not target_segment(address)
+    ]
     if group_framed and "DGROUP" not in groups:
         return "generated data references require an established DGROUP frame"
     added = []
     for offset, address in laid.symbols:
-        if address.space is Space.SEGMENT and address.index not in found.dgroup and address.segment == Register.NONE:
-            return f"generated data reference at {kept + offset:#x} is outside DGROUP: {address}"
         target = "segment" if address.space is Space.SEGMENT else "external"
         fixup = (
             omf.target_offset_fixup(found.seg, kept + offset, target, address.index, address.disp)
-            if address.segment != Register.NONE
+            if address.segment != Register.NONE or target_segment(address)
             else omf.offset_fixup(
                 found.seg,
                 kept + offset,
