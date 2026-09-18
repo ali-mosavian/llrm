@@ -1009,3 +1009,17 @@ whole FP roadmap: global x87 allocation, more general recurrence forms, and
 runtime-matrix acceptance remain open.  GCC/LLVM listings remain advisory
 flat-i386 structural references; BCC/WC medium-model output remains the ABI
 and legal-address-form authority.
+
+### 48. QuickBASIC strict-FP literal proof — 2026-09-18
+
+The QuickBASIC `/O` FPCSE literal-initializer xfail now passes through the
+same general floating recurrence analysis as PDS and VBDOS.  It proves the
+ten-trip exit and its `0x43f3c000` final storage fact while preserving the
+original literal-initializer side table; supplying no initializer facts still
+correctly refuses the proof.  The regression is active (`1 passed`, `0.22s`).
+
+This extends Phase-5 strict-FP evidence across all three supported BASIC
+frontends/layouts.  It does not expand the proof to unknown initial memory or
+relax the storage-rounding and exception constraints.  GCC/LLVM remains
+advisory flat-i386 structural evidence; BCC/WC medium-model output remains
+the ABI/address-form legality authority.

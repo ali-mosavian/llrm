@@ -211,7 +211,6 @@ def test_fpbench_one_survives_unrelated_pointer_relocations():
     assert dict(body.initial)[ref] == mir.Const(0x3F800000, 4)
 
 
-@pytest.mark.xfail(reason='QB45 FPCSE no longer proves its floating loop exit', strict=True)
 def test_quickbasic_literal_initializers_prove_the_same_floating_exit():
     """FPCSE's QB object retained ten iterations while PDS/VBDOS proved 487.5."""
     path = Path("fixtures/omf/fpcse-q-O.obj")
