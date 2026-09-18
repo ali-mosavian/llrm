@@ -1072,3 +1072,21 @@ it is not a code-quality claim.  GCC and LLVM listings remain best-case
 flat-i386 structural references only.  BCC/WC medium-model listings remain
 the authority for segmented ABI setup, legal address forms, and emitted
 relocation semantics.
+
+### 51. PRESS literal-loop regression audit — 2026-09-18
+
+The last strict `PRESS` xfail was run fail-first through the legacy
+byte-rewriter and failed only because it required a surviving back edge.  A
+fresh-LIR stage dump and listing show that the production pipeline now
+evaluates all four literal invariant products and the ten literal iterations;
+there is no loop and no multiply left to allocate.  The old assertion about a
+particular `mov bx` in a loop was therefore neither a current regression nor
+evidence for Phase-4 splitting.
+
+The active regression observes the final fresh MIR boundary instead.  It
+requires no natural loop or multiply and an explicit `R=7500` PRINT argument,
+the independently calculated result of the original program (`1 passed`,
+`0.34s`).  Dynamic `PRESSX` remains the proper Phase-4 pressure witness; no
+allocator claim is made from this all-literal fixture.  GCC/LLVM listings
+remain best-case flat-i386 structural references only, while BCC/WC
+medium-model output remains the emitted-form and ABI authority.

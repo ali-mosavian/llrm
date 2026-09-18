@@ -1033,31 +1033,34 @@ def test_dead_code_leaves_a_body_it_cannot_read_alone() -> None:
     assert transform.dead(body) is body, "and stays when the body holds a barrier"
 
 
-@pytest.mark.xfail(
-    reason="press accumulates four invariant products and each crosses the loop "
-    "edge wanting a register of its own, which the hoist no longer allocates. "
-    "Restored when regalloc splits a live range on LIR.",
-    strict=True,
-)
-def test_the_invariant_sum_leaves_press_with_one_instruction_in_its_loop() -> None:
-    """press adds four invariant products into a running total, ten times.
+def test_the_invariant_sum_folds_press_to_its_known_result() -> None:
+    """PRESS's literal products used to leave a dead BX move in its loop.
 
-    All of it is constant, so the loop should hold the accumulate and the
-    counter and nothing else. What kept a second instruction there was a
-    move whose result is overwritten two bytes later, alive on the strength
-    of a register half nothing reads.
+    The fresh MIR pipeline now evaluates the complete ten-trip literal
+    recurrence.  Assert that stronger, observable result rather than the
+    retired byte-rewriter's particular surviving-loop shape.
     """
-    seen = _rebuilt("press-p-g2")
-    back = [
-        (int(text.split()[-1].rstrip("h"), 16), ip)
-        for ip, text in seen
-        if text.startswith(("jle", "jl ")) and int(text.split()[-1].rstrip("h"), 16) < ip
-    ]
-    assert back, "nothing loops here, so this proves nothing"
-    lo, hi = min(back, key=lambda one: one[1] - one[0])
-    inside = [text for ip, text in seen if lo <= ip <= hi]
-    assert not [text for text in inside if text.replace(" ", "").startswith("movbx")], (
-        f"a dead move is still in the loop: {inside}"
+    from qbopt import wholeseg
+    from qbopt.analysis import loops
+
+    states = []
+
+    def watch(stage, name, body):
+        if isinstance(body, mir.MirBody) and name and name.startswith("main"):
+            states.append(body)
+
+    result = wholeseg.emitted(Path("fixtures/omf/press-p-g2.obj").read_bytes(), watch=watch)
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    body = states[-1]
+    assert not loops.loops(body.blocks, body.entry)
+    assert not [op for block in body.blocks for op in block.ops if op.kind is mir.Kind.MUL]
+    assert any(
+        arg == mir.Const(7500, arg.width)
+        for block in body.blocks
+        for op in block.ops
+        if op.kind is mir.Kind.ARG
+        for arg in op.args
+        if isinstance(arg, mir.Const)
     )
 
 
