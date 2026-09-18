@@ -188,7 +188,13 @@ def test_c_crc_unroll_keeps_the_inner_result_on_the_outer_backedge() -> None:
 
 
 def test_c_nbody_peels_the_fixed_triangular_interaction_loop() -> None:
-    """Nbody retained 33,632 estimated operations because ``j = i + 1`` hid its six fixed interactions."""
+    """Nbody retained 33,632 estimated operations because ``j = i + 1`` hid its six fixed interactions.
+
+    A later scalar-only peel boundary left both fixed interaction loops in
+    production and still passed the former 20,000-operation guard at 13,959.
+    The specialized six-pair body is independently stable near 2,085; keep a
+    generous bound that catches either loop returning without pinning bytes.
+    """
     from tools import quality
     from qbopt.cfront import compile as cfront
 
@@ -199,7 +205,7 @@ def test_c_nbody_peels_the_fixed_triangular_interaction_loop() -> None:
 
     assert not procedure.body.inputs
     assert status.startswith("estimated:")
-    assert dynamic is not None and dynamic < 20_000
+    assert dynamic is not None and dynamic < 3_000
 
 
 def test_c_shellsort_retains_large_exact_loops_instead_of_cloning_every_store() -> None:

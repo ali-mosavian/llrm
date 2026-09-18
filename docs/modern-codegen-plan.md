@@ -22,13 +22,47 @@ iteration updates this file in the same commit.
 |---|---|---|
 | Per-CPU measurement | in progress | CPU profiles distinguish native medium-model addressing from the complete costed secondary 67h form and now carry the complete-peel iteration budget; the C corpus, static/dynamic metrics and reference listings exist, and exact counts survive recurrence rewinds, loop rotation, and zero-byte-header threading; audited targets remain. |
 | MIR/LIR provenance and fresh OMF | complete in production | allocated LIR emits directly with external source maps/allocation hints; the remaining compatibility views are test-only and cannot route a compilation through record rewriting. |
-| SROA and scalar promotion | partial | fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies can now expand into exact leaves, while far, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
+| SROA and scalar promotion | partial | fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies can now expand into exact leaves, while far, overlap, volatile, bounded indexed-array constants, general indexed copies and broader aggregate decomposition remain. |
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, dying-base indexed-form unfolding, and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
 | Loop optimization | partial | exact pre/post-tested recurrences and symbolic sentinels, target-priced exact nested-recurrence rewind, complete nested-initializer LICM, dead-control countdowns with zero-trip guards, complete-affine spill/recompute pricing, precise-volatile-aware LICM, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling with bounded full-growth exist; versioning, partial unrolling, and complete candidate-set pressure forecasting remain. |
 | Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs (including closed recursive SCCs in C and object paths), constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
 | Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing, dead-register frame-copy shuttles, target-priced 67h LEA selection, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 105. Audit nested peeling before changing its policy — 2026-09-18
+
+The refreshed 386 corpus makes matmul the largest current structural outlier:
+3,644 bytes and 906 instructions, against Clang's normalized 356 instructions
+and GCC's 849.  The raw listings show that these references choose different
+strategies: Clang retains a row loop while specializing columns and products;
+GCC nearly completely expands the nest; qbopt completely expands it.
+
+The unroll trace explains how qbopt gets there.  Successive profitable
+candidates add `3`, `31`, `272`, `196`, and `75` MIR operations.  Each loop
+has only eight trips, so the existing trip-count bound is not a useful bound
+on the composed nest.  However, adding a second static expansion ceiling was
+not a valid solution.  A 200-operation ceiling reduced matmul to 498 static
+instructions but increased its dynamic estimate from 906 to 2,731, and a
+cumulative 320-operation budget increased it to 3,844.  Ranking candidates by
+saving/growth and charging semantic static cost also produced slower results.
+Those experiments were discarded rather than landing a smaller but slower
+program.
+
+The raw Clang listing identifies a more general missing mechanism: it proves
+the fixed values in `b[8][8]` and neither materializes the 64-element constant
+array nor reloads it through indexed memory.  qbopt still emits 64 constant
+stores followed by indexed loads.  Bounded indexed-array scalar promotion is
+therefore the next SROA step; loop-policy selection should be measured again
+after that changes the candidate bodies.
+
+The production results remain 906 estimated dynamic operations for matmul and
+2,085 for nbody.  Fresh OMF emission, LINK, and real DOS execution during the
+audit returned the independent answers `353712` and `4774160`.  One attempted
+scalar-only peel boundary regressed nbody to 13,959 while passing its former
+20,000-operation test.  The regression now uses a deliberately loose 3,000
+ceiling, which fails on that observed defect without pinning exact bytes or a
+single allocation.
 
 ### 104. Bound complete peeling without blocking constant collapse — 2026-09-18
 
