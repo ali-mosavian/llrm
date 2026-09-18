@@ -33,7 +33,13 @@ def selected(what: ir.Semantics | None, forms: dict[int, tuple[ir.Held, int]]) -
     def operand(arg: object) -> object:
         if not isinstance(arg, ir.Mem) or arg.base is None or arg.base.width != 2 or arg.index is not None:
             return arg
-        if arg.addr is None or arg.addr.space is not Space.FAR:
+        # A based FAR cell and a non-relocated LITERAL cell both encode the
+        # arithmetic displacement beside their base register.  The latter is
+        # how a local array reached through SS is represented after its frame
+        # root has been folded.  SEGMENT/EXTERNAL/GROUP cells stay out: their
+        # displacement is owned by a relocation rather than by this address
+        # computation.
+        if arg.addr is None or arg.addr.space not in (Space.FAR, Space.LITERAL):
             return arg
         base, offset = arg.base, 0
         seen = set()
@@ -76,6 +82,7 @@ def indexed(body: mir.MirBody, exposed: set[int]) -> tuple[dict[int, FoldedForm]
     objects; the address width below decides whether a scale is legal.
     """
     made = {value.id: op for block in body.blocks for op in block.ops for value in op.defines}
+    constant_offsets = offsets(body)
     frame_bases = {
         result.value.id: ir.Address(
             Addr(Space.FRAME, source.offset),
@@ -140,19 +147,29 @@ def indexed(body: mir.MirBody, exposed: set[int]) -> tuple[dict[int, FoldedForm]
             break
     bases: dict[int, int] = {}
     other: dict[int, int] = {}
+    constant_bases: set[int] = set()
+    unencodable_constant_bases: set[int] = set()
     for block in body.blocks:
         for phi in block.phis:
             for value in phi.incoming.values():
                 other[value.id] = other.get(value.id, 0) + 1
         for op in block.ops:
+            cells = [one for one in (*op.args, *op.results) if isinstance(one, mir.Cell) and one.ref.base is not None]
             based = {
                 one.ref.base.id
-                for one in (*op.args, *op.results)
-                if isinstance(one, mir.Cell)
-                and one.ref.base is not None
-                and one.ref.addr is not None
-                and one.ref.where not in (Space.GROUP, Space.STACK)
+                for one in cells
+                if one.ref.addr is not None and one.ref.where not in (Space.GROUP, Space.STACK)
             }
+            for cell in cells:
+                value = cell.ref.base.id
+                if (
+                    cell.ref.base_width == 2
+                    and cell.ref.addr is not None
+                    and cell.ref.addr.space in (Space.FAR, Space.LITERAL)
+                ):
+                    constant_bases.add(value)
+                else:
+                    unencodable_constant_bases.add(value)
             held = [one.value.id for one in op.args if isinstance(one, mir.Held)]
             for value in op.uses:
                 if value.id in based and value.id not in held:
@@ -193,7 +210,24 @@ def indexed(body: mir.MirBody, exposed: set[int]) -> tuple[dict[int, FoldedForm]
             break
 
     forms: dict[int, FoldedForm] = {}
-    folded: set[int] = set()
+    # `selected` puts a copied-and-constant-adjusted 16-bit address directly
+    # in every based cell.  When cells are the result's only readers, the
+    # operation that produced that result is part of the same address fold.
+    # Record it here so Lowering expands it to an ownership anchor rather
+    # than emitting symbolic arithmetic which machine DCE must conservatively
+    # retain.  `plain` is the flag-observability gate; `other` also includes
+    # phis and every non-address read.
+    folded: set[int] = {
+        value
+        for value in constant_offsets
+        if value in bases
+        and value in constant_bases
+        and value not in unencodable_constant_bases
+        and value not in other
+        and (defining := made.get(value)) is not None
+        and defining.kind in (mir.Kind.COPY, mir.Kind.ADD)
+        and plain(defining, defining.kind)
+    }
     for value, fixed in fixed_frames.items():
         if value not in bases:
             continue
