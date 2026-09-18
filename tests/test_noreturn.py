@@ -58,6 +58,19 @@ def test_qrender_main_spill_uses_shutdown_control_proof(terminal: bool) -> None:
     assert (symbols["HOST_SHUTDOWN"] in proven) is terminal
     assert symbols["HOST_INIT"] not in proven  # Has END arms and a returning arm.
 
+    handler = bodies[symbols["HOST_SHUTDOWN"]]
+    terminal_sites = exits | frozenset(at for at, target in local.items() if target in proven)
+    # The object path used the summary only for its prologue: after B$CEND
+    # at 0x17f7 it still lowered a dead call and return in this same block.
+    assert [op.at for op in handler.block(0x17BF).ops[-3:]] == [0x17F7, 0x17FC, 0x1801]
+    trimmed = noreturn.after_terminal_calls(handler, terminal_sites)
+    if terminal:
+        assert [op.at for op in trimmed.block(0x17BF).ops[-1:]] == [0x17F7]
+        assert not trimmed.block(0x17BF).succ
+    else:
+        assert trimmed is handler
+    assert not mir.verify(trimmed)
+
     body = lower.lowered(
         "main",
         bodies[0x30],

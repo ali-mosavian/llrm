@@ -397,34 +397,11 @@ def noreturn_procedures(
 def terminal_calls(
     body: mir.MirBody, calls: dict[int, str], noreturn: frozenset[str]
 ) -> mir.MirBody:
-    """Cut code and CFG edges after a proven direct terminal call.
+    """Apply the shared MIR terminal-call cleanup to named direct C calls."""
+    from qbopt.analysis import noreturn as control
 
-    A physical CALL remains in its source order.  Only code whose execution
-    requires that proven terminal call to return is removed.  The caller may
-    itself become no-return in the next summary round; normal optimization
-    then cleans the newly unreachable CFG without a source-name exception.
-    """
-    blocks = []
-    changed = False
-    for block in body.blocks:
-        cut = next(
-            (
-                index
-                for index, op in enumerate(block.ops)
-                if op.kind is mir.Kind.CALL and calls.get(op.at) in noreturn
-            ),
-            None,
-        )
-        if cut is None:
-            blocks.append(block)
-            continue
-        ops = block.ops[: cut + 1]
-        if ops == block.ops and not block.succ:
-            blocks.append(block)
-            continue
-        blocks.append(replace(block, ops=ops, succ=()))
-        changed = True
-    return replace(body, blocks=tuple(blocks)) if changed else body
+    sites = frozenset(at for at, target in calls.items() if target in noreturn)
+    return control.after_terminal_calls(body, sites)
 
 
 def argument_sites(body: mir.MirBody, contracts: dict[int, object]) -> dict[int, frozenset[int]]:

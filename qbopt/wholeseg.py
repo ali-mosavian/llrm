@@ -349,11 +349,20 @@ def _through_lir(
     terminal_calls = frozenset(
         at for at, contract in contracts.items() if contract.established and contract.control is runtime.Control.NEVER
     )
+    local_calls = {at: symbols[name] for at, name in found.calls.items() if name in symbols}
     no_return = noreturn.inferred(
         {body.entry: body for _, body in bodies},
-        {at: symbols[name] for at, name in found.calls.items() if name in symbols},
+        local_calls,
         terminal_calls,
     )
+    terminal_sites = terminal_calls | frozenset(at for at, target in local_calls.items() if target in no_return)
+    trimmed = []
+    for name, body in bodies:
+        after = noreturn.after_terminal_calls(body, terminal_sites)
+        if after is not body and watch is not None:
+            watch("mir-noreturn", name, after)
+        trimmed.append((name, after))
+    bodies = trimmed
     done = []
     for name, body in bodies:
         try:

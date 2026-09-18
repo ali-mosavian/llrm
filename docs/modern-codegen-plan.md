@@ -30,6 +30,32 @@ iteration updates this file in the same commit.
 
 ## Iteration log
 
+### 89. Shared terminal-call MIR cleanup — 2026-09-18
+
+The object path previously used no-return only to choose a lower-level frame
+shape.  The QCport `HOST_SHUTDOWN` regression retained an unreachable call at
+`0x17fc` and `RETURN` at `0x1801` after its proven terminal `B$CEND` call at
+`0x17f7`; C had already removed equivalent tails.  The initial focused test
+failed in both terminal-control variants before the transform existed.
+
+`noreturn.after_terminal_calls()` is now the one MIR operation for both
+frontends.  It retains the physical terminal call, truncates only later
+operations in that block, and removes that block's outgoing CFG edges while
+leaving any independently reachable successor block intact.  It is
+idempotent and MIR verification remains valid.  The object pipeline applies
+it after no-return inference and exposes `mir-noreturn` in stage watches;
+the real QCport stage probe now ends `HOST_SHUTDOWN` at `0x17f7`.  C's named
+call wrapper delegates to that same mechanism rather than carrying a second
+spelling.
+
+The full object no-return file passes (`3 passed`, `4.49s`), the C/MIR
+terminal and SCC checks pass (`5 passed`, `0.17s`), and the regression covers
+both recognizing and withholding `B$CEND` as terminal.  This is Phase 6
+control-flow cleanup, not a claim that all unreachable blocks, recursive
+IPSCCP, or broader global elimination are complete.  GCC/LLVM remain
+best-case flat-i386 listing references; BCC/WC medium-model output remains
+the hard authority for ABI, segments, legal forms, and performance targets.
+
 ### 88. Object-path no-return SCC parity — 2026-09-18
 
 The C named-body summary was now SCC-capable, but the shared object/BASIC
