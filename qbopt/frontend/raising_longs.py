@@ -2,6 +2,7 @@
 
 from dataclasses import replace
 
+from qbopt.analysis import liveness
 from qbopt.model import ir, mir
 from qbopt.frontend import pairs
 
@@ -190,8 +191,22 @@ def scalar(body: mir.MirBody) -> mir.MirBody:
     variable = max((value.variable for value in values), default=0)
     readers = {value for block in body.blocks for op in block.ops for value in op.uses if value not in op.merges}
     readers |= phi_reads
-    users = {value: {id(op) for block in body.blocks for op in block.ops if value in op.uses and value not in op.merges}
+    users = {value: {id(op) for block in body.blocks for op in block.ops
+                     if value in op.uses and value not in op.merges}
              for value in values if value.flags}
+    # A word-pair ALU operation leaves the high-word condition codes, while
+    # the scalar form would leave the whole-value condition codes.  Direct
+    # users are not the whole observation: a condition can cross a CFG or
+    # machine-exit edge, so derive every operation's live flags from ordinary
+    # MIR liveness before recognizing a pair.
+    live = liveness.live(body)
+    flags_after = {}
+    for block in body.blocks:
+        alive = {value for value in live.live_out[block.at] if value.flags}
+        for op in reversed(block.ops):
+            flags_after[id(op)] = frozenset(alive)
+            alive.difference_update(op.defines)
+            alive.update(value for value in op.uses if value.flags)
     wide_reads = {arg.value for block in body.blocks for op in block.ops for arg in op.args
                   if isinstance(arg, mir.Held) and arg.width > 2}
 
@@ -257,7 +272,8 @@ def scalar(body: mir.MirBody) -> mir.MirBody:
                            or result.value in wide_reads for result in (*low.results, *high.results))
                     or any(value.flags and value in readers for value in high.defines)
                     or any(value.flags and (value in phi_reads or users.get(value, set()) - {id(high)})
-                           for value in low.defines)):
+                           for value in low.defines)
+                    or flags_after[id(high)]):
                     ops.append(op)
                     continue
                 if pair.kind is pairs.Kind.LOAD:

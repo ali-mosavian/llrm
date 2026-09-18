@@ -30,6 +30,31 @@ iteration updates this file in the same commit.
 
 ## Iteration log
 
+### 76. Exit conditions visible during scalar raising — 2026-09-18
+
+`arith-p-evt` first reached the fresh-OMF emitter with a source-free 32-bit
+add at `0x1c6`, then correctly refused it because a condition was live across
+the replacement and visible at the machine exit.  The source sequence is
+`add`/`adc`: it leaves the final word's condition codes, whereas a native
+32-bit add would leave different zero/parity/auxiliary flags.  The apparent
+contradiction was temporal, not a lowering rule: exit observations were
+attached only after the full raise, so the pair recognizer could not see the
+condition it was obliged to preserve.
+
+Exit-visible values are now materialized as ordinary MIR `exits` immediately
+after frame annotation, before any recognition or optimization.  Scalar-long
+recognition derives per-operation flag liveness from those semantic edges and
+retains a pair whenever a final-word condition is observable.  The fail-first
+fixture now emits fresh LIR for event-enabled ARITH; it proves the boundary
+outcome rather than a particular source encoding.  This is a Phase 2
+MIR-boundary correctness increment, not an event-specific fast path and not
+a relaxation of strict BASIC flags.
+
+GCC and LLVM flat-i386 listings remain the best-case reference for expression
+and loop structure.  They cannot overrule this result: BCC/WC medium-model
+listings and the actual segmented ABI remain authoritative for flags,
+segments, legal addressing and OMF behavior.
+
 ### 75. Target-scoreboard fresh-emission refusals — 2026-09-18
 
 The complete QB target audit stopped at `ARITH` when fresh lowering refused a

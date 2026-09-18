@@ -9,6 +9,13 @@ import pytest
 from qbopt.model import ir, mir
 from qbopt.frontend import raising_longs
 from qbopt.optimize import transform
+from qbopt import wholeseg
+
+
+def test_event_arithmetic_keeps_a_pair_when_its_flags_cross_the_machine_exit():
+    """ARITH /V fused ADD/ADC despite its final-word flags being visible at the machine exit, so fresh OMF emission refused it."""
+    result = wholeseg.emitted(Path("fixtures/omf/arith-p-evt.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
 
 
 def test_udtacc_second_field_is_a_whole_long():

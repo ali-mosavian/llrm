@@ -2917,6 +2917,11 @@ def bodies(
             from qbopt.frontend import raising_frame
 
             built = raising_frame.annotated(built, found, mine, contracts)
+            # Values visible at a machine exit are semantic edges, not a
+            # late lowering constraint.  Materialize them before any
+            # recognition can replace source operations: a word-pair ALU
+            # leaves its high-word flags whereas a scalar ALU does not.
+            built = _with_live_outs(built)
             if not basic_semantics:
                 from qbopt.frontend import raising_numeric_policy
 
