@@ -993,3 +993,19 @@ strict FP loop specialization; final x87 allocation and runtime-matrix
 acceptance remain separate gates.  GCC/LLVM listings remain advisory
 flat-i386 structural references; BCC/WC medium-model output remains the ABI
 and addressing-form authority.
+
+### 47. Strict FP final-iteration gate — 2026-09-18
+
+The final FPCSE strict-xfail was re-run after moving specialization before
+LICM and became an XPASS on PDS `/G2`, QuickBASIC `/O`, and VBDOS `/G3`.
+It directly exercises `floatloop.specialized()` and confirms the exact loop
+is removed only after preserving the original floating/checkpoint sequence,
+installing the storage-rounded penultimate seed, and executing one original
+final iteration.  The xfail is now active.  The complete focused integration
+file passes (`18 passed`, `3.31s`).
+
+This closes the currently registered strict-FP loop-exit regressions, not the
+whole FP roadmap: global x87 allocation, more general recurrence forms, and
+runtime-matrix acceptance remain open.  GCC/LLVM listings remain advisory
+flat-i386 structural references; BCC/WC medium-model output remains the ABI
+and legal-address-form authority.

@@ -57,7 +57,6 @@ def test_emitted_final_answer_has_the_correct_symbol(tag):
     assert final_counter.stores[0].addr == counter.addr
 
 
-@pytest.mark.xfail(reason="FPCSE's floating loop exit is no longer proved", strict=True)
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_exact_loop_retains_checkpoint_and_final_iteration(tag):
     """FPCSE computes 487.5, but previously repeated its exact FP body ten times."""
