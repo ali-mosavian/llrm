@@ -21,7 +21,7 @@ iteration updates this file in the same commit.
 | Phase | State | Current boundary |
 |---|---|---|
 | Per-CPU measurement | in progress | CPU profiles, C corpus, static/dynamic metrics and reference listings exist; audited targets remain. |
-| MIR/LIR provenance and fresh OMF | largely complete | allocated LIR emits directly with external source maps/allocation hints; legacy object-rewrite compatibility remains. |
+| MIR/LIR provenance and fresh OMF | complete in production | allocated LIR emits directly with external source maps/allocation hints; the remaining compatibility views are test-only and cannot route a compilation through record rewriting. |
 | SROA and scalar promotion | partial | fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies can now expand into exact leaves, while far, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
 | Loop optimization | partial | exact pre- and post-tested recurrences, composed pointer recurrences, formula costing, specialization, peeling and exact unrolling exist; versioning, rotation and broad pressure forecasting remain. |
@@ -29,6 +29,24 @@ iteration updates this file in the same commit.
 | Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing, conservative later-core/P5 scheduling, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 77. Direct allocated-LIR OMF emission audit — 2026-09-18
+
+The architecture document still described an `omfwrite._as_mir` compatibility
+seam even though that function no longer exists. The production BC path takes
+allocated `LirBody` objects directly into `layout.rebuild()` and fresh OMF
+serialization; `rewrite.py` invokes that route through `wholeseg.emitted()`.
+The only retained `SourceMap.applied()` API is a non-mutating low-level test
+view, and the existing production-path guard proves it cannot be called while
+emitting a real object.
+
+Phase 2 is therefore complete for production output: neither the QB-object
+nor C frontend rewrites an existing OMF record stream, and neither converts
+allocated LIR back to MIR before layout. This does not claim final acceptance:
+the full matrix, byte-identity gate and quality targets remain their separate
+plan gates. GCC/LLVM listings remain best-case structural references; BCC/WC
+medium-model output remains authoritative for the ABI, segmentation and OMF
+semantics.
 
 ### 76. Exit conditions visible during scalar raising — 2026-09-18
 

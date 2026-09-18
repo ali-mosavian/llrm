@@ -435,8 +435,7 @@ segment lengths and possibly LEDATA boundaries.
 
 ```mermaid
 flowchart TD
-    Bodies["allocated LIR bodies"] --> Bridge["omfwrite._as_mir<br/>temporary layout compatibility seam"]
-    Bridge --> Select["select.py<br/>encode instruction forms"]
+    Bodies["allocated LIR bodies"] --> Select["select.py<br/>encode instruction forms"]
     Select --> Layout["layout.py / asm.py<br/>order bodies, choose lengths,<br/>relax branches to a fixed point"]
     Tables["inline tables and preserved padding"] --> Layout
     Layout --> Image["new code image + movement map"]
@@ -463,10 +462,10 @@ Important invariants:
 - A branch target may not land inside a replaced region.
 - A phi reaching `omfwrite` is a hard bug: phis have no encoding.
 
-`omfwrite._as_mir` is explicitly a compatibility seam: layout still consumes
-MIR-shaped operations after LIR has already been allocated. The intended end
-state is for layout and selection to consume `LirBody` directly, removing this
-back-conversion and the duplicate assignment channel.
+Layout and selection consume `LirBody` directly. There is no LIR-to-MIR
+back-conversion or duplicate assignment channel in the production emitter;
+the test-only `SourceMap.applied()` compatibility view is not part of the
+compile path.
 
 ## Atomic refusal and idempotence
 
