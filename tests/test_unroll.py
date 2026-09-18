@@ -202,6 +202,27 @@ def test_c_nbody_peels_the_fixed_triangular_interaction_loop() -> None:
     assert dynamic is not None and dynamic < 20_000
 
 
+def test_c_shellsort_retains_large_exact_loops_instead_of_cloning_every_store() -> None:
+    """Shellsort grew to 1,838 bytes and 463 instructions on 386.
+
+    Exact-loop profitability priced the saved branches but had no complete-
+    peel count budget, so the 64-element initializer became 64 separately
+    encoded stores.  Modern GCC and Clang both retain that initializer loop.
+    The symptom is static memory traffic, independent of how the general
+    policy represents its budget.
+    """
+    from tools import quality
+    from qbopt.cfront import compile as cfront
+
+    source = Path("bench/c/shellsort.c")
+    module = cfront.assembled(cfront.recorded(source, []), source.stem, optimise=True, cpu="386")
+    procedure = next(one for one in module.procedures if one.name == "_bench_shellsort")
+    rows = quality._rows(quality._blob(module, procedure, 0))
+    _loads, stores = quality._memory(rows)
+
+    assert stores < 16
+
+
 @pytest.mark.parametrize("checkpoint", [False, True])
 def test_dead_inserted_store_needs_no_neighbor_to_take_its_bytes(checkpoint):
     """FPCSE retained dead unrolled stores because a zero-byte clone could not donate bytes to its neighbor."""

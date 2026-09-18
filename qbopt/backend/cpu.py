@@ -40,6 +40,10 @@ class Profile:
     # it is legal but never silently promoted to a native/free scale, and is
     # nevertheless considered before spill/recompute.
     address_forms: tuple[AddressForm, ...] = ()
+    # GCC's target-independent complete-peel default is sixteen iterations.
+    # Keep it in the immutable profile so another target can extend the
+    # policy without teaching MIR a CPU name.
+    max_unroll_iterations: int = 16
 
     def cost(self, operation: str) -> int:
         """The existing target-ranking cost for one named instruction form."""

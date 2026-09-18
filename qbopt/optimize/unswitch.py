@@ -23,6 +23,7 @@ def optimized(
     index_scales: frozenset[int] | None = None,
     address_forms: tuple[AddressForm, ...] | None = None,
     costs: OperationCosts | None = None,
+    max_unroll_iterations: int = 0,
     watch=None,
 ) -> mir.MirBody:
     from qbopt.optimize import transform
@@ -41,6 +42,7 @@ def optimized(
         index_scales=index_scales,
         address_forms=address_forms,
         costs=costs,
+        max_unroll_iterations=max_unroll_iterations,
         watch=lambda name, state: stages.append((name, state)),
     )
 

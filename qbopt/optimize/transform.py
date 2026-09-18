@@ -2803,6 +2803,7 @@ def applied(
     index_scales: frozenset[int] | None = None,
     address_forms: tuple[AddressForm, ...] | None = None,
     costs: OperationCosts | None = None,
+    max_unroll_iterations: int = 0,
     coverage: dict[int, tuple[tuple[int, int], ...]] | None = None,
     watch=None,
 ) -> MirBody:
@@ -2858,6 +2859,7 @@ def applied(
         index_scales=frozenset({1}) if index_scales is None else index_scales,
         address_forms=() if address_forms is None else address_forms,
         costs=costs or OperationCosts(),
+        max_unroll_iterations=max_unroll_iterations,
     )
     # These names were public debugging selectors before value reuse became
     # one pass.  Keep them as aliases rather than accepting a command that
@@ -2962,6 +2964,7 @@ def applied(
             index_scales=where.index_scales,
             address_forms=where.address_forms,
             costs=where.costs,
+            max_unroll_iterations=where.max_unroll_iterations,
             watch=watch,
         )
     return _unreachable(body)

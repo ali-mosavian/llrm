@@ -20,15 +20,77 @@ iteration updates this file in the same commit.
 
 | Phase | State | Current boundary |
 |---|---|---|
-| Per-CPU measurement | in progress | CPU profiles distinguish native medium-model addressing from the complete costed secondary 67h form; the C corpus, static/dynamic metrics and reference listings exist, and exact counts now survive recurrence rewinds, loop rotation, and zero-byte-header threading; audited targets remain. |
+| Per-CPU measurement | in progress | CPU profiles distinguish native medium-model addressing from the complete costed secondary 67h form and now carry the complete-peel iteration budget; the C corpus, static/dynamic metrics and reference listings exist, and exact counts survive recurrence rewinds, loop rotation, and zero-byte-header threading; audited targets remain. |
 | MIR/LIR provenance and fresh OMF | complete in production | allocated LIR emits directly with external source maps/allocation hints; the remaining compatibility views are test-only and cannot route a compilation through record rewriting. |
 | SROA and scalar promotion | partial | fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies can now expand into exact leaves, while far, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, dying-base indexed-form unfolding, and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
-| Loop optimization | partial | exact pre/post-tested recurrences and symbolic sentinels, target-priced exact nested-recurrence rewind, complete nested-initializer LICM, dead-control countdowns with zero-trip guards, complete-affine spill/recompute pricing, precise-volatile-aware LICM, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling exist; versioning and complete candidate-set pressure forecasting remain. |
+| Loop optimization | partial | exact pre/post-tested recurrences and symbolic sentinels, target-priced exact nested-recurrence rewind, complete nested-initializer LICM, dead-control countdowns with zero-trip guards, complete-affine spill/recompute pricing, precise-volatile-aware LICM, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling with bounded full-growth exist; versioning, partial unrolling, and complete candidate-set pressure forecasting remain. |
 | Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs (including closed recursive SCCs in C and object paths), constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
 | Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing, dead-register frame-copy shuttles, target-priced 67h LEA selection, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 104. Bound complete peeling without blocking constant collapse — 2026-09-18
+
+The current 386 Shellsort listing was not a memory-folding failure.  Raw
+assembly showed that exact CFG peeling had expanded both 64-trip setup and
+checksum loops.  The initializer alone became 64 separately encoded stores;
+the final function was 1,838 bytes and 463 instructions.  Its profitability
+transaction priced the saved branch work, but had no full-peel count budget,
+so a 3.6% estimated semantic-cost saving could multiply the whole body.
+
+GCC's local source defines `max-completely-peel-times` as 16.  Both installed
+i686 GCC and Clang retain Shellsort's 64-store initializer; Clang separately
+specializes other loops, while GCC retains the directly comparable loop
+structure.  The immutable CPU profile now carries that 16-iteration default
+and every C, BASIC-object, and shared-flow entry point threads it into the
+machine-neutral `Where` context.  The one shared unroll/peel profitability
+gate rejects an over-budget candidate only when its optimized body is larger
+than the original.  A long exact loop which folds to no growth therefore
+remains eligible, as do all normally costed candidates at or below the
+profile limit.  No pass names a CPU or frontend.
+
+```asm
+; before: one of 64 separately encoded initializer elements
+mov ebx,eax
+xor ebx,37
+mov word ptr [bp-132],bx
+; ... 63 more constant-displacement stores
+
+; after: the retained recurrence and one store site
+mov dx,cx
+shl dx,7
+xor edx,ebx
+xor edx,eax
+lea si,[ecx+ecx]
+mov word ptr ss:[bp+si-132],dx
+add cx,1
+add ebx,109
+cmp cx,64
+jb  L0_8
+```
+
+On 386, Shellsort changes from `1838/463/1829` to `192/66/255`
+bytes/instructions/static weighted cost; static stores fall from 68 to 5 and
+spills from one reload to none.  The final ABI-normalized body has 58
+instructions versus GCC's 57.  Its exact/profile-free mixed dynamic estimate
+is 6,727 versus GCC's 6,506.37 (1.034x).  This is an explicit size/runtime
+tradeoff against qbopt's previous expansion: qbopt's own estimate rises from
+6,016 by 11.8%, while bytes fall 89.6%.  P6 similarly changes from
+`1779/447/769` and 6,453.68 estimated operations to `192/70/58` and 7,336.68;
+the missing next mechanism is bounded partial unrolling, not restoring a
+64-way static clone.
+
+Every final profile emits 192 bytes: 386 `66/255`, 486 `66/173`, P5
+`66/112`, P6 `70/58`, K5 `68/36`, K6 `68/37`, K7 `68/45`, and Core `70/50`
+instructions/weighted cost.  The production symptom regression failed first
+at 68 static stores and now requires fewer than 16; a Tier-1 unit regression
+failed first on the absent profile interface and covers over-limit growth,
+growth erased by folding, and at-limit profitability.  Independent per-CPU
+hard targets remain unregistered, so the GCC comparison is audited structural
+evidence rather than a completed acceptance claim.  Tier 1 remains bounded at
+224 passes in 1.51 seconds, and the affected fresh-OMF/LINK/DOS run returns
+Shellsort's independent oracle value, `6384478`.
 
 ### 103. Rewind exact nested recurrences by target cost — 2026-09-18
 

@@ -187,6 +187,10 @@ class Where:
     # Semantic work only. The profile boundary translates instruction forms
     # once; no MIR pass can recover an opcode or register from these prices.
     costs: OperationCosts = OperationCosts()
+    # Complete peeling beyond this exact trip count is allowed only when the
+    # optimized expansion erases its own static growth. Zero leaves the policy
+    # unbounded for a caller deliberately supplying no target limit.
+    max_unroll_iterations: int = 0
 
     @property
     def named(self) -> dict:

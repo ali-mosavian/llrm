@@ -41,6 +41,7 @@ def test_every_public_cpu_name_has_one_immutable_profile() -> None:
         assert target.operations.float_divide == target.cost("x87_div")
         assert target.operations.float_load == target.cost("x87_load")
         assert target.operations.float_store == target.cost("x87_store")
+        assert target.max_unroll_iterations == 16
     assert cpu.profile("P5").pentium_pairing
     assert not any(cpu.profile(name).pentium_pairing for name in cpu.names() if name != "P5")
 
@@ -153,16 +154,24 @@ def test_c_frontend_threads_machine_neutral_cpu_costs_to_mir(monkeypatch: pytest
     real = transform.applied
 
     def recording(*args, **kwargs):
-        observed.append((kwargs.get("costs"), kwargs.get("index_scales"), kwargs.get("address_forms")))
+        observed.append(
+            (
+                kwargs.get("costs"),
+                kwargs.get("index_scales"),
+                kwargs.get("address_forms"),
+                kwargs.get("max_unroll_iterations"),
+            )
+        )
         return real(*args, **kwargs)
 
     monkeypatch.setattr(transform, "applied", recording)
     cfront.compiled((FIXTURES / "halve.cgs").read_text(), "halve", optimise=True, cpu="P5")
 
     assert observed
-    assert {costs for costs, _scales, _forms in observed} == {cpu.profile("P5").operations}
-    assert {scales for _costs, scales, _forms in observed} == {cpu.profile("P5").address_scales}
-    assert {forms for _costs, _scales, forms in observed} == {cpu.profile("P5").address_forms}
+    assert {costs for costs, _scales, _forms, _limit in observed} == {cpu.profile("P5").operations}
+    assert {scales for _costs, scales, _forms, _limit in observed} == {cpu.profile("P5").address_scales}
+    assert {forms for _costs, _scales, forms, _limit in observed} == {cpu.profile("P5").address_forms}
+    assert {limit for _costs, _scales, _forms, limit in observed} == {cpu.profile("P5").max_unroll_iterations}
 
 
 def test_formula_selection_prices_complete_sibling_groups() -> None:

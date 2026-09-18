@@ -47,6 +47,7 @@ FAST_MODULES = frozenset(
         "test_stack_segment.py",
         "test_splitkit.py",
         "test_test_tiers.py",
+        "test_unroll_budget.py",
     }
 )
 

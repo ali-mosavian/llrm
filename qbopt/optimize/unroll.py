@@ -165,6 +165,16 @@ def _rejection(
     """
     if len(loops.loops(after.blocks, after.entry)) >= len(loops.loops(before.blocks, before.entry)):
         return "residual-loops"
+    if (
+        where.max_unroll_iterations
+        and count > where.max_unroll_iterations
+        and _size(after) > _size(before)
+    ):
+        # A large exact loop may still be an excellent constant-folding
+        # vehicle: allow it when scalar optimization erases all expansion
+        # growth. Otherwise obey the target's complete-peel budget before an
+        # expensive branch makes arbitrary duplication look free.
+        return "iteration-growth"
     dynamic_before = profit.weighted(before, where.costs, {latch: count})
     dynamic_after = profit.weighted(after, where.costs)
     if dynamic_before is None or dynamic_after is None:

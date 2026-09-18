@@ -146,6 +146,7 @@ def run(
                 index_scales=target.address_scales,
                 address_forms=target.address_forms,
                 costs=target.operations,
+                max_unroll_iterations=target.max_unroll_iterations,
                 coverage=source.coverage,
             )
             body = rotate.entered(body)
