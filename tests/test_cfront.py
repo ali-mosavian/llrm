@@ -820,6 +820,25 @@ def test_hot_loop_does_not_carry_a_scaled_index_that_spills() -> None:
     assert not any(line.startswith("add word ptr [bp-") and line.endswith(", 2") for line in loop), loop
 
 
+def test_hot_loop_unfolds_dying_indexed_bases_before_spilling() -> None:
+    """farloadloop shifted both indexes in one shared frame slot.
+
+    Both indexed far bases die at their access.  Keeping the folded memory
+    form constrained each short-lived index to the 16-bit address-register
+    class, even though an explicit add can consume it from any word register.
+    The explicit add already exists in the spill recovery, so allocation must
+    try that legal form before creating frame traffic.
+    """
+    text = cfront.compiled((FIXTURES / "farloadloop.cgs").read_text(), "farloadloop", optimise=True)
+    body = _proc([line.strip() for line in text.splitlines()], "_mark")
+    jump = next(line for line in body if line.startswith("jl "))
+    loop_label = jump.split()[1] + ":"
+    loop = body[body.index(loop_label) : body.index(jump)]
+
+    assert not any("word ptr [bp-" in line for line in loop), loop
+    assert sum(line.startswith("add di, ") for line in loop) == 2, loop
+
+
 @pytest.mark.parametrize("name", ["_grab", "_pass"])
 def test_long_call_result_is_consumed_as_its_two_words(name):
     """A long returned in DX:AX was joined through `push dx; push ax; pop eax`

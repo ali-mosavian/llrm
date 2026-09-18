@@ -607,8 +607,8 @@ def test_c_matmul_multiplies_spilled_rows_directly_from_memory() -> None:
     commutative two-address selection must leave the long-lived row value in
     its spill slot and use x86's register-by-memory multiply form.
     """
-    from qbopt.cfront import compile as cfront
     from tools import quality
+    from qbopt.cfront import compile as cfront
 
     source = Path("bench/c/matmul.c")
     module = cfront.assembled(cfront.recorded(source, []), source.stem, optimise=True)
@@ -1168,6 +1168,69 @@ def test_a_spilled_word_index_does_not_mutate_a_base_used_later():
     )
 
     result = _out(_body(update, *reads), {1})
+    assert not any(
+        one.what is not None
+        and one.what.name == "add"
+        and len(one.what.sources) == 2
+        and isinstance(one.what.sources[1], ir.Mem)
+        for one in result
+    ), [one.what for one in result]
+
+
+def test_a_spilled_word_index_does_not_mutate_a_base_read_later_as_a_value():
+    """A base used later outside a memory operand was omitted from the death proof.
+
+    The direct spill fold destructively adds the index to the address base.
+    Counting only later encoded memory bases therefore changed an ordinary
+    subsequent register use to the indexed address.  Every semantic use, not
+    merely every memory spelling, must participate in the last-use proof.
+    """
+    update = _add(1, 2)
+    cell = ir.Mem(Addr(Space.FAR, 0, segment=Register.ES), 2, base=ir.Held(5, 2), index=ir.Held(1, 2))
+    read = lir.Insn(
+        at=0x102,
+        covers=(0x102, 0x104),
+        what=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(4, 2),), (cell,)),
+        defines=(4,),
+        uses=(5, 1),
+        op=None,
+    )
+    later = _move(6, 5)
+
+    result = _out(_body(update, read, later), {1})
+
+    assert not any(
+        one.what is not None
+        and one.what.name == "add"
+        and len(one.what.sources) == 2
+        and isinstance(one.what.sources[1], ir.Mem)
+        for one in result
+    ), [one.what for one in result]
+
+
+@pytest.mark.parametrize("data_value", [1, 5], ids=["index", "base"])
+def test_a_spilled_word_index_does_not_mutate_an_address_operand_used_as_data(data_value):
+    """A destructive address fold also changed a base/index data operand.
+
+    One instruction can use the same value both to form its memory address
+    and as the value stored or combined there.  Last-instruction liveness is
+    not enough: the fold is legal only when every occurrence of the base and
+    index in that instruction belongs to the indexed cells being rewritten.
+    """
+    update = _add(1, 2)
+    cell = ir.Mem(Addr(Space.FAR, 0, segment=Register.ES), 2, base=ir.Held(5, 2), index=ir.Held(1, 2))
+    source = ir.Held(data_value, 2)
+    write = lir.Insn(
+        at=0x102,
+        covers=(0x102, 0x104),
+        what=ir.Semantics(ir.Operation.BINARY, "add", (cell,), (cell, source)),
+        defines=(),
+        uses=(5, 1),
+        op=None,
+    )
+
+    result = _out(_body(update, write), {1})
+
     assert not any(
         one.what is not None
         and one.what.name == "add"

@@ -23,12 +23,73 @@ iteration updates this file in the same commit.
 | Per-CPU measurement | in progress | CPU profiles now distinguish native medium-model addressing from the complete costed 67h fallback, and the C corpus, static/dynamic metrics and reference listings exist; audited targets remain. |
 | MIR/LIR provenance and fresh OMF | complete in production | allocated LIR emits directly with external source maps/allocation hints; the remaining compatibility views are test-only and cannot route a compilation through record rewriting. |
 | SROA and scalar promotion | partial | fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies can now expand into exact leaves, while far, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
-| Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
+| Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, dying-base indexed-form unfolding, and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
 | Loop optimization | partial | exact pre- and post-tested recurrences, composed pointer recurrences, target-priced spill-aware formula rejection, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling exist; versioning and complete candidate-set pressure forecasting remain. |
 | Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs (including closed recursive SCCs in C and object paths), constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
-| Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
+| Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing, target-priced 67h LEA selection, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 96. Unfold dying indexed bases before frame spill — 2026-09-18
+
+`farloadloop._mark` still shifted both mutually exclusive indexes through one
+frame slot. Lowering had correctly folded each `base + index` into its far
+memory operand, but in 16-bit mode that confined both short-lived indexes to
+the four address registers. The allocator therefore spilled them even though
+the base dies at each access and an explicit `add base,index` can consume the
+index from any word register. The spill recovery already emitted exactly that
+add, so keeping the folded spelling was buying no dynamic address operation.
+
+The allocator now compares a general dying-base unfolded form before the
+frame-spill form. It accepts the trial only when the complete allocation
+protects the selected long-lived owners and strictly reduces loop-weighted
+spill traffic. The same trial receives ordinary constant/frame/address
+rematerialization before comparison. A semantic last-use proof guards the
+destructive base add. While writing its fail-first coverage, a second red
+regression exposed that the old proof counted only encoded memory-base uses;
+it could therefore mutate a base read later as an ordinary register. A third
+red case showed that the final instruction can also use its base or index as
+data. The proof now counts every LIR semantic use once per instruction and
+requires every same-instruction occurrence to belong to the indexed cells.
+
+Adjacent dumps first differ at `RegAlloc`: the two frame-cell shifts become
+register shifts followed by the same two base adds; MIR and lowering remain
+unchanged. The central hot-path change is:
+
+```asm
+; before
+mov word ptr [bp-2], ax
+shl word ptr [bp-2], 1
+add di, word ptr [bp-2]
+
+; after, 386/486/P5/K5/K6/K7
+lea cx, [eax+eax]
+add di, cx
+
+; after, P6/Core
+mov cx, ax
+shl cx, 1
+add di, cx
+```
+
+The last distinction matters. The first candidate run improved six profiles
+but regressed P6 and Core because the post-allocation peephole read all of EAX
+after the loop had written AX. The fail-first target regression records that
+symptom. Scaled-LEA selection now prices the address prefix and the profile's
+16-to-32-bit partial-register merge penalty; a tie still selects the shorter
+67h form. This keeps 67h ahead of spilling/recomputation while avoiding it
+where its actual target cost exceeds the equivalent narrow register work.
+
+Against iteration 94's committed baseline, bytes fall `71 -> 62`. Instruction
+counts fall `29 -> 27`, except P6/Core at 28. Weighted costs change: 386
+`133 -> 118`, 486 `75 -> 71`, P5 `46 -> 42`, P6 `44 -> 43`, K5 `24 -> 19`,
+K6 `24 -> 20`, K7 `29 -> 25`, and Core remains 42. No CPU regresses. Focused
+allocation, safety, peephole, and C output checks pass (`48 passed`, `306
+deselected`, `0.71s`); Tier 1 passes (`209 passed`, `31 deselected`, `2.07s`).
+The independent hard-target table remains open, so these are candidate deltas,
+not a final parity claim. GCC/LLVM listings remain best-case flat-i386
+structural references; BCC/WC remain authoritative for the medium-model ABI,
+segments, and legal address semantics.
 
 ### 95. Costed 67h addressing before spill/recompute — 2026-09-18
 

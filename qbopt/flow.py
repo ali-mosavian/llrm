@@ -80,7 +80,7 @@ def machine(
         # is nothing to ask.
         parcopy.ParallelCopy(),
         prologue.Prologue(frame, calls) if frame is not None else prologue.Prologue(frames.Frame(0), calls),
-        peephole.Peephole(frame),
+        peephole.Peephole(frame, cpu=target),
         # Last: physical CSE/DCE have exposed all safe integer work, and
         # scheduling may only move fully allocated machine occurrences.
         schedule.Scheduler(target),

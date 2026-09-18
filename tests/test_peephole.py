@@ -534,6 +534,29 @@ def test_index_lea_preserves_observed_shift_flags(following):
         assert result[0].defines == (2,)
 
 
+@pytest.mark.parametrize(
+    "cpu,expected",
+    [("386", ["lea", "cmp"]), ("K7", ["lea", "cmp"]), ("P6", ["mov", "shl", "cmp"]), ("Core", ["mov", "shl", "cmp"])],
+)
+def test_word_scaled_lea_prices_the_partial_register_read(cpu, expected):
+    """FARLOADLOOP gained five P6 cycles when AX*2 became LEA CX,[EAX+EAX].
+
+    The 67h form is preferable to spilling or recomputing the address, but
+    reading all of EAX after the loop updated AX incurs the target's partial
+    register merge penalty.  Targets without that penalty keep the shorter
+    single-instruction form.
+    """
+    dest, source = ir.Reg(Register.CX, 2), ir.Reg(Register.AX, 2)
+    copy = lir.Insn(0, (0, 0), ir.Semantics(ir.Operation.MOVE, "mov", (dest,), (source,)), (2,), (1,))
+    shift = lir.Insn(1, (1, 1), ir.Semantics(ir.Operation.BINARY, "shl", (dest,), (dest, ir.Imm(1, 1))), (2,), (2,))
+    compare = lir.Insn(2, (2, 2), ir.Semantics(ir.Operation.COMPARE, "cmp", (), (dest, ir.Imm(8, 2))), (), (2,))
+    body = lir.LirBody("farloadloop._mark", 0, (lir.LirBlock(0, (copy, shift, compare), ()),), {}, {})
+
+    result = peephole.addresses(body, cpu=cpu).insns
+
+    assert [one.what.name for one in result] == expected
+
+
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_hotlpx_uses_scaled_address_for_factor_five(tag):
     """HOTLPX's factor twenty expanded to copy/shift/add/shift instead of LEA/shift."""

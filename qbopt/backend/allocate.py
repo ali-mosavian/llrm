@@ -884,6 +884,29 @@ class RegAlloc(LIRTransform):
             # value that happened to be there when the splitter ran.
             self.pinned = {**prefer, **constrain.required(body)}
             got = assigned(body)
+            if got.spilled:
+                # Lowering folds base+index into memory before allocation,
+                # which can make a cheap short-lived index compete only for
+                # the four 16-bit address registers. If allocation would
+                # spill that index and the base dies at the access, compare
+                # the equivalent explicit-add form first. The spill path
+                # already emits the same add from the frame slot, so a trial
+                # that lowers weighted spill traffic does not buy its result
+                # with extra dynamic address work.
+                unfolded, opened = spiller.unfolded_indexes(body, got.spilled)
+                if opened:
+                    try:
+                        trial = allocate(
+                            unfolded,
+                            self.pinned,
+                            reloads,
+                            protected=retained,
+                            cpu=self.cpu,
+                        )
+                    except Unplaced:
+                        trial = None
+                    if trial is not None and _traffic(unfolded, trial.spilled) < _traffic(body, got.spilled):
+                        body, got = unfolded, trial
             if not retained and got.spilled:
                 # A value live from a cold prelude through a later call can
                 # still be the base of every memory access in one hot natural
@@ -895,33 +918,73 @@ class RegAlloc(LIRTransform):
                 scoped, keep = splitkit.loop_bases(body, got.spilled)
                 if keep:
                     # The natural companion to an address owner is a dying
-                    # word index in the same loop.  Materialize that fold
-                    # before the trial, not afterwards: its SI/DI is exactly
-                    # what lets the retained owners leave BX available for
-                    # the transient far-field base.  `spilled()` proves the
-                    # fold's lifetime and address legality; values outside a
-                    # loop that actually uses a fresh owner are not offered.
+                    # word index in the same loop. First expose its existing
+                    # address add: this releases the index from the address
+                    # register class and can keep it in an otherwise-idle
+                    # general register. It is the same add the frame recovery
+                    # below emits, so the alternatives differ only in where
+                    # the index lives. Values outside a loop that actually
+                    # uses a fresh owner are not offered.
                     folded = _scoped_foldable_indexes(scoped, keep)
-                    prepared, made = (
-                        spiller.spilled(scoped, folded, self.frame) if folded else (scoped, frozenset())
-                    )
-                    try:
-                        trial = allocate(prepared, self.pinned, reloads | made, protected=keep, cpu=self.cpu)
-                    except Unplaced:
-                        trial = None
-                    if (
-                        trial is not None
-                        and keep.isdisjoint(trial.spilled)
-                        # The candidate may spill ordinary cold values into
-                        # their normal slots; unlike the former whole-range
-                        # plan it has already shortened the retained values.
-                        # Admit it only when the complete pre-folded trial
-                        # lowers weighted dynamic spill traffic, rather than
-                        # treating an arbitrary protected assignment as a
-                        # gain because its preferred bases happened to fit.
-                        and _traffic(prepared, trial.spilled) < _traffic(body, got.spilled)
-                    ):
-                        body, retained, got, reloads = prepared, keep, trial, reloads | made
+                    opened_body, opened = spiller.unfolded_indexes(scoped, folded)
+                    if opened:
+                        opened_reloads = reloads
+                        try:
+                            trial = allocate(opened_body, self.pinned, reloads, protected=keep, cpu=self.cpu)
+                        except Unplaced:
+                            trial = None
+                        # Compare the complete direct-recovery plan. The
+                        # ordinary allocation loop rematerializes constants,
+                        # stable frame arguments, relocatable addresses and
+                        # cheap extensions before committing other spills.
+                        # An alternate address form must receive the same
+                        # opportunity or a long-lived constant can make it
+                        # look worse than the frame-index candidate solely
+                        # because that candidate is evaluated one round later.
+                        if trial is not None:
+                            rematerializable = spiller.rematerializable(opened_body, trial.spilled)
+                            if rematerializable:
+                                remade, made = spiller.spilled(opened_body, rematerializable, self.frame)
+                                if remade != opened_body:
+                                    opened_body = remade
+                                    opened_reloads |= made
+                                    try:
+                                        trial = allocate(
+                                            opened_body,
+                                            self.pinned,
+                                            opened_reloads,
+                                            protected=keep,
+                                            cpu=self.cpu,
+                                        )
+                                    except Unplaced:
+                                        trial = None
+                        if (
+                            trial is not None
+                            and keep.isdisjoint(trial.spilled)
+                            and _traffic(opened_body, trial.spilled) < _traffic(body, got.spilled)
+                        ):
+                            body, retained, got, reloads = opened_body, keep, trial, opened_reloads
+                    if not retained:
+                        # If the unfolded indexes still do not fit, commit
+                        # them to slots and consume those slots directly in
+                        # the identical dying-base adds. `spilled()` proves
+                        # the same lifetime/address condition before writing.
+                        prepared, made = (
+                            spiller.spilled(scoped, folded, self.frame) if folded else (scoped, frozenset())
+                        )
+                        try:
+                            trial = allocate(prepared, self.pinned, reloads | made, protected=keep, cpu=self.cpu)
+                        except Unplaced:
+                            trial = None
+                        if (
+                            trial is not None
+                            and keep.isdisjoint(trial.spilled)
+                            # The candidate may spill ordinary cold values
+                            # into normal slots. Admit it only when the whole
+                            # pre-folded trial lowers weighted traffic.
+                            and _traffic(prepared, trial.spilled) < _traffic(body, got.spilled)
+                        ):
+                            body, retained, got, reloads = prepared, keep, trial, reloads | made
                 # The global version is useful where a source cell is stable
                 # over the whole body.  Keep it as a separate candidate: a
                 # loop-scoped split is not a reason to make a once-used owner
@@ -1147,11 +1210,7 @@ def _scoped_foldable_indexes(body: lir.LirBody, bases: frozenset[int]) -> frozen
         ]
         if not any(isinstance(where.base, ir.Held) and where.base.value in bases for where in cells):
             continue
-        indexes.update(
-            where.index.value
-            for where in cells
-            if isinstance(where.index, ir.Held) and where.scale == 1
-        )
+        indexes.update(where.index.value for where in cells if isinstance(where.index, ir.Held) and where.scale == 1)
     from qbopt.backend import spiller
 
     return spiller.foldable_indexes(body, frozenset(indexes))

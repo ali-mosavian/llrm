@@ -410,12 +410,7 @@ def _color_slots(
             frame.slot(value, width)
             continue
         color = next(
-            (
-                one
-                for one in colors
-                if one[1] >= capacity
-                and all(not interval.overlaps(other) for other in one[2])
-            ),
+            (one for one in colors if one[1] >= capacity and all(not interval.overlaps(other) for other in one[2])),
             None,
         )
         if color is None:
@@ -442,11 +437,7 @@ def _existing_colors(body: lir.LirBody, frame: frames.Frame) -> list[tuple[int, 
     homes = sorted(set(frame.slots.values()))
     if not homes:
         return []
-    held = {
-        value
-        for one in body.insns
-        for value in (*one.defines, *one.uses)
-    } | set(body.inputs)
+    held = {value for one in body.insns for value in (*one.defines, *one.uses)} | set(body.inputs)
     first = min(held, default=0) - len(homes) - 1
     pseudo = {home: first + index for index, home in enumerate(homes)}
     capacities = {home: frame.capacities.get(home, frames.WORD) for home in homes}
@@ -889,14 +880,18 @@ class _Cells:
 
 
 def _base_uses(body: lir.LirBody) -> dict[int, int]:
-    """How many encoded memory operands still need each address base."""
+    """How many instructions still read each possible address base.
+
+    A destructive index fold requires the base's final semantic use, not
+    merely its final appearance inside an encoded memory operand. ``uses``
+    already includes memory address dependencies and ordinary register reads
+    once per instruction, including a read-modify-write cell that is spelt in
+    both the source and destination tuples.
+    """
     out: dict[int, int] = {}
     for one in body.insns:
-        if one.what is None:
-            continue
-        for where in (*one.what.dests, *one.what.sources):
-            if isinstance(where, ir.Mem) and isinstance(where.base, ir.Held):
-                out[where.base.value] = out.get(where.base.value, 0) + 1
+        for value in set(one.uses):
+            out[value] = out.get(value, 0) + 1
     return out
 
 
@@ -909,10 +904,77 @@ def foldable_indexes(body: lir.LirBody, values: frozenset[int]) -> frozenset[int
     """
     bases = _base_uses(body)
     return frozenset(
-        found[1].value
-        for one in body.insns
-        if (found := _indexed_pattern(one, values, bases)) is not None
+        found[1].value for one in body.insns if (found := _indexed_pattern(one, values, bases)) is not None
     )
+
+
+def unfolded_indexes(body: lir.LirBody, values: frozenset[int]) -> "tuple[lir.LirBody, frozenset[int]]":
+    """Expose dying-base address adds so indexes may use any word register.
+
+    Lowering profitably folds ``base + index`` into a memory operand before
+    allocation. In 16-bit mode that also confines both values to the small
+    address-register class. If allocation would spill the index and this is
+    the base's final semantic use, spell the same address as a destructive
+    add followed by the base-only cell. The spill recovery already needs that
+    add; exposing it first lets the index occupy any general word register and
+    may avoid the frame traffic altogether.
+    """
+    if not values:
+        return body, frozenset()
+    base_uses = _base_uses(body)
+    changed: set[int] = set()
+    blocks = []
+    for block in body.blocks:
+        rewritten: dict[int, lir.Insn] = {}
+        after: dict[int, list[lir.Insn]] = {}
+        definitions: dict[int, int] = {}
+        for position, one in enumerate(block.insns):
+            definitions.update((value, position) for value in one.defines)
+            found = _indexed_pattern(one, values, base_uses)
+            if found is None:
+                continue
+            base, index, _cells = found
+            add, access = _unfolded_index(one, base, index)
+            placement = position - 1
+            latest_definition = max(definitions.get(value, position - 1) for value in (base.value, index.value))
+            crossed = block.insns[latest_definition + 1 : position]
+            if latest_definition < position and _flags_overwritten(crossed):
+                placement = latest_definition
+            rewritten[position] = access
+            after.setdefault(placement, []).append(add)
+            changed.add(index.value)
+        insns = []
+        insns.extend(after.get(-1, ()))
+        for position, one in enumerate(block.insns):
+            if position in rewritten:
+                insns.append(rewritten[position])
+            else:
+                insns.append(one)
+            insns.extend(after.get(position, ()))
+        blocks.append(replace(block, insns=tuple(insns)))
+    if not changed:
+        return body, frozenset()
+    return replace(body, blocks=tuple(blocks)), frozenset(changed)
+
+
+def _flags_overwritten(crossed: tuple[lir.Insn, ...]) -> bool:
+    """Whether an early inserted add's flags die before anything can read them."""
+    for one in crossed:
+        if one.group is not None or one.requires or one.delivers or one.clobbers or one.clobbers_high:
+            return False
+        what = one.what
+        if what is None:
+            continue
+        if what.op in (ir.Operation.BRANCH, ir.Operation.JUMP, ir.Operation.CALL, ir.Operation.RETURN):
+            return False
+        if what.name in {"adc", "sbb", "rcl", "rcr"}:
+            return False
+        # These forms overwrite every condition code a following branch can
+        # observe. Shifts and inc/dec leave part of FLAGS unchanged, so they
+        # are not a sufficient boundary for an inserted ADD.
+        if what.name in {"add", "sub", "and", "or", "xor", "cmp", "test"}:
+            return True
+    return False
 
 
 def _indexed_pattern(one: lir.Insn, values: frozenset[int], base_uses: dict[int, int]):
@@ -935,9 +997,47 @@ def _indexed_pattern(one: lir.Insn, values: frozenset[int], base_uses: dict[int,
         return None
     if any(where.base != base or where.index != index for where in cells):
         return None
-    if base_uses.get(base.value, 0) != len(cells):
+    participants = {base.value, index.value}
+    for where in (*one.what.dests, *one.what.sources):
+        if isinstance(where, ir.Held) and where.value in participants:
+            return None
+        if isinstance(where, ir.Mem):
+            held = {value.value for value in (where.base, where.index, where.selector) if value is not None}
+            if participants & held and (
+                where.base != base
+                or where.index != index
+                or where.scale != 1
+                or where.selector is not None
+                and where.selector.value in participants
+            ):
+                return None
+    if base_uses.get(base.value, 0) != 1:
         return None
     return base, index, cells
+
+
+def _unfolded_index(one: lir.Insn, base: ir.Held, index: ir.Held) -> tuple[lir.Insn, lir.Insn]:
+    """One indexed cell as ``add base,index`` and a base-only cell."""
+
+    def rebased(where):
+        if isinstance(where, ir.Mem) and where.base == base and where.index == index:
+            return replace(where, index=None, scale=1, index_through=0)
+        return where
+
+    rewritten = replace(
+        one,
+        what=replace(
+            one.what, dests=tuple(map(rebased, one.what.dests)), sources=tuple(map(rebased, one.what.sources))
+        ),
+        uses=tuple(value for value in one.uses if value != index.value),
+    )
+    add = _inserted(
+        one,
+        ir.Semantics(ir.Operation.BINARY, "add", (base,), (base, index)),
+        (base.value,),
+        (base.value, index.value),
+    )
+    return add, rewritten
 
 
 def _indexed_source(
@@ -947,10 +1047,11 @@ def _indexed_source(
 
     A 16-bit effective address cannot name a frame slot as its index, but
     ``add bx,[bp-slot]`` followed by ``es:[bx]`` names exactly the same byte
-    address.  The destructive add is safe only when *all* remaining encoded
-    uses of the virtual base are the matching operands in this instruction;
-    otherwise it would silently move a later access.  A read-modify-write
-    appears twice (destination and source) and is one safe final access.
+    address. The destructive add is safe only when this is the base's final
+    semantic use and every base/index occurrence in the instruction belongs
+    to a matching cell; otherwise it would silently alter a later access or a
+    data operand. A read-modify-write appears twice (destination and source)
+    and is one safe final access.
     """
     found = _indexed_pattern(one, values, base_uses)
     if found is None:
@@ -959,22 +1060,11 @@ def _indexed_source(
     slot = frame.cell(index.value, index.width)
     if slot is None:
         return None
-
-    def rebased(where):
-        if isinstance(where, ir.Mem) and where.base == base and where.index == index:
-            return replace(where, index=None, scale=1, index_through=0)
-        return where
-
-    rewritten = replace(
-        one,
-        what=replace(one.what, dests=tuple(map(rebased, one.what.dests)), sources=tuple(map(rebased, one.what.sources))),
-        uses=tuple(value for value in one.uses if value != index.value),
-    )
-    add = _inserted(
-        one,
-        ir.Semantics(ir.Operation.BINARY, "add", (base,), (base, slot)),
-        (base.value,),
-        (base.value,),
+    add, rewritten = _unfolded_index(one, base, index)
+    add = replace(
+        add,
+        what=replace(add.what, sources=(base, slot)),
+        uses=(base.value,),
     )
     return add, rewritten
 
@@ -1489,11 +1579,7 @@ def _encodable(what: ir.Semantics) -> bool:
 
     taken: dict[int, object] = {}
     rows = {
-        width: [
-            one
-            for one in target.AVAILABLE
-            if target.WIDTHS.get(target.named(one, width)) == width
-        ]
+        width: [one for one in target.AVAILABLE if target.WIDTHS.get(target.named(one, width)) == width]
         for width in (1, 2, 4)
     }
 

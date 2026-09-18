@@ -14,22 +14,24 @@ from iced_x86 import RegisterExt
 from qbopt.model import ir
 from qbopt.model import lir
 from qbopt.backend import target
+from qbopt.backend import cpu as targets
 from qbopt.model.passes import LIRTransform
 
 
 class Peephole(LIRTransform):
     name = "peephole"
 
-    def __init__(self, frame=None):
+    def __init__(self, frame=None, *, cpu: str | targets.Profile = "386"):
         self.frame = frame
+        self.cpu = targets.profile(cpu)
 
     def transform(self, body: lir.LirBody) -> lir.LirBody:
         from qbopt.backend import phielim
         from qbopt.backend import copyprop
         from qbopt.backend import copysink
+        from qbopt.backend import regthrash
         from qbopt.backend import machinecse
         from qbopt.backend import machinedce
-        from qbopt.backend import regthrash
         from qbopt.backend import spillforward
         from qbopt.backend import storecombine
 
@@ -45,7 +47,7 @@ class Peephole(LIRTransform):
         body = storecombine.combined(body)
         body = pushed_constants(body)
         body = far_loads(fused(overwritten(shuttles(commuted(constants(pushes(body)))))))
-        body = machinecse.eliminated(addresses(body))
+        body = machinecse.eliminated(addresses(body, cpu=self.cpu))
         body = waits(zero_compares(tested(zeroes(body))))
         return self._frame(machinedce.eliminated(body))
 
@@ -190,20 +192,18 @@ def extensions(body: lir.LirBody) -> lir.LirBody:
 def _extension(first: lir.Insn, second: lir.Insn, users: Counter[int]) -> "lir.Insn | None":
     from qbopt.backend import select
 
-    if (
-        any(
-            one.what is None
-            or one.clobbers
-            or one.clobbers_high
-            or one.requires
-            or one.delivers
-            or one.spread
-            or one.group is not None
-            or one.frame_adjust
-            or one.spill_reload
-            or one.spill_store
-            for one in (first, second)
-        )
+    if any(
+        one.what is None
+        or one.clobbers
+        or one.clobbers_high
+        or one.requires
+        or one.delivers
+        or one.spread
+        or one.group is not None
+        or one.frame_adjust
+        or one.spill_reload
+        or one.spill_store
+        for one in (first, second)
     ):
         return None
     # The follower forms below have register operands only, so even an
@@ -997,7 +997,12 @@ def _next_word(low: ir.Mem, high: ir.Mem) -> bool:
     return moved == 2 and high.offset - low.offset in (0, 2) or moved == 0 and high.offset == low.offset + 2
 
 
-def _scaled_address(parts: tuple[lir.Insn, ...], *, flags_dead: bool = False) -> lir.Insn | None:
+def _scaled_address(
+    parts: tuple[lir.Insn, ...],
+    *,
+    flags_dead: bool = False,
+    cpu: str | targets.Profile = "386",
+) -> lir.Insn | None:
     if len(parts) not in (3, 4) or any(one.what is None or one.clobbers or one.symbol is True for one in parts):
         return None
     copy, shift, add = parts[:3]
@@ -1041,6 +1046,9 @@ def _scaled_address(parts: tuple[lir.Insn, ...], *, flags_dead: bool = False) ->
     base = RegisterExt.full_register32(source.register)
     if base == Register.ESP:
         return None
+    target_cpu = targets.profile(cpu)
+    if not _scaled_address_is_cheaper(source, len(parts[:3]), target_cpu):
+        return None
     # For a word result only the low sixteen address bits are used. Unknown
     # upper source bits cannot affect them; LEA performs no memory access.
     what = ir.Semantics(
@@ -1049,8 +1057,9 @@ def _scaled_address(parts: tuple[lir.Insn, ...], *, flags_dead: bool = False) ->
     return replace(copy, what=what, defines=add.defines)
 
 
-def addresses(body: lir.LirBody) -> lir.LirBody:
+def addresses(body: lir.LirBody, *, cpu: str | targets.Profile = "386") -> lir.LirBody:
     """Select LEA for allocated arithmetic when the replaced flags are dead."""
+    target_cpu = targets.profile(cpu)
     blocks = []
     for block in body.blocks:
         dead = set()
@@ -1063,15 +1072,19 @@ def addresses(body: lir.LirBody) -> lir.LirBody:
         index = 0
         while index < len(block.insns):
             triple = block.insns[index : index + 3]
-            combined = _scaled_address(triple, flags_dead=True) if len(triple) == 3 and id(triple[2]) in dead else None
+            combined = (
+                _scaled_address(triple, flags_dead=True, cpu=target_cpu)
+                if len(triple) == 3 and id(triple[2]) in dead
+                else None
+            )
             if combined is None:
-                combined = _scaled_address(block.insns[index : index + 4])
+                combined = _scaled_address(block.insns[index : index + 4], cpu=target_cpu)
             if combined is not None:
                 insns.append(combined)
                 index += 3
             else:
                 pair = block.insns[index : index + 2]
-                combined = _shift_address(pair) if len(pair) == 2 and id(pair[1]) in dead else None
+                combined = _shift_address(pair, cpu=target_cpu) if len(pair) == 2 and id(pair[1]) in dead else None
                 if combined is not None:
                     folded = (
                         [combined]
@@ -1088,7 +1101,7 @@ def addresses(body: lir.LirBody) -> lir.LirBody:
     return replace(body, blocks=tuple(blocks))
 
 
-def _shift_address(parts: tuple[lir.Insn, ...]) -> lir.Insn | None:
+def _shift_address(parts: tuple[lir.Insn, ...], *, cpu: str | targets.Profile = "386") -> lir.Insn | None:
     copy, shift = parts
     if any(one.what is None or one.clobbers or one.symbol is True or one.spread for one in parts):
         return None
@@ -1111,10 +1124,30 @@ def _shift_address(parts: tuple[lir.Insn, ...]) -> lir.Insn | None:
     base = RegisterExt.full_register32(source.register)
     if base == Register.ESP or base == RegisterExt.full_register32(dest.register):
         return None
+    target_cpu = targets.profile(cpu)
+    if not _scaled_address_is_cheaper(source, len(parts), target_cpu):
+        return None
     what = ir.Semantics(ir.Operation.ADDRESS, "lea", (dest,), (ir.Address(None, through=base, index=base),))
     if copy.covers == (shift.at, shift.at):
         return replace(shift, what=what, uses=copy.uses)
     return replace(copy, what=what, defines=shift.defines)
+
+
+def _scaled_address_is_cheaper(source: ir.Reg, replaced: int, cpu: targets.Profile) -> bool:
+    """Whether one 67h LEA beats the allocated register sequence it replaces.
+
+    A word source is consumed through its full 32-bit root by SIB addressing.
+    That is semantically harmless for a low-word result, but on targets with
+    partial-register merging it is not free.  Ties prefer LEA because it is
+    one instruction and normally fewer bytes.
+    """
+    old = cpu.operations.move + cpu.operations.shift
+    if replaced == 3:
+        old += cpu.operations.add
+    new = cpu.operations.address + cpu.operations.prefix
+    if source.width < 4:
+        new += cpu.partial_register_stall
+    return new <= old
 
 
 def _flags_before(one: lir.Insn, flags_dead: bool) -> bool:
