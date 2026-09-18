@@ -10,6 +10,21 @@ from qbopt.model import mir
 from qbopt.objectfile import omf
 
 
+def test_closed_local_terminal_scc_is_noreturn():
+    """The object path missed a→b→a because its no-return summary started empty."""
+    from qbopt.analysis import noreturn
+    from qbopt.model import ir
+
+    call_b = mir.Op(2, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.CALL)
+    call_a = mir.Op(4, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.CALL)
+    first = mir.MirBody(0x30, (mir.MirBlock(0x30, (), (call_b,), ()),), sealed=True)
+    second = mir.MirBody(0x40, (mir.MirBlock(0x40, (), (call_a,), ()),), sealed=True)
+
+    assert noreturn.inferred({0x30: first, 0x40: second}, {2: 0x40, 4: 0x30}, frozenset()) == frozenset(
+        {0x30, 0x40}
+    )
+
+
 @pytest.mark.parametrize("terminal", [True, False])
 def test_qrender_main_spill_uses_shutdown_control_proof(terminal: bool) -> None:
     # MAIN crashed reserving two spill bytes: HOST_SHUTDOWN ends via B$CEND,

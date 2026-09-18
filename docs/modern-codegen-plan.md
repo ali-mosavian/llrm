@@ -25,10 +25,34 @@ iteration updates this file in the same commit.
 | SROA and scalar promotion | partial | fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies can now expand into exact leaves, while far, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
 | Loop optimization | partial | exact pre- and post-tested recurrences, composed pointer recurrences, formula costing, specialization, rotation, peeling and exact unrolling exist; versioning and broad pressure forecasting remain. |
-| Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs (including closed recursive SCCs), constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
+| Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs (including closed recursive SCCs in C and object paths), constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
 | Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 88. Object-path no-return SCC parity — 2026-09-18
+
+The C named-body summary was now SCC-capable, but the shared object/BASIC
+analysis still began with an empty terminal set and therefore missed the same
+closed local recursion.  That left an implementation-state discrepancy
+between the two frontends even though both operate on the same machine-neutral
+MIR control fact.
+
+`noreturn.inferred()` now uses the same greatest fixed point: begin with the
+locally defined bodies, remove any body with a reachable normal return,
+fallthrough, or path through a nonterminal call, and repeat until stable.
+Established runtime `NEVER` calls remain independent terminals.  This proves
+only a closed local SCC; a normal returning member removes its callers from
+the set, and it does not infer anything about unknown external procedures.
+
+The fail-first object-path MIR regression records `a → b → a` formerly
+producing an empty result.  The full no-return file passes (`3 passed`,
+`4.50s`), including both sides of QCport's existing shutdown-control proof;
+the C SCC regressions also pass (`2 passed`, `0.11s`).  This brings Phase 6
+no-return SCC reasoning to both frontends, not recursive IPSCCP or broader
+call-effect inference.  GCC/LLVM remain best-case flat-i386 listing
+references; BCC/WC medium-model output remains the hard authority for ABI,
+segments, legal forms, and performance targets.
 
 ### 87. Closed private no-return SCCs — 2026-09-18
 
