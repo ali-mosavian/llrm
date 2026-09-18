@@ -32,6 +32,15 @@ def test_report_measures_each_emitted_function_and_names_its_profile() -> None:
         assert function["peak_live_values"] >= 0
         assert function["rematerializations"] >= 0
         assert function["dynamic_operations"] is not None
+        assert function["dynamic"]["instructions"] == function["dynamic_operations"]
+        assert set(function["dynamic"]) == {
+            "instructions",
+            "loads",
+            "stores",
+            "branches",
+            "calls",
+            "address_calculations",
+        }
         assert function["target_status"] == "missing"
         assert function["ratio"] is None
 
@@ -236,6 +245,7 @@ def test_reference_assembly_is_measured_per_function_without_directives_or_comme
                 "address_calculations": 0,
             },
             "dynamic_operations": None,
+            "dynamic": None,
             "dynamic_status": "unmeasured: call, interrupt, or repeated instruction hides executed work",
             "normalized_sha256": quality._normalized_hash(
                 (
@@ -257,7 +267,7 @@ def test_reference_dynamic_operations_count_a_natural_loop() -> None:
     bench_loop:
         mov ecx, 10
     .Lagain:
-        add eax, 1
+        add DWORD PTR [eax], 1
         dec ecx
         jne .Lagain
         ret
@@ -267,6 +277,14 @@ def test_reference_dynamic_operations_count_a_natural_loop() -> None:
     (function,) = quality._reference_functions(assembly)
 
     assert function["dynamic_operations"] == 32.0
+    assert function["dynamic"] == {
+        "instructions": 32.0,
+        "loads": 10.0,
+        "stores": 10.0,
+        "branches": 10.0,
+        "calls": 0.0,
+        "address_calculations": 0.0,
+    }
     assert function["dynamic_status"] == "estimated: CFG branches and ten iterations per natural loop"
 
 
@@ -351,6 +369,14 @@ def test_structural_comparison_matches_c_and_medium_model_symbol_spellings() -> 
                     "calls": 0,
                     "address_calculations": 2,
                     "dynamic_operations": 120.0,
+                    "dynamic": {
+                        "instructions": 120.0,
+                        "loads": 30.0,
+                        "stores": 12.0,
+                        "branches": 6.0,
+                        "calls": 0.0,
+                        "address_calculations": 3.0,
+                    },
                 }
             ],
         }
@@ -370,6 +396,14 @@ def test_structural_comparison_matches_c_and_medium_model_symbol_spellings() -> 
                     "calls": 0,
                     "address_calculations": 1,
                     "dynamic_operations": 100.0,
+                    "dynamic": {
+                        "instructions": 100.0,
+                        "loads": 20.0,
+                        "stores": 12.0,
+                        "branches": 4.0,
+                        "calls": 0.0,
+                        "address_calculations": 1.0,
+                    },
                 }
             ],
         }
@@ -384,6 +418,14 @@ def test_structural_comparison_matches_c_and_medium_model_symbol_spellings() -> 
         "calls": None,
         "address_calculations": 2.0,
         "dynamic_operations": 1.2,
+    }
+    assert comparison["dynamic"]["ratios"] == {
+        "instructions": 1.2,
+        "loads": 1.5,
+        "stores": 1.0,
+        "branches": 1.5,
+        "calls": None,
+        "address_calculations": 3.0,
     }
 
 

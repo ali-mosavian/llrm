@@ -171,8 +171,8 @@ def _reference_metrics(instructions: list[str]) -> dict[str, int]:
     }
 
 
-def _reference_dynamic(events: list[tuple[str, str]]) -> tuple[float | None, str]:
-    """Profile-free executed instructions from a reference function's CFG."""
+def _reference_dynamic_metrics(events: list[tuple[str, str]]) -> tuple[dict[str, float] | None, str]:
+    """Profile-free executed structural metrics from a reference CFG."""
     if any(
         line.split(None, 1)[0] in {"call", "int", "into"} or line.split(None, 1)[0].startswith("rep")
         for kind, line in events
@@ -235,11 +235,24 @@ def _reference_dynamic(events: list[tuple[str, str]]) -> tuple[float | None, str
     frequencies = _frequencies(body)
     if frequencies is None:
         return None, "unmeasured: control flow has no finite profile-free estimate"
-    estimate = round(sum(len(block.instructions) * frequencies.get(block.at, 0.0) for block in blocks), 6)
+    per_block = {block.at: _reference_metrics(list(block.instructions)) for block in blocks}
+    estimate = {
+        metric: round(
+            sum(per_block[block.at][metric] * frequencies.get(block.at, 0.0) for block in blocks),
+            6,
+        )
+        for metric in STRUCTURAL_METRICS
+    }
     status = "estimated: CFG branches"
     if loops.loops(body.blocks, body.entry):
         status += " and ten iterations per natural loop"
     return estimate, status
+
+
+def _reference_dynamic(events: list[tuple[str, str]]) -> tuple[float | None, str]:
+    """Backward-compatible executed-instruction view of the structural estimate."""
+    metrics, status = _reference_dynamic_metrics(events)
+    return (None if metrics is None else metrics["instructions"]), status
 
 
 def _reference_functions(assembly: str) -> list[dict]:
@@ -256,13 +269,15 @@ def _reference_functions(assembly: str) -> list[dict]:
             return
         raw = _reference_metrics(instructions)
         body = _abi_body(instructions, lambda line: line.partition(" ")[::2])
-        dynamic_operations, dynamic_status = _reference_dynamic(events)
+        dynamic, dynamic_status = _reference_dynamic_metrics(events)
+        dynamic_operations = None if dynamic is None else dynamic["instructions"]
         functions.append(
             {
                 "name": current,
                 **raw,
                 "comparison": _reference_metrics(body),
                 "dynamic_operations": dynamic_operations,
+                "dynamic": dynamic,
                 "dynamic_status": dynamic_status,
                 "normalized_sha256": _normalized_hash(tuple(instructions)),
             }
@@ -506,10 +521,10 @@ def _frequencies(body: lir.LirBody) -> dict[int, float] | None:
     return {at: round(max(0.0, right[index[at]]), 9) for at in nodes}
 
 
-def _block_instruction_counts(
+def _block_instruction_rows(
     module: masm.Module, procedure: masm.Procedure, number: int
-) -> tuple[int, dict[int, int], list[tuple[str, str, str]]]:
-    """Exact emitted instruction counts split at the final block labels."""
+) -> tuple[list[tuple[str, str, str]], dict[int, list[tuple[str, str, str]]], list[tuple[str, str, str]]]:
+    """Exact emitted instructions split at the final block labels."""
     code, labels = _image(module, procedure, number)
     rows = _rows(code)
     starts = []
@@ -519,19 +534,21 @@ def _block_instruction_counts(
             raise InvalidMeasurement(f"emitted function has no label for block {block.at:#x}")
         starts.append((block.at, labels[name]))
     prologue_end = starts[0][1] if starts else len(code)
-    prologue = len(_rows(code[:prologue_end])) if prologue_end else 0
-    counts = {}
+    prologue = _rows(code[:prologue_end]) if prologue_end else []
+    blocks = {}
     for index, (at, start) in enumerate(starts):
         end = starts[index + 1][1] if index + 1 < len(starts) else len(code)
-        counts[at] = len(_rows(code[start:end])) if end > start else 0
-    if prologue + sum(counts.values()) != len(rows):
+        blocks[at] = _rows(code[start:end]) if end > start else []
+    if len(prologue) + sum(len(one) for one in blocks.values()) != len(rows):
         raise InvalidMeasurement("block instruction extents do not cover the emitted function exactly once")
-    return prologue, counts, rows
+    return prologue, blocks, rows
 
 
-def _dynamic_operations(module: masm.Module, procedure: masm.Procedure, number: int) -> tuple[float | None, str]:
-    """Estimate executed instructions only when every visible cost is bounded."""
-    prologue, counts, rows = _block_instruction_counts(module, procedure, number)
+def _dynamic_metrics(
+    module: masm.Module, procedure: masm.Procedure, number: int
+) -> tuple[dict[str, float] | None, str]:
+    """Estimate executed structural metrics when every visible cost is bounded."""
+    prologue, blocks, rows = _block_instruction_rows(module, procedure, number)
     if any(mnemonic in {"call", "int", "into"} for _raw, mnemonic, _operands in rows):
         return None, "unmeasured: call or interrupt hides executed work"
     if any(mnemonic.startswith("rep") for _raw, mnemonic, _operands in rows):
@@ -539,7 +556,16 @@ def _dynamic_operations(module: masm.Module, procedure: masm.Procedure, number: 
     frequencies = _frequencies(procedure.body)
     if frequencies is None:
         return None, "unmeasured: control flow has no finite profile-free estimate"
-    estimate = round(float(prologue) + sum(counts[at] * frequencies.get(at, 0.0) for at in counts), 6)
+    fixed = _row_metrics(prologue)
+    per_block = {at: _row_metrics(block) for at, block in blocks.items()}
+    estimate = {
+        metric: round(
+            float(fixed[metric])
+            + sum(per_block[at][metric] * frequencies.get(at, 0.0) for at in per_block),
+            6,
+        )
+        for metric in STRUCTURAL_METRICS
+    }
     status = "estimated: CFG branches"
     if procedure.body.loop_trip_counts:
         status += ", exact proved trip counts where available"
@@ -549,6 +575,12 @@ def _dynamic_operations(module: masm.Module, procedure: masm.Procedure, number: 
     ):
         status += ", otherwise ten iterations per natural loop"
     return estimate, status
+
+
+def _dynamic_operations(module: masm.Module, procedure: masm.Procedure, number: int) -> tuple[float | None, str]:
+    """Backward-compatible executed-instruction view of the structural estimate."""
+    metrics, status = _dynamic_metrics(module, procedure, number)
+    return (None if metrics is None else metrics["instructions"]), status
 
 
 def _cost_report(
@@ -581,7 +613,8 @@ def function_report(module: masm.Module, procedure: masm.Procedure, number: int,
     loads, stores = _memory(rows)
     body_rows = _abi_body(rows, lambda row: (row[1], row[2]))
     instructions = tuple(one for block in procedure.body.blocks for one in block.insns)
-    dynamic_operations, dynamic_status = _dynamic_operations(module, procedure, number)
+    dynamic, dynamic_status = _dynamic_metrics(module, procedure, number)
+    dynamic_operations = None if dynamic is None else dynamic["instructions"]
     weighted_cost, weighted_status, unpriced_forms = _cost_report(rows, target)
     return {
         "name": procedure.name,
@@ -591,6 +624,7 @@ def function_report(module: masm.Module, procedure: masm.Procedure, number: int,
         "weighted_status": weighted_status,
         "unpriced_forms": unpriced_forms,
         "dynamic_operations": dynamic_operations,
+        "dynamic": dynamic,
         "dynamic_status": dynamic_status,
         "loads": loads,
         "stores": stores,
@@ -740,6 +774,19 @@ def _comparisons(reports: list[dict], references: list[dict]) -> list[dict]:
                 candidate_dynamic = function.get("dynamic_operations")
                 reference_dynamic = other.get("dynamic_operations")
                 dynamic_ratio_status = _dynamic_ratio_status(function, other)
+                candidate_dynamic_metrics = function.get("dynamic")
+                reference_dynamic_metrics = other.get("dynamic")
+                dynamic_ratios = {
+                    metric: (
+                        candidate_dynamic_metrics[metric] / reference_dynamic_metrics[metric]
+                        if dynamic_ratio_status == "comparable"
+                        and isinstance(candidate_dynamic_metrics, dict)
+                        and isinstance(reference_dynamic_metrics, dict)
+                        and reference_dynamic_metrics.get(metric, 0) > 0
+                        else None
+                    )
+                    for metric in STRUCTURAL_METRICS
+                }
                 ratios["dynamic_operations"] = (
                     candidate_dynamic / reference_dynamic
                     if dynamic_ratio_status == "comparable"
@@ -775,6 +822,12 @@ def _comparisons(reports: list[dict], references: list[dict]) -> list[dict]:
                         },
                         "ratios": ratios,
                         "dynamic_ratio_status": dynamic_ratio_status,
+                        "dynamic": {
+                            "qbopt": candidate_dynamic_metrics,
+                            "reference": reference_dynamic_metrics,
+                            "ratios": dynamic_ratios,
+                            "status": dynamic_ratio_status,
+                        },
                         "gap_attribution": attribution,
                         "first_excess_stage": {
                             metric: result["stage"] if result["status"] == "attributed" else None
@@ -959,9 +1012,19 @@ def main(argv: list[str] | None = None) -> int:
         metric = "estimated executed instructions" if dynamic is not None else "static instructions"
         if dynamic is None and comparison.get("dynamic_ratio_status", "") != "comparable":
             metric += " (dynamic withheld)"
+        candidate_traffic = comparison["dynamic"].get("qbopt")
+        reference_traffic = comparison["dynamic"].get("reference")
+        traffic = ""
+        if isinstance(candidate_traffic, dict) and isinstance(reference_traffic, dict):
+            traffic = (
+                "; dyn ins/load/store "
+                f"{candidate_traffic['instructions']:g}/{candidate_traffic['loads']:g}/{candidate_traffic['stores']:g}"
+                " vs "
+                f"{reference_traffic['instructions']:g}/{reference_traffic['loads']:g}/{reference_traffic['stores']:g}"
+            )
         print(
             f" ref {comparison['cpu']:>4} {Path(comparison['source']).stem}.{comparison['function']:<24} "
-            f"{comparison['compiler']:<14} {measured:>6} {metric}"
+            f"{comparison['compiler']:<14} {measured:>6} {metric}{traffic}"
         )
     if not args.gate:
         return 0

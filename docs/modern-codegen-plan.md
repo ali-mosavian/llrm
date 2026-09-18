@@ -20,7 +20,7 @@ iteration updates this file in the same commit.
 
 | Phase | State | Current boundary |
 |---|---|---|
-| Per-CPU measurement | in progress | CPU profiles distinguish native medium-model addressing from the complete costed secondary 67h form and now carry the complete-peel iteration budget; the C corpus, static/dynamic metrics and reference listings exist, and exact counts survive recurrence rewinds, loop rotation, and zero-byte-header threading; audited targets remain. |
+| Per-CPU measurement | in progress | CPU profiles distinguish native medium-model addressing from the complete costed secondary 67h form and carry the complete-peel iteration budget; the C corpus, static and frequency-weighted structural metrics, reference listings, and exact-count preservation across recurrence rewinds, loop rotation, and zero-byte-header threading exist; audited targets and runtime profiles remain. |
 | MIR/LIR provenance and fresh OMF | complete in production | allocated LIR emits directly with external source maps/allocation hints; the remaining compatibility views are test-only and cannot route a compilation through record rewriting. |
 | SROA and scalar promotion | partial | fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies expand into exact leaves, and structural candidates transact leaves made singleton by scalar convergence with finite-capacity pressure pricing; far, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, dying-base indexed-form unfolding, and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
@@ -29,6 +29,63 @@ iteration updates this file in the same commit.
 | Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing, dead-register frame-copy shuttles, target-priced 67h LEA selection including source-owned loaded scale/add tails and constant/register sums, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 110. Weight memory and control traffic by CFG execution — 2026-09-18
+
+The current nbody report appeared to identify a clear lowering defect: qbopt
+had 146 static loads versus Clang's 74 and GCC's 71, and the scoreboard named
+`lir-lower` as the first stage after which the excess remained.  Raw assembly
+showed that the programs did not have comparable static shapes.  qbopt peels
+or unrolls five of the six fixed interaction bodies while Clang retains one
+large loop; counting each textual load once rewards the looped spelling even
+when it executes repeatedly.
+
+The quality instrument now applies its existing CFG frequency solution to
+every structural metric, not only total instructions.  Candidate and
+reference function reports carry a `dynamic` map for instructions, loads,
+stores, branches, calls, and address calculations.  The legacy
+`dynamic_operations` field remains the instruction member of that map, so
+existing targets and callers stay compatible.  Structural comparisons expose
+both raw maps and compute per-metric ratios only when the existing evidence
+policy declares the dynamic extents comparable.  Calls, interrupts, repeated
+instructions, irreducible CFGs, unmapped blocks, and heuristic loop counts
+retain their previous refusal or withheld status.
+
+The fail-first reference regression uses one read/modify/write memory
+instruction in a ten-iteration loop.  Its static one load and one store must
+report exactly ten dynamic loads and stores alongside 32 executed
+instructions.  Candidate reports prove their dynamic instruction member is
+identical to the compatibility field, and a synthetic candidate/reference
+comparison proves each dynamic ratio is taken from the corresponding metric
+rather than from static totals.
+
+At the current unsigned revision, the real nbody input produces this raw
+profile-free evidence:
+
+| listing | normalized static ins/load/store | estimated dynamic ins/load/store/branch |
+|---|---:|---:|
+| qbopt 386 medium model | 277 / 146 / 85 | 2085 / 1234 / 485 / 20 |
+| Clang 21 flat i386 | 290 / 74 / 51 | 1174 / 328.5 / 189.5 / 6 |
+| GCC 16.2 flat i386 | 263 / 71 / 106 | 5131.5 / 1438 / 1228 / 169 |
+
+The static load comparison says qbopt is about twice either reference; the
+frequency-weighted estimate says it is 3.76x Clang but 0.86x GCC.  That
+direction reversal proves static memory counts cannot identify a runtime
+traffic gap across these different unroll/loop choices.  None of the dynamic
+ratios is published: nbody's `steps` argument is not statically known and all
+three estimates use at least one profile-free ten-trip fallback.  Clang and
+GCC remain best-case structural listings; a runtime profile or independently
+audited medium-model target is still required before changing optimization
+policy from these numbers.
+
+The authoritative report and raw listings are under
+`build/quality/iter117`.  The source hash is
+`4086d97bc336ee110eaf1ae04c822cd47f9817f94b1e89599e2b2f65a76a6c43`;
+the report records Apple Clang 21.0.0 and i686-elf GCC 16.2.0 with strict x87,
+SSE-disabled flags.  This advances Phase 1's measurement trustworthiness; it
+does not claim a Phase 4 x87 improvement or a final nbody target.  Focused
+measurement checks pass (`6 passed`, `52 deselected`, `0.34s`) and Tier 1
+passes (`235 passed`, `31 deselected`, `2.37s`).
 
 ### 109. See physical scale/add tails through source anchors — 2026-09-18
 
