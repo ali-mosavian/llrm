@@ -249,6 +249,40 @@ def test_a_cut_range_renames_the_cell_it_is_the_base_of() -> None:
     )
 
 
+def test_local_split_can_cut_a_gap_in_one_block_of_a_cross_block_range() -> None:
+    """A local constrained use stayed spilled because another block also read it.
+
+    A copy back at the selected block's boundary restores the original value,
+    so references in other blocks are not a reason to reject a wide local
+    gap.  The old local rung required *all* references to be in one block and
+    therefore could not offer this ordinary split-ladder candidate.
+    """
+    body = _pointer_across_a_loop()
+    loop = next(block for block in body.blocks if block.at == 0x10)
+    first = _insn(
+        0x0F,
+        ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(8, 2),), (ir.Held(3, 2),)),
+        (8,),
+        (3,),
+    )
+    # v3 is now read twice in this block with the increment/load work
+    # between them, and remains read by the exit block.
+    body = lir.LirBody(
+        body.name,
+        body.entry,
+        tuple(
+            lir.LirBlock(block.at, (first, *block.insns) if block.at == 0x10 else block.insns, block.succ)
+            for block in body.blocks
+        ),
+        body.origin,
+        body.pins,
+    )
+
+    plan = splitkit._local(body, 3, {}, {}, {})
+
+    assert plan == splitkit.Region(frozenset({0x10}), 2)
+
+
 def test_a_loop_scoped_base_piece_enters_once_and_leaves_after_the_loop() -> None:
     """r_walk's owner crossed a later call, so whole-range retention
     rematerialized it at every loop access.  The allocator needs a distinct

@@ -42,6 +42,7 @@ FAST_MODULES = frozenset(
         "test_sccp.py",
         "test_schedule.py",
         "test_stack_segment.py",
+        "test_splitkit.py",
         "test_test_tiers.py",
     }
 )

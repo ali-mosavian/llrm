@@ -240,22 +240,23 @@ def _regional(body, value, live, index, deep) -> "Region | None":
 
 
 def _local(body, value, live, index, deep) -> "Region | None":
-    """`tryLocalSplit`: one block, cut at the widest gap between references.
+    """`tryLocalSplit`: cut the widest same-block gap between references.
 
-    Only for a range living in a single block. The gap has to be wider than
-    a single instruction or the two pieces are live across each other's
-    uses anyway and the copy buys nothing.
+    The value may also be live in other blocks.  `_carved` restores the
+    original at this region's boundary, so those references are outside the
+    fresh piece and cannot make this split unsafe.  The gap still has to be
+    wider than a single instruction or the two pieces are live across each
+    other's uses anyway and the copy buys nothing.
     """
     found = _references(body, value)
-    if len(found) != 1:
+    gaps = [
+        (positions[position + 1] - positions[position], at, positions[position + 1])
+        for at, positions in found.items()
+        for position in range(len(positions) - 1)
+    ]
+    if not gaps:
         return None
-    at, positions = next(iter(found.items()))
-    if len(positions) < 2:
-        return None
-    gap, cut = max(
-        ((positions[i + 1] - positions[i], positions[i + 1]) for i in range(len(positions) - 1)),
-        default=(0, 0),
-    )
+    gap, at, cut = max(gaps)
     if gap < 2:
         return None
     return Region(frozenset({at}), cut)

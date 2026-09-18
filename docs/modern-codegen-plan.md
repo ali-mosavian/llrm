@@ -23,12 +23,39 @@ iteration updates this file in the same commit.
 | Per-CPU measurement | in progress | CPU profiles, C corpus, static/dynamic metrics and reference listings exist; audited targets remain. |
 | MIR/LIR provenance and fresh OMF | complete in production | allocated LIR emits directly with external source maps/allocation hints; the remaining compatibility views are test-only and cannot route a compilation through record rewriting. |
 | SROA and scalar promotion | partial | fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies can now expand into exact leaves, while far, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
-| Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
+| Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
 | Loop optimization | partial | exact pre- and post-tested recurrences, composed pointer recurrences, formula costing, specialization, rotation, peeling and exact unrolling exist; versioning and broad pressure forecasting remain. |
 | Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs (including closed recursive SCCs in C and object paths), constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
 | Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 92. Split local gaps across block boundaries — 2026-09-18
+
+The allocator's local split rung was described as a single-block mechanism,
+but its selector rejected a value as soon as *any* other block also referenced
+it.  That is not a safety proof: a local carve copies into the selected gap
+and restores the original at that region's boundary, so later or predecessor
+uses remain on the original value.  The over-restriction withheld a normal
+constrained-use split from multi-block live ranges and left the allocator with
+an avoidable spill candidate.
+
+`splitkit._local()` now prices every same-block gap and selects the widest
+one, regardless of references outside that block.  It retains the existing
+minimum-gap rule and uses the unchanged generic carve/restore logic, so this
+is neither a register preference nor a QCport-specific split.  The
+fail-first LIR regression has two uses separated in one block and an
+additional exit-block use; it previously received no plan and now receives
+the local region beginning at the later use.  All splitkit checks pass (`8
+passed`, `0.06s`).
+
+`test_splitkit.py` is also now Tier 1: all eight tests are hermetic core-LIR
+coverage and complete well inside the fast gate budget.  This advances Phase
+4's split ladder, not the still-open global splitting/rematerialization,
+x87 allocation, or complete target-priced constrained-role planning.
+GCC/LLVM listings remain best-case structural references; BCC/WC
+medium-model listings remain the authority for ABI, segments, legal address
+forms, and hard targets.
 
 ### 91. Put terminal CFG cleanup in Tier 1 — 2026-09-18
 
