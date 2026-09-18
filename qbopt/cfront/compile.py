@@ -465,9 +465,12 @@ def assembled(
             if not changed and not inlined:
                 break
         pure = interprocedural.pure_procedures({one.name: (bodies[one.name], one.calls) for one in raised_procedures})
+        readonly = interprocedural.readonly_procedures(
+            {one.name: (bodies[one.name], one.calls) for one in raised_procedures}
+        )
         for raised in raised_procedures:
             before = bodies[raised.name]
-            after = interprocedural.remove_dead_pure_calls(before, raised.calls, pure, call_arguments[raised.name])
+            after = interprocedural.remove_dead_pure_calls(before, raised.calls, readonly, call_arguments[raised.name])
             if after is not before:
                 bodies[raised.name] = run_optimiser(raised, after, "ipa-pure.")
         roots = frozenset(one.name for one in raised_procedures if one.symbol.exported) | address_taken

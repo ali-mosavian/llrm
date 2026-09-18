@@ -166,6 +166,22 @@ def test_returned_constant_inlines_one_call_without_specializing_dynamic_callers
     assert "add ax, 29" in dynamic
 
 
+def test_unused_private_readonly_call_is_removed() -> None:
+    """ipa_readonly kept sample's unobservable static load and call before returning 7."""
+    source = Path("fixtures/c/ipa_readonly.c")
+    assembly = cfront.compiled(cfront.recorded(source, []), source.stem, optimise=True)
+    discard = assembly[assembly.index("_discardSample proc far") : assembly.index("_discardSample endp")]
+
+    assert "call _sample" not in discard
+    assert "mov ax, 7" in discard
+    assert "_sample proc near" not in assembly
+
+    volatile = assembly[
+        assembly.index("_keepVolatileSample proc far") : assembly.index("_keepVolatileSample endp")
+    ]
+    assert "call _sampleVolatile" in volatile
+
+
 def test_relative_source_and_include(tmp_path, monkeypatch):
     """wccq runs in its scratch directory, where `fixtures/c/x.c` and `-I src`
     no longer resolved: E1051 unable to open."""

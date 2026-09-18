@@ -381,3 +381,40 @@ def test_purity_refuses_nontermination_and_nonlocal_stores():
     returned = _returned(1).blocks[0].ops[-1]
     writing = mir.MirBody(1, (mir.MirBlock(1, (), (store, returned), ()),), sealed=True)
     assert interprocedural.pure_procedures({"loop": (looping, {}), "write": (writing, {})}) == frozenset()
+
+
+def test_readonly_procedure_allows_only_direct_nonvolatile_static_reads():
+    """An unused static read is erasable; a volatile read is not observable-free."""
+    global_ = mir.MemRef(Addr(Space.SEGMENT, 0, 1), 2, space=Space.SEGMENT)
+    value = mir.Value(1, 1, variable=1, version=1)
+    load = mir.Op(
+        1,
+        ir.Operation.MOVE,
+        "",
+        (value,),
+        (),
+        kind=mir.Kind.LOAD,
+        args=(mir.Cell(global_),),
+        results=(mir.Held(value, 2),),
+        loads=(global_,),
+    )
+    returned = mir.Op(2, ir.Operation.NOTHING, "", (), (value,), kind=mir.Kind.RETURN, args=(mir.Held(value, 2),))
+    body = mir.MirBody(1, (mir.MirBlock(1, (), (load, returned), ()),), sealed=True)
+    volatile = replace(global_, volatile=True)
+    volatile_load = replace(load, args=(mir.Cell(volatile),), loads=(volatile,))
+    volatile_body = replace(body, blocks=(replace(body.blocks[0], ops=(volatile_load, returned)),))
+    store = mir.Op(
+        1,
+        ir.Operation.NOTHING,
+        "",
+        (),
+        (),
+        kind=mir.Kind.STORE,
+        args=(mir.Const(1, 2),),
+        results=(mir.Cell(global_),),
+        stores=(global_,),
+    )
+    writing = mir.MirBody(1, (mir.MirBlock(1, (), (store, returned), ()),), sealed=True)
+    assert interprocedural.readonly_procedures(
+        {"read": (body, {}), "volatile": (volatile_body, {}), "write": (writing, {})}
+    ) == frozenset({"read"})

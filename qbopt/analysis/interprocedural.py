@@ -317,6 +317,56 @@ def pure_procedures(procedures: dict[str, tuple[mir.MirBody, dict[int, str]]]) -
         pure = made
 
 
+def readonly_procedures(procedures: dict[str, tuple[mir.MirBody, dict[int, str]]]) -> frozenset[str]:
+    """Acyclic user bodies whose unused calls have no observable effect.
+
+    This is intentionally broader than ``pure_procedures``: an ordinary,
+    direct read of this module's static data is not observable in C when its
+    result is unused.  It remains narrower than a general no-fault proof:
+    pointer-based, far/externally selected, volatile and floating reads stay
+    out, as do all non-frame writes.  Callers may use this fact only to erase
+    a dead result; it is not an inlining or alias-preservation permission.
+    """
+    readonly: frozenset[str] = frozenset()
+    while True:
+        made = readonly | frozenset(
+            name for name, (body, calls) in procedures.items() if _readonly_effects(body, calls, readonly)
+        )
+        if made == readonly:
+            return readonly
+        readonly = made
+
+
+def _readonly_effects(body: mir.MirBody, calls: dict[int, str], readonly: frozenset[str]) -> bool:
+    if not _acyclic_returning(body):
+        return False
+    local = frozenset({Space.FRAME, Space.STACK})
+    for block in body.blocks:
+        for op in block.ops:
+            if op.barrier or op.kind in _MAY_TRAP | _FLOATING | {mir.Kind.ESCAPE, mir.Kind.OPAQUE, mir.Kind.FILL}:
+                return False
+            if op.kind is mir.Kind.CALL:
+                if calls.get(op.at) not in readonly:
+                    return False
+                continue
+            if any(ref.volatile for ref in (*op.loads, *op.stores)):
+                return False
+            # Internal frame writes disappear with the call.  Any write to a
+            # nonlocal object remains observable, even if it is otherwise an
+            # exact direct reference.
+            if any(ref.space not in local for ref in op.stores):
+                return False
+            for ref in op.loads:
+                if ref.space in local:
+                    continue
+                # A direct near static data reference is guaranteed to name
+                # this module's mapped data.  Do not infer the same from an
+                # arbitrary pointer, external selector or far access.
+                if ref.space is not Space.SEGMENT or ref.base is not None or ref.segment is not None:
+                    return False
+    return True
+
+
 def argument_sites(body: mir.MirBody, contracts: dict[int, object]) -> dict[int, frozenset[int]]:
     """Associate each call with the exact stack ARG operations that feed it."""
     out = {}

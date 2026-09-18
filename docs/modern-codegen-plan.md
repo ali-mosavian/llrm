@@ -25,10 +25,38 @@ iteration updates this file in the same commit.
 | SROA and scalar promotion | partial | fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies can now expand into exact leaves, while far, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
 | Loop optimization | partial | exact pre- and post-tested recurrences, composed pointer recurrences, formula costing, specialization, peeling and exact unrolling exist; versioning, rotation and broad pressure forecasting remain. |
-| Whole-module optimization | partial | summaries, constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
+| Whole-module optimization | partial | summaries, direct private readonly-effect proofs, constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
 | Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing, conservative later-core/P5 scheduling, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 80. Direct private readonly-effect elimination — 2026-09-18
+
+`ipa_readonly` first retained a call to private `sample()` even though its
+only work was reading an ordinary static word and its return was unused.
+The previous `pure_procedures` predicate deliberately required all memory to
+be frame-local; that was right for inlining, but too strict for C's
+unobservable nonvolatile static reads and left a callable dead-effect gap.
+
+The new fixed-point readonly predicate is separate from inlining purity.  It
+admits only acyclic, returning direct bodies with no barrier, trap, floating,
+escape, opaque, or nonlocal write; direct near `SEGMENT` reads and frame/stack
+traffic are allowed only when nonvolatile.  It follows only already-proven
+readonly private callees.  Pointer-based, far/externally selected, volatile,
+unknown, recursive, and indirect work remain conservative.  Dead-result call
+removal consumes this narrower semantic fact, while the original frame-only
+purity predicate continues to govern cloning.
+
+The fail-first C regression now emits `discardSample` as `mov ax, 7` with no
+`_sample` call or body.  Its volatile counterpart retains
+`call _sampleVolatile`; the Tier 1 MIR test independently rejects volatile
+and global-store bodies.  Focused checks pass (`2 passed`, `0.14s`); the
+bounded Tier 1 rerun passes (`192 passed`, `31 deselected`, `1.64s`).  This advances Phase 6's
+user-procedure readonly and dead-call work only.  Nocapture/writeonly/noreturn
+inference, recursive SCC handling, indirect calls, and public/address-taken
+procedure facts remain unfinished.  GCC/LLVM listings remain best-case
+flat-i386 structural references; BCC/WC medium-model listings remain the
+authority for ABI, segments, legal forms and OMF linkage.
 
 ### 79. MIR-derived constant call-site cloning — 2026-09-18
 
