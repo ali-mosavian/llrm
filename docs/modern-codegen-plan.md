@@ -26,9 +26,34 @@ iteration updates this file in the same commit.
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
 | Loop optimization | partial | exact pre- and post-tested recurrences, composed pointer recurrences, formula costing, specialization, peeling and exact unrolling exist; versioning, rotation and broad pressure forecasting remain. |
 | Whole-module optimization | partial | summaries, direct private readonly-effect proofs, constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
-| Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing, conservative later-core/P5 scheduling, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
+| Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 81. Frame-LEA scheduling — 2026-09-18
+
+The P5 scheduler treated every `lea` as a memory boundary, leaving
+`mov di,si; lea bx,[bp-4]` in source order even though the LEA reads only BP,
+writes BX, and can issue in Pentium's U pipe alongside the independent V-pipe
+move.  That was an over-conservative representation boundary: unlike a load,
+the selected frame-address LEA has no memory, segment-state, fault, or
+relocation effect.
+
+The safe scheduler window now admits exactly a one-source, non-relocated
+`FRAME` address LEA with ordinary GPR base/index lanes.  Its latency uses the
+audited `lea` profile entry and P5 classifies it as U-only.  Symbolic,
+non-frame, far/segment-selected, stack, memory, call, x87, source-mapped
+allocator-artifact, and control forms remain boundaries.  Thus this is a
+physical LIR dependency fact; no MIR pass gains an opcode or register name.
+
+The fail-first scheduler regression now places the frame LEA before its
+independent move on P5, making the pair eligible.  Its negative companion
+proves a non-frame symbolic address is still refused.  Focused scheduler
+checks pass (`8 passed`, `0.05s`), and Tier 1 passes (`194 passed`, `31
+deselected`, `1.67s`).  This is a narrow Phase 7 scheduling increment, not a claim of memory
+pairing, x87/segment scheduling, or a complete issue model.  GCC/LLVM remain
+best-case flat-i386 structural references; BCC/WC medium-model listings
+remain authoritative for address legality and ABI behavior.
 
 ### 80. Direct private readonly-effect elimination — 2026-09-18
 

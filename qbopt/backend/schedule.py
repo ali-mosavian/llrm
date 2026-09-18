@@ -18,6 +18,7 @@ from qbopt.backend import cpu as targets
 from qbopt.model import ir
 from qbopt.model import lir
 from qbopt.model.passes import LIRTransform
+from qbopt.objectfile.module import Space
 
 
 _GENERAL = frozenset(
@@ -60,10 +61,23 @@ def _safe(one: lir.Insn) -> "tuple[frozenset, frozenset] | None":
             ir.Operation.COMPARE,
             ir.Operation.EXTEND,
             ir.Operation.FUNNEL,
+            ir.Operation.ADDRESS,
         }
         or not what.dests
         or any(not isinstance(where, ir.Reg) for where in what.dests)
-        or any(not isinstance(where, (ir.Reg, ir.Imm)) for where in what.sources)
+        or (
+            what.op is not ir.Operation.ADDRESS
+            and any(not isinstance(where, (ir.Reg, ir.Imm)) for where in what.sources)
+        )
+        or (
+            what.op is ir.Operation.ADDRESS
+            and (
+                len(what.sources) != 1
+                or not isinstance(what.sources[0], ir.Address)
+                or what.sources[0].addr is None
+                or what.sources[0].addr.space is not Space.FRAME
+            )
+        )
         or any(isinstance(where, ir.Imm) and where.address is not None for where in what.sources)
         or one.clobbers
         or one.clobbers_high
@@ -80,6 +94,10 @@ def _safe(one: lir.Insn) -> "tuple[frozenset, frozenset] | None":
     ):
         return None
     registers = [where.register for where in (*what.dests, *what.sources) if isinstance(where, ir.Reg)]
+    if what.op is ir.Operation.ADDRESS:
+        address = what.sources[0]
+        assert isinstance(address, ir.Address)
+        registers.extend(register for register in (address.through, address.index) if register is not Register.NONE)
     if any(RegisterExt.full_register32(register) not in _GENERAL for register in registers):
         return None
     effects = _register_effects(one, flags=True)
@@ -95,6 +113,8 @@ def _form(one: lir.Insn) -> str:
     """The audited profile key for a safe selected form, or ``unknown``."""
     assert one.what is not None
     what = one.what
+    if what.op is ir.Operation.ADDRESS:
+        return "lea"
     if what.name == "imul":
         return "imul_r32" if any(where.width == 4 for where in (*what.dests, *what.sources)) else "mul_r16"
     if what.name in {"mov", "movsx", "movzx"}:
@@ -191,6 +211,8 @@ def _pair_class(one: lir.Insn) -> str:
         return "u"
     if one.what.name == "imul" or any(isinstance(where, ir.Imm) for where in one.what.sources):
         return "np"
+    if one.what.op is ir.Operation.ADDRESS:
+        return "u"
     if one.what.name in {"shl", "shr", "sar", "rol", "ror"}:
         return "u"
     return "uv"

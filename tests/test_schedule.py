@@ -6,6 +6,8 @@ from qbopt.backend import cpu
 from qbopt.backend import schedule
 from qbopt.model import ir
 from qbopt.model import lir
+from qbopt.objectfile.module import Addr
+from qbopt.objectfile.module import Space
 
 
 def _insn(at: int, operation: ir.Operation, name: str, dests, sources) -> lir.Insn:
@@ -106,6 +108,43 @@ def test_pentium_orders_a_prefixed_move_before_its_uv_pair() -> None:
     result = schedule.scheduled(_body(pairable, u_only), cpu.profile("P5"))
 
     assert [one.what.dests[0].register for one in result.insns] == [Register.EAX, Register.DI]
+
+
+def test_pentium_pairs_a_frame_lea_before_an_independent_register_move() -> None:
+    """P5 left ``mov di,si; lea bx,[bp-4]`` unpaired by treating LEA as a load."""
+    move = _insn(
+        0,
+        ir.Operation.MOVE,
+        "mov",
+        (ir.Reg(Register.DI, 2),),
+        (ir.Reg(Register.SI, 2),),
+    )
+    address = ir.Address(Addr(Space.FRAME, -4), Register.BP, offset=-4, disp_width=1)
+    lea = _insn(
+        1,
+        ir.Operation.ADDRESS,
+        "lea",
+        (ir.Reg(Register.BX, 2),),
+        (address,),
+    )
+
+    result = schedule.scheduled(_body(move, lea), cpu.profile("P5"))
+
+    assert [one.what.name for one in result.insns] == ["lea", "mov"]
+
+
+def test_scheduler_keeps_symbolic_or_nonframe_addresses_out_of_its_window() -> None:
+    """A LEA with a non-frame symbol owns relocation/segment meaning, unlike a frame address."""
+    address = ir.Address(Addr(Space.SEGMENT, 0, 1), Register.BX, offset=0, disp_width=2)
+    lea = _insn(
+        1,
+        ir.Operation.ADDRESS,
+        "lea",
+        (ir.Reg(Register.DI, 2),),
+        (address,),
+    )
+
+    assert schedule._safe(lea) is None
 
 
 def test_flag_writers_remain_in_program_order() -> None:
