@@ -859,32 +859,36 @@ def _rebuilt(name: str) -> list[tuple[int, str]]:
     return [(one.ip, shown.format(one)) for one in Decoder(16, code, ip=0)]
 
 
-@pytest.mark.xfail(
-    reason='a copy no longer leaves a loop at all. The guard was "every source is '
-    'a register", so a constant load was real work and could go. Tried again '
-    "after the hoist gave what leaves a loop its own variable, and hotlop still "
-    "printed 0 for 630 on nine of twelve configurations -- so the register was "
-    "never the whole of it, and what refuses the counter's own initialiser has "
-    "to be found before this can be relaxed.",
-    strict=True,
-)
 def test_a_constant_product_leaves_the_loop() -> None:
-    """`n * k` from two constants is not computed twenty times.
+    """HOTLOP's literal product and recurrence fold to its final 630 output.
 
-    A widening `imul` defines dx:ax. consts._defined refused anything with
-    two results, so the product was never a fact and could not be folded,
-    and the liveness had to see that the dx it reads is only the previous
-    contents of the register it writes -- read exactly as much as the half
-    it feeds, which is not at all.
+    The legacy byte-rewriter test assumed an intermediate jump over a loop.
+    Fresh LIR emission correctly removes the entire literal loop, so MIR at
+    the public emission boundary is the stable evidence: no multiply or
+    natural loop remains, and PRINT receives the independently known 630.
     """
-    seen = _rebuilt("hotlop-p-g2")
-    assert not [text for _, text in seen if text.startswith("imul")], "the multiply is still there"
-    # 21, as an immediate, in whatever register the allocation chose -- and
-    # outside the loop. Naming the register here would be testing the shape
-    # of the fix rather than the thing that was wrong.
-    start = next(i for i, (_, text) in enumerate(seen) if text.startswith("jmp"))
-    before = [text for _, text in seen[:start]]
-    assert [text for text in before if text.endswith(",15h")], f"7 * 3 was not folded: {before}"
+    from qbopt import wholeseg
+    from qbopt.analysis import loops
+
+    states = []
+
+    def watch(stage, name, body):
+        if isinstance(body, mir.MirBody):
+            states.append(body)
+
+    result = wholeseg.emitted(Path("fixtures/omf/hotlop-p-g2.obj").read_bytes(), watch=watch)
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    body = states[-1]
+    assert not loops.loops(body.blocks, body.entry)
+    assert not [op for block in body.blocks for op in block.ops if op.kind is mir.Kind.MUL]
+    assert any(
+        arg == mir.Const(630, arg.width)
+        for block in body.blocks
+        for op in block.ops
+        if op.kind is mir.Kind.ARG
+        for arg in op.args
+        if isinstance(arg, mir.Const)
+    )
 
 
 def test_an_invariant_multiply_leaves_a_loop_it_cannot_be_folded_out_of() -> None:

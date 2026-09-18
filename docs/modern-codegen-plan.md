@@ -928,3 +928,21 @@ invariant address formation, then exit-store sinking—without treating a
 post-unroll listing as the proof.  GCC/LLVM listings remain advisory flat
 i386 structural references; BCC/WC medium-model output remains the legality
 authority for the emitted addressing form.
+
+### 44. HOTLOP fresh-emitter regression — 2026-09-18
+
+The historical HOTLOP invariant-product xfail was run fail-first and did not
+find an allocator failure: `imul` was already absent.  It failed only when
+the retired byte-rewriter assertion searched for a jump over a loop that the
+fresh emitter now folds away completely.  Raw fresh emission confirms a
+single straight-line body rather than a retained loop.
+
+The regression now observes MIR at the public fresh-emission boundary.  It
+requires no natural loop and no integer multiply, then verifies the known
+literal result reaches the PRINT argument as 630.  It passes (`1 passed`,
+`0.22s`).  This retires a legacy-path listing assumption and confirms that
+the Phase-5 loop cleanup is already stronger for fully literal HOTLOP; it
+does not claim progress on the Phase-4 pressure problem exercised by dynamic
+HOTLPX and PRESS.  GCC/LLVM listings remain advisory flat-i386 structural
+references, and BCC/WC medium-model output remains the emitted-form legality
+authority.
