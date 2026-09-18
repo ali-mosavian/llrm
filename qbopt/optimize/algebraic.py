@@ -9,6 +9,7 @@ from qbopt.analysis import consts
 def simplified(body: mir.MirBody, wanted: set[mir.Value], wide: set[mir.Value]) -> mir.MirBody:
     from qbopt.optimize import wholephis
     from qbopt.optimize import wholestores
+
     body = wholestores.joined(wholephis.joined(body))
     body = _halved(_divisions(body))
     mentioned = {value for block in body.blocks for op in block.ops for value in op.uses if value not in op.merges} | {
@@ -16,8 +17,12 @@ def simplified(body: mir.MirBody, wanted: set[mir.Value], wide: set[mir.Value]) 
     }
     mentioned |= {value for block in body.blocks for op in block.ops for value in _operands_read(op)}
     definitions = {value: op for block in body.blocks for op in block.ops for value in op.defines}
-    uses = Counter(value for block in body.blocks for op in block.ops
-                   for value in _operands_read(op) | (set(op.uses) - op.merges.keys()))
+    uses = Counter(
+        value
+        for block in body.blocks
+        for op in block.ops
+        for value in _operands_read(op) | (set(op.uses) - op.merges.keys())
+    )
     uses.update(value for block in body.blocks for phi in block.phis for value in phi.incoming.values())
 
     def simplify(op):
@@ -37,10 +42,7 @@ def simplified(body: mir.MirBody, wanted: set[mir.Value], wide: set[mir.Value]) 
         blocks=tuple(
             replace(
                 block,
-                ops=tuple(
-                    simplify(op)
-                    for op in block.ops
-                ),
+                ops=tuple(simplify(op) for op in block.ops),
             )
             for block in body.blocks
         ),
@@ -72,26 +74,46 @@ def simplified(body: mir.MirBody, wanted: set[mir.Value], wide: set[mir.Value]) 
 
 def _negated_difference(op: mir.Op, definitions: dict, wanted: set[mir.Value], uses: Counter) -> mir.Op:
     """Negating a single-use modular difference reverses its operands."""
-    if (op.kind is not mir.Kind.NEG or op.loads or op.stores or op.barrier or op.merges
-        or len(op.args) != 1 or len(op.results) != 1
-        or not all(isinstance(arg, mir.Held) for arg in (*op.args, *op.results))):
+    if (
+        op.kind is not mir.Kind.NEG
+        or op.loads
+        or op.stores
+        or op.barrier
+        or op.merges
+        or len(op.args) != 1
+        or len(op.results) != 1
+        or not all(isinstance(arg, mir.Held) for arg in (*op.args, *op.results))
+    ):
         return op
     source, result = op.args[0], op.results[0]
     if source.width != result.width or uses[source.value] != 1:
         return op
     difference = definitions.get(source.value)
-    if (difference is None or difference.kind is not mir.Kind.SUB or difference.loads or difference.stores
-        or difference.barrier or difference.merges or difference.results != (source,)
+    if (
+        difference is None
+        or difference.kind is not mir.Kind.SUB
+        or difference.loads
+        or difference.stores
+        or difference.barrier
+        or difference.merges
+        or difference.results != (source,)
         or len(difference.args) != 2
-        or any(not isinstance(arg, (mir.Held, mir.Const)) or arg.width != result.width
-               for arg in difference.args)
-        or any(value in wanted for one in (op, difference) for value in one.defines
-               if value != one.results[0].value)):
+        or any(not isinstance(arg, (mir.Held, mir.Const)) or arg.width != result.width for arg in difference.args)
+        or any(value in wanted for one in (op, difference) for value in one.defines if value != one.results[0].value)
+    ):
         return op
     args = tuple(reversed(difference.args))
-    return replace(op, kind=mir.Kind.SUB, name="sub", op=ir.Operation.BINARY, args=args,
-                   defines=(result.value,), uses=tuple(arg.value for arg in args if isinstance(arg, mir.Held)),
-                   source_backed=False, raised=None)
+    return replace(
+        op,
+        kind=mir.Kind.SUB,
+        name="sub",
+        op=ir.Operation.BINARY,
+        args=args,
+        defines=(result.value,),
+        uses=tuple(arg.value for arg in args if isinstance(arg, mir.Held)),
+        source_backed=False,
+        raised=None,
+    )
 
 
 def _shared_shifts(body: mir.MirBody, wanted: set[mir.Value]) -> mir.MirBody:
@@ -133,10 +155,18 @@ def _shared_shifts(body: mir.MirBody, wanted: set[mir.Value]) -> mir.MirBody:
 
 
 def _scale(op: mir.Op, wanted: set[mir.Value], tied: bool = False):
-    if (op.kind not in (mir.Kind.MUL, mir.Kind.SHL) or op.loads or op.stores or op.barrier
-        or op.merges and (not tied or mir.partial(op))
-        or len(op.args) != 2 or len(op.results) != 1 or not isinstance(op.results[0], mir.Held)
-        or any(value in wanted for value in op.defines if value != op.results[0].value)):
+    if (
+        op.kind not in (mir.Kind.MUL, mir.Kind.SHL)
+        or op.loads
+        or op.stores
+        or op.barrier
+        or op.merges
+        and (not tied or mir.partial(op))
+        or len(op.args) != 2
+        or len(op.results) != 1
+        or not isinstance(op.results[0], mir.Held)
+        or any(value in wanted for value in op.defines if value != op.results[0].value)
+    ):
         return None
     source, factor = op.args
     if not isinstance(source, mir.Held) or not isinstance(factor, mir.Const) or source.width != op.results[0].width:
@@ -162,20 +192,39 @@ def _scaled_chain(op: mir.Op, definitions: dict, wanted: set[mir.Value], uses: C
         return op
     source, initial = first
     factor = consts.masked(initial * factor, source.width)
-    return replace(op, kind=mir.Kind.MUL, args=(source, mir.Const(factor, source.width)),
-                   defines=(op.results[0].value,), uses=(source.value,), source_backed=False, raised=None)
+    return replace(
+        op,
+        kind=mir.Kind.MUL,
+        args=(source, mir.Const(factor, source.width)),
+        defines=(op.results[0].value,),
+        uses=(source.value,),
+        source_backed=False,
+        raised=None,
+    )
 
 
 def _offset(op: mir.Op, wanted: set[mir.Value]):
-    if (op.kind not in (mir.Kind.ADD, mir.Kind.SUB) or op.loads or op.stores or op.barrier or op.merges
-        or len(op.args) != 2 or len(op.results) != 1 or not isinstance(op.results[0], mir.Held)
-        or any(value in wanted for value in op.defines if value != op.results[0].value)):
+    if (
+        op.kind not in (mir.Kind.ADD, mir.Kind.SUB)
+        or op.loads
+        or op.stores
+        or op.barrier
+        or op.merges
+        or len(op.args) != 2
+        or len(op.results) != 1
+        or not isinstance(op.results[0], mir.Held)
+        or any(value in wanted for value in op.defines if value != op.results[0].value)
+    ):
         return None
     source, amount = op.args
     if op.kind is mir.Kind.ADD and isinstance(source, mir.Const):
         source, amount = amount, source
-    if (not isinstance(source, mir.Held) or not isinstance(amount, mir.Const)
-        or source.width != amount.width or source.width != op.results[0].width):
+    if (
+        not isinstance(source, mir.Held)
+        or not isinstance(amount, mir.Const)
+        or source.width != amount.width
+        or source.width != op.results[0].width
+    ):
         return None
     return source, amount.n if op.kind is mir.Kind.ADD else -amount.n
 
@@ -194,17 +243,23 @@ def _offset_chain(op: mir.Op, definitions: dict, wanted: set[mir.Value], uses: C
         return op
     source, initial = first
     amount = consts.masked(initial + amount, source.width)
-    return replace(op, kind=mir.Kind.ADD, name="add", op=ir.Operation.BINARY,
-                   args=(source, mir.Const(amount, source.width)),
-                   defines=(op.results[0].value,), uses=(source.value,), source_backed=False, raised=None)
+    return replace(
+        op,
+        kind=mir.Kind.ADD,
+        name="add",
+        op=ir.Operation.BINARY,
+        args=(source, mir.Const(amount, source.width)),
+        defines=(op.results[0].value,),
+        uses=(source.value,),
+        source_backed=False,
+        raised=None,
+    )
 
 
 _ASSOCIATIVE_BITS = frozenset({mir.Kind.AND, mir.Kind.OR, mir.Kind.XOR})
 
 
-def _bitwise(
-    op: mir.Op, wanted: set[mir.Value], *, preserve_flags: bool = False
-) -> tuple[mir.Held, int] | None:
+def _bitwise(op: mir.Op, wanted: set[mir.Value], *, preserve_flags: bool = False) -> tuple[mir.Held, int] | None:
     """A pure fixed-width bitwise operation with one constant operand."""
     if (
         op.kind not in _ASSOCIATIVE_BITS
@@ -262,16 +317,24 @@ def _bitwise_chain(op: mir.Op, definitions: dict, wanted: set[mir.Value], uses: 
 
 def _recombined(op: mir.Op, definitions: dict) -> mir.Op:
     """Joining both extracted halves of one value is that value, without a round trip."""
-    if (op.kind is not mir.Kind.CONCAT or op.loads or op.stores or op.barrier
-        or len(op.args) != 2 or len(op.results) != 1
-        or not isinstance(op.results[0], mir.Held) or op.results[0].width != 4
-        or op.defines != (op.results[0].value,)):
+    if (
+        op.kind is not mir.Kind.CONCAT
+        or op.loads
+        or op.stores
+        or op.barrier
+        or len(op.args) != 2
+        or len(op.results) != 1
+        or not isinstance(op.results[0], mir.Held)
+        or op.results[0].width != 4
+        or op.defines != (op.results[0].value,)
+    ):
         return op
     original = mir.extracted_whole(*op.args, definitions)
     if original is None:
         return op
-    return replace(op, kind=mir.Kind.COPY, args=(original,), uses=(original.value,),
-                   merges={}, source_backed=False, raised=None)
+    return replace(
+        op, kind=mir.Kind.COPY, args=(original,), uses=(original.value,), merges={}, source_backed=False, raised=None
+    )
 
 
 def _redundant_extension(op: mir.Op, definitions: dict) -> mir.Op:
@@ -283,46 +346,79 @@ def _redundant_extension(op: mir.Op, definitions: dict) -> mir.Op:
     every added bit equals the original sign bit. Mixed signedness is not
     interchangeable and is deliberately excluded.
     """
-    if (op.kind not in (mir.Kind.ZERO_EXTEND, mir.Kind.SIGN_EXTEND)
-        or op.loads or op.stores or op.barrier or op.merges
-        or len(op.args) != 1 or len(op.results) != 1
+    if (
+        op.kind not in (mir.Kind.ZERO_EXTEND, mir.Kind.SIGN_EXTEND)
+        or op.loads
+        or op.stores
+        or op.barrier
+        or op.merges
+        or len(op.args) != 1
+        or len(op.results) != 1
         or not isinstance(op.args[0], mir.Held)
         or not isinstance(op.results[0], mir.Held)
-        or op.defines != (op.results[0].value,)):
+        or op.defines != (op.results[0].value,)
+    ):
         return op
     viewed, result = op.args[0], op.results[0]
     previous = definitions.get(viewed.value)
-    if (previous is None or previous.kind is not op.kind
-        or previous.loads or previous.stores or previous.barrier or previous.merges
-        or len(previous.args) != 1 or len(previous.results) != 1
+    if (
+        previous is None
+        or previous.kind is not op.kind
+        or previous.loads
+        or previous.stores
+        or previous.barrier
+        or previous.merges
+        or len(previous.args) != 1
+        or len(previous.results) != 1
         or not isinstance(previous.results[0], mir.Held)
         or previous.results[0].value != viewed.value
-        or previous.defines != (viewed.value,)):
+        or previous.defines != (viewed.value,)
+    ):
         return op
     source_width = getattr(previous.args[0], "width", None)
     established = previous.results[0].width
     if source_width is None or not source_width <= viewed.width < result.width <= established:
         return op
     known = mir.Held(viewed.value, result.width)
-    return replace(op, kind=mir.Kind.COPY, args=(known,), uses=(viewed.value,),
-                   merges={}, source_backed=False, raised=None)
+    return replace(
+        op, kind=mir.Kind.COPY, args=(known,), uses=(viewed.value,), merges={}, source_backed=False, raised=None
+    )
 
 
 def _zero_difference(op: mir.Op, definitions: dict) -> mir.Op:
     """``0 - x`` is the unary modular negation of x, with identical flags."""
-    if (op.kind is not mir.Kind.SUB or op.loads or op.stores or op.barrier or op.merges
-        or len(op.args) != 2 or len(op.results) != 1
-        or not isinstance(op.args[1], mir.Held) or not isinstance(op.results[0], mir.Held)
-        or any(not value.flags for value in op.defines if value != op.results[0].value)):
+    if (
+        op.kind is not mir.Kind.SUB
+        or op.loads
+        or op.stores
+        or op.barrier
+        or op.merges
+        or len(op.args) != 2
+        or len(op.results) != 1
+        or not isinstance(op.args[1], mir.Held)
+        or not isinstance(op.results[0], mir.Held)
+        or any(not value.flags for value in op.defines if value != op.results[0].value)
+    ):
         return op
     zero, source = op.args
     result = op.results[0]
-    if (zero.width != source.width or source.width != result.width
+    if (
+        zero.width != source.width
+        or source.width != result.width
         or set(op.uses) != {arg.value for arg in op.args if isinstance(arg, mir.Held)}
-        or not _copied_zero(zero, definitions)):
+        or not _copied_zero(zero, definitions)
+    ):
         return op
-    return replace(op, kind=mir.Kind.NEG, name="neg", op=ir.Operation.UNARY,
-                   args=(source,), uses=(source.value,), source_backed=False, raised=None)
+    return replace(
+        op,
+        kind=mir.Kind.NEG,
+        name="neg",
+        op=ir.Operation.UNARY,
+        args=(source,),
+        uses=(source.value,),
+        source_backed=False,
+        raised=None,
+    )
 
 
 def _copied_zero(arg: mir.Arg, definitions: dict) -> bool:
@@ -332,20 +428,36 @@ def _copied_zero(arg: mir.Arg, definitions: dict) -> bool:
     while isinstance(arg, mir.Held) and arg.value not in seen:
         seen.add(arg.value)
         made = definitions.get(arg.value)
-        if (made is None or made.kind is not mir.Kind.COPY
-            or made.loads or made.stores or made.barrier or made.merges
-            or made.results != (arg,) or made.defines != (arg.value,)
-            or len(made.args) != 1 or getattr(made.args[0], "width", None) != width):
+        if (
+            made is None
+            or made.kind is not mir.Kind.COPY
+            or made.loads
+            or made.stores
+            or made.barrier
+            or made.merges
+            or made.results != (arg,)
+            or made.defines != (arg.value,)
+            or len(made.args) != 1
+            or getattr(made.args[0], "width", None) != width
+        ):
             return False
         arg = made.args[0]
     return isinstance(arg, mir.Const) and arg.width == width and consts.masked(arg.n, width) == 0
 
 
 def _halves(op: mir.Op):
-    if (op.kind is not mir.Kind.CONCAT or op.loads or op.stores or op.barrier or len(op.args) != 2
+    if (
+        op.kind is not mir.Kind.CONCAT
+        or op.loads
+        or op.stores
+        or op.barrier
+        or len(op.args) != 2
         or not all(isinstance(arg, (mir.Held, mir.Const)) and arg.width == 2 for arg in op.args)
-        or len(op.results) != 1 or not isinstance(op.results[0], mir.Held) or op.results[0].width != 4
-        or op.defines != (op.results[0].value,)):
+        or len(op.results) != 1
+        or not isinstance(op.results[0], mir.Held)
+        or op.results[0].width != 4
+        or op.defines != (op.results[0].value,)
+    ):
         return None
     return op.args
 
@@ -357,23 +469,37 @@ def _takes_halves(op: mir.Op, whole: mir.Held, readers: dict) -> bool:
     match op.kind:
         case mir.Kind.STORE:
             ref = op.stores[0] if len(op.stores) == 1 else None
-            return (op.args == (whole,) and not op.defines and ref is not None and ref.width == 4
-                    and ref.addr is not None and whole.value not in (ref.base, ref.segment))
+            return (
+                op.args == (whole,)
+                and not op.defines
+                and ref is not None
+                and ref.width == 4
+                and ref.addr is not None
+                and whole.value not in (ref.base, ref.segment)
+            )
         case mir.Kind.ARG:
             return op.args == (whole,) and not op.stores and not op.defines
         case mir.Kind.SUB:
             # Only the zero flag of `h | l` agrees with `whole - 0`.
-            return (op.args == (whole, mir.Const(0, 4)) and not op.stores and not op.results
-                    and all(value.flags for value in op.defines)
-                    and all(reader.kind is mir.Kind.BRANCH and reader.test in (mir.Kind.EQ, mir.Kind.NE)
-                            for value in op.defines for reader in readers.get(value, ())))
+            return (
+                op.args == (whole, mir.Const(0, 4))
+                and not op.stores
+                and not op.results
+                and all(value.flags for value in op.defines)
+                and all(
+                    reader.kind is mir.Kind.BRANCH and reader.test in (mir.Kind.EQ, mir.Kind.NE)
+                    for value in op.defines
+                    for reader in readers.get(value, ())
+                )
+            )
     return False
 
 
 def _halved(body: mir.MirBody) -> mir.MirBody:
     """A value joined from two words, read only where words will do, is never joined."""
-    joins = {op.results[0].value: halves for block in body.blocks for op in block.ops
-             if (halves := _halves(op)) is not None}
+    joins = {
+        op.results[0].value: halves for block in body.blocks for op in block.ops if (halves := _halves(op)) is not None
+    }
     if not joins:
         return body
     readers: dict = {}
@@ -382,8 +508,11 @@ def _halved(body: mir.MirBody) -> mir.MirBody:
             for value in _operands_read(op) | set(op.uses):
                 readers.setdefault(value, []).append(op)
     phied = {value for block in body.blocks for phi in block.phis for value in phi.incoming.values()}
-    split = {value: halves for value, halves in joins.items() if value not in phied and all(
-        _takes_halves(op, mir.Held(value, 4), readers) for op in readers.get(value, ()))}
+    split = {
+        value: halves
+        for value, halves in joins.items()
+        if value not in phied and all(_takes_halves(op, mir.Held(value, 4), readers) for op in readers.get(value, ()))
+    }
     if not split:
         return body
     values = {value for block in body.blocks for op in block.ops for value in (*op.defines, *op.uses)}
@@ -402,27 +531,55 @@ def _halved(body: mir.MirBody) -> mir.MirBody:
 
         def reads(*args, ref=None):
             held = [arg.value for arg in args if isinstance(arg, mir.Held)]
-            return tuple(dict.fromkeys((*held, *(part for part in (ref.base, ref.segment) if part is not None)) if ref else held))
+            return tuple(
+                dict.fromkeys((*held, *(part for part in (ref.base, ref.segment) if part is not None)) if ref else held)
+            )
+
         match op.kind:
             case mir.Kind.STORE:
                 ref = op.stores[0]
                 words = ((low, replace(ref, width=2)), (high, replace(ref, addr=ref.addr.plus(2), width=2)))
-                return tuple(replace(op, args=(word,), results=(mir.Cell(cell),), stores=(cell,),
-                                     uses=reads(word, ref=cell), **(later if index else fresh))
-                             for index, (word, cell) in enumerate(words))
+                return tuple(
+                    replace(
+                        op,
+                        args=(word,),
+                        results=(mir.Cell(cell),),
+                        stores=(cell,),
+                        uses=reads(word, ref=cell),
+                        **(later if index else fresh),
+                    )
+                    for index, (word, cell) in enumerate(words)
+                )
             case mir.Kind.ARG:
-                return tuple(replace(op, args=(word,), uses=reads(word), **(later if index else fresh))
-                             for index, word in enumerate((high, low)))
+                return tuple(
+                    replace(op, args=(word,), uses=reads(word), **(later if index else fresh))
+                    for index, word in enumerate((high, low))
+                )
             case mir.Kind.SUB:
                 serial += 1
                 variable += 1
                 result = mir.Held(mir.Value(serial, op.at, variable=variable, version=1), 2)
-                return (replace(op, kind=mir.Kind.OR, name="or", op=ir.Operation.BINARY, args=(high, low),
-                                results=(result,), defines=(result.value, *op.defines), uses=reads(high, low), **fresh),)
+                return (
+                    replace(
+                        op,
+                        kind=mir.Kind.OR,
+                        name="or",
+                        op=ir.Operation.BINARY,
+                        args=(high, low),
+                        results=(result,),
+                        defines=(result.value, *op.defines),
+                        uses=reads(high, low),
+                        **fresh,
+                    ),
+                )
         return (op,)
 
-    return replace(body, blocks=tuple(
-        replace(block, ops=tuple(one for op in block.ops for one in rewritten(op))) for block in body.blocks))
+    return replace(
+        body,
+        blocks=tuple(
+            replace(block, ops=tuple(one for op in block.ops for one in rewritten(op))) for block in body.blocks
+        ),
+    )
 
 
 def _shift_chain(op: mir.Op, definitions: dict, wanted: set[mir.Value], uses: Counter) -> mir.Op:
@@ -441,16 +598,25 @@ def _shift_chain(op: mir.Op, definitions: dict, wanted: set[mir.Value], uses: Co
     ):
         return op
     original, first_count = previous.args
-    if (not isinstance(original, mir.Held) or not isinstance(first_count, mir.Const)
-        or previous.results[0] != source or op.results[0].width != source.width or original.width != source.width
-        or any(value in wanted for value in op.defines if value != op.results[0].value)):
+    if (
+        not isinstance(original, mir.Held)
+        or not isinstance(first_count, mir.Const)
+        or previous.results[0] != source
+        or op.results[0].width != source.width
+        or original.width != source.width
+        or any(value in wanted for value in op.defines if value != op.results[0].value)
+    ):
         return op
     total = first_count.n + count.n
     if min(first_count.n, count.n) <= 0 or total >= source.width * 8:
         return op
-    return replace(op, args=(original, mir.Const(total, count.width)),
-                   uses=tuple(dict.fromkeys(original.value if value == source.value else value for value in op.uses)),
-                   source_backed=False, raised=None)
+    return replace(
+        op,
+        args=(original, mir.Const(total, count.width)),
+        uses=tuple(dict.fromkeys(original.value if value == source.value else value for value in op.uses)),
+        source_backed=False,
+        raised=None,
+    )
 
 
 def _divisions(body: mir.MirBody) -> mir.MirBody:
@@ -466,12 +632,20 @@ def _divisions(body: mir.MirBody) -> mir.MirBody:
     for block in body.blocks:
         ops = []
         for op in block.ops:
-            if (op.kind is not mir.Kind.DIVMOD or op.loads or op.stores or op.barrier
-                or len(op.args) != 2 or len(op.results) != 2
+            if (
+                op.kind is not mir.Kind.DIVMOD
+                or op.loads
+                or op.stores
+                or op.barrier
+                or len(op.args) != 2
+                or len(op.results) != 2
                 or not all(isinstance(arg, mir.Held) and arg.width == op.args[0].width for arg in op.results)
-                or not isinstance(op.args[0], mir.Held) or op.args[0].width not in (2, 4)
-                or not isinstance(op.args[1], (mir.Held, mir.Const)) or op.args[1].width != op.args[0].width
-                or set(op.defines) != {result.value for result in op.results}):
+                or not isinstance(op.args[0], mir.Held)
+                or op.args[0].width not in (2, 4)
+                or not isinstance(op.args[1], (mir.Held, mir.Const))
+                or op.args[1].width != op.args[0].width
+                or set(op.defines) != {result.value for result in op.results}
+            ):
                 ops.append(op)
                 continue
             width = op.args[0].width
@@ -490,13 +664,20 @@ def _divisions(body: mir.MirBody) -> mir.MirBody:
                     serial += 1
                     variable += 1
                     result = mir.Held(mir.Value(serial, op.at, variable=variable, version=1), width)
-                sequence.append(mir.Op(
-                    op.at, ir.Operation.BINARY, kind.value, (result.value,),
-                    tuple(arg.value for arg in args if isinstance(arg, mir.Held)),
-                    kind=kind, args=args, results=(result,),
-                    id=op.id if not sequence else None,
-                    absorbed=op.absorbed if not sequence else (),
-                ))
+                sequence.append(
+                    mir.Op(
+                        op.at,
+                        ir.Operation.BINARY,
+                        kind.value,
+                        (result.value,),
+                        tuple(arg.value for arg in args if isinstance(arg, mir.Held)),
+                        kind=kind,
+                        args=args,
+                        results=(result,),
+                        id=op.id if not sequence else None,
+                        absorbed=op.absorbed if not sequence else (),
+                    )
+                )
                 return result
 
             dividend = op.args[0]
@@ -553,7 +734,9 @@ def _simplified(op: mir.Op, wanted: set[mir.Value], wide: set[mir.Value]) -> mir
     if op.kind is mir.Kind.CONCAT:
         high, low = op.args
         if isinstance(high, mir.Const) and isinstance(low, mir.Const) and high.width + low.width == result.width:
-            number = ((high.n & ((1 << (high.width * 8)) - 1)) << (low.width * 8)) | (low.n & ((1 << (low.width * 8)) - 1))
+            number = ((high.n & ((1 << (high.width * 8)) - 1)) << (low.width * 8)) | (
+                low.n & ((1 << (low.width * 8)) - 1)
+            )
             return replace(op, kind=mir.Kind.COPY, args=(mir.Const(number, result.width),), uses=())
         return op
     if result.width == 2 and result.value in wide:
@@ -573,7 +756,17 @@ def _simplified(op: mir.Op, wanted: set[mir.Value], wide: set[mir.Value]) -> mir
     mask = (1 << (result.width * 8)) - 1
     number = right.n & ((1 << (right.width * 8)) - 1)
     match op.kind, number:
-        case mir.Kind.ADD | mir.Kind.SUB | mir.Kind.OR | mir.Kind.XOR | mir.Kind.SHL | mir.Kind.SHR | mir.Kind.SAR | mir.Kind.PTR_OFFSET, 0:
+        case (
+            mir.Kind.ADD
+            | mir.Kind.SUB
+            | mir.Kind.OR
+            | mir.Kind.XOR
+            | mir.Kind.SHL
+            | mir.Kind.SHR
+            | mir.Kind.SAR
+            | mir.Kind.PTR_OFFSET,
+            0,
+        ):
             answer = left
         case mir.Kind.MUL, 1:
             answer = left

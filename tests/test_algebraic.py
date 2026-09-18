@@ -16,7 +16,7 @@ def test_nbody_reuses_the_whole_signed_initialization_value():
     path = Path("fixtures/bench/nbody-v-g3.obj")
     body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
     done = algebraic.simplified(body, set(), set())
-    for at in (0x75, 0x9c):
+    for at in (0x75, 0x9C):
         assert not any(op.at == at and op.kind is mir.Kind.CONCAT for block in done.blocks for op in block.ops)
 
 
@@ -49,17 +49,19 @@ def test_nbody_counter_comparison_joins_whole_values_before_the_loop():
     path = Path("fixtures/bench/nbody-v-g3.obj")
     body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
     done = algebraic.simplified(body, set(), set())
-    assert not any(op.at == 0x2fe and op.kind is mir.Kind.CONCAT
-                   for block in done.blocks for op in block.ops)
-    assert any(op.at == 0x2fe and op.kind is mir.Kind.COPY
-               and isinstance(op.args[0], mir.Held) and op.args[0].width == 4
-               for block in done.blocks for op in block.ops)
+    assert not any(op.at == 0x2FE and op.kind is mir.Kind.CONCAT for block in done.blocks for op in block.ops)
+    assert any(
+        op.at == 0x2FE and op.kind is mir.Kind.COPY and isinstance(op.args[0], mir.Held) and op.args[0].width == 4
+        for block in done.blocks
+        for op in block.ops
+    )
     from qbopt.analysis import ssa
+
     existing = {value.variable for value in ssa.values(body)}
     added = [phi for block in done.blocks for phi in block.phis if phi.result.variable not in existing]
     assert added
     assert all(phi.result.variable == value.variable for phi in added for value in phi.incoming.values())
-    header = next(block for block in done.blocks if block.at == 0x2f0)
+    header = next(block for block in done.blocks if block.at == 0x2F0)
     assert not any(phi.result.variable in (1, 3) for phi in header.phis)
     resolved = mir.resolved(done)
     assert isinstance(resolved, mir.MirBody), resolved
@@ -70,17 +72,22 @@ def test_nbody_counter_is_stored_as_one_whole_value():
     path = Path("fixtures/bench/nbody-v-g3.obj")
     body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
     done = algebraic.simplified(body, set(), set())
-    stores = [op for block in done.blocks for op in block.ops
-              if op.at in (0x2f0, 0x2f3) and op.stores]
+    stores = [op for block in done.blocks for op in block.ops if op.at in (0x2F0, 0x2F3) and op.stores]
     assert len(stores) == 1
     assert stores[0].stores[0].width == stores[0].args[0].width == 4
     from qbopt.analysis import loops
+
     found = corpus.loaded(path)
     final = transform.applied(body, found.dgroup, found.calls, blocks=corpus.partitioned(path), found=found)
     counter = stores[0].stores[0].addr
-    loop = next(loop for loop in loops.loops(final.blocks, final.entry) if loop.header == 0x2f0)
-    assert not any(ref.addr == counter for block in final.blocks if block.at in loop.body
-                   for op in block.ops for ref in (*op.loads, *op.stores))
+    loop = next(loop for loop in loops.loops(final.blocks, final.entry) if loop.header == 0x2F0)
+    assert not any(
+        ref.addr == counter
+        for block in final.blocks
+        if block.at in loop.body
+        for op in block.ops
+        for ref in (*op.loads, *op.stores)
+    )
 
 
 @pytest.mark.parametrize("mismatch", ["address", "value", "barrier"])
@@ -88,11 +95,12 @@ def test_whole_store_requires_adjacent_matching_word_writes(mismatch):
     """NBODY's counter store is not permission to combine unrelated or observable writes."""
     from qbopt.optimize import wholephis
     from qbopt.optimize import wholestores
+
     path = Path("fixtures/bench/nbody-v-g3.obj")
     body = wholephis.joined(mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1])
-    header = next(block for block in body.blocks if block.at == 0x2f0)
-    low = next(op for op in header.ops if op.at == 0x2f0 and op.stores)
-    high = next(op for op in header.ops if op.at == 0x2f3 and op.stores)
+    header = next(block for block in body.blocks if block.at == 0x2F0)
+    low = next(op for op in header.ops if op.at == 0x2F0 and op.stores)
+    high = next(op for op in header.ops if op.at == 0x2F3 and op.stores)
     match mismatch:
         case "address":
             ref = high.stores[0]
@@ -101,34 +109,38 @@ def test_whole_store_requires_adjacent_matching_word_writes(mismatch):
             changed = replace(high, args=low.args)
         case "barrier":
             changed = replace(high, kind=mir.Kind.CALL)
-    body = replace(body, blocks=tuple(replace(block, ops=tuple(changed if op is high else op for op in block.ops))
-                                     for block in body.blocks))
+    body = replace(
+        body,
+        blocks=tuple(
+            replace(block, ops=tuple(changed if op is high else op for op in block.ops)) for block in body.blocks
+        ),
+    )
     done = wholestores.joined(body)
-    assert sum(bool(op.stores) for block in done.blocks for op in block.ops if op.at in (0x2f0, 0x2f3)) == 2
+    assert sum(bool(op.stores) for block in done.blocks for op in block.ops if op.at in (0x2F0, 0x2F3)) == 2
 
 
 @pytest.mark.parametrize("mismatch", ["edge", "half", "unknown"])
 def test_whole_counter_phi_requires_every_matching_edge(mismatch):
     """NBODY's comparison must not combine unrelated words or guess a missing incoming value."""
     from qbopt.optimize import wholephis
+
     path = Path("fixtures/bench/nbody-v-g3.obj")
     body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
-    header = next(block for block in body.blocks if block.at == 0x2f0)
+    header = next(block for block in body.blocks if block.at == 0x2F0)
     low = next(phi for phi in header.phis if phi.result.variable == 1)
     high = next(phi for phi in header.phis if phi.result.variable == 3)
     incoming = dict(high.incoming)
     match mismatch:
         case "edge":
-            incoming.pop(0x2e3)
+            incoming.pop(0x2E3)
         case "half":
-            incoming[0x2e3] = low.incoming[0x2e3]
+            incoming[0x2E3] = low.incoming[0x2E3]
         case "unknown":
-            incoming[0xc7] = mir.Value(999999, 0xc7, variable=999999)
-    header = replace(header, phis=tuple(replace(phi, incoming=incoming) if phi is high else phi
-                                       for phi in header.phis))
+            incoming[0xC7] = mir.Value(999999, 0xC7, variable=999999)
+    header = replace(header, phis=tuple(replace(phi, incoming=incoming) if phi is high else phi for phi in header.phis))
     body = replace(body, blocks=tuple(header if block.at == header.at else block for block in body.blocks))
     done = wholephis.joined(body)
-    assert any(op.at == 0x2fe and op.kind is mir.Kind.CONCAT for block in done.blocks for op in block.ops)
+    assert any(op.at == 0x2FE and op.kind is mir.Kind.CONCAT for block in done.blocks for op in block.ops)
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
@@ -136,10 +148,13 @@ def test_sixty_dimensional_zero_offset_needs_no_pointer_arithmetic(tag):
     """NDMAX printed 11,22 correctly but normalized a pointer advanced by zero bytes."""
     from qbopt import wholeseg
     from qbopt.analysis import consts
+
     states = []
+
     def watch(stage, name, state):
         if stage == "mir-widen":
             states.append(state)
+
     result = wholeseg.emitted(Path(f"fixtures/regressions/ndmax-{tag}.obj").read_bytes(), watch=watch)
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     facts = consts.known(states[0])
@@ -156,6 +171,7 @@ def test_hotlpx_scales_by_twenty_without_a_second_multiply(tag):
     from iced_x86 import Mnemonic
 
     from qbopt import wholeseg
+
     result = wholeseg.emitted(Path(f"fixtures/omf/hotlpx-{tag}.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     insns = [one.insn for block in corpus.partitioned(result.data) for one in block.insns]
@@ -175,6 +191,7 @@ def test_spill_folds_closed_loops_to_their_exact_final_constants(tag):
     from iced_x86 import Mnemonic
 
     from qbopt import wholeseg
+
     result = wholeseg.emitted(Path(f"fixtures/omf/spill-{tag}.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     instructions = [one.insn for block in corpus.partitioned(result.data) for one in block.insns]
@@ -194,12 +211,29 @@ def test_spill_folds_closed_loops_to_their_exact_final_constants(tag):
 def test_offset_composition_preserves_modular_values_and_observers(kind, guard):
     """SPILL's combined increment must preserve wraparound and any observed intermediate."""
     from collections import Counter
+
     source, middle, result = (mir.Value(index, 0) for index in range(1, 4))
     flags = mir.Value(4, 0, flags=True)
-    first = mir.Op(0, ir.Operation.BINARY, "add", (middle,), (source,), kind=mir.Kind.ADD,
-                   args=(mir.Held(source, 2), mir.Const(65530, 2)), results=(mir.Held(middle, 2),))
-    last = mir.Op(1, ir.Operation.BINARY, "add" if kind is mir.Kind.ADD else "sub", (result,), (middle,), kind=kind,
-                  args=(mir.Held(middle, 2), mir.Const(20, 2)), results=(mir.Held(result, 2),))
+    first = mir.Op(
+        0,
+        ir.Operation.BINARY,
+        "add",
+        (middle,),
+        (source,),
+        kind=mir.Kind.ADD,
+        args=(mir.Held(source, 2), mir.Const(65530, 2)),
+        results=(mir.Held(middle, 2),),
+    )
+    last = mir.Op(
+        1,
+        ir.Operation.BINARY,
+        "add" if kind is mir.Kind.ADD else "sub",
+        (result,),
+        (middle,),
+        kind=kind,
+        args=(mir.Held(middle, 2), mir.Const(20, 2)),
+        results=(mir.Held(result, 2),),
+    )
     if guard == "first_flags":
         first = replace(first, defines=(middle, flags))
     if guard == "last_flags":
@@ -299,6 +333,7 @@ def test_addrm_reuses_word_scale_for_long_address(tag):
     from qbopt.objectfile import omf
     from qbopt.frontend import blocks
     from qbopt.objectfile import module
+
     result = wholeseg.emitted(Path(f"fixtures/omf/addrm-{tag}.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
@@ -310,12 +345,29 @@ def test_addrm_reuses_word_scale_for_long_address(tag):
 @pytest.mark.parametrize("guard", ["none", "first_flags", "last_flags", "shared", "width", "merge"])
 def test_scaled_chain_preserves_modular_values_and_observed_intermediates(guard):
     from collections import Counter
+
     source, middle, result = (mir.Value(index, 0) for index in range(1, 4))
     flags = mir.Value(4, 0, flags=True)
-    first = mir.Op(0, ir.Operation.BINARY, "mul", (middle,), (source,), kind=mir.Kind.MUL,
-                   args=(mir.Held(source, 2), mir.Const(32769, 2)), results=(mir.Held(middle, 2),))
-    last = mir.Op(1, ir.Operation.BINARY, "shl", (result,), (middle,), kind=mir.Kind.SHL,
-                  args=(mir.Held(middle, 2), mir.Const(1, 1)), results=(mir.Held(result, 2),))
+    first = mir.Op(
+        0,
+        ir.Operation.BINARY,
+        "mul",
+        (middle,),
+        (source,),
+        kind=mir.Kind.MUL,
+        args=(mir.Held(source, 2), mir.Const(32769, 2)),
+        results=(mir.Held(middle, 2),),
+    )
+    last = mir.Op(
+        1,
+        ir.Operation.BINARY,
+        "shl",
+        (result,),
+        (middle,),
+        kind=mir.Kind.SHL,
+        args=(mir.Held(middle, 2), mir.Const(1, 1)),
+        results=(mir.Held(result, 2),),
+    )
     if guard == "first_flags":
         first = replace(first, defines=(middle, flags))
     if guard == "last_flags":
@@ -339,13 +391,37 @@ def test_shared_shift_requires_available_same_width_value(guard):
     """ADDRM address reuse must preserve live flags, widths, and block availability."""
     source, middle, result, observed = (mir.Value(index, 0) for index in range(1, 5))
     flags = mir.Value(5, 0, flags=True)
-    first = mir.Op(0, ir.Operation.BINARY, "shl", (middle,), (source,), kind=mir.Kind.SHL,
-                   args=(mir.Held(source, 2), mir.Const(1, 1)), results=(mir.Held(middle, 2),))
-    observe = mir.Op(1, ir.Operation.MOVE, "mov", (observed,), (middle,), kind=mir.Kind.COPY,
-                     args=(mir.Held(middle, 2),), results=(mir.Held(observed, 2),))
+    first = mir.Op(
+        0,
+        ir.Operation.BINARY,
+        "shl",
+        (middle,),
+        (source,),
+        kind=mir.Kind.SHL,
+        args=(mir.Held(source, 2), mir.Const(1, 1)),
+        results=(mir.Held(middle, 2),),
+    )
+    observe = mir.Op(
+        1,
+        ir.Operation.MOVE,
+        "mov",
+        (observed,),
+        (middle,),
+        kind=mir.Kind.COPY,
+        args=(mir.Held(middle, 2),),
+        results=(mir.Held(observed, 2),),
+    )
     width = 4 if guard == "width" else 2
-    last = mir.Op(2, ir.Operation.BINARY, "shl", (result,), (source,), kind=mir.Kind.SHL,
-                  args=(mir.Held(source, width), mir.Const(2, 1)), results=(mir.Held(result, width),))
+    last = mir.Op(
+        2,
+        ir.Operation.BINARY,
+        "shl",
+        (result,),
+        (source,),
+        kind=mir.Kind.SHL,
+        args=(mir.Held(source, width), mir.Const(2, 1)),
+        results=(mir.Held(result, width),),
+    )
     if guard == "flags":
         last = replace(last, defines=(result, flags))
     prefix = (first,) if guard == "unused" else (first, observe)
@@ -400,10 +476,14 @@ def test_shared_shift_distinguishes_a_word_tie_from_a_partial_write(partial):
         args=(first_result,),
     )
 
-    done = algebraic._shared_shifts(
-        mir.MirBody(0, (mir.MirBlock(0, (), (first, observe, last), ()),)),
-        set(),
-    ).blocks[0].ops[-1]
+    done = (
+        algebraic._shared_shifts(
+            mir.MirBody(0, (mir.MirBlock(0, (), (first, observe, last), ()),)),
+            set(),
+        )
+        .blocks[0]
+        .ops[-1]
+    )
 
     if partial:
         assert done == last
@@ -422,28 +502,58 @@ def test_nested_combines_row_scale_in_emitted_code(tag):
     from qbopt.objectfile import omf
     from qbopt.frontend import blocks
     from qbopt.objectfile import module
+
     result = wholeseg.emitted(Path(f"fixtures/omf/nested-{tag}.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
-    factors = [one.insn.immediate8to16 for one in blocks.instructions(found)
-               if one.insn.code == Code.IMUL_R16_RM16_IMM8]
-    strides = [one.insn.immediate8to16 for one in blocks.instructions(found)
-               if one.insn.code == Code.ADD_RM16_IMM8]
+    factors = [
+        one.insn.immediate8to16 for one in blocks.instructions(found) if one.insn.code == Code.IMUL_R16_RM16_IMM8
+    ]
+    strides = [one.insn.immediate8to16 for one in blocks.instructions(found) if one.insn.code == Code.ADD_RM16_IMM8]
     assert 12 in factors or 12 in strides
     assert 6 not in factors
 
 
-@pytest.mark.parametrize(("high_offset", "different_source", "recombined"), [(16, False, True), (0, False, False), (16, True, False)])
+@pytest.mark.parametrize(
+    ("high_offset", "different_source", "recombined"), [(16, False, True), (0, False, False), (16, True, False)]
+)
 def test_extracted_halves_recombine_to_the_original_value(high_offset, different_source, recombined) -> None:
     """Nbody split a multiply result and rebuilt it before division, adding stack traffic."""
     source, other, low, high, result = (mir.Value(index, 0) for index in range(1, 6))
+
     def extract(value, original, offset):
-        return mir.Op(0, mir.Synth.HALF_TO_LOW, "extract", (value,), (original,), kind=mir.Kind.EXTRACT,
-                      args=(mir.Held(original, 4), mir.Const(offset, 4)), results=(mir.Held(value, 2),))
-    concat = mir.Op(1, mir.Synth.CONCAT_LOW, "concat", (result,), (high, low), kind=mir.Kind.CONCAT,
-                    args=(mir.Held(high, 2), mir.Held(low, 2)), results=(mir.Held(result, 4),))
-    body = mir.MirBody(0, (mir.MirBlock(0, (), (extract(low, source, 0),
-        extract(high, other if different_source else source, high_offset), concat), ()),))
+        return mir.Op(
+            0,
+            mir.Synth.HALF_TO_LOW,
+            "extract",
+            (value,),
+            (original,),
+            kind=mir.Kind.EXTRACT,
+            args=(mir.Held(original, 4), mir.Const(offset, 4)),
+            results=(mir.Held(value, 2),),
+        )
+
+    concat = mir.Op(
+        1,
+        mir.Synth.CONCAT_LOW,
+        "concat",
+        (result,),
+        (high, low),
+        kind=mir.Kind.CONCAT,
+        args=(mir.Held(high, 2), mir.Held(low, 2)),
+        results=(mir.Held(result, 4),),
+    )
+    body = mir.MirBody(
+        0,
+        (
+            mir.MirBlock(
+                0,
+                (),
+                (extract(low, source, 0), extract(high, other if different_source else source, high_offset), concat),
+                (),
+            ),
+        ),
+    )
     done = algebraic.simplified(body, {result}, set()).blocks[0].ops[-1]
     if recombined:
         assert done.kind is mir.Kind.COPY
@@ -458,26 +568,64 @@ def test_joined_halves_are_consumed_as_halves(mode) -> None:
     pushed; lowered, the join is `push dx; push ax; pop eax`."""
     from qbopt.cfront.raise_hir import Addr
     from qbopt.cfront.raise_hir import Space
+
     low, high, whole, flags, other = (mir.Value(index, 0) for index in range(1, 6))
     flags = mir.Value(4, 0, True)
     K = mir.Kind
     ref = mir.MemRef(Addr(Space.SEGMENT, 8, 5), 4, space=Space.SEGMENT)
     ops = [
-        mir.Op(1, ir.Operation.NOTHING, "", (low, high), (), kind=K.CALL,
-               results=(mir.Held(low, 2), mir.Held(high, 2))),
-        mir.Op(2, ir.Operation.NOTHING, "", (whole,), (high, low), kind=K.CONCAT,
-               args=(mir.Held(high, 2), mir.Held(low, 2)), results=(mir.Held(whole, 4),)),
-        mir.Op(3, ir.Operation.NOTHING, "", (), (whole,), kind=K.STORE,
-               args=(mir.Held(whole, 4),), results=(mir.Cell(ref),), stores=(ref,)),
+        mir.Op(
+            1, ir.Operation.NOTHING, "", (low, high), (), kind=K.CALL, results=(mir.Held(low, 2), mir.Held(high, 2))
+        ),
+        mir.Op(
+            2,
+            ir.Operation.NOTHING,
+            "",
+            (whole,),
+            (high, low),
+            kind=K.CONCAT,
+            args=(mir.Held(high, 2), mir.Held(low, 2)),
+            results=(mir.Held(whole, 4),),
+        ),
+        mir.Op(
+            3,
+            ir.Operation.NOTHING,
+            "",
+            (),
+            (whole,),
+            kind=K.STORE,
+            args=(mir.Held(whole, 4),),
+            results=(mir.Cell(ref),),
+            stores=(ref,),
+        ),
         mir.Op(4, ir.Operation.NOTHING, "", (), (whole,), kind=K.ARG, args=(mir.Held(whole, 4),)),
-        mir.Op(5, ir.Operation.NOTHING, "", (flags,), (whole,), kind=K.SUB,
-               args=(mir.Held(whole, 4), mir.Const(5 if mode == "nonzero" else 0, 4))),
-        mir.Op(6, ir.Operation.NOTHING, "", (), (flags,), kind=K.BRANCH,
-               test=K.LT if mode == "ordered" else K.NE, target=0),
+        mir.Op(
+            5,
+            ir.Operation.NOTHING,
+            "",
+            (flags,),
+            (whole,),
+            kind=K.SUB,
+            args=(mir.Held(whole, 4), mir.Const(5 if mode == "nonzero" else 0, 4)),
+        ),
+        mir.Op(
+            6, ir.Operation.NOTHING, "", (), (flags,), kind=K.BRANCH, test=K.LT if mode == "ordered" else K.NE, target=0
+        ),
     ]
     if mode == "whole_use":
-        ops.insert(5, mir.Op(5, ir.Operation.NOTHING, "", (other,), (whole,), kind=K.SHR,
-                             args=(mir.Held(whole, 4), mir.Const(1, 1)), results=(mir.Held(other, 4),)))
+        ops.insert(
+            5,
+            mir.Op(
+                5,
+                ir.Operation.NOTHING,
+                "",
+                (other,),
+                (whole,),
+                kind=K.SHR,
+                args=(mir.Held(whole, 4), mir.Const(1, 1)),
+                results=(mir.Held(other, 4),),
+            ),
+        )
     body = mir.MirBody(0, (mir.MirBlock(0, (), tuple(ops), ()),))
     done = algebraic.simplified(body, {other}, set()).blocks[0].ops
     readers = [op for op in done if whole in op.uses]
@@ -500,10 +648,10 @@ def test_nbody_multiply_value_survives_into_scaled_division() -> None:
     body = mir.bodies(found, blocks)[0][1]
     done = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
     ops = [op for block in done.blocks for op in block.ops]
-    product = next(op for op in ops if op.at == 0x1cd and op.kind is mir.Kind.MUL).results[0]
-    sign = next(op for op in ops if op.at == 0x1d4 and op.kind is mir.Kind.SAR)
+    product = next(op for op in ops if op.at == 0x1CD and op.kind is mir.Kind.MUL).results[0]
+    sign = next(op for op in ops if op.at == 0x1D4 and op.kind is mir.Kind.SAR)
     assert sign.args[0] == product
-    assert not any(op.at == 0x1d4 and op.kind is mir.Kind.CONCAT for op in ops)
+    assert not any(op.at == 0x1D4 and op.kind is mir.Kind.CONCAT for op in ops)
 
 
 @pytest.mark.parametrize("mode", ["copy", "width_change", "cycle"])
@@ -512,11 +660,27 @@ def test_recombination_follows_only_exact_word_copies(mode):
     source, high, low, copied = (mir.Value(index, 0) for index in range(1, 5))
     definitions = {}
     for value, offset in ((high, 16), (low, 0)):
-        definitions[value] = mir.Op(0, mir.Synth.HALF_TO_LOW, "extract", (value,), (source,),
-            kind=mir.Kind.EXTRACT, args=(mir.Held(source, 4), mir.Const(offset, 4)), results=(mir.Held(value, 2),))
+        definitions[value] = mir.Op(
+            0,
+            mir.Synth.HALF_TO_LOW,
+            "extract",
+            (value,),
+            (source,),
+            kind=mir.Kind.EXTRACT,
+            args=(mir.Held(source, 4), mir.Const(offset, 4)),
+            results=(mir.Held(value, 2),),
+        )
     incoming = copied if mode == "cycle" else low
-    definitions[copied] = mir.Op(1, ir.Operation.MOVE, "mov", (copied,), (incoming,), kind=mir.Kind.COPY,
-        args=(mir.Held(incoming, 4 if mode == "width_change" else 2),), results=(mir.Held(copied, 2),))
+    definitions[copied] = mir.Op(
+        1,
+        ir.Operation.MOVE,
+        "mov",
+        (copied,),
+        (incoming,),
+        kind=mir.Kind.COPY,
+        args=(mir.Held(incoming, 4 if mode == "width_change" else 2),),
+        results=(mir.Held(copied, 2),),
+    )
     answer = mir.extracted_whole(mir.Held(high, 2), mir.Held(copied, 2), definitions)
     assert answer == (mir.Held(source, 4) if mode == "copy" else None)
 
@@ -527,16 +691,40 @@ def test_signed_recombination_compares_copy_sources_symmetrically(mode):
     root, copied, sibling, whole, high = (mir.Value(index, 0) for index in range(1, 6))
     definitions = {}
     for value in (copied, sibling):
-        definitions[value] = mir.Op(0, ir.Operation.MOVE, "mov", (value,), (root,), kind=mir.Kind.COPY,
-            args=(mir.Held(root, 2),), results=(mir.Held(value, 2),))
+        definitions[value] = mir.Op(
+            0,
+            ir.Operation.MOVE,
+            "mov",
+            (value,),
+            (root,),
+            kind=mir.Kind.COPY,
+            args=(mir.Held(root, 2),),
+            results=(mir.Held(value, 2),),
+        )
     if mode == "width_change":
         definitions[copied] = replace(definitions[copied], args=(mir.Held(root, 4),))
     if mode == "barrier":
         definitions[copied] = replace(definitions[copied], op=ir.Operation.BARRIER)
-    definitions[whole] = mir.Op(1, ir.Operation.EXTEND, "sign_extend", (whole,), (copied,),
-        kind=mir.Kind.SIGN_EXTEND, args=(mir.Held(copied, 2),), results=(mir.Held(whole, 4),))
-    definitions[high] = mir.Op(1, mir.Synth.HALF_TO_LOW, "extract", (high,), (whole,),
-        kind=mir.Kind.EXTRACT, args=(mir.Held(whole, 4), mir.Const(16, 4)), results=(mir.Held(high, 2),))
+    definitions[whole] = mir.Op(
+        1,
+        ir.Operation.EXTEND,
+        "sign_extend",
+        (whole,),
+        (copied,),
+        kind=mir.Kind.SIGN_EXTEND,
+        args=(mir.Held(copied, 2),),
+        results=(mir.Held(whole, 4),),
+    )
+    definitions[high] = mir.Op(
+        1,
+        mir.Synth.HALF_TO_LOW,
+        "extract",
+        (high,),
+        (whole,),
+        kind=mir.Kind.EXTRACT,
+        args=(mir.Held(whole, 4), mir.Const(16, 4)),
+        results=(mir.Held(high, 2),),
+    )
     low = copied if mode == "same" else sibling
     if mode == "different":
         low = mir.Value(99, 0)
@@ -550,7 +738,7 @@ def test_nbody_address_shifts_combine_without_an_extra_counter() -> None:
     found = corpus.loaded(path)
     body = mir.bodies(found, corpus.partitioned(path))[0][1]
     done = transform.Algebraic().transform(body)
-    shift = next(op for block in done.blocks for op in block.ops if op.at == 0x11b)
+    shift = next(op for block in done.blocks for op in block.ops if op.at == 0x11B)
     assert shift.kind is mir.Kind.SHL and shift.args[1] == mir.Const(2, 1)
 
 
@@ -563,6 +751,7 @@ def test_nbody_damping_keeps_negation_whole():
     from qbopt.objectfile import omf
     from qbopt.frontend import blocks
     from qbopt.objectfile import module
+
     path = Path("fixtures/regressions/nbody-stack-p-g2.obj")
     body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
     negated = [op for block in body.blocks for op in block.ops if op.kind is mir.Kind.NEG]
@@ -572,8 +761,10 @@ def test_nbody_damping_keeps_negation_whole():
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
     negations = [one.insn for one in blocks.instructions(found) if one.insn.mnemonic == Mnemonic.NEG]
-    assert all(one.op0_register in (Register.EAX, Register.EBX, Register.ECX,
-                                   Register.EDX, Register.ESI, Register.EDI) for one in negations)
+    assert all(
+        one.op0_register in (Register.EAX, Register.EBX, Register.ECX, Register.EDX, Register.ESI, Register.EDI)
+        for one in negations
+    )
 
 
 def test_nbody_damping_reverses_subtraction_without_negation():
@@ -584,6 +775,7 @@ def test_nbody_damping_reverses_subtraction_without_negation():
     from qbopt.objectfile import omf
     from qbopt.frontend import blocks
     from qbopt.objectfile import module
+
     result = wholeseg.emitted(Path("fixtures/regressions/nbody-stack-p-g2.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
@@ -594,12 +786,29 @@ def test_nbody_damping_reverses_subtraction_without_negation():
 def test_reversed_difference_preserves_observed_values_and_flags(guard):
     """NBODY's negated subtraction can be reversed only without duplicating work or changing flags."""
     from collections import Counter
+
     left, right, middle, result = (mir.Value(index, 0) for index in range(1, 5))
     flags = mir.Value(5, 0, flags=True)
-    difference = mir.Op(0, ir.Operation.BINARY, "sub", (middle,), (left, right), kind=mir.Kind.SUB,
-                        args=(mir.Held(left, 4), mir.Held(right, 4)), results=(mir.Held(middle, 4),))
-    negate = mir.Op(1, ir.Operation.UNARY, "neg", (result,), (middle,), kind=mir.Kind.NEG,
-                    args=(mir.Held(middle, 4),), results=(mir.Held(result, 4),))
+    difference = mir.Op(
+        0,
+        ir.Operation.BINARY,
+        "sub",
+        (middle,),
+        (left, right),
+        kind=mir.Kind.SUB,
+        args=(mir.Held(left, 4), mir.Held(right, 4)),
+        results=(mir.Held(middle, 4),),
+    )
+    negate = mir.Op(
+        1,
+        ir.Operation.UNARY,
+        "neg",
+        (result,),
+        (middle,),
+        kind=mir.Kind.NEG,
+        args=(mir.Held(middle, 4),),
+        results=(mir.Held(result, 4),),
+    )
     match guard:
         case "sub_flags":
             difference = replace(difference, defines=(middle, flags))
@@ -609,15 +818,16 @@ def test_reversed_difference_preserves_observed_values_and_flags(guard):
             negate = replace(negate, results=(mir.Held(result, 2),))
         case "merge":
             difference = replace(difference, merges={left: middle})
-    done = algebraic._negated_difference(negate, {middle: difference}, {flags},
-                                         Counter({middle: 2 if guard == "shared" else 1}))
+    done = algebraic._negated_difference(
+        negate, {middle: difference}, {flags}, Counter({middle: 2 if guard == "shared" else 1})
+    )
     if guard != "none":
         assert done == negate
         return
     assert done.kind is mir.Kind.SUB and done.args == tuple(reversed(difference.args))
-    for first in (0, 1, 0x7fffffff, 0x80000000, 0xffffffff):
-        for second in (0, 1, 0x7fffffff, 0x80000000, 0xffffffff):
-            assert (-((first - second) & 0xffffffff)) & 0xffffffff == (second - first) & 0xffffffff
+    for first in (0, 1, 0x7FFFFFFF, 0x80000000, 0xFFFFFFFF):
+        for second in (0, 1, 0x7FFFFFFF, 0x80000000, 0xFFFFFFFF):
+            assert (-((first - second) & 0xFFFFFFFF)) & 0xFFFFFFFF == (second - first) & 0xFFFFFFFF
 
 
 @pytest.mark.parametrize(
@@ -627,16 +837,35 @@ def test_reversed_difference_preserves_observed_values_and_flags(guard):
 def test_shift_combination_preserves_count_flag_and_use_boundaries(first_count, last_count, live_flags, uses) -> None:
     source, middle, result = (mir.Value(index, 0) for index in range(1, 4))
     flags = mir.Value(4, 0, flags=True)
-    first = mir.Op(0, ir.Operation.BINARY, "shl", (middle,), (source,), kind=mir.Kind.SHL,
-                   args=(mir.Held(source, 2), mir.Const(first_count, 1)), results=(mir.Held(middle, 2),))
-    last = mir.Op(1, ir.Operation.BINARY, "shl", (result, flags), (middle,), kind=mir.Kind.SHL,
-                  args=(mir.Held(middle, 2), mir.Const(last_count, 1)), results=(mir.Held(result, 2),))
-    assert algebraic._shift_chain(
-        last,
-        {middle: first},
-        {flags} if live_flags else set(),
-        Counter({middle: uses}),
-    ) == last
+    first = mir.Op(
+        0,
+        ir.Operation.BINARY,
+        "shl",
+        (middle,),
+        (source,),
+        kind=mir.Kind.SHL,
+        args=(mir.Held(source, 2), mir.Const(first_count, 1)),
+        results=(mir.Held(middle, 2),),
+    )
+    last = mir.Op(
+        1,
+        ir.Operation.BINARY,
+        "shl",
+        (result, flags),
+        (middle,),
+        kind=mir.Kind.SHL,
+        args=(mir.Held(middle, 2), mir.Const(last_count, 1)),
+        results=(mir.Held(result, 2),),
+    )
+    assert (
+        algebraic._shift_chain(
+            last,
+            {middle: first},
+            {flags} if live_flags else set(),
+            Counter({middle: uses}),
+        )
+        == last
+    )
 
 
 @pytest.mark.parametrize(("width", "divisor"), [(4, 2), (4, 16), (4, 512), (4, 262144), (2, 2), (2, 16), (2, 16384)])
@@ -646,11 +875,26 @@ def test_signed_power_division_preserves_quotient_and_remainder(width: int, divi
     A word was left to IDIV: shellsort's `gap /= 2`."""
     bits = 8 * width
     source, constant, quotient, remainder = (mir.Value(index, 0) for index in range(1, 5))
-    copy = mir.Op(0, ir.Operation.MOVE, "mov", (constant,), (), kind=mir.Kind.COPY,
-                  args=(mir.Const(divisor, width),), results=(mir.Held(constant, width),))
-    divide = mir.Op(1, ir.Operation.DIVIDE, "idiv", (quotient, remainder), (source, constant),
-                    kind=mir.Kind.DIVMOD, args=(mir.Held(source, width), mir.Held(constant, width)),
-                    results=(mir.Held(quotient, width), mir.Held(remainder, width)))
+    copy = mir.Op(
+        0,
+        ir.Operation.MOVE,
+        "mov",
+        (constant,),
+        (),
+        kind=mir.Kind.COPY,
+        args=(mir.Const(divisor, width),),
+        results=(mir.Held(constant, width),),
+    )
+    divide = mir.Op(
+        1,
+        ir.Operation.DIVIDE,
+        "idiv",
+        (quotient, remainder),
+        (source, constant),
+        kind=mir.Kind.DIVMOD,
+        args=(mir.Held(source, width), mir.Held(constant, width)),
+        results=(mir.Held(quotient, width), mir.Held(remainder, width)),
+    )
     body = mir.MirBody(0, (mir.MirBlock(0, (), (copy, divide), ()),))
     if immediate:
         divide = replace(divide, args=(mir.Held(source, width), mir.Const(divisor, width)), uses=(source,))
@@ -658,30 +902,48 @@ def test_signed_power_division_preserves_quotient_and_remainder(width: int, divi
     done = algebraic._divisions(body)
     assert all(op.kind is not mir.Kind.DIVMOD for op in done.blocks[0].ops)
     lowest, highest = -(1 << (bits - 1)), (1 << (bits - 1)) - 1
-    for number in [lowest, -divisor-1, -divisor, -divisor+1, -1, 0, 1, divisor-1, divisor, highest]:
+    for number in [lowest, -divisor - 1, -divisor, -divisor + 1, -1, 0, 1, divisor - 1, divisor, highest]:
         values = {source: number}
         for op in done.blocks[0].ops:
             args = [arg.n if isinstance(arg, mir.Const) else values[arg.value] for arg in op.args]
             match op.kind:
-                case mir.Kind.COPY: answer = args[0]
-                case mir.Kind.SAR: answer = args[0] >> args[1]
-                case mir.Kind.SHR: answer = (args[0] & ((1 << bits) - 1)) >> args[1]
-                case mir.Kind.SHL: answer = args[0] << args[1]
-                case mir.Kind.AND: answer = args[0] & args[1]
-                case mir.Kind.ADD: answer = args[0] + args[1]
-                case mir.Kind.SUB: answer = args[0] - args[1]
-                case _: pytest.fail(str(op.kind))
+                case mir.Kind.COPY:
+                    answer = args[0]
+                case mir.Kind.SAR:
+                    answer = args[0] >> args[1]
+                case mir.Kind.SHR:
+                    answer = (args[0] & ((1 << bits) - 1)) >> args[1]
+                case mir.Kind.SHL:
+                    answer = args[0] << args[1]
+                case mir.Kind.AND:
+                    answer = args[0] & args[1]
+                case mir.Kind.ADD:
+                    answer = args[0] + args[1]
+                case mir.Kind.SUB:
+                    answer = args[0] - args[1]
+                case _:
+                    pytest.fail(str(op.kind))
             values[op.results[0].value] = ((answer & ((1 << bits) - 1)) ^ (1 << (bits - 1))) - (1 << (bits - 1))
         expected = abs(number) // divisor * (-1 if number < 0 else 1)
         assert values[quotient] == expected
         assert values[remainder] == number - expected * divisor
 
 
-@pytest.mark.parametrize(("high", "low", "answer"), [(4, 0, 262144), (0, 512, 512), (-1, -1, 0xffffffff), (1, -1, 0x1ffff)])
+@pytest.mark.parametrize(
+    ("high", "low", "answer"), [(4, 0, 262144), (0, 512, 512), (-1, -1, 0xFFFFFFFF), (1, -1, 0x1FFFF)]
+)
 def test_constant_word_concatenation(high: int, low: int, answer: int) -> None:
     result = mir.Value(1, 0)
-    op = mir.Op(0, mir.Synth.CONCAT_LOW, "concat", (result,), (), kind=mir.Kind.CONCAT,
-                args=(mir.Const(high, 2), mir.Const(low, 2)), results=(mir.Held(result, 4),))
+    op = mir.Op(
+        0,
+        mir.Synth.CONCAT_LOW,
+        "concat",
+        (result,),
+        (),
+        kind=mir.Kind.CONCAT,
+        args=(mir.Const(high, 2), mir.Const(low, 2)),
+        results=(mir.Held(result, 4),),
+    )
     body = mir.MirBody(0, (mir.MirBlock(0, (), (op,), ()),))
     done = algebraic.simplified(body, {result}, set()).blocks[0].ops[0]
     assert done.kind is mir.Kind.COPY
@@ -803,8 +1065,16 @@ def test_a_symbol_plus_zero_is_the_symbol() -> None:
 
     symbol = mir.Symbol(Space.SEGMENT, 2, 0, 2)
     result = mir.Value(1, 0)
-    add = mir.Op(0, ir.Operation.BINARY, "add", (result,), (), kind=mir.Kind.ADD,
-                 args=(mir.Const(0, 2), symbol), results=(mir.Held(result, 2),))
+    add = mir.Op(
+        0,
+        ir.Operation.BINARY,
+        "add",
+        (result,),
+        (),
+        kind=mir.Kind.ADD,
+        args=(mir.Const(0, 2), symbol),
+        results=(mir.Held(result, 2),),
+    )
     done = algebraic._simplified(add, set(), set())
     assert (done.kind, done.args) == (mir.Kind.COPY, (symbol,))
 
@@ -817,12 +1087,27 @@ def test_reextending_an_already_zero_extended_low_byte_is_a_copy() -> None:
     nothing, so the allocator should see a copy it can coalesce.
     """
     source, middle, result = (mir.Value(index, 0) for index in range(1, 4))
-    first = mir.Op(1, ir.Operation.EXTEND, "", (middle,), (source,), kind=mir.Kind.ZERO_EXTEND,
-                   args=(mir.Held(source, 1),), results=(mir.Held(middle, 2),))
-    second = mir.Op(2, ir.Operation.EXTEND, "", (result,), (middle,), kind=mir.Kind.ZERO_EXTEND,
-                    args=(mir.Held(middle, 1),), results=(mir.Held(result, 2),))
-    use = mir.Op(3, ir.Operation.PUSH, "", (), (result,), kind=mir.Kind.ARG,
-                 args=(mir.Held(result, 1),))
+    first = mir.Op(
+        1,
+        ir.Operation.EXTEND,
+        "",
+        (middle,),
+        (source,),
+        kind=mir.Kind.ZERO_EXTEND,
+        args=(mir.Held(source, 1),),
+        results=(mir.Held(middle, 2),),
+    )
+    second = mir.Op(
+        2,
+        ir.Operation.EXTEND,
+        "",
+        (result,),
+        (middle,),
+        kind=mir.Kind.ZERO_EXTEND,
+        args=(mir.Held(middle, 1),),
+        results=(mir.Held(result, 2),),
+    )
+    use = mir.Op(3, ir.Operation.PUSH, "", (), (result,), kind=mir.Kind.ARG, args=(mir.Held(result, 1),))
     body = mir.MirBody(0, (mir.MirBlock(0, (), (first, second, use), ()),))
 
     done = algebraic.simplified(body, set(), set())
@@ -835,10 +1120,26 @@ def test_reextending_an_already_zero_extended_low_byte_is_a_copy() -> None:
 @pytest.mark.parametrize("guard", ["signedness", "discarded_bits", "unknown_upper", "extra_result"])
 def test_redundant_extension_requires_every_output_bit_to_be_known(guard: str) -> None:
     source, middle, result, flags = (mir.Value(index, 0, flags=index == 4) for index in range(1, 5))
-    first = mir.Op(1, ir.Operation.EXTEND, "", (middle,), (source,), kind=mir.Kind.ZERO_EXTEND,
-                   args=(mir.Held(source, 1),), results=(mir.Held(middle, 2),))
-    second = mir.Op(2, ir.Operation.EXTEND, "", (result,), (middle,), kind=mir.Kind.ZERO_EXTEND,
-                    args=(mir.Held(middle, 1),), results=(mir.Held(result, 2),))
+    first = mir.Op(
+        1,
+        ir.Operation.EXTEND,
+        "",
+        (middle,),
+        (source,),
+        kind=mir.Kind.ZERO_EXTEND,
+        args=(mir.Held(source, 1),),
+        results=(mir.Held(middle, 2),),
+    )
+    second = mir.Op(
+        2,
+        ir.Operation.EXTEND,
+        "",
+        (result,),
+        (middle,),
+        kind=mir.Kind.ZERO_EXTEND,
+        args=(mir.Held(middle, 1),),
+        results=(mir.Held(result, 2),),
+    )
     match guard:
         case "signedness":
             second = replace(second, kind=mir.Kind.SIGN_EXTEND)
@@ -855,10 +1156,19 @@ def test_redundant_extension_requires_every_output_bit_to_be_known(guard: str) -
 def test_subtracting_from_a_copied_zero_is_negation() -> None:
     """C CRC32 copied an invariant zero before `0 - (crc & 1)` in every bit iteration."""
     zero, source, result, flags = (mir.Value(index, 0, flags=index == 4) for index in range(1, 5))
-    constant = mir.Op(1, ir.Operation.MOVE, "", (zero,), (), kind=mir.Kind.COPY,
-                      args=(mir.Const(0, 4),), results=(mir.Held(zero, 4),))
-    subtract = mir.Op(2, ir.Operation.BINARY, "", (result, flags), (zero, source), kind=mir.Kind.SUB,
-                      args=(mir.Held(zero, 4), mir.Held(source, 4)), results=(mir.Held(result, 4),))
+    constant = mir.Op(
+        1, ir.Operation.MOVE, "", (zero,), (), kind=mir.Kind.COPY, args=(mir.Const(0, 4),), results=(mir.Held(zero, 4),)
+    )
+    subtract = mir.Op(
+        2,
+        ir.Operation.BINARY,
+        "",
+        (result, flags),
+        (zero, source),
+        kind=mir.Kind.SUB,
+        args=(mir.Held(zero, 4), mir.Held(source, 4)),
+        results=(mir.Held(result, 4),),
+    )
 
     changed = algebraic._zero_difference(subtract, {zero: constant})
 
@@ -871,10 +1181,19 @@ def test_subtracting_from_a_copied_zero_is_negation() -> None:
 @pytest.mark.parametrize("guard", ["nonzero", "width", "effect", "extra_result", "untracked_use", "cycle"])
 def test_zero_difference_requires_a_complete_pure_value(guard: str) -> None:
     zero, source, result, extra = (mir.Value(index, 0) for index in range(1, 5))
-    constant = mir.Op(1, ir.Operation.MOVE, "", (zero,), (), kind=mir.Kind.COPY,
-                      args=(mir.Const(0, 4),), results=(mir.Held(zero, 4),))
-    subtract = mir.Op(2, ir.Operation.BINARY, "", (result,), (zero, source), kind=mir.Kind.SUB,
-                      args=(mir.Held(zero, 4), mir.Held(source, 4)), results=(mir.Held(result, 4),))
+    constant = mir.Op(
+        1, ir.Operation.MOVE, "", (zero,), (), kind=mir.Kind.COPY, args=(mir.Const(0, 4),), results=(mir.Held(zero, 4),)
+    )
+    subtract = mir.Op(
+        2,
+        ir.Operation.BINARY,
+        "",
+        (result,),
+        (zero, source),
+        kind=mir.Kind.SUB,
+        args=(mir.Held(zero, 4), mir.Held(source, 4)),
+        results=(mir.Held(result, 4),),
+    )
     match guard:
         case "nonzero":
             constant = replace(constant, args=(mir.Const(1, 4),))
