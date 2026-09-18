@@ -26,9 +26,61 @@ iteration updates this file in the same commit.
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, dying-base indexed-form unfolding, and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
 | Loop optimization | partial | exact pre/post-tested recurrences and symbolic sentinels, target-priced exact nested-recurrence rewind, complete nested-initializer LICM, dead-control countdowns with zero-trip guards, complete-affine spill/recompute pricing, precise-volatile-aware LICM, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling with bounded full-growth exist; versioning, partial unrolling, and complete candidate-set pressure forecasting remain. |
 | Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs (including closed recursive SCCs in C and object paths), constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
-| Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing, dead-register frame-copy shuttles, target-priced 67h LEA selection, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
+| Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing, dead-register frame-copy shuttles, target-priced 67h LEA selection including globally-dead shifted reload tails, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 106. Fold terminal offsets without forcing a worse address class — 2026-09-18
+
+The retained-row matmul experiment exposed a boundary defect before it
+exposed an allocation policy.  Its MIR expressed every cell after the first
+as a copied base plus a constant, and lowering correctly changed the memory
+operand to `ss:[base+disp]`.  It nevertheless emitted the original symbolic
+ADD as well.  Machine DCE must retain symbolic operations because they may
+own relocations; the first wrong stage was therefore lowering, not DCE.
+
+Lowering now treats a copied or constant-adjusted 16-bit address as completely
+folded when all of its readers are encodable based cells, its flags are dead,
+and it has no ordinary or phi use.  Both FAR cells and non-relocated LITERAL
+cells can own the displacement.  SEGMENT, EXTERNAL, and GROUP relocations
+cannot: a fail-first negative regression showed that the initial rule deleted
+the ADD feeding a SEGMENT cell even though the relocation still required its
+dynamic result.  The final proof checks every cell using the value and refuses
+the fold if any one has a relocated or otherwise unencodable displacement.
+
+On the experimental retained-row body this changed
+`1655/451/1067` bytes/static instructions/dynamic operations from
+`1753/482/1315`, removing 31 static and 248 estimated dynamic operations.  It
+does not change the current production matmul winner, whose completely
+expanded body remains at 906 dynamic operations, so these are candidate
+diagnostics rather than a claimed benchmark-gate improvement.
+
+The next tempting fold was wrong.  Encoding the parent row as
+`ss:[bp+index+disp]` constrained the long-lived output index to the 16-bit
+address register class.  Allocation then spilled that index and reloaded it
+before every output store; the candidate regressed to
+`1691/454/1091`.  That experiment and its structural-settle transaction were
+discarded.  The structural transaction was also responsible for pathological
+corpus compile time.  The result confirms the intended ordering: use native
+16-bit addressing only when its class pressure is affordable, otherwise
+consider 67h before spill or recomputation.
+
+A separate post-allocation selector now catches the residual
+`mov temp,[spill]; shl temp,k; add total,temp` artifact.  When the ADD flags
+are dead, the selected CPU prices prefix plus address formation no higher than
+the shift and add, and a whole-body SSA use count proves no successor needs
+the shifted temporary, it emits the load followed by
+`67h lea total,[total+temp*scale]`.  The whole-body condition is regression
+tested: the first block-local implementation silently changed a value read by
+a successor.  This cleanup cannot substitute for pressure-aware preallocation
+selection, but it removes a shift when a legal spill has already happened.
+
+Both accepted changes have fail-first positive and refusal regressions.  The
+focused address and peephole sets pass, as does the ordinary pre-commit pytest
+gate.  The two implementation commits are explicitly unsigned.  GCC and
+Clang remain flat-i386 best-case structural references; BCC/WC remain the
+authority for medium-model segment, relocation, ABI, and legal-address
+behavior.
 
 ### 105. Audit nested peeling before changing its policy — 2026-09-18
 
