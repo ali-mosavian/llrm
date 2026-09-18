@@ -28,6 +28,12 @@ from qbopt.model.passes import MIRTransform
 # tighter bound; every candidate here still has to pass the target-priced
 # profitability transaction after the ordinary fixed point simplifies it.
 MAX_SPECULATIVE_OPERATIONS = 4096
+# Conditional floating cloning has a second ceiling.  Every copy may expose a
+# different scalar path, and each resulting floating region crosses the full
+# strict-FP fixed point before profitability can reject it.  Keep that bounded
+# independently of ordinary CFG cloning: it is an analysis resource limit, not
+# a claim that larger source loops are semantically illegal.
+MAX_CONDITIONAL_FLOAT_OPERATIONS = 512
 
 
 class Peel(MIRTransform):
@@ -39,6 +45,17 @@ class Peel(MIRTransform):
     def transform(self, body: mir.MirBody) -> mir.MirBody:
         found = _candidate(body, self.where)
         return body if found is None else found[0]
+
+
+def _conditional_floating(loop, blocks: dict[int, mir.MirBlock]) -> bool:
+    """Whether a loop can multiply strict floating CFG regions when cloned."""
+    inside = (blocks[at] for at in loop.body if at in blocks)
+    return any(
+        block.at != loop.header
+        and len(block.succ) > 1
+        and any(op.floating is not None for op in block.ops)
+        for block in inside
+    )
 
 
 def _candidate(
@@ -66,6 +83,11 @@ def _candidate(
             op.kind is not mir.Kind.NOTHING for block in closed.blocks if block.at in loop.body for op in block.ops
         )
         if count * emitted > MAX_SPECULATIVE_OPERATIONS:
+            continue
+        if (
+            _conditional_floating(loop, {block.at: block for block in closed.blocks})
+            and count * emitted > MAX_CONDITIONAL_FLOAT_OPERATIONS
+        ):
             continue
         candidate = loopclone.peeled(closed, loop, count)
         if candidate is not None:

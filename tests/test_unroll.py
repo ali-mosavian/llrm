@@ -106,6 +106,47 @@ def test_peel_reports_the_gate_that_rejected_its_candidate(monkeypatch) -> None:
     assert stages == ["peel-rejected-residual-loops"]
 
 
+def test_peel_bounds_conditional_floating_clone_work(monkeypatch) -> None:
+    """A large branchy floating peel made the C benchmark gate spend minutes
+    rebuilding transient CFGs before it could execute an oracle.
+
+    The ceiling is an analysis-resource bound, not a source-specific nbody
+    heuristic: a small exact triangular clone remains eligible, while a
+    high-trip conditional floating body must not enter the expensive fixed
+    point merely to be rejected later on profitability.
+    """
+    from dataclasses import replace
+
+    from qbopt.analysis import induction
+    from qbopt.model import ir
+    from qbopt.model.floating import Format
+    from qbopt.model.floating import Precision
+    from qbopt.model.floating import Rounding
+    from qbopt.model.floating import Semantics
+    from qbopt.optimize import loopclone
+    from qbopt.optimize import peel
+    from test_loopclone import diamond
+
+    body, _ = diamond()
+    work = body.block(3)
+    floating = Semantics((Format.EXTENDED80,), Format.EXTENDED80, Precision.DYNAMIC, Rounding.DYNAMIC)
+    body = replace(
+        body,
+        blocks=tuple(
+            replace(block, ops=(replace(block.ops[0], op=ir.Operation.FLOAT_ARITH, floating=floating), *block.ops[1:]))
+            if block is work
+            else block
+            for block in body.blocks
+        ),
+    )
+    called = []
+    monkeypatch.setattr(induction, "trip_count", lambda *_args: 513)
+    monkeypatch.setattr(loopclone, "peeled", lambda *_args: called.append(True))
+
+    assert peel._candidate(body, Where()) is None
+    assert not called
+
+
 def test_c_matmul_unrolls_exact_multiblock_loops() -> None:
     """Matmul retained eight DIVs after its fixed 8x8 initializer, then a stale bridge phi returned 4252537476."""
     from tools import quality

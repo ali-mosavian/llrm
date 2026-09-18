@@ -13,6 +13,46 @@ from qbopt.analysis import loops
 from qbopt.optimize import edges
 
 
+def _block_local_floating(body: mir.MirBody, originals: list[mir.MirBlock]) -> bool:
+    """Whether conditional cloning cannot create a floating-value join.
+
+    Floating values are abstract MIR values, not x87 locations.  If every
+    one is defined and consumed in its own block, lowering can allocate an
+    independent floating region for either arm: no value reaches a CFG edge
+    whose stack position a differently simplified copy would have to match.
+    Raw raised stack effects remain deliberately outside this proof; their
+    incoming contents are still opaque and therefore continue to refuse.
+    """
+    inside = {block.at for block in originals}
+    if any(op.stack is not None for block in originals for op in block.ops):
+        return False
+    owners = {
+        value: block.at
+        for block in originals
+        for op in block.ops
+        if op.floating is not None
+        for value in op.defines
+    }
+    if not owners:
+        return True
+    users: dict[mir.Value, set[int]] = {value: set() for value in owners}
+    for block in body.blocks:
+        for phi in block.phis:
+            for value in phi.incoming.values():
+                if value in users:
+                    users[value].add(block.at)
+        for op in block.ops:
+            for value in op.uses:
+                if value in users:
+                    users[value].add(block.at)
+            if block.at not in inside or op.floating is None:
+                continue
+            for arg in op.args:
+                if isinstance(arg, mir.Held) and arg.width == 10 and owners.get(arg.value) != block.at:
+                    return False
+    return all(users[value] == {owner} for value, owner in owners.items())
+
+
 def peeled(body: mir.MirBody, loop: loops.Loop, count: int) -> mir.MirBody | None:
     if count < 1:
         raise ValueError("peeling needs a positive iteration count")
@@ -31,16 +71,16 @@ def peeled(body: mir.MirBody, loop: loops.Loop, count: int) -> mir.MirBody | Non
         return None
     originals = [block for block in body.blocks if block.at in loop.body]
     # A straight-line floating region can be cloned and allocated as one x87
-    # sequence.  An internal conditional is different: folding the cloned
-    # selector can delete a different arm in every copy, and the current x87
-    # region model has no equivalence proof for the resulting stack joins.
-    # NBODYS demonstrated the unsound case by turning every computed falloff
-    # into 0.5 after its ``other <> body`` loop was peeled.  Keep this as a
-    # legality boundary until conditional floating regions carry an explicit
-    # stack state on every CFG edge.
+    # sequence.  An internal conditional needs a stronger proof: folding a
+    # cloned selector may delete a different arm in every copy.  Values that
+    # never leave their own block form independent floating regions, so no
+    # stack join needs reconciling.  Raised raw-stack work or a value crossing
+    # an edge remains refused; NBODYS exposed that unsound case by turning
+    # every computed falloff into 0.5 after its ``other <> body`` loop peeled.
     if (
         any(op.floating is not None for block in originals for op in block.ops)
         and any(block.at != loop.header and len(block.succ) > 1 for block in originals)
+        and not _block_local_floating(body, originals)
     ):
         return None
     if any(

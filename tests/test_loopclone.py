@@ -121,6 +121,57 @@ def test_peeling_refuses_floating_work_behind_an_internal_branch() -> None:
     assert loopclone.peeled(body, loop, 2) is None
 
 
+def test_peeling_accepts_block_local_floating_values_behind_a_branch() -> None:
+    """A strict floating value that dies in its own arm does not create an
+    x87-stack join.
+
+    The blanket floating-CFG refusal kept C nbody's exact outer four-body
+    loop from exposing its constant inner bounds.  The safe rule is narrower:
+    every floating value must be born and consumed inside one block, with no
+    raw stack-effect operation.  Then lowering owns independent regions on
+    every CFG edge rather than trying to reconcile a value at the join.
+    """
+    body, values = diamond()
+    floating = Semantics(
+        (Format.EXTENDED80,),
+        Format.EXTENDED80,
+        Precision.DYNAMIC,
+        Rounding.DYNAMIC,
+    )
+    temporary = mir.Value(20, 30, variable=20, version=1)
+    work = body.block(3)
+    load = mir.Op(
+        30,
+        ir.Operation.FLOAT_LOAD,
+        "fld",
+        (temporary,),
+        (),
+        floating=floating,
+        kind=mir.Kind.FLOAD,
+        results=(mir.Held(temporary, 10),),
+    )
+    store = mir.Op(
+        31,
+        ir.Operation.FLOAT_STORE,
+        "fstp",
+        (),
+        (temporary,),
+        floating=floating,
+        kind=mir.Kind.FSTORE,
+        args=(mir.Held(temporary, 10),),
+    )
+    body = replace(
+        body,
+        blocks=tuple(
+            replace(block, ops=(load, store, *block.ops[1:])) if block is work else block
+            for block in body.blocks
+        ),
+    )
+    (loop,) = loops.loops(body.blocks, body.entry)
+
+    assert loopclone.peeled(body, loop, 1) is not None
+
+
 def test_peeling_clones_pointer_identity_and_seed_facts() -> None:
     """Matmul's peeled pointer values lost their exact frame-object leaves.
 

@@ -1172,3 +1172,40 @@ GCC and LLVM remain best-case flat-i386 structural listings only.  Their
 algorithmic loop shape and memory traffic guide the audit; BCC/WC medium-model
 listings remain the authority for ABI, segmentation, legal address forms, and
 any hard target.
+
+### 55. Self-contained strict-FP CFG cloning — 2026-09-18
+
+The nbody listing investigation reached the real Phase-5 barrier: its exact
+four-body outer loop contains the triangular pair loop, so the existing CFG
+cloner rejected it solely because that nested conditional performs floating
+work.  The old blanket rule was sound but unnecessarily broad.  A new
+machine-neutral MIR proof admits a conditional floating CFG only when every
+floating SSA value is defined and consumed in its own block, no floating value
+crosses a phi or CFG edge, and no raised raw stack-effect operation appears.
+Lowering can then allocate independently owned floating regions on each arm;
+it never has to reconcile an x87 stack position selected by different cloned
+paths.  The earlier cross-edge case remains refused.
+
+The positive and negative regressions were run fail-first.  With the proof,
+the fresh nbody candidate expands the six fixed interactions and changes its
+listing from 598 bytes / 138 instructions / 13,652 heuristic CFG operations
+to 1,095 bytes / 280 instructions / 2,066 heuristic CFG operations.  The
+instruction count is now structurally close to the installed i686 GCC listing
+(267), but these are not timing claims: the dynamic values still contain the
+outer-step profile-free fallback, and GCC remains a flat-i386 advisory
+reference.
+
+The first complete C oracle attempt demonstrated a separate compile-time
+hazard before reaching DOSBox: large branchy floating candidates can make
+strict fixed-point rebuilding disproportionate.  `Peel` now has a general
+512-semantic-operation ceiling for conditional floating clones, in addition
+to its existing 4,096-operation general CFG ceiling.  A fail-first 513-trip
+regression proves the candidate is refused before cloning; the focused clone
+and resource suite passes (`3 passed`, `0.21s`).  The small nbody candidate
+remains below that bound.  The full DOS C oracle was intentionally stopped
+without recording a pass, to retain the agreed test-time budget; it remains
+the next correctness gate before a performance or hard-target claim.
+
+This advances Phase 5's guarded exact cloning and Phase 1's listing audit.
+GCC/LLVM remain best-case flat-i386 structural listings; BCC/WC medium-model
+listings remain the ABI, segment, and legal-address-form authority.
