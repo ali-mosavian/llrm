@@ -236,7 +236,10 @@ def _reference_dynamic(events: list[tuple[str, str]]) -> tuple[float | None, str
     if frequencies is None:
         return None, "unmeasured: control flow has no finite profile-free estimate"
     estimate = round(sum(len(block.instructions) * frequencies.get(block.at, 0.0) for block in blocks), 6)
-    return estimate, "estimated: CFG branches and ten iterations per natural loop"
+    status = "estimated: CFG branches"
+    if loops.loops(body.blocks, body.entry):
+        status += " and ten iterations per natural loop"
+    return estimate, status
 
 
 def _reference_functions(assembly: str) -> list[dict]:
@@ -717,9 +720,11 @@ def _comparisons(reports: list[dict], references: list[dict]) -> list[dict]:
                 }
                 candidate_dynamic = function.get("dynamic_operations")
                 reference_dynamic = other.get("dynamic_operations")
+                dynamic_ratio_status = _dynamic_ratio_status(function, other)
                 ratios["dynamic_operations"] = (
                     candidate_dynamic / reference_dynamic
-                    if isinstance(candidate_dynamic, (int, float))
+                    if dynamic_ratio_status == "comparable"
+                    and isinstance(candidate_dynamic, (int, float))
                     and isinstance(reference_dynamic, (int, float))
                     and reference_dynamic > 0
                     else None
@@ -750,6 +755,7 @@ def _comparisons(reports: list[dict], references: list[dict]) -> list[dict]:
                             "dynamic_operations": reference_dynamic,
                         },
                         "ratios": ratios,
+                        "dynamic_ratio_status": dynamic_ratio_status,
                         "gap_attribution": attribution,
                         "first_excess_stage": {
                             metric: result["stage"] if result["status"] == "attributed" else None
@@ -758,6 +764,28 @@ def _comparisons(reports: list[dict], references: list[dict]) -> list[dict]:
                     }
                 )
     return out
+
+
+def _dynamic_ratio_status(candidate: dict, reference: dict) -> str:
+    """Whether two dynamic estimates have enough evidence to divide.
+
+    The ten-trip convention is intentionally retained in each function report
+    as a diagnostic estimate.  It is not a runtime profile, so a ratio using
+    it would present two arbitrary loop assumptions as a measured code-quality
+    gap.  Missing statuses are accepted for compact unit fixtures created
+    before status reporting existed; production reports always name theirs.
+    """
+    fallback = (
+        "otherwise ten iterations per natural loop",
+        "and ten iterations per natural loop",
+    )
+    statuses = (candidate.get("dynamic_status"), reference.get("dynamic_status"))
+    if any(isinstance(status, str) and any(marker in status for marker in fallback) for status in statuses):
+        return "withheld: profile-free loop heuristic"
+    values = (candidate.get("dynamic_operations"), reference.get("dynamic_operations"))
+    if not all(isinstance(value, (int, float)) for value in values) or values[1] <= 0:
+        return "withheld: dynamic extent is unmeasured"
+    return "comparable"
 
 
 def _first_excess_stage(stages: list[dict], metric: str, reference: int) -> str | None:
@@ -910,6 +938,8 @@ def main(argv: list[str] | None = None) -> int:
         ratio = dynamic if dynamic is not None else comparison["ratios"]["instructions"]
         measured = "--" if ratio is None else f"{ratio:.2f}x"
         metric = "estimated executed instructions" if dynamic is not None else "static instructions"
+        if dynamic is None and comparison.get("dynamic_ratio_status", "") != "comparable":
+            metric += " (dynamic withheld)"
         print(
             f" ref {comparison['cpu']:>4} {Path(comparison['source']).stem}.{comparison['function']:<24} "
             f"{comparison['compiler']:<14} {measured:>6} {metric}"

@@ -1118,3 +1118,23 @@ checked answer and a candidate-ABI audit.  No code-generation change is
 claimed in this measurement iteration; the focused report completed in
 11.2s, and GCC/LLVM remain advisory best-case listings while BCC/WC remain
 the medium-model legality and ABI authority.
+
+### 53. Dynamic-quality ratio evidence gate — 2026-09-18
+
+The nbody audit found the quality report still divided two profile-free
+ten-trip loop estimates and printed the result as an estimated executed
+instruction ratio.  That made the 11.63x/2.66x flat-reference numbers look
+more authoritative than their evidence allowed.  The estimates remain in the
+per-function report for diagnosis, but structural comparison now withholds a
+dynamic ratio whenever either status says it used the ten-iteration fallback.
+The console prints the remaining static ratio as `dynamic withheld`; a ratio
+is produced only for a fully measured or exact-trip-backed pair.
+
+The regression first observed the false 11.63x ratio and now requires the
+withheld status.  It also retains the natural-loop reference and ordinary
+symbol-spelling comparison checks (`3 passed`, `0.11s`), and a fresh nbody
+report confirms the dynamic labels are withheld.  This advances Phase 1's
+measurement trustworthiness; it does not alter nbody code generation or
+create a hard target.  GCC/LLVM assembly remains best-case flat-i386
+structural evidence only, with BCC/WC medium-model output the ABI and
+address-form authority.
