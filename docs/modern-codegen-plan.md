@@ -773,3 +773,25 @@ original pointer variable; it now receives the carried recurrence's SSA
 variable.  The focused composed-pointer and memory-substitution checks pass
 in `0.08s`.  This advances phase 5's recurrence-use selection; broad formula
 pricing, loop versioning, and pressure forecasting remain open.
+
+### 38. Nbody dynamic-measurement audit — 2026-09-18
+
+At `15b77c9`, a fresh `tools/quality.py bench/c/nbody.c --cpu 386
+--references` run reports 598 bytes / 138 raw instructions for qbopt,
+against 292 / 267 raw instructions for Clang 21 / i686 GCC 16.2.  Raw
+assembly explains the apparent contradiction in the heuristic's dynamic
+headline: GCC and Clang have unrolled the fixed three-body interaction nest,
+whereas qbopt retains its `i < 4` and `j < 4` loops.  The current CFG model
+assigns ten trips independently to every surviving natural loop, producing
+qbopt 33,632 estimated operations versus Clang 1,174 and an implausible
+28.65x ratio.
+
+That is not an accepted code-quality conclusion.  It compares different
+unrolling shapes with a profile-free ten-trip model and magnifies fixed loops
+only on one side.  The raw listings and static counts are retained as
+best-case GCC/LLVM structural evidence, subject to the medium-model caveat;
+the dynamic comparison must instead use audited exact trip counts or a
+runtime-input execution trace before it can be a target or a performance
+claim.  The next measurement iteration needs a fail-first nbody regression
+for this asymmetric fixed-loop case, then a general bound-aware dynamic
+estimator.  No optimizer change is claimed here.
