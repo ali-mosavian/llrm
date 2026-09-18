@@ -20,8 +20,11 @@ is covered. Unknown and overlapping writes still invalidate the cell facts.
 Phi inputs and memory facts meet on agreement across incoming paths.
 """
 
-from dataclasses import replace
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
+from dataclasses import replace
 
 from qbopt.model import ir
 from qbopt.model import mir
@@ -50,6 +53,38 @@ UNARY = {
 # Memory facts are stored as bytes so partial writes and control-flow
 # joins do not discard an untouched neighbor. Reads assemble their width.
 Cells = dict
+
+
+# One MIR fixed-point transaction repeatedly asks several analyses for the
+# same immutable body.  Keeping this cache dynamically scoped makes that
+# sharing explicit and bounded: it cannot survive into another compilation or
+# confuse a recycled object id with a new body.  Requests with edge/entry
+# facts stay uncached because those fact maps are deliberately mutable proof
+# inputs.
+_reuse: ContextVar[dict | None] = ContextVar("qbopt_constant_analysis_reuse", default=None)
+
+
+@contextmanager
+def reusing() -> Iterator[None]:
+    """Reuse ordinary constant facts for identical bodies in one transaction."""
+    token = _reuse.set({})
+    try:
+        yield
+    finally:
+        _reuse.reset(token)
+
+
+def _reuse_key(
+    body: mir.MirBody,
+    dgroup: frozenset[int] | None,
+    calls: dict[int, str] | None,
+    edges: dict[tuple[int, int], Cells] | None,
+    initial: Cells | None,
+) -> tuple | None:
+    if edges is not None or initial is not None:
+        return None
+    named = None if calls is None else tuple(sorted(calls.items()))
+    return id(body), dgroup, named
 
 
 @dataclass(frozen=True, slots=True)
@@ -608,11 +643,20 @@ def known(
     # every selector still assumed resolved. All or nothing threw the answer
     # away whenever one body had a selector that never could resolve -- a
     # $DYNAMIC array's, which is every one of qbdemo's 213.
+    cache = _reuse.get()
+    key = _reuse_key(body, dgroup, calls, edges, initial)
+    if cache is not None and key is not None and (saved := cache.get(key)) is not None and saved[0] is body:
+        # Analysis consumers receive a normal mutable dictionary.  Preserve
+        # that API without letting one consumer corrupt the transaction's
+        # retained immutable-body result.
+        return dict(saved[1])
     allowed: frozenset[mir.Value] | None = None
     while True:
         got, assumed = _solved(body, dgroup, calls, edges=edges, initial=initial, assume=set(), allowed=allowed)
         resolved = frozenset(value for value in assumed if value in got)
         if resolved == assumed:
+            if cache is not None and key is not None:
+                cache[key] = (body, dict(got))
             return got
         allowed = resolved
 

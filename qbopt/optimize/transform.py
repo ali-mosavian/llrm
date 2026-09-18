@@ -2736,6 +2736,7 @@ PASSES_ON = (
 )
 
 
+@consts.reusing()
 def applied(
     body: MirBody,
     dgroup: frozenset[int],

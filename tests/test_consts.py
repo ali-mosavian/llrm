@@ -79,6 +79,46 @@ def test_an_index_constant_is_not_the_value_of_an_indexed_store() -> None:
     assert loaded not in consts.known(body, frozenset({5}), {})
 
 
+def test_constant_analysis_scope_reuses_an_unchanged_body_without_sharing_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Nbody's accepted floating CFG clone repeatedly rebuilt identical
+    constant-memory facts during one MIR fixed point.
+
+    Analysis reuse is valid only for the immutable body and request.  A
+    caller still receives its own dictionary: mutating one result must not
+    poison the next request in the same optimization transaction.
+    """
+    value = mir.Value(1, 0)
+    op = mir.Op(
+        0,
+        ir.Operation.MOVE,
+        "",
+        (value,),
+        (),
+        kind=mir.Kind.COPY,
+        args=(mir.Const(7, 2),),
+        results=(mir.Held(value, 2),),
+    )
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (op,), ()),))
+    calls = 0
+    real = consts._solved
+
+    def recording(*args: object, **kwargs: object) -> object:
+        nonlocal calls
+        calls += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(consts, "_solved", recording)
+    with consts.reusing():
+        first = consts.known(body)
+        first[value] = consts.Known(99, 2)
+        second = consts.known(body)
+
+    assert calls == 1
+    assert second[value] == consts.Known(7, 2)
+
+
 @pytest.mark.parametrize("number", [0, 1, 32767, 32768, 65535])
 def test_signed_widening_produces_a_whole_long_constant(number):
     """ADDRM's explicit word-to-long conversion could not fold even with a known input."""

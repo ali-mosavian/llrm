@@ -1209,3 +1209,36 @@ the next correctness gate before a performance or hard-target claim.
 This advances Phase 5's guarded exact cloning and Phase 1's listing audit.
 GCC/LLVM remain best-case flat-i386 structural listings; BCC/WC medium-model
 listings remain the ABI, segment, and legal-address-form authority.
+
+### 56. Transaction-scoped constant-analysis reuse — 2026-09-18
+
+Profiling the accepted nbody floating-CFG candidate found a general optimizer
+cost rather than an invalid clone: 63.4 seconds under `cProfile`, with the
+dominant work in repeated constant-memory solving (`consts.cells`, `_kills`,
+and alias overlap) while successive MIR passes were still examining the same
+immutable body.  Re-running the same analysis was not a new proof and did not
+improve code; it merely made the full C oracle spend its time compiling.
+
+`consts.reusing()` now establishes a dynamically scoped cache for ordinary
+constant requests keyed by the actual immutable body, data-group facts, and
+call summaries.  Explicit entry and edge facts remain uncached because they
+are mutable proof inputs.  Cached results are copied before return, so a
+consumer can retain the existing mutable-dictionary API without contaminating
+the next analysis request.  `transform.applied()` owns one such scope, which
+covers its normal fixed point and nested peel/unroll candidate evaluation but
+cannot leak between compilations.
+
+The fail-first regression proves both properties: an unchanged body solves
+once in one scope, and mutation of the first returned map cannot poison the
+second (`4 focused checks passed`, `0.14s`).  The real optimized C nbody
+compile remains cloned and falls to 19.55 seconds wall time in an unprofiled
+run, down from the preceding 63.4-second instrumented diagnostic (the two
+figures are not a timing ratio because profiling adds its own overhead).
+
+The full C DOS known-answer oracle was started against this revision and was
+still compiling after 2m52s, before it had launched DOSBox.  It was stopped
+under the agreed test-time budget and is **not** recorded as a pass.  The
+oracle remains the required correctness gate for the new CFG clone; this
+iteration establishes only the resource mechanism and its focused regression.
+GCC/LLVM remain best-case flat-i386 structural listings, while BCC/WC
+medium-model listings remain the ABI and legal-address-form authority.
