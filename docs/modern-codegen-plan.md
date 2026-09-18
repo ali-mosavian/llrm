@@ -1090,3 +1090,31 @@ the independently calculated result of the original program (`1 passed`,
 allocator claim is made from this all-literal fixture.  GCC/LLVM listings
 remain best-case flat-i386 structural references only, while BCC/WC
 medium-model output remains the emitted-form and ABI authority.
+
+### 52. Nbody triangular-loop listing audit — 2026-09-18
+
+A fresh `--cpu 386 --references` quality report at `889fdae` records
+qbopt's `_bench_nbody` as 598 bytes, 138 static instructions and 1435 model
+cost.  Its flat-i386 comparison headline is still 11.63x Clang and 2.66x
+i686 GCC estimated instructions, but it is explicitly not a performance or
+target claim: the outer time-step bound is an input, and the reference
+compilers use different flat ABI, frame, address, and unrolling strategies.
+The raw listings and stage dumps, not that ratio, decide the next work.
+
+In particular, the remaining pair loop is **not** a missed constant four-trip
+loop.  Its MIR header starts `j` from `i + 1`, so its exit count is triangular
+and depends on the enclosing iteration.  The existing exact unroller correctly
+finds and accepts only the separate four-element velocity-update loop.  It
+does not and must not clone the pair loop under a fabricated fixed bound.
+Clang's fully expanded flat-model body is useful best-case structural evidence,
+but not proof that such expansion is legal or profitable under the medium
+model and strict x87 semantics.
+
+The next Phase-5 mechanism is therefore an exact triangular-loop
+peeling/versioning candidate that derives the nested bound, preserves the
+zero-trip and final-counter behavior, and prices the complete x87/memory and
+code-size tradeoff.  It must be accepted only against an independently
+checked answer and a candidate-ABI audit.  No code-generation change is
+claimed in this measurement iteration; the focused report completed in
+11.2s, and GCC/LLVM remain advisory best-case listings while BCC/WC remain
+the medium-model legality and ABI authority.
