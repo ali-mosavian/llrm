@@ -1287,3 +1287,27 @@ isolated nbody OMF/LINK/DOS oracle remains green from iteration 57.  This is
 debuggability and test-boundary work in Phases 1 and 5, not a new performance
 result.  GCC/LLVM remain best-case flat-i386 structural references; BCC/WC
 medium-model listings remain the ABI and encoding authority.
+
+### 59. Refreshed nbody structural listing audit — 2026-09-18
+
+The current committed `tools/quality.py bench/c/nbody.c --cpu 386
+--references` report records qbopt at 1,095 emitted bytes / 280 raw
+instructions (274 ABI-normalized instructions).  Apple Clang 21 emits 290
+normalized instructions and installed i686 GCC 16.2 emits 263.  This makes
+the valid conclusion deliberately narrow: instruction *count* is structurally
+near the best-case flat-i386 listings, not that their ABI, bytes, or timing are
+matched.
+
+The useful remaining signal is memory traffic.  Against Clang, qbopt has 158
+loads / 85 stores versus 74 / 51; against GCC it has 158 / 85 versus 71 / 106.
+The quality report attributes qbopt's excess loads (and Clang-relative stores
+and branches) first to `lir-lower`, after the machine-neutral MIR stages have
+already settled.  Dynamic ratios remain withheld because both sides include
+the profile-free natural-loop fallback.  These facts direct the next work to
+legal medium-model memory-form selection and post-lowering traffic, not an
+ABI-incompatible copy of a flat compiler's stack frame or addressing modes.
+
+The report embeds the `best-case-flat-i386-structural-reference` contract,
+source hash, compiler versions, listing paths, and stage attribution.  It is
+Phase-1 measurement evidence only; BCC/WC medium-model listings remain the
+hard authority before any target or timing claim is registered.
