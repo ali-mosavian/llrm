@@ -20,7 +20,7 @@ iteration updates this file in the same commit.
 
 | Phase | State | Current boundary |
 |---|---|---|
-| Per-CPU measurement | in progress | CPU profiles distinguish native medium-model addressing from the complete costed secondary 67h form and carry the complete-peel iteration budget; the C corpus, static and frequency-weighted structural metrics, reference listings, and exact-count preservation across recurrence rewinds, loop rotation, and zero-byte-header threading exist; audited targets and runtime profiles remain. |
+| Per-CPU measurement | in progress | CPU profiles distinguish native medium-model addressing from the complete costed secondary 67h form and carry the complete-peel iteration budget; the C corpus, static and frequency-weighted structural metrics, static and CFG-frequency-weighted per-CPU cost rankings, reference listings, and exact-count preservation across recurrence rewinds, loop rotation, and zero-byte-header threading exist; audited targets and runtime profiles remain. |
 | MIR/LIR provenance and fresh OMF | complete in production | allocated LIR emits directly with external source maps/allocation hints; the remaining compatibility views are test-only and cannot route a compilation through record rewriting. |
 | SROA and scalar promotion | partial | fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies expand into exact leaves, and structural candidates transact leaves made singleton by scalar convergence with finite-capacity pressure pricing; far, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, dying-base indexed-form unfolding, and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
@@ -29,6 +29,59 @@ iteration updates this file in the same commit.
 | Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing and byte-neutral source-unowned terminal-return duplication, dead-register frame-copy shuttles, target-priced 67h LEA selection including source-owned loaded scale/add tails and constant/register sums, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 113. Weight per-CPU cost by executed CFG paths — 2026-09-18
+
+Iteration 112 exposed an instrument contradiction.  Duplicating `choose.c`'s
+two-byte terminal return removed an executed jump at unchanged byte size, yet
+the only CPU-cost field rose from 50 to 65 on 386.  Raw assembly showed why:
+the static sum charged both mutually exclusive copies of `pop bp; retf` as if
+one path executed both.  That is a size-oriented ranking, not hot-path work.
+
+The report now retains `weighted_cost` unchanged as the compatibility/static
+ranking and adds `dynamic_weighted_cost`.  One shared extent builder maps the
+exact emitted bytes to final LIR blocks, rejects hidden call/interrupt/`rep`
+work and irreducible or unbounded CFGs, and supplies the same exact-trip or
+explicit profile-free frequencies used by dynamic structural metrics.  The
+prologue is priced once; each block is priced independently for the selected
+CPU and multiplied by its expected executions.  Missing forms remain null and
+named.  Later-CPU dependency scoring restarts at block boundaries because the
+profile-free CFG does not identify a cross-edge schedule; the status calls the
+result an estimate rather than measured cycles.
+
+The fail-first real-source regression raised `KeyError` because the executed
+cost did not exist.  Its hand audit now pins 386 `choose` to 41 units:
+prologue 4, load block 4, compare/branch block 9, and two 24-unit return arms
+at one-half frequency each.  A zero or a repeated static total cannot pass.
+Disabling only terminal-return duplication supplies the exact prior layout;
+the all-profile comparison is:
+
+| CPU | shared-tail executed cost | duplicated-tail executed cost | result |
+|---|---:|---:|---:|
+| 386 | 44.5 | 41 | -7.9% |
+| 486 | 26.5 | 25 | -5.7% |
+| P5 | 11.5 | 11 | -4.3% |
+| P6 | 24 | 24 | unchanged |
+| K5 | 10 | 9 | -10.0% |
+| K6 | 10 | 10 | unchanged |
+| K7 | 12 | 12 | unchanged |
+| Core | 26 | 25 | -3.8% |
+
+No selected bytes or program semantics change in this measurement iteration.
+The real inputs 0 and 1 still produce `0a 00 08 00` (10 and 8) through fresh
+OMF, the DOS linker and a DOS 386.  The qbopt listing remains GCC-shaped with
+two direct return arms; GCC emits the same control structure, while Clang's
+best-case flat-i386 listing remains the outstanding `sete; lea` if-conversion.
+Candidate and raw reference listings for every supported profile are under
+`build/quality/iter120-choose-cost`; the source SHA-256 remains
+`84551e148b8a0517c83840c2d800c0157b32eb425f1464fd3256a939709ab5cf`.
+This advances Phase 1 and makes future branch duplication, loop cloning,
+peeling and unrolling comparisons honest; it does not claim a runtime profile,
+if-conversion, audited hard target, or final acceptance.  Focused measurement
+checks pass (`3 passed`, `57 deselected`, `1.49s`), the hidden-callee refusal
+passes (`1 passed`, `59 deselected`, `0.55s`), the DOS execution regression
+passes (`1 passed`, `2 deselected`, `2.56s`), and Tier 1 passes (`238 passed`,
+`31 deselected`, `5.36s`).
 
 ### 112. Duplicate byte-neutral terminal return tails — 2026-09-18
 

@@ -30,9 +30,21 @@ that fails to return without mistaking a timeout for a wrong answer.
   setup, callee-save traffic, and teardown are removed while one return remains.
   Raw totals above are never changed. GCC/Clang comparisons use these normalized
   counts so a 32-bit flat-ABI prologue is not judged against a 16-bit far one.
-- `weighted_cost` is a ranking from the selected CPU profile. A missing form
-  makes it `null`; `weighted_status` and `unpriced_forms` name the reason and
-  the table prints it as `UNPRICED[...]`. It is never silently assigned zero.
+- `weighted_cost` is the static ranking from the selected CPU profile: every
+  selected instruction is counted once. A missing form makes it `null`;
+  `weighted_status` and `unpriced_forms` name the reason and the table prints
+  it as `UNPRICED[...]`. It is never silently assigned zero.
+- `dynamic_weighted_cost` applies the same per-CPU ranking to the exact emitted
+  rows in each final basic block, then weights those block costs by the same
+  CFG frequencies as dynamic structural metrics. The prologue is charged once.
+  This prevents mutually exclusive duplicated tails and loop bodies from being
+  reported as if all copies execute. Calls, interrupts, repeated instructions,
+  irreducible control flow, missing instruction prices, and unbounded extents
+  remain explicitly null; `dynamic_weighted_status` and
+  `dynamic_unpriced_forms` retain the reason. Later-CPU dependency scoring is
+  restarted at basic-block boundaries because a profile-free CFG does not
+  identify one cross-edge schedule. It is a ranking estimate, not elapsed
+  cycles.
 - loads, stores, branches, calls, address calculations, peak live values, and
   allocator spill markers are structural counts.  They are not elapsed time.
 - rematerializations count the final allocated-LIR instructions that rebuild a

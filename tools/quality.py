@@ -544,10 +544,18 @@ def _block_instruction_rows(
     return prologue, blocks, rows
 
 
-def _dynamic_metrics(
-    module: masm.Module, procedure: masm.Procedure, number: int
-) -> tuple[dict[str, float] | None, str]:
-    """Estimate executed structural metrics when every visible cost is bounded."""
+@dataclass(frozen=True, slots=True)
+class _DynamicExtent:
+    """Selected rows and profile-free execution frequencies for one function."""
+
+    prologue: list[tuple[str, str, str]]
+    blocks: dict[int, list[tuple[str, str, str]]]
+    frequencies: dict[int, float]
+    status: str
+
+
+def _dynamic_extent(module: masm.Module, procedure: masm.Procedure, number: int) -> tuple[_DynamicExtent | None, str]:
+    """Bound the visible executed extent once for structural and CPU costs."""
     prologue, blocks, rows = _block_instruction_rows(module, procedure, number)
     if any(mnemonic in {"call", "int", "into"} for _raw, mnemonic, _operands in rows):
         return None, "unmeasured: call or interrupt hides executed work"
@@ -556,16 +564,6 @@ def _dynamic_metrics(
     frequencies = _frequencies(procedure.body)
     if frequencies is None:
         return None, "unmeasured: control flow has no finite profile-free estimate"
-    fixed = _row_metrics(prologue)
-    per_block = {at: _row_metrics(block) for at, block in blocks.items()}
-    estimate = {
-        metric: round(
-            float(fixed[metric])
-            + sum(per_block[at][metric] * frequencies.get(at, 0.0) for at in per_block),
-            6,
-        )
-        for metric in STRUCTURAL_METRICS
-    }
     status = "estimated: CFG branches"
     if procedure.body.loop_trip_counts:
         status += ", exact proved trip counts where available"
@@ -574,6 +572,25 @@ def _dynamic_metrics(
         for loop in loops.loops(procedure.body.blocks, procedure.body.entry)
     ):
         status += ", otherwise ten iterations per natural loop"
+    return _DynamicExtent(prologue, blocks, frequencies, status), status
+
+
+def _dynamic_metrics(
+    module: masm.Module, procedure: masm.Procedure, number: int
+) -> tuple[dict[str, float] | None, str]:
+    """Estimate executed structural metrics when every visible cost is bounded."""
+    extent, status = _dynamic_extent(module, procedure, number)
+    if extent is None:
+        return None, status
+    fixed = _row_metrics(extent.prologue)
+    per_block = {at: _row_metrics(block) for at, block in extent.blocks.items()}
+    estimate = {
+        metric: round(
+            float(fixed[metric]) + sum(per_block[at][metric] * extent.frequencies.get(at, 0.0) for at in per_block),
+            6,
+        )
+        for metric in STRUCTURAL_METRICS
+    }
     return estimate, status
 
 
@@ -587,6 +604,8 @@ def _cost_report(
     rows: list[tuple[str, str, str]], target: targets.Profile
 ) -> tuple[float | None, str, tuple[str, ...]]:
     """Return the ranking and make every missing cost assumption visible."""
+    if not rows:
+        return 0.0, "priced", ()
     kinds = [cycles.classify(mnemonic, operands, raw) for raw, mnemonic, operands in rows]
     missing = {
         f"unknown:{mnemonic}" if kind == "unknown" else kind
@@ -600,6 +619,25 @@ def _cost_report(
         return float(sum(target.cost(kind) for kind in kinds)), "priced", ()
     scored, _detail = cycles.score(rows)
     return float(scored[0][targets.names().index(target.name) - 1]), "priced", ()
+
+
+def _dynamic_cost_report(
+    module: masm.Module, procedure: masm.Procedure, number: int, target: targets.Profile
+) -> tuple[float | None, str, tuple[str, ...]]:
+    """Profile-free executed CPU ranking, priced independently per CFG block."""
+    extent, status = _dynamic_extent(module, procedure, number)
+    if extent is None:
+        return None, status, ()
+    fixed, _fixed_status, fixed_missing = _cost_report(extent.prologue, target)
+    per_block = {at: _cost_report(rows, target) for at, rows in extent.blocks.items()}
+    missing = tuple(sorted(set(fixed_missing).union(*(forms for _cost, _status, forms in per_block.values()))))
+    if missing:
+        return None, f"unpriced: {', '.join(missing)}", missing
+    costs = {at: cost for at, (cost, _block_status, _forms) in per_block.items()}
+    if fixed is None or any(cost is None for cost in costs.values()):
+        return None, "unpriced: selected form has no CPU cost", ()
+    estimate = fixed + sum(cost * extent.frequencies.get(at, 0.0) for at, cost in costs.items() if cost is not None)
+    return round(float(estimate), 6), status, ()
 
 
 def _cost(rows: list[tuple[str, str, str]], target: targets.Profile) -> float | None:
@@ -616,6 +654,9 @@ def function_report(module: masm.Module, procedure: masm.Procedure, number: int,
     dynamic, dynamic_status = _dynamic_metrics(module, procedure, number)
     dynamic_operations = None if dynamic is None else dynamic["instructions"]
     weighted_cost, weighted_status, unpriced_forms = _cost_report(rows, target)
+    dynamic_weighted_cost, dynamic_weighted_status, dynamic_unpriced_forms = _dynamic_cost_report(
+        module, procedure, number, target
+    )
     return {
         "name": procedure.name,
         "bytes": len(code),
@@ -623,6 +664,9 @@ def function_report(module: masm.Module, procedure: masm.Procedure, number: int,
         "weighted_cost": weighted_cost,
         "weighted_status": weighted_status,
         "unpriced_forms": unpriced_forms,
+        "dynamic_weighted_cost": dynamic_weighted_cost,
+        "dynamic_weighted_status": dynamic_weighted_status,
+        "dynamic_unpriced_forms": dynamic_unpriced_forms,
         "dynamic_operations": dynamic_operations,
         "dynamic": dynamic,
         "dynamic_status": dynamic_status,
@@ -995,15 +1039,23 @@ def main(argv: list[str] | None = None) -> int:
         args.json.write_text(json.dumps(result, indent=2) + "\n")
     for report in reports:
         for function in report["functions"]:
-            cost = (
+            static_cost = (
                 f"UNPRICED[{','.join(function['unpriced_forms'])}]"
                 if function["weighted_cost"] is None
                 else f"{function['weighted_cost']:g}"
             )
+            executed_cost = (
+                f"UNPRICED[{','.join(function['dynamic_unpriced_forms'])}]"
+                if function["dynamic_weighted_cost"] is None and function["dynamic_unpriced_forms"]
+                else "--"
+                if function["dynamic_weighted_cost"] is None
+                else f"{function['dynamic_weighted_cost']:g}"
+            )
             ratio = "NO TARGET" if function["ratio"] is None else f"{function['ratio']:.2f}x"
             print(
                 f"{report['cpu']:>4} {Path(report['source']).stem}.{function['name']:<24} "
-                f"{function['bytes']:>5} bytes {function['instructions']:>4} ins {cost:>7} cost {ratio}"
+                f"{function['bytes']:>5} bytes {function['instructions']:>4} ins "
+                f"{static_cost:>7} static/{executed_cost:<7} exec cost {ratio}"
             )
     for comparison in comparisons:
         dynamic = comparison["ratios"].get("dynamic_operations")

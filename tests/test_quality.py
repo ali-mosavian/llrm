@@ -33,6 +33,9 @@ def test_report_measures_each_emitted_function_and_names_its_profile() -> None:
         assert function["rematerializations"] >= 0
         assert function["dynamic_operations"] is not None
         assert function["dynamic"]["instructions"] == function["dynamic_operations"]
+        assert function["dynamic_weighted_cost"] is not None
+        assert function["dynamic_weighted_status"].startswith("estimated: CFG branches")
+        assert function["dynamic_unpriced_forms"] == ()
         assert set(function["dynamic"]) == {
             "instructions",
             "loads",
@@ -304,6 +307,23 @@ def test_constant_phi_exit_folds_on_each_return_edge() -> None:
     assert "add ax, 1" not in function
     assert "jmp " not in function
     assert function.count("retf") == 2
+
+
+def test_executed_cpu_cost_does_not_sum_mutually_exclusive_return_tails() -> None:
+    """choose's byte-neutral return duplication reported a 50-to-65 slowdown.
+
+    The static CPU ranking counted both copies of ``pop bp; retf`` even though
+    only one arm executes.  Retain that useful size-oriented ranking, but
+    report expected executed cost from the same CFG frequencies used for
+    dynamic structural work.
+    """
+    source = FIXTURES / "choose.c"
+    built = cfront.assembled(cfront.recorded(source, []), "choose_cost", optimise=True)
+    (function,) = quality.module_report(built, source, "386")["functions"]
+
+    assert function["dynamic_weighted_status"] == "estimated: CFG branches"
+    assert function["weighted_cost"] == 65.0
+    assert function["dynamic_weighted_cost"] == 41.0
 
 
 def test_dynamic_frequency_uses_a_proven_fixed_trip_count() -> None:
@@ -724,9 +744,10 @@ def test_dynamic_frequencies_solve_nested_loops_without_iteration_cutoff() -> No
 
 def test_dynamic_estimate_refuses_hidden_callee_cost() -> None:
     """Counting CALL as one instruction made an arbitrarily expensive helper look free."""
+    from qbopt.backend import cpu
+    from qbopt.backend import masm
     from qbopt.model import ir
     from qbopt.model import lir
-    from qbopt.backend import masm
 
     call = lir.Insn(0, (0, 0), ir.Semantics(ir.Operation.CALL, "call"), (), ())
     ret = lir.Insn(1, (1, 1), ir.Semantics(ir.Operation.RETURN, "ret"), (), ())
@@ -736,6 +757,10 @@ def test_dynamic_estimate_refuses_hidden_callee_cost() -> None:
     estimate, status = quality._dynamic_operations(module, procedure, 0)
     assert estimate is None
     assert status == "unmeasured: call or interrupt hides executed work"
+    cost, cost_status, forms = quality._dynamic_cost_report(module, procedure, 0, cpu.profile("386"))
+    assert cost is None
+    assert cost_status == status
+    assert forms == ()
 
 
 def test_dynamic_estimate_refuses_an_unmapped_block(monkeypatch: pytest.MonkeyPatch) -> None:
