@@ -41,13 +41,16 @@ from dataclasses import replace
 from qbopt.model import ir
 from qbopt.model import mir
 from qbopt.analysis import ssa
-from qbopt.analysis import loops as loopy
 from qbopt.model.mir import Op
 from qbopt.analysis import consts
+from qbopt.analysis import liveness
 from qbopt.model.mir import MirBody
 from qbopt.analysis import induction
+from qbopt.model.passes import Where
+from qbopt.analysis import loops as loopy
 from qbopt.objectfile.module import Space
-from qbopt.model.passes import MIRTransform, OperationCosts, Where
+from qbopt.model.passes import MIRTransform
+from qbopt.model.passes import OperationCosts
 
 _DEFAULT_COSTS = OperationCosts()
 
@@ -96,6 +99,7 @@ def reduced(
     if not found:
         return body
 
+    live = liveness.live(body) if registers else None
     at_of = {block.at: block for block in body.blocks}
     references: dict[int, int] = {}
     for block in body.blocks:
@@ -106,7 +110,7 @@ def reduced(
     first = taken + 1
     ahead: dict[int, list[Op]] = {}
     behind: dict[int, list[Op]] = {}
-    replacements: dict[int, "Op | tuple[Op, ...]"] = {}
+    replacements: dict[int, Op | tuple[Op, ...]] = {}
     # A carried pointer replaces an address expression with a copy from the
     # loop phi.  Its immediately-following memory use should name that phi
     # directly, rather than spend a copy merely to use it as a cell base.
@@ -159,7 +163,20 @@ def reduced(
         if call_registers and any(op.kind is mir.Kind.CALL for at in loop.body for op in at_of[at].ops):
             capacity = min(capacity, call_registers) if capacity else call_registers
         if capacity:
-            room = max(0, capacity - _recurrences(body, loop) - _RESERVE)
+            # The old fixed reserve saw only recurrences.  A C loop may also
+            # retain invariant address owners and several short-lived values;
+            # adding a backedge-live formula when that semantic peak already
+            # fills the target makes the new recurrence the spill.  Keep the
+            # historical recurrence budget as an upper bound, but let actual
+            # MIR liveness expose tighter loops.  Values which are still worth
+            # carrying *while spilled* are admitted by `_formula_set` below.
+            room = max(
+                0,
+                min(
+                    capacity - _recurrences(body, loop) - _RESERVE,
+                    capacity - liveness.pressure(body, live, loop.body),
+                ),
+            )
         candidates = _formula_set(candidates, room, free, costs=costs, references=references)
         indexes = {
             id(one.op): scale for one in candidates if (scale := _indexable(body, loop, one, scales, facts)) is not None
@@ -396,7 +413,43 @@ def _formula_set(
         selected.difference_update(id(child.op) for child in children)
         selected.add(id(parent.op))
 
+    # A complete sibling collapse cannot help a lone formula.  If it exceeds
+    # the pressure budget, compare the work it removes with the memory traffic
+    # of carrying it as a spilled recurrence.  This is the missing half of the
+    # candidate-set decision: `i * 2` is one cheap shift when recomputed, while
+    # a variable multiply can remain profitable even when its recurrence has
+    # to be updated and consumed from memory.
+    while slots() > room:
+        overflow = [one for one in candidates if id(one.op) in selected and id(one.op) not in free]
+        priced = []
+        for order, one in enumerate(overflow):
+            result = one.op.results[0].value if one.op.results and isinstance(one.op.results[0], mir.Held) else None
+            uses = references.get(result.id, 1) if result is not None else 1
+            spilled = costs.memory_update + uses * costs.load
+            priced.append((_recompute_cost(one, costs) - spilled, -order, one))
+        if not priced:
+            break
+        benefit, _order, loser = min(priced, key=lambda choice: choice[:2])
+        if benefit > 0:
+            break
+        selected.remove(id(loser.op))
+
     return [one for one in candidates if id(one.op) in selected]
+
+
+def _recompute_cost(one: induction.Derived, costs: OperationCosts) -> int:
+    """Target-neutral semantic cost of leaving one formula in its loop."""
+    if one.op.kind is mir.Kind.MUL:
+        if isinstance(one.by, mir.Const) and one.by.n > 0 and one.by.n & (one.by.n - 1) == 0:
+            return costs.shift
+        return costs.multiply
+    if one.op.kind in (mir.Kind.SHL, mir.Kind.SHR, mir.Kind.SAR):
+        return costs.shift
+    if one.op.kind in (mir.Kind.PTR_OFFSET, mir.Kind.ADD):
+        return costs.address
+    if one.op.kind in (mir.Kind.DIV, mir.Kind.REM, mir.Kind.DIVMOD):
+        return costs.divide
+    return costs.add
 
 
 def _copying(op: Op, start: mir.Value, answer: mir.Value, width: int) -> Op:
@@ -506,11 +559,7 @@ def _starts(into: mir.Value, one: induction.Derived, preheader: int, counted: bo
                 )
             )
             offset = mir.Held(product, width)
-        result = (
-            next(temporaries)
-            if one.pointer is not None or index != len(one.offsets) - 1
-            else into
-        )
+        result = next(temporaries) if one.pointer is not None or index != len(one.offsets) - 1 else into
         if current is None:
             kind = mir.Kind.LOAD if isinstance(offset, mir.Cell) else mir.Kind.COPY
             operations.append(_made(kind, "mov", result, (offset,), preheader, one.op))
@@ -541,12 +590,7 @@ def _start_temporary_count(one: induction.Derived, counted: bool = True) -> int:
     invariant; a scaled invariant needs both, and the counter itself is a
     separate temporary when it is materialized here.
     """
-    direct_pointer = (
-        one.pointer is not None
-        and isinstance(one.by, mir.Const)
-        and one.by.n == 1
-        and not one.offsets
-    )
+    direct_pointer = one.pointer is not None and isinstance(one.by, mir.Const) and one.by.n == 1 and not one.offsets
     if direct_pointer or one.pointer is None and not one.offsets:
         return 0
     return int(counted) + sum(
@@ -628,11 +672,7 @@ def _local_pointer_rebases(
     that address before the use runs.  Phi inputs retain the original copy;
     their individual incoming edges need a separate reconstruction rule.
     """
-    where = {
-        id(op): (block.at, index)
-        for block in body.blocks
-        for index, op in enumerate(block.ops)
-    }
+    where = {id(op): (block.at, index) for block in body.blocks for index, op in enumerate(block.ops)}
     dominators = loopy.dominators(body.blocks, body.entry)
     users: dict[int, list[Op]] = {}
     for block in body.blocks:
@@ -659,11 +699,7 @@ def _local_pointer_rebases(
         # A consumer with two independent carried-pointer bases must retain
         # both identities unless they agree.  That makes the substitution a
         # local value rename rather than an address-specific special case.
-        if any(
-            answer.id in rebases.get(id(user), {})
-            and rebases[id(user)][answer.id] != carried
-            for user in uses
-        ):
+        if any(answer.id in rebases.get(id(user), {}) and rebases[id(user)][answer.id] != carried for user in uses):
             continue
         for user in uses:
             rebases.setdefault(id(user), {})[answer.id] = carried

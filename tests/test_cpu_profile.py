@@ -6,15 +6,15 @@ import pytest
 from qbopt import flow
 from qbopt.model import ir
 from qbopt.model import mir
-from qbopt.analysis import induction
 from qbopt.backend import cpu
 from qbopt.backend import lower
 from qbopt.backend import allocate
-from qbopt.backend import floatalloc
 from qbopt.backend import schedule
-from qbopt.cfront import compile as cfront
-from qbopt.optimize import transform
 from qbopt.optimize import strength
+from qbopt.analysis import induction
+from qbopt.backend import floatalloc
+from qbopt.optimize import transform
+from qbopt.cfront import compile as cfront
 from qbopt.model.passes import OperationCosts
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "c"
@@ -193,3 +193,36 @@ def test_formula_selection_prices_complete_sibling_groups() -> None:
     selected = strength._formula_set(candidates, room=4, costs=costly_addresses)
 
     assert selected == [small[0], *large[1:]]
+
+
+def test_formula_selection_recomputes_a_cheap_scaled_index_under_pressure() -> None:
+    """farloadloop carried ``i * 2`` in a spilled recurrence.
+
+    A power-of-two product lowers to one shift.  With no recurrence slot
+    available, its shift is cheaper than a memory update plus the indexed
+    use's reload; a genuine multiply remains worth carrying under the same
+    pressure.
+    """
+    counter = mir.Value(10, 0)
+    answer = mir.Value(11, 1)
+    affine = induction.Affine(counter.id, mir.Const(0, 2), mir.Const(1, 2), 1)
+
+    def formula(by: mir.Const | mir.Held) -> induction.Derived:
+        multiply = mir.Op(
+            1,
+            ir.Operation.MULTIPLY,
+            "imul",
+            (answer,),
+            (counter,),
+            kind=mir.Kind.MUL,
+            args=(mir.Held(counter, 2), by),
+            results=(mir.Held(answer, 2),),
+        )
+        return induction.Derived(multiply, affine, by)
+
+    costs = OperationCosts(add=2, multiply=22, shift=3, load=4, memory_update=8)
+
+    assert strength._formula_set([formula(mir.Const(2, 2))], room=0, costs=costs, references={answer.id: 1}) == []
+    assert strength._formula_set(
+        [formula(mir.Held(mir.Value(12, 0), 2))], room=0, costs=costs, references={answer.id: 1}
+    )

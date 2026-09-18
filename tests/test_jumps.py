@@ -8,11 +8,11 @@ from pathlib import Path
 
 from iced_x86 import Register
 
-from qbopt.cfront import compile as cfront
 from qbopt.model import ir
 from qbopt.model import lir
 from qbopt.backend import masm
 from qbopt.backend import jumps
+from qbopt.cfront import compile as cfront
 
 AX, BX, CX = (ir.Reg(one, 2) for one in (Register.AX, Register.BX, Register.CX))
 
@@ -123,19 +123,41 @@ def test_identical_result_tails_are_merged() -> None:
     assert sum(what.op is ir.Operation.BRANCH for what in physical) == 0
 
 
-def test_sieve_rejects_tail_sharing_that_adds_a_hot_jump() -> None:
-    """Unpriced tail sharing grew C sieve from 54 to 55 instructions."""
-    source = Path("bench/c/sieve.c")
-    module = cfront.assembled(cfront.recorded(source, []), source.stem, optimise=True)
-    (procedure,) = module.procedures
-    physical = [
-        one
-        for block in procedure.body.blocks
-        for one in block.insns
-        if one.what is not None and one.what.op is not ir.Operation.NOTHING
-    ]
+def test_tail_sharing_rejects_a_static_saving_that_adds_hot_work() -> None:
+    """Unpriced tail sharing grew C sieve from 54 to 55 instructions.
 
-    assert len(physical) == 46
+    The regression is the cost decision, not sieve's total instruction count:
+    unrelated loop optimization later reduced that total from 46 to 40 while
+    preserving the decision.  Model a smaller static result whose extra loop
+    instruction makes it dynamically dearer and require the original body.
+    """
+
+    def body(entry: tuple[lir.Insn, ...], loop: tuple[lir.Insn, ...]) -> lir.LirBody:
+        return lir.LirBody(
+            "f",
+            1,
+            (
+                lir.LirBlock(1, entry, (10,)),
+                lir.LirBlock(10, loop, (30, 20)),
+                lir.LirBlock(20, (_jump(20, 10),), (10,)),
+                lir.LirBlock(30, (_return(30),), ()),
+            ),
+            {},
+            {},
+        )
+
+    before = body(
+        (_move(1, BX), _move(2, CX), _move(3, ir.Imm(0, 2)), _jump(4, 10)),
+        (_compare(10), _branch(11, "je", 30)),
+    )
+    after = body(
+        (_jump(1, 10),),
+        (_move(9, CX), _compare(10), _branch(11, "je", 30)),
+    )
+
+    assert jumps._work(after)[0] < jumps._work(before)[0]
+    assert jumps._work(after)[1] > jumps._work(before)[1]
+    assert jumps.preferred(before, after) is before
 
 
 def test_qglsurf_shares_all_three_zero_result_tails() -> None:

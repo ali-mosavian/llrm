@@ -803,6 +803,23 @@ def test_hot_loop_retains_invariant_far_field_owners_under_pressure():
     assert any("[bp+8]" in line for line in before), body
 
 
+def test_hot_loop_does_not_carry_a_scaled_index_that_spills() -> None:
+    """farloadloop grew a second induction variable for ``i * 2``.
+
+    The derived value was updated in a frame slot on every iteration, making
+    the strength-reduced loop 75 bytes / weighted 386 cost 141; recomputing
+    the cheap shift produced 71 / 133.  Formula selection must reject a
+    recurrence whose backedge lifetime costs more than the work it removes.
+    """
+    text = cfront.compiled((FIXTURES / "farloadloop.cgs").read_text(), "farloadloop", optimise=True)
+    body = _proc([line.strip() for line in text.splitlines()], "_mark")
+    jump = next(line for line in body if line.startswith("jl "))
+    loop_label = jump.split()[1] + ":"
+    loop = body[body.index(loop_label) : body.index(jump)]
+
+    assert not any(line.startswith("add word ptr [bp-") and line.endswith(", 2") for line in loop), loop
+
+
 @pytest.mark.parametrize("name", ["_grab", "_pass"])
 def test_long_call_result_is_consumed_as_its_two_words(name):
     """A long returned in DX:AX was joined through `push dx; push ax; pop eax`

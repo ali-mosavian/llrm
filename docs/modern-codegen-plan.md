@@ -24,11 +24,57 @@ iteration updates this file in the same commit.
 | MIR/LIR provenance and fresh OMF | complete in production | allocated LIR emits directly with external source maps/allocation hints; the remaining compatibility views are test-only and cannot route a compilation through record rewriting. |
 | SROA and scalar promotion | partial | fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies can now expand into exact leaves, while far, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
-| Loop optimization | partial | exact pre- and post-tested recurrences, composed pointer recurrences, formula costing, specialization, rotation, peeling and exact unrolling exist; versioning and broad pressure forecasting remain. |
+| Loop optimization | partial | exact pre- and post-tested recurrences, composed pointer recurrences, target-priced spill-aware formula rejection, specialization, rotation, peeling and exact unrolling exist; versioning and complete candidate-set pressure forecasting remain. |
 | Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs (including closed recursive SCCs in C and object paths), constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
 | Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 94. Spill-aware induction formula rejection — 2026-09-18
+
+The compact far-load loop was reconsidered from the raw GCC 16.2 and Clang
+21 listings rather than from BCC's register assignment.  Both flat-i386
+references carry one induction variable, while qbopt carried the source
+counter and a derived `i * 2` recurrence.  Their exact forms are not directly
+portable: Clang uses an unavailable SIB scale, and GCC carries a 32-bit byte
+offset and reconstructs the dynamic exit.  Replacing that with a 16-bit
+equality recurrence would be unsound because a step of two repeats after
+32,768 iterations.  The transferable result is therefore the candidate-set
+rule—choose one profitable complete IV set—not either reference's encoding.
+
+The fail-first C regression captured the actual excess: `_mark` updated the
+derived offset in `[bp-4]` on every trip.  Suppressing that formula measured
+better, so strength selection now combines its existing recurrence budget
+with the loop's MIR live peak.  A candidate beyond that capacity is retained
+only when recomputing its operation costs more than its predicted memory
+update and uses.  A power-of-two product is priced as the shift it will become,
+while a true variable multiply retains its multiplication price.  Liveness is
+computed once per strength pass and shared by all loops so the Tier 1 budget
+does not pay one whole-body analysis per candidate.
+
+Adjacent stage dumps are identical through `r01-promote`; `r01-strength` is
+the first difference, retaining the local multiply and removing the derived
+phi, seed, and latch update.  Later algebraic lowering turns that multiply
+into the expected shift.  The result is therefore attributed to formula
+selection rather than inferred backwards from allocation or assembly.
+
+On every CPU profile the loop falls from 75 bytes / 30 instructions to 71 /
+29.  Weighted cost changes are: 386 `141 -> 133`, 486 `78 -> 75`, P5
+`49 -> 46`, P6 `44 -> 44`, K5/K6 `24 -> 24`, K7 `29 -> 29`, and Core
+`43 -> 42`; no selected profile regresses.  The emitted result still spills
+the two mutually exclusive short-lived shifts through one frame slot.  That
+is now isolated as a Phase 4 local allocation/splitting problem rather than
+being obscured by a globally unprofitable second recurrence.
+
+The same Tier 1 run exposed a brittle sieve tail-sharing check that asserted
+the benchmark's unrelated total instruction count.  It now directly builds
+the cost counterexample and requires rejection when a static saving adds hot
+dynamic work.  The focused formula and emitted-code regressions failed before
+the change; Tier 1 passes (`208 passed`, `31 deselected`, `2.88s`).  The slow
+matrix comparison was stopped when it exceeded this iteration's test budget;
+the full corpus/profile matrix remains a phase-boundary gate.  GCC/LLVM remain
+best-case flat-i386 structural references, while BCC/WC remains authoritative
+for medium-model ABI, segments, legal forms, and audited hard targets.
 
 ### 93. Reject incomplete counter/mask role trial — 2026-09-18
 
