@@ -367,6 +367,61 @@ def _readonly_effects(body: mir.MirBody, calls: dict[int, str], readonly: frozen
     return True
 
 
+def noreturn_procedures(procedures: dict[str, tuple[mir.MirBody, dict[int, str]]]) -> frozenset[str]:
+    """Direct private procedures that cannot reach a normal return.
+
+    This is the named-body spelling of the shared MIR control proof used by
+    the object path.  A callee joins the terminal set only after every path in
+    its body is already terminal, so mutually recursive procedures do not
+    bootstrap one another into a no-return claim.
+    """
+    from qbopt.analysis import noreturn
+
+    proven: frozenset[str] = frozenset()
+    while True:
+        found = proven | frozenset(
+            name
+            for name, (body, calls) in procedures.items()
+            if noreturn._cannot_return(body, frozenset(at for at, target in calls.items() if target in proven))
+        )
+        if found == proven:
+            return proven
+        proven = found
+
+
+def terminal_calls(
+    body: mir.MirBody, calls: dict[int, str], noreturn: frozenset[str]
+) -> mir.MirBody:
+    """Cut code and CFG edges after a proven direct terminal call.
+
+    A physical CALL remains in its source order.  Only code whose execution
+    requires that proven terminal call to return is removed.  The caller may
+    itself become no-return in the next summary round; normal optimization
+    then cleans the newly unreachable CFG without a source-name exception.
+    """
+    blocks = []
+    changed = False
+    for block in body.blocks:
+        cut = next(
+            (
+                index
+                for index, op in enumerate(block.ops)
+                if op.kind is mir.Kind.CALL and calls.get(op.at) in noreturn
+            ),
+            None,
+        )
+        if cut is None:
+            blocks.append(block)
+            continue
+        ops = block.ops[: cut + 1]
+        if ops == block.ops and not block.succ:
+            blocks.append(block)
+            continue
+        blocks.append(replace(block, ops=ops, succ=()))
+        changed = True
+    return replace(body, blocks=tuple(blocks)) if changed else body
+
+
 def argument_sites(body: mir.MirBody, contracts: dict[int, object]) -> dict[int, frozenset[int]]:
     """Associate each call with the exact stack ARG operations that feed it."""
     out = {}

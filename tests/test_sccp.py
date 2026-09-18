@@ -418,3 +418,17 @@ def test_readonly_procedure_allows_only_direct_nonvolatile_static_reads():
     assert interprocedural.readonly_procedures(
         {"read": (body, {}), "volatile": (volatile_body, {}), "write": (writing, {})}
     ) == frozenset({"read"})
+
+
+def test_direct_noreturn_summary_prunes_only_the_callers_impossible_tail():
+    """A private spin body made its caller's following return unreachable, not the call itself."""
+    spin = mir.MirBody(1, (mir.MirBlock(1, (), (), (1,)),), sealed=True)
+    call = mir.Op(2, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.CALL)
+    returned = mir.Op(3, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.RETURN)
+    caller = mir.MirBody(2, (mir.MirBlock(2, (), (call, returned), ()),), sealed=True)
+    procedures = {"spin": (spin, {}), "caller": (caller, {2: "spin"})}
+
+    assert interprocedural.noreturn_procedures(procedures) == frozenset({"spin", "caller"})
+    pruned = interprocedural.terminal_calls(caller, {2: "spin"}, frozenset({"spin"}))
+    assert pruned.blocks[0].ops == (call,)
+    assert pruned.blocks[0].succ == ()

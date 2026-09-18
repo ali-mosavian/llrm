@@ -25,10 +25,37 @@ iteration updates this file in the same commit.
 | SROA and scalar promotion | partial | fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies can now expand into exact leaves, while far, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
 | Loop optimization | partial | exact pre- and post-tested recurrences, composed pointer recurrences, formula costing, specialization, peeling and exact unrolling exist; versioning, rotation and broad pressure forecasting remain. |
-| Whole-module optimization | partial | summaries, direct private readonly-effect proofs, constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
+| Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs, constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
 | Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 84. Direct private no-return caller-tail pruning — 2026-09-18
+
+`ipa_noreturn` first emitted `call _spinForever`, followed by the impossible
+`mov ax, 7; retf` tail in `entersSpin`.  The terminal callee is a private,
+direct C body whose only reachable path is an exact infinite loop.  Keeping
+that tail is both dead work and a barrier to the caller becoming terminal in
+the next whole-module round.
+
+The named-procedure fixed point now reuses the established MIR control proof:
+a body joins the no-return set only when each of its paths is independently
+terminal, or reaches a call proven terminal in an earlier round.  At every
+such direct call it keeps the physical `CALL` in source order and removes only
+the following operations and CFG edges whose execution would require a
+return.  The ordinary optimizer then handles the newly unreachable body.
+Already-terminal blocks are unchanged, so the fixed point is idempotent.
+Mutual recursion cannot bootstrap itself, and indirect, external,
+address-taken, and public-call claims remain conservative.
+
+The fail-first C regression now checks that `_entersSpin` retains
+`call _spinForever` but contains neither `mov ax, 7` nor a return.  Its Tier 1
+MIR companion separately proves that only the impossible caller tail is cut.
+Focused checks pass (`2 passed`, `0.22s`).  This advances Phase 6 direct
+no-return summaries only; nocapture/writeonly facts, recursive SCC summaries,
+and broader global elimination remain unfinished.  GCC/LLVM remain best-case
+flat-i386 listing references; BCC/WC medium-model assembly remains the hard
+authority for ABI, segments, address legality, and performance targets.
 
 ### 83. Refreshed compact far-load quality evidence — 2026-09-18
 

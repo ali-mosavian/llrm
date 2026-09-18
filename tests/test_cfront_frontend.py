@@ -182,6 +182,17 @@ def test_unused_private_readonly_call_is_removed() -> None:
     assert "call _sampleVolatile" in volatile
 
 
+def test_private_nonreturn_call_prunes_its_unreachable_caller_tail() -> None:
+    """ipa_noreturn left `mov ax, 7; retf` after a proven spinForever call."""
+    source = Path("fixtures/c/ipa_noreturn.c")
+    assembly = cfront.compiled(cfront.recorded(source, []), source.stem, optimise=True)
+    caller = assembly[assembly.index("_entersSpin proc far") : assembly.index("_entersSpin endp")]
+
+    assert "call _spinForever" in caller
+    assert "mov ax, 7" not in caller
+    assert "ret" not in caller
+
+
 def test_relative_source_and_include(tmp_path, monkeypatch):
     """wccq runs in its scratch directory, where `fixtures/c/x.c` and `-I src`
     no longer resolved: E1051 unable to open."""

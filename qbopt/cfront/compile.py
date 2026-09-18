@@ -473,6 +473,24 @@ def assembled(
             after = interprocedural.remove_dead_pure_calls(before, raised.calls, readonly, call_arguments[raised.name])
             if after is not before:
                 bodies[raised.name] = run_optimiser(raised, after, "ipa-pure.")
+        # A direct private body whose every path stops (for example an exact
+        # infinite loop) makes the tail of every call site unreachable. Keep
+        # the physical call, but remove only the code that would require it
+        # to return, then repeat because its caller may now be terminal too.
+        while True:
+            noreturn = interprocedural.noreturn_procedures(
+                {one.name: (bodies[one.name], one.calls) for one in raised_procedures}
+            )
+            changed = False
+            for raised in raised_procedures:
+                before = bodies[raised.name]
+                after = interprocedural.terminal_calls(before, raised.calls, noreturn)
+                if after is before:
+                    continue
+                bodies[raised.name] = run_optimiser(raised, after, "ipa-noreturn.")
+                changed = True
+            if not changed:
+                break
         roots = frozenset(one.name for one in raised_procedures if one.symbol.exported) | address_taken
         reachable = _reachable_procedures(raised_procedures, bodies, roots)
         raised_procedures = [one for one in raised_procedures if one.name in reachable]
