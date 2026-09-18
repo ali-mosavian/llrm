@@ -174,7 +174,15 @@ def repeated(ops: tuple[mir.Op, ...], count: int, initial: consts.Cells,
         for op in ops:
             if checkpoint(op):
                 continue  # exact operations add no pending exception; the check is retained by specialization
-            if op.barrier or op.merges:
+            # A narrow integer update can merge the old value's preserved
+            # upper half into its machine result.  The exact evaluator keeps
+            # the new fact at the operation's declared width, so that
+            # preservation cannot manufacture a wider numeric input; a
+            # later wide consumer simply remains unknown.  Rejecting the
+            # merge outright therefore discarded otherwise exact FP loop
+            # recurrences solely because their integer trip counter used a
+            # word increment.
+            if op.barrier:
                 return None
             if op.floating is None:
                 if op.kind not in allowed or op.loads or op.stores or op.stack is not None:

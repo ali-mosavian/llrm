@@ -946,3 +946,29 @@ does not claim progress on the Phase-4 pressure problem exercised by dynamic
 HOTLPX and PRESS.  GCC/LLVM listings remain advisory flat-i386 structural
 references, and BCC/WC medium-model output remains the emitted-form legality
 authority.
+
+### 45. Strict floating loop-exit facts — 2026-09-18
+
+FPCSE's strict floating recurrence had an exact ten-trip exit (487.5), but
+the numeric proof was blocked by the word loop-counter increment's preserved
+upper-half merge.  `floatfacts.repeated()` now permits such a narrow merge:
+the integer evaluator records only the operation's declared result width, so
+a later wider consumer stays unknown rather than inheriting an invented upper
+half.  The existing fail-first FPCSE read regression then proved the exit
+load folds to binary32 `0x43f3c000`.
+
+That proof exposed two correctness requirements.  First, ordinary `folded()`
+must not turn a loop's strict x87 sequence into static stores merely because
+the exit is numeric; storage folding is now limited to loop-free bodies, and
+FP loop specialization retains the final checked iteration.  Second, an
+edge fact is true at its successor, not after a call.  Constant-memory
+propagation therefore invalidates explicitly supplied edge facts at every
+call while retaining its existing precise call handling for ordinary facts.
+
+Five former strict xfails are now active: exact exit-read folding, edge
+scoping through calls/aliases/bypasses, alternate trip bounds, stage-dump
+evidence, and repeated storage rounding.  The focused suite passes (`19
+passed`, `1.15s`).  This is Phase-5 strict-FP loop analysis progress; it does
+not claim the separate FP loop-specialization or global x87-allocation gates
+are complete.  GCC/LLVM flat-i386 output remains advisory structural
+evidence only; BCC/WC medium-model output remains the legality baseline.

@@ -2026,9 +2026,17 @@ def folded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirB
         out.append(replace(block, ops=tuple(ops)))
     from qbopt.optimize import floatfold
 
-    return floatfold.stored(
-        floatfold.discarded(replace(body, blocks=tuple(out)) if changed else body, conversions), floating_facts
-    )
+    result = replace(body, blocks=tuple(out)) if changed else body
+    # An exact exit fact describes only the path leaving a numeric loop.  It
+    # may fold a successor load, but it is not permission for ordinary
+    # constant folding to replace the loop's strict x87 operations and their
+    # observation points with stores.  That transformation belongs to the
+    # dedicated FP loop specialization, which retains its final checked
+    # iteration.  Straight-line FP work remains eligible for the existing
+    # storage/conversion folds.
+    if loopy.loops(result.blocks, result.entry):
+        return result
+    return floatfold.stored(floatfold.discarded(result, conversions), floating_facts)
 
 
 def _constant_update(op: Op, facts: dict, memory: dict, wanted: set) -> Op:

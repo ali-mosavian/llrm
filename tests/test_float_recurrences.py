@@ -10,7 +10,6 @@ from qbopt.analysis import consts, floatfacts
 from qbopt.model import mir
 
 
-@pytest.mark.xfail(reason="FPCSE's floating loop exit is no longer proved", strict=True)
 def test_proved_exit_folds_a_read_without_removing_strict_operations():
     """FPCSE's 487.5 exit was reported but unavailable to later integer reads."""
     from qbopt.optimize import transform
@@ -32,7 +31,6 @@ def test_proved_exit_folds_a_read_without_removing_strict_operations():
     assert next(block for block in changed.blocks if block.at == latch.at) == latch
 
 
-@pytest.mark.xfail(reason="FPCSE's floating loop exit is no longer proved", strict=True)
 @pytest.mark.parametrize("change", ["none", "call", "alias", "bypass"])
 def test_exit_facts_stay_on_the_proved_edge_and_obey_memory_effects(change):
     """487.5 is the normal FPCSE exit, not an invariant or a post-call guarantee."""
@@ -63,7 +61,6 @@ def test_exit_facts_stay_on_the_proved_edge_and_obey_memory_effects(change):
         consts.Known(0x43f3c000, 4) if change == "none" else None)
 
 
-@pytest.mark.xfail(reason="FPCSE's floating loop exit is no longer proved", strict=True)
 @pytest.mark.parametrize("count,bits", [(3, 0x43124000), (10, 0x43f3c000)])
 def test_loop_exit_analysis_uses_the_actual_bound(count, bits):
     """FPCSE's exit must follow its loop bound, not an assumed ten iterations."""
@@ -101,7 +98,6 @@ def test_loop_exit_analysis_rejects_unproved_control_or_header_effects(change):
     assert floatfacts.loop_exits(body, found.dgroup, found.calls) == ()
 
 
-@pytest.mark.xfail(reason="FPCSE's floating loop exit is no longer proved", strict=True)
 def test_stage_dump_exposes_proved_loop_exit(capsys):
     from tools import stages
     path = Path("fixtures/omf/fpcse-p-g2.obj")
@@ -111,7 +107,6 @@ def test_stage_dump_exposes_proved_loop_exit(capsys):
     assert "after 10 iterations" in report and "0x43f3c000" in report
 
 
-@pytest.mark.xfail(reason="FPCSE's floating loop exit is no longer proved", strict=True)
 @pytest.mark.parametrize("tag", ["p-g2", "v-g3"])
 def test_fpcse_memory_recurrence_has_exact_single_exit(tag):
     """FPCSE retained ten iterations although its rounded accumulator exits at 487.5."""

@@ -194,6 +194,7 @@ def _kills(
     calls: dict[int, str],
     assume: "set[mir.Value] | None" = None,
     allowed: "frozenset[mir.Value] | None" = None,
+    edge_facts: bool = False,
 ) -> Cells:
     """The cell facts still standing after this operation.
 
@@ -208,6 +209,16 @@ def _kills(
     """
     from qbopt.analysis import effects
 
+    # A fact supplied for one CFG edge is a proof about reaching that edge,
+    # not a durable summary of a callee.  In particular, a numeric loop exit
+    # may describe a static cell exactly at its successor but cannot be
+    # forwarded through a call merely because today's runtime contract does
+    # not name that cell.  The caller may observe, replace, or resume through
+    # memory the local contract cannot model.  Ordinary propagation keeps its
+    # existing precise call handling; this conservative rule applies only
+    # while explicitly supplied edge facts participate in the analysis.
+    if edge_facts and op.kind is mir.Kind.CALL:
+        here = {}
     if effects.unmodeled_write(op) and (op.barrier or op.at not in calls):
         here = {}
     if op.kind is mir.Kind.CALL and op.at in calls and not op.stores:
@@ -311,7 +322,7 @@ def cells(
             if here is None:
                 continue
             for op in block.ops:
-                here = _kills(here, op, known, dgroup, calls, assume, allowed)
+                here = _kills(here, op, known, dgroup, calls, assume, allowed, bool(edges))
             if outof[block.at] != here:
                 outof[block.at] = here
                 changing = True
@@ -321,7 +332,7 @@ def cells(
         here = entering(block.at) or {}
         for index, op in enumerate(block.ops):
             found[(block.at, index)] = here
-            here = _kills(here, op, known, dgroup, calls, assume, allowed)
+            here = _kills(here, op, known, dgroup, calls, assume, allowed, bool(edges))
     return found
 
 
