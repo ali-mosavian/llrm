@@ -2608,6 +2608,20 @@ class Dead(MIRTransform):
         return dead(body)
 
 
+class FloatLoop(MIRTransform):
+    """Specialize a proven strict-FP recurrence before LICM changes its shape."""
+
+    name = "floatloop"
+
+    def __init__(self, where: Where) -> None:
+        self.where = where
+
+    def transform(self, body: MirBody) -> MirBody:
+        from qbopt.optimize import floatloop
+
+        return floatloop.specialized(body, self.where.dgroup, self.where.calls)
+
+
 class Hoist(MIRTransform):
     name = "hoist"
 
@@ -2688,6 +2702,10 @@ def pipeline(where: Where, **wanted) -> list[MIRTransform]:
         Decide(where),
         loopsimplify.LoopSimplify(),
         lcssa.LoopClosedSSA(),
+        # Strict floating recurrences must retain their original iteration
+        # order.  Their numeric exit proof is canonical here; LICM may move
+        # invariant x87 preparation out of the latch afterwards.
+        FloatLoop(where),
         Hoist(where),
         DropStores(where),
         Gvn(where),

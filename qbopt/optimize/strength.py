@@ -63,7 +63,6 @@ class Strength(MIRTransform):
         from qbopt.optimize import ivshare
         from qbopt.optimize import exitsink
         from qbopt.optimize import loopexit
-        from qbopt.optimize import floatloop
         from qbopt.optimize import transform
 
         body = reduced(
@@ -77,7 +76,7 @@ class Strength(MIRTransform):
         )
         body = exitsink.sunk(transform.dead(ivshare.shared(body)))
         body = loopexit.evaluated(body)
-        body = indvars.simplified(floatloop.specialized(body, self.where.dgroup, self.where.calls))
+        body = indvars.simplified(body)
         return indvars.zeroed(body)
 
 

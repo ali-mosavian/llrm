@@ -972,3 +972,24 @@ passed`, `1.15s`).  This is Phase-5 strict-FP loop analysis progress; it does
 not claim the separate FP loop-specialization or global x87-allocation gates
 are complete.  GCC/LLVM flat-i386 output remains advisory structural
 evidence only; BCC/WC medium-model output remains the legality baseline.
+
+### 46. Strict FP specialization before LICM — 2026-09-18
+
+The FPCSE integration trace showed that the strict-FP specializer already
+worked on canonical MIR but was called from `Strength` after LICM.  LICM had
+then moved invariant x87 preparation out of the latch, leaving the
+specializer no longer able to recognize the checked recurrence.  A dedicated
+`floatloop` pipeline transform now runs immediately after LCSSA and before
+LICM; `Strength` no longer invokes it too late.
+
+This is not a static replacement of the final result.  The specialized body
+stores the rounded penultimate value 438.75 (`0x43db6000`) with its original
+symbol ownership, retains the original final x87 store to produce 487.5, and
+writes the final counter value 11 before the exit.  The updated three-layout
+regression observes that stage, requires no remaining natural loop, the
+symbol-owned seed, the final strict store at the original accumulator, and
+the original counter cell (`3 passed`, `1.97s`).  This advances Phase 5
+strict FP loop specialization; final x87 allocation and runtime-matrix
+acceptance remain separate gates.  GCC/LLVM listings remain advisory
+flat-i386 structural references; BCC/WC medium-model output remains the ABI
+and addressing-form authority.

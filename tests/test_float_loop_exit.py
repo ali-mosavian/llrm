@@ -27,10 +27,9 @@ def test_checkpoint_with_additional_effects_is_not_ignored(effect):
     assert floatfacts.repeated((op,), 1, {}, frozenset()) is None
 
 
-@pytest.mark.xfail(reason="FPCSE's floating loop exit is no longer proved", strict=True)
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_emitted_final_answer_has_the_correct_symbol(tag):
-    """FPCSE printed 48.75 instead of 487.5 when its new seed lost its relocation."""
+    """FPCSE seeds 438.75 and retains the strict final iteration to reach 487.5."""
     from qbopt import wholeseg
 
     path = Path(f"fixtures/omf/fpcse-{tag}.obj")
@@ -40,17 +39,22 @@ def test_emitted_final_answer_has_the_correct_symbol(tag):
         op.stores[0] for block in body.blocks for op in reversed(block.ops) if op.kind is mir.Kind.FSTORE
     )
     counter = next(op.stores[0] for block in body.blocks if block.phis for op in block.ops if op.stores)
-    result = wholeseg.emitted(path.read_bytes())
+    states = []
+
+    def watch(stage, name, state):
+        if stage == "mir-r01-floatloop" and isinstance(state, mir.MirBody):
+            states.append(state)
+
+    result = wholeseg.emitted(path.read_bytes(), watch=watch)
     assert result.outcome is wholeseg.Emission.LIR, result.reason
-    emitted = corpus.loaded(result.data)
-    bodies = mir.bodies(emitted, corpus.partitioned(result.data))
-    ops = [op for _, body in bodies for block in body.blocks for op in block.ops]
-    (final,) = [op for op in ops if op.kind is mir.Kind.STORE and op.args == (mir.Const(0x43F3C000, 4),)]
-    assert final.stores[0].addr == accumulator.addr
-    assert any(op.kind is mir.Kind.ARG and op.args == (mir.Const(0x43F3C000, 4),) for op in ops)
+    (specialized,) = states
+    assert not loops.loops(specialized.blocks, specialized.entry)
+    ops = [op for block in specialized.blocks for op in block.ops]
+    (seed,) = [op for op in ops if op.kind is mir.Kind.STORE and op.args == (mir.Const(0x43DB6000, 4),)]
+    assert seed.stores[0].addr == accumulator.addr and seed.symbol
+    assert any(op.kind is mir.Kind.FSTORE and accumulator in op.stores for op in ops)
     (final_counter,) = [op for op in ops if op.kind is mir.Kind.STORE and op.args == (mir.Const(11, 2),)]
     assert final_counter.stores[0].addr == counter.addr
-    assert all(not loops.loops(body.blocks, body.entry) for _, body in bodies)
 
 
 @pytest.mark.xfail(reason="FPCSE's floating loop exit is no longer proved", strict=True)
