@@ -846,3 +846,39 @@ This is Phase-3 scalar/CSE progress, not a claim that the GCC/LLVM listing is
 an ABI target.  The fresh BCC/WC medium-model listing remains the source for
 the legal far-address form; flat-i386 GCC/LLVM listings remain best-case
 structural evidence only.
+
+### 41. Explicit merged operands remain effective — 2026-09-18
+
+The next loop-motion regression, `IVWORD`, was exercised fail-first with
+unswitching disabled.  Its unchanged `branchChoice` cell was loaded and
+tested on every trip of the ten-iteration loop, on both the PDS `/G2` and
+QuickBASIC `/O` fixtures.  Stage dumps showed that LICM proved the load
+non-aliasing and collected its `LOAD` plus `AND` as an invariant run.  It
+then correctly retained the flags-producing `AND` in the loop, but
+incorrectly discarded the load as non-crossing.
+
+The cause was the effective-value seed, not a loop-specific condition:
+`and value,value` both explicitly consumes its low word to produce flags and
+merges its preserved upper word into its narrow result.  The seed treated
+every merged use as preservation only.  It now delegates to MIR's single
+`consumed()` definition, which retains explicit operands and address bases
+even when the same value is merged, while excluding preservation alone.  The
+existing regression is now active and checks the emitted loop has no memory
+source load while retaining its conditional test.  It failed before the
+change and now passes for both compiler layouts (`2 passed`, `1.49s`).
+
+While checking adjacent induction coverage, the old HARR structural test
+failed identically with and without this change: the current optimizer fully
+unrolls its fixed 10-by-10 fixture, leaving no conditional branch for an
+assertion spelling `jne` to count.  The raw listing contains the expected
+constant stores and no retained loop.  The test now measures natural loops
+instead of a particular branch mnemonic: a retained shape must have the
+expected number of loops and recurrence increments, while a fully unrolled
+shape must have no increments.  This keeps the test useful across legal
+lowering branch choices and complete unrolling without treating a stronger
+result as a regression.
+
+This advances Phase 5 LICM and Phase 4's machine-neutral value accounting.
+It does not infer a target from the result: GCC/LLVM flat-i386 listings are
+still advisory best-case structural references, while BCC/WC medium-model
+output defines the ABI, segmentation, and legal address-form constraints.

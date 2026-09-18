@@ -952,13 +952,15 @@ def _effective(body: MirBody, calls: dict[int, str]) -> set:
             for value in phi.incoming.values():
                 carrying.setdefault(phi.result, set()).add(value)
         for op in block.ops:
-            for use in op.uses:
-                # Really read, not merely preserved. `merges` is the raise's
-                # answer to that; asked as "is this use's register among the
-                # ones the instruction names", the index register of a based
-                # operand was missed and the use read as preserved.
-                if use.flags or op.at in calls or use not in op.merges:
-                    wanted.add(use)
+            # `merges` records a value preserved into a narrow result, not
+            # necessarily an unconsumed one.  `and ax,ax`, for example,
+            # reads AX to set the flags and also preserves the upper half of
+            # EAX; dropping every merged use therefore made an invariant
+            # condition load look dead.  `mir.consumed()` is the one
+            # machine-neutral definition of the distinction: it retains an
+            # explicit operand (and an address base) even when the same
+            # value is merged, while excluding preservation alone.
+            wanted |= _consumed(op)
     changing = True
     while changing:
         changing = False

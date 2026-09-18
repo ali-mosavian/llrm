@@ -10,7 +10,6 @@ from qbopt.model import ir, mir
 from qbopt.analysis import loops
 
 
-@pytest.mark.xfail(reason="IVWORD's invariant branch load stays in the loop on p-g2 and q-O", strict=True)
 @pytest.mark.parametrize("tag", ["p-g2", "q-O"])
 def test_invariant_branch_load_moves_out_but_its_test_stays(tag, monkeypatch):
     """IVWORD reloaded unchanged branchChoice every trip because its test prevented LICM."""
@@ -44,15 +43,24 @@ def test_internal_branch_reuses_the_value_recurrence(tag, program, monkeypatch):
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
-@pytest.mark.parametrize("program,branches,increments", [("harr", 1, 1), ("matrix", 2, 1), ("nested", 2, 0)])
+@pytest.mark.parametrize("program,loop_count,increments", [("harr", 1, 1), ("matrix", 2, 1), ("nested", 2, 0)])
 def test_harr_reuses_an_existing_recurrence_for_termination(
-    tag: str, program: str, branches: int, increments: int
+    tag: str, program: str, loop_count: int, increments: int
 ) -> None:
-    """HARR advanced both c and r+c on each inner iteration; one recurrence suffices."""
+    """HARR has one recurrence per retained loop, or is completely unrolled."""
     result = wholeseg.emitted(Path(f"fixtures/omf/{program}-{tag}.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
-    instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]
-    assert sum(one.startswith("jne ") for one in instructions) == branches
+    blocks = corpus.partitioned(result.data)
+    instructions = [str(one.insn) for block in blocks for one in block.insns]
+    retained = loops.loops(blocks)
+    if not retained:
+        # All bounds and body values are constants in HARR, so complete
+        # unrolling is stronger than retaining the old recurrence.  Do not
+        # require a particular conditional-branch spelling from a future
+        # lowering pass.
+        assert not any(one.startswith("inc ") for one in instructions)
+        return
+    assert len(retained) == loop_count
     assert sum(one.startswith("inc ") for one in instructions) == increments
 
 
