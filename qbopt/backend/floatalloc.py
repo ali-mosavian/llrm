@@ -9,6 +9,7 @@ from iced_x86 import Register
 from qbopt.model import ir
 from qbopt.model import lir
 from qbopt.model.passes import LIRTransform
+from qbopt.backend import cpu as targets
 from qbopt.objectfile.module import Space
 
 
@@ -317,8 +318,8 @@ class _Stack:
     unwritten: each reader takes the cell as its memory operand or reloads it.
     """
 
-    def __init__(self, frame, floating: set[int]):
-        self.frame, self.floating = frame, floating
+    def __init__(self, frame, floating: set[int], cpu: targets.Profile):
+        self.frame, self.floating, self.cpu = frame, floating, cpu
         self.values: list[int] = []  # top first
         self.home: dict[int, lir.Insn] = {}  # the load that reads a value again
         self.defined: dict[int, int] = {}
@@ -668,9 +669,16 @@ class _Stack:
             self.values[other] = result
 
 
-def allocated(body: lir.LirBody, frame=None, *, basic_semantics: bool = True) -> lir.LirBody:
+def allocated(
+    body: lir.LirBody,
+    frame=None,
+    *,
+    basic_semantics: bool = True,
+    cpu: str | targets.Profile = "386",
+) -> lir.LirBody:
     from qbopt.backend.lower import Unlowered
 
+    target = targets.profile(cpu)
     body = _integer_stores(_integer_loads(body, frame), frame, basic_semantics)
     floating = {
         arg.value
@@ -734,6 +742,7 @@ def allocated(body: lir.LirBody, frame=None, *, basic_semantics: bool = True) ->
                 + tuple(block for block in body.blocks if block.at not in order),
             ),
             frame,
+            cpu=target,
         )
     floating = {
         arg.value
@@ -743,7 +752,7 @@ def allocated(body: lir.LirBody, frame=None, *, basic_semantics: bool = True) ->
         for arg in (*one.what.sources, *one.what.dests)
         if isinstance(arg, ir.Held) and arg.width == 10
     }
-    stack = _Stack(frame, floating)
+    stack = _Stack(frame, floating, target)
     blocks = []
     for index, block in enumerate(body.blocks):
         if index - 1 not in continues:
@@ -829,9 +838,10 @@ def _truncating(body: lir.LirBody, frame) -> lir.LirBody:
 class FloatAlloc(LIRTransform):
     name = "floatalloc"
 
-    def __init__(self, frame=None, *, basic_semantics: bool = True):
+    def __init__(self, frame=None, *, basic_semantics: bool = True, cpu: str | targets.Profile = "386"):
         self.frame = frame
         self.basic_semantics = basic_semantics
+        self.cpu = targets.profile(cpu)
 
     def transform(self, body):
-        return allocated(body, self.frame, basic_semantics=self.basic_semantics)
+        return allocated(body, self.frame, basic_semantics=self.basic_semantics, cpu=self.cpu)

@@ -1345,3 +1345,25 @@ measurement, not a runtime target or a comparison against an ABI-incompatible
 listing.  GCC/LLVM remain best-case flat-i386 structural references for loop
 and traffic audits; BCC/WC medium-model output remains the authority for
 segments, legal address forms, ABI costs, and hard targets.
+
+### 61. Profile-aware x87 allocation boundary — 2026-09-18
+
+The CPU-profile audit found one remaining propagation hole: `flow.machine()`
+passed the selected immutable profile to general register allocation but built
+`FloatAlloc` with no profile.  That left every future x87 keep-versus-reload,
+spill, and stack-form decision exposed to an implicit 386 policy even when a
+caller had selected P5, P6, K5, K6, K7, or Core.
+
+`FloatAlloc` and its direct `allocated()` API now resolve and retain the same
+`cpu.Profile` as the rest of the machine pipeline; direct callers retain the
+public default of `386`.  The current x87 policy is deliberately unchanged:
+this is the explicit architecture boundary needed before a costed choice can
+be introduced, not a fabricated performance change.  The fail-first pipeline
+regression previously found no `FloatAlloc.cpu`; it now proves that the P5
+profile object is the exact immutable object received by both allocators.
+
+The focused CPU-profile suite passes (`10 passed`, `0.19s`) and the x87
+allocator suite passes (`75 passed`, `0.07s`).  This advances Phase 1's
+per-CPU plumbing and Phase 4's x87 allocation work.  GCC/LLVM remain
+best-case flat-i386 structural references; BCC/WC medium-model output remains
+the ABI and legal-form authority.

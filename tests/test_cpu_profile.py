@@ -10,6 +10,7 @@ from qbopt.analysis import induction
 from qbopt.backend import cpu
 from qbopt.backend import lower
 from qbopt.backend import allocate
+from qbopt.backend import floatalloc
 from qbopt.cfront import compile as cfront
 from qbopt.optimize import transform
 from qbopt.optimize import strength
@@ -91,7 +92,9 @@ def test_unknown_cpu_is_rejected_at_the_shared_boundary() -> None:
 def test_machine_pipeline_gives_allocator_the_complete_cpu_profile() -> None:
     phases = flow.machine({}, cpu="P5")
     allocator = next(one for one in phases if isinstance(one, allocate.RegAlloc))
+    floating = next(one for one in phases if isinstance(one, floatalloc.FloatAlloc))
     assert allocator.cpu is cpu.profile("P5")
+    assert floating.cpu is cpu.profile("P5")
 
 
 def test_c_frontend_threads_selected_cpu_to_every_procedure(monkeypatch: pytest.MonkeyPatch) -> None:

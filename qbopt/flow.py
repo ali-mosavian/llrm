@@ -67,7 +67,7 @@ def machine(
     if frame is not None and frame.native is not None:
         pinned = {**pinned, **frame.native_pins}
     return [
-        floatalloc.FloatAlloc(frame, basic_semantics=basic_semantics),
+        floatalloc.FloatAlloc(frame, basic_semantics=basic_semantics, cpu=target),
         phielim.PhiElimination(),
         twoaddr.TwoAddress(),
         coalesce.Coalescer(),
