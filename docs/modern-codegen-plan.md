@@ -581,3 +581,17 @@ therefore remains correct to refuse it.  The next implementation must choose
 and split the mutually dependent counter, shifted successor, and CL reload
 as one plan; this change merely removes an accidental temporary from that
 candidate and improves every frontend's ordinary move spill path.
+
+### 29. Soft register-role preferences — 2026-09-18
+
+The allocator now distinguishes a role preference from a hard ABI pin.
+`allocate(..., preferred={value: register})` tries the preferred legal
+register first but freely falls back when it is occupied; it cannot turn a
+valid body into an unplaceable fixed-register problem.  The fail-first
+allocator regression proves both halves: a free DX preference is honoured,
+and the same preference falls back when an overlapping hard DX range exists.
+
+This is the required foundation for the next joint role-plan evaluator.  It
+lets that evaluator compare counter and temporary roles using real complete
+allocations, while `pinned` remains exclusively an ABI/encoding fact and the
+unplaceable-reload guard continues to reject impossible candidates.

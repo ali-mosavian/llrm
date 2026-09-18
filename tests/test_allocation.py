@@ -399,6 +399,34 @@ def test_a_half_register_and_its_whole_are_the_same_register() -> None:
         )
 
 
+def test_a_soft_preference_changes_free_register_order_without_becoming_a_pin() -> None:
+    """r_walk needs to compare counter placements without declaring one ABI-fixed.
+
+    A role trial must be able to try DX before EAX for a freely placeable
+    value, but DX is still only a preference: if it is unavailable, ordinary
+    allocation may choose another legal register instead of reporting an
+    impossible fixed assignment.
+    """
+    from qbopt.backend import allocate
+
+    one = allocate.allocate(_one_block(_mov(1, 1, 0x100)), preferred={1: Register.EDX})
+    assert one.where[1] is Register.EDX
+    overlap = lir.Insn(
+        at=0x104,
+        covers=(0x104, 0x106),
+        what=ir.Semantics(ir.Operation.BINARY, "add", (ir.Held(1, 2),), (ir.Held(1, 2), ir.Held(2, 2))),
+        defines=(1,),
+        uses=(1, 2),
+        op=None,
+    )
+    held = allocate.allocate(
+        _one_block(_mov(2, 2, 0x100), _mov(1, 1, 0x102), overlap),
+        pinned={2: Register.EDX},
+        preferred={1: Register.EDX},
+    )
+    assert held.where[1] is not Register.EDX
+
+
 def test_folded_spill_cost_depends_on_the_selected_cpu() -> None:
     """A folded source is not free on a 386.
 

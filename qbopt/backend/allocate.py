@@ -367,6 +367,7 @@ def allocate(
     pinned: dict[int, Register_] | None = None,
     unspillable: "frozenset[int] | None" = None,
     protected: "frozenset[int] | None" = None,
+    preferred: "dict[int, Register_] | None" = None,
     *,
     cpu: "str | targets.Profile" = "386",
 ) -> Assignment:
@@ -463,6 +464,15 @@ def allocate(
         if mine is None:
             continue
         order = target.order(confined.get(value)) if value not in fixed else (fixed[value],)
+        # A preference is an allocation-order vote, unlike `pinned`: it
+        # cannot make an otherwise legal plan unplaceable.  Pressure-plan
+        # evaluation uses it to compare counter/temporary roles without
+        # pretending an ISA or ABI fact requires a particular register.
+        if value not in fixed and (choice := (preferred or {}).get(value)) is not None:
+            wanted = _whole(choice)
+            order = tuple(one for one in order if _whole(one) is wanted) + tuple(
+                one for one in order if _whole(one) is not wanted
+            )
         # A 16-bit `[base+index]` form has a non-interchangeable base role:
         # only BX can carry it, while SI/DI carry the index.  A protected
         # loop-scoped address owner is deliberately long-lived over the hot
