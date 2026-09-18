@@ -207,6 +207,8 @@ class Sroa(MIRTransform):
 
     def transform(self, body: MirBody) -> MirBody:
         body = _bounded_leaves(body)
+        body = _canonical_leaf_types(body)
+        body = _split_copies(body)
         return promoted(body, self.where.dgroup, self.where.bounds, aggregate_only=True)
 
 
@@ -315,6 +317,248 @@ def _bounded_leaves(body: MirBody) -> MirBody:
         )
         blocks.append(replace(block, ops=ops))
     return replace(body, blocks=tuple(blocks))
+
+
+def _canonical_leaf_types(body: MirBody) -> MirBody:
+    """Attach an established scalar type to an otherwise untyped same-size leaf.
+
+    A C aggregate move is byte-typed at the raise, while a later field access
+    carries the field's scalar type.  They are the same exact bytes, not a
+    type-punning access: the former simply has no more precise source type to
+    report.  Canonicalizing only that ``None`` spelling lets the scalar leaf
+    represent both occurrences.  Two explicit, distinct type classes retain
+    the existing conservative union/type-pun rejection.
+    """
+    types: dict[tuple[memory.Object, int, int], set[str]] = {}
+    for block in body.blocks:
+        for op in block.ops:
+            if op.source_backed or op.absorbed or op.id is None:
+                continue
+            for ref in (*op.loads, *op.stores):
+                if (leaf := _leaf(ref)) is not None and leaf.type_class is not None:
+                    types.setdefault((leaf.object, leaf.low, leaf.high), set()).add(leaf.type_class)
+
+    known = {key: next(iter(classes)) for key, classes in types.items() if len(classes) == 1}
+    if not known:
+        return body
+
+    def reference(ref: mir.MemRef) -> mir.MemRef:
+        leaf = _leaf(ref)
+        if leaf is None or ref.typed is not None:
+            return ref
+        type_class = known.get((leaf.object, leaf.low, leaf.high))
+        return ref if type_class is None else replace(ref, typed=(type_class, False))
+
+    def operand(arg: mir.Arg) -> mir.Arg:
+        return mir.Cell(reference(arg.ref)) if isinstance(arg, mir.Cell) else arg
+
+    return replace(
+        body,
+        blocks=tuple(
+            replace(
+                block,
+                ops=tuple(
+                    op
+                    if op.source_backed or op.absorbed or op.id is None
+                    else replace(
+                        op,
+                        loads=tuple(map(reference, op.loads)),
+                        stores=tuple(map(reference, op.stores)),
+                        args=tuple(map(operand, op.args)),
+                        results=tuple(map(operand, op.results)),
+                        memory_values=tuple((reference(ref), value) for ref, value in op.memory_values),
+                    )
+                    for op in block.ops
+                ),
+            )
+            for block in body.blocks
+        ),
+    )
+
+
+def _copy_partition(ref: mir.MemRef, leaves: tuple[_Leaf, ...]) -> tuple[_Leaf, ...] | None:
+    """The exact scalar partition of a whole-object move destination, if any."""
+    whole = _leaf(ref)
+    if whole is None:
+        return None
+    pieces = tuple(
+        sorted(
+            {
+                leaf
+                for leaf in leaves
+                if leaf.object == whole.object
+                and whole.low <= leaf.low < leaf.high <= whole.high
+                and (leaf.low, leaf.high) != (whole.low, whole.high)
+            },
+            key=lambda leaf: (leaf.low, leaf.high),
+        )
+    )
+    if len(pieces) < 2:
+        return None
+    at = whole.low
+    for piece in pieces:
+        if piece.low != at:
+            return None
+        at = piece.high
+    return pieces if at == whole.high else None
+
+
+def _copy_piece(ref: mir.MemRef, whole: _Leaf, piece: _Leaf, *, low: int) -> mir.MemRef:
+    """One direct scalar byte range of a proven whole-object access."""
+    assert ref.addr is not None
+    return replace(
+        ref,
+        addr=ref.addr.plus(low - whole.low),
+        width=piece.high - piece.low,
+        typed=None if piece.type_class is None else (piece.type_class, False),
+        provenance=memory.Provenance.one(whole.object, low, low + piece.high - piece.low),
+    )
+
+
+def _split_copies(body: MirBody) -> MirBody:
+    """Expand a proven direct aggregate move into its existing scalar leaves.
+
+    This is deliberately stricter than an ordinary copy: both sides must be
+    direct exact references, their objects must be known disjoint, and the
+    destination's complete byte range must already have a contiguous scalar
+    partition.  In particular it never splits a far or indexed pointer copy:
+    changing one uncertain wide access into several accesses could alter its
+    fault/tearing behaviour.  The C aggregate move has no source-byte owner;
+    source-backed object instructions stay untouched for the source-map
+    emitter.
+    """
+    leaves = tuple(
+        leaf
+        for block in body.blocks
+        for op in block.ops
+        for ref in (*op.loads, *op.stores)
+        if (leaf := _leaf(ref)) is not None
+    )
+    fresh = _next(body)
+    variable = max((one.variable for one in ssa.values(body)), default=0) + 1
+    changed = False
+    blocks = []
+
+    for block in body.blocks:
+        ops: list[Op] = []
+        index = 0
+        while index < len(block.ops):
+            load = block.ops[index]
+            store = block.ops[index + 1] if index + 1 < len(block.ops) else None
+            candidate = _copy_candidate(load, store, leaves)
+            if candidate is None:
+                ops.append(load)
+                index += 1
+                continue
+            source, destination, source_leaf, destination_leaf, pieces = candidate
+            for piece in pieces:
+                source_piece = _copy_piece(
+                    source,
+                    source_leaf,
+                    piece,
+                    low=source_leaf.low + piece.low - destination_leaf.low,
+                )
+                destination_piece = _copy_piece(destination, destination_leaf, piece, low=piece.low)
+                width = piece.high - piece.low
+                value = mir.Value(fresh, load.at, variable=variable, version=1)
+                fresh += 1
+                variable += 1
+                held = mir.Held(value, width)
+                ops.append(
+                    replace(
+                        load,
+                        defines=(value,),
+                        uses=(),
+                        loads=(source_piece,),
+                        stores=(),
+                        args=(mir.Cell(source_piece),),
+                        results=(held,),
+                        source_backed=False,
+                        raised=None,
+                        id=None,
+                        absorbed=(),
+                        symbol=None,
+                    )
+                )
+                ops.append(
+                    replace(
+                        store,
+                        defines=(),
+                        uses=(value,),
+                        loads=(),
+                        stores=(destination_piece,),
+                        args=(held,),
+                        results=(mir.Cell(destination_piece),),
+                        source_backed=False,
+                        raised=None,
+                        id=None,
+                        absorbed=(),
+                        symbol=None,
+                    )
+                )
+            changed = True
+            index += 2
+        blocks.append(replace(block, ops=tuple(ops)))
+    return replace(body, blocks=tuple(blocks)) if changed else body
+
+
+def _copy_candidate(load: Op, store: Op | None, leaves: tuple[_Leaf, ...]):
+    """Return the proof for one adjacent C aggregate move, otherwise ``None``."""
+    if (
+        store is None
+        or load.source_backed
+        or store.source_backed
+        or load.absorbed
+        or store.absorbed
+        or load.id is None
+        or store.id is None
+        or load.volatile
+        or store.volatile
+    ):
+        return None
+    if (
+        load.kind is not mir.Kind.LOAD
+        or store.kind is not mir.Kind.STORE
+        or len(load.loads) != 1
+        or load.stores
+        or len(store.stores) != 1
+        or store.loads
+        or len(load.results) != 1
+        or len(store.args) != 1
+        or not isinstance(load.results[0], mir.Held)
+        or not isinstance(store.args[0], mir.Held)
+        or load.results[0].value != store.args[0].value
+        or load.defines != (load.results[0].value,)
+        or load.uses
+        or store.defines
+        or store.uses != (store.args[0].value,)
+    ):
+        return None
+    source, destination = load.loads[0], store.stores[0]
+    source_leaf, destination_leaf = _leaf(source), _leaf(destination)
+    if (
+        source_leaf is None
+        or destination_leaf is None
+        or source.width != destination.width
+        or source.volatile
+        or destination.volatile
+        or source.pointer
+        or destination.pointer
+        or source.base is not None
+        or source.segment is not None
+        or destination.base is not None
+        or destination.segment is not None
+        or source.addr is None
+        or destination.addr is None
+        or not source.addr.direct
+        or not destination.addr.direct
+        or memory.objects_may_alias(source_leaf.object, destination_leaf.object)
+    ):
+        return None
+    pieces = _copy_partition(destination, leaves)
+    if pieces is None:
+        return None
+    return source, destination, source_leaf, destination_leaf, pieces
 
 
 def promotable(

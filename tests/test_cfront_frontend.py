@@ -57,6 +57,24 @@ def test_inline_assembly_frame_fixups_are_not_indirect_call_targets(tmp_path):
     assert "call word ptr" not in assembly
 
 
+def test_packed_aggregate_copy_promotes_the_word_leaves() -> None:
+    """aggregatecopy kept ``[bp-8]`` and ``[bp-6]`` reloads after a dword copy."""
+    source = Path("fixtures/c/aggregatecopy.c")
+    assembly = cfront.compiled(cfront.recorded(source, []), source.stem, optimise=True)
+
+    assert "word ptr [bp-8]" not in assembly
+    assert "word ptr [bp-6]" not in assembly
+
+
+def test_unbounded_far_aggregate_copy_remains_a_whole_access() -> None:
+    """aggregatecopyfar must not turn one unbounded far dword read into two reads."""
+    source = Path("fixtures/c/aggregatecopyfar.c")
+    assembly = cfront.compiled(cfront.recorded(source, []), source.stem, optimise=True)
+
+    assert "mov dword ptr [bp-8], eax" in assembly
+    assert "mov eax, dword ptr es:[bx]" in assembly
+
+
 def test_relative_source_and_include(tmp_path, monkeypatch):
     """wccq runs in its scratch directory, where `fixtures/c/x.c` and `-I src`
     no longer resolved: E1051 unable to open."""

@@ -22,7 +22,7 @@ iteration updates this file in the same commit.
 |---|---|---|
 | Per-CPU measurement | in progress | CPU profiles, C corpus, static/dynamic metrics and reference listings exist; audited targets remain. |
 | MIR/LIR provenance and fresh OMF | largely complete | allocated LIR emits directly with external source maps/allocation hints; legacy object-rewrite compatibility remains. |
-| SROA and scalar promotion | partial | fixed/disjoint leaves and some indexed leaves promote; general aggregate/copy decomposition remains. |
+| SROA and scalar promotion | partial | fixed/disjoint and singleton-indexed leaves promote; direct, bounded C aggregate copies can now expand into exact leaves, while pointer/overlap/volatile copies and broader aggregate decomposition remain. |
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
 | Loop optimization | partial | exact pre- and post-tested recurrences, composed pointer recurrences, formula costing, specialization, peeling and exact unrolling exist; versioning, rotation and broad pressure forecasting remain. |
 | Whole-module optimization | partial | summaries, constant returns, private inlining and private procedure DCE exist; full IPSCCP/cloning and private-data DCE remain. |
@@ -1543,3 +1543,35 @@ claim memory pairing, complex P5 forms, x87 overlap, or a final per-CPU
 throughput model.  GCC/LLVM listings remain best-case flat-i386 structural
 references; BCC/WC medium-model output remains the ABI, segment, legal-form,
 and hard-target authority.
+
+### 69. Exact direct aggregate-copy scalarization — 2026-09-18
+
+The C fixture `aggregatecopy` first failed with a direct global-to-frame
+`dword` copy followed by word reloads from `[bp-8]` and `[bp-6]`. The old
+SROA rule correctly rejected the whole copy because it properly overlapped
+the two field leaves; it had no general way to express that the copy itself
+could be partitioned before scalar promotion.
+
+SROA now recognizes an adjacent C-raised load/store pair only when both
+references are direct, nonvolatile, exact canonical ranges; their source and
+destination objects are proven disjoint; and existing scalar leaves form a
+complete contiguous partition of the destination range. It expands that one
+move into source-leaf load/store pairs, then the ordinary scalar-promotion
+pipeline removes the redundant frame reloads. An untyped aggregate access
+adopts a unique already-established scalar leaf type only within this
+C-raised, unowned form; explicit incompatible types retain the existing
+type-pun rejection.
+
+The same proof deliberately rejects far, indexed, pointer, volatile,
+overlapping, source-mapped, and incomplete-partition copies. Splitting any
+of those could change fault or tearing behavior, or lose source-map byte
+ownership. The fail-first output regression now emits three direct `_source`
+word reads with no `[bp-8]`/`[bp-6]` reload. Its companion regression proves
+that an unbounded far aggregate still retains its one `es:[bx]` dword read
+and store. Focused C checks pass (`3 passed`, `0.13s`).
+
+This advances Phase 3 without claiming general pointer-copy SROA, C library
+`memcpy` recognition, or aggregate-copy lowering through the fresh OMF path.
+GCC/LLVM listings remain best-case flat-i386 structural references; BCC/WC
+medium-model output remains the authority for segment behavior, legal address
+forms, ABI constraints, and hard targets.
