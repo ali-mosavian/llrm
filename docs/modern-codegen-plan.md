@@ -25,7 +25,7 @@ iteration updates this file in the same commit.
 | SROA and scalar promotion | partial | fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies can now expand into exact leaves, while far, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
 | Loop optimization | partial | exact pre- and post-tested recurrences, composed pointer recurrences, formula costing, specialization, peeling and exact unrolling exist; versioning, rotation and broad pressure forecasting remain. |
-| Whole-module optimization | partial | summaries, constant returns, costed private straight-line inlining, private procedure DCE, and conservative private-data DCE exist; full IPSCCP/cloning and broader global-elimination proofs remain. |
+| Whole-module optimization | partial | summaries, constant returns, whole-body and constant-call-site specialization, costed private inlining, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
 | Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing, conservative later-core/P5 scheduling, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
@@ -1679,3 +1679,34 @@ is a Phase 6 linkage-safe DCE increment, not an assumption that flat-i386
 GCC/LLVM section garbage collection is applicable to this medium-model OMF
 layout. GCC/LLVM listings remain best-case structural references; BCC/WC
 remain the authority for ABI, segment, address-form, and linkage constraints.
+
+### 74. Constant call-site specialization — 2026-09-18
+
+`ipconst_site` first left `zeroAdjusted` calling private branchy `adjust(0)`
+because `dynamicAdjusted(value)` prevented whole-body parameter
+specialization. The existing repeated-call inliner correctly refused the
+branchy body, but its all-callers-agree rule meant local SCCP never saw the
+known zero actual.
+
+The inliner now has a target-costed call-site candidate layer. A private,
+pure, legal MIR leaf whose direct call has at least one known constant actual
+may clone into that caller when its semantic work is cheaper than the selected
+profile's direct-call cost. The ordinary body pipeline immediately revisits
+the clone, so it owns branch folding and dead code removal. The original body
+continues to serve dynamic callers; after the constant call vanishes, the
+existing one-use policy may independently inline that remaining call.
+
+While exercising the branchy clone, the regression also found that fresh
+inline values were numbered only against the caller. Independently raised
+callees restart value numbering, so a materialized actual could collide with a
+callee source ID and violate SSA dominance. Fresh values are now unique across
+both bodies before substitution. The source-level regression first failed on
+the retained constant call, then proves `zeroAdjusted` is `mov ax, 7` while
+the dynamic path still contains its runtime test and `+3` case.
+
+This advances selective MIR inlining and IPSCCP's constant-call edge handling,
+but recursion, address-taken/public functions, effectful or floating bodies,
+large CFG cloning, and general multi-version procedure emission remain out of
+scope. GCC/LLVM listings remain best-case flat-i386 structural references;
+BCC/WC medium-model listings remain authoritative for ABI, segments, legal
+addresses, and OMF linkage.

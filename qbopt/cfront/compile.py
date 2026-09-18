@@ -350,7 +350,16 @@ def assembled(
             changed = False
             for raised in raised_procedures:
                 before = bodies[raised.name]
-                after = inline.expanded(before, raised.calls, call_arguments[raised.name], available)
+                constant = inline.constant_sites(
+                    bodies,
+                    {one.name: one.parameters for one in raised_procedures},
+                    raised.calls,
+                    raised.constants,
+                    private,
+                    pure,
+                    target.cost("call_far"),
+                )
+                after = inline.expanded(before, raised.calls, call_arguments[raised.name], available, constant)
                 if after is before:
                     continue
                 stage = f"inline{inline_round}"

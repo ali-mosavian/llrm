@@ -87,6 +87,43 @@ def candidates(
     return out
 
 
+def constant_sites(
+    bodies: dict[str, mir.MirBody],
+    parameters: dict[str, tuple[mir.MemRef, ...]],
+    calls: dict[int, str],
+    constants: dict[int, tuple[mir.Const | None, ...]],
+    private: frozenset[str],
+    pure: frozenset[str],
+    call_cost: int,
+) -> dict[int, Candidate]:
+    """Private pure leaves worth cloning at one constant direct-call site.
+
+    Whole-body parameter specialization needs every caller to agree.  This
+    narrower policy instead admits a call whose known actual exposes local
+    SCCP after the normal MIR clone.  The original body remains for dynamic
+    callers, so no source-level calling convention or OMF symbol changes.
+    As with repeated-leaf inlining, the target profile must price the call
+    above the cloned semantic work.
+    """
+    budget = max(6, min(24, call_cost // 2))
+    out = {}
+    for at, name in calls.items():
+        known = constants.get(at, ())
+        if not any(value is not None for value in known):
+            continue
+        if name not in private or name not in pure or name not in bodies:
+            continue
+        body, parms = bodies[name], parameters[name]
+        semantic = sum(
+            op.kind not in (mir.Kind.NOTHING, mir.Kind.JUMP, mir.Kind.RETURN)
+            for block in body.blocks
+            for op in block.ops
+        )
+        if semantic < call_cost and semantic <= budget and _leaf(body, parms):
+            out[at] = Candidate(body, parms)
+    return out
+
+
 def _straight(body: mir.MirBody) -> bool:
     """Whether cloning the body duplicates no control-flow structure."""
     return len(body.blocks) == 1 and not body.blocks[0].phis and not body.blocks[0].succ
@@ -136,8 +173,10 @@ def expanded(
     calls: dict[int, str],
     arguments: dict[int, frozenset[int]],
     available: dict[str, Candidate],
+    constant: dict[int, Candidate] | None = None,
 ) -> mir.MirBody:
     """Inline the first legal call site in ``body``, or return it unchanged."""
+    constant = constant or {}
     used = {
         value
         for block in body.blocks
@@ -148,7 +187,7 @@ def expanded(
     }
     for block in body.blocks:
         for index, call in enumerate(block.ops):
-            candidate = available.get(calls.get(call.at, ""))
+            candidate = constant.get(call.at, available.get(calls.get(call.at, "")))
             if call.kind is not mir.Kind.CALL or candidate is None or call.at not in arguments:
                 continue
             made = _at(body, block, index, call, arguments[call.at], candidate, used)
@@ -200,8 +239,13 @@ def _at(
         return None
 
     values = tuple(ssa.values(body))
-    next_id = max((value.id for value in values), default=0) + 1
-    next_variable = max((value.variable for value in values), default=0) + 1
+    callee_values = tuple(ssa.values(callee))
+    # The two independently raised bodies both number values from one.  A
+    # materialized actual must consequently be fresh against the callee's
+    # *source* IDs too: substitution keys are IDs, and colliding with one
+    # would make a constant binding look like an unrelated cloned definition.
+    next_id = max((value.id for value in (*values, *callee_values)), default=0) + 1
+    next_variable = max((value.variable for value in (*values, *callee_values)), default=0) + 1
     versions = Counter()
     for value in values:
         versions[value.variable] = max(versions[value.variable], value.version)
@@ -245,7 +289,6 @@ def _at(
         parameter_values[number] = value
         materialized.append(_copy(call.at, actual, mir.Held(value, width), value))
 
-    callee_values = tuple(ssa.values(callee))
     variable_map: dict[int, int] = {}
     swap: dict[int, mir.Value] = {}
     for callee_block in callee.blocks:

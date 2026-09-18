@@ -120,6 +120,26 @@ def test_unreferenced_private_data_is_not_emitted() -> None:
     assert "_unusedValue label byte" in unoptimised
 
 
+def test_constant_private_call_specializes_without_changing_dynamic_call() -> None:
+    """ipconst_site left `zeroAdjusted` calling branchy `adjust` because a
+    second dynamic call prevented whole-body parameter specialization.
+
+    The constant call may instead clone into its caller and simplify there.
+    That leaves one dynamic call, which the ordinary one-use inliner may then
+    absorb without turning its runtime condition into a constant.
+    """
+    source = Path("fixtures/c/ipconst_site.c")
+    assembly = cfront.compiled(cfront.recorded(source, []), source.stem, optimise=True)
+    zero = assembly[assembly.index("_zeroAdjusted proc far") : assembly.index("_zeroAdjusted endp")]
+    dynamic = assembly[assembly.index("_dynamicAdjusted proc far") : assembly.index("_dynamicAdjusted endp")]
+
+    assert "call _adjust" not in zero
+    assert "mov ax, 7" in zero
+    assert "_adjust proc near" not in assembly
+    assert "or ax, ax" in dynamic
+    assert "add ax, 3" in dynamic
+
+
 def test_relative_source_and_include(tmp_path, monkeypatch):
     """wccq runs in its scratch directory, where `fixtures/c/x.c` and `-I src`
     no longer resolved: E1051 unable to open."""
