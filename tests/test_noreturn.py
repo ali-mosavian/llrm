@@ -25,35 +25,6 @@ def test_closed_local_terminal_scc_is_noreturn():
     )
 
 
-def test_terminal_call_inerts_newly_unreachable_successor() -> None:
-    """A terminal CALL left its detached successor executable after object lowering.
-
-    Cutting a CFG edge is not enough when this cleanup runs after the ordinary
-    optimizer: the successor still owns source bytes, but cannot retain a
-    store or other executable MIR operation that lowering would emit.
-    """
-    from qbopt.analysis import noreturn
-    from qbopt.model import ir
-
-    terminal = mir.Op(2, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.CALL)
-    store = mir.Op(10, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.STORE)
-    body = mir.MirBody(
-        0,
-        (
-            mir.MirBlock(0, (), (terminal,), (10,)),
-            mir.MirBlock(10, (), (store,), ()),
-        ),
-        sealed=True,
-    )
-
-    trimmed = noreturn.after_terminal_calls(body, frozenset({2}))
-
-    assert not trimmed.block(0).succ
-    orphan = trimmed.block(10)
-    assert not orphan.succ
-    assert all(op.kind is mir.Kind.NOTHING and not op.stores for op in orphan.ops)
-
-
 @pytest.mark.parametrize("terminal", [True, False])
 def test_qrender_main_spill_uses_shutdown_control_proof(terminal: bool) -> None:
     # MAIN crashed reserving two spill bytes: HOST_SHUTDOWN ends via B$CEND,

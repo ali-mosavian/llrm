@@ -30,6 +30,30 @@ iteration updates this file in the same commit.
 
 ## Iteration log
 
+### 91. Put terminal CFG cleanup in Tier 1 — 2026-09-18
+
+Iteration 90's fail-first terminal-successor regression was hermetic MIR, but
+had been added to the Tier 2 object-fixture module.  That left the exact
+mechanism which prevents terminal-detached stores from lowering outside the
+ordinary development gate; the real QCport-derived object proof has a
+different purpose and cost.
+
+The synthetic regression now lives beside the existing Tier 1 direct
+interprocedural no-return coverage.  It continues to assert the observable
+property—after a terminal call cuts the only predecessor edge, the successor
+is an inert source-byte owner rather than executable store work.  The
+QCport-derived object regression stays Tier 2 to retain the end-to-end
+contract, so this moves a fast mechanism check rather than relabeling a slow
+integration test.
+
+The terminal/no-return subset passes (`5 passed`, `0.05s`) and Tier 1 passes
+(`199 passed`, `31 deselected`, `1.74s`).  This makes Phase 6's existing
+terminal cleanup more durable; it does not advance any unfinished Phase 3
+aggregate proof, Phase 4 allocation mechanism, Phase 5 versioning, or Phase
+6 recursive/full IPSCCP.  GCC/LLVM listings remain best-case structural
+references; BCC/WC medium-model listings remain the authority for ABI,
+segments, legal address forms, and hard targets.
+
 ### 90. Normalize terminal-detached byte owners — 2026-09-18
 
 The shared no-return cleanup removed an edge after a proven terminal call,
