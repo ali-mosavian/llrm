@@ -172,7 +172,21 @@ def subexpressions(body: MirBody, dgroup: frozenset[int] = frozenset()) -> MirBo
                     swap[result.id] = source
                     gone.add(id(op))
                 continue
-            key = _computation(op, stands, whole)
+            # A narrow result carries the prior value's high half as a
+            # merge.  That is a real dependency only while somebody reads
+            # the preserved half.  When half-liveness proves it dead, the
+            # operation's semantic identity is its width-sized arithmetic,
+            # not the accidental register-wide read/modify/write form it
+            # arrived in.  This is the same general distinction already
+            # used for copies above; applying it to every pure computation
+            # lets value numbering see repeated descriptor address adds
+            # without teaching CSE about a particular register or frontend.
+            semantic = (
+                replace(op, merges={})
+                if op.merges and all((value, HIGH) not in demanded for value in op.merges.values())
+                else op
+            )
+            key = _computation(semantic, stands, whole)
             if key is None:
                 continue
             candidates = seen.setdefault(key, [])

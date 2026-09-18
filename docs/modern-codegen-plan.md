@@ -821,3 +821,28 @@ the outer bound is an input and the remaining nested loop is not yet exactly
 profiled, while both GCC/LLVM listings are best-case flat-i386 structural
 references rather than medium-model targets.  BCC/WC listings remain the
 authority for ABI, segmentation, and legal address-form constraints.
+
+### 40. Partial-result semantic CSE — 2026-09-18
+
+The strict HARR descriptor-address CSE regression was rerun fail-first and
+failed on all PDS, QuickBASIC, and VBDOS fixtures: the same descriptor-based
+address add survived twice around the store.  The former xfail explanation
+was stale—the FAR access already had its allocation identity.  Adjacent MIR
+dumps instead showed both ADDs carrying a word-result merge, which represents
+the old register's preserved high half.  CSE correctly refuses an observable
+merge, but it had also refused that merge after `halves()` proved the result's
+high half dead.
+
+`subexpressions()` now constructs a merge-free **semantic identity** only
+when every preserved high half is dead.  It still performs ordinary alias and
+path checks between the two computations; this is neither a descriptor rule
+nor a frontend/register exception.  A companion regression makes the later
+result observable at width four and proves both ADDs remain.  The original
+HARR regression now passes normally across all three compiler layouts and
+retains its mutation guard, so an intervening unknown store still prevents
+reuse.  Focused checks pass (`7 passed`, `0.32s`).
+
+This is Phase-3 scalar/CSE progress, not a claim that the GCC/LLVM listing is
+an ABI target.  The fresh BCC/WC medium-model listing remains the source for
+the legal far-address form; flat-i386 GCC/LLVM listings remain best-case
+structural evidence only.
