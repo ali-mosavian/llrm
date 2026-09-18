@@ -370,6 +370,20 @@ class _Stack:
         left, right = self.canonical(left.value), self.canonical(right.value)
         return left != right and _memory_name(name, left == value, self.home[value]) is not None
 
+    def memory_arithmetic(self, name: str) -> bool:
+        """Whether a cell arithmetic form costs no more than loading it into x87.
+
+        The stack form has one explicit ``fld`` and a register arithmetic;
+        the direct form combines those two effects.  A profile without the
+        form-specific prices keeps the historic legal memory folding policy,
+        rather than treating unavailable data as a zero-cost instruction.
+        """
+        base = {"fadd": "x87_add", "fsub": "x87_add", "fmul": "x87_mul", "fdiv": "x87_div"}[name]
+        memory = f"{base}_m"
+        if not all(self.cpu.prices(form) for form in ("x87_load", base, memory)):
+            return True
+        return self.cpu.cost(memory) <= self.cpu.cost("x87_load") + self.cpu.cost(base)
+
     def insert(self, what: ir.Semantics) -> None:
         at = self.one.at
         self.out.append(lir.Insn(at, (at, at), what, (), ()))
@@ -608,7 +622,7 @@ class _Stack:
             # Both in their cells: the later one is the memory operand, so the loads keep their order.
             key=lambda pair: -self.defined.get(pair[0], -1),
         )
-        if cells:
+        if cells and self.memory_arithmetic(name):
             cell, kept = cells[0]
             load, covers = self.home[cell], self.one.covers
             operation = _memory_name(name, cell == left, load)

@@ -34,6 +34,7 @@ def test_truncation_saves_the_control_word_once_per_body():
 
 from qbopt.model import ir
 from qbopt.model import lir
+from qbopt.backend import cpu
 from qbopt.backend import select
 from qbopt.backend import floatalloc
 from qbopt.objectfile.module import Addr
@@ -840,6 +841,60 @@ def test_shared_producer_is_kept_across_two_arithmetic_consumers():
     assert select.emit(duplicate.what).code == bytes.fromhex("d9c0")
     assert duplicate.covers == (8, 8) and duplicate.op is None
     assert result.insns[4].what.sources == (ir.St(0), cell)
+
+
+def test_x87_memory_operand_follows_the_selected_cpu_cost():
+    """A costly memory multiply must materialize the home instead of folding it.
+
+    The stack allocator used to select an x87 memory form whenever it was
+    encodable.  A target table that prices ``fld`` plus a register multiply
+    lower must choose that sequence; ordinary public profiles retain their
+    audited memory-form choice.
+    """
+    raw, left, right, product = (ir.Held(index, 10) for index in range(1, 5))
+    source, home, out = _cells(-4, -8, -12)
+    body = _body(
+        [
+            _load(raw, source),
+            ir.Semantics(ir.Operation.FLOAT_UNARY, "fchs", (left,), (raw,)),
+            _load(right, home),
+            _arithmetic("fmul", product, left, right),
+            _store(out, product),
+        ]
+    )
+    costs = dict(cpu.profile("386")._costs)
+    costs.update(x87_load=1, x87_mul=1, x87_mul_m=99)
+    slow_memory = replace(cpu.profile("386"), name="test-x87", _costs=tuple(costs.items()))
+
+    result = floatalloc.allocated(body, cpu=slow_memory)
+
+    multiply = next(one.what for one in result.insns if one.what.name.startswith("fmul"))
+    assert all(isinstance(arg, ir.St) for arg in multiply.sources)
+    memory, stack = _x87(result.insns, {source: 7, home: 3})
+    assert memory[out] == -21 and not stack
+
+
+@pytest.mark.parametrize("profile", cpu.names())
+def test_x87_memory_operand_matches_each_public_cpu_cost(profile):
+    """Each public CPU's emitted form agrees with its own audited cost table."""
+    raw, left, right, product = (ir.Held(index, 10) for index in range(1, 5))
+    source, home, out = _cells(-4, -8, -12)
+    body = _body(
+        [
+            _load(raw, source),
+            ir.Semantics(ir.Operation.FLOAT_UNARY, "fchs", (left,), (raw,)),
+            _load(right, home),
+            _arithmetic("fmul", product, left, right),
+            _store(out, product),
+        ]
+    )
+    target = cpu.profile(profile)
+
+    result = floatalloc.allocated(body, cpu=target)
+
+    multiply = next(one.what for one in result.insns if one.what.name.startswith("fmul"))
+    folded = any(isinstance(arg, ir.Mem) for arg in multiply.sources)
+    assert folded is (target.cost("x87_mul_m") <= target.cost("x87_load") + target.cost("x87_mul"))
 
 
 def test_repeated_stable_float_cell_load_is_kept_across_consumers():

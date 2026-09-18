@@ -1367,3 +1367,28 @@ allocator suite passes (`75 passed`, `0.07s`).  This advances Phase 1's
 per-CPU plumbing and Phase 4's x87 allocation work.  GCC/LLVM remain
 best-case flat-i386 structural references; BCC/WC medium-model output remains
 the ABI and legal-form authority.
+
+### 62. Costed x87 memory-form selection — 2026-09-18
+
+With the complete CPU profile at the x87 allocator, direct floating arithmetic
+no longer chooses a memory operand solely because one is encodable.  For an
+available cell value, `FloatAlloc` compares the profile's arithmetic-with-memory
+form to the explicit alternative (`fld` plus register arithmetic), including
+the distinct add/subtract, multiply, and divide cost families.  Missing form
+prices intentionally preserve the old legal memory-folding behavior: unknown
+data is never interpreted as a free instruction.
+
+The regression was fail-first with a synthetic but complete profile whose
+memory multiply costs 99 while `fld + fmul` costs 2; the old allocator still
+emitted `fmul [cell]`, while the new one materializes the cell and uses a
+stack-register form with the same result.  A companion matrix verifies that
+each of the eight public profiles emits exactly the form its own audited table
+chooses.  Their present tables retain the established memory fold, so this
+does not manufacture a benchmark improvement merely by retuning a rule.
+
+The cost-form checks pass (`9 passed`, `0.08s`), the complete float allocator
+suite passes (`84 passed`, `0.08s`), CPU-profile suite passes (`10 passed`,
+`0.18s`), and the independent DOS nbody oracle remains `4774160` (`1 passed`,
+`13.38s`).  This advances Phase 4's target- and pressure-driven x87
+allocation.  GCC/LLVM remain best-case flat-i386 structural references;
+BCC/WC medium-model output remains the ABI and legal-form authority.
