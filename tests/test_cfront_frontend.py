@@ -75,6 +75,15 @@ def test_unbounded_far_aggregate_copy_remains_a_whole_access() -> None:
     assert "mov eax, dword ptr es:[bx]" in assembly
 
 
+def test_exact_pointer_aggregate_copy_promotes_the_word_leaves() -> None:
+    """aggregatecopyptr kept local word reloads despite its one-object pointer proof."""
+    source = Path("fixtures/c/aggregatecopyptr.c")
+    assembly = cfront.compiled(cfront.recorded(source, []), source.stem, optimise=True)
+
+    assert "word ptr [bp-14]" not in assembly
+    assert "word ptr [bp-12]" not in assembly
+
+
 def test_relative_source_and_include(tmp_path, monkeypatch):
     """wccq runs in its scratch directory, where `fixtures/c/x.c` and `-I src`
     no longer resolved: E1051 unable to open."""

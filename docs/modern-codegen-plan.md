@@ -1575,3 +1575,28 @@ This advances Phase 3 without claiming general pointer-copy SROA, C library
 GCC/LLVM listings remain best-case flat-i386 structural references; BCC/WC
 medium-model output remains the authority for segment behavior, legal address
 forms, ABI constraints, and hard targets.
+
+### 70. Exact pointer-source aggregate scalarization — 2026-09-18
+
+`aggregatecopyptr` first failed after the direct-copy work: a local pointer
+was proven to designate one six-byte frame object, yet its four-byte source
+load was represented as one contiguous stride-one element of width four.
+SROA recognized only the equivalent byte-range spelling, so the pointer copy
+remained a dword frame store followed by two local word reloads.
+
+The leaf proof now normalizes those two exact contiguous-slice spellings to
+the same object byte interval. Copy expansion admits an exact source base
+when its complete MIR `uses` set is precisely that base and optional segment
+value; every generated source leaf carries those values forward. Destination
+storage remains direct and the existing nonvolatile, disjoint-object, and
+complete-partition proofs still apply. Thus an exact local pointer is not a
+special case: it is one expression of the same bounded object identity.
+
+The fail-first C regression now has no `[bp-14]` or `[bp-12]` aggregate
+reloads. Direct and unbounded-far aggregate regressions continue to pass,
+establishing both the wider exact proof and its conservative boundary. This
+advances Phase 3, but arbitrary pointer, far-pointer, indexed, overlapping,
+volatile, and incomplete aggregate copies remain memory until a comparably
+complete range and alias proof exists. GCC/LLVM remain best-case structural
+references; BCC/WC medium-model listings remain authoritative for legal
+addressing, segments, and ABI behavior.

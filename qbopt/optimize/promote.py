@@ -83,11 +83,20 @@ def _leaf(ref: mir.MemRef) -> _Leaf | None:
     if provenance is None or len(provenance.slices) != 1:
         return None
     span = next(iter(provenance.slices))
-    if span.stride != 1 or span.width != 1 or span.high - span.low != ref.width:
+    # Frontends spell one contiguous exact access either as the canonical
+    # byte range ``[low, low + width)`` or as one stride-1 element whose own
+    # width is the access width.  They select exactly the same bytes; keep
+    # that representational difference out of SROA's object identity.
+    contiguous = (
+        (span.width == 1 and span.high - span.low == ref.width)
+        or (span.high - span.low == 1 and span.width == ref.width)
+    )
+    if span.stride != 1 or not contiguous:
         return None
-    if span.object.extent is not None and not (0 <= span.low < span.high <= span.object.extent):
+    high = span.low + ref.width
+    if span.object.extent is not None and not (0 <= span.low < high <= span.object.extent):
         return None
-    return _Leaf(span.object, span.low, span.high, None if ref.typed is None else ref.typed[0])
+    return _Leaf(span.object, span.low, high, None if ref.typed is None else ref.typed[0])
 
 
 def _blocked_objects(refs: list[mir.MemRef]) -> frozenset[memory.Object]:
@@ -468,7 +477,7 @@ def _split_copies(body: MirBody) -> MirBody:
                     replace(
                         load,
                         defines=(value,),
-                        uses=(),
+                        uses=tuple(one for one in (source_piece.base, source_piece.segment) if one is not None),
                         loads=(source_piece,),
                         stores=(),
                         args=(mir.Cell(source_piece),),
@@ -529,7 +538,6 @@ def _copy_candidate(load: Op, store: Op | None, leaves: tuple[_Leaf, ...]):
         or not isinstance(store.args[0], mir.Held)
         or load.results[0].value != store.args[0].value
         or load.defines != (load.results[0].value,)
-        or load.uses
         or store.defines
         or store.uses != (store.args[0].value,)
     ):
@@ -544,8 +552,6 @@ def _copy_candidate(load: Op, store: Op | None, leaves: tuple[_Leaf, ...]):
         or destination.volatile
         or source.pointer
         or destination.pointer
-        or source.base is not None
-        or source.segment is not None
         or destination.base is not None
         or destination.segment is not None
         or source.addr is None
@@ -554,6 +560,9 @@ def _copy_candidate(load: Op, store: Op | None, leaves: tuple[_Leaf, ...]):
         or not destination.addr.direct
         or memory.objects_may_alias(source_leaf.object, destination_leaf.object)
     ):
+        return None
+    source_inputs = tuple(one for one in (source.base, source.segment) if one is not None)
+    if load.uses != source_inputs:
         return None
     pieces = _copy_partition(destination, leaves)
     if pieces is None:
