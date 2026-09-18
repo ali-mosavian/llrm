@@ -534,30 +534,54 @@ def _sentinel_trip_count(body: mir.MirBody, loop: loopy.Loop, counter: Affine, f
     if len(loop.latches) != 1:
         return None
     header, latch = blocks[loop.header], blocks[next(iter(loop.latches))]
-    if latch.succ != (header.at,) or not header.ops or len(header.succ) != 2:
-        return None
-    branch = header.ops[-1]
-    if branch.kind is not mir.Kind.BRANCH or branch.target not in header.succ:
-        return None
     inside = set(loop.body)
-    if any(not blocks[at].succ or any(to not in inside for to in blocks[at].succ) for at in inside if at != header.at):
+    if latch.succ == (header.at,) and len(header.succ) == 2:
+        control = header
+        posttested = False
+    elif len(latch.succ) == 2 and header.at in latch.succ:
+        control = latch
+        posttested = True
+    else:
         return None
-    test = branch.test
-    if branch.target not in inside:
-        test = {mir.Kind.EQ: mir.Kind.NE, mir.Kind.NE: mir.Kind.EQ}.get(test)
+    if not control.ops or sum(to in inside for to in control.succ) != 1:
+        return None
+    branch = control.ops[-1]
+    if branch.kind is not mir.Kind.BRANCH or branch.target not in control.succ:
+        return None
+    if any(
+        not blocks[at].succ or any(to not in inside for to in blocks[at].succ)
+        for at in inside
+        if at != control.at
+    ):
+        return None
+    test = _continuing_test(branch, inside)
     if test is not mir.Kind.NE:
         return None
 
     made = {value.id: op for block in body.blocks for op in block.ops for value in op.defines}
     owners = {value.id: block.at for block in body.blocks for op in block.ops for value in op.defines}
-    comparisons = [
-        bound
-        for op in header.ops[:-1]
-        if (bound := _counter_bound(op, branch, counter, width, made)) is not None
-    ]
-    if len(comparisons) != 1 or not isinstance(comparisons[0], mir.Held):
+    if posttested:
+        compared = [
+            found
+            for op in control.ops[:-1]
+            if (found := _posttested_bound(op, branch, counter, width, made)) is not None
+        ]
+        if len(compared) != 1:
+            return None
+        bound, after_step = compared[0]
+        raw_after = _constant(after_step, facts, width)
+    else:
+        compared = [
+            (found, None)
+            for op in control.ops[:-1]
+            if (found := _counter_bound(op, branch, counter, width, made)) is not None
+        ]
+        if len(compared) != 1:
+            return None
+        bound, _after_step = compared[0]
+        raw_after = None
+    if not isinstance(bound, mir.Held):
         return None
-    bound = comparisons[0]
     definition = made.get(bound.value.id)
     if (
         definition is None
@@ -578,7 +602,7 @@ def _sentinel_trip_count(body: mir.MirBody, loop: loopy.Loop, counter: Affine, f
         return None
     raw_step = _constant(counter.step, facts, width)
     delta = _constant(offsets[0], facts, width)
-    if raw_step in (None, 0) or delta is None:
+    if raw_step in (None, 0) or delta is None or (posttested and raw_after != raw_step):
         return None
     modulus = 1 << (8 * width)
     divisor = gcd(raw_step, modulus)

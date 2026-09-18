@@ -236,6 +236,39 @@ def test_formula_selection_recomputes_a_cheap_scaled_index_under_pressure() -> N
     )
 
 
+def test_formula_selection_prices_a_complete_affine_formula_under_pressure() -> None:
+    """Mandelbrot rebuilt ``24*x - 128 + seed`` in its inner loop.
+
+    The leaf operation is an addition, but the recurrence candidate denotes
+    the complete affine formula.  Pricing only that leaf made recomputation
+    appear cheaper than a spilled recurrence by omitting the multiply and the
+    other invariant addition.
+    """
+    counter = mir.Value(10, 0)
+    answer = mir.Value(11, 1)
+    seed = mir.Value(12, 0)
+    affine = induction.Affine(counter.id, mir.Const(0, 4), mir.Const(1, 4), 1)
+    leaf = mir.Op(
+        1,
+        ir.Operation.BINARY,
+        "add",
+        (answer,),
+        (counter, seed),
+        kind=mir.Kind.ADD,
+        args=(mir.Held(counter, 4), mir.Held(seed, 4)),
+        results=(mir.Held(answer, 4),),
+    )
+    complete = induction.Derived(
+        leaf,
+        affine,
+        mir.Const(24, 4),
+        ((mir.Const(-128, 4), 1), (mir.Held(seed, 4), 1)),
+    )
+    costs = OperationCosts(add=2, multiply=22, shift=3, address=2, load=4, memory_update=8)
+
+    assert strength._formula_set([complete], room=0, costs=costs, references={answer.id: 1}) == [complete]
+
+
 def test_formula_selection_uses_67h_before_spilling_or_recomputing() -> None:
     """A scaled far index overflowed the register budget and was recomputed.
 

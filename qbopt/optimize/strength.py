@@ -304,8 +304,12 @@ def reduced(
             wide.add(answer)
         candidates = [one for one in candidates if id(one.op) not in indexes]
         # Every remaining formula is a value live around the loop. Formula
-        # selection above has already collapsed complete sibling groups when
-        # their separate address recurrences would exceed this budget.
+        # selection above has already collapsed complete sibling groups and
+        # rejected cheap formulas when they exceed this budget.  A selected
+        # formula may still exceed ``room`` deliberately: `_formula_set`
+        # proved that updating and loading its spilled recurrence costs less
+        # than recomputing it.  Do not apply the register-only budget again
+        # here or those pressure-priced choices can never reach allocation.
         added = 0
         # One counter an expression. Reads of `t[j]` through two counters
         # stepping alike are one recurrence, and given one each, a round at a
@@ -324,8 +328,6 @@ def reduced(
                 replacements[id(one.op)] = _copying(one.op, shared[key], answer, width)
                 if one.pointer is not None:
                     pointer_bindings.append((one.op, answer, shared[key]))
-                continue
-            if added >= room:
                 continue
             if _times(one.of.step, one.by, width) is None:
                 continue
@@ -521,18 +523,30 @@ def _fallback_indexes(
 
 
 def _recompute_cost(one: induction.Derived, costs: OperationCosts) -> int:
-    """Target-neutral semantic cost of leaving one formula in its loop."""
-    if one.op.kind is mir.Kind.MUL:
-        if isinstance(one.by, mir.Const) and one.by.n > 0 and one.by.n & (one.by.n - 1) == 0:
-            return costs.shift
-        return costs.multiply
-    if one.op.kind in (mir.Kind.SHL, mir.Kind.SHR, mir.Kind.SAR):
-        return costs.shift
-    if one.op.kind in (mir.Kind.PTR_OFFSET, mir.Kind.ADD):
-        return costs.address
+    """Target-neutral cost of rebuilding a complete affine formula.
+
+    ``Derived.op`` is only the formula's leaf.  A composed candidate such as
+    ``24*i - 128 + base`` therefore cannot be priced as that leaf's final
+    addition: reducing it removes the scale and every invariant addition too.
+    ``by`` and ``offsets`` are the canonical whole formula and remain valid
+    after the producer chain itself has been folded away.
+    """
     if one.op.kind in (mir.Kind.DIV, mir.Kind.REM, mir.Kind.DIVMOD):
         return costs.divide
-    return costs.add
+    if isinstance(one.by, mir.Const):
+        scale = one.by.n
+        if scale in (0, 1):
+            work = 0
+        elif scale > 0 and scale & (scale - 1) == 0:
+            work = costs.shift
+        else:
+            work = costs.multiply
+    else:
+        work = costs.multiply
+    work += len(one.offsets) * costs.add
+    if one.pointer is not None or one.op.kind is mir.Kind.PTR_OFFSET:
+        work += costs.address
+    return work
 
 
 def _copying(op: Op, start: mir.Value, answer: mir.Value, width: int) -> Op:

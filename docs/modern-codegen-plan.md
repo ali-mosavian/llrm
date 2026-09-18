@@ -20,15 +20,94 @@ iteration updates this file in the same commit.
 
 | Phase | State | Current boundary |
 |---|---|---|
-| Per-CPU measurement | in progress | CPU profiles now distinguish native medium-model addressing from the complete costed 67h fallback, and the C corpus, static/dynamic metrics and reference listings exist; audited targets remain. |
+| Per-CPU measurement | in progress | CPU profiles distinguish native medium-model addressing from the complete costed 67h fallback; the C corpus, static/dynamic metrics and reference listings exist, and rotated symbolic-sentinel trip counts remain exact after strength reduction; audited targets remain. |
 | MIR/LIR provenance and fresh OMF | complete in production | allocated LIR emits directly with external source maps/allocation hints; the remaining compatibility views are test-only and cannot route a compilation through record rewriting. |
 | SROA and scalar promotion | partial | fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies can now expand into exact leaves, while far, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, dying-base indexed-form unfolding, and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
-| Loop optimization | partial | exact pre- and post-tested recurrences, composed pointer recurrences, target-priced spill-aware formula rejection, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling exist; versioning and complete candidate-set pressure forecasting remain. |
+| Loop optimization | partial | exact pre/post-tested recurrences and symbolic sentinels, complete-affine spill/recompute pricing, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling exist; versioning and complete candidate-set pressure forecasting remain. |
 | Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs (including closed recursive SCCs in C and object paths), constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
 | Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing, target-priced 67h LEA selection, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 97. Carry profitable complete affine formulas through pressure — 2026-09-18
+
+The full C corpus first exposed two superficially large listing gaps that were
+not both optimization defects.  Matmul had 906 candidate instructions against
+Clang's roughly 360 because Clang retains a row loop while qbopt and GCC 16.2
+fully expand it.  A measured peel cap reduced static size (`3644 -> 3130`
+bytes and `906 -> 770` instructions) but raised estimated dynamic work
+`906 -> 3315` and weighted 386 cost `3396 -> 4515`; that size-for-speed trade
+was rejected.  Shellsort has the same fully-expanded-versus-looped distinction.
+Neither reference listing is being mistaken for an ABI-equivalent target.
+
+Mandelbrot was different.  GCC carries its two 32-bit coordinates and advances
+each by 24; Clang rebuilds them with flat-mode LEAs.  qbopt rebuilt both in
+frame slots from 16-bit `px`/`py` counters.  Adjacent MIR dumps first differed
+at strength selection: induction analysis already proved the extended affine
+forms, but the selector's profitable-overflow result never reached the rewrite.
+After `_formula_set` had compared spill traffic with recomputation, a second
+`added >= room` gate silently imposed a register-only budget.  Removing that
+contradictory gate lets a formula which is cheaper even when spilled reach the
+allocator.  Cheap overflow formulas are still rejected by the selector.
+
+The first fail-first compiled regression then reduced only the outer formula.
+The inner leaf denotes the complete `24*x - 128 + seed` expression, but its
+cost was priced as its final addition.  Complete-formula pricing now uses the
+canonical scale, every invariant offset, and the final pointer formation when
+present.  A fast fail-first policy regression records that distinction.  This
+is the resulting central listing:
+
+```asm
+; before: rebuilt from a narrow counter in the loop
+movsx eax, ax
+mov dword ptr [bp-4], eax
+shl dword ptr [bp-4], 1
+add dword ptr [bp-4], eax
+shl dword ptr [bp-4], 3
+sub dword ptr [bp-4], 128
+add dword ptr [bp-4], seed
+add word ptr [bp-20], 1
+
+; after: complete 32-bit coordinate recurrence
+add dword ptr [bp-16], 24
+mov eax, dword ptr [bp-16]
+cmp eax, dword ptr [bp-20]
+jne inner
+```
+
+The 67h ordering from iteration 95 is unchanged: a proven legal native or
+costed address-size-override form is considered before this spill/recompute
+choice.  Mandel's coordinates are arithmetic values consumed by the fixed
+point kernel, not memory indexes, so 67h is not a competing spelling here.
+
+The first post-change quality report claimed dynamic work fell
+`85553 -> 24713`.  That contradicted the raw instruction delta and was rejected
+as an instrument result.  Strength reduction had converted the inner exit to
+a rotated equality against `start + 768`; exact-trip analysis understood that
+symbolic sentinel only in a pre-tested header.  The estimator consequently
+substituted ten trips for the real 32.  A fail-first synthetic regression now
+covers rotated symbolic sentinels, and lower again records the exact count.
+The corrected dynamic estimate is `85553 -> 78569` (8.2%), consistent with the
+raw loop.  The invalid `24713` is retained here explicitly so it cannot be
+quoted later.
+
+On 386, Mandel falls `233 -> 202` bytes, `68 -> 56` instructions, weighted
+cost `327 -> 287`, loads `20 -> 15`, stores `17 -> 10`, and spill reloads
+`2 -> 1`.  The final listing is byte-identical across all eight profiles;
+their post-change weighted costs are 287, 224, 144, 80, 38, 38, 46 and 68 for
+386 through Core.  GCC's recurrence is structural evidence for the selected
+shape; Clang's LEA spelling remains useful evidence for targets with different
+register and addressing constraints.  No hard target is registered yet.
+
+The complete-formula and 67h selector checks pass (`3 passed`, `0.17s`), the
+post-tested exact-count checks pass (`2 passed`, `0.07s`), the compiled
+Mandel listing check passed after the code-generation change (`1 passed`,
+`79.19s`), and the final quality run independently confirms the corrected
+exact-trip metric and identical final assembly.  Tier 1 passes (`210 passed`,
+`31 deselected`, `1.49s`).  No phase-boundary full suite was run; focused test
+execution remained bounded while the corpus and eight-profile measurements
+dominated this iteration.
 
 ### 96. Unfold dying indexed bases before frame spill — 2026-09-18
 

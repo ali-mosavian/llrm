@@ -485,12 +485,15 @@ def test_cross_width_recurrence_replaces_counter_only_for_its_full_period(
 
 
 def test_c_mandel_reuses_coordinate_recurrences_for_both_outer_loops() -> None:
-    """C Mandelbrot advanced ``px`` and ``py`` beside ``cx`` and ``cy``.
+    """C Mandelbrot recomputed ``24 * px`` and ``24 * py`` in memory.
 
-    The selected code had three unit increments: the required iteration count
-    and two redundant coordinate counters. A target-independent induction
-    proof should leave only the iteration increment regardless of which
-    registers or spill slots allocation later chooses.
+    The selector proved both affine coordinate formulas profitable even with
+    no register headroom, then the rewrite's register-only gate silently
+    discarded them.  That left two hot ``shl/add/shl`` chains targeting frame
+    slots.  Keep the coordinates as ``+24`` recurrences whether allocation
+    gives them registers or spill slots.  The narrower ``px``/``py`` counters
+    themselves remain redundant, so only the required iteration increment is
+    present too.
     """
     from qbopt.cfront import compile as cfront
     from tools import quality
@@ -498,15 +501,36 @@ def test_c_mandel_reuses_coordinate_recurrences_for_both_outer_loops() -> None:
     source = Path("bench/c/mandel.c")
     module = cfront.assembled(cfront.recorded(source, []), source.stem, optimise=True)
     procedure = next(one for one in module.procedures if one.name == "_bench_mandel")
+    assert dict(procedure.body.loop_trip_counts) == {8: 24, 14: 32}
     rows = quality._rows(quality._blob(module, procedure, 0))
+
+    def immediate(operands: str) -> int | None:
+        text = operands.rsplit(",", 1)[-1].strip()
+        try:
+            return int(text[:-1], 16) if text.endswith("h") else int(text)
+        except ValueError:
+            return None
+
     unit_steps = [
         (mnemonic, operands)
         for _raw, mnemonic, operands in rows
-        if mnemonic == "inc" or mnemonic == "add" and operands.rsplit(",", 1)[-1].strip() == "1"
+        if mnemonic == "inc" or mnemonic == "add" and immediate(operands) == 1
+    ]
+    coordinate_steps = [
+        (mnemonic, operands)
+        for _raw, mnemonic, operands in rows
+        if mnemonic == "add" and immediate(operands) == 24
+    ]
+    frame_shifts = [
+        (mnemonic, operands)
+        for _raw, mnemonic, operands in rows
+        if mnemonic == "shl" and operands.lstrip().startswith("dword ptr [bp-")
     ]
 
     assert len(unit_steps) == 1, unit_steps
     assert "[" not in unit_steps[0][1]
+    assert len(coordinate_steps) == 2, coordinate_steps
+    assert not frame_shifts, frame_shifts
 
 
 def _trip_counts(data: bytes) -> list[int]:

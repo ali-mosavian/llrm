@@ -113,6 +113,73 @@ def test_posttested_counter_has_an_exact_fixed_trip_count():
     assert lower.lowered("fixed", body, {}, set(), {}).loop_trip_counts == ((1, 4),)
 
 
+def test_posttested_symbolic_sentinel_keeps_its_exact_trip_count():
+    """Mandelbrot's inner 32-trip loop was measured as ten trips.
+
+    Strength reduction replaces ``x < 16`` with a coordinate recurrence
+    ending at ``start + 768``.  Rotation compares the just-advanced value at
+    the latch, so exact-trip reasoning must recognize the same symbolic
+    sentinel there as it does in a pre-tested header.
+    """
+    start = mir.Value(930, 0, variable=1)
+    end = mir.Value(931, 0, variable=2)
+    counter = mir.Value(932, 1, variable=3)
+    following = mir.Value(933, 2, variable=3)
+    flags = mir.Value(934, 2, flags=True)
+    endpoint = mir.Op(
+        0,
+        ir.Operation.BINARY,
+        "",
+        (end,),
+        (start,),
+        kind=mir.Kind.ADD,
+        args=(mir.Held(start, 4), mir.Const(768, 4)),
+        results=(mir.Held(end, 4),),
+    )
+    increment = mir.Op(
+        2,
+        ir.Operation.BINARY,
+        "",
+        (following,),
+        (counter,),
+        kind=mir.Kind.ADD,
+        args=(mir.Held(counter, 4), mir.Const(24, 4)),
+        results=(mir.Held(following, 4),),
+    )
+    compare = mir.Op(
+        2,
+        ir.Operation.BINARY,
+        "",
+        (flags,),
+        (following, end),
+        kind=mir.Kind.SUB,
+        args=(mir.Held(following, 4), mir.Held(end, 4)),
+    )
+    branch = mir.Op(
+        2,
+        ir.Operation.BRANCH,
+        "",
+        (),
+        (flags,),
+        kind=mir.Kind.BRANCH,
+        test=mir.Kind.NE,
+        target=1,
+    )
+    body = mir.MirBody(
+        0,
+        (
+            mir.MirBlock(0, (), (endpoint,), (1,)),
+            mir.MirBlock(1, (mir.Phi(counter, {0: start, 2: following}),), (), (2,)),
+            mir.MirBlock(2, (), (increment, compare, branch), (1, 3)),
+            mir.MirBlock(3, (), (), ()),
+        ),
+    )
+    loop = loops.Loop(1, frozenset({2}), frozenset({1, 2}))
+
+    assert induction.trip_count(body, loop, consts.known(body)) == 32
+    assert lower.lowered("symbolic", body, {}, set(), {}).loop_trip_counts == ((1, 32),)
+
+
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_nine_dimensional_loop_carries_its_pointer(tag):
     """NDARR printed 1,12,2 correctly but rebuilt its nine-dimensional pointer each iteration."""
