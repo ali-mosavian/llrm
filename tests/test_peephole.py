@@ -602,6 +602,117 @@ def test_scaled_lea_does_not_require_another_shift(amount, following, width):
         assert emitted.memory_index_scale == 1 << amount
 
 
+def test_loaded_scaled_add_uses_67h_lea() -> None:
+    """Matmul emitted ``mov temp,[spill]; shl temp,1; add sum,temp``.
+
+    The reload is still required, but once the ADD's flags and the shifted
+    temporary are dead, 386 SIB addressing can apply the scale in a 67h LEA
+    and remove the shift without changing the spill decision.
+    """
+    temporary = ir.Reg(Register.EAX, 4)
+    total = ir.Reg(Register.EDX, 4)
+    cell = ir.Mem(ir.Addr(ir.Space.FRAME, -4), 4, Register.BP)
+    load = lir.Insn(
+        0,
+        (0, 0),
+        ir.Semantics(ir.Operation.MOVE, "mov", (temporary,), (cell,)),
+        (1,),
+        (),
+        spill_reload=True,
+    )
+    shift = lir.Insn(
+        1,
+        (1, 1),
+        ir.Semantics(ir.Operation.BINARY, "shl", (temporary,), (temporary, ir.Imm(1, 1))),
+        (1,),
+        (1,),
+    )
+    add = lir.Insn(
+        2,
+        (2, 2),
+        ir.Semantics(ir.Operation.BINARY, "add", (total,), (total, temporary)),
+        (2,),
+        (2, 1),
+    )
+    compare = lir.Insn(
+        3,
+        (3, 3),
+        ir.Semantics(ir.Operation.COMPARE, "cmp", (), (total, ir.Imm(0, 4))),
+        (),
+        (2,),
+    )
+    body = lir.LirBody("matmul-scale", 0, (lir.LirBlock(0, (load, shift, add, compare), ()),), {}, {})
+
+    result = peephole.addresses(body, cpu="386").insns
+
+    assert [one.what.name for one in result] == ["mov", "lea", "cmp"]
+    address = result[1].what.sources[0]
+    assert isinstance(address, ir.Address)
+    assert address.through == Register.EDX
+    assert address.index == Register.EAX
+    assert address.scale == 2
+
+
+def test_loaded_scaled_add_preserves_a_shifted_value_live_into_a_successor() -> None:
+    """A block-local use count lost a shifted temporary read by its successor.
+
+    Replacing ``shl temp; add total,temp`` with LEA leaves ``temp`` unshifted,
+    so the selection is legal only when the add is its last use in the whole
+    body, not merely its last use in the defining block.
+    """
+    temporary = ir.Reg(Register.EAX, 4)
+    total = ir.Reg(Register.EDX, 4)
+    saved = ir.Reg(Register.ECX, 4)
+    cell = ir.Mem(ir.Addr(ir.Space.FRAME, -4), 4, Register.BP)
+    load = lir.Insn(
+        0,
+        (0, 0),
+        ir.Semantics(ir.Operation.MOVE, "mov", (temporary,), (cell,)),
+        (1,),
+        (),
+        spill_reload=True,
+    )
+    shift = lir.Insn(
+        1,
+        (1, 1),
+        ir.Semantics(ir.Operation.BINARY, "shl", (temporary,), (temporary, ir.Imm(1, 1))),
+        (1,),
+        (1,),
+    )
+    add = lir.Insn(
+        2,
+        (2, 2),
+        ir.Semantics(ir.Operation.BINARY, "add", (total,), (total, temporary)),
+        (2,),
+        (2, 1),
+    )
+    compare = lir.Insn(
+        3,
+        (3, 3),
+        ir.Semantics(ir.Operation.COMPARE, "cmp", (), (total, ir.Imm(0, 4))),
+        (),
+        (2,),
+    )
+    preserve = lir.Insn(
+        4,
+        (4, 4),
+        ir.Semantics(ir.Operation.MOVE, "mov", (saved,), (temporary,)),
+        (3,),
+        (1,),
+    )
+    body = lir.LirBody(
+        "live-scale",
+        0,
+        (lir.LirBlock(0, (load, shift, add, compare), (1,)), lir.LirBlock(1, (preserve,), ())),
+        {},
+        {},
+    )
+
+    result = peephole.addresses(body, cpu="386")
+
+    assert [one.what.name for one in result.blocks[0].insns] == ["mov", "shl", "add", "cmp"]
+
+
 @pytest.mark.parametrize(
     "guard", ["none", "dword", "carry", "zero_shift", "bytes", "wrong_source", "same", "stack", "relocation"]
 )

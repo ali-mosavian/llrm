@@ -1159,9 +1159,97 @@ def _scaled_address(
     return replace(copy, what=what, defines=add.defines)
 
 
+def _loaded_scaled_add(
+    parts: tuple[lir.Insn, ...],
+    uses: Counter,
+    *,
+    cpu: str | targets.Profile = "386",
+) -> lir.Insn | None:
+    """Replace a dead temporary's shift with a scaled 67h LEA.
+
+    The load remains a load.  Only the register-only ``shl; add`` tail is
+    selected differently, after virtual use counts prove that no later use
+    expects the temporary to contain its shifted value.
+    """
+    if len(parts) != 3 or any(
+        one.what is None
+        or one.clobbers
+        or one.clobbers_high
+        or one.symbol is True
+        or one.spread
+        or one.group is not None
+        or one.frame_adjust
+        for one in parts
+    ):
+        return None
+    load, shift, addition = parts
+    match load.what, shift.what, addition.what:
+        case (
+            ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg() as temporary,), (ir.Mem(),)),
+            ir.Semantics(
+                ir.Operation.BINARY,
+                "shl",
+                (shift_dest,),
+                (shift_source, ir.Imm(amount, _, None)),
+            ),
+            ir.Semantics(
+                ir.Operation.BINARY,
+                "add",
+                (ir.Reg() as total,),
+                (add_left, add_right),
+            ),
+        ):
+            if (
+                shift_dest != temporary
+                or shift_source != temporary
+                or add_left != total
+                or add_right != temporary
+                or not 1 <= amount <= 3
+            ):
+                return None
+        case _:
+            return None
+    if (
+        temporary.width != total.width
+        or temporary.width not in {2, 4}
+        or temporary.register not in target.WIDTHS
+        or total.register not in target.WIDTHS
+        or ir.root(temporary.register) == ir.root(total.register)
+        or ir.root(temporary.register) == Register.ESP
+        or len(load.defines) != 1
+        or shift.defines != load.defines
+        or shift.uses != load.defines
+        or load.defines[0] not in addition.uses
+        or uses[load.defines[0]] != 2
+    ):
+        return None
+    target_cpu = targets.profile(cpu)
+    old = target_cpu.operations.shift + target_cpu.operations.add
+    new = target_cpu.operations.address + target_cpu.operations.prefix
+    if temporary.width < 4:
+        new += target_cpu.partial_register_stall
+    if new > old:
+        return None
+    what = ir.Semantics(
+        ir.Operation.ADDRESS,
+        "lea",
+        (total,),
+        (
+            ir.Address(
+                None,
+                through=RegisterExt.full_register32(total.register),
+                index=RegisterExt.full_register32(temporary.register),
+                scale=1 << amount,
+            ),
+        ),
+    )
+    return replace(addition, what=what)
+
+
 def addresses(body: lir.LirBody, *, cpu: str | targets.Profile = "386") -> lir.LirBody:
     """Select LEA for allocated arithmetic when the replaced flags are dead."""
     target_cpu = targets.profile(cpu)
+    virtual_uses = Counter(value for block in body.blocks for one in block.insns for value in one.uses)
     blocks = []
     for block in body.blocks:
         dead = set()
@@ -1174,6 +1262,18 @@ def addresses(body: lir.LirBody, *, cpu: str | targets.Profile = "386") -> lir.L
         index = 0
         while index < len(block.insns):
             triple = block.insns[index : index + 3]
+            combined = (
+                _loaded_scaled_add(triple, virtual_uses, cpu=target_cpu)
+                if len(triple) == 3 and id(triple[2]) in dead
+                else None
+            )
+            if combined is not None:
+                shift = triple[1]
+                folded = lir.without((shift, combined), lambda one, shift=shift: one is shift)
+                if len(folded) == 1:
+                    insns.extend((triple[0], *folded))
+                    index += 3
+                    continue
             combined = (
                 _scaled_address(triple, flags_dead=True, cpu=target_cpu)
                 if len(triple) == 3 and id(triple[2]) in dead
