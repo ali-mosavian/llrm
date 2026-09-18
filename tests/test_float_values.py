@@ -38,6 +38,24 @@ def test_c_float_loop_keeps_its_nonvolatile_bound_outside_the_volatile_loop() ->
     assert argument_loads[0] not in inside
 
 
+def test_c_float_loop_uses_the_guarded_countdown_shape() -> None:
+    """C floats retained ``add/cmp/jb`` in its ten-trip hot path.
+
+    Require the actual benchmark to use the general countdown mechanism; the
+    fast synthetic tests separately cover zero-trip safety and refusal when
+    the source counter is observable.
+    """
+    from qbopt.cfront import compile as cfront
+
+    source = Path("bench/c/floats.c")
+    text = cfront.compiled(cfront.recorded(source, []), source.stem, optimise=True)
+    procedure = text.split("_bench_floats proc far", 1)[1].split("_bench_floats endp", 1)[0]
+
+    assert "dec " in procedure and "jne " in procedure
+    assert "add ax, 1" not in procedure and "cmp ax, bx" not in procedure
+    assert "je " in procedure  # the dynamic zero-trip guard
+
+
 def test_qrender_word_conversion_lowers_without_extracting_a_word_from_a_word():
     """ENT_CHECK_TELEPORT refused FIS2 at 0xae9: a 16-bit result was treated as a long pair."""
     from qbopt.abi import runtime

@@ -11,6 +11,7 @@ from qbopt.model import ir
 from qbopt.model import mir
 from qbopt.analysis import ssa
 from qbopt.analysis import loops
+from qbopt.analysis import consts
 from qbopt.analysis import induction
 
 
@@ -23,7 +24,230 @@ def entered(body: mir.MirBody) -> mir.MirBody:
     """
     from qbopt.optimize import cfg
 
-    return cfg.merged(rotated(body))
+    return cfg.merged(rotated(_counted_down(body)))
+
+
+def _counted_down(body: mir.MirBody) -> mir.MirBody:
+    """Rotate a dead ``0..bound-1`` counter into a guarded countdown.
+
+    A dynamic unsigned bound cannot prove that the loop is entered, so the
+    ordinary rotation below correctly leaves its initial test in place.  If
+    the induction value itself is otherwise dead, its only useful meaning is
+    the number of trips remaining:
+
+        i = 0; while (i < n) { body; ++i; }
+
+    becomes a zero-trip guard followed by ``--n`` and a branch on that
+    operation's own flags.  This is an induction-variable formula choice,
+    not a peephole: the guard is what makes ``n == 0`` exact, and refusing an
+    observed counter is what makes replacing its values sound.
+
+    The first implementation deliberately takes the canonical one-body-block
+    form produced by loop simplification.  More involved loops remain on the
+    original representation rather than acquiring a partially repaired CFG.
+    """
+    from qbopt.optimize import transform
+
+    blocks = {block.at: block for block in body.blocks}
+    predecessors = loops.predecessors(body.blocks)
+    facts = consts.known(body)
+    made = {value.id: op for block in body.blocks for op in block.ops for value in op.defines}
+    all_values = tuple(ssa.values(body))
+
+    for loop in loops.loops(body.blocks, body.entry):
+        if len(loop.body) != 2 or len(loop.latches) != 1:
+            continue
+        preheader = transform._preheader(body, loop)
+        if preheader is None or blocks[preheader].succ != (loop.header,):
+            continue
+        header = blocks[loop.header]
+        latch_at = next(iter(loop.latches))
+        latch = blocks[latch_at]
+        inside = set(loop.body)
+        entered_at = [at for at in header.succ if at in inside and at != header.at]
+        exits = [at for at in header.succ if at not in inside]
+        if (
+            entered_at != [latch_at]
+            or len(exits) != 1
+            or latch.succ != (header.at,)
+            or latch.phis
+            or set(predecessors.get(latch.at, ())) != {header.at}
+            or len(header.phis) != 1
+            or not header.ops
+            or header.ops[-1].kind is not mir.Kind.BRANCH
+            or not all(_tests(op) for op in header.ops[:-1])
+            or blocks[exits[0]].phis
+        ):
+            continue
+        branch = header.ops[-1]
+        counter = next(iter(induction.basics(body, loop).values()), None)
+        if (
+            counter is None
+            or induction._signed(counter.start, facts, counter.start.width) != 0
+            or induction._signed(counter.step, facts, counter.step.width) != 1
+            or induction._continuing_test(branch, inside) is not mir.Kind.BELOW
+        ):
+            continue
+        phi = header.phis[0]
+        if phi.result.id != counter.value or set(phi.incoming) != {preheader, latch_at}:
+            continue
+        width = counter.start.width
+        comparisons = [
+            (op, bound)
+            for op in header.ops[:-1]
+            if (bound := induction._counter_bound(op, branch, counter, width, made)) is not None
+        ]
+        if len(comparisons) != 1:
+            continue
+        compare, bound = comparisons[0]
+        if (
+            not isinstance(bound, mir.Held)
+            or bound.width != width
+            or bound.value.id not in induction.invariant(body, inside)
+        ):
+            continue
+        update = phi.incoming[latch_at]
+        stepping = made.get(update.id)
+        stepped = mir.stepping(stepping) if stepping is not None else None
+        if (
+            stepping is None
+            or stepped != (mir.Held(phi.result, width), mir.Const(1, width))
+            or stepping.results != (mir.Held(update, width),)
+            or stepping.loads
+            or stepping.stores
+            or stepping.barrier
+            or stepping.merges
+        ):
+            continue
+        if any(
+            (set(compare.defines) & set(op.uses) and op is not branch)
+            or {value for value in stepping.defines if value.flags} & set(op.uses)
+            for block in body.blocks
+            for op in block.ops
+        ):
+            continue
+        # The recurrence may be replaced only when it is control, not a
+        # source-language value.  Count operation reads and phi edges alike;
+        # an exit use hidden in either representation must reject the change.
+        allowed = {id(compare), id(stepping)}
+        if any(
+            phi.result in op.uses and id(op) not in allowed
+            or update in op.uses
+            for block in body.blocks
+            for op in block.ops
+        ):
+            continue
+        if any(
+            other is not phi and {phi.result, update} & set(other.incoming.values())
+            for block in body.blocks
+            for other in block.phis
+        ):
+            continue
+
+        serial = max((value.id for value in all_values), default=0) + 1
+        variable = max((value.variable for value in all_values), default=0) + 1
+        step_flags = mir.Value(serial, stepping.at, flags=True, variable=variable, version=1)
+        guard_flags = mir.Value(serial + 1, preheader, flags=True, variable=variable + 1, version=1)
+        decrement = replace(
+            stepping,
+            name="",
+            defines=tuple(value for value in stepping.defines if not value.flags) + (step_flags,),
+            uses=(phi.result,),
+            source_backed=False,
+            kind=mir.Kind.DECREMENT,
+            args=(mir.Held(phi.result, width),),
+            raised=None,
+            symbol=False,
+        )
+        guard_compare = replace(
+            compare,
+            at=blocks[preheader].ops[-1].at if blocks[preheader].ops else preheader,
+            defines=(guard_flags,),
+            uses=(bound.value,),
+            source_backed=False,
+            args=(bound, mir.Const(0, width)),
+            raised=None,
+            absorbed=(),
+            symbol=False,
+        )
+        guard_branch = replace(
+            branch,
+            at=guard_compare.at,
+            name="",
+            defines=(),
+            uses=(guard_flags,),
+            source_backed=False,
+            test=mir.Kind.EQ,
+            target=exits[0],
+            raised=None,
+            absorbed=(),
+            symbol=False,
+        )
+        entry_ops = list(blocks[preheader].ops)
+        if entry_ops and entry_ops[-1].kind is mir.Kind.JUMP:
+            entry_ops[-1] = _cleared(entry_ops[-1])
+        elif entry_ops and entry_ops[-1].kind is mir.Kind.BRANCH:
+            continue
+        entry_ops += [guard_compare, guard_branch]
+
+        start = phi.incoming[preheader]
+        start_definition = made.get(start.id)
+        start_is_private = start_definition is not None and not any(
+            start in op.uses for block in body.blocks for op in block.ops
+        ) and not any(
+            start in other.incoming.values()
+            for block in body.blocks
+            for other in block.phis
+            if other is not phi
+        )
+        if start_is_private:
+            entry_ops = [_cleared(op) if op is start_definition else op for op in entry_ops]
+        rewritten = []
+        for block in body.blocks:
+            ops = []
+            for op in block.ops:
+                if op is stepping:
+                    op = decrement
+                elif op is compare:
+                    op = _cleared(op)
+                elif op is branch:
+                    op = replace(
+                        op,
+                        name="",
+                        uses=(step_flags,),
+                        source_backed=False,
+                        test=mir.Kind.NE,
+                        target=latch.at,
+                        raised=None,
+                        symbol=False,
+                    )
+                elif start_is_private and op is start_definition:
+                    op = _cleared(op)
+                ops.append(op)
+            rewritten.append(
+                replace(
+                    block,
+                    ops=tuple(ops),
+                    phis=(replace(phi, incoming={preheader: bound.value, latch_at: update}),)
+                    if block.at == header.at
+                    else block.phis,
+                )
+            )
+        changed = replace(body, blocks=tuple(rewritten))
+        changed_header = changed.block(header.at)
+        changed_latch = changed.block(latch.at)
+        return _counted_down(
+            _entered(
+                changed,
+                loop,
+                preheader,
+                changed_header,
+                changed_latch,
+                entry_ops,
+                entry_succ=(changed_latch.at, exits[0]),
+            )
+        )
+    return body
 
 
 def rotated(body: mir.MirBody) -> mir.MirBody:
@@ -63,7 +287,15 @@ def rotated(body: mir.MirBody) -> mir.MirBody:
     return body
 
 
-def _entered(body, loop, preheader, header, first, ops) -> mir.MirBody:
+def _entered(
+    body: mir.MirBody,
+    loop: loops.Loop,
+    preheader: int,
+    header: mir.MirBlock,
+    first: mir.MirBlock,
+    ops: list[mir.Op],
+    entry_succ: tuple[int, ...] | None = None,
+) -> mir.MirBody:
     """`body` entering `loop` at `first`, its phis moved there by hand.
 
     Not re-derived by variable: two values of one variable a pass has
@@ -77,7 +309,10 @@ def _entered(body, loop, preheader, header, first, ops) -> mir.MirBody:
     """
     latch = next(iter(loop.latches))
     serial = max(value.id for value in ssa.values(body)) + 1
-    moved = {phi.result.id: replace(phi.result, id=serial + index, at=first.at) for index, phi in enumerate(header.phis)}
+    moved = {
+        phi.result.id: replace(phi.result, id=serial + index, at=first.at)
+        for index, phi in enumerate(header.phis)
+    }
 
     def latest(value: mir.Value) -> mir.Value:
         # A latch value that is itself a header phi is that phi one pass on.
@@ -103,7 +338,7 @@ def _entered(body, loop, preheader, header, first, ops) -> mir.MirBody:
         )
         changed = replace(block, phis=phis, ops=tuple(_swapped(op, swap) for op in block.ops))
         if block.at == preheader:
-            return replace(changed, ops=tuple(ops), succ=(first.at,))
+            return replace(changed, ops=tuple(ops), succ=entry_succ or (first.at,))
         if block.at == header.at:
             return replace(changed, phis=())
         if block.at == first.at:
@@ -111,6 +346,27 @@ def _entered(body, loop, preheader, header, first, ops) -> mir.MirBody:
         return changed
 
     return replace(body, blocks=tuple(rewired(block) for block in body.blocks))
+
+
+def _cleared(op: mir.Op) -> mir.Op:
+    """Retain an occurrence's ownership while deleting its computation."""
+    return replace(
+        op,
+        kind=mir.Kind.NOTHING,
+        name="",
+        defines=(),
+        uses=(),
+        loads=(),
+        stores=(),
+        args=(),
+        results=(),
+        merges={},
+        raised=None,
+        target=None,
+        test=None,
+        stack=None,
+        symbol=False,
+    )
 
 
 def _swapped(op: mir.Op, swap: dict[int, mir.Value]) -> mir.Op:

@@ -20,15 +20,82 @@ iteration updates this file in the same commit.
 
 | Phase | State | Current boundary |
 |---|---|---|
-| Per-CPU measurement | in progress | CPU profiles distinguish native medium-model addressing from the complete costed 67h fallback; the C corpus, static/dynamic metrics and reference listings exist, and rotated symbolic-sentinel trip counts remain exact after strength reduction; audited targets remain. |
+| Per-CPU measurement | in progress | CPU profiles distinguish native medium-model addressing from the complete costed 67h fallback; the C corpus, static/dynamic metrics and reference listings exist, and rotated symbolic sentinels and guarded post-tests retain comparable trip estimates; audited targets remain. |
 | MIR/LIR provenance and fresh OMF | complete in production | allocated LIR emits directly with external source maps/allocation hints; the remaining compatibility views are test-only and cannot route a compilation through record rewriting. |
 | SROA and scalar promotion | partial | fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies can now expand into exact leaves, while far, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, dying-base indexed-form unfolding, and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
-| Loop optimization | partial | exact pre/post-tested recurrences and symbolic sentinels, complete-affine spill/recompute pricing, precise-volatile-aware LICM, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling exist; versioning and complete candidate-set pressure forecasting remain. |
+| Loop optimization | partial | exact pre/post-tested recurrences and symbolic sentinels, dead-control countdowns with zero-trip guards, complete-affine spill/recompute pricing, precise-volatile-aware LICM, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling exist; versioning and complete candidate-set pressure forecasting remain. |
 | Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs (including closed recursive SCCs in C and object paths), constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
 | Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing, target-priced 67h LEA selection, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 99. Count dead dynamic induction variables down on their flags — 2026-09-18
+
+After iteration 98 hoisted `floats`' immutable bound, the raw listing still
+spent three hot integer operations controlling an otherwise x87-only loop:
+`add ax,1 / cmp ax,bx / jb`.  Clang's strict-x87 reference instead consumes
+the dynamic trip count as a countdown.  GCC retains the ordinary up-counter;
+both are structural references, while the selected form remains constrained
+by the medium-model ABI.
+
+The new MIR formula applies to a canonical unsigned `0..n-1` loop only when
+the induction value has no observable use.  It tests `n` once before entry,
+moves `n` into the loop phi, replaces the unit increment with a decrement,
+and makes the backedge branch consume that decrement's flags directly.  The
+entry guard preserves the source's zero-trip behavior.  Multi-block bodies,
+exit phis, non-unit or wrapping recurrences, shared comparison/step flags and
+any non-control counter use are refused rather than partially rewritten.  The
+first changed stage is the final MIR `rotate` stage:
+
+```asm
+; before
+xor ax,ax
+mov bx,word ptr [bp+6]
+loop:
+    ; floating body
+    add ax,1
+    cmp ax,bx
+    jb loop
+
+; after
+mov ax,word ptr [bp+6]
+or ax,ax
+je exit
+loop:
+    ; floating body
+    dec ax
+    jne loop
+```
+
+The fail-first compiled regression initially found no decrement.  The fast
+semantic regression now requires both the one-time `EQ` guard and a loop
+backedge whose `NE` condition reads the decrement's own flags, so an unsafe
+post-test cannot satisfy it; a companion case proves an observed source
+counter refuses the rewrite.  The actual C benchmark has its own emitted-shape
+regression.  Real DOS executions independently return `1000` for the zero-trip
+call and the corpus oracle `162635` for 1000 trips.
+
+The first quality run implausibly reported dynamic work `96 -> 57`.  The raw
+change removes one instruction per executed trip, not 39.  The instrument had
+treated the new guard as a generic 50/50 branch while treating the equivalent
+old pretest as the documented 90/10 loop convention.  A second fail-first
+regression now covers guarded natural-loop frequencies, and the estimator
+recognizes only the exact shape “one successor is this loop's header and the
+other bypasses it.”  The corrected dynamic estimate is `96 -> 85`; the false
+`57` result is recorded here so it is not quoted as a speedup.
+
+All eight CPU profiles emit the same 91-byte, 29-instruction body, down from
+95 bytes and 30 instructions.  Static weighted cost changes `355 -> 353` on
+386, `273 -> 272` on 486, `107 -> 106` on P5, and is unchanged on P6, K5,
+K6, K7 and Core (`137, 141, 134, 109, 133`).  Loads, stores, branches, peak
+live values and spill traffic are unchanged.  The regenerated strict-x87
+references report 25 normalized candidate instructions against 26 for Clang
+and 25 for i686 GCC; those flat-i386 counts remain advisory, not a registered
+medium-model target.  The three fast countdown/measurement checks pass
+(`3 passed`, `0.09s`), the actual C shape check passes (`1 passed`, `0.22s`),
+and Tier 1 passes (`213 passed`, `31 deselected`, `1.75s`); no phase-boundary
+full suite was run.
 
 ### 98. Hoist disjoint work around precise volatile accesses — 2026-09-18
 

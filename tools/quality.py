@@ -447,6 +447,22 @@ def _transitions(body: lir.LirBody) -> dict[int, dict[int, float]]:
                     **{one: (1.0 - continue_probability) / len(outside) for one in outside},
                 }
                 break
+        if split is None:
+            # A zero-trip-safe rotation puts one guard immediately before a
+            # post-tested loop.  Its two successors are the loop header and
+            # the path bypassing the loop.  Charging that ordinary-looking
+            # branch 50/50 while charging the equivalent pretest 90/10 makes
+            # a CFG rewrite appear to halve executed work.  Preserve the
+            # documented profile-free convention across the two shapes.
+            guarded = [
+                loop
+                for loop in natural
+                if loop.header in successors
+                and len(successors) == 2
+                and all(one == loop.header or one not in loop.body for one in successors)
+            ]
+            if len(guarded) == 1:
+                split = {one: 0.9 if one == guarded[0].header else 0.1 for one in successors}
         out[block.at] = split or {one: 1.0 / len(successors) for one in successors}
     return out
 
@@ -527,7 +543,10 @@ def _dynamic_operations(module: masm.Module, procedure: masm.Procedure, number: 
     status = "estimated: CFG branches"
     if procedure.body.loop_trip_counts:
         status += ", exact proved trip counts where available"
-    if any(loop.header not in dict(procedure.body.loop_trip_counts) for loop in loops.loops(procedure.body.blocks, procedure.body.entry)):
+    if any(
+        loop.header not in dict(procedure.body.loop_trip_counts)
+        for loop in loops.loops(procedure.body.blocks, procedure.body.entry)
+    ):
         status += ", otherwise ten iterations per natural loop"
     return estimate, status
 
