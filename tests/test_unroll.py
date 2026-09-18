@@ -224,7 +224,15 @@ def body():
     path = Path("fixtures/omf/fpdeep-p-g2.obj")
     found = corpus.loaded(path)
     original = mir.bodies(found, corpus.partitioned(path))[0][1]
-    optimized = transform.applied(original, found.dgroup, found.calls, found=found, unroll_=False)
+    optimized = transform.applied(
+        original,
+        found.dgroup,
+        found.calls,
+        found=found,
+        floatloop_=False,
+        peel_=False,
+        unroll_=False,
+    )
     return found, optimized
 
 
@@ -234,8 +242,16 @@ def test_production_fpdeep_unrolls_through_lcssa_exits(tag):
     from tools.stages import _bodies
     found, bodies, _ = _bodies(Path(f"fixtures/omf/fpdeep-{tag}.obj").read_bytes())
     partition = corpus.partitioned(Path(f"fixtures/omf/fpdeep-{tag}.obj"))
-    original = transform.applied(bodies[0][1], found.dgroup, found.calls,
-                                 blocks=partition, found=found, unroll_=False)
+    original = transform.applied(
+        bodies[0][1],
+        found.dgroup,
+        found.calls,
+        blocks=partition,
+        found=found,
+        floatloop_=False,
+        peel_=False,
+        unroll_=False,
+    )
     loop, = loops.loops(original.blocks, original.entry)
     exit_at, = set(original.block(loop.header).succ) - loop.body
     assert original.block(exit_at).phis
@@ -250,8 +266,11 @@ def test_production_fpdeep_unrolls_through_lcssa_exits(tag):
 
 def test_normal_pipeline_expands_and_folds_fpdeep_to_a_fixed_point():
     """FPDEEP's improvements previously required an out-of-band unroll wrapper."""
-    found, original = body()
+    path = Path("fixtures/omf/fpdeep-p-g2.obj")
+    found = corpus.loaded(path)
+    original = mir.bodies(found, corpus.partitioned(path))[0][1]
     changed = transform.applied(original, found.dgroup, found.calls, found=found)
+    assert changed.repetitions == ((0x66, 3),)
     assert changed.repetitions == ((0x66, 3),)
     assert not loops.loops(changed.blocks, changed.entry)
     assert transform.applied(changed, found.dgroup, found.calls, found=found) == changed
@@ -264,7 +283,7 @@ def test_fpcse_exact_ten_iteration_sum_folds_in_source_order():
     found = corpus.loaded(path)
     original = mir.bodies(found, corpus.partitioned(path))[0][1]
     changed = transform.applied(original, found.dgroup, found.calls, found=found)
-    assert changed.repetitions == ((0x66, 10),)
+    assert not changed.repetitions
     assert not loops.loops(changed.blocks, changed.entry)
     assert not any(op.floating for block in changed.blocks for op in block.ops)
     import struct

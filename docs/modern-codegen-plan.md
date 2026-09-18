@@ -1263,3 +1263,27 @@ iteration 55 remains provisional until its normal performance and complete
 suite gates; GCC/LLVM are best-case flat-i386 structural references, while
 BCC/WC medium-model output remains the authority for ABI, segments, and legal
 addressing.
+
+### 58. Individually bisectable FloatLoop stage — 2026-09-18
+
+The focused validation exposed two historical generic-unroll tests that
+prepared FPDEEP through the normal optimizer, then expected a loop to remain.
+That preparation is no longer a stable stage boundary: `FloatLoop` runs before
+the generic unroller and can legally consume an exact recurrence first.  The
+old assertions therefore described an implementation accident rather than a
+program property.
+
+`transform.applied()` now accepts `floatloop_=False`, matching the existing
+per-pass switches and restoring the stated bisection contract: every MIR pass
+can be disabled for a stage comparison.  The regression first requires the
+new switch—so it fails on the former API—and proves `only="floatloop"` removes
+FPCSE's exact loop only when that pass is enabled.  The generic-unroll tests
+now explicitly disable both earlier structural consumers (`FloatLoop` and
+`Peel`) when they inspect unrolling mechanics; their public end-state checks
+continue to run the normal pipeline.
+
+The affected focused tests pass (`7` unroll checks in `18.49s`), and the
+isolated nbody OMF/LINK/DOS oracle remains green from iteration 57.  This is
+debuggability and test-boundary work in Phases 1 and 5, not a new performance
+result.  GCC/LLVM remain best-case flat-i386 structural references; BCC/WC
+medium-model listings remain the ABI and encoding authority.

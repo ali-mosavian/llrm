@@ -2754,6 +2754,7 @@ def applied(
     drop_stores: bool = True,
     promote_: bool = True,
     strength_: bool = True,
+    floatloop_: bool = True,
     unroll_: bool = True,
     peel_: bool = True,
     fill_: bool = True,
@@ -2786,6 +2787,7 @@ def applied(
         # bisected: a variant that skips one and still allocates and emits
         # is the only kind that measures anything.
         "lcssa": lcssa_,
+        "floatloop": floatloop_,
         "fold": fold,
         "decide": decide,
         "dead": dead,

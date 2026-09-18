@@ -84,6 +84,30 @@ def test_exact_loop_retains_checkpoint_and_final_iteration(tag):
     assert floatfacts.encoded(facts[stored.args[0].value], stored.floating.result) == 0x43F3C000
 
 
+def test_floatloop_can_be_disabled_for_stage_bisection():
+    """FPCSE's generic-unroll test needs the loop before FloatLoop consumes it.
+
+    Every MIR pass must be individually suppressible: otherwise a stage dump
+    cannot distinguish an earlier exact specialization from a later unroll.
+    """
+    from qbopt.optimize import transform
+
+    path = Path("fixtures/omf/fpcse-p-g2.obj")
+    found = corpus.loaded(path)
+    body = mir.bodies(found, corpus.partitioned(path))[0][1]
+    enabled = transform.applied(body, found.dgroup, found.calls, found=found, only="floatloop")
+    disabled = transform.applied(
+        body,
+        found.dgroup,
+        found.calls,
+        found=found,
+        floatloop_=False,
+        only="floatloop",
+    )
+    assert not loops.loops(enabled.blocks, enabled.entry)
+    assert loops.loops(disabled.blocks, disabled.entry)
+
+
 @pytest.mark.parametrize("handles_errors", [True, False])
 @pytest.mark.parametrize("phase", ["sink", "dead"])
 def test_checkpoint_keeps_initial_memory_and_counter_stores_for_an_error_handler(phase, handles_errors):
