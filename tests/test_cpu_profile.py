@@ -63,13 +63,16 @@ def test_medium_model_profiles_distinguish_native_and_67h_addressing() -> None:
     representing the real 386 fallback and all of its extra costs explicitly.
     """
     for target in map(cpu.profile, cpu.names()):
-        native, fallback = target.address_forms
+        native, secondary = target.address_forms
         assert target.address_scales == native.scales == frozenset({1})
-        assert native.index_width == 2 and not native.fallback
-        assert fallback.index_width == 4 and fallback.scales == frozenset({1, 2, 4, 8})
-        assert fallback.fallback and fallback.extra_bytes == 1
-        assert fallback.use_cost == target.prefix_cost
-        assert fallback.extension_cost == target.operations.extend
+        assert native.index_width == 2 and not native.secondary
+        assert secondary.index_width == 4 and secondary.scales == frozenset({1, 2, 4, 8})
+        assert secondary.secondary and secondary.extra_bytes == 1
+        assert secondary.use_cost == target.prefix_cost
+        assert secondary.extension_cost == target.operations.extend
+
+    legacy = AddressForm(4, frozenset({1, 2, 4, 8}), fallback=True)
+    assert legacy.secondary and legacy.fallback
 
 
 def test_direct_mir_default_keeps_medium_model_address_legality(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -291,20 +294,20 @@ def test_formula_selection_uses_67h_before_spilling_or_recomputing() -> None:
         results=(mir.Held(answer, 2),),
     )
     formula = induction.Derived(multiply, affine, mir.Const(2, 2))
-    fallback = AddressForm(
+    secondary = AddressForm(
         4,
         frozenset({1, 2, 4, 8}),
         extra_bytes=1,
         use_cost=1,
         extension_cost=4,
-        fallback=True,
+        secondary=True,
     )
 
-    activated = strength._fallback_indexes(
+    activated = strength._secondary_indexes(
         [formula],
         room=0,
         native=frozenset(),
-        fallbacks={id(multiply): (2, fallback)},
+        secondary={id(multiply): (2, secondary)},
         references={answer.id: 1},
     )
 

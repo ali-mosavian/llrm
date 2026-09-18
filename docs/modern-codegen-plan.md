@@ -24,11 +24,74 @@ iteration updates this file in the same commit.
 | MIR/LIR provenance and fresh OMF | complete in production | allocated LIR emits directly with external source maps/allocation hints; the remaining compatibility views are test-only and cannot route a compilation through record rewriting. |
 | SROA and scalar promotion | partial | fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies can now expand into exact leaves, while far, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, dying-base indexed-form unfolding, and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
-| Loop optimization | partial | exact pre/post-tested recurrences and symbolic sentinels, dead-control countdowns with zero-trip guards, complete-affine spill/recompute pricing, precise-volatile-aware LICM, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling exist; versioning and complete candidate-set pressure forecasting remain. |
+| Loop optimization | partial | exact pre/post-tested recurrences and symbolic sentinels, complete nested-initializer LICM, dead-control countdowns with zero-trip guards, complete-affine spill/recompute pricing, precise-volatile-aware LICM, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling exist; versioning and complete candidate-set pressure forecasting remain. |
 | Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs (including closed recursive SCCs in C and object paths), constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
 | Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing, target-priced 67h LEA selection, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 101. Hoist complete nested-loop initializers — 2026-09-18
+
+Mandelbrot's column recurrence starts at `xOffset - 512` and stops at
+`xOffset + 256`.  Both expressions are invariant across all 24 rows, but LICM
+treated every value which initialized a nested phi as a mutable reset.  That
+conservative rule was necessary for the historical SEGld failure: moving its
+literal counter reset made the next outer iteration start from the preceding
+iteration's final counter.  It was too broad for a complete SSA result.  A
+pure expression has its own immutable value; the nested recurrence updates
+later versions, not the result which initialized it.
+
+LICM now admits a single complete non-floating result with no memory,
+barrier, merge, stack effect, or readable flags.  COPY, carry/borrow, and
+two-result divide forms remain excluded.  The first changed production stage
+is MIR `r03-hoist`; the reset copy itself still executes on every outer
+iteration.
+
+```asm
+; before: six instructions on every one of 24 rows
+mov eax,[xOffset]
+mov [x],eax
+add [x],-512
+mov eax,[x]
+mov [xEnd],eax
+add [xEnd],768
+
+; after: four instructions once, two on every row
+add [xStart],-512
+mov eax,[xStart]
+mov [xEnd],eax
+add [xEnd],768
+row:
+push dword ptr [xStart]
+pop  dword ptr [x]
+```
+
+The raw control count is independently checkable: `6 * 24 = 144` dynamic
+setup instructions becomes `4 + 2 * 24 = 52`, exactly the quality report's
+`92`-instruction reduction.  Every CPU profile loses two bytes and one spill
+store, with unchanged raw instruction, load, and store counts.  Estimated
+dynamic operations fall by 92 on all eight profiles.  The straight-line
+ranking rises on 386 (`285 -> 289`), 486 (`224 -> 230`) and P5 (`143 -> 144`),
+is unchanged on P6/K5/K6, and improves on K7 (`46 -> 44`) and Core (`68 ->
+67`).  This is an audited hot-path trade: using the profile's in-order form
+costs, the changed setup alone falls from 672 to 262 cycles on 386 and from
+240 plus 144 operand-prefix clocks to 200 plus 52 prefix clocks on 486.  The
+static ranking counts each textual instruction once and therefore cannot
+represent that repetition.
+
+GCC's flat-i386 listing still computes `xOffset - 512` once per row; Clang
+rebuilds the affine column expression per pixel.  They remain useful
+structural references, not candidate-ABI authorities.  The fail-first Tier 1
+regression reproduces the complete computed initializer and distinguishes it
+from the recurrence step; the existing SEGld regression continues to protect
+the mutable COPY case.
+
+The address-form terminology is also made unambiguous in production code: the
+legal non-native form is now named `secondary`, and selection remains native
+16-bit form, then costed `67h`, then spill or recomputation.  The former
+`fallback` constructor/attribute remains as a synchronized compatibility alias
+for existing Python callers.  The extra prefix byte is kept separate from its
+target-specific execution cost.
 
 ### 100. Fold allocated sums through the secondary 67h form — 2026-09-18
 

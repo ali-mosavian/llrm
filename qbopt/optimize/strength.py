@@ -161,10 +161,10 @@ def reduced(
         # and harr's loops report nine.
         leaves = _formula_set(candidates)
         widened: dict[int, list[tuple[Op, Op]] | None] = {}
-        native_forms = tuple(form for form in address_forms if not form.fallback)
+        native_forms = tuple(form for form in address_forms if not form.secondary)
         if not native_forms:
             native_forms = (AddressForm(2, scales),)
-        fallback_forms = tuple(form for form in address_forms if form.fallback)
+        secondary_forms = tuple(form for form in address_forms if form.secondary)
         native = {
             id(one.op): indexed
             for one in leaves
@@ -180,7 +180,7 @@ def reduced(
             )
             is not None
         }
-        fallbacks = {
+        secondary = {
             id(one.op): indexed
             for one in leaves
             if id(one.op) not in native
@@ -188,7 +188,7 @@ def reduced(
                 indexed := next(
                     (
                         found
-                        for form in fallback_forms
+                        for form in secondary_forms
                         if (found := _legal_form(body, loop, one, form, facts, widened)) is not None
                     ),
                     None,
@@ -215,19 +215,19 @@ def reduced(
                     capacity - liveness.pressure(body, live, loop.body),
                 ),
             )
-        fallback_indexes = _fallback_indexes(
+        secondary_indexes = _secondary_indexes(
             leaves,
             room,
             frozenset(native),
-            fallbacks,
+            secondary,
             references=references,
         )
-        free = frozenset(native) | fallback_indexes
+        free = frozenset(native) | secondary_indexes
         candidates = _formula_set(candidates, room, free, costs=costs, references=references)
         indexes = {
-            id(one.op): (native | fallbacks)[id(one.op)]
+            id(one.op): (native | secondary)[id(one.op)]
             for one in candidates
-            if id(one.op) in native or id(one.op) in fallback_indexes
+            if id(one.op) in native or id(one.op) in secondary_indexes
         }
         # Only a counter every address indexes. One pointer left beside it can
         # end the loop in its place, and the index then costs the register
@@ -487,11 +487,11 @@ def _formula_set(
     return [one for one in candidates if id(one.op) in selected]
 
 
-def _fallback_indexes(
+def _secondary_indexes(
     candidates: list[induction.Derived],
     room: int,
     native: frozenset[int],
-    fallbacks: dict[int, tuple[int, AddressForm]],
+    secondary: dict[int, tuple[int, AddressForm]],
     *,
     references: dict[int, int] | None = None,
 ) -> frozenset[int]:
@@ -499,7 +499,7 @@ def _fallback_indexes(
 
     Native indexed leaves consume no recurrence slot. Other leaves may occupy
     the available register budget. If those leaves overflow it, a legal
-    fallback address is the next representation to try: it spends encoding
+    secondary address is the next representation to try: it spends encoding
     bytes and a target-specific per-use cost, but it does not create the
     loop-carried value that allocation would otherwise spill. Only the
     remaining overflow reaches sibling collapse and spill/recompute pricing.
@@ -509,7 +509,7 @@ def _fallback_indexes(
     overflow = max(0, len(slots) - room)
     choices = []
     for order, one in enumerate(slots):
-        indexed = fallbacks.get(id(one.op))
+        indexed = secondary.get(id(one.op))
         if indexed is None:
             continue
         _scale, form = indexed

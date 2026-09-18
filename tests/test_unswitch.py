@@ -88,7 +88,7 @@ def test_unswitch_reoptimization_preserves_mir_target_costs(monkeypatch):
     """Specializing IVARM used to restart optimization with default tuning."""
     found, body = original("p-g2")
     costs = OperationCosts(add=97, address=89, load=83)
-    forms = (AddressForm(2, frozenset({1})), AddressForm(4, frozenset({1, 2}), fallback=True))
+    forms = (AddressForm(2, frozenset({1})), AddressForm(4, frozenset({1, 2}), secondary=True))
     observed = []
     real = transform.applied
 

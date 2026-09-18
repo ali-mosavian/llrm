@@ -77,7 +77,8 @@ class AddressForm:
     choice with an address-size prefix or which physical registers encode it.
     ``extra_bytes`` is separate from execution cost so a zero-cycle prefix
     still participates in code-size decisions without being invented as
-    processor latency.
+    processor latency. ``secondary`` means a legal non-native form which is
+    considered before spill or recomputation; it is not a last-resort form.
     """
 
     index_width: int
@@ -85,7 +86,18 @@ class AddressForm:
     extra_bytes: int = 0
     use_cost: int = 0
     extension_cost: int = 0
-    fallback: bool = False
+    secondary: bool = False
+    # Compatibility for existing Python callers which used the old, easily
+    # misread name.  Keep both views identical; production code says
+    # ``secondary`` so its place in the selection order is explicit.
+    fallback: bool | None = None
+
+    def __post_init__(self) -> None:
+        if self.fallback is not None and self.secondary and self.fallback != self.secondary:
+            raise ValueError("an address form cannot disagree about whether it is secondary")
+        selected = self.secondary if self.fallback is None else self.fallback
+        object.__setattr__(self, "secondary", selected)
+        object.__setattr__(self, "fallback", selected)
 
 
 @dataclass(frozen=True, slots=True)

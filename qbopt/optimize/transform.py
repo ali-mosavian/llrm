@@ -1037,6 +1037,34 @@ def _whole_shift(op: Op, readable: set | None) -> bool:
             return False
 
 
+def _complete_value(op: Op, readable: set | None) -> bool:
+    """Whether this pure operation defines one complete, reparentable value.
+
+    An SSA result that merely initializes a nested recurrence is immutable;
+    the recurrence's later versions cannot change it. LICM may therefore
+    move a complete computation of outer-invariant operands and give its
+    crossing result a fresh variable. A COPY remains excluded: source-level
+    counter resets deliberately execute once per enclosing iteration, and
+    moving one was the historical SEGld miscompile this distinction protects.
+    """
+    if (
+        readable is None
+        or op.kind in (mir.Kind.COPY, mir.Kind.ADD_CARRY, mir.Kind.SUB_BORROW, mir.Kind.DIVMOD, mir.Kind.UDIVMOD)
+        or op.loads
+        or op.stores
+        or op.merges
+        or op.barrier
+        or op.floating is not None
+        or op.stack is not None
+        or len(op.results) != 1
+        or not isinstance(op.results[0], mir.Held)
+    ):
+        return False
+    result = op.results[0].value
+    values = {value for value in op.defines if not value.flags}
+    return values == {result} and not any(value.flags and value in readable for value in op.defines)
+
+
 _consumed = mir.consumed
 
 
@@ -1165,6 +1193,7 @@ def _invariant_run(
                     and isinstance(one.args[0], mir.Symbol)
                 )
                 and not _whole_shift(one, readable)
+                and not _complete_value(one, readable)
                 and not (nonempty and one.loads and not one.merges)
             ):
                 continue

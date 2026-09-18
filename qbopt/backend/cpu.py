@@ -37,8 +37,8 @@ class Profile:
     pentium_pairing: bool = False
     # Appended to retain the public positional shape above. 16-bit medium
     # model can use 386 32-bit SIB addressing through an address-size prefix;
-    # it is legal but never silently promoted to a native/free scale. The
-    # field name ``fallback`` means non-native, not "after spill/recompute".
+    # it is legal but never silently promoted to a native/free scale, and is
+    # nevertheless considered before spill/recompute.
     address_forms: tuple[AddressForm, ...] = ()
 
     def cost(self, operation: str) -> int:
@@ -145,7 +145,7 @@ def _address_forms(costs: OperationCosts, prefix: int) -> tuple[AddressForm, ...
             extra_bytes=1,
             use_cost=prefix,
             extension_cost=costs.extend,
-            fallback=True,
+            secondary=True,
         ),
     )
 
