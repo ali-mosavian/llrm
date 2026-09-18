@@ -493,3 +493,30 @@ Focused split, far-load, and dead-index-fold regressions pass in `0.22s`.
 The broader allocator group was deliberately stopped while still running to
 honour the development test-time budget; it is a phase-boundary suite, not a
 claimed green gate for this iteration.
+
+### 25. Committed QCport loop listing validation — 2026-09-18
+
+The clean paired listing for qbopt
+`45031078e4d7cd6f1e17bf57dd2c7bc6e7a72b1a`, CPU `386`, and QCport
+`18f5e1f9e8d4ad54622da847dd5a412e6726ab50` records source SHA-256
+`e5abf5f8fb67c3cac011579fcb980bff446ab068c130dd2c196652bbf802fef0`, BCC
+listing SHA-256 `e7a79276d99101ebb86bc6060ec67c3f2714c765067642d0d001e01e476f9975`,
+and qbopt listing SHA-256
+`9234aca827aa9117854392544d267c8aef10d8c911455b525a3ed33beb5a284b`.
+
+Raw assembly verifies the intended target-specific result.  qbopt's marked
+face loop has `les bx,dword ptr [si+38]` and later
+`les bx,dword ptr [di+1014]`, with no `[bp+6]` or `[bp+8]` reload in between.
+Those are the same medium-model-legal owner/field roles as BCC's DI/SI/BX
+form, though allocation is free to exchange SI and DI.  This is a listing
+comparison, not a DOSBox timing claim.
+
+The next remaining structural gap is also hand-derived rather than inferred
+from a ratio.  BCC carries the loop counter in DX, leaving AX/AL to load,
+shift, and form the one-bit mask; qbopt carries its counter in AX, retains the
+unshifted face in CX, and therefore performs the shifted bitmap index through
+a frame word.  The next candidate must jointly select a loop counter,
+temporary value, and byte/shift roles from the target register constraints
+and spill cost.  It must not merely swap AX and DX for this function.  Flat
+GCC/LLVM listings remain best-case structural references only; this BCC
+listing is the constrained ABI reference.
