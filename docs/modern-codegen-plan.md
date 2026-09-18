@@ -26,7 +26,7 @@ iteration updates this file in the same commit.
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
 | Loop optimization | partial | exact pre- and post-tested recurrences, composed pointer recurrences, formula costing, specialization, peeling and exact unrolling exist; versioning, rotation and broad pressure forecasting remain. |
 | Whole-module optimization | partial | summaries, constant returns, private inlining and private procedure DCE exist; full IPSCCP/cloning and private-data DCE remain. |
-| Post-allocation quality | partial | copy propagation, machine CSE/DCE and C-path tail sharing exist; source-map-aware BC tail sharing and CPU scheduling remain. |
+| Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing, and conservative out-of-order integer latency scheduling exist; source-map-aware BC tail sharing, P5 pairing, x87/segment scheduling, and full issue modelling remain. |
 
 ## Iteration log
 
@@ -1464,3 +1464,31 @@ This advances Phase 4's global-x87 prerequisite but leaves canonical stack
 states, edge shuffles, and live values at genuine CFG joins open.  GCC and
 LLVM remain best-case flat-i386 structural listings only; BCC/WC medium-model
 output remains the ABI, segmentation, and legal-addressing authority.
+
+### 66. Conservative profile-aware machine scheduling — 2026-09-18
+
+The post-allocation pipeline had physical CSE and DCE but did not consume the
+CPU profile's dependency-latency data at all.  `schedule.py` now performs a
+deterministic list schedule for the narrow region it can prove complete:
+allocated integer operations whose operands are only general registers and
+non-relocated immediates.  Physical register *and flag* lanes form RAW, WAR,
+and WAW dependencies.  Memory, segment and stack state, x87, calls, control
+transfer, opaque/source-map boundaries, relocations, and allocator-owned
+instructions terminate a scheduling window rather than being approximated.
+
+On out-of-order profiles, an independent operation can therefore fill a
+measured producer-to-consumer gap: the fail-first P6 regression changes
+`imul; add; mov` to `imul; mov; add`.  It also proves that flag writers retain
+their original order and a potentially trapping memory load prevents any
+crossing.  386 and 486 keep their established source order.  P5 is deliberately
+unchanged: its U/V pairing rules are not represented by `issue_width`, so
+using that scalar as if it were a pairing model would manufacture a claim the
+profile cannot justify.  The pipeline regression proves the scheduler receives
+the same immutable profile object as the general and x87 allocators.
+
+Focused checks pass (`14 passed`, `0.19s`); Tier 1 passes (`179 passed`,
+`31 deselected`, `0.96s`).  This is Phase 7's first safe scheduling slice,
+not a performance target or a claim of P5/later-core issue-model completeness.
+GCC/LLVM listings remain best-case flat-i386 structural references for
+dependency and expression shape; BCC/WC medium-model output remains the
+authority for ABI, segment state, legal addresses, and any hard target.

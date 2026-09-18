@@ -24,6 +24,7 @@ The machine half, against LLVM's own order:
     InlineSpiller       spiller.py    inside RegAlloc's own loop
     VirtRegRewriter     allocate.py   virtual -> physical
     PrologEpilogInsert  prologue.py   reserve what the spiller took
+    MachineScheduler    schedule.py   ordered physical integer operations
 
 `intervals.py`, `liveness.py` and `loops.py` are analyses, not phases: they
 answer questions and change nothing, which is why nothing here lists them.
@@ -42,6 +43,7 @@ from qbopt.backend import allocate
 from qbopt.backend import coalesce
 from qbopt.backend import omfwrite
 from qbopt.backend import peephole
+from qbopt.backend import schedule
 from qbopt.backend import prologue
 from qbopt.objectfile import module
 from qbopt.optimize import transform
@@ -79,6 +81,9 @@ def machine(
         parcopy.ParallelCopy(),
         prologue.Prologue(frame, calls) if frame is not None else prologue.Prologue(frames.Frame(0), calls),
         peephole.Peephole(frame),
+        # Last: physical CSE/DCE have exposed all safe integer work, and
+        # scheduling may only move fully allocated machine occurrences.
+        schedule.Scheduler(target),
     ]
 
 
