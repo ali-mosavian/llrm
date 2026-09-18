@@ -464,15 +464,6 @@ def allocate(
         if mine is None:
             continue
         order = target.order(confined.get(value)) if value not in fixed else (fixed[value],)
-        # A preference is an allocation-order vote, unlike `pinned`: it
-        # cannot make an otherwise legal plan unplaceable.  Pressure-plan
-        # evaluation uses it to compare counter/temporary roles without
-        # pretending an ISA or ABI fact requires a particular register.
-        if value not in fixed and (choice := (preferred or {}).get(value)) is not None:
-            wanted = _whole(choice)
-            order = tuple(one for one in order if _whole(one) is wanted) + tuple(
-                one for one in order if _whole(one) is not wanted
-            )
         # A 16-bit `[base+index]` form has a non-interchangeable base role:
         # only BX can carry it, while SI/DI carry the index.  A protected
         # loop-scoped address owner is deliberately long-lived over the hot
@@ -492,6 +483,17 @@ def allocate(
                 if (register := fixed.get(other, where.get(other))) is not None
             )
             order = tuple(sorted(order, key=lambda register: -votes[_whole(register)]))
+            # A preference is an explicit allocation-order vote, unlike a
+            # copy hint and unlike `pinned`: it cannot make an otherwise
+            # legal plan unplaceable, but ordinary coalescing taste must not
+            # silently reverse the role a complete pressure candidate asked
+            # to evaluate.  Apply it after heuristic hint ordering; when the
+            # register is occupied `_free` still walks every legal fallback.
+            if (choice := (preferred or {}).get(value)) is not None:
+                wanted = _whole(choice)
+                order = tuple(one for one in order if _whole(one) is wanted) + tuple(
+                    one for one in order if _whole(one) is not wanted
+                )
 
         got = _free(mine, order, union, live, masks, widths.get(value, 4))
         if got is not None:

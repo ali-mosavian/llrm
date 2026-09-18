@@ -595,3 +595,28 @@ This is the required foundation for the next joint role-plan evaluator.  It
 lets that evaluator compare counter and temporary roles using real complete
 allocations, while `pinned` remains exclusively an ABI/encoding fact and the
 unplaceable-reload guard continues to reject impossible candidates.
+
+### 30. Explicit role preferences outrank copy hints — 2026-09-18
+
+The first complete `r_walk` experiment used the new DX counter preference and
+proved it is a legal alternative, but its allocated spill traffic and emitted
+hot-path instruction count were unchanged: it only exchanged AX and DX.
+That makes BCC's particular register spelling an unsuitable acceptance target
+by itself.  The candidate remains rejected until the target pricing can show a
+net gain for the complete loop plan.
+
+The experiment also exposed one allocator-contract defect.  `preferred`
+initially moved its register to the front of the allocation order, then copy
+hints re-sorted that same order and could put the hinted register back first.
+An explicit role request therefore silently lost to an ordinary coalescing
+heuristic.  Preferences now reorder after copy-hint voting.  They still are
+not pins: if the requested register is occupied, allocation tries every legal
+fallback.
+
+The fail-first regression constructs the exact source-dead copy shape: AX is
+available through a copy hint, DX is explicitly requested, and both are legal.
+It previously assigned AX and now assigns DX.  The existing overlapping hard
+DX case still falls back, proving this did not turn a role preference into an
+ABI constraint.  Focused allocator checks pass in `0.06s`.  GCC/LLVM i686
+listings remain best-case structural references; BCC's medium-model listing
+continues to constrain only legal ABI/address forms, not register spelling.

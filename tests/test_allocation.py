@@ -427,6 +427,41 @@ def test_a_soft_preference_changes_free_register_order_without_becoming_a_pin() 
     assert held.where[1] is not Register.EDX
 
 
+def test_an_explicit_soft_preference_beats_an_ordinary_copy_hint() -> None:
+    """A role trial asked for DX, but a dead source's AX copy hint won.
+
+    Copy hints are profitable tiebreakers only.  They must not silently
+    reverse the explicit, still-fallible register role that a complete
+    pressure candidate is evaluating.  The source dies at the copy, so both
+    AX and DX are legal for its successor; the requested DX has to win.
+    """
+    from qbopt.backend import allocate
+
+    source = _mov(2, 2, 0x100)
+    copy = lir.Insn(
+        at=0x102,
+        covers=(0x102, 0x104),
+        what=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(1, 2),), (ir.Held(2, 2),)),
+        defines=(1,),
+        uses=(2,),
+        op=None,
+    )
+    use = lir.Insn(
+        at=0x104,
+        covers=(0x104, 0x106),
+        what=ir.Semantics(ir.Operation.BINARY, "add", (ir.Held(1, 2),), (ir.Held(1, 2), ir.Imm(1, 2))),
+        defines=(1,),
+        uses=(1,),
+        op=None,
+    )
+    got = allocate.allocate(
+        _one_block(source, copy, use),
+        pinned={2: Register.EAX},
+        preferred={1: Register.EDX},
+    )
+    assert got.where[1] is Register.EDX, got.where
+
+
 def test_folded_spill_cost_depends_on_the_selected_cpu() -> None:
     """A folded source is not free on a 386.
 
