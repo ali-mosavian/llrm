@@ -24,10 +24,12 @@ FULL_OBJECT_FIXTURES = frozenset({"mapped_obj", "obj", "operator_obj"})
 FAST_MODULES = frozenset(
     {
         "test_arithmetic_immediates.py",
+        "test_address_roles.py",
         "test_addressforms.py",
         "test_constant_carry.py",
         "test_countdown.py",
         "test_cpu_profile.py",
+        "test_farload.py",
         "test_inline.py",
         "test_invariant_values.py",
         "test_jumps.py",

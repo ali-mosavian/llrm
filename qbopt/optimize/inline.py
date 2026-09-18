@@ -264,6 +264,7 @@ def _at(
     materialized: list[mir.Op] = []
     parameter_values: dict[int, mir.Value] = {}
     parameter_widths: dict[int, int] = {}
+    callee_ids = {value.id for value in callee_values}
     for callee_block in callee.blocks:
         for op in callee_block.ops:
             number = _parameter(op, parameters)
@@ -280,7 +281,7 @@ def _at(
         actual_width = getattr(actual, "width", 0)
         if actual_width < width or isinstance(actual, (mir.Cell, mir.Opaque)):
             return None
-        if isinstance(actual, mir.Held):
+        if isinstance(actual, mir.Held) and actual.value.id not in callee_ids:
             parameter_values[number] = actual.value
             continue
         if isinstance(actual, mir.Const) and actual.width != width:

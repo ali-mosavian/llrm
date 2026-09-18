@@ -8,6 +8,7 @@ from iced_x86 import Register
 from qbopt.model import ir
 from qbopt.model import lir
 from qbopt.model import mir
+from qbopt.backend import select
 from qbopt.backend import peephole
 from qbopt.objectfile.module import Addr
 from qbopt.objectfile.module import Space
@@ -209,3 +210,16 @@ def test_high_extract_keeps_observable_wide_load_or_shift_effects(hazard: str) -
         body = replace(body, blocks=(replace(body.blocks[0], insns=(load, *body.insns[1:])),))
 
     assert peephole.high_extracts(body) == body
+
+
+def test_discarded_x87_result_has_a_register_pop_encoding() -> None:
+    """qcport gib.c's ``(void)gib_crandom(rng)`` reached fresh OMF output as
+    ``fstp st(0)``.  The allocated instruction was valid but selection knew
+    only memory stores, so the complete optimized build was unencodable.
+    """
+    what = ir.Semantics(ir.Operation.FLOAT_STORE, "fstp", (ir.St(0),), (ir.St(0),))
+
+    made = select.emit(what)
+
+    assert made is not None
+    assert made.code == bytes.fromhex("ddd8")

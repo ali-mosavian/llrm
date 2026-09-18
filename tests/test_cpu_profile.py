@@ -42,6 +42,7 @@ def test_every_public_cpu_name_has_one_immutable_profile() -> None:
         assert target.operations.float_load == target.cost("x87_load")
         assert target.operations.float_store == target.cost("x87_store")
         assert target.max_unroll_iterations == 16
+        assert target.max_unrolled_operations == 200
     assert cpu.profile("P5").pentium_pairing
     assert not any(cpu.profile(name).pentium_pairing for name in cpu.names() if name != "P5")
 

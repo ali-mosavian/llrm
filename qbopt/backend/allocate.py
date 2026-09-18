@@ -238,6 +238,7 @@ def classes(body: lir.LirBody) -> dict[int, frozenset[Register_]]:
     # it appears in can name one: a move, a push or a pop.
     selecting: set[int] = set()
     numeric: set[int] = set()
+    word_pairs: list[tuple[int, int]] = []
 
     def restrict(value: int, choices: frozenset[Register_]) -> None:
         out[value] = out.get(value, choices) & choices
@@ -265,14 +266,108 @@ def classes(body: lir.LirBody) -> dict[int, frozenset[Register_]]:
                 if isinstance(where, ir.Mem) and where.index is not None:
                     numeric.add(where.index.value)
                     if where.index.width == 2:
-                        restrict(where.index.value, target.WORD_INDEXES)
-                        if where.base is not None:
-                            restrict(where.base.value, target.WORD_BASES)
+                        if where.base is not None and where.base.width == 2 and where.scale == 1:
+                            # [bx+si] is commutative.  Record the pair now and
+                            # choose its two roles over the whole connected
+                            # address graph below; fixing every source-level
+                            # base to BX spills two bases around one shared
+                            # index even though the opposite orientation fits.
+                            word_pairs.append((where.base.value, where.index.value))
+                        else:
+                            restrict(where.index.value, target.WORD_INDEXES)
+                            if where.base is not None:
+                                restrict(where.base.value, target.WORD_BASES)
                 if isinstance(where, ir.Held) and where.width == 1:
                     restrict(where.value, frozenset({Register.AX, Register.BX, Register.CX, Register.DX}))
     for value in selecting - numeric:
         restrict(value, frozenset(target.SELECTORS))
+    _word_address_roles(word_pairs, out, body)
     return out
+
+
+def _word_address_roles(
+    pairs: list[tuple[int, int]], confined: dict[int, frozenset[Register_]], body: lir.LirBody
+) -> None:
+    """Choose BX versus SI/DI for commutative ``[word+word]`` graphs.
+
+    One connected component has two valid bipartite orientations.  Put the
+    smaller partition in the single-register BX class and the larger one in
+    the two-register index class, subject to restrictions from other uses.
+    This is native 16-bit addressing, so it precedes the costlier 67h form and
+    every spill or recomputation fallback.
+    """
+    adjacent: dict[int, set[int]] = {}
+    for base, index in pairs:
+        adjacent.setdefault(base, set()).add(index)
+        adjacent.setdefault(index, set()).add(base)
+    unseen = set(adjacent)
+    numbered = ranges.indexed(body)
+    live = ranges.intervals(body, numbered)
+    masks = _masks(body, numbered)
+    word_base = next(iter(target.WORD_BASES))
+
+    def base_penalty(values: set[int]) -> int:
+        # BX is the sole base half of a native [base+index] form.  A value
+        # live through a call which destroys BX cannot occupy that side at
+        # all, while SI/DI's low words survive the medium-model ABI.  Treat
+        # this as the hard placement fact it is before considering the
+        # softer aim of putting the smaller partition in the scarcer class.
+        return sum(
+            _clobbered(interval, word_base, masks, 2) for value in values if (interval := live.get(value)) is not None
+        )
+
+    def allowed(values: set[int], choices: frozenset[Register_]) -> bool:
+        return all(confined.get(value, choices) & choices != frozenset() for value in values)
+
+    def restrict(values: set[int], choices: frozenset[Register_]) -> None:
+        for value in values:
+            confined[value] = confined.get(value, choices) & choices
+
+    while unseen:
+        seed = min(unseen)
+        colors = {seed: 0}
+        work = [seed]
+        bipartite = True
+        while work:
+            value = work.pop()
+            for other in adjacent[value]:
+                if other not in colors:
+                    colors[other] = 1 - colors[value]
+                    work.append(other)
+                elif colors[other] == colors[value]:
+                    bipartite = False
+        component = set(colors)
+        unseen -= component
+        if not bipartite:
+            # No whole-range orientation can encode an odd cycle.  Preserve
+            # the source spelling; occurrence splitting or the secondary 67h
+            # form owns the genuinely harder case.
+            for base, index in pairs:
+                if base in component:
+                    restrict({base}, target.WORD_BASES)
+                    restrict({index}, target.WORD_INDEXES)
+            continue
+        sides = (
+            {value for value, color in colors.items() if color == 0},
+            {value for value, color in colors.items() if color},
+        )
+        options = [
+            (left, right)
+            for left, right in (sides, sides[::-1])
+            if allowed(left, target.WORD_BASES) and allowed(right, target.WORD_INDEXES)
+        ]
+        if not options:
+            for base, index in pairs:
+                if base in component:
+                    restrict({base}, target.WORD_BASES)
+                    restrict({index}, target.WORD_INDEXES)
+            continue
+        bases, indexes = min(
+            options,
+            key=lambda option: (base_penalty(option[0]), len(option[0]), tuple(sorted(option[0]))),
+        )
+        restrict(bases, target.WORD_BASES)
+        restrict(indexes, target.WORD_INDEXES)
 
 
 _SEGMENT_OPERANDS = frozenset({ir.Operation.MOVE, ir.Operation.PUSH, ir.Operation.POP})
@@ -563,6 +658,30 @@ def allocate(
         stage[value] = Stage.DONE
 
     return Assignment(where, frozenset(spilled), cost, False, "greedy with eviction")
+
+
+def _assigned_plan(
+    body: lir.LirBody,
+    pinned: dict[int, Register_],
+    reloads: frozenset[int],
+    retained: frozenset[int],
+    *,
+    cpu: str | targets.Profile,
+) -> tuple[Assignment, frozenset[int]]:
+    """Allocate one evaluated retention plan, or discard that plan.
+
+    Protecting a profitable loop base is a candidate, not an ABI rule. Spill
+    recovery can introduce several short address operands at one instruction
+    after the candidate was first priced. If those operands make the retained
+    arrangement impossible, retry the same rewritten body without protection;
+    the ordinary split/spill loop then chooses the legal fallback.
+    """
+    if retained:
+        try:
+            return allocate(body, pinned, reloads, protected=retained, cpu=cpu), retained
+        except Unplaced:
+            pass
+    return allocate(body, pinned, reloads, cpu=cpu), frozenset()
 
 
 def _values(body: lir.LirBody) -> list[int]:
@@ -866,9 +985,9 @@ class RegAlloc(LIRTransform):
         retained: frozenset[int] = frozenset()
 
         def assigned(current: lir.LirBody) -> Assignment:
-            if retained:
-                return allocate(current, self.pinned, reloads, protected=retained, cpu=self.cpu)
-            return allocate(current, self.pinned, reloads, cpu=self.cpu)
+            nonlocal retained
+            answer, retained = _assigned_plan(current, self.pinned, reloads, retained, cpu=self.cpu)
+            return answer
 
         # Which values have already been cut. Splitting is bounded per
         # value, not merely per round.
@@ -1438,11 +1557,20 @@ def _settled(where: ir.Loc | ir.Held, held: dict, origin: dict) -> ir.Loc:
         index = held.get(where.index.value)
         if index is None or (where.base is not None and base is None):
             raise Unplaced(f"scaled cell {where} has no register for its base or index")
-        return replace(
-            where,
-            through=target.named(base, where.base.width) if base is not None else where.through,
-            index_through=target.named(index, where.index.width),
-        )
+        base_register = target.named(base, where.base.width) if base is not None else where.through
+        index_register = target.named(index, where.index.width)
+        if (
+            where.base is not None
+            and where.base.width == where.index.width == 2
+            and where.scale == 1
+            and base_register in target.WORD_INDEXES
+            and index_register in target.WORD_BASES
+        ):
+            # The encoding has named roles even though addition has not.
+            # Normalize the chosen orientation only after allocation, when
+            # both physical answers are known.
+            base_register, index_register = index_register, base_register
+        return replace(where, through=base_register, index_through=index_register)
     if isinstance(where, ir.Mem) and where.base is not None:
         # The cell keeps saying which value reached it; `through` becomes
         # the register that value was given. Everything else is untouched.

@@ -251,6 +251,7 @@ def _rebuilt(
                 address_forms=target.address_forms,
                 costs=target.operations,
                 max_unroll_iterations=target.max_unroll_iterations,
+                max_unrolled_operations=target.max_unrolled_operations,
                 watch=(lambda stage, state: watch(f"mir-{stage}", name, state)) if watch is not None else None,
             )
             if only is None:

@@ -1645,6 +1645,10 @@ def emit(
                     built = operand_of(cell)
                     if built is not None:
                         return _assemble(Instruction.create_mem(Code.CALL_RM16, built[0]), at, built[1])
+                case ir.Mem(width=4) as cell:
+                    built = operand_of(cell)
+                    if built is not None:
+                        return _assemble(Instruction.create_mem(Code.CALL_M1616, built[0]), at, built[1])
         case ir.Operation.CALL:
             return call_far(at) if what.target is None else call_near(what.target, at)
         case ir.Operation.ESCAPE if what.target is None:
@@ -1659,6 +1663,8 @@ def emit(
             match dests[0]:
                 case ir.Mem() as cell:
                     return float_memory(what.name or "", cell, at)
+                case ir.St(index=index) if what.name == "fstp" and sources == (ir.St(0),):
+                    return _assemble(Instruction.create_reg(Code.FSTP_STI, STACK_REGISTERS[index]), at)
         case ir.Operation.EXCHANGE if len(dests) == 2:
             match (dests[0], dests[1]):
                 case (ir.Reg(register=one), ir.Reg(register=other)):

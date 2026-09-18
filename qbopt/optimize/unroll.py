@@ -171,6 +171,28 @@ def _size(body: mir.MirBody) -> int:
     return sum(len(block.phis) + sum(op.kind is not mir.Kind.NOTHING for op in block.ops) for block in body.blocks)
 
 
+def _expanded_operations(before: mir.MirBody, after: mir.MirBody, latch: int) -> int:
+    """Optimized semantic operations attributable to one expanded sequence.
+
+    The complete-peel budget applies to the loop sequence, not the containing
+    procedure.  Subtract the original operations outside the loop from the
+    settled candidate; this also credits folding exposed by expansion without
+    making an unrelated large procedure ineligible.  A missing/ambiguous
+    latch is conservatively treated as making the whole result the sequence.
+    """
+    found = [one for one in loops.loops(before.blocks, before.entry) if latch in one.latches]
+    if len(found) != 1:
+        return _size(after)
+    inside = found[0].body
+    loop_size = sum(
+        len(block.phis) + sum(op.kind is not mir.Kind.NOTHING for op in block.ops)
+        for block in before.blocks
+        if block.at in inside
+    )
+    outside = max(0, _size(before) - loop_size)
+    return max(0, _size(after) - outside)
+
+
 def _profitable(
     before: mir.MirBody,
     after: mir.MirBody,
@@ -209,21 +231,39 @@ def _rejection(
         return "unpriced"
     if dynamic_after >= dynamic_before:
         return "no-saving"
-    total_before = profit.pressure_adjusted(before, where.costs, where.registers, {latch: count})
-    total_after = profit.pressure_adjusted(after, where.costs, where.registers)
-    if total_before is None or total_after is None:
+    pressure_before = profit.spill_risk(before, where.costs, where.registers, {latch: count})
+    pressure_after = profit.spill_risk(after, where.costs, where.registers)
+    if pressure_before is None or pressure_after is None:
         return "unpriced"
+    if (
+        pressure_after > 0
+        and where.max_unrolled_operations
+        and _expanded_operations(before, after, latch) > where.max_unrolled_operations
+    ):
+        # GCC's target-independent ``max-completely-peeled-insns`` is 200.
+        # Keep the corresponding machine-neutral budget in the target profile.
+        # Register pressure makes MIR's traffic estimate a lower bound rather
+        # than an allocation certificate; P5 matmul crossed this boundary at
+        # 459 operations and selected 958 instructions instead of 421.  A
+        # register-fitting constant specialization remains governed by the
+        # exact profitability calculation below, so CRC is unaffected.
+        return "operation-growth"
+    total_before = dynamic_before + pressure_before
+    total_after = dynamic_after + pressure_after
     if total_after >= total_before:
         return "pressure"
     # MIR cannot know final encoding bytes. Charge one register move per added
-    # semantic operation, amortized over the exact executions whose dynamic
-    # work the expansion removes.  Charging every clone once *per invocation*
-    # made a nine-trip loop pay its whole static growth nine times while its
-    # saved work was correctly counted across all nine trips.  The profile's
-    # complete-peel count and the builder's operation ceiling independently
-    # bound code growth; later selection still supplies exact size evidence.
+    # semantic operation.  A register-fitting scalar chain can amortize that
+    # static growth over the exact executions whose dynamic work it removes:
+    # charging every CRC clone once per invocation rejected its useful
+    # constant specialization.  A candidate already predicted to spill must
+    # pay the full growth instead.  MIR's spill cost is only a lower bound on
+    # constrained allocation, so amortizing both the bound's error and the
+    # expansion made matmul twice as large *and* slower.  The profile's peel
+    # count and the builder's operation ceiling remain independent bounds.
     growth = max(0, _size(after) - _size(before)) * where.costs.move
-    growth = (growth + count - 1) // count
+    if pressure_after == 0:
+        growth = (growth + count - 1) // count
     return "growth" if total_before - total_after <= growth else None
 
 

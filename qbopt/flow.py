@@ -36,6 +36,7 @@ from qbopt.abi import runtime
 from qbopt.backend import lower
 from qbopt.backend import verify
 from qbopt.objectfile import omf
+from qbopt.backend import farcall
 from qbopt.backend import parcopy
 from qbopt.backend import phielim
 from qbopt.backend import twoaddr
@@ -69,6 +70,7 @@ def machine(
     if frame is not None and frame.native is not None:
         pinned = {**pinned, **frame.native_pins}
     return [
+        farcall.FarIndirectCalls(frame if frame is not None else frames.Frame(0)),
         floatalloc.FloatAlloc(frame, basic_semantics=basic_semantics, cpu=target),
         phielim.PhiElimination(),
         twoaddr.TwoAddress(),
@@ -147,6 +149,7 @@ def run(
                 address_forms=target.address_forms,
                 costs=target.operations,
                 max_unroll_iterations=target.max_unroll_iterations,
+                max_unrolled_operations=target.max_unrolled_operations,
                 coverage=source.coverage,
             )
             body = rotate.entered(body)

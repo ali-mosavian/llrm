@@ -1,5 +1,7 @@
 """Fast regressions for exact-loop expansion budgets."""
 
+from dataclasses import replace
+
 from qbopt.model import ir
 from qbopt.model import mir
 from qbopt.optimize import profit
@@ -91,6 +93,14 @@ def _pressure_waves() -> mir.MirBody:
     return mir.MirBody(0, (mir.MirBlock(0, (), tuple(ops), ()),))
 
 
+def _large_pressured() -> mir.MirBody:
+    """A spill-prone expanded sequence just above GCC's default ceiling."""
+    body = _pressured()
+    padding = tuple(mir.Op(at, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.COPY) for at in range(6, 202))
+    block = replace(body.blocks[0], ops=(*body.blocks[0].ops, *padding))
+    return replace(body, blocks=(block,))
+
+
 def _floating_pressure() -> mir.MirBody:
     """Three x87 values overlap but consume no integer-register capacity."""
     values = tuple(mir.Value(index, index) for index in range(1, 4))
@@ -146,6 +156,44 @@ def test_bounded_complete_peel_amortizes_growth_over_its_exact_trip_count() -> N
     where = Where(costs=costs, registers=6, max_unroll_iterations=16)
 
     assert unroll._rejection(_loop(), _straight(25), 1, 9, where) is None
+
+
+def test_bounded_peel_with_spill_risk_pays_its_complete_growth() -> None:
+    """Matmul grew from 421 to 847 instructions and from 4,070 to 4,812
+    executed 386 cost units after its eight-row loop was completely peeled.
+
+    Amortizing static growth is safe for CRC's register-fitting scalar chain,
+    but not for a candidate already known to exceed the target's capacity:
+    MIR's spill estimate is a lower bound, and expansion magnifies any gap
+    between that bound and the constrained allocation.  Such a candidate must
+    erase its expansion before it can replace the loop.
+    """
+    costs = OperationCosts(add=1, branch=5, move=2, load=1, store=1)
+    where = Where(costs=costs, registers=3, max_unroll_iterations=16)
+
+    assert profit.spill_risk(_pressured(), costs, where.registers) > 0
+    assert unroll._rejection(_loop(), _pressured(), 1, 2, where) == "growth"
+
+
+def test_spill_prone_complete_peel_respects_the_sequence_budget() -> None:
+    """P5 matmul crossed from 187 to 459 MIR operations, then selected 958
+    instructions where the bounded form selected 421.
+
+    GCC independently caps a completely peeled sequence at 200 estimated
+    instructions.  Apply the same machine-neutral profile budget when MIR
+    already predicts spills; register-fitting constant specialization remains
+    governed by its separate profitability calculation.
+    """
+    costs = OperationCosts(add=1, branch=100, move=1, load=1, store=1)
+    where = Where(
+        costs=costs,
+        registers=3,
+        max_unroll_iterations=16,
+        max_unrolled_operations=200,
+    )
+
+    assert profit.spill_risk(_large_pressured(), costs, where.registers) > 0
+    assert unroll._rejection(_loop(), _large_pressured(), 1, 8, where) == "operation-growth"
 
 
 def test_structural_saving_must_pay_for_unavoidable_pressure() -> None:

@@ -176,9 +176,7 @@ def test_unused_private_readonly_call_is_removed() -> None:
     assert "mov ax, 7" in discard
     assert "_sample proc near" not in assembly
 
-    volatile = assembly[
-        assembly.index("_keepVolatileSample proc far") : assembly.index("_keepVolatileSample endp")
-    ]
+    volatile = assembly[assembly.index("_keepVolatileSample proc far") : assembly.index("_keepVolatileSample endp")]
     assert "call _sampleVolatile" in volatile
 
 
@@ -355,8 +353,7 @@ def test_volatile_floating_accesses_retain_encodable_semantics(tmp_path):
     """
     text = _stream(
         tmp_path,
-        "double once(void) { volatile double value = 1.0; "
-        "value = value + 0.5; return value; }\n",
+        "double once(void) { volatile double value = 1.0; value = value + 0.5; return value; }\n",
     )
 
     assembly = cfront.compiled(text, "volatile_float", optimise=True)
@@ -398,6 +395,44 @@ def test_far_function_designator_cast_to_a_long_reaches_the_emitter(tmp_path):
 
     body = assembly[assembly.index("_use proc far") : assembly.index("_use endp")]
     assert "pushw seg _cb" in body and "push offset _cb" in body
+
+
+def test_far_function_designator_decays_and_calls_indirectly(tmp_path):
+    """qcport host.c passes a far callback without an explicit cast, while
+    item.c later calls it through the parameter.  The frontend used to reject
+    the first Function as a scalar value and the second as a non-near call.
+    Both are ordinary C function-pointer decay under the medium-model ABI.
+    """
+    text = _stream(
+        tmp_path,
+        "typedef void (far *Notice)(int);\n"
+        "static void far notify(int value) { (void)value; }\n"
+        "void take(Notice notice) { notice(7); }\n"
+        "void pass(void) { take(notify); }\n",
+    )
+
+    assembly = cfront.compiled(text, "far_indirect", optimise=True)
+    take = assembly[assembly.index("_take proc far") : assembly.index("_take endp")]
+    passed = assembly[assembly.index("_pass proc far") : assembly.index("_pass endp")]
+
+    assert "call dword ptr [bp" in take
+    assert "pushw seg _notify" in passed and "push offset _notify" in passed
+
+
+def test_discarded_float_call_result_is_popped(tmp_path):
+    """qcport gib.c discards gib_crandom's float result.  Float allocation
+    correctly produced ``fstp st(0)``, but selection had no encoding for the
+    x87 register form and the optimized build stopped before writing an OBJ.
+    """
+    text = _stream(
+        tmp_path,
+        "extern float sample(void);\nvoid discard(void) { (void)sample(); }\n",
+    )
+
+    assembly = cfront.compiled(text, "discard_float", optimise=True)
+    body = assembly[assembly.index("_discard proc far") : assembly.index("_discard endp")]
+
+    assert "fstp st(0)" in body
 
 
 def test_external_far_object_uses_its_own_selector(tmp_path):

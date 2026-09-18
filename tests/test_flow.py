@@ -619,7 +619,6 @@ def test_no_phi_survives_elimination_on_a_critical_edge() -> None:
     """bools-q-O had three, and every one was silently discarded. harr-q-O has three now."""
     from pathlib import Path
 
-    from qbopt.backend import lower
     from qbopt.objectfile import omf
     from qbopt.backend import phielim
     from qbopt.objectfile import module
@@ -730,6 +729,29 @@ def test_a_wide_divide_requires_its_dividend_halves_where_idiv_reads_them() -> N
     # And the table agrees with the operands it is asked about.
     assert what.sources[0] == machine.Reg(Register.EDX, 4)
     assert what.sources[1] == machine.Reg(Register.EAX, 4)
+
+
+def test_far_load_pins_its_selector_result() -> None:
+    """QCport's pl_game_reset selected LES before allocation, but the selector
+    result was assigned BX; fresh OMF emission then refused the impossible
+    ``les ax:bx,[di+table]`` form.
+
+    A far-load instruction defines its selector in the segment register named
+    by the opcode, even when no later far-memory use happens to constrain it.
+    """
+    from iced_x86 import Register
+
+    from qbopt.backend import target
+    from qbopt.model import ir as machine
+
+    what = machine.Semantics(
+        machine.Operation.MOVE,
+        "les",
+        (machine.Held(1, 2), machine.Held(2, 2)),
+        (machine.Mem(None, 4, base=machine.Held(3, 2)),),
+    )
+
+    assert target.requirements(what) == {target.Occurrence("dest", 1): Register.ES}
 
 
 def _lngmix_through_the_lir_route():

@@ -41,11 +41,7 @@ def selected(insns: tuple[lir.Insn, ...]) -> tuple[lir.Insn, ...]:
         made[at] = joined
         erased.add(at + 1)
     return tuple(
-        made[at]
-        if at in made
-        else replace(lir.anchor(one), defines=(), uses=(), widths=())
-        if at in erased
-        else one
+        made[at] if at in made else replace(lir.anchor(one), defines=(), uses=(), widths=()) if at in erased else one
         for at, one in enumerate(insns)
     )
 
@@ -128,7 +124,7 @@ def _far_pointer_words(first: lir.Insn, second: lir.Insn) -> bool:
         loaded = () if one.op is None else one.op.loads
         if len(loaded) != 1 or loaded[0].width != 2 or loaded[0].volatile or not loaded[0].typed:
             return False
-        if loaded[0].typed[0] != "pointer4" or len(loaded[0].provenance.slices) != 1:
+        if loaded[0].typed[0] != "pointer4" or loaded[0].provenance is None or len(loaded[0].provenance.slices) != 1:
             return False
         refs.append((loaded[0], next(iter(loaded[0].provenance.slices))))
     (low, low_slice), (high, high_slice) = refs

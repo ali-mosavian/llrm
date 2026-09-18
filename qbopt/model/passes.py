@@ -191,6 +191,9 @@ class Where:
     # optimized expansion erases its own static growth. Zero leaves the policy
     # unbounded for a caller deliberately supplying no target limit.
     max_unroll_iterations: int = 0
+    # Maximum optimized semantic operations in one completely expanded
+    # sequence. Zero leaves the policy unbounded for target-less callers.
+    max_unrolled_operations: int = 0
 
     @property
     def named(self) -> dict:

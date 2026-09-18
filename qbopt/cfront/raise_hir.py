@@ -1095,8 +1095,12 @@ class _Raise:
             callee, indirect = target.symbol, None
         else:
             callee, indirect = self.unit.symbols[call.symbol], target
-            if not isinstance(indirect, mir.Held) or indirect.width != 2 or callee.far:
-                raise Unsupported(f"{self.symbol.name}: indirect call through anything but a near code pointer")
+            wanted = 4 if callee.far else 2
+            if not isinstance(indirect, mir.Held) or indirect.width != wanted:
+                raise Unsupported(
+                    f"{self.symbol.name}: indirect {'far' if callee.far else 'near'} call "
+                    f"through anything but a {wanted}-byte code pointer"
+                )
         return self.invoke(
             callee,
             [(self.eval(node), type_) for node, type_ in call.parms],
@@ -1205,7 +1209,10 @@ class _Raise:
                 {runtime.Reg.AX, runtime.Reg.BX, runtime.Reg.CX, runtime.Reg.DX, runtime.Reg.ES, runtime.Reg.FLAGS}
             ),
             established=True,
-            evidence="Borland medium model: stack arguments, result in AX or DX:AX; SI, DI, BP and DS kept as 16-bit registers",
+            evidence=(
+                "Borland medium model: stack arguments, result in AX or DX:AX; "
+                "SI, DI, BP and DS kept as 16-bit registers"
+            ),
             i386=True,
             inputs=frozenset(),
             caller_cleanup=pushed if caller_pops else 0,
@@ -1346,6 +1353,12 @@ class _Raise:
 
     def operand(self, got, type_: str) -> Operand:
         match got:
+            case Function():
+                # C function designators decay to pointers in every scalar
+                # context except the direct-call case handled by call().
+                # Materialize the relocatable offset[:selector] exactly as an
+                # explicit cast does, then use the ordinary pointer value.
+                return self.operand(self.convert(got, type_, type_), type_)
             case mir.Held() | mir.Const():
                 return got
             case Far(whole=split, disp=0) if split is not None:
@@ -1515,9 +1528,7 @@ class _Raise:
                     Addr(space, disp, index), width, base=base, space=space, base_width=2, provenance=provenance
                 )
             case Near(base, disp):
-                return mir.MemRef(
-                    Addr(Space.LITERAL, disp), width, base=base, space=address.space, base_width=2
-                )
+                return mir.MemRef(Addr(Space.LITERAL, disp), width, base=base, space=address.space, base_width=2)
             case Far(segment, offset, disp, _, named):
                 provenance = memory.Provenance.one(memory.Object(memory.Kind.NAMED, named)) if named else None
                 return mir.MemRef(

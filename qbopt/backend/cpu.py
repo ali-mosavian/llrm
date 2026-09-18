@@ -44,6 +44,10 @@ class Profile:
     # Keep it in the immutable profile so another target can extend the
     # policy without teaching MIR a CPU name.
     max_unroll_iterations: int = 16
+    # GCC's target-independent ``max-completely-peeled-insns`` default. This
+    # is a machine-neutral semantic-operation budget at the MIR boundary, not
+    # an opcode count; targets may tune it without exposing machine form.
+    max_unrolled_operations: int = 200
 
     def cost(self, operation: str) -> int:
         """The existing target-ranking cost for one named instruction form."""

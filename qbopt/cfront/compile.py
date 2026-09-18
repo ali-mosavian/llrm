@@ -408,6 +408,7 @@ def assembled(
             address_forms=target.address_forms,
             costs=target.operations,
             max_unroll_iterations=target.max_unroll_iterations,
+            max_unrolled_operations=target.max_unrolled_operations,
             watch=observe if dump is not None or watch is not None else None,
         )
         body = rotate.entered(body)

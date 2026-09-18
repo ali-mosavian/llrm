@@ -3574,3 +3574,72 @@ large CFG cloning, and general multi-version procedure emission remain out of
 scope. GCC/LLVM listings remain best-case flat-i386 structural references;
 BCC/WC medium-model listings remain authoritative for ABI, segments, legal
 addresses, and OMF linkage.
+
+### 75. Pressure-bounded complete peeling — 2026-09-18
+
+The C performance pass exposed a bad P5 matmul choice: complete peeling
+reduced MIR's estimated dynamic work, but the expanded loop crossed the
+allocator's practical pressure limit and selected 958 machine instructions
+where the unexpanded form selected 421. The earlier profitability test
+amortized both static growth and its spill-risk estimate over the trip count;
+that made a pressure-bearing expansion look cheaper precisely when MIR's
+traffic model was least able to certify the final constrained allocation.
+
+The immutable CPU profile now carries a machine-neutral complete-expansion
+budget of 200 optimized semantic operations, matching GCC's target-independent
+`max-completely-peeled-insns` default as a structural reference. The unroller
+measures only the expanded loop sequence, not unrelated operations in its
+procedure. A candidate predicted to create register pressure pays all of its
+static growth and is rejected when the optimized sequence exceeds the budget;
+a register-fitting candidate can still amortize growth over its exact trip
+count. That preserves the useful CRC constant specialization while refusing
+the matmul explosion. Regressions cover the budget boundary, procedure-local
+measurement, pressure-sensitive accounting, and propagation through every
+optimization entry point.
+
+This advances Phase 5's target- and pressure-driven loop policy. The 200-op
+limit is a conservative default rather than an audited optimum for every CPU;
+future per-profile tuning still requires allocated listings and registered
+runtime measurements. GCC/LLVM remain best-case flat-i386 structural
+references, while BCC/WC remain authoritative for the medium-model ABI and
+legal address forms.
+
+### 76. Optimized qc-port integration gate — 2026-09-18
+
+A complete WC-frontend `--opt --cpu 386` qc-port build found eight defects
+that unit and corpus compilation had not jointly exercised. Each now has a
+fail-first symptom regression:
+
+- far-load selection pins the implicit selector result of `les`, `lfs`, and
+  `lgs`, independent of whether a later memory operand happens to mention it;
+- commutative 16-bit `[base+index]` graphs are bipartitioned globally so the
+  smaller, non-call-crossing side consumes scarce `bx`, while the other side
+  uses `si`/`di`;
+- a retained hot-loop-base plan is a costed candidate and falls back to the
+  ordinary split/spill ladder if reload insertion later makes it unallocatable;
+- inlining materializes an actual whose value number collides with the
+  independently raised callee namespace, preserving SSA dominance;
+- C function designators decay in scalar contexts, and a 16:16 indirect call
+  is lowered through one reusable owned frame cell to the ISA's `m16:16` form;
+- discarding an x87 return emits a real `fstp st(0)` stack pop;
+- far-load pair recognition conservatively rejects a typed access with no
+  provenance instead of dereferencing absent analysis evidence; and
+- the complete-peeling pressure guard above prevents the allocator-hostile
+  matmul expansion encountered during the application build.
+
+Segment registers do not replace a general address register: `es`, `fs`, and
+`gs` hold the selector half, while the effective offset still needs an integer
+register. Native commuted 16-bit addressing is therefore chosen first. The
+existing 67h 32-bit address form remains a secondary legal alternative before
+an actual spill or recomputation when its inputs are already suitable; it is
+costed rather than forced when exact 16-bit inputs would first require two
+extensions.
+
+The final executable linked with the prepared, reindexed WC/BCC-compatible
+library, passed the 64-KiB DGROUP check with 7,264 bytes of near heap, and ran
+the title demo visibly in DOSBox with dynamic core, maximum cycles, high
+priority, lightmaps, and SB16 sound configured. Tier 1 passes 258 tests in
+1.15 seconds. This is an integration gate for the current Phase 4 allocation
+and C ABI work, not a claim that Phase 4 or the broader GCC/Clang-quality plan
+is complete. The raw qc-port loops and GCC/LLVM reference listings still drive
+the remaining spill, folding, scheduling, and whole-module work.

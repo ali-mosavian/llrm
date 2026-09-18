@@ -7,11 +7,13 @@ import pytest
 
 from qbopt.model import ir
 from qbopt.model import mir
+from qbopt.backend import cpu
 from qbopt.model import memory
 from qbopt.analysis import alias
 from qbopt.optimize import inline
+from qbopt.objectfile.module import Addr
+from qbopt.objectfile.module import Space
 from qbopt.cfront import compile as cfront
-from qbopt.backend import cpu
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "c"
 
@@ -117,6 +119,86 @@ def test_inline_refuses_a_live_unmodelled_call_result() -> None:
     assert inline.expanded(body, {2: "leaf"}, {2: frozenset()}, {"leaf": inline.Candidate(_leaf(), ())}) is body
 
 
+def test_inline_materializes_an_actual_whose_id_is_a_callee_substitution_key() -> None:
+    """QCport's combat_player_health mapped its second formal to caller v18,
+    while the callee also had an unrelated internal v18.  Transitive
+    substitution followed the actual into that internal definition; combat.c
+    then used a branch-local constant on the other branch and failed SSA.
+
+    An actual entering another SSA namespace must first receive a collision-
+    free value when its numeric ID is any key in the callee's substitution.
+    """
+    parameter = mir.MemRef(Addr(Space.FRAME, 4), 2, space=Space.FRAME)
+    formal = mir.Value(1, 1, variable=1, version=1)
+    colliding = mir.Value(2, 2, variable=2, version=1)
+    load = mir.Op(
+        1,
+        ir.Operation.MOVE,
+        "mov",
+        (formal,),
+        (),
+        kind=mir.Kind.LOAD,
+        loads=(parameter,),
+        args=(mir.Cell(parameter),),
+        results=(mir.Held(formal, 2),),
+    )
+    unrelated = _copy(2, colliding, 99)
+    returned = mir.Op(
+        3,
+        ir.Operation.NOTHING,
+        "",
+        (),
+        (formal,),
+        kind=mir.Kind.RETURN,
+        args=(mir.Held(formal, 2),),
+    )
+    leaf = mir.MirBody(1, (mir.MirBlock(1, (), (load, unrelated, returned), ()),), sealed=True)
+
+    actual = mir.Value(2, 1, variable=20, version=1)
+    result = mir.Value(3, 3, variable=30, version=1)
+    argument = mir.Op(
+        2,
+        ir.Operation.NOTHING,
+        "",
+        (),
+        (actual,),
+        kind=mir.Kind.ARG,
+        args=(mir.Held(actual, 2),),
+    )
+    call = mir.Op(
+        3,
+        ir.Operation.NOTHING,
+        "",
+        (result,),
+        (),
+        kind=mir.Kind.CALL,
+        results=(mir.Held(result, 2),),
+    )
+    caller = mir.MirBody(
+        1,
+        (mir.MirBlock(1, (), (_copy(1, actual, 7), argument, call), ()),),
+        sealed=True,
+    )
+
+    made = inline.expanded(
+        caller,
+        {3: "leaf"},
+        {3: frozenset({2})},
+        {"leaf": inline.Candidate(leaf, (parameter,))},
+    )
+
+    returned_copies = [
+        op for block in made.blocks for op in block.ops if op.kind is mir.Kind.COPY and result in op.defines
+    ]
+    assert len(returned_copies) == 1
+    source = returned_copies[0].args[0]
+    assert isinstance(source, mir.Held) and source.value != colliding
+    definitions = [op for block in made.blocks for op in block.ops if source.value in op.defines]
+    assert len(definitions) == 1
+    assert definitions[0].args == (mir.Held(actual, 2),)
+    assert mir.verify(made) == []
+
+
 def test_inline_policy_refuses_repeated_work_without_a_call_cost() -> None:
     """A repeated body must not clone when the profile cannot price a call."""
     leaf = _leaf()
@@ -145,9 +227,9 @@ def test_small_private_pure_helpers_inline_in_mir() -> None:
             (FIXTURES / "choose.cgs").read_text(),
             "choose",
             optimise=True,
-            watch=lambda stage, name, body: stages.append(body)
-            if name == "_choose" and stage == "mir-inline1"
-            else None,
+            watch=lambda stage, name, body: (
+                stages.append(body) if name == "_choose" and stage == "mir-inline1" else None
+            ),
         ).splitlines()
     ]
     assert "_pick proc near" not in lines

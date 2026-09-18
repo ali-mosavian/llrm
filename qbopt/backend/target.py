@@ -71,6 +71,14 @@ def requirements(what: "ir.Semantics") -> dict[Occurrence, Register_]:
     out: dict[Occurrence, Register_] = {}
     if _on_the_stack(what):
         return out
+    # LES/LFS/LGS name their offset destination normally but encode the
+    # selector destination in the opcode.  The selector is therefore a hard
+    # result requirement even when no later far-memory operand happens to use
+    # it.  Pre-allocation far-load selection relies on this table rather than
+    # prescribing a register itself.
+    far_selector = {"les": Register.ES, "lfs": Register.FS, "lgs": Register.GS}.get(what.name or "")
+    if what.op is ir.Operation.MOVE and far_selector is not None and len(what.dests) == 2:
+        out[Occurrence("dest", 1)] = far_selector
     # The widening forms name neither half: the product and the dividend
     # are both dx:ax, low first.
     if what.op in (ir.Operation.MULTIPLY, ir.Operation.DIVIDE) and len(what.dests) != 1:
