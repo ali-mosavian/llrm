@@ -653,6 +653,87 @@ def test_loaded_scaled_add_uses_67h_lea() -> None:
     assert address.scale == 2
 
 
+def test_loaded_scaled_add_skips_metadata_only_anchors() -> None:
+    """Matmul retained ``load; shl; add`` when metadata anchors separated it.
+
+    The anchors emit no machine instruction and carry no virtual edge.  They
+    must remain for source ownership, but cannot make the physically adjacent
+    shift/add tail invisible to instruction selection.
+    """
+    temporary = ir.Reg(Register.EBX, 4)
+    total = ir.Reg(Register.EAX, 4)
+    cell = ir.Mem(ir.Addr(ir.Space.FRAME, -8), 4, Register.BP)
+    load = lir.Insn(
+        148,
+        (148, 148),
+        ir.Semantics(ir.Operation.MOVE, "mov", (temporary,), (cell,)),
+        (1,),
+        (),
+        symbol=True,
+    )
+    shift = lir.Insn(
+        155,
+        (155, 155),
+        ir.Semantics(ir.Operation.BINARY, "shl", (temporary,), (temporary, ir.Imm(1, 1))),
+        (1,),
+        (1,),
+        symbol=True,
+    )
+    addition = lir.Insn(
+        156,
+        (156, 156),
+        ir.Semantics(ir.Operation.BINARY, "add", (total,), (total, temporary)),
+        (2,),
+        (2, 1),
+        symbol=True,
+    )
+    anchors = (
+        lir.Insn(
+            151,
+            (151, 151),
+            ir.Semantics(ir.Operation.NOTHING, "", (), ()),
+            (),
+            (),
+        ),
+        lir.Insn(
+            154,
+            (154, 154),
+            ir.Semantics(ir.Operation.NOTHING, "", (), ()),
+            (),
+            (),
+        ),
+    )
+    compare = lir.Insn(
+        157,
+        (157, 157),
+        ir.Semantics(ir.Operation.COMPARE, "cmp", (), (total, ir.Imm(0, 4))),
+        (),
+        (2,),
+    )
+    body = lir.LirBody(
+        "matmul-anchored-scale",
+        148,
+        (lir.LirBlock(148, (load, anchors[0], shift, anchors[1], addition, compare), ()),),
+        {},
+        {},
+    )
+
+    from qbopt.backend import verify
+
+    transformed = peephole.addresses(body, cpu="386")
+    result = transformed.insns
+
+    assert [one.what.name for one in result] == ["mov", "", "", "", "lea", "cmp"]
+    assert result[0].symbol is True
+    assert result[1] == anchors[0] and result[3] == anchors[1]
+    assert result[2].symbol is False and result[2].defines == shift.defines
+    assert result[4].symbol is True
+    address = result[4].what.sources[0]
+    assert isinstance(address, ir.Address)
+    assert (address.through, address.index, address.scale) == (Register.EAX, Register.EBX, 2)
+    assert not verify.verify(transformed)
+
+
 def test_loaded_scaled_add_preserves_a_shifted_value_live_into_a_successor() -> None:
     """A block-local use count lost a shifted temporary read by its successor.
 

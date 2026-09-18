@@ -1175,7 +1175,6 @@ def _loaded_scaled_add(
         one.what is None
         or one.clobbers
         or one.clobbers_high
-        or one.symbol is True
         or one.spread
         or one.group is not None
         or one.frame_adjust
@@ -1246,12 +1245,53 @@ def _loaded_scaled_add(
     return replace(addition, what=what)
 
 
+def _loaded_addresses(
+    block: lir.LirBlock,
+    uses: Counter,
+    cpu: targets.Profile,
+) -> lir.LirBlock:
+    """Select physically adjacent load/scale/add tails across inert anchors."""
+    dead = set()
+    flags_dead = False
+    for one in reversed(block.insns):
+        if flags_dead:
+            dead.add(id(one))
+        flags_dead = _flags_before(one, flags_dead)
+
+    insns = list(block.insns)
+    work = [index for index, one in enumerate(insns) if not _skippable_nothing(one)]
+    removed = set()
+    at = 0
+    while at + 2 < len(work):
+        indexes = work[at : at + 3]
+        parts = tuple(insns[index] for index in indexes)
+        combined = _loaded_scaled_add(parts, uses, cpu=cpu) if id(parts[2]) in dead else None
+        if combined is None:
+            at += 1
+            continue
+        shift = parts[1]
+        if shift.symbol is True:
+            insns[indexes[1]] = lir.anchor(shift)
+            insns[indexes[2]] = combined
+            at += 3
+            continue
+        folded = lir.without((shift, combined), lambda one, shift=shift: one is shift)
+        if len(folded) != 1:
+            at += 1
+            continue
+        insns[indexes[2]] = folded[0]
+        removed.add(indexes[1])
+        at += 3
+    return replace(block, insns=tuple(one for index, one in enumerate(insns) if index not in removed))
+
+
 def addresses(body: lir.LirBody, *, cpu: str | targets.Profile = "386") -> lir.LirBody:
     """Select LEA for allocated arithmetic when the replaced flags are dead."""
     target_cpu = targets.profile(cpu)
     virtual_uses = Counter(value for block in body.blocks for one in block.insns for value in one.uses)
     blocks = []
     for block in body.blocks:
+        block = _loaded_addresses(block, virtual_uses, target_cpu)
         dead = set()
         flags_dead = False
         for one in reversed(block.insns):
@@ -1262,18 +1302,6 @@ def addresses(body: lir.LirBody, *, cpu: str | targets.Profile = "386") -> lir.L
         index = 0
         while index < len(block.insns):
             triple = block.insns[index : index + 3]
-            combined = (
-                _loaded_scaled_add(triple, virtual_uses, cpu=target_cpu)
-                if len(triple) == 3 and id(triple[2]) in dead
-                else None
-            )
-            if combined is not None:
-                shift = triple[1]
-                folded = lir.without((shift, combined), lambda one, shift=shift: one is shift)
-                if len(folded) == 1:
-                    insns.extend((triple[0], *folded))
-                    index += 3
-                    continue
             combined = (
                 _scaled_address(triple, flags_dead=True, cpu=target_cpu)
                 if len(triple) == 3 and id(triple[2]) in dead
