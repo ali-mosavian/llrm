@@ -22,7 +22,7 @@ iteration updates this file in the same commit.
 |---|---|---|
 | Per-CPU measurement | in progress | CPU profiles distinguish native medium-model addressing from the complete costed secondary 67h form, explicitly price x87 stack exchange, LES/LFS/LGS complete far-pointer loads, and read-only memory comparisons separately from read/modify/write ALU forms, and carry the complete-peel iteration budget; the C corpus, a paired BASIC/C known-answer parity gate, static and frequency-weighted structural metrics, static and CFG-frequency-weighted per-CPU cost rankings, reference listings, and exact-count preservation across recurrence rewinds, loop rotation, and zero-byte-header threading exist; audited targets and runtime profiles remain. |
 | MIR/LIR provenance and fresh OMF | complete in production | allocated LIR emits directly with external source maps/allocation hints; unreachable same-block source occurrences remain inert owners after terminal-call pruning; the remaining compatibility views are test-only and cannot route a compilation through record rewriting. |
-| SROA and scalar promotion | partial | precise SSA pointer identity and scalar TBAA for both direct and indirect lvalues now refine coarse frontend operand annotations before GVN, LICM, packed-pointer splitting, and SROA, while exact-address incompatible views retain the conservative union rule; packed 16:16 dereferences are normalized into independent offset/selector SSA values before SROA; fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies expand into exact leaves, and structural candidates transact leaves made singleton by scalar convergence with finite-capacity pressure pricing; far aggregate copies, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
+| SROA and scalar promotion | partial | precise SSA pointer identity, including address-of canonical frontend cells, and scalar TBAA for both direct and indirect lvalues now refine coarse frontend operand annotations before observer analysis, DSE, GVN, LICM, packed-pointer splitting, and SROA, while exact-address incompatible views retain the conservative union rule; packed 16:16 dereferences are normalized into independent offset/selector SSA values before SROA; fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies expand into exact leaves, and structural candidates transact leaves made singleton by scalar convergence with finite-capacity pressure pricing; far aggregate copies, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, constrained native-address occurrence splitting, dying-base indexed-form unfolding, direct composition of spilled frame addresses into their sole memory use, and local constant, frame, relocatable-address, and provenance-disjoint incoming-argument rematerialization exist; GVN now retains store-crossing providers under existing pressure only when the selected target has a secondary address form cheaper than the reload/spill alternative; typed far-pointer loads are selected before allocation only when a virtual address owner would otherwise be lost, while fixed addresses retain independent rematerialization and late LES/LFS/LGS selection; x87 allocation composes complete target-priced reread and retained-home candidates independently at empty-stack regions after all shuffles are materialized; global integer splitting/rematerialization, CFG-frequency weighting within a nonempty x87 region, and broader global x87 allocation remain. |
 | Loop optimization | partial | exact pre/post-tested recurrences and symbolic sentinels, target-priced exact nested-recurrence rewind, complete nested-initializer LICM, dead-control countdowns with zero-trip guards, complete-affine spill/recompute pricing, precise-volatile-aware LICM, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling with exact-trip-amortized growth plus a pre-folding complete-sequence/pressure proof and bounded public defaults, post-specialization associative integer constant composition, and machine-neutral whole-range pressure forecasting exist; versioning, partial unrolling, constraint-complete candidate-set forecasting, and compile-time candidate memoization remain. |
 | Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs (including closed recursive SCCs in C and object paths), constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, post-inline constant folding through phi edges and linear corridors, private immutable numeric-data initializer facts, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
@@ -30,13 +30,47 @@ iteration updates this file in the same commit.
 
 ## Iteration log
 
+### 134. Canonical address publication across BYREF calls — 2026-09-19
+
+The QB compatibility program Q45P04 first passed uninitialized frame slots to
+`ADDLONG&`: optimized MIR had replaced the stores of `100000` and `23` with
+`NOTHING` while retaining their addresses and the call.  The QB HIR already
+described both pointee read/write effects, so disabling DSE in that frontend
+would have hidden a shared alias/observer defect rather than fixed it.
+
+The fail-first shared-MIR regression recreates the complete symptom.  An
+`ADDRESS` operation takes a canonical frame `Cell`, publishes its result to a
+call with an explicit pointee footprint, and asks DSE whether the preceding
+store is observable.  The first bad analysis was pointer provenance: the
+shared points-to solver recognized `FrameAddress` but not the equivalent
+canonical-cell spelling.  Address-of now inherits that cell's bounded object
+provenance.  This is an object-identity rule available to every frontend, not
+a QB call or temporary exception.
+
+Recovering the provenance exposed the second error.  Observer analysis found
+the exact published frame object, but when that made its private-object test
+false it fell through to the older raw BP-offset rule and made the same object
+private again.  Canonical identity is now a complete answer in both
+directions: a bounded current-frame object is private exactly when none of its
+canonical identities has been published.  Unknown direct-address publication
+retains the existing conservative all-frame fallback.
+
+The fail-first regression now passes with the surrounding alias/private-frame
+suite (`31 passed`).  In the QB integration worktree, the former strict xfail
+passes normally, frontend emission reports zero failures, and the exact qb45
+Q45P04 linked DOS verdict reports zero failures.  This advances the shared
+alias/observer part of Phases 3 and 6; it does not add a frontend-specific DSE
+switch or weaken elimination of genuinely unobservable frame stores.
+
 ### 133. Paired BASIC/C parity gate and allocation closure — 2026-09-19
 
 The first committed paired corpus expresses the same aggregate, loop, signed
 extension, multiplication, and 32-bit accumulation in BASIC and C and binds
 both programs to one independently calculated result, `1789`.  Its bounded
 host gate requires both frontends to finish the shared optimizer, allocator,
-layout, and fresh OMF writer.  Its Tier 2 gates execute both emitted objects on
+layout, and fresh OMF writer.  All three parity gates remain in Tier 2 because
+the paired host compilation alone costs 1.88 seconds; the fail-first mechanism
+regressions stay in Tier 1.  The runtime gates execute both emitted objects on
 the DOS 386 path and compare each with that same oracle.  Passing this corpus
 establishes semantic parity for the covered mechanism; it does not claim that
 all programs or source-language corner cases are now equivalent.

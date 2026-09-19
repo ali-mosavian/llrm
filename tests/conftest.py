@@ -30,7 +30,6 @@ FAST_MODULES = frozenset(
         "test_countdown.py",
         "test_cpu_profile.py",
         "test_farload.py",
-        "test_frontend_parity.py",
         "test_inline.py",
         "test_invariant_values.py",
         "test_jumps.py",

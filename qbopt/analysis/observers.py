@@ -171,16 +171,19 @@ def private(body: mir.MirBody, found: Module | None, blocks: list | None) -> Cal
     def unobserved(ref: mir.MemRef) -> bool:
         provenance = pointers.reference(ref)
         if provenance is not None and provenance.slices and not unknown_frame_publication:
-            canonical = all(
+            canonical_frame = all(
                 one.object.kind is memory.Kind.FRAME
                 and one.object.extent is not None
                 and 0 <= one.low < one.high
                 and one.high + one.width - 1 <= one.object.extent
-                and one.object not in published
                 for one in provenance.slices
             )
-            if canonical:
-                return True
+            if canonical_frame:
+                # Canonical object identity is a complete answer in both
+                # directions. Falling through to the raw BP-offset rule after
+                # finding a published object made that same object private
+                # again and let DSE erase stores before a BYREF call.
+                return all(one.object not in published for one in provenance.slices)
         addr = ref.addr
         if addr is None or addr.base != Register.NONE or ref.base is not None or ref.segment is not None:
             return False

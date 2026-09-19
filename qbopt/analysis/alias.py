@@ -397,6 +397,13 @@ def _direct(op: mir.Op, values: dict[mir.Value, memory.Provenance]) -> memory.Pr
             low, high = extent
             object_ = memory.Object(memory.Kind.FRAME, (low, high), extent=high - low)
             return memory.Provenance.one(object_, offset - low, offset - low + 1)
+        case mir.Kind.ADDRESS, (mir.Cell(ref=ref),) if ref.provenance is not None and ref.provenance.slices:
+            # Frontends with explicit object identities can spell address-of
+            # as a canonical cell instead of reconstructing a FrameAddress.
+            # The cell's provenance is the object being published, including
+            # its complete bounded subobject rather than only the pointer-width
+            # bytes used to encode the address operation.
+            return ref.provenance
         case mir.Kind.COPY, (mir.Symbol(space=space, index=index, offset=offset, addend=addend),):
             kind = memory.Kind.EXTERNAL if space is Space.EXTERNAL else memory.Kind.GLOBAL
             return memory.Provenance.one(memory.Object(kind, (space, index)), offset + addend, offset + addend + 1)

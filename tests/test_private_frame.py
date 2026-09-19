@@ -85,6 +85,64 @@ def test_a_published_pointer_derived_frame_store_stays_observable() -> None:
     assert store not in avail.dead_stores(body, frozenset(), {}, private)
 
 
+def test_address_of_a_canonical_frame_cell_publishes_its_store_to_a_call() -> None:
+    """Q45P04 passed uninitialized BYREF slots after DSE deleted 100000 and 23.
+
+    The QB HIR frontend represents ``address local`` as ADDRESS of a canonical
+    Cell.  That spelling carries the same object identity as FrameAddress and
+    must flow through the resulting pointer, otherwise the observer analysis
+    falsely calls the local private while its callee reads it.
+    """
+    pointer = mir.Value(1, 1, variable=1, version=1)
+    object_ = memory.Object(memory.Kind.FRAME, ("Q45P04", "$arg3"), extent=4)
+    provenance = memory.Provenance.one(object_, 0, 4)
+    cell = mir.MemRef(
+        Addr(Space.FRAME, -10),
+        4,
+        space=Space.FRAME,
+        provenance=provenance,
+    )
+    store = mir.Op(
+        1,
+        ir.Operation.MOVE,
+        "mov",
+        (),
+        (),
+        kind=mir.Kind.STORE,
+        args=(mir.Const(100000, 4),),
+        results=(mir.Cell(cell),),
+        stores=(cell,),
+    )
+    address = mir.Op(
+        2,
+        ir.Operation.ADDRESS,
+        "address",
+        (pointer,),
+        (),
+        kind=mir.Kind.ADDRESS,
+        args=(mir.Cell(replace(cell, width=2)),),
+        results=(mir.Held(pointer, 2),),
+    )
+    pointee = mir.MemRef(None, 4, base=pointer, space=Space.LITERAL, base_width=2, pointer=True)
+    call = mir.Op(
+        3,
+        ir.Operation.CALL,
+        "call",
+        (),
+        (pointer,),
+        kind=mir.Kind.CALL,
+        args=(mir.Held(pointer, 2),),
+        loads=(pointee,),
+        stores=(pointee,),
+    )
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (store, address, call), ()),), sealed=True)
+
+    private = observers.private(body, None, None)
+
+    assert private is not None and not private(cell)
+    assert store not in avail.dead_stores(body, frozenset(), {}, private)
+
+
 def test_a_direct_frame_address_conservatively_publishes_canonical_objects() -> None:
     """A direct address has no SSA identity that can safely select one object."""
     body, store, cell = _pointer_frame_store(False)
