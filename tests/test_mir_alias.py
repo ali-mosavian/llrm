@@ -5,8 +5,9 @@ from iced_x86 import Register
 from qbopt.model import ir
 from qbopt.model import mir
 from qbopt.model import memory
-from qbopt.analysis import alias
 from qbopt.backend import lower
+from qbopt.analysis import alias
+from qbopt.optimize import transform
 from qbopt.objectfile.module import Addr
 from qbopt.objectfile.module import Space
 
@@ -183,16 +184,52 @@ def test_a_maybe_nonframe_pointer_keeps_the_default_data_segment() -> None:
         0,
         (mir.MirBlock(0, (), (write,), ()),),
         pointer_values=frozenset({pointer}),
-        pointer_seeds={
-            pointer: memory.Provenance(
-                frozenset({memory.Slice(frame, 0, 1), memory.Slice(global_, 0, 1)})
-            )
-        },
+        pointer_seeds={pointer: memory.Provenance(frozenset({memory.Slice(frame, 0, 1), memory.Slice(global_, 0, 1)}))},
     )
 
     ref = alias.annotated(body).blocks[0].ops[0].stores[0]
 
     assert lower._address(ref).segment == Register.NONE
+
+
+def test_unannotated_computed_address_keeps_ssa_provenance() -> None:
+    """C nbody lost every frame-array object and stopped unrolling its hot loop.
+
+    C array indexing is an address expression rather than a source pointer
+    dereference, so the memory operand need not carry ``pointer=True``.  With
+    no attached annotation, the shared analysis must still derive its object
+    from the SSA address value.
+    """
+    address = mir.Value(1, 1, variable=1, version=1)
+    result = mir.Value(2, 2, variable=2, version=1)
+    ref = mir.MemRef(None, 8, base=address, space=Space.FRAME)
+    make_address = mir.Op(
+        1,
+        ir.Operation.ADDRESS,
+        "address",
+        (address,),
+        (),
+        kind=mir.Kind.ADDRESS,
+        args=(mir.FrameAddress(-32, 2, (-32, 0)),),
+        results=(mir.Held(address, 2),),
+    )
+    load = mir.Op(
+        2,
+        ir.Operation.MOVE,
+        "mov",
+        (result,),
+        (address,),
+        kind=mir.Kind.LOAD,
+        args=(mir.Cell(ref),),
+        results=(mir.Held(result, 8),),
+        loads=(ref,),
+    )
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (make_address, load), ()),), sealed=True)
+
+    tagged = alias.annotated(body).blocks[0].ops[-1].loads[0]
+
+    assert tagged.provenance is not None
+    assert {one.object.kind for one in tagged.provenance.slices} == {memory.Kind.FRAME}
 
 
 def test_store_through_parameter_keeps_disjoint_frame_pointer_spill() -> None:
@@ -577,3 +614,115 @@ def test_strided_slice_intersection_matches_the_bytes_it_describes() -> None:
     for one in slices:
         for other in slices:
             assert one.intersects(other) == bool(bytes_of(one) & bytes_of(other)), (one, other)
+
+
+def test_pointer_fact_refines_coarse_operand_provenance_before_gvn() -> None:
+    """QB SC_INIT reloaded a global descriptor after every allocation store.
+
+    The pointer SSA value already named its dynamic allocation, but the
+    indirect operand's conservative PARAMETER spelling won unconditionally.
+    A frontend may spell an address inefficiently; shared pointer analysis
+    must canonicalize it before MemorySSA decides what the store clobbers.
+    """
+    pointer, first, second = (mir.Value(number, number, variable=number, version=1) for number in range(1, 4))
+    descriptor_object = memory.Object(memory.Kind.GLOBAL, (Space.SEGMENT, 7), extent=2)
+    allocation = memory.Object(memory.Kind.ALLOCATION, "owned", extent=64)
+    descriptor = mir.MemRef(
+        Addr(Space.SEGMENT, 0, 7),
+        2,
+        space=Space.SEGMENT,
+        provenance=memory.Provenance.one(descriptor_object, 0, 2),
+    )
+    indirect = mir.MemRef(
+        None,
+        2,
+        base=pointer,
+        base_width=4,
+        pointer=True,
+        provenance=memory.Provenance.one(memory.Object(memory.Kind.PARAMETER, "coarse")),
+    )
+
+    def load(at: int, result: mir.Value) -> mir.Op:
+        return mir.Op(
+            at,
+            ir.Operation.MOVE,
+            "mov",
+            (result,),
+            (),
+            kind=mir.Kind.LOAD,
+            args=(mir.Cell(descriptor),),
+            results=(mir.Held(result, 2),),
+            loads=(descriptor,),
+        )
+
+    store = mir.Op(
+        2,
+        ir.Operation.MOVE,
+        "mov",
+        (),
+        (pointer,),
+        kind=mir.Kind.STORE,
+        args=(mir.Const(0, 2),),
+        results=(mir.Cell(indirect),),
+        stores=(indirect,),
+    )
+    returned = mir.Op(
+        4,
+        ir.Operation.RETURN,
+        "ret",
+        (),
+        (first, second),
+        kind=mir.Kind.RETURN,
+        args=(mir.Held(first, 2), mir.Held(second, 2)),
+    )
+    body = mir.MirBody(
+        0,
+        (mir.MirBlock(0, (), (load(1, first), store, load(3, second), returned), ()),),
+        sealed=True,
+        pointer_values=frozenset({pointer}),
+        pointer_seeds={pointer: memory.Provenance.one(allocation, 0, 1)},
+    )
+
+    optimized = transform.applied(body, frozenset({7}), {}, unroll_=False, peel_=False, fill_=False)
+    descriptor_loads = [
+        op for block in optimized.blocks for op in block.ops if op.kind is mir.Kind.LOAD and op.loads == (descriptor,)
+    ]
+
+    assert len(descriptor_loads) == 1
+
+
+def test_pointer_fact_does_not_hide_a_conflicting_concrete_operand_object() -> None:
+    """Inconsistent concrete metadata must remain may-alias, never become a false proof."""
+    pointer = mir.Value(1, 1, variable=1, version=1)
+    allocation = memory.Object(memory.Kind.ALLOCATION, "derived", extent=8)
+    attached = memory.Object(memory.Kind.GLOBAL, (Space.SEGMENT, 9), extent=8)
+    ref = mir.MemRef(
+        None,
+        2,
+        base=pointer,
+        pointer=True,
+        provenance=memory.Provenance.one(attached, 0, 2),
+    )
+    store = mir.Op(
+        1,
+        ir.Operation.MOVE,
+        "mov",
+        (),
+        (pointer,),
+        kind=mir.Kind.STORE,
+        args=(mir.Const(0, 2),),
+        results=(mir.Cell(ref),),
+        stores=(ref,),
+    )
+    body = mir.MirBody(
+        0,
+        (mir.MirBlock(0, (), (store,), ()),),
+        sealed=True,
+        pointer_values=frozenset({pointer}),
+        pointer_seeds={pointer: memory.Provenance.one(allocation, 0, 1)},
+    )
+
+    tagged = alias.annotated(body).blocks[0].ops[0].stores[0]
+
+    assert tagged.provenance is not None
+    assert {one.object for one in tagged.provenance.slices} == {allocation, attached}

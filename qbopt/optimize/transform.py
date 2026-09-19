@@ -43,8 +43,6 @@ from qbopt.optimize import loopsimplify
 from qbopt.optimize import pointeraccess
 from qbopt.analysis import loops as loopy
 from qbopt.model.passes import AddressForm
-from qbopt.model.passes import DEFAULT_MAX_UNROLL_ITERATIONS
-from qbopt.model.passes import DEFAULT_MAX_UNROLLED_OPERATIONS
 from qbopt.model.passes import MIRTransform
 from qbopt.model.passes import OperationCosts
 from qbopt.analysis import liveness as alive_at
@@ -52,6 +50,8 @@ from qbopt.analysis.ssa import provider as _provider
 from qbopt.analysis.ssa import values as _ssa_values
 from qbopt.analysis.ssa import pruned_phis as _pruned_phis
 from qbopt.analysis.ssa import substituted as _substituted
+from qbopt.model.passes import DEFAULT_MAX_UNROLL_ITERATIONS
+from qbopt.model.passes import DEFAULT_MAX_UNROLLED_OPERATIONS
 
 
 def _absorb(ops: list[Op], gone: set[int]) -> list[Op]:
@@ -2883,6 +2883,17 @@ class SplitPointers(MIRTransform):
         return pointeraccess.split(body)
 
 
+class PointerProvenance(MIRTransform):
+    """Canonicalize indirect objects from current SSA pointer facts."""
+
+    name = "provenance"
+
+    def transform(self, body: MirBody) -> MirBody:
+        from qbopt.analysis import alias
+
+        return alias.annotated(body)
+
+
 def pipeline(where: Where, **wanted) -> list[MIRTransform]:
     """The passes, in order, that `wanted` leaves on.
 
@@ -2890,6 +2901,10 @@ def pipeline(where: Where, **wanted) -> list[MIRTransform]:
     it and skipped, so what runs is what this returns.
     """
     every: list[MIRTransform] = [
+        # Pointer identity is a solved program fact, not a frontend code-shape
+        # requirement.  Resolve it before a packed pointer becomes independent
+        # offset and selector values which no longer name the original address.
+        PointerProvenance(),
         SplitPointers(),
         # Aggregate/object leaves become ordinary SSA before any scalar or
         # CFG pass asks what is constant, redundant, or loop invariant.
@@ -3036,7 +3051,7 @@ def applied(
     # its ordinary scalar convergence.  Keep pipeline order here: packed far
     # references must expose their offset and selector before SROA reasons
     # about the memory object they address.
-    structural = (SplitPointers, promote.Sroa)
+    structural = (PointerProvenance, SplitPointers, promote.Sroa)
     boundary = [one for one in passes if isinstance(one, structural)]
     passes = [one for one in passes if not isinstance(one, structural)]
     unrollers = [one for one in passes if isinstance(one, unroll.Unroll)]

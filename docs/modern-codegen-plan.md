@@ -22,13 +22,66 @@ iteration updates this file in the same commit.
 |---|---|---|
 | Per-CPU measurement | in progress | CPU profiles distinguish native medium-model addressing from the complete costed secondary 67h form and carry the complete-peel iteration budget; the C corpus, static and frequency-weighted structural metrics, static and CFG-frequency-weighted per-CPU cost rankings, reference listings, and exact-count preservation across recurrence rewinds, loop rotation, and zero-byte-header threading exist; audited targets and runtime profiles remain. |
 | MIR/LIR provenance and fresh OMF | complete in production | allocated LIR emits directly with external source maps/allocation hints; the remaining compatibility views are test-only and cannot route a compilation through record rewriting. |
-| SROA and scalar promotion | partial | packed 16:16 dereferences are normalized into independent offset/selector SSA values before SROA; fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies expand into exact leaves, and structural candidates transact leaves made singleton by scalar convergence with finite-capacity pressure pricing; far aggregate copies, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
+| SROA and scalar promotion | partial | precise SSA pointer identity now refines coarse frontend operand annotations before GVN, LICM, packed-pointer splitting, and SROA; packed 16:16 dereferences are normalized into independent offset/selector SSA values before SROA; fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies expand into exact leaves, and structural candidates transact leaves made singleton by scalar convergence with finite-capacity pressure pricing; far aggregate copies, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, dying-base indexed-form unfolding, and local constant, frame, relocatable-address, and provenance-disjoint incoming-argument rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
 | Loop optimization | partial | exact pre/post-tested recurrences and symbolic sentinels, target-priced exact nested-recurrence rewind, complete nested-initializer LICM, dead-control countdowns with zero-trip guards, complete-affine spill/recompute pricing, precise-volatile-aware LICM, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling with exact-trip-amortized growth plus a pre-folding complete-sequence/pressure proof and bounded public defaults, post-specialization associative integer constant composition, and machine-neutral whole-range pressure forecasting exist; versioning, partial unrolling, constraint-complete candidate-set forecasting, and compile-time candidate memoization remain. |
 | Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs (including closed recursive SCCs in C and object paths), constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, post-inline constant folding through phi edges and linear corridors, private immutable numeric-data initializer facts, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
 | Post-allocation quality | partial | copy propagation, machine CSE/DCE, shared final block placement/threading/fall-through elision and fresh-tail sharing, plus byte-neutral source-unowned terminal-return duplication, dead-register frame-copy shuttles, dying-input commutative result transfer, synthetic high-word reload narrowing, target-priced 67h LEA selection including source-owned loaded scale/add tails and constant/register sums, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware decoded-tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 125. Make pointer provenance a shared optimization boundary — 2026-09-19
+
+The QB integration exposed repeated descriptor loads and address reconstruction
+in `SC_INIT`.  Caching those values in the source frontend would make one
+listing smaller while leaving the optimizer unable to clean equivalent HIR
+from another frontend.  The frontend's contract is semantic identity only:
+an owned array pointer may name its allocation, but the frontend remains free
+to emit every repeated load and computation.
+
+Pointer analysis previously gave an operand's attached provenance absolute
+priority over the SSA value actually dereferenced.  Thus a conservative
+`PARAMETER` spelling on a memory operand hid a precise `ALLOCATION` fact on
+its pointer.  MemorySSA then had to assume that a store into array data could
+overwrite the array's global descriptor, so GVN and LICM retained the next
+descriptor load.  A new common structural pass canonicalizes references from
+current SSA pointer facts before pointer splitting and SROA.  Concrete derived
+identity replaces only abstract `UNKNOWN`, `NONLOCAL`, or `PARAMETER`
+annotations.  Conflicting concrete identities are unioned conservatively and
+therefore cannot manufacture a false no-alias proof.
+
+The fail-first `SC_INIT` model is deliberately inefficient MIR: descriptor
+load, allocation store through a coarsely annotated pointer, then the same
+descriptor load.  Before the change both loads survive; with the allocation's
+semantic identity present, ordinary shared GVN leaves one.  No frontend cache
+or QB-specific operation is involved.
+
+The first implementation also exposed a measurement guardrail.  It required
+the explicit pointer flag before deriving any SSA address identity, which
+removed provenance from C nbody's ordinary frame-array expressions.  The
+allocated listing shrank from 1,083 bytes/283 instructions to 616/143, but the
+hot loop stopped exact specialization and the estimator rose from 2,085 to
+31,149 dynamic instructions.  A second fail-first regression records that
+exact missing-provenance symptom.  The corrected rule retains the historic
+derivation for an unannotated computed address and uses the pointer flag only
+when refining an already attached annotation.
+
+C nbody is consequently byte-for-byte identical to iteration 123/124 at
+1,083 bytes and 283 instructions, with the same 2,085 estimated dynamic
+instructions and byte-identical GCC 16.2 and Clang 21 references.  Real VBDOS
+`/R` D_SURF is also stage-for-stage and assembly-byte identical to iteration
+124 at 15,734 emitted code bytes and 5,017 assembly instructions.  That
+identity is intentional for an architectural commit: the current QB frontend
+still has to supply the stable allocation identity, then remove its descriptor
+value caches so the shared regression's deliberately redundant shape is what
+production exercises.  Artifacts are under
+`build/quality/iter125-provenance`.
+
+This advances the Phase 3 alias/SROA boundary without claiming general
+descriptor recognition, arbitrary pointer-load ownership, or a completed
+quality gate.  Inferring allocation ownership from arbitrary pointer-shaped
+loads would be unsound; it is a source-language semantic fact, not a request
+for frontend optimization.
 
 ### 124. Share fresh allocated tails in the common pipeline — 2026-09-19
 

@@ -50,9 +50,7 @@ class PointsTo:
         """
         provenance = self.values.get(value)
         nonnull = frozenset({memory.Kind.FRAME, memory.Kind.GLOBAL, memory.Kind.EXTERNAL, memory.Kind.NAMED})
-        return bool(provenance and provenance.slices) and all(
-            one.object.kind in nonnull for one in provenance.slices
-        )
+        return bool(provenance and provenance.slices) and all(one.object.kind in nonnull for one in provenance.slices)
 
 
 def _resolved_reference(
@@ -60,19 +58,46 @@ def _resolved_reference(
     values: dict[mir.Value, memory.Provenance],
 ) -> memory.Provenance | None:
     """Resolve a memory operand through the current pointer-value facts."""
-    if ref.provenance is not None:
-        return ref.provenance
-    if ref.base is None or ref.base not in values:
-        return None
-    source = values[ref.base]
-    displacement = ref.addr.disp if ref.addr is not None else 0
-    slices = set()
-    for one in source.slices:
-        low, high = one.low + displacement, one.high + displacement
-        # A singleton address names `width` consecutive bytes. A set of
-        # indexed addresses retains its stride and widens its final lane.
-        slices.add(memory.Slice(one.object, low, high, one.stride, max(ref.width, 1)))
-    return memory.Provenance(frozenset(slices), source.restrict)
+    derived = None
+    # An unannotated computed address has always acquired its identity from
+    # its SSA base, whether or not the source needed to mark the operand as a
+    # first-class pointer.  ``pointer`` matters only when refining an existing
+    # conservative frontend annotation: ordinary indexed references must not
+    # let an unrelated arithmetic base contradict their concrete object.
+    derive = ref.provenance is None or ref.pointer
+    if derive and ref.base is not None and ref.base in values:
+        source = values[ref.base]
+        displacement = ref.addr.disp if ref.addr is not None else 0
+        slices = set()
+        for one in source.slices:
+            low, high = one.low + displacement, one.high + displacement
+            # A singleton address names `width` consecutive bytes. A set of
+            # indexed addresses retains its stride and widens its final lane.
+            slices.add(memory.Slice(one.object, low, high, one.stride, max(ref.width, 1)))
+        derived = memory.Provenance(frozenset(slices), source.restrict)
+    attached = ref.provenance
+    if attached is None:
+        return derived
+    if derived is None:
+        return attached
+
+    # The operand annotation is allowed to be a conservative source spelling;
+    # the SSA pointer is the address actually dereferenced.  Prefer a concrete
+    # object solved from that value over UNKNOWN/NONLOCAL/PARAMETER placeholders.
+    # If two concrete claims disagree, retain both instead of manufacturing a
+    # disjointness proof from inconsistent metadata.
+    abstract = {memory.Kind.UNKNOWN, memory.Kind.NONLOCAL, memory.Kind.PARAMETER}
+    attached_objects = {one.object for one in attached.slices}
+    derived_objects = {one.object for one in derived.slices}
+    attached_concrete = bool(attached_objects) and all(one.kind not in abstract for one in attached_objects)
+    derived_concrete = bool(derived_objects) and all(one.kind not in abstract for one in derived_objects)
+    if derived_concrete and not attached_concrete:
+        return derived
+    if attached_concrete and not derived_concrete:
+        return attached
+    if attached_concrete and derived_concrete and attached_objects == derived_objects:
+        return derived
+    return attached.union(derived)
 
 
 @dataclass(frozen=True, slots=True)
@@ -691,9 +716,7 @@ def annotated(body: mir.MirBody) -> mir.MirBody:
         # retain the ordinary near-data interpretation instead.
         space = (
             Space.FRAME
-            if got is not None
-            and got.slices
-            and all(one.object.kind is memory.Kind.FRAME for one in got.slices)
+            if got is not None and got.slices and all(one.object.kind is memory.Kind.FRAME for one in got.slices)
             else ref.space
         )
         return replace(ref, provenance=got, space=space) if got != ref.provenance or space is not ref.space else ref
