@@ -24,11 +24,86 @@ iteration updates this file in the same commit.
 | MIR/LIR provenance and fresh OMF | complete in production | allocated LIR emits directly with external source maps/allocation hints; the remaining compatibility views are test-only and cannot route a compilation through record rewriting. |
 | SROA and scalar promotion | partial | fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies expand into exact leaves, and structural candidates transact leaves made singleton by scalar convergence with finite-capacity pressure pricing; far, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, dying-base indexed-form unfolding, and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
-| Loop optimization | partial | exact pre/post-tested recurrences and symbolic sentinels, target-priced exact nested-recurrence rewind, complete nested-initializer LICM, dead-control countdowns with zero-trip guards, complete-affine spill/recompute pricing, precise-volatile-aware LICM, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling with exact-trip-amortized bounded growth, post-specialization associative integer constant composition, and machine-neutral whole-range pressure forecasting exist; versioning, partial unrolling, and constraint-complete candidate-set forecasting remain. |
+| Loop optimization | partial | exact pre/post-tested recurrences and symbolic sentinels, target-priced exact nested-recurrence rewind, complete nested-initializer LICM, dead-control countdowns with zero-trip guards, complete-affine spill/recompute pricing, precise-volatile-aware LICM, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling with exact-trip-amortized growth plus a pre-folding complete-sequence/pressure proof, post-specialization associative integer constant composition, and machine-neutral whole-range pressure forecasting exist; versioning, partial unrolling, constraint-complete candidate-set forecasting, and compile-time candidate memoization remain. |
 | Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs (including closed recursive SCCs in C and object paths), constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, post-inline constant folding through phi edges and linear corridors, private immutable numeric-data initializer facts, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
 | Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing and byte-neutral source-unowned terminal-return duplication, dead-register frame-copy shuttles, dying-input commutative result transfer, synthetic high-word reload narrowing, target-priced 67h LEA selection including source-owned loaded scale/add tails and constant/register sums, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 118. Make complete-peel growth prove its pressure benefit — 2026-09-19
+
+The profile's 200-operation complete-sequence ceiling initially fixed P5
+matmul's code explosion but also rejected nbody's profitable fixed interaction
+specialization.  Simply exempting the first CFG peel restored nbody and 386
+matmul, but P5 matmul then grew to 3,856 bytes and 958 instructions.  Its
+allocation contained 26 spill reloads, 94 spill stores, 641 total loads and 380
+total stores.  This was not accepted as a surprising performance result: the
+raw candidate trace showed that the profitability instrument was wrong twice.
+
+First, the settled-body calculation let candidate folding erase evidence of
+the source loop cloned by the transformation.  A fail-first regression builds
+a 30-operation loop with eight exact trips and a 150-operation settled body;
+the old instrument called that a 150-operation sequence instead of retaining
+the conservative 240-operation pre-folding bound.  `_expanded_operations` now
+uses the greater of the settled attributable body and `source loop size × exact
+trip count`.  It still subtracts unrelated procedure work, so a large caller
+does not make a small loop ineligible.
+
+Second, a later P5 candidate escaped because the MIR spill lower bound fell by
+one unit.  The real trace was:
+
+```text
+                         before  after  sequence  dynamic cost  spill bound
+P5 matmul, rejected         187    459       392   19542→15576    2025→4301
+P5 matmul, old accepted     187    383       456   22208→21835    2341→2340
+386 nbody, accepted         166    380       278  292701→109413    8010→3984
+```
+
+The one-unit matmul change was not an allocation certificate; it triggered the
+958-instruction cascade.  A second fail-first regression captures that exact
+class.  Above the CPU profile's sequence ceiling, a spill-prone candidate must
+now both strictly reduce the spill lower bound and save enough dynamic target
+cost to pay for the complete cloned sequence.  Nbody clears that proof by
+orders of magnitude; marginal noise does not.  The rule is shared by straight
+unrolling and CFG peeling and names no source program, peel order, register or
+opcode.
+
+`mir-peel-rejected-operation-growth` is the first changed production stage for
+P5 matmul.  Nbody still reaches `mir-peel-accepted`; lowering and allocation are
+unchanged.  Against the committed capped baseline:
+
+| CPU/program | before bytes/ins/dynamic/cost | after bytes/ins/dynamic/cost |
+|---|---:|---:|
+| 386 nbody | `592 / 138 / 13959 / 220965` | `1083 / 283 / 2085 / 39081` |
+| 386 matmul | `502 / 154 / 10780 / 47363` | `1625 / 421 / 1023 / 4070` |
+| P5 matmul | `502 / 154 / 10780 / 22867` | `625 / 171 / 4077 / 14644` |
+
+The 386 speed/size trade is intentional under the requested performance
+priority.  Its emitted structure is credible against fresh flat-i386 best-case
+references: normalized nbody is 277 static / 2,085 estimated dynamic
+instructions versus GCC's 263 / 5,132 and Clang's 290 / 1,174; matmul is
+413 / 1,023 versus Clang's 356 / 879 (GCC's 849-instruction listing has no
+complete dynamic estimate).  These are advisory structural references, not
+medium-model targets.
+
+P5 matmul is explicitly not closed: the rejected full specialization had 958
+dynamic instructions and estimated cost 2,512, but was 2.7 times Clang's
+static instruction count and mostly memory traffic.  The next general work is
+pressure-aware scalar lifetime/formula selection so that fixed work can remain
+specialized without hundreds of allocator-created loads and stores.  Repeated
+candidate fixed points also make compilation take minutes; memoization or an
+earlier sound pressure bound remains a separate compile-time requirement.
+
+The focused policy suite passes (`10 passed`, `0.20s`), Tier 1 passes (`261
+passed`, `31 deselected`, `1.14s`), and fresh OMF plus the DOS linker and a
+real 386 return nbody's independent `4774160` oracle (`1 passed`, `13.85s`).
+The combined nbody/matmul structural run was stopped at the test-time ceiling
+after nbody passed; its matmul assertions are independently covered by the
+completed emitted-code report above. Candidate listings, all MIR/LIR stages,
+and reports are under
+`build/quality/iter127-pressure-proof-{386,p5}`.  Audited candidate-ABI targets,
+loop versioning, partial unrolling and final cross-profile acceptance remain
+open.
 
 ### 117. Compose associative bitwise constants — 2026-09-18
 

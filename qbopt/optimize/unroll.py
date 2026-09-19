@@ -171,14 +171,14 @@ def _size(body: mir.MirBody) -> int:
     return sum(len(block.phis) + sum(op.kind is not mir.Kind.NOTHING for op in block.ops) for block in body.blocks)
 
 
-def _expanded_operations(before: mir.MirBody, after: mir.MirBody, latch: int) -> int:
-    """Optimized semantic operations attributable to one expanded sequence.
+def _expanded_operations(before: mir.MirBody, after: mir.MirBody, latch: int, count: int) -> int:
+    """Conservative semantic operations attributable to one expanded sequence.
 
     The complete-peel budget applies to the loop sequence, not the containing
-    procedure.  Subtract the original operations outside the loop from the
-    settled candidate; this also credits folding exposed by expansion without
-    making an unrelated large procedure ineligible.  A missing/ambiguous
-    latch is conservatively treated as making the whole result the sequence.
+    procedure. Subtract the original operations outside the loop from the
+    settled candidate, but never let folding hide the source loop copied by
+    the transformation itself. A missing or ambiguous latch is conservatively
+    treated as making the whole result the sequence.
     """
     found = [one for one in loops.loops(before.blocks, before.entry) if latch in one.latches]
     if len(found) != 1:
@@ -190,7 +190,8 @@ def _expanded_operations(before: mir.MirBody, after: mir.MirBody, latch: int) ->
         if block.at in inside
     )
     outside = max(0, _size(before) - loop_size)
-    return max(0, _size(after) - outside)
+    settled = max(0, _size(after) - outside)
+    return max(settled, loop_size * count)
 
 
 def _profitable(
@@ -235,21 +236,26 @@ def _rejection(
     pressure_after = profit.spill_risk(after, where.costs, where.registers)
     if pressure_before is None or pressure_after is None:
         return "unpriced"
+    total_before = dynamic_before + pressure_before
+    total_after = dynamic_after + pressure_after
+    sequence = _expanded_operations(before, after, latch, count)
     if (
         pressure_after > 0
         and where.max_unrolled_operations
-        and _expanded_operations(before, after, latch) > where.max_unrolled_operations
+        and sequence > where.max_unrolled_operations
+        and (pressure_after >= pressure_before or total_before - total_after <= sequence * where.costs.move)
     ):
         # GCC's target-independent ``max-completely-peeled-insns`` is 200.
         # Keep the corresponding machine-neutral budget in the target profile.
         # Register pressure makes MIR's traffic estimate a lower bound rather
-        # than an allocation certificate; P5 matmul crossed this boundary at
-        # 459 operations and selected 958 instructions instead of 421.  A
-        # register-fitting constant specialization remains governed by the
-        # exact profitability calculation below, so CRC is unaffected.
+        # than an allocation certificate. P5 matmul first crossed this boundary
+        # while its spill lower bound rose, then escaped through a second shape
+        # where it fell by one (2,341 to 2,340); that candidate selected 958
+        # instructions instead of 421. An oversized spill-prone candidate must
+        # both lower pressure and save enough dynamic work to pay for its whole
+        # expanded sequence. Nbody does: it lowers the bound from 8,010 to
+        # 3,984 and saves 187,314 cost units across its six fixed interactions.
         return "operation-growth"
-    total_before = dynamic_before + pressure_before
-    total_after = dynamic_after + pressure_after
     if total_after >= total_before:
         return "pressure"
     # MIR cannot know final encoding bytes. Charge one register move per added

@@ -2,6 +2,8 @@
 
 from dataclasses import replace
 
+import pytest
+
 from qbopt.model import ir
 from qbopt.model import mir
 from qbopt.optimize import profit
@@ -194,6 +196,101 @@ def test_spill_prone_complete_peel_respects_the_sequence_budget() -> None:
 
     assert profit.spill_risk(_large_pressured(), costs, where.registers) > 0
     assert unroll._rejection(_loop(), _large_pressured(), 1, 8, where) == "operation-growth"
+
+
+def test_sequence_budget_counts_the_source_loop_before_candidate_folding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """P5 matmul hid an eight-way clone behind a 150-operation settled body.
+
+    Subtracting everything absent from the optimized candidate let folding of
+    the clone itself erase the evidence that its 30-operation source loop had
+    been copied eight times.  The result selected 958 machine instructions;
+    the sequence budget must conservatively retain that pre-folding work.
+    """
+    original = _loop()
+    loop = original.block(1)
+    padding = tuple(mir.Op(at, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.COPY) for at in range(28))
+    original = replace(
+        original,
+        blocks=(original.block(0), replace(loop, ops=(*padding, *loop.ops)), original.block(2)),
+    )
+    candidate = _straight(150)
+    costs = OperationCosts(add=1, branch=1_000, move=1, load=1, store=1)
+    where = Where(costs=costs, registers=3, max_unrolled_operations=200)
+
+    def spill_risk(
+        body: mir.MirBody,
+        _costs: OperationCosts,
+        _capacity: int,
+        _trips: dict[int, int] | None = None,
+    ) -> int:
+        return 100 if body is original else 200
+
+    monkeypatch.setattr(profit, "spill_risk", spill_risk)
+
+    assert unroll._rejection(original, candidate, 1, 8, where) == "operation-growth"
+
+
+def test_negligible_spill_improvement_does_not_bypass_the_sequence_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """P5 matmul escaped its ceiling because spill risk fell 2341 to 2340.
+
+    That one-unit lower bound was not an allocation certificate: the accepted
+    candidate cascaded to 958 instructions and 120 explicit spill operations.
+    Oversized spill-prone specialization must pay for its complete cloned
+    sequence, not only its smaller settled-body growth.
+    """
+    original = _loop()
+    loop = original.block(1)
+    padding = tuple(mir.Op(at, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.COPY) for at in range(28))
+    original = replace(
+        original,
+        blocks=(original.block(0), replace(loop, ops=(*padding, *loop.ops)), original.block(2)),
+    )
+    candidate = _straight(150)
+    costs = OperationCosts(add=1, branch=18, move=1, load=1, store=1)
+    where = Where(costs=costs, registers=3, max_unrolled_operations=200)
+
+    def spill_risk(
+        body: mir.MirBody,
+        _costs: OperationCosts,
+        _capacity: int,
+        _trips: dict[int, int] | None = None,
+    ) -> int:
+        return 101 if body is original else 100
+
+    monkeypatch.setattr(profit, "spill_risk", spill_risk)
+
+    assert unroll._rejection(original, candidate, 1, 8, where) == "operation-growth"
+
+
+def test_oversized_specialization_may_reduce_existing_spill_burden(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The first growth cap left nbody at 13,959 instead of 2,085 operations.
+
+    Its settled CFG was larger than 200 MIR operations but reduced the spill
+    lower bound from 8,010 to 3,984 while exposing six fixed interactions.
+    The cap guards worsening allocator uncertainty, not size by itself.
+    """
+    original = _loop()
+    candidate = _large_pressured()
+    costs = OperationCosts(add=1, branch=1_000, move=1, load=1, store=1)
+    where = Where(costs=costs, registers=3, max_unrolled_operations=200)
+
+    def spill_risk(
+        body: mir.MirBody,
+        _costs: OperationCosts,
+        _capacity: int,
+        _trips: dict[int, int] | None = None,
+    ) -> int:
+        return 100 if body is original else 50
+
+    monkeypatch.setattr(profit, "spill_risk", spill_risk)
+
+    assert unroll._rejection(original, candidate, 1, 8, where) is None
 
 
 def test_structural_saving_must_pay_for_unavoidable_pressure() -> None:
