@@ -1582,9 +1582,12 @@ impl Compiler {
                 } => self.select_statement(selector, arms, otherwise)?,
                 Statement::Call {
                     name, arguments, ..
-                } => {
-                    self.call(name, arguments, false)?;
-                }
+                } => match name.as_str() {
+                    "BLOAD" | "BSAVE" => self.binary_memory_statement(name, arguments)?,
+                    _ => {
+                        self.call(name, arguments, false)?;
+                    }
+                },
                 Statement::DefSeg { value, .. } => {
                     if let Some(value) = value {
                         let (value, type_id) = self.expression(value)?;
@@ -4121,6 +4124,49 @@ impl Compiler {
             "intrinsic {name} has no semantic lowering for {:?}",
             intrinsic.lowering
         ))
+    }
+
+    fn binary_memory_statement(
+        &mut self,
+        name: &str,
+        arguments: &[Expr],
+    ) -> Result<(), SemanticError> {
+        if name == "BSAVE" {
+            let [path, offset, length] = arguments else {
+                return self.fail("BSAVE expects a path, offset, and length");
+            };
+            let path = self.string_descriptor(path)?;
+            let (offset, offset_type) = self.expression(offset)?;
+            let offset = self.convert(offset, offset_type, INTEGER)?;
+            let (length, length_type) = self.expression(length)?;
+            let length = self.convert(length, length_type, INTEGER)?;
+            self.emit_runtime_call("B$BSAV", Vec::new(), vec![path, offset, length]);
+            return Ok(());
+        }
+
+        let (path, offset, supplied) = match arguments {
+            [path] => (
+                path,
+                Operand::Constant(INTEGER, Number::Integer(0)),
+                0,
+            ),
+            [path, offset] => {
+                let (offset, offset_type) = self.expression(offset)?;
+                (path, self.convert(offset, offset_type, INTEGER)?, 1)
+            }
+            _ => return self.fail("BLOAD expects a path and optional offset"),
+        };
+        let path = self.string_descriptor(path)?;
+        self.emit_runtime_call(
+            "B$BLOD",
+            Vec::new(),
+            vec![
+                path,
+                offset,
+                Operand::Constant(INTEGER, Number::Integer(supplied)),
+            ],
+        );
+        Ok(())
     }
 
     fn call(

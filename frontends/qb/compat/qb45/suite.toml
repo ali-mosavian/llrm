@@ -97,7 +97,7 @@ features = ["fixed strings", "dynamic strings", "concatenation", "mid assignment
 switches = []
 expected = "PASS strings"
 parser = "required"
-lowering = "pending"
+lowering = "required"
 runtime = "required"
 verification = "Fixed/dynamic strings, MID$ assignment, trimming, and length yield the asserted dog-text result."
 
@@ -145,7 +145,7 @@ features = ["on error goto", "error", "err"]
 switches = ["/E"]
 expected = "PASS errors"
 parser = "required"
-lowering = "pending"
+lowering = "required"
 runtime = "required"
 verification = "ERROR 13 reaches handler with ERR 13."
 
@@ -698,7 +698,7 @@ features = ["$STATIC metacommand", "ERASE static arrays"]
 switches = []
 expected = "PASS staticdynamic"
 parser = "required"
-lowering = "pending"
+lowering = "required"
 runtime = "pending"
 
 [[case]]
@@ -744,8 +744,9 @@ features = ["def seg", "varptr", "varseg", "bsave", "bload"]
 switches = []
 expected = "PASS bload"
 parser = "required"
-lowering = "pending"
-runtime = "pending"
+lowering = "required"
+runtime = "required"
+verification = "BSAVE writes four source bytes and BLOAD restores them into a distinct cleared fixed string before exact comparison."
 
 [[case]]
 name = "keyevent"
@@ -843,7 +844,7 @@ features = ["$static", "module data lifetime"]
 switches = []
 expected = "PASS memorymodel"
 parser = "required"
-lowering = "pending"
+lowering = "required"
 runtime = "pending"
 
 [[case]]

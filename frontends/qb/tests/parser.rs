@@ -1282,6 +1282,20 @@ fn open_append_preserves_runtime_mode_bits() {
 }
 
 #[test]
+fn bload_and_bsave_use_the_measured_runtime_interfaces() {
+    let module = parse(
+        "bsave \"DATA.BSV\", 12, 4\nbload \"DATA.BSV\"\nbload \"DATA.BSV\", 20\n",
+        Dialect::QuickBasic45,
+    )
+    .unwrap();
+    let hir = compile(&module, "binary_memory", Dialect::QuickBasic45, "qb45").unwrap();
+    assert_eq!(hir.matches("\"callee\":\"B$BSAV\"").count(), 1);
+    assert_eq!(hir.matches("\"callee\":\"B$BLOD\"").count(), 2);
+    assert!(hir.contains("\"type\":1,\"value\":0"));
+    assert!(hir.contains("\"type\":1,\"value\":1"));
+}
+
+#[test]
 fn print_keeps_destination_item_types_and_terminators() {
     let module = parse(
         "dim f as integer\ndim x as single\ndim y as single\nprint \"ready\"\nprint #f, x, y\nprint #f, \"partial\";\n",
