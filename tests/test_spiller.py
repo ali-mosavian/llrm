@@ -86,6 +86,37 @@ def test_a_spilled_byte_move_loads_straight_into_its_constrained_child() -> None
     assert copied.uses == ()
 
 
+def test_a_short_update_is_completed_before_its_result_is_spilled() -> None:
+    """qbsp turned ``nodenr * 6`` into a frame RMW before every update.
+
+    A copied result that is immediately updated has a one-instruction local
+    split: keep it in the copy's register and store the final value once.
+    Long-lived later uses still reload the spill slot normally.
+    """
+    copied = _move(2, 1, at=0x10)
+    shifted = lir.Insn(
+        at=0x11,
+        covers=(0x11, 0x11),
+        what=ir.Semantics(
+            ir.Operation.BINARY,
+            "shl",
+            (ir.Held(2, 2),),
+            (ir.Held(2, 2), ir.Imm(1, 1)),
+        ),
+        defines=(2,),
+        uses=(2,),
+        op=None,
+    )
+
+    insns = _out(_body(copied, shifted), {2})
+    update = next(one for one in insns if one.what is not None and one.what.name == "shl")
+    spill = next(one for one in insns if one.spill_store)
+
+    assert isinstance(update.what.dests[0], ir.Held)
+    assert isinstance(update.what.sources[0], ir.Held)
+    assert insns.index(spill) > insns.index(update)
+
+
 def test_slot_is_as_wide_as_the_widest_use_of_its_value():
     """snd_mix_frame spilled a value first seen as a word, then stored all four
     bytes of it: `mov dword ptr [bp-2], eax` over the saved BP, and a 4-byte

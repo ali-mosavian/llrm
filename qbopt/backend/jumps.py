@@ -97,7 +97,7 @@ def _onward(block: lir.LirBlock, done: set[int], inside: frozenset[int] = frozen
 
     The branch's target second, so that `jcc target; jmp placed` becomes one inverted branch.
     """
-    real = [one.what for one in block.insns if one.what.op is not ir.Operation.NOTHING]
+    real = [one.what for one in block.insns if one.what is not None and one.what.op is not ir.Operation.NOTHING]
     if not real or real[-1].op is not ir.Operation.JUMP:
         return None
     targets = [real[-1].target]
@@ -442,9 +442,7 @@ def _passage(block: lir.LirBlock) -> int | None:
     handled when a chosen fall-through removes the instruction itself.
     """
     if block.phis or any(
-        one.what is not None
-        and one.what.op is ir.Operation.NOTHING
-        and (not one.inserted or one.spread)
+        one.what is not None and one.what.op is ir.Operation.NOTHING and (not one.inserted or one.spread)
         for one in block.insns
     ):
         return None
@@ -510,10 +508,7 @@ def _reachable(body: lir.LirBody, blocks: list) -> lir.LirBody:
         if block.at not in reached
         and block.insns
         and all(one.what is not None and one.what.op is ir.Operation.NOTHING for one in block.insns)
-        and any(
-            one.covers is not None and one.covers[0] < one.covers[1] or one.spread
-            for one in block.insns
-        )
+        and any(one.covers is not None and one.covers[0] < one.covers[1] or one.spread for one in block.insns)
     }
     return replace(
         body,

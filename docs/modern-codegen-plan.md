@@ -4814,6 +4814,22 @@ requires both `nodenr * 6` sites to avoid IMUL.  The second site now becomes
 the same add/shift address arithmetic as the first instead of reloading the
 frame scalar into a two-result multiply.
 
+The resulting long-lived scaled index still had to cross BASIC's clobbering
+copy and function calls, but spill-web expansion spread that spill backward
+through a short multiply expression.  It removed one register copy at the
+price of three frame read/modify/write operations.  Copy-web profitability now
+charges every non-copy member use, including an encodable memory RMW, and the
+local split ladder keeps a just-copied result in its short source register
+through one adjacent two-address update before storing the final value.  The
+allocated BASIC sequence is now the same `lea [eax+eax*2]` plus `shl` selected
+for C, followed by one unavoidable store across the BASIC helper calls.  A
+focused spiller regression rejects the old early store/memory-shift shape;
+the real qbsp regression rejects both IMUL and frame RMW address arithmetic.
+That changed placement also preserved a pre-existing byte-coverage anchor with
+no machine instruction through final layout.  Jump placement now skips such
+anchors explicitly instead of dereferencing a missing opcode; the existing
+nbody spill regression failed first and covers the complete emitted path.
+
 The raw qbsp listing still contains dynamic-array descriptor loads, two UDT
 copy calls, a hidden floating result cell, and preservation around those calls.
 Those are genuine BASIC language/ABI scaffolding relative to C's direct struct

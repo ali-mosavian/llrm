@@ -26,8 +26,8 @@ from qbopt.model import lir
 from qbopt.model import mir
 from qbopt.model import memory
 from qbopt.backend import target
-from qbopt.backend import frame as frames
 from qbopt.objectfile.module import Addr
+from qbopt.backend import frame as frames
 from qbopt.objectfile.module import Space
 from qbopt.model.passes import LIRTransform
 from qbopt.analysis.regions import addresses
@@ -78,6 +78,8 @@ def spilled(
     # Before any cell names a slot: one made at the first use's width is
     # outgrown by a wider use later, which then writes over its neighbour.
     _color_slots(body, stored, _widest(body, stored), frame)
+    body, fresh, short = _short_update_runs(body, stored, frame, fresh)
+    made.update(short)
     abandoned: set[int] = set()
     rematerialized_definitions: set[int] = set()
     identities: set[int] = set()
@@ -263,6 +265,68 @@ def spilled(
     return result, frozenset(made & surviving)
 
 
+def _short_update_runs(
+    body: lir.LirBody,
+    stored: frozenset[int],
+    frame: frames.Frame,
+    fresh: int,
+) -> tuple[lir.LirBody, int, frozenset[int]]:
+    """Keep a just-defined spilled value in a register through one update.
+
+    Two-address lowering spells ``result = source; result op= constant`` as
+    adjacent instructions.  Storing after the copy and folding the update to
+    a frame RMW creates extra memory traffic merely because the result lives
+    past the local expression.  Extend the already-short source temporary
+    through that update, make the extended range unspillable, and store only
+    its final value.  This is the local split rung of the spill ladder;
+    arbitrary updates and non-adjacent uses retain the conservative rewrite.
+    """
+    made: set[int] = set()
+    blocks = []
+    for block in body.blocks:
+        insns = []
+        position = 0
+        while position < len(block.insns):
+            first = block.insns[position]
+            second = block.insns[position + 1] if position + 1 < len(block.insns) else None
+            pair = _plain_move(first)
+            if pair is None or second is None:
+                insns.append(first)
+                position += 1
+                continue
+            into, outof = pair
+            what = second.what
+            width = _width(first, into)
+            eligible = (
+                into in stored
+                and outof not in stored
+                and first.covers == (first.at, first.at)
+                and second.group is None
+                and what is not None
+                and what.op in (ir.Operation.BINARY, ir.Operation.UNARY)
+                and second.defines == (into,)
+                and into in second.uses
+                and not second.requires
+                and not second.delivers
+                and not second.clobbers
+                and not second.clobbers_high
+                and not any(isinstance(operand, ir.Mem) for operand in (*what.dests, *what.sources))
+                and frame.cell(into, width) is not None
+            )
+            if not eligible:
+                insns.append(first)
+                position += 1
+                continue
+            renamed = {into: outof}
+            updated = _renamed(second, renamed)
+            insns.append(updated)
+            insns.append(_store(second, outof, frame.cell(into, width)))
+            made.add(outof)
+            position += 2
+        blocks.append(replace(block, insns=tuple(insns)))
+    return replace(body, blocks=tuple(blocks)), fresh, frozenset(made)
+
+
 def _identity(one: lir.Insn, stored: "frozenset[int]", frame) -> bool:
     """A move between two spilled values that share one slot."""
     pair = _plain_move(one)
@@ -340,18 +404,15 @@ def siblings(body: lir.LirBody, values: "frozenset[int]", frame, fixed: "frozens
                 if set(pair) - {candidate} <= group:
                     saved += each
                 continue
-            what = one.what
-            in_place = (
-                what is not None
-                and what.op in (ir.Operation.BINARY, ir.Operation.UNARY)
-                and candidate in one.defines
-                and candidate in one.uses
-                and not one.requires
-                and not one.delivers
-                and not any(isinstance(x, ir.Mem) for x in (*what.dests, *what.sources))
-            )
-            if not in_place:
-                cost += each
+            # An in-place register update remains one instruction when moved
+            # into the spill slot, but it becomes a memory read/modify/write.
+            # That traffic and its longer encoding are not free.  Charging no
+            # cost pulled short expression temporaries into a long-lived
+            # result's copy web merely to remove one final MOV, as in qbsp's
+            # multiply-by-six address calculation.  Count every non-copy use;
+            # a real phi/update web still wins when it removes more weighted
+            # edge copies than memory updates it creates.
+            cost += each
         return saved > cost
 
     taken: set[int] = set()

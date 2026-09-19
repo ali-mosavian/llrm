@@ -338,6 +338,7 @@ def test_quake_bsp_integer_index_does_not_preserve_a_dead_long_high_half() -> No
 
     basic, _c = pair("qbsp")
     assert not [line for _at, line in basic if line.startswith("imul ")]
+    assert not [line for _at, line in basic if line.startswith(("add word ptr [bp-", "shl word ptr [bp-"))]
 
 
 def test_runtime_frame_is_established_before_allocator_spill_accesses() -> None:
