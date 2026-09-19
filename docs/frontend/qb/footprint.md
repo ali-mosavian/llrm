@@ -275,3 +275,47 @@ previous round. Complete linked code is **10.7% above BC**, also 740 bytes
 smaller. The size improvement is secondary to the corrected repeated-read
 semantics; the two measurements agree exactly because runtime selection did
 not change.
+
+## 2026-09-19: canonical far fields and isolated build regressions
+
+This round includes canonical far-pointer field access plus three independently
+reduced frontend failures found while rebuilding QGL: typed string-comparison
+ABI sites (`SCMPABI.BAS`), virtual definitions on threaded phi edges
+(`ENTPHI.BAS`), and false volatility on compiler conversion temporaries
+(`FSTKBR.BAS`). Each fixture failed before its general fix and passes through
+its full stage sequence afterwards. No MIR model or backend change was needed.
+
+All production BASIC objects except `H_BENCH` were freshly rebuilt. Its full
+source audit found no semantic discrepancy, but aggregate optimization did not
+finish within six minutes, so this link deliberately retains the preceding
+round's audited object. The linked image currently aborts during startup with a
+corrupt DOS MCB chain; footprint is recorded independently and is not evidence
+of runtime correctness.
+
+| Module | BC bytes | qbopt bytes | Delta |
+| --- | ---: | ---: | ---: |
+| COMMON | 2,542 | 2,650 | +108 |
+| D_MDL | 3,104 | 3,068 | -36 |
+| D_SURF | 12,498 | 11,762 | -736 |
+| D_TURB | 201 | 188 | -13 |
+| ENT | 19,814 | 18,840 | -974 |
+| H_BENCH | 11,076 | 14,118 | +3,042 |
+| H_FRAME | 10,692 | 11,036 | +344 |
+| IN_MAIN | 677 | 610 | -67 |
+| MAIN | 9,231 | 9,490 | +259 |
+| MODEL | 4,693 | 4,142 | -551 |
+| MOD_TEX | 3,931 | 4,397 | +466 |
+| PL_MOVE | 41,785 | 37,703 | -4,082 |
+| QGLSTUB | 239 | 218 | -21 |
+| R_BSP | 6,556 | 5,348 | -1,208 |
+| SCREEN | 16,444 | 20,740 | +4,296 |
+| SND | 1,546 | 1,399 | -147 |
+| SYS | 4,312 | 4,567 | +255 |
+| VID | 763 | 605 | -158 |
+| VIEW | 4,118 | 4,110 | -8 |
+| **BASIC-owned BC_CODE** | **154,222** | **154,991** | **+769** |
+| **Complete linked code** | **252,243** | **246,976** | **-5,267** |
+
+The BASIC-owned scope is **0.5% above BC**. Complete linked code is **2.1%
+smaller than BC**, after charging BC for the runtime helpers behind its calls.
+Runtime failure remains a separate blocking gate.
