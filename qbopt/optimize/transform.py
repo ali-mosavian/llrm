@@ -123,7 +123,12 @@ _PURE = frozenset(
 )
 
 
-def subexpressions(body: MirBody, dgroup: frozenset[int] = frozenset()) -> MirBody:
+def subexpressions(
+    body: MirBody,
+    dgroup: frozenset[int] = frozenset(),
+    *,
+    avoid_store_crossing: bool = False,
+) -> MirBody:
     """One operation where two computed the same thing from the same values.
 
     lngmix is the program this exists for. `s = s + v \\ 7 + v MOD 7`
@@ -217,6 +222,11 @@ def subexpressions(body: MirBody, dgroup: frozenset[int] = frozenset()) -> MirBo
                 continue
             if op.loads and (
                 at != order[block.at] or not _undisturbed(op, earlier, block.ops[where + 1 : index], dgroup)
+            ):
+                candidates.append((order[block.at], index, op))
+                continue
+            if op.loads and avoid_store_crossing and any(
+                crossed.stores for crossed in block.ops[where + 1 : index]
             ):
                 candidates.append((order[block.at], index, op))
                 continue
@@ -834,7 +844,13 @@ def without_dead_stores(
 # provider here.
 
 
-def forwarded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirBody:
+def forwarded(
+    body: MirBody,
+    dgroup: frozenset[int],
+    calls: dict[int, str],
+    *,
+    avoid_store_crossing: bool = False,
+) -> MirBody:
     """Replace known memory operands with SSA values, extending their uses.
 
     Arithmetic remains intact. The allocator, not this pass, decides where
@@ -844,6 +860,68 @@ def forwarded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> M
     if not want:
         return body
     served = {id(one.op): one.value for one in avail.forwardable(body, dgroup, calls, want) if one.value is not None}
+    if avoid_store_crossing:
+        locations = {
+            id(op): (block.at, index)
+            for block in body.blocks
+            for index, op in enumerate(block.ops)
+        }
+        definitions = {
+            value: (block.at, index)
+            for block in body.blocks
+            for index, op in enumerate(block.ops)
+            for value in op.defines
+        }
+        by_at = {block.at: block for block in body.blocks}
+        op_by_id = {id(op): op for block in body.blocks for op in block.ops}
+        predecessors = loopy.predecessors(body.blocks)
+
+        def blocks_reaching(destination: int) -> set[int]:
+            reached = {destination}
+            work = [destination]
+            while work:
+                reached.update(new := predecessors[work.pop()] - reached)
+                work.extend(new)
+            return reached
+
+        def crosses_store(op: Op, holder) -> bool:
+            if not isinstance(holder, mir.Value):
+                return False
+            source = definitions.get(holder)
+            destination = locations[id(op)]
+            if source is None:
+                return True
+            if source[0] == destination[0]:
+                return source[1] >= destination[1] or any(
+                    one.stores for one in by_at[source[0]].ops[source[1] + 1 : destination[1]]
+                )
+            reaching = blocks_reaching(destination[0])
+            if source[0] not in reaching:
+                return True
+            seen: set[int] = set()
+            work = [source[0]]
+            arrived = False
+            while work:
+                at = work.pop()
+                if at in seen or at not in reaching:
+                    continue
+                seen.add(at)
+                block = by_at[at]
+                low = source[1] + 1 if at == source[0] else 0
+                high = destination[1] if at == destination[0] else len(block.ops)
+                if any(one.stores for one in block.ops[low:high]):
+                    return True
+                if at == destination[0]:
+                    arrived = True
+                else:
+                    work.extend(block.succ)
+            return not arrived
+
+        served = {
+            identity: holder
+            for identity, holder in served.items()
+            if not crosses_store(op_by_id[identity], holder)
+        }
     if not served:
         return body
 

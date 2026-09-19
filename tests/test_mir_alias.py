@@ -1,5 +1,6 @@
 from dataclasses import replace
 
+import pytest
 from iced_x86 import Register
 
 from qbopt.model import ir
@@ -424,20 +425,190 @@ def test_strided_ranges_prove_interleaved_arrays_disjoint() -> None:
 
 
 def test_restrict_roots_and_tbaa_share_the_alias_query() -> None:
-    """Restrict roots are disjoint; TBAA needs a declared effective type.
+    """Restrict roots and indirect scalar TBAA both disambiguate accesses.
 
-    Two incompatible accesses alone may still be two members of one union.
-    Character accesses remain conservative regardless of provenance.
+    Two incompatible accesses at one explicit address may still be members of
+    one union. Character accesses remain conservative regardless of provenance.
     """
     unknown = memory.Object(memory.Kind.UNKNOWN)
     left = mir.MemRef(None, 4, typed=("int4", False), provenance=memory.Provenance.one(unknown, restrict=1))
     right = mir.MemRef(None, 4, typed=("float4", False), provenance=memory.Provenance.one(unknown, restrict=2))
     chars = replace(right, typed=None, provenance=memory.Provenance.one(unknown))
     typed_only = replace(right, provenance=memory.Provenance.one(unknown))
+    union_int = mir.MemRef(Addr(Space.FRAME, -8), 4, typed=("int4", False))
+    union_float = replace(union_int, typed=("float4", False))
 
     assert not mir.overlapping(left, right, frozenset())
-    assert mir.overlapping(replace(left, provenance=memory.Provenance.one(unknown)), typed_only, frozenset())
+    assert not mir.overlapping(replace(left, provenance=memory.Provenance.one(unknown)), typed_only, frozenset())
+    assert mir.overlapping(union_int, union_float, frozenset())
     assert mir.overlapping(left, chars, frozenset())
+
+
+def test_incompatible_indirect_scalar_store_does_not_kill_a_loaded_pointer_field() -> None:
+    """indexed.lru_use reloaded ``sc->bnext`` after storing ``bprev[b]``.
+
+    Both are indirect lvalues, so neither carries a directly named object's
+    type anchor.  Their pointer4/int2 access classes are nevertheless the C
+    strict-aliasing contract: the intervening short store cannot change the
+    loaded pointer field, and ordinary GVN must serve the second read from
+    the first value.  Exact same-address incompatible views remain the union
+    exception exercised by ``test_a_declared_scalar...`` in test_regions.
+    """
+    owner, owner_segment, array, array_segment = (
+        mir.Value(number, number, variable=number, version=1) for number in range(1, 5)
+    )
+    first, second = (mir.Value(number, number, variable=number, version=1) for number in range(5, 7))
+    field = mir.MemRef(
+        Addr(Space.FAR, 8),
+        2,
+        base=owner,
+        segment=owner_segment,
+        space=Space.FAR,
+        base_width=2,
+        typed=("pointer4", False),
+    )
+    element = mir.MemRef(
+        Addr(Space.FAR, 0),
+        2,
+        base=array,
+        segment=array_segment,
+        space=Space.FAR,
+        base_width=2,
+        typed=("int2", False),
+    )
+
+    def load(at: int, value: mir.Value) -> mir.Op:
+        return mir.Op(
+            at,
+            ir.Operation.MOVE,
+            "mov",
+            (value,),
+            (owner, owner_segment),
+            kind=mir.Kind.LOAD,
+            args=(mir.Cell(field),),
+            results=(mir.Held(value, 2),),
+            loads=(field,),
+        )
+
+    store = mir.Op(
+        2,
+        ir.Operation.MOVE,
+        "mov",
+        (),
+        (array, array_segment),
+        kind=mir.Kind.STORE,
+        args=(mir.Const(-1, 2),),
+        results=(mir.Cell(element),),
+        stores=(element,),
+    )
+    body = mir.MirBody(
+        0,
+        (mir.MirBlock(0, (), (load(1, first), store, load(3, second)), ()),),
+        sealed=True,
+    )
+
+    result = transform.forwarded(body, frozenset(), {})
+    later = result.blocks[0].ops[-1]
+
+    assert later.kind is mir.Kind.COPY
+    assert later.loads == ()
+    assert later.args == (mir.Held(first, 2),)
+
+
+def test_gvn_keeps_a_reload_when_reuse_would_worsen_existing_pressure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """indexed.lru_use traded two source reloads for a new frame spill.
+
+    The alias proof makes reuse legal, but a body already beyond its finite
+    register capacity must keep the stable source reload when extending the
+    provider raises modeled spill traffic and no cheap secondary address form
+    can remove that pressure before allocation.
+    """
+    from qbopt.optimize import gvn
+    from qbopt.optimize import profit
+    from qbopt.model.passes import Where
+    from qbopt.model.passes import OperationCosts
+
+    values = [mir.Value(number, number, variable=number, version=1) for number in range(1, 7)]
+    first, left, middle, right, second, early = values
+    refs = [mir.MemRef(Addr(Space.FRAME, offset), 2, typed=("int2", True)) for offset in (6, 8, 10, 12, 14)]
+
+    def load(at: int, ref: mir.MemRef, result: mir.Value) -> mir.Op:
+        return mir.Op(
+            at,
+            ir.Operation.MOVE,
+            "mov",
+            (result,),
+            (),
+            kind=mir.Kind.LOAD,
+            args=(mir.Cell(ref),),
+            results=(mir.Held(result, 2),),
+            loads=(ref,),
+        )
+
+    consume = mir.Op(
+        2,
+        ir.Operation.BINARY,
+        "add",
+        (early,),
+        (first,),
+        kind=mir.Kind.ADD,
+        args=(mir.Held(first, 2), mir.Const(1, 2)),
+        results=(mir.Held(early, 2),),
+    )
+    unrelated_store = mir.Op(
+        3,
+        ir.Operation.MOVE,
+        "mov",
+        (),
+        (),
+        kind=mir.Kind.STORE,
+        args=(mir.Const(7, 2),),
+        results=(mir.Cell(refs[4]),),
+        stores=(refs[4],),
+    )
+    returned = mir.Op(
+        7,
+        ir.Operation.RETURN,
+        "ret",
+        (),
+        (early, left, middle, right, second),
+        kind=mir.Kind.RETURN,
+        args=tuple(mir.Held(value, 2) for value in (early, left, middle, right, second)),
+    )
+    body = mir.MirBody(
+        0,
+        (
+            mir.MirBlock(
+                0,
+                (),
+                (
+                    load(1, refs[0], first),
+                    consume,
+                    unrelated_store,
+                    load(4, refs[2], middle),
+                    load(5, refs[3], right),
+                    load(3, refs[1], left),
+                    load(6, refs[0], second),
+                    returned,
+                ),
+                (),
+            ),
+        ),
+        sealed=True,
+    )
+    costs = OperationCosts(load=4, store=2, move=2)
+    forwarded = transform.forwarded(body, frozenset(), {})
+    assert forwarded.blocks[0].ops[-2].kind is mir.Kind.COPY
+
+    def spill_risk(candidate: mir.MirBody, _costs: OperationCosts, _capacity: int) -> int:
+        return 10 if candidate.blocks[0].ops[-2].kind is mir.Kind.LOAD else 20
+
+    monkeypatch.setattr(profit, "spill_risk", spill_risk)
+
+    result = gvn.optimized(body, Where(registers=2, costs=costs))
+
+    assert result.blocks[0].ops[-2].kind is mir.Kind.LOAD
+    assert result.blocks[0].ops[-2].loads == (refs[0],)
 
 
 def test_unknown_call_reaches_nonlocals_and_only_its_pointer_actual() -> None:

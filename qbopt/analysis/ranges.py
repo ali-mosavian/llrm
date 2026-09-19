@@ -289,6 +289,44 @@ def bounded(body: mir.MirBody) -> dict[int, dict[mir.Value, Interval]]:
     return result
 
 
+def dominated_edges(body: mir.MirBody) -> dict[int, dict[mir.Value, Interval]]:
+    """Facts established by unavoidable branch edges at each block.
+
+    This is the acyclic counterpart to :func:`bounded`.  A fact established
+    on an edge is available below it only when that edge's destination has
+    one predecessor and dominates the block being queried.  That deliberately
+    refuses joins: a second way into the region is a second way around the
+    check.  Address-form selection uses this to distinguish a non-negative
+    word index, whose scaled 32-bit spelling is the same address, from a
+    negative one where zero extension would change the wrapped word address.
+    """
+    facts = consts.known(body)
+    predecessors = loops.predecessors(body.blocks)
+    dominators = loops.dominators(body.blocks, body.entry)
+    edges = [
+        (block, successor)
+        for block in body.blocks
+        for successor in block.succ
+        if predecessors.get(successor) == {block.at}
+    ]
+    edges.sort(key=lambda edge: len(dominators.get(edge[1], ())))
+    result: dict[int, dict[mir.Value, Interval]] = {}
+    for block in body.blocks:
+        known: dict[mir.Value, Interval] = {}
+        # Apply the path from outermost to innermost dominator once. Repeating
+        # a relational ``a < b`` constraint would falsely walk both open
+        # intervals inward rather than intersecting with one original fact.
+        for parent, successor in edges:
+            if successor not in dominators.get(block.at, ()):
+                continue
+            narrowed = on_edge(parent, successor, known, facts)
+            if narrowed is not None:
+                known = narrowed
+        if known:
+            result[block.at] = known
+    return result
+
+
 def constants(body: mir.MirBody, dgroup: frozenset[int] | None = None, calls: dict[int, str] | None = None) -> dict:
     """Every value `consts` knows, as the singleton interval an alias query reads.
 

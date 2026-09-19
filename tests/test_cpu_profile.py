@@ -390,3 +390,20 @@ def test_formula_selection_uses_67h_before_spilling_or_recomputing() -> None:
     )
 
     assert activated == {id(multiply)}
+
+
+def test_secondary_address_form_is_ranked_against_reload_and_spill_work() -> None:
+    """indexed.lru_use improved on Core but regressed P5/P6 when every legal
+    67h form was treated as equally profitable.
+
+    Legality is common; selection is per profile.  The audited extension,
+    prefix, native address, scale and spill prices admit the form on 386,
+    K5/K6/K7 and Core while retaining native reloads on 486, P5 and P6.
+    """
+    selected = {
+        name
+        for name in cpu.names()
+        if cpu.profile(name).address_forms[1].before_spill(cpu.profile(name).operations)
+    }
+
+    assert selected == {"386", "K5", "K6", "K7", "Core"}

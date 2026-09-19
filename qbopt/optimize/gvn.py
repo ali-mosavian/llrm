@@ -26,9 +26,24 @@ def optimized(body: mir.MirBody, where) -> mir.MirBody:
     # rewrites; this module owns the pass and its ordering.
     from qbopt.optimize import floatfold, loadjoins, transform
 
-    body = transform.forwarded(body, where.dgroup, where.named)
+    avoid_store_crossing = False
+    if where.registers:
+        from qbopt.optimize import profit
+
+        pressure = profit.spill_risk(body, where.costs, where.registers)
+        cheap_secondary = any(
+            form.secondary and form.before_spill(where.costs)
+            for form in where.address_forms
+        )
+        avoid_store_crossing = pressure is not None and pressure > 0 and not cheap_secondary
+    body = transform.forwarded(
+        body,
+        where.dgroup,
+        where.named,
+        avoid_store_crossing=avoid_store_crossing,
+    )
     body = transform.reused_divides(body, where.dgroup, where.found)
-    canonical = transform.subexpressions(body, where.dgroup)
+    canonical = transform.subexpressions(body, where.dgroup, avoid_store_crossing=avoid_store_crossing)
     # PRE may add work to a previously missing path.  Do that only after
     # local numbering has stabilized; otherwise a transient spelling can
     # acquire an insertion that prevents the next fixed-point round from

@@ -522,6 +522,8 @@ def lowered(
     without anything having been optimised.
     """
     from qbopt.model import lir
+    from qbopt.backend import comparefold
+    from qbopt.backend import addressforms
     from qbopt.backend import farload
     from qbopt.backend import rmw
     from qbopt.analysis import ssa
@@ -608,6 +610,19 @@ def lowered(
     # into unrelated physical bases; the final peephole retains the analogous
     # source-byte-backed fusion.
     made = {at: farload.selected(insns) for at, insns in made.items()}
+    try:
+        made = addressforms.promote(made, making._address_promoted, making.fresh)
+    except ValueError as error:
+        raise Unlowered(str(error)) from error
+    uses = Counter(value for insns in made.values() for one in insns for value in one.uses)
+    uses.update(
+        held.value for insns in made.values() for one in insns for held, _ in one.requires if held.value not in one.uses
+    )
+    uses.update(value.id for block in body.blocks for phi in block.phis for value in phi.incoming.values())
+    # A one-use comparison load is a legal memory operand, not a virtual
+    # range allocation needs to price.  Select it before pressure decisions;
+    # the post-allocation fold remains a safety net for shapes formed later.
+    made = {at: comparefold.selected(insns, uses, making._exposed) for at, insns in made.items()}
     uses = Counter(value for insns in made.values() for one in insns for value in one.uses)
     uses.update(
         held.value for insns in made.values() for one in insns for held, _ in one.requires if held.value not in one.uses
@@ -1473,7 +1488,9 @@ class Lowering:
         from qbopt.backend import addressforms
 
         self._address_forms = addressforms.offsets(body)
-        self._indexed, self._folded = addressforms.indexed(body, self._exposed)
+        self._indexed, self._folded, self._address_promoted = addressforms.indexed(
+            body, self._exposed, self.cpu.address_forms, self.cpu.operations
+        )
         every = [
             one.id for block in body.blocks for op in block.ops for one in (*op.defines, *op.uses) if one.id is not None
         ]

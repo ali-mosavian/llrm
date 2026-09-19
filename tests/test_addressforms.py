@@ -13,6 +13,7 @@ from qbopt.backend import select
 from qbopt.frontend import blocks
 from qbopt.backend import peephole
 from qbopt.backend import addressforms
+from qbopt.backend import cpu
 from qbopt.frontend.declen import decode
 from qbopt.objectfile.module import Addr
 from qbopt.objectfile.module import Space
@@ -294,7 +295,7 @@ def test_based_constant_offset_address_computation_is_fully_folded() -> None:
     )
     body = mir.MirBody(0, (mir.MirBlock(0, (), (add, load), ()),))
 
-    _forms, folded = addressforms.indexed(body, set())
+    _forms, folded, _promoted = addressforms.indexed(body, set())
 
     assert folded == frozenset({address.id})
 
@@ -342,7 +343,7 @@ def test_relocated_constant_offset_address_computation_is_not_deleted() -> None:
     )
     body = mir.MirBody(0, (mir.MirBlock(0, (), (add, load), ()),))
 
-    _forms, folded = addressforms.indexed(body, set())
+    _forms, folded, _promoted = addressforms.indexed(body, set())
 
     assert address.id not in folded
 
@@ -388,7 +389,7 @@ def test_based_local_array_folds_add_into_word_addressing() -> None:
     )
     body = mir.MirBody(0, (mir.MirBlock(0, (), (shift, add, load), ()),))
 
-    forms, folded = addressforms.indexed(body, set())
+    forms, folded, _promoted = addressforms.indexed(body, set())
 
     assert forms == {address.id: (ir.Held(base.id, 2), ir.Held(shifted.id, 2), 1)}
     assert folded == frozenset({address.id})
@@ -445,7 +446,7 @@ def test_indexed_frame_array_uses_bp_as_the_encoded_base() -> None:
         loads=(ref,),
     )
     body = mir.MirBody(0, (mir.MirBlock(0, (), (frame_address, add, load), ()),))
-    forms, folded = addressforms.indexed(body, set())
+    forms, folded, _promoted = addressforms.indexed(body, set())
     cell = ir.Mem(Addr(Space.LITERAL, 0, segment=Register.SS), 2, base=ir.Held(address.id, 2))
 
     changed = addressforms.scaled(ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(loaded.id, 2),), (cell,)), forms)
@@ -510,7 +511,7 @@ def test_constant_frame_array_address_folds_to_a_displacement() -> None:
         loads=(ref,),
     )
     body = mir.MirBody(0, (mir.MirBlock(0, (), (frame_address, add, load), ()),))
-    forms, folded = addressforms.indexed(body, set())
+    forms, folded, _promoted = addressforms.indexed(body, set())
     cell = ir.Mem(Addr(Space.LITERAL, 0, segment=Register.SS), 8, base=ir.Held(address.id, 2))
 
     changed = addressforms.scaled(ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (ir.St(0),), (cell,)), forms)
@@ -587,7 +588,7 @@ def test_chained_constant_frame_addresses_fold_to_one_displacement() -> None:
         (mir.MirBlock(0, (), (frame_address, add(2, end, frame, 32), add(3, element, end, 65520), load), ()),),
     )
 
-    forms, folded = addressforms.indexed(body, set())
+    forms, folded, _promoted = addressforms.indexed(body, set())
     cell = ir.Mem(Addr(Space.LITERAL, 0, segment=Register.SS), 8, base=ir.Held(element.id, 2))
     changed = addressforms.scaled(ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (ir.St(0),), (cell,)), forms)
 
@@ -630,7 +631,7 @@ def test_frame_address_root_survives_a_live_derived_value() -> None:
     )
     body = mir.MirBody(0, (mir.MirBlock(0, (), (frame_address, add), ()),))
 
-    forms, folded = addressforms.indexed(body, {derived.id})
+    forms, folded, _promoted = addressforms.indexed(body, {derived.id})
 
     assert forms == {}
     assert folded == frozenset()
@@ -670,7 +671,7 @@ def test_direct_frame_array_address_folds_into_its_memory_operand() -> None:
         loads=(ref,),
     )
     body = mir.MirBody(0, (mir.MirBlock(0, (), (frame_address, load), ()),))
-    forms, folded = addressforms.indexed(body, set())
+    forms, folded, _promoted = addressforms.indexed(body, set())
     cell = ir.Mem(Addr(Space.LITERAL, 0, segment=Register.SS), 8, base=ir.Held(frame.id, 2))
 
     changed = addressforms.scaled(ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (ir.St(0),), (cell,)), forms)
@@ -688,3 +689,112 @@ def test_direct_frame_array_address_folds_into_its_memory_operand() -> None:
     assert instruction.insn.memory_segment == Register.SS
     assert instruction.insn.memory_base == Register.BP
     assert instruction.insn.memory_displacement & 65535 == (-36) & 65535
+
+
+def test_secondary_scaled_address_replaces_a_live_word_product_before_spilling() -> None:
+    """indexed.lru_use spilled ``bnext`` while carrying ``b * 2``.
+
+    The non-negative guard makes zero extension exact for every defined C
+    lvalue access.  Select the target's 67h ``base32 + index32 * 2`` form at
+    lowering, remove both word arithmetic values, and promote the existing
+    base/index definitions rather than adding another live range.
+    """
+    index, base, product, address, loaded = (mir.Value(number, number) for number in range(1, 6))
+    flags = mir.Value(6, 1, flags=True)
+    index_ref = mir.MemRef(Addr(Space.FRAME, 6), 2, typed=("int2", True))
+    base_ref = mir.MemRef(Addr(Space.FRAME, 8), 2, typed=("pointer4", True))
+    read_index = mir.Op(
+        1,
+        ir.Operation.MOVE,
+        "mov",
+        (index,),
+        (),
+        kind=mir.Kind.LOAD,
+        args=(mir.Cell(index_ref),),
+        results=(mir.Held(index, 2),),
+        loads=(index_ref,),
+    )
+    read_base = mir.Op(
+        2,
+        ir.Operation.MOVE,
+        "mov",
+        (base,),
+        (),
+        kind=mir.Kind.LOAD,
+        args=(mir.Cell(base_ref),),
+        results=(mir.Held(base, 2),),
+        loads=(base_ref,),
+    )
+    compare = mir.Op(
+        3,
+        ir.Operation.COMPARE,
+        "cmp",
+        (flags,),
+        (index,),
+        kind=mir.Kind.SUB,
+        args=(mir.Held(index, 2), mir.Const(0, 2)),
+    )
+    branch = mir.Op(
+        4,
+        ir.Operation.BRANCH,
+        "jge",
+        (),
+        (flags,),
+        kind=mir.Kind.BRANCH,
+        test=mir.Kind.GE,
+        target=7,
+    )
+    multiply = mir.Op(
+        7,
+        ir.Operation.MULTIPLY,
+        "imul",
+        (product,),
+        (index,),
+        kind=mir.Kind.MUL,
+        args=(mir.Held(index, 2), mir.Const(2, 2)),
+        results=(mir.Held(product, 2),),
+    )
+    addition = mir.Op(
+        8,
+        ir.Operation.BINARY,
+        "add",
+        (address,),
+        (base, product),
+        kind=mir.Kind.ADD,
+        args=(mir.Held(base, 2), mir.Held(product, 2)),
+        results=(mir.Held(address, 2),),
+    )
+    element = mir.MemRef(
+        Addr(Space.FAR, 0),
+        2,
+        base=address,
+        space=Space.FAR,
+        base_width=2,
+        typed=("int2", False),
+    )
+    load = mir.Op(
+        9,
+        ir.Operation.MOVE,
+        "mov",
+        (loaded,),
+        (address,),
+        kind=mir.Kind.LOAD,
+        args=(mir.Cell(element),),
+        results=(mir.Held(loaded, 2),),
+        loads=(element,),
+    )
+    body = mir.MirBody(
+        1,
+        (
+            mir.MirBlock(1, (), (read_index, read_base, compare, branch), (5, 7)),
+            mir.MirBlock(5, (), (), ()),
+            mir.MirBlock(7, (), (multiply, addition, load), ()),
+        ),
+    )
+
+    target = cpu.profile("386")
+    forms, folded, promoted = addressforms.indexed(body, set(), target.address_forms, target.operations)
+
+    assert forms[address.id] == (ir.Held(base.id, 4), ir.Held(index.id, 4), 2)
+    assert {product.id, address.id} <= folded
+    assert promoted == frozenset({index.id, base.id})

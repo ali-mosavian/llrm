@@ -870,7 +870,10 @@ def test_dynamic_far_struct_pointer_fields_are_complete_loads() -> None:
     body = _proc([line.strip() for line in text.splitlines()], "_lru_use")
     loads = [line for line in body if line.startswith(("les ", "lfs ", "lgs "))]
 
-    assert len(loads) >= 6, body
+    # GVN may now retain bnext across the incompatible short-array store, so
+    # five complete loads are sufficient and preferable to reloading field 8.
+    assert len(loads) >= 5, body
+    assert sum("dword ptr fs:[" in line and "+8]" in line for line in loads) == 1, body
     assert not any(
         line.startswith(("mov es,", "mov fs,", "mov gs,"))
         and "word ptr" in line

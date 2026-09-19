@@ -1,11 +1,14 @@
 """Fast regressions for post-allocation memory operand folding."""
 
+from collections import Counter
+
 import pytest
 from iced_x86 import Register
 
 from qbopt.model import ir
 from qbopt.model import lir
 from qbopt.backend import masm
+from qbopt.backend import comparefold
 from qbopt.backend import peephole
 from qbopt.objectfile.module import Addr
 from qbopt.objectfile.module import Space
@@ -32,6 +35,53 @@ def _body(head: tuple[lir.Insn, ...], eax: ir.Reg, ecx: ir.Reg) -> lir.LirBody:
         {},
         {},
     )
+
+
+def test_one_use_memory_comparison_is_selected_before_allocation() -> None:
+    """Retaining lru_use's test temporary made its surviving far pointer spill.
+
+    The direct memory comparison is an x86 operand choice, so lowering must
+    remove the virtual loaded value before allocation computes pressure.  A
+    zero-byte ownership anchor between the load and comparison does not make
+    the source-level read less adjacent on the emitted machine path.
+    """
+    base, selector, loaded, other = 1, 2, 3, 4
+    cell = ir.Mem(
+        Addr(Space.FAR, 0, segment=Register.ES),
+        2,
+        Register.NONE,
+        0,
+        2,
+        base=ir.Held(base, 2),
+        selector=ir.Held(selector, 2),
+    )
+    load = lir.Insn(
+        1,
+        None,
+        ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(loaded, 2),), (cell,)),
+        (loaded,),
+        (base, selector),
+    )
+    anchor = lir.Insn(2, None, ir.Semantics(ir.Operation.NOTHING, ""), (), ())
+    compare = lir.Insn(
+        3,
+        None,
+        ir.Semantics(
+            ir.Operation.COMPARE,
+            "cmp",
+            (),
+            (ir.Held(loaded, 2), ir.Held(other, 2)),
+        ),
+        (),
+        (loaded, other),
+    )
+
+    result = comparefold.selected((load, anchor, compare), Counter((base, selector, loaded, other)), set())
+
+    assert result[0].what.op is ir.Operation.NOTHING
+    assert not result[0].defines and not result[0].uses
+    assert result[2].what.sources == (cell, ir.Held(other, 2))
+    assert result[2].uses == (base, selector, other)
 
 
 def test_memory_round_trip_folds_across_an_independent_operand_load() -> None:

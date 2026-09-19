@@ -75,9 +75,11 @@ object cannot prove otherwise. Reaching it takes a subscript past the end of
 its own segment, which BASIC's arrays do not allow. So an indexed reference
 reaches every byte of its own segment and no other's.
 
-**5. A declared object is changed only through its own type.** C lets an
-lvalue of another type, bar a character type, neither read nor write a
-declared scalar; the raise says which references are which.
+**5. A scalar lvalue is reached only through a compatible type.** C's
+strict-aliasing contract applies to indirect accesses as well as named
+objects.  Two incompatible scalar views of the same exact address remain
+conservative: that is the spelling retained for union members.  Character,
+aggregate and otherwise untyped accesses carry no class and reach anything.
 
 The first two are regions this file has always had. The third needs the
 selector's value, which arrives in `known` -- an interval per value, singleton
@@ -297,15 +299,55 @@ def regions(ref, bounds: dict | None = None, known: dict | None = None, layout=N
     return RegionSet(_spans(ref, bounds, known, layout), _holes(ref, layout))
 
 
-def typed_apart(one, other) -> bool:
-    """Axiom 5: a declared object is reached only through its own type class.
+def _same_typed_start(one: object, other: object) -> bool:
+    """Whether two typed views explicitly start at the same storage.
 
-    An access of another class may still be a union's other member, so two
-    accesses say nothing.  At least one side must name the declared object's
-    effective type; character, aggregate and otherwise untyped accesses carry
-    no class and therefore retain the conservative answer."""
+    This is the union exception to TBAA, not a general must-alias query.  It
+    deliberately requires the same SSA address computation (or the same
+    concrete canonical slice); two unrelated pointers that happen to compare
+    equal at run time still carry C's ordinary strict-aliasing contract.
+    """
+    one_addr, other_addr = getattr(one, "addr", None), getattr(other, "addr", None)
+    one_base, other_base = getattr(one, "base", None), getattr(other, "base", None)
+    one_segment, other_segment = getattr(one, "segment", None), getattr(other, "segment", None)
+    one_base_width, other_base_width = getattr(one, "base_width", None), getattr(other, "base_width", None)
+    if one_addr is not None and other_addr is not None:
+        if one_addr.space is Space.FAR and one_base is None and one_segment is None:
+            return False
+        return (
+            one_addr == other_addr
+            and one_base == other_base
+            and one_segment == other_segment
+            and one_base_width == other_base_width
+            and getattr(one, "symbolic", None) == getattr(other, "symbolic", None)
+            and getattr(one, "allocation", None) == getattr(other, "allocation", None)
+        )
+    if getattr(one, "pointer", False) and getattr(other, "pointer", False):
+        return (
+            one_base is not None
+            and one_base == other_base
+            and one_segment == other_segment
+            and one_base_width == other_base_width
+        )
+    one_provenance = getattr(one, "provenance", None)
+    other_provenance = getattr(other, "provenance", None)
+    if one_provenance is None or other_provenance is None:
+        return False
+    if len(one_provenance.slices) != 1 or len(other_provenance.slices) != 1:
+        return False
+    a, b = next(iter(one_provenance.slices)), next(iter(other_provenance.slices))
+    return a.object == b.object and a.low == b.low and a.low != _FLOOR
+
+
+def typed_apart(one: object, other: object) -> bool:
+    """Axiom 5: incompatible non-character scalar lvalues are disjoint.
+
+    GCC and LLVM attach TBAA to indirect loads and stores, not only directly
+    named declarations.  Preserve incompatible views of one explicit address
+    for C's union rule; every other pair carries the language's no-alias fact.
+    """
     a, b = getattr(one, "typed", None), getattr(other, "typed", None)
-    return a is not None and b is not None and a[0] != b[0] and (a[1] or b[1])
+    return a is not None and b is not None and a[0] != b[0] and not _same_typed_start(one, other)
 
 
 def may_alias(

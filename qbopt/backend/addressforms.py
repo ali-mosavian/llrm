@@ -1,11 +1,16 @@
 from dataclasses import replace
+from collections.abc import Callable
 
 from iced_x86 import Register
 
 from qbopt.model import ir
+from qbopt.model import lir
 from qbopt.model import mir
+from qbopt.analysis import ranges
 from qbopt.objectfile.module import Addr
 from qbopt.objectfile.module import Space
+from qbopt.model.passes import AddressForm
+from qbopt.model.passes import OperationCosts
 
 
 def offsets(body: mir.MirBody) -> dict[int, tuple[ir.Held, int]]:
@@ -72,7 +77,12 @@ type IndexedForm = tuple[IndexedBase, ir.Held, int]
 type FoldedForm = IndexedForm | ir.Address
 
 
-def indexed(body: mir.MirBody, exposed: set[int]) -> tuple[dict[int, FoldedForm], frozenset[int]]:
+def indexed(
+    body: mir.MirBody,
+    exposed: set[int],
+    address_forms: tuple[AddressForm, ...] = (),
+    costs: OperationCosts | None = None,
+) -> tuple[dict[int, FoldedForm], frozenset[int], frozenset[int]]:
     """Based addresses `b + (c << k)` read only by cells, and what computes them.
 
     The address becomes the cell's `[base+index*scale]` and the add and
@@ -81,7 +91,9 @@ def indexed(body: mir.MirBody, exposed: set[int]) -> tuple[dict[int, FoldedForm]
     applies equally to far pointers and near pointers into local or global
     objects; the address width below decides whether a scale is legal.
     """
+    costs = costs or OperationCosts()
     made = {value.id: op for block in body.blocks for op in block.ops for value in op.defines}
+    block_of = {id(op): block.at for block in body.blocks for op in block.ops}
     constant_offsets = offsets(body)
     frame_bases = {
         result.value.id: ir.Address(
@@ -282,6 +294,126 @@ def indexed(body: mir.MirBody, exposed: set[int]) -> tuple[dict[int, FoldedForm]
             forms[address.value.id] = form
             folded.add(address.value.id)
 
+    # The native word form has no scale.  Before preserving a separately
+    # computed ``index * scale`` (and eventually spilling another value),
+    # try the target's explicitly priced secondary form.  Widen the original
+    # index and each pointer base at the operations the fold removes, so no
+    # additional live range is introduced.  The range gate is semantic: a
+    # non-negative word product fitting in 16 bits names the same byte through
+    # a 32-bit scaled address; a negative or wrapping product does not.
+    secondary = next(
+        (form for form in address_forms if form.secondary and form.index_width == 4),
+        None,
+    )
+    if secondary is not None and not secondary.before_spill(costs):
+        secondary = None
+    promoted: set[int] = set()
+    if secondary is not None:
+        use_ops: dict[int, list[mir.Op]] = {}
+        for block in body.blocks:
+            for op in block.ops:
+                for value in op.uses:
+                    use_ops.setdefault(value.id, []).append(op)
+        scoped = ranges.dominated_edges(body)
+        for product in tuple(made.values()):
+            if not plain(product, product.kind) or product.kind not in (mir.Kind.MUL, mir.Kind.SHL):
+                continue
+            if len(product.args) != 2 or len(product.results) != 1:
+                continue
+            source = next(
+                (arg for arg in product.args if isinstance(arg, mir.Held) and arg.width == 2),
+                None,
+            )
+            amount = next(
+                (arg.n for arg in product.args if isinstance(arg, mir.Const) and arg.width == 2),
+                None,
+            )
+            if source is None or amount is None:
+                continue
+            if product.kind is mir.Kind.SHL and not 0 <= amount < 16:
+                continue
+            scale = amount if product.kind is mir.Kind.MUL else 1 << amount
+            result = product.results[0]
+            if (
+                not isinstance(result, mir.Held)
+                or result.width != 2
+                or scale not in secondary.scales
+                or scale <= 1
+                or result.value.id in exposed
+            ):
+                continue
+            additions = use_ops.get(result.value.id, ())
+            if not additions:
+                continue
+            candidates: list[tuple[mir.Op, mir.Held, mir.Held]] = []
+            safe = True
+            for addition in additions:
+                if not plain(addition, mir.Kind.ADD) or len(addition.args) != 2:
+                    safe = False
+                    break
+                base_args = [
+                    arg
+                    for arg in addition.args
+                    if isinstance(arg, mir.Held) and arg.width == 2 and arg.value.id != result.value.id
+                ]
+                if len(base_args) != 1 or len(addition.results) != 1 or not isinstance(addition.results[0], mir.Held):
+                    safe = False
+                    break
+                address = addition.results[0]
+                if address.width != 2 or address.value.id in other or address.value.id not in bases:
+                    safe = False
+                    break
+                readers = use_ops.get(address.value.id, ())
+                if not readers:
+                    safe = False
+                    break
+                for reader in readers:
+                    cells = [
+                        one
+                        for one in (*reader.args, *reader.results)
+                        if isinstance(one, mir.Cell) and one.ref.base == address.value
+                    ]
+                    if not cells:
+                        safe = False
+                        break
+                    fact = scoped.get(block_of[id(reader)], {}).get(source.value)
+                    typed_access = bool(cells) and all(cell.ref.typed is not None for cell in cells)
+                    if (
+                        fact is None
+                        or fact.width != 2
+                        or fact.low < 0
+                        # A typed C lvalue may only be evaluated through a
+                        # pointer that designates its object.  Any execution
+                        # whose scaled offset exceeds the 16-bit segment is
+                        # already undefined, so the wider address need agree
+                        # only on the defined range.  Untyped/BASIC accesses
+                        # retain their explicit 16-bit wrapping semantics.
+                        or fact.high * scale > 0xFFFF
+                        and not typed_access
+                    ):
+                        safe = False
+                        break
+                    if any(
+                        cell.ref.addr is None or cell.ref.addr.space not in (Space.FAR, Space.LITERAL) for cell in cells
+                    ):
+                        safe = False
+                        break
+                if not safe:
+                    break
+                candidates.append((addition, base_args[0], address))
+            if not safe:
+                continue
+            # The word definitions themselves are promoted below after far
+            # pointer halves have been selected as one complete load.  Thus
+            # the low word and its widened address value remain one live
+            # range rather than introducing the very pressure this removes.
+            promoted.add(source.value.id)
+            folded.add(result.value.id)
+            for _addition, base, address in candidates:
+                promoted.add(base.value.id)
+                forms[address.value.id] = (ir.Held(base.value.id, 4), ir.Held(source.value.id, 4), scale)
+                folded.add(address.value.id)
+
     phi_reads = {value.id for block in body.blocks for phi in block.phis for value in phi.incoming.values()}
     # Prove deletion backwards from actual folded memory operands.  Being a
     # recognizable fixed address is insufficient: its defining arithmetic
@@ -317,7 +449,91 @@ def indexed(body: mir.MirBody, exposed: set[int]) -> tuple[dict[int, FoldedForm]
                 folded.add(value)
         if len(folded) == before:
             break
-    return forms, frozenset(folded)
+    return forms, frozenset(folded), frozenset(promoted)
+
+
+def promote(
+    blocks: dict[int, tuple[lir.Insn, ...]], values: frozenset[int], fresh: Callable[[], int]
+) -> dict[int, tuple[lir.Insn, ...]]:
+    """Make selected word definitions usable as dword address components.
+
+    A plain word load can directly select ``movzx r32,m16``.  A complete far
+    pointer load must still use LES/LFS/LGS, so its offset is first delivered
+    to a short-lived temporary and then zero-extended into the original SSA
+    value.  In both cases the promoted value has one definition and remains
+    the same live range for later low-word uses.
+    """
+    if not values:
+        return blocks
+    definitions = {
+        value: (at, index)
+        for at, insns in blocks.items()
+        for index, one in enumerate(insns)
+        for value in one.defines
+        if value in values
+    }
+    if set(definitions) != set(values):
+        missing = sorted(set(values) - set(definitions))
+        raise ValueError(f"secondary address values have no definition: {missing}")
+    out = {at: list(insns) for at, insns in blocks.items()}
+    # Work backwards within each block so inserting a follower cannot move a
+    # definition still waiting to be rewritten.
+    for value, (at, index) in sorted(definitions.items(), key=lambda item: (item[1][0], -item[1][1])):
+        one = out[at][index]
+        what = one.what
+        if what is None:
+            raise ValueError(f"value#{value} has no selected definition to promote")
+        destinations = list(what.dests)
+        position = next(
+            (
+                n
+                for n, destination in enumerate(destinations)
+                if isinstance(destination, ir.Held) and destination.value == value and destination.width == 2
+            ),
+            None,
+        )
+        if position is None:
+            raise ValueError(f"value#{value} has no word destination to promote")
+        if (
+            what.op is ir.Operation.MOVE
+            and what.name == "mov"
+            and len(destinations) == len(what.sources) == 1
+            and isinstance(what.sources[0], (ir.Mem, ir.Held))
+            and what.sources[0].width == 2
+        ):
+            destinations[0] = ir.Held(value, 4)
+            out[at][index] = replace(
+                one,
+                what=replace(what, op=ir.Operation.EXTEND, name="movzx", dests=tuple(destinations)),
+                widths=tuple(dict.fromkeys((*one.widths, (value, 4)))),
+            )
+            continue
+        if what.op is not ir.Operation.MOVE or what.name not in ("les", "lfs", "lgs") or position != 0:
+            raise ValueError(f"value#{value} cannot be promoted from {what.name or what.op}")
+        temporary = fresh()
+        destinations[0] = ir.Held(temporary, 2)
+        leader = replace(
+            one,
+            what=replace(what, dests=tuple(destinations)),
+            defines=tuple(temporary if found == value else found for found in one.defines),
+            widths=tuple((temporary if found == value else found, width) for found, width in one.widths),
+        )
+        follower = replace(
+            lir.anchor(one),
+            what=ir.Semantics(
+                ir.Operation.EXTEND,
+                "movzx",
+                (ir.Held(value, 4),),
+                (ir.Held(temporary, 2),),
+            ),
+            defines=(value,),
+            uses=(temporary,),
+            widths=((temporary, 2), (value, 4)),
+            op=None,
+            node=None,
+        )
+        out[at][index : index + 1] = [leader, follower]
+    return {at: tuple(insns) for at, insns in out.items()}
 
 
 def scaled(what: ir.Semantics | None, forms: dict[int, FoldedForm]) -> ir.Semantics | None:

@@ -22,13 +22,70 @@ iteration updates this file in the same commit.
 |---|---|---|
 | Per-CPU measurement | in progress | CPU profiles distinguish native medium-model addressing from the complete costed secondary 67h form, explicitly price x87 stack exchange, LES/LFS/LGS complete far-pointer loads, and read-only memory comparisons separately from read/modify/write ALU forms, and carry the complete-peel iteration budget; the C corpus, static and frequency-weighted structural metrics, static and CFG-frequency-weighted per-CPU cost rankings, reference listings, and exact-count preservation across recurrence rewinds, loop rotation, and zero-byte-header threading exist; audited targets and runtime profiles remain. |
 | MIR/LIR provenance and fresh OMF | complete in production | allocated LIR emits directly with external source maps/allocation hints; the remaining compatibility views are test-only and cannot route a compilation through record rewriting. |
-| SROA and scalar promotion | partial | precise SSA pointer identity now refines coarse frontend operand annotations before GVN, LICM, packed-pointer splitting, and SROA; packed 16:16 dereferences are normalized into independent offset/selector SSA values before SROA; fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies expand into exact leaves, and structural candidates transact leaves made singleton by scalar convergence with finite-capacity pressure pricing; far aggregate copies, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
-| Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, constrained native-address occurrence splitting, dying-base indexed-form unfolding, and local constant, frame, relocatable-address, and provenance-disjoint incoming-argument rematerialization exist; typed far-pointer loads are selected before allocation only when a virtual address owner would otherwise be lost, while fixed addresses retain independent rematerialization and late LES/LFS/LGS selection; x87 allocation composes complete target-priced reread and retained-home candidates independently at empty-stack regions after all shuffles are materialized; global integer splitting/rematerialization, CFG-frequency weighting within a nonempty x87 region, and broader global x87 allocation remain. |
+| SROA and scalar promotion | partial | precise SSA pointer identity and scalar TBAA for both direct and indirect lvalues now refine coarse frontend operand annotations before GVN, LICM, packed-pointer splitting, and SROA, while exact-address incompatible views retain the conservative union rule; packed 16:16 dereferences are normalized into independent offset/selector SSA values before SROA; fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies expand into exact leaves, and structural candidates transact leaves made singleton by scalar convergence with finite-capacity pressure pricing; far aggregate copies, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
+| Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, constrained native-address occurrence splitting, dying-base indexed-form unfolding, and local constant, frame, relocatable-address, and provenance-disjoint incoming-argument rematerialization exist; GVN now retains store-crossing providers under existing pressure only when the selected target has a secondary address form cheaper than the reload/spill alternative; typed far-pointer loads are selected before allocation only when a virtual address owner would otherwise be lost, while fixed addresses retain independent rematerialization and late LES/LFS/LGS selection; x87 allocation composes complete target-priced reread and retained-home candidates independently at empty-stack regions after all shuffles are materialized; global integer splitting/rematerialization, CFG-frequency weighting within a nonempty x87 region, and broader global x87 allocation remain. |
 | Loop optimization | partial | exact pre/post-tested recurrences and symbolic sentinels, target-priced exact nested-recurrence rewind, complete nested-initializer LICM, dead-control countdowns with zero-trip guards, complete-affine spill/recompute pricing, precise-volatile-aware LICM, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling with exact-trip-amortized growth plus a pre-folding complete-sequence/pressure proof and bounded public defaults, post-specialization associative integer constant composition, and machine-neutral whole-range pressure forecasting exist; versioning, partial unrolling, constraint-complete candidate-set forecasting, and compile-time candidate memoization remain. |
 | Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs (including closed recursive SCCs in C and object paths), constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, post-inline constant folding through phi edges and linear corridors, private immutable numeric-data initializer facts, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
-| Post-allocation quality | partial | copy propagation, machine CSE/DCE, shared final block placement/threading/fall-through elision and fresh-tail sharing, plus byte-neutral source-unowned terminal-return duplication, epilogue-aware dead-register analysis, direct one-use memory comparison folding including self-addressed loads, dead-register frame-copy shuttles, dying-input commutative result transfer, synthetic high-word reload narrowing, target-priced 67h LEA selection and repeated-base promotion including exact byte, prefix, length-changing-prefix and partial-register costs, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware decoded-tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
+| Post-allocation quality | partial | copy propagation, machine CSE/DCE, shared final block placement/threading/fall-through elision and fresh-tail sharing, plus byte-neutral source-unowned terminal-return duplication, epilogue-aware dead-register analysis, direct one-use memory comparison folding including self-addressed loads, pre-allocation selection of those comparison operands, dead-register frame-copy shuttles, dying-input commutative result transfer, synthetic high-word reload narrowing, target-priced 67h LEA selection and repeated-base promotion including exact byte, prefix, length-changing-prefix and partial-register costs, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware decoded-tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 132. Carry indirect TBAA through pressure-priced scaled addressing — 2026-09-19
+
+The redundant operations in `indexed._lru_use` were not frontend residue.
+The final shared MIR loaded `sc->bnext` three times because a store through
+`bprev` was conservatively treated as able to overwrite the pointer field.
+Both accesses already carried their C scalar access classes.  GCC's
+`tree-ssa-alias.cc` applies strict-alias disambiguation after its pointer and
+declaration checks, and LLVM's TBAA access tags likewise describe indirect
+loads and stores.  The common alias query now applies incompatible scalar
+TBAA to indirect lvalues too.  An incompatible view at the same explicit
+address remains may-alias for the union case, and character/untyped accesses
+remain fully conservative.  A fail-first MemorySSA/GVN regression records the
+actual pointer-field/short-store symptom.
+
+Simply retaining the pointer exposed the next issue: allocation spilled its
+offset because the native medium-model spelling also carried `b * 2` as a
+seventh value.  The GCC and Clang references carry the original index and use
+scaled addresses instead.  Acyclic address selection now recognizes every
+pure `base + index * {2,4,8}` whose uses are encodable cells, proves the index
+non-negative from dominating branch edges, and tries the profile's secondary
+32-bit address form before a spill or recomputation.  Untyped/BASIC addresses
+still require the complete scaled range to fit 16 bits.  A typed C lvalue may
+use the wider form over its defined object range; an out-of-segment access was
+already undefined.  Existing word definitions are promoted in place: a plain
+load selects `movzx r32,m16`, while a complete far-pointer load keeps
+LES/LFS/LGS and zero-extends its offset through a short-lived temporary.  The
+scaled product and address additions disappear before allocation.
+
+Legality is not profitability.  The first complete CPU run showed that always
+selecting 67h improved 386/K5/K6/K7/Core but regressed 486/P5/P6.  The immutable
+address form now ranks its extension and per-use cost against both a direct
+reload and the native scale/address/move plus displaced-value store.  Under an
+existing MIR pressure wave, GVN also keeps a source reload when retaining its
+provider would cross a store and the chosen secondary form loses that price
+comparison.  Store-free reuse remains enabled.  This reproduces the profitable
+old P5/P6 shape without weakening the new alias fact, and records the decision
+in fast pressure and per-profile regressions.
+
+One more lowering issue was found on the same path.  A one-use load followed
+by a comparison was folded only after allocation, so a value that emitted no
+instruction still competed for a register.  The legal memory comparison is
+now selected before allocation, across only inert zero-byte anchors; the late
+fold remains for shapes created afterwards.  Its fail-first regression asserts
+that the virtual range is gone as well as the final load instruction.
+
+On 386, `_lru_use` improves from iteration 131's 158 bytes, 55 instructions,
+241 static weighted units, 103.4375 dynamic weighted units and 22.21875
+estimated executed instructions to 144 bytes, 44 instructions, 210,
+101.71875 and 20.90625 respectively.  Static/dynamic loads fall from 14/5.28125
+to 12/5.1875, with no spill, reload or rematerialization marker.  K5 changes
+64/27.1875 to 42/23.0625, K6 66/27.6875 to 45/23.8125, K7 87/36.1875 to
+59/30.5625, and Core 114/59.5 to 98/56.15625.  The costlier secondary form is
+not selected on 486, P5 or P6; their prior static/dynamic costs remain exactly
+163/70.53125, 113/42.625 and 112/56.9375, with the same 158-byte no-spill
+shape.  Current listings and stage dumps are under
+`build/quality/iter132-indexed-final`.
 
 ### 131. Fold return-edge memory tests with epilogue-aware liveness — 2026-09-19
 

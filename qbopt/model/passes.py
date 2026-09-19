@@ -99,6 +99,24 @@ class AddressForm:
         object.__setattr__(self, "secondary", selected)
         object.__setattr__(self, "fallback", selected)
 
+    def before_spill(self, costs: "OperationCosts") -> bool:
+        """Whether this form is cheap enough to try before a frame spill.
+
+        The direct case compares one extension plus one prefixed use with a
+        source reload.  A one-cycle extension may also amortize across the
+        native alternative it removes: materializing the scale, forming the
+        address, moving it into place, and storing one displaced live value.
+        This is deliberately expressed only in semantic costs; neither MIR
+        nor the policy learns how the target spells the form.
+        """
+        direct = self.extension_cost + self.use_cost <= costs.load
+        amortized = (
+            self.extension_cost <= costs.move
+            and self.extension_cost + self.use_cost
+            <= costs.shift + costs.address + costs.move + costs.store
+        )
+        return not self.secondary or direct or amortized
+
 
 @dataclass(frozen=True, slots=True)
 class OperationCosts:
