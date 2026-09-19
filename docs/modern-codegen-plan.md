@@ -26,9 +26,64 @@ iteration updates this file in the same commit.
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, dying-base indexed-form unfolding, and local constant, frame, relocatable-address, and provenance-disjoint incoming-argument rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
 | Loop optimization | partial | exact pre/post-tested recurrences and symbolic sentinels, target-priced exact nested-recurrence rewind, complete nested-initializer LICM, dead-control countdowns with zero-trip guards, complete-affine spill/recompute pricing, precise-volatile-aware LICM, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling with exact-trip-amortized growth plus a pre-folding complete-sequence/pressure proof and bounded public defaults, post-specialization associative integer constant composition, and machine-neutral whole-range pressure forecasting exist; versioning, partial unrolling, constraint-complete candidate-set forecasting, and compile-time candidate memoization remain. |
 | Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs (including closed recursive SCCs in C and object paths), constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, post-inline constant folding through phi edges and linear corridors, private immutable numeric-data initializer facts, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
-| Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing and byte-neutral source-unowned terminal-return duplication, final fresh-emitter fall-through elision, dead-register frame-copy shuttles, dying-input commutative result transfer, synthetic high-word reload narrowing, target-priced 67h LEA selection including source-owned loaded scale/add tails and constant/register sums, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
+| Post-allocation quality | partial | copy propagation, machine CSE/DCE, shared final block placement/threading/fall-through elision, tail sharing and byte-neutral source-unowned terminal-return duplication, dead-register frame-copy shuttles, dying-input commutative result transfer, synthetic high-word reload narrowing, target-priced 67h LEA selection including source-owned loaded scale/add tails and constant/register sums, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 123. Put final block placement in the shared machine pipeline — 2026-09-19
+
+The final threader formerly lived in the C driver after the shared machine
+pipeline.  A frontend consuming `flow.machine()` directly therefore kept the
+source block order.  Final listing had to materialize its implicit false edges,
+and fresh QB D_SURF contained 189 `jcc body; jmp exit` pairs plus 389 total
+unconditional jumps.  This was a backend pipeline omission, not a property of
+QB control flow.
+
+The common last machine phase now performs the existing general block placer
+and then the existing threader.  Placement first makes every implicit edge
+explicit and follows loop-local traces; threading then removes edges made free
+by that physical order, redirects passage blocks, folds converged diamonds,
+and preserves exact-trip loop headers.  The C driver's later placement remains
+idempotent and available for its tail-merging fixed point.  No frontend-specific
+branch rule was added.
+
+The fail-first regression models the actual missed shape: one conditional
+instruction with two CFG successors and no explicit false-edge jump in LIR.
+Before the phase, final listing inserted `jmp exit`; after final placement it
+orders the false successor next and emits only the conditional.  An earlier
+regression draft used an already-explicit jump and therefore tested the
+threader rather than the pipeline defect; the real D_SURF stage diff exposed
+that bad instrument before it could become the committed test.
+
+The current main backend was again overlaid on the uncommitted QB frontend and
+used to compile real VBDOS `/R` D_SURF.  The shared `jumps` phase is the first
+changed stage.  It rotates the two counted `SC_INIT` loops into preheader/body/
+test order, matching BC's one taken backedge per iteration rather than adding
+an exit jump on every test.
+
+| `D_SURF` metric | iteration 122 | shared final placement | change |
+|---|---:|---:|---:|
+| code bytes | 16,029 | 15,802 | -227 (-1.4%) |
+| object bytes | 25,346 | 25,119 | -227 (-0.9%) |
+| emitted procedure instructions | 5,182 | 4,962 | -220 (-4.2%) |
+| unconditional jumps | 389 | 169 | -220 (-56.6%) |
+| adjacent `jcc`/`jmp` pairs | 189 | 1 | -188 (-99.5%) |
+| `SC_INIT` bytes | 789 | 781 | -8 (-1.0%) |
+| `SC_INIT` instructions | 202 | 198 | -4 (-2.0%) |
+
+The byte saving is smaller than two bytes per removed jump because the new
+physical order lengthens some formerly short conditional displacements.  The
+placer deliberately ranks executed loop work before static size: the removed
+edge was executed on every loop test, while each retained preheader jump runs
+once.  BC remains at 12,570 D_SURF code bytes and 547 bytes/161 instructions
+for `SC_INIT`; the gaps are now 3,232 bytes (25.7%) and 234 bytes/37
+instructions (42.8%/23.0%).
+
+The production C nbody output remains byte-for-byte identical at 1,083 bytes
+and 283 instructions.  Its GCC 16.2 and Clang 21 reference listings are also
+byte-identical to iteration 122, with normalized static-instruction ratios of
+1.05x and 0.96x respectively.  Raw objects, stage dumps, candidate listings
+and references are under `build/quality/iter123-shared-jumps`.
 
 ### 122. Elide explicit edges made free by final block order — 2026-09-19
 

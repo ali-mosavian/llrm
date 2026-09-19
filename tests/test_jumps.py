@@ -4,14 +4,16 @@ Over qcport: 335 `jcc` over a `jmp`, 262 `jmp` to the next label, 69 jumps
 to a block that only jumps.
 """
 
-from dataclasses import replace
 from pathlib import Path
+from dataclasses import replace
 
 from iced_x86 import Register
 
+from qbopt import flow
 from qbopt.model import ir
 from qbopt.model import lir
 from qbopt.backend import masm
+from qbopt.backend import frame
 from qbopt.backend import jumps
 from qbopt.cfront import compile as cfront
 
@@ -77,6 +79,38 @@ def test_branch_then_jump_in_one_block_is_inverted():
         lir.LirBlock(4, (_move(4, CX), _return(5)), ()),
         lir.LirBlock(9, (_move(9, BX), _return(10)), ()),
     ) == ["L0_1:", "cmp ax, bx", "jne L0_9", "L0_4:", "mov ax, cx", "ret", "L0_9:", "mov ax, bx", "ret"]
+
+
+def test_shared_machine_pipeline_threads_the_final_branch_pair() -> None:
+    """Fresh QB D_SURF retained 189 ``jcc body; jmp exit; body`` pairs.
+
+    The C driver happened to invoke the threader after the shared machine
+    pipeline.  A frontend that consumes that pipeline directly therefore
+    encoded both edges.  Final allocated control-flow cleanup is a backend
+    phase, not a responsibility each frontend must remember independently.
+    """
+    body = lir.LirBody(
+        "f",
+        1,
+        (
+            lir.LirBlock(1, (_compare(1), _branch(2, "je", 4)), (4, 9)),
+            lir.LirBlock(4, (_return(4),), ()),
+            lir.LirBlock(9, (_return(9),), ()),
+        ),
+        {},
+        {},
+    )
+
+    result = flow.machine({}, frame.Frame(0), {})[-1].transform(body)
+
+    real = [one.what for one in result.blocks[0].insns if one.what is not None]
+    assert [(one.op, one.name, one.target) for one in real] == [
+        (ir.Operation.COMPARE, "cmp", None),
+        (ir.Operation.BRANCH, "je", 4),
+    ]
+    assert tuple(block.at for block in result.blocks) == (1, 9, 4)
+    emitted = [line.strip() for line in masm._procedure(masm.Procedure("_f", True, False, result, 0, {}), {}, 0)]
+    assert not any(line.startswith("jmp ") for line in emitted), emitted
 
 
 def test_jump_to_the_next_block_is_dropped():

@@ -12,6 +12,16 @@ from dataclasses import replace
 from qbopt.model import ir
 from qbopt.model import lir
 from qbopt.backend.layout import _OPPOSITE
+from qbopt.model.passes import LIRTransform
+
+
+class ControlFlow(LIRTransform):
+    """Thread and fold allocated edges after every machine-shaping phase."""
+
+    name = "jumps"
+
+    def transform(self, body: lir.LirBody) -> lir.LirBody:
+        return threaded(placed(body))
 
 
 def placed(body: lir.LirBody) -> lir.LirBody:

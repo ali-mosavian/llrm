@@ -25,6 +25,7 @@ The machine half, against LLVM's own order:
     VirtRegRewriter     allocate.py   virtual -> physical
     PrologEpilogInsert  prologue.py   reserve what the spiller took
     MachineScheduler    schedule.py   ordered physical integer operations
+    FinalControlFlow    jumps.py      thread edges and choose fall-throughs
 
 `intervals.py`, `liveness.py` and `loops.py` are analyses, not phases: they
 answer questions and change nothing, which is why nothing here lists them.
@@ -33,6 +34,7 @@ answer questions and change nothing, which is why nothing here lists them.
 from qbopt.model import lir
 from qbopt.model import mir
 from qbopt.abi import runtime
+from qbopt.backend import jumps
 from qbopt.backend import lower
 from qbopt.backend import verify
 from qbopt.objectfile import omf
@@ -83,9 +85,12 @@ def machine(
         parcopy.ParallelCopy(),
         prologue.Prologue(frame, calls) if frame is not None else prologue.Prologue(frames.Frame(0), calls),
         peephole.Peephole(frame, cpu=target),
-        # Last: physical CSE/DCE have exposed all safe integer work, and
-        # scheduling may only move fully allocated machine occurrences.
+        # Physical CSE/DCE have exposed all safe integer work, and scheduling
+        # may only move fully allocated machine occurrences.
         schedule.Scheduler(target),
+        # Last, after every phase that can empty a block or expose a passage:
+        # this physical order decides which explicit edge is now fall-through.
+        jumps.ControlFlow(),
     ]
 
 
