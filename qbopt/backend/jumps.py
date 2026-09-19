@@ -458,7 +458,18 @@ def _passage(block: lir.LirBlock) -> int | None:
     handled when a chosen fall-through removes the instruction itself.
     """
     if block.phis or any(
-        one.what is not None and one.what.op is ir.Operation.NOTHING and (not one.inserted or one.spread)
+        one.what is not None
+        and one.what.op is ir.Operation.NOTHING
+        and (
+            not one.inserted
+            or one.spread
+            # An identity copy may emit no instruction after allocation, but
+            # its anchor still establishes a virtual definition on this CFG
+            # edge. Threading around it would leave the successor's operand
+            # naming a value no surviving instruction defines.
+            or one.defines
+            or one.uses
+        )
         for one in block.insns
     ):
         return None

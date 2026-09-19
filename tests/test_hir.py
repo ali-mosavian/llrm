@@ -2079,3 +2079,20 @@ def test_byref_loop_condition_reloads_the_published_pointee() -> None:
         for block in optimized.body.blocks
         for one in block.ops
     )
+
+
+def test_identity_phi_edge_survives_control_flow_threading() -> None:
+    """ENTPHI lost a dynamic-array address after its identity phi edge vanished.
+
+    The source's `CASE 0, 1` join reaches a field through an address value
+    which has the same physical register on both edges.  Its copies therefore
+    emit nothing, but their virtual definition must survive until all LIR
+    control-flow threading is complete.
+    """
+    source = qb_driver.parsed(
+        ROOT / "frontends/qb/fixtures/ENTPHI.BAS",
+        dialect="vbdos",
+        runtime="vbdos",
+        array_order="row-major",
+    )
+    assert qb_compile.object_bytes(source, "ENTPHI.BAS")
