@@ -65,7 +65,12 @@ def test_qrender_main_spill_uses_shutdown_control_proof(terminal: bool) -> None:
     assert [op.at for op in handler.block(0x17BF).ops[-3:]] == [0x17F7, 0x17FC, 0x1801]
     trimmed = noreturn.after_terminal_calls(handler, terminal_sites)
     if terminal:
-        assert [op.at for op in trimmed.block(0x17BF).ops[-1:]] == [0x17F7]
+        assert [op.at for op in trimmed.block(0x17BF).ops[-3:]] == [0x17F7, 0x17FC, 0x1801]
+        assert [op.kind for op in trimmed.block(0x17BF).ops[-3:]] == [
+            mir.Kind.CALL,
+            mir.Kind.NOTHING,
+            mir.Kind.NOTHING,
+        ]
         assert not trimmed.block(0x17BF).succ
     else:
         assert trimmed is handler

@@ -27,6 +27,7 @@ from qbopt.model import mir
 from qbopt.model import memory
 from qbopt.backend import target
 from qbopt.backend import frame as frames
+from qbopt.objectfile.module import Addr
 from qbopt.objectfile.module import Space
 from qbopt.model.passes import LIRTransform
 from qbopt.analysis.regions import addresses
@@ -112,6 +113,15 @@ def spilled(
             if rebuilt:
                 folded = _source(one, frozenset(rebuilt), _Cells(rebuilt))
                 if folded is not None:
+                    one = folded
+            # A pure frame address used only as a memory base need not be
+            # rematerialized into a register at all.  Compose its displacement
+            # into the cell before minting the short reload interval below:
+            # ``lea t,[bp-38]; mov x,[t+10]`` is exactly ``mov x,[bp-28]``.
+            # This is an allocation fold, not a MIR optimization; the value
+            # reached this point only because allocation chose to spill it.
+            for value in tuple(one.uses):
+                if value in addresses and (folded := _address_source(one, value, addresses[value])) is not None:
                     one = folded
             remade = {}
             for value in one.uses:
@@ -1185,6 +1195,71 @@ def _source(one, values, frame):
         what=replace(one.what, sources=sources),
         symbol=False,
         uses=tuple(value for value in one.uses if value != right.value),
+    )
+
+
+def _address_source(one: lir.Insn, value: int, address: ir.Address) -> lir.Insn | None:
+    """Fold a rematerializable frame address into every cell that uses it.
+
+    Only a direct BP-relative address plus an unrelocated literal displacement
+    is closed under this rewrite.  Relocated, far, selected, scaled, or mixed
+    uses keep the ordinary rematerialized LEA so neither fixup ownership nor
+    segment identity can change.
+    """
+    if (
+        one.what is None
+        or one.symbol is True
+        or address.addr is None
+        or address.addr.space is not Space.FRAME
+        or address.through != Register.BP
+        or address.index != Register.NONE
+        or address.scale != 1
+        or any(held.value == value for held, _register in (*one.requires, *one.delivers))
+    ):
+        return None
+
+    changed = False
+    invalid = False
+
+    def operand(where: ir.Loc) -> ir.Loc:
+        nonlocal changed, invalid
+        held = tuple(one for one in ir.values(where) if one.value == value)
+        if not held:
+            return where
+        if (
+            not isinstance(where, ir.Mem)
+            or len(held) != 1
+            or where.base != held[0]
+            or held[0].width != 2
+            or where.selector is not None
+            or where.index is not None
+            or where.addr is None
+            or where.addr.space is not Space.LITERAL
+            or where.addr.index != 0
+            or where.addr.segment not in (Register.NONE, Register.SS)
+        ):
+            invalid = True
+            return where
+        displacement = address.addr.disp + where.addr.disp
+        changed = True
+        return replace(
+            where,
+            addr=Addr(Space.FRAME, displacement),
+            through=Register.BP,
+            offset=displacement,
+            disp_width=0,
+            base=None,
+        )
+
+    dests = tuple(operand(where) for where in one.what.dests)
+    sources = tuple(operand(where) for where in one.what.sources)
+    if invalid or not changed:
+        return None
+    return replace(
+        one,
+        what=replace(one.what, dests=dests, sources=sources),
+        uses=tuple(found for found in one.uses if found != value),
+        symbol=False,
     )
 
 

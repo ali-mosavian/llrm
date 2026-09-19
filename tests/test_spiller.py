@@ -505,6 +505,43 @@ def test_spilled_frame_address_is_rematerialized_without_a_frame_slot() -> None:
     assert result.insns[-1].what.sources[1].value == recreated[0].defines[0]
 
 
+def test_spilled_frame_address_folds_directly_into_its_only_memory_use() -> None:
+    """Frontend parity's BASIC loopmix could not allocate its array load.
+
+    Spilling the descriptor address made ``lea temporary,[bp-38]`` beside
+    ``mov value,[temporary+10]``.  All four 16-bit address registers were
+    occupied, although the exact cell is directly encodable as ``[bp-28]``.
+    Compose the address during spill rewriting instead of creating an
+    unspillable one-instruction range.
+    """
+    source = ir.Address(Addr(Space.FRAME, -38), Register.BP, offset=-38, disp_width=1)
+    address = lir.Insn(
+        at=0x10,
+        covers=(0x10, 0x13),
+        what=ir.Semantics(ir.Operation.ADDRESS, "lea", (ir.Held(1, 2),), (source,)),
+        defines=(1,),
+        uses=(),
+    )
+    cell = ir.Mem(Addr(Space.LITERAL, 10, base=Register.SI), 2, base=ir.Held(1, 2))
+    load = lir.Insn(
+        at=0x14,
+        covers=(0x14, 0x17),
+        what=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(2, 2),), (cell,)),
+        defines=(2,),
+        uses=(1,),
+    )
+
+    result, made = spiller.spilled(_body(address, load), frozenset({1}), frames.Frame(0))
+
+    assert made == frozenset()
+    assert not any(one.what and one.what.op is ir.Operation.ADDRESS for one in result.insns)
+    folded = result.insns[-1].what.sources[0]
+    assert isinstance(folded, ir.Mem)
+    assert folded.addr == Addr(Space.FRAME, -28)
+    assert folded.base is None
+    assert result.insns[-1].uses == ()
+
+
 @pytest.mark.parametrize("space", [Space.SEGMENT, Space.EXTERNAL])
 def test_spilled_relocatable_address_is_rematerialized_without_a_frame_slot(space) -> None:
     """QCport's global descriptor address spilled into a private frame cell.

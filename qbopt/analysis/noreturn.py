@@ -58,6 +58,8 @@ def after_terminal_calls(body: mir.MirBody, terminal_calls: frozenset[int]) -> m
     are returned unchanged, making it safe to use at the no-return fixed
     point boundary.
     """
+    from qbopt.optimize import transform
+
     blocks = []
     changed = False
     for block in body.blocks:
@@ -67,7 +69,8 @@ def after_terminal_calls(body: mir.MirBody, terminal_calls: frozenset[int]) -> m
         if cut is None:
             blocks.append(block)
             continue
-        ops = block.ops[: cut + 1]
+        inert_tail = transform._without(list(block.ops[cut + 1 :]), lambda _op: True)
+        ops = block.ops[: cut + 1] + tuple(inert_tail)
         if ops == block.ops and not block.succ:
             blocks.append(block)
             continue
@@ -81,6 +84,4 @@ def after_terminal_calls(body: mir.MirBody, terminal_calls: frozenset[int]) -> m
     # normalized here, rather than left as executable work for lowering.  The
     # shared CFG normalizer retains its source-byte owner as inert MIR, which
     # is the required object-emission provenance contract.
-    from qbopt.optimize import transform
-
     return transform._unreachable(replace(body, blocks=tuple(blocks)))

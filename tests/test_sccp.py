@@ -572,6 +572,46 @@ def test_terminal_call_inerts_newly_unreachable_successor():
     assert all(op.kind is mir.Kind.NOTHING and not op.stores for op in orphan.ops)
 
 
+def test_terminal_call_inerts_its_same_block_source_tail():
+    """loopmix lost the jump bytes after B$STOP and fresh OMF layout refused a gap.
+
+    A proven terminal call makes later work unreachable, but a source-backed
+    occurrence in the same block must remain as an inert ownership marker.
+    Dropping the occurrence outright leaves the emitter with bytes that no
+    MIR operation owns.
+    """
+    from qbopt.analysis import noreturn
+
+    terminal = mir.Op(2, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.CALL)
+    dead_jump = mir.Op(
+        3,
+        ir.Operation.BRANCH,
+        "jmp",
+        (),
+        (),
+        kind=mir.Kind.BRANCH,
+        target=20,
+        absorbed=(3,),
+    )
+    body = mir.MirBody(
+        0,
+        (
+            mir.MirBlock(0, (), (terminal, dead_jump), (20,)),
+            mir.MirBlock(20, (), (), ()),
+        ),
+        sealed=True,
+    )
+
+    trimmed = noreturn.after_terminal_calls(body, frozenset({2}))
+
+    owner = trimmed.block(0).ops[-1]
+    assert owner.at == 3
+    assert owner.absorbed == (3,)
+    assert owner.kind is mir.Kind.NOTHING
+    assert owner.target is None
+    assert not trimmed.block(0).succ
+
+
 def test_noreturn_summary_does_not_make_an_exported_body_a_private_fact():
     """The direct proof must not turn an externally visible infinite loop into an IPA-only summary."""
     spin = mir.MirBody(1, (mir.MirBlock(1, (), (), (1,)),), sealed=True)
