@@ -1,14 +1,12 @@
 from collections import Counter
 from dataclasses import replace
 
-from qbopt.model import ir
-from qbopt.model import mir
 from qbopt.analysis import consts
+from qbopt.model import ir, mir
 
 
 def simplified(body: mir.MirBody, wanted: set[mir.Value], wide: set[mir.Value]) -> mir.MirBody:
-    from qbopt.optimize import wholephis
-    from qbopt.optimize import wholestores
+    from qbopt.optimize import wholephis, wholestores
 
     body = wholestores.joined(wholephis.joined(body))
     body = _halved(_divisions(body))
@@ -26,6 +24,7 @@ def simplified(body: mir.MirBody, wanted: set[mir.Value], wide: set[mir.Value]) 
     uses.update(value for block in body.blocks for phi in block.phis for value in phi.incoming.values())
 
     def simplify(op):
+        op = _extracted(op, definitions)
         op = _recombined(op, definitions)
         op = _redundant_extension(op, definitions)
         op = _zero_difference(op, definitions)
@@ -334,6 +333,51 @@ def _recombined(op: mir.Op, definitions: dict) -> mir.Op:
         return op
     return replace(
         op, kind=mir.Kind.COPY, args=(original,), uses=(original.value,), merges={}, source_backed=False, raised=None
+    )
+
+
+def _extracted(op: mir.Op, definitions: dict) -> mir.Op:
+    """Extracting a word just concatenated from two words recovers that word."""
+    if (
+        op.kind is not mir.Kind.EXTRACT
+        or op.loads
+        or op.stores
+        or op.barrier
+        or len(op.args) != 2
+        or len(op.results) != 1
+        or not isinstance(op.args[0], mir.Held)
+        or op.args[0].width != 4
+        or not isinstance(op.args[1], mir.Const)
+        or op.args[1].n not in (0, 16)
+        or not isinstance(op.results[0], mir.Held)
+        or op.results[0].width != 2
+    ):
+        return op
+    joined = definitions.get(op.args[0].value)
+    if (
+        joined is None
+        or joined.kind is not mir.Kind.CONCAT
+        or joined.loads
+        or joined.stores
+        or joined.barrier
+        or len(joined.args) != 2
+        or len(joined.results) != 1
+        or joined.results != (op.args[0],)
+        or any(not isinstance(arg, (mir.Held, mir.Const)) or arg.width != 2 for arg in joined.args)
+    ):
+        return op
+    high, low = joined.args
+    source = low if op.args[1].n == 0 else high
+    return replace(
+        op,
+        op=ir.Operation.MOVE,
+        name="mov",
+        kind=mir.Kind.COPY,
+        args=(source,),
+        uses=(source.value,) if isinstance(source, mir.Held) else (),
+        merges={},
+        source_backed=False,
+        raised=None,
     )
 
 

@@ -40,6 +40,7 @@ from qbopt.model.passes import Where
 from qbopt.optimize import algebraic
 from qbopt.optimize import loopmotion
 from qbopt.optimize import loopsimplify
+from qbopt.optimize import pointeraccess
 from qbopt.analysis import loops as loopy
 from qbopt.model.passes import AddressForm
 from qbopt.model.passes import MIRTransform
@@ -104,6 +105,8 @@ _PURE = frozenset(
         mir.Kind.NOT,
         mir.Kind.CONVERT,
         mir.Kind.SIGN_EXTEND,
+        mir.Kind.EXTRACT,
+        mir.Kind.CONCAT,
         mir.Kind.COPY,
         mir.Kind.ADDRESS,
         mir.Kind.LT,
@@ -2869,6 +2872,15 @@ class Algebraic(MIRTransform):
         )
 
 
+class SplitPointers(MIRTransform):
+    """Expose packed far addresses as independently allocatable MIR values."""
+
+    name = "split_pointers"
+
+    def transform(self, body: MirBody) -> MirBody:
+        return pointeraccess.split(body)
+
+
 def pipeline(where: Where, **wanted) -> list[MIRTransform]:
     """The passes, in order, that `wanted` leaves on.
 
@@ -2876,6 +2888,7 @@ def pipeline(where: Where, **wanted) -> list[MIRTransform]:
     it and skipped, so what runs is what this returns.
     """
     every: list[MIRTransform] = [
+        SplitPointers(),
         # Aggregate/object leaves become ordinary SSA before any scalar or
         # CFG pass asks what is constant, redundant, or loop invariant.
         promote.Sroa(where),
@@ -3012,14 +3025,18 @@ def applied(
     if only in {"forward", "drop_loads", "reuse", "cse"}:
         only = "gvn"
     passes = [one for one in pipeline(where, **wanted) if only is None or one.name == only]
-    # SROA establishes the scalar memory shape at structural boundaries.  It
-    # is not a member of the scalar fixed point: rerunning global range
-    # analysis after every scalar round made the C corpus take four times as
-    # long while producing identical code.  Exact loop cloning can expose new
-    # fixed aggregate leaves, though, so each structural candidate crosses
-    # this boundary once before its ordinary scalar convergence.
-    boundary = [one for one in passes if isinstance(one, promote.Sroa)]
-    passes = [one for one in passes if not isinstance(one, promote.Sroa)]
+    # Pointer decomposition and SROA establish the scalar memory shape at
+    # structural boundaries.  They are not members of the scalar fixed point:
+    # rerunning global range analysis after every scalar round made the C
+    # corpus take four times as long while producing identical code.  Exact
+    # loop cloning can expose new packed accesses or fixed aggregate leaves,
+    # though, so each structural candidate crosses this boundary once before
+    # its ordinary scalar convergence.  Keep pipeline order here: packed far
+    # references must expose their offset and selector before SROA reasons
+    # about the memory object they address.
+    structural = (SplitPointers, promote.Sroa)
+    boundary = [one for one in passes if isinstance(one, structural)]
+    passes = [one for one in passes if not isinstance(one, structural)]
     unrollers = [one for one in passes if isinstance(one, unroll.Unroll)]
     passes = [one for one in passes if not isinstance(one, unroll.Unroll)]
     peelers = [one for one in passes if isinstance(one, peel.Peel)]
@@ -3093,13 +3110,14 @@ def applied(
         prefix: str,
         consider_unroll: bool = False,
     ) -> MirBody:
-        """Settle newly exact aggregate leaves before pricing a CFG clone.
+        """Normalize addresses and newly exact leaves before pricing a CFG clone.
 
-        Structural cloning crosses SROA before scalar convergence.  That
-        convergence can itself make indexed accesses singleton leaves, so a
-        second boundary is part of the same candidate transaction.  Only
-        scalar MIR reconverges after that boundary: a further structural
-        choice belongs to the next independently priced transaction.
+        Structural cloning crosses pointer decomposition and SROA before
+        scalar convergence.  That convergence can itself make indexed
+        accesses singleton leaves, so a second boundary is part of the same
+        candidate transaction.  Only scalar MIR reconverges after that
+        boundary: a further structural choice belongs to the next
+        independently priced transaction.
         """
         state = fixed(
             scalarized(candidate, stage),

@@ -256,9 +256,12 @@ it has no location. Blocks carry phis and successors. Memory references retain
 symbolic object and addressing facts so alias analysis can be conservative
 without collapsing all memory into one cell.
 
-The production pass order comes directly from `transform.pipeline()`. The
-sequence repeats until the body is unchanged, with a hard limit of 16 rounds.
-LCSSA precedes the loop transforms, which consume its explicit exit values.
+The production pass order comes directly from `transform.pipeline()`. Packed
+far-memory operands are decomposed and SROA establishes scalar memory once at
+the structural boundary; the remaining scalar sequence repeats until the body
+is unchanged, with a size-scaled hard limit. LCSSA precedes the loop
+transforms, which consume its explicit exit values. A priced structural clone
+crosses the same boundary before its scalar fixed point.
 
 Within `strength`, equal-stride sharing (`ivshare`) preserves observed upper
 bits only with a common-source proof. Dead-value cleanup exposes exit-only
@@ -267,7 +270,8 @@ Unknown readers and live flag dependencies retain the original computation.
 
 ```mermaid
 flowchart LR
-    In["raised MirBody"] --> Fold["fold"] --> Decide["decide"] --> LoopSimplify["loopsimplify"]
+    In["raised MirBody"] --> Split["split packed far dereferences<br/>into offset + selector SSA"]
+    Split --> SROA["sroa"] --> Fold["fold"] --> Decide["decide"] --> LoopSimplify["loopsimplify"]
     LoopSimplify --> LCSSA["lcssa"] --> Hoist["hoist<br/>+ sink stores"] --> DS["drop_stores"]
     DS --> GVN["gvn<br/>scalar + memory PRE<br/>divide reuse"] --> Promote["promote"]
     Promote --> Strength["strength"] --> Algebraic["algebraic"]
@@ -285,6 +289,7 @@ Pass responsibilities are intentionally narrow:
 
 | Family | Passes | Question answered |
 | --- | --- | --- |
+| Structural memory form | `split_pointers`, `sroa` | Which address operands and aggregate leaves are independently optimizable SSA values? |
 | Scalar simplification | `fold`, `decide`, `algebraic`, `dead` | What value or control edge is already determined? |
 | Memory/value reuse | `drop_stores`, `gvn`, `promote` | Can existing data replace work here? |
 | Loop optimization | `hoist`, `strength`, `unroll`, `lcssa` | What can leave, stride through, duplicate around, or cross the exit of a loop? |

@@ -46,7 +46,13 @@ def test_selector_proof_checks_the_loop_exit_path():
 
     path = Path("fixtures/regressions/hugelp-p-g2.obj")
     found = corpus.loaded(path)
-    body = mir.bodies(found, corpus.partitioned(path), bounds_checks=True)[0][1]
+    raised = mir.bodies(found, corpus.partitioned(path), bounds_checks=True)
+    public = raised[0][1]
+    # _selector_dead is raise-time recognition: decoded effects and historical
+    # placement are deliberately unavailable on public MIR.  Reconstruct the
+    # private view explicitly, as the other focused recognition tests do,
+    # instead of silently asking a public body a question it cannot answer.
+    body = mir._with_raise_context(public, raised.hints[public.entry], raised.source)
     contracts = runtime.for_module(found)
     block = next(block for block in body.blocks if sum(
         op.kind is mir.Kind.CALL and found.calls.get(op.at) == "B$HARY" for op in block.ops) == 2)

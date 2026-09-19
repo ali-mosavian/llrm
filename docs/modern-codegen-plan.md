@@ -22,13 +22,94 @@ iteration updates this file in the same commit.
 |---|---|---|
 | Per-CPU measurement | in progress | CPU profiles distinguish native medium-model addressing from the complete costed secondary 67h form and carry the complete-peel iteration budget; the C corpus, static and frequency-weighted structural metrics, static and CFG-frequency-weighted per-CPU cost rankings, reference listings, and exact-count preservation across recurrence rewinds, loop rotation, and zero-byte-header threading exist; audited targets and runtime profiles remain. |
 | MIR/LIR provenance and fresh OMF | complete in production | allocated LIR emits directly with external source maps/allocation hints; the remaining compatibility views are test-only and cannot route a compilation through record rewriting. |
-| SROA and scalar promotion | partial | fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies expand into exact leaves, and structural candidates transact leaves made singleton by scalar convergence with finite-capacity pressure pricing; far, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
+| SROA and scalar promotion | partial | packed 16:16 dereferences are normalized into independent offset/selector SSA values before SROA; fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies expand into exact leaves, and structural candidates transact leaves made singleton by scalar convergence with finite-capacity pressure pricing; far aggregate copies, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, dying-base indexed-form unfolding, and local constant, frame, relocatable-address, and provenance-disjoint incoming-argument rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
 | Loop optimization | partial | exact pre/post-tested recurrences and symbolic sentinels, target-priced exact nested-recurrence rewind, complete nested-initializer LICM, dead-control countdowns with zero-trip guards, complete-affine spill/recompute pricing, precise-volatile-aware LICM, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling with exact-trip-amortized growth plus a pre-folding complete-sequence/pressure proof, post-specialization associative integer constant composition, and machine-neutral whole-range pressure forecasting exist; versioning, partial unrolling, constraint-complete candidate-set forecasting, and compile-time candidate memoization remain. |
 | Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs (including closed recursive SCCs in C and object paths), constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, post-inline constant folding through phi edges and linear corridors, private immutable numeric-data initializer facts, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
 | Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing and byte-neutral source-unowned terminal-return duplication, dead-register frame-copy shuttles, dying-input commutative result transfer, synthetic high-word reload narrowing, target-priced 67h LEA selection including source-owned loaded scale/add tails and constant/register sums, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 120. Expose packed far-pointer address operands before SROA — 2026-09-19
+
+The new QB frontend represents a 16:16 pointer as one 32-bit scalar, which is
+the right program value but was the wrong memory-operand boundary.  A load or
+store through that scalar reached lowering as an opaque packed pointer.
+Lowering could only preserve the selector and unpack the two words locally:
+
+```asm
+push cx
+push dx
+pop ecx
+push es
+push ecx
+pop si
+pop es
+mov dword ptr es:[si],0
+pop es
+```
+
+That sequence hid the offset and selector from value numbering, LICM and the
+allocator, so every dereference repeated the stack traffic.  This was the
+largest directly redundant component in the frontend's qrender output.
+
+The general rule is now explicit at the structural MIR boundary.  A packed
+far-pointer *scalar* stays packed.  A memory reference through it is rewritten
+to two ordinary, independently allocatable word SSA values: an offset and a
+selector.  The normalization names no register or opcode and runs before SROA;
+lowering remains responsible for realizing the abstract far reference.  GVN
+can reuse identical extractions, and algebraic simplification turns extraction
+from a known `CONCAT(selector, offset)` back into the original word values.
+That common frontend shape now emits:
+
+```asm
+mov es,word ptr [bx+2]
+mov si,word ptr [bx+10]
+mov dword ptr es:[si],0
+```
+
+The fail-first regression models exactly that descriptor-to-`CONCAT`-to-store
+shape.  Before the change its optimized store still held `pointer=True` and
+lowering emitted `push`/`pop`; now it holds a split `FAR` reference to the
+original offset and selector, with neither stack operation nor residual
+`CONCAT`/`EXTRACT`.  `r01-split_pointers` is the first changed stage, before
+`r01-sroa`.
+
+The same uncommitted frontend source was overlaid on the previous and current
+backend revisions and used to compile qrender's `D_SURF.BAS` with VBDOS `/R`
+array order.  These are raw emitted listings and fresh OMF sizes, not inferred
+scores:
+
+| metric | before | after | change |
+|---|---:|---:|---:|
+| code bytes | 20,446 | 17,243 | -3,203 (-15.7%) |
+| static instructions | 7,923 | 5,579 | -2,344 (-29.6%) |
+| all `push`/`pop` | 2,886 | 750 | -2,136 (-74.0%) |
+| `push es`/`pop es` | 958 | 57 | -901 (-94.1%) |
+| `SC_INIT` instructions | 689 | 270 | -419 (-60.8%) |
+
+BC's production object is still smaller: 12,570 code bytes, leaving the fresh
+frontend 4,673 bytes or 37.2% larger.  Raw BC `SC_INIT` has 161 instructions,
+so the current 270 remain 67.7% above it.  The next gap is visible rather than
+speculative: BC retains short counted initialization loops and keeps descriptor
+words live; the frontend fully unrolls them and repeatedly reloads the same
+descriptor fields.  Loop-form selection plus alias-backed descriptor CSE is
+therefore the next general mechanism, not another pointer-unpacking exception.
+
+As a flat-i386 structural reference, GCC 16.2 either keeps the low word as a
+view or obtains the high word with `shr`; Clang 21 directly loads `[p]` and
+`[p+2]`.  Neither materializes the parts through the stack.  They cannot model
+our segmented memory operand, so this supports only the split-value boundary,
+not a claim that their final addressing is ABI-comparable.
+
+On the older HUGE2 object path, where the packed value is not already a known
+concatenation, the normalization reduces the emitted listing from 215 to 210
+instructions and its `push`/`pop` count from 55 to 37.  Code grows from 1,784
+to 1,800 bytes (+0.90%) because independently live selectors sometimes use
+FS/GS prefixes; that is below the plan's one-percent cross-target limit and
+buys fewer executed operations.  The focused fail-first and private raise-view
+regressions pass in `0.13s`; complete iteration artifacts are under
+`build/quality/iter120-pointer-split`.
 
 ### 119. Rematerialize incoming arguments across proven local objects — 2026-09-19
 
