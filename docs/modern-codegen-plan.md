@@ -23,12 +23,84 @@ iteration updates this file in the same commit.
 | Per-CPU measurement | in progress | CPU profiles distinguish native medium-model addressing from the complete costed secondary 67h form and carry the complete-peel iteration budget; the C corpus, static and frequency-weighted structural metrics, static and CFG-frequency-weighted per-CPU cost rankings, reference listings, and exact-count preservation across recurrence rewinds, loop rotation, and zero-byte-header threading exist; audited targets and runtime profiles remain. |
 | MIR/LIR provenance and fresh OMF | complete in production | allocated LIR emits directly with external source maps/allocation hints; the remaining compatibility views are test-only and cannot route a compilation through record rewriting. |
 | SROA and scalar promotion | partial | fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies expand into exact leaves, and structural candidates transact leaves made singleton by scalar convergence with finite-capacity pressure pricing; far, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
-| Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, dying-base indexed-form unfolding, and local constant, frame, and relocatable-address rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
+| Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, dying-base indexed-form unfolding, and local constant, frame, relocatable-address, and provenance-disjoint incoming-argument rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
 | Loop optimization | partial | exact pre/post-tested recurrences and symbolic sentinels, target-priced exact nested-recurrence rewind, complete nested-initializer LICM, dead-control countdowns with zero-trip guards, complete-affine spill/recompute pricing, precise-volatile-aware LICM, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling with exact-trip-amortized growth plus a pre-folding complete-sequence/pressure proof, post-specialization associative integer constant composition, and machine-neutral whole-range pressure forecasting exist; versioning, partial unrolling, constraint-complete candidate-set forecasting, and compile-time candidate memoization remain. |
 | Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs (including closed recursive SCCs in C and object paths), constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, post-inline constant folding through phi edges and linear corridors, private immutable numeric-data initializer facts, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
 | Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing and byte-neutral source-unowned terminal-return duplication, dead-register frame-copy shuttles, dying-input commutative result transfer, synthetic high-word reload narrowing, target-priced 67h LEA selection including source-owned loaded scale/add tails and constant/register sums, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 119. Rematerialize incoming arguments across proven local objects — 2026-09-19
+
+P5 matmul copied its incoming `seed` from `[bp+6]` to a private frame slot at
+entry, then read that copy once per initializer iteration.  The spiller knew
+that reloading the original cell was cheaper than a spill slot, but every
+indexed store to either local matrix conservatively invalidated it.  Final LIR
+could not repair the proof: selection spells a local pointer as an arbitrary
+address-register access, so its physical address no longer says `FRAME` even
+though the attached MIR store still has exact current-activation provenance.
+
+The first regression deliberately uses that production shape: a positive
+BP-relative load, followed by an indexed selected store whose MIR provenance
+is confined to one bounded `FRAME` object, followed by a use.  Before the fix
+the value acquired a new `[bp-2]` spill home.  A companion exact-offset case
+and five pre-existing call, pointer, and frame-effect variants define the
+conservative boundary.
+
+Spill rematerialization now asks one general object question.  A non-negative,
+fixed BP-relative incoming cell cannot overlap storage allocated below BP by
+the current activation.  A modeled store whose nonempty provenance consists
+only of `memory.Kind.FRAME` objects therefore preserves that cell even when
+its selected address is indexed or has lost the abstract address-space
+spelling.  Unknown provenance, escaped pointers, unmodeled writes, calls, and
+any store set not wholly covered by that proof retain the previous
+conservative invalidation.  This reuses the canonical alias object model; it
+does not parse a frontend-specific identity tuple or name matmul.
+
+`lir-regalloc` is the first changed stage; every MIR stage and LIR through
+coalescing is identical.  The emitted initializer changes from:
+
+```asm
+mov ax, word ptr [bp+6]
+mov word ptr [bp-520], ax
+...
+add ax, word ptr [bp-520]
+```
+
+to the foldable original home:
+
+```asm
+add ax, word ptr [bp+6]
+```
+
+Spill-slot recolouring also reduces the frame by four bytes.  Against the
+iteration 118 P5 result:
+
+| metric | before | after | change |
+|---|---:|---:|---:|
+| bytes | 625 | 617 | -8 |
+| static instructions | 171 | 169 | -2 |
+| estimated dynamic instructions | 4,077 | 4,075 | -2 |
+| static / dynamic P5 cost | `509 / 14,644` | `507 / 14,642` | `-2 / -2` |
+| loads / stores | `46 / 20` | `45 / 19` | `-1 / -1` |
+| spill reloads / stores | `3 / 11` | `3 / 10` | `0 / -1` |
+
+Fresh advisory flat-i386 references remain structurally much more aggressive:
+Clang emits 366 static and an estimated 879 dynamic instructions after
+unroll-and-jam; i686 GCC emits 860 static instructions and has no complete
+profile-free dynamic estimate.  The candidate's smaller static listing is not
+parity: its 4,075 dynamic instructions expose the still-open loop-form gap.
+This iteration advances Phase 4 rematerialization only.
+
+The fail-first indexed test originally failed with `{1: -2}` and now passes
+with the exact-offset and conservative-effect variants (`7 passed`, `0.14s`).
+The production candidate, all stage dumps, GCC/Clang listings, and JSON reports
+are under `build/quality/iter119-local-provenance-p5{,-v2}`.  The exact emitted
+assembly was assembled to OMF, linked by the DOS toolchain, and run on the real
+386 path; `VALUE.BIN` contained `b0 65 05 00`, the independent `353712`
+oracle, with no linker error.  Tier 1 passes (`261 passed`, `31 deselected`,
+`2.64s`).  Aggregate test execution was under one percent of this iteration's
+wall time.
 
 ### 118. Make complete-peel growth prove its pressure benefit — 2026-09-19
 

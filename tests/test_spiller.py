@@ -176,6 +176,98 @@ def test_parameter_is_reloaded_across_what_spares_the_frame(between):
     assert (slots == []) == bool(spared), [one.what for one in got]
 
 
+def _parameter_across(store: lir.Insn) -> tuple[lir.LirBody, frames.Frame, ir.Mem]:
+    parameter = ir.Mem(Addr(Space.FRAME, 6), 2, Register.BP, 0, 2)
+    load = lir.Insn(
+        at=0x100,
+        covers=(0x100, 0x100),
+        op=None,
+        defines=(1,),
+        uses=(),
+        what=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(1, 2),), (parameter,)),
+    )
+    frame = frames.Frame(0)
+    result, _made = spiller.spilled(_body(load, store, _add(3, 1, at=0x102)), frozenset({1}), frame)
+    return result, frame, parameter
+
+
+def _assert_parameter_rematerialized(store: lir.Insn) -> None:
+    result, frame, parameter = _parameter_across(store)
+    assert 1 not in frame.slots
+    add = next(one for one in result.insns if one.what is not None and one.what.name == "add")
+    assert parameter in add.what.sources
+
+
+def test_parameter_rematerializes_across_an_exact_disjoint_local_store() -> None:
+    """Fully specialized matmul copied ``seed`` to a private spill slot.
+
+    Its initializer writes many exact negative BP offsets between the argument
+    load and its uses.  Conservative MIR provenance describes those as frame
+    writes, but allocated LIR proves none overlaps the positive argument slot;
+    the original cell is the cheaper and already initialized spill home.
+    """
+    from qbopt.model import mir
+
+    local = ir.Mem(Addr(Space.FRAME, -2), 2, Register.BP, 0, 2)
+    vague_local = mir.MemRef(None, 2, space=Space.FRAME)
+    store = lir.Insn(
+        at=0x101,
+        covers=(0x101, 0x101),
+        op=mir.Op(0x101, ir.Operation.MOVE, "mov", (), (2,), kind=mir.Kind.STORE, stores=(vague_local,)),
+        defines=(),
+        uses=(2,),
+        what=ir.Semantics(ir.Operation.MOVE, "mov", (local,), (ir.Held(2, 2),)),
+    )
+    _assert_parameter_rematerialized(store)
+
+
+def test_parameter_rematerializes_across_a_proven_local_array_store() -> None:
+    """Matmul copied ``seed`` while initializing an indexed local array.
+
+    The selected destination is dynamic, so its final LIR address alone does
+    not prove a fixed disjoint range.  MIR nevertheless identifies the whole
+    destination as one current-activation FRAME object, which cannot overlap
+    the positive BP-relative incoming argument cell.
+    """
+    from qbopt.model import mir
+    from qbopt.model import memory
+
+    local = ir.Mem(
+        Addr(Space.FRAME, -132),
+        2,
+        Register.BP,
+        0,
+        2,
+        index=ir.Held(4, 2),
+        index_through=Register.SI,
+    )
+    object_ = memory.Object(memory.Kind.FRAME, (7, -132, -4), extent=128)
+    indexed_local = mir.MemRef(
+        None,
+        2,
+        base=mir.Value(4, 0),
+        space=Space.FRAME,
+        provenance=memory.Provenance.one(object_, 0, 128, stride=2, width=2),
+    )
+    store = lir.Insn(
+        at=0x101,
+        covers=(0x101, 0x101),
+        op=mir.Op(
+            0x101,
+            ir.Operation.MOVE,
+            "mov",
+            (),
+            (2, 4),
+            kind=mir.Kind.STORE,
+            stores=(indexed_local,),
+        ),
+        defines=(),
+        uses=(2, 4),
+        what=ir.Semantics(ir.Operation.MOVE, "mov", (local,), (ir.Held(2, 2),)),
+    )
+    _assert_parameter_rematerialized(store)
+
+
 def test_nbody_reads_spilled_position_directly_in_subtraction():
     """NBODY loaded [BP-2Ch] into EAX solely for SUB ESI,EAX on every force pair."""
     from qbopt import wholeseg

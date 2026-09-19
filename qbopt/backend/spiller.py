@@ -24,6 +24,7 @@ from iced_x86 import Register
 from qbopt.model import ir
 from qbopt.model import lir
 from qbopt.model import mir
+from qbopt.model import memory
 from qbopt.backend import target
 from qbopt.backend import frame as frames
 from qbopt.objectfile.module import Space
@@ -565,15 +566,59 @@ def _keeps(one: lir.Insn, define: lir.Insn, cell: ir.Mem, holds: bool) -> bool:
     written = _written(one, cell)
     return (
         holds
-        and not _may_write(one.op, cell)
+        and not _may_write(one, cell)
         and not any(dest.addr is None or addresses(cell.addr, cell.width, dest.addr, dest.width) for dest in written)
     )
 
 
-def _may_write(op: "mir.Op | None", cell: ir.Mem) -> bool:
+def _exact_frame(cell: ir.Mem) -> bool:
+    """Whether allocated LIR names one fixed BP-relative frame range."""
+    return (
+        cell.addr is not None
+        and cell.addr.space is Space.FRAME
+        and cell.through == Register.BP
+        and cell.base is None
+        and cell.index is None
+    )
+
+
+def _incoming_frame(cell: ir.Mem) -> bool:
+    """Whether `cell` is a fixed incoming BP-relative word, not a local.
+
+    FRAME provenance denotes storage allocated below BP by this activation.
+    Non-negative BP displacements belong to its caller-facing frame area and
+    therefore cannot overlap such an object.  Calls and unknown stores still
+    go through the conservative effect checks below.
+    """
+    return _exact_frame(cell) and cell.addr is not None and cell.addr.disp >= 0
+
+
+def _proven_local_frame(ref: mir.MemRef) -> bool:
+    """Whether provenance confines an access to this activation's objects."""
+    return (
+        ref.provenance is not None
+        and bool(ref.provenance.slices)
+        and all(one.object.kind is memory.Kind.FRAME for one in ref.provenance.slices)
+    )
+
+
+def _may_write(one: lir.Insn, cell: ir.Mem) -> bool:
     """Whether the MIR operation may change `cell`: through what it says it
-    stores, and anywhere at all where that is not stated. A call stating a
-    store with no address that spares the whole frame leaves a frame cell alone."""
+    stores, and anywhere at all where that is not stated.
+
+    Allocated LIR can be more precise than its conservative MIR provenance:
+    a selected store to one fixed negative BP offset cannot change a positive
+    argument slot. Trust that exact form only when every modeled store has an
+    exact frame destination; pointer stores and hidden call effects retain the
+    MIR answer.
+    """
+    op = one.op
+    written = _written(one, cell)
+    if _exact_frame(cell) and written and all(_exact_frame(dest) for dest in written):
+        if any(addresses(cell.addr, cell.width, dest.addr, dest.width) for dest in written):
+            return True
+        if op is None or len(written) >= len(op.stores):
+            return False
     from qbopt.analysis import effects
 
     if op is None:
@@ -582,6 +627,8 @@ def _may_write(op: "mir.Op | None", cell: ir.Mem) -> bool:
         return True
     for ref in op.stores:
         if _in_frame(cell) and mir.WHOLE_FRAME in ref.excludes:
+            continue
+        if _incoming_frame(cell) and _proven_local_frame(ref):
             continue
         if ref.addr is None or addresses(cell.addr, cell.width, ref.addr, ref.width):
             return True
@@ -605,11 +652,23 @@ def _written(one: lir.Insn, cell: ir.Mem) -> list[ir.Mem]:
         and bool(op.stores)
         and all(mir.WHOLE_FRAME in ref.excludes for ref in op.stores)
     )
-    return [
+    written = [
         dest
         for dest in (one.what.dests if one.what is not None else ())
         if isinstance(dest, ir.Mem) and not (spared and dest.addr is not None and dest.addr.space is not Space.FRAME)
     ]
+    # Selection may spell a proven local object through an arbitrary address
+    # register (and consequently LITERAL space), but it is still the same MIR
+    # store.  Do not let that less informative spelling undo the object proof.
+    if (
+        _incoming_frame(cell)
+        and op is not None
+        and op.stores
+        and len(written) <= len(op.stores)
+        and all(_proven_local_frame(ref) for ref in op.stores)
+    ):
+        return []
+    return written
 
 
 def _unchanged(body: lir.LirBody, define: lir.Insn, cell: ir.Mem, uses: list) -> bool:
@@ -706,7 +765,7 @@ def _frame_loads(body: lir.LirBody, values: frozenset[int]) -> dict[int, ir.Mem]
         last_use = max(used_at for _block, used_at in locations)
         safe = True
         for one in body.blocks[block_index].insns[defined_at + 1 : last_use + 1]:
-            if _may_write(one.op, source):
+            if _may_write(one, source):
                 safe = False
                 break
         if safe:
@@ -787,7 +846,7 @@ def _holding(one: lir.Insn, value: int, home: ir.Mem, store: lir.Insn, holds: bo
     written = _written(one, home)
     return (
         holds
-        and not _may_write(one.op, home)
+        and not _may_write(one, home)
         and not any(
             cell is not home and (cell.addr is None or addresses(home.addr, home.width, cell.addr, cell.width))
             for cell in written
