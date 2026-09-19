@@ -790,14 +790,6 @@ def _floating_form(what: ir.Semantics) -> str | None:
     return f"{base}_m" if any(isinstance(arg, ir.Mem) for arg in what.sources) else base
 
 
-def _allocation_score(body: lir.LirBody, target: targets.Profile) -> tuple[int, int]:
-    """Target cost and instruction count after every x87 stack shuffle exists."""
-    forms = tuple(form for one in body.insns if one.what and (form := _floating_form(one.what)) is not None)
-    if not all(target.prices(form) for form in forms):
-        return (sum(1 for _one in body.insns), len(forms))
-    return sum(target.cost(form) for form in forms), len(forms)
-
-
 def _allocate_stack(
     body: lir.LirBody,
     frame,
@@ -807,19 +799,26 @@ def _allocate_stack(
     order: tuple[int, ...],
     *,
     retain_homes: bool,
-) -> lir.LirBody:
+) -> tuple[lir.LirBody, dict[int, tuple[int, ...]]]:
     """Allocate one complete stack candidate so its real shuffles can be priced."""
     from qbopt.backend.lower import Unlowered
     from qbopt.backend.floatregions import boundary
 
     stack = _Stack(frame, floating, target, retain_homes=retain_homes)
     blocks = []
+    labels = {}
+    region = 0
     for index, block in enumerate(body.blocks):
         if index - 1 not in continues:
+            region += 1
             stack.region(*_region(body.blocks, index, 0, continues))
         # By identity, so only while every instruction marked is still in `out`.
         stack.out, stack.vacated = [], set()
+        output_regions = []
         for position, one in enumerate(block.insns):
+            current_region = region
+            before = len(stack.out)
+            begins_region = False
             stack.here += 1
             what = one.what
             if what is None or not any(_floating(arg) for arg in (*what.sources, *what.dests)):
@@ -830,14 +829,82 @@ def _allocate_stack(
                     if stack.values:
                         raise Unlowered("floating stack crosses an unmodelled instruction")
                     stack.region(*_region(body.blocks, index, position + 1, continues))
+                    begins_region = True
                 stack.out.append(one)
-                continue
-            stack.allocate(one)
+            else:
+                stack.allocate(one)
+            output_regions.extend([current_region] * (len(stack.out) - before))
+            if begins_region:
+                region += 1
         if stack.values and index not in continues:
             raise Unlowered("floating stack live-out requires cross-block allocation")
-        blocks.append(replace(block, insns=tuple(lir.without(stack.out, lambda one: id(one) in stack.vacated))))
+        kept = tuple(
+            (one, region) for one, region in zip(stack.out, output_regions, strict=True) if id(one) not in stack.vacated
+        )
+        blocks.append(replace(block, insns=tuple(one for one, _region in kept)))
+        labels[block.at] = tuple(region for _one, region in kept)
     allocated_blocks = {block.at: block for block in blocks}
-    return replace(body, blocks=tuple(allocated_blocks[at] for at in order))
+    return replace(body, blocks=tuple(allocated_blocks[at] for at in order)), labels
+
+
+def _region_scores(
+    body: lir.LirBody, labels: dict[int, tuple[int, ...]], target: targets.Profile
+) -> dict[int, tuple[int, int]]:
+    """Target cost and instruction count for each independently empty-stack region."""
+    costs = defaultdict(int)
+    counts = defaultdict(int)
+    unpriced = set()
+    for block in body.blocks:
+        regions = labels[block.at]
+        if len(regions) != len(block.insns):
+            raise ValueError("x87 candidate region labels do not cover its instructions")
+        for one, region in zip(block.insns, regions, strict=True):
+            counts[region] += 1
+            form = _floating_form(one.what) if one.what else None
+            if form is None:
+                continue
+            if target.prices(form):
+                costs[region] += target.cost(form)
+            else:
+                unpriced.add(region)
+    return {
+        region: (counts[region], counts[region]) if region in unpriced else (costs[region], counts[region])
+        for region in counts
+    }
+
+
+def _compose_regions(
+    baseline: tuple[lir.LirBody, dict[int, tuple[int, ...]]],
+    retained: tuple[lir.LirBody, dict[int, tuple[int, ...]]],
+    target: targets.Profile,
+) -> lir.LirBody:
+    """Choose the cheaper complete allocation independently at every empty stack."""
+    baseline_body, baseline_labels = baseline
+    retained_body, retained_labels = retained
+    baseline_scores = _region_scores(baseline_body, baseline_labels, target)
+    retained_scores = _region_scores(retained_body, retained_labels, target)
+    regions = set(baseline_scores) | set(retained_scores)
+    use_retained = {
+        region for region in regions if retained_scores.get(region, (0, 0)) < baseline_scores.get(region, (0, 0))
+    }
+    retained_at = {block.at: block for block in retained_body.blocks}
+    blocks = []
+    for block in baseline_body.blocks:
+        other = retained_at[block.at]
+        baseline_groups = defaultdict(list)
+        retained_groups = defaultdict(list)
+        for one, region in zip(block.insns, baseline_labels[block.at], strict=True):
+            baseline_groups[region].append(one)
+        for one, region in zip(other.insns, retained_labels[block.at], strict=True):
+            retained_groups[region].append(one)
+        order = sorted(set(baseline_groups) | set(retained_groups))
+        insns = tuple(
+            one
+            for region in order
+            for one in (retained_groups[region] if region in use_retained else baseline_groups[region])
+        )
+        blocks.append(replace(block, insns=insns))
+    return replace(baseline_body, blocks=tuple(blocks))
 
 
 def allocated(
@@ -933,7 +1000,7 @@ def allocated(
     }
     baseline = _allocate_stack(body, frame, floating, target, continues, order, retain_homes=False)
     retained = _allocate_stack(body, frame, floating, target, continues, order, retain_homes=True)
-    selected = min((baseline, retained), key=lambda candidate: _allocation_score(candidate, target))
+    selected = _compose_regions(baseline, retained, target)
     return _truncating(selected, frame)
 
 

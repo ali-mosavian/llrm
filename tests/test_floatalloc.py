@@ -72,6 +72,9 @@ def _x87(insns, memory):
         what = one.what
         if what.op is ir.Operation.NOTHING:
             continue
+        if what.op is ir.Operation.BARRIER:
+            assert not stack
+            continue
         assert select.emit(what) is not None, what
         read = lambda arg: stack[arg.index] if isinstance(arg, ir.St) else memory[arg]
         match what.op:
@@ -971,6 +974,68 @@ def test_complete_x87_candidate_rejects_locally_profitable_overlapping_homes(mon
     assert sum(rounded in one.what.sources for one in result.insns) == 3
     memory, stack = _x87(result.insns, {left_cell: 7, right_cell: 2})
     assert (memory[square_out], memory[left_out], memory[right_out], stack) == (25, 35, 10, [])
+
+
+def test_independent_x87_regions_select_their_own_complete_candidate():
+    """One bad stack region made the old whole-body choice discard a cheaper sibling.
+
+    The first region saves a rounded-home read without adding instructions.
+    The second would need an expensive 80387 exchange to retain its value, so
+    its ordinary three reads must not suppress the first region's independent
+    improvement.
+    """
+    home, left_cell, right_cell, square_out, left_out, right_out = _cells(-4, -8, -12, -16, -20, -24)
+    shared, left, right, square, left_product, right_product = (ir.Held(index, 10) for index in range(1, 7))
+    operations = [
+        _load(shared, home),
+        _arithmetic("fmul", square, shared, shared),
+        _store(square_out, square),
+        _load(left, left_cell),
+        _arithmetic("fmul", left_product, shared, left),
+        _store(left_out, left_product),
+        _load(right, right_cell),
+        _arithmetic("fmul", right_product, shared, right),
+        _store(right_out, right_product),
+        ir.Semantics(ir.Operation.BARRIER, "wait", (), ()),
+    ]
+    other, scale_cell, first_acc, second_acc, other_square = _cells(-28, -32, -36, -40, -44)
+    value, squared, scale, product, old, added, scale_again, product_again, old_again, subtracted = (
+        ir.Held(index, 10) for index in range(10, 20)
+    )
+    operations += [
+        _load(value, other),
+        _arithmetic("fmul", squared, value, value),
+        _store(other_square, squared),
+        _load(old, first_acc),
+        _load(scale, scale_cell),
+        _arithmetic("fmul", product, value, scale),
+        _arithmetic("fadd", added, old, product),
+        _store(first_acc, added),
+        _load(old_again, second_acc),
+        _load(scale_again, scale_cell),
+        _arithmetic("fmul", product_again, value, scale_again),
+        _arithmetic("fsub", subtracted, old_again, product_again),
+        _store(second_acc, subtracted),
+    ]
+
+    result = floatalloc.allocated(_body(operations), cpu="386")
+
+    assert sum(home in one.what.sources for one in result.insns) == 1
+    assert sum(other in one.what.sources for one in result.insns) == 3
+    assert not any(one.what.name == "fxch" for one in result.insns)
+    memory, stack = _x87(
+        result.insns,
+        {home: 7, left_cell: 2, right_cell: 3, other: 5, scale_cell: 2, first_acc: 10, second_acc: 20},
+    )
+    assert (
+        memory[square_out],
+        memory[left_out],
+        memory[right_out],
+        memory[other_square],
+        memory[first_acc],
+        memory[second_acc],
+        stack,
+    ) == (49, 14, 21, 25, 20, 10, [])
 
 
 def test_repeated_stable_float_cell_load_is_kept_across_consumers():

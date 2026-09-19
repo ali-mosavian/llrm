@@ -23,12 +23,65 @@ iteration updates this file in the same commit.
 | Per-CPU measurement | in progress | CPU profiles distinguish native medium-model addressing from the complete costed secondary 67h form, explicitly price x87 stack exchange, and carry the complete-peel iteration budget; the C corpus, static and frequency-weighted structural metrics, static and CFG-frequency-weighted per-CPU cost rankings, reference listings, and exact-count preservation across recurrence rewinds, loop rotation, and zero-byte-header threading exist; audited targets and runtime profiles remain. |
 | MIR/LIR provenance and fresh OMF | complete in production | allocated LIR emits directly with external source maps/allocation hints; the remaining compatibility views are test-only and cannot route a compilation through record rewriting. |
 | SROA and scalar promotion | partial | precise SSA pointer identity now refines coarse frontend operand annotations before GVN, LICM, packed-pointer splitting, and SROA; packed 16:16 dereferences are normalized into independent offset/selector SSA values before SROA; fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies expand into exact leaves, and structural candidates transact leaves made singleton by scalar convergence with finite-capacity pressure pricing; far aggregate copies, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
-| Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, dying-base indexed-form unfolding, and local constant, frame, relocatable-address, and provenance-disjoint incoming-argument rematerialization exist; x87 allocation compares complete target-priced reread and retained-home candidates after stack shuffles are materialized; global splitting/rematerialization, block-weighted x87 candidate composition, and broader global x87 allocation remain. |
+| Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, dying-base indexed-form unfolding, and local constant, frame, relocatable-address, and provenance-disjoint incoming-argument rematerialization exist; x87 allocation composes complete target-priced reread and retained-home candidates independently at empty-stack regions after all shuffles are materialized; global integer splitting/rematerialization, CFG-frequency weighting within a nonempty x87 region, and broader global x87 allocation remain. |
 | Loop optimization | partial | exact pre/post-tested recurrences and symbolic sentinels, target-priced exact nested-recurrence rewind, complete nested-initializer LICM, dead-control countdowns with zero-trip guards, complete-affine spill/recompute pricing, precise-volatile-aware LICM, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling with exact-trip-amortized growth plus a pre-folding complete-sequence/pressure proof and bounded public defaults, post-specialization associative integer constant composition, and machine-neutral whole-range pressure forecasting exist; versioning, partial unrolling, constraint-complete candidate-set forecasting, and compile-time candidate memoization remain. |
 | Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs (including closed recursive SCCs in C and object paths), constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, post-inline constant folding through phi edges and linear corridors, private immutable numeric-data initializer facts, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
 | Post-allocation quality | partial | copy propagation, machine CSE/DCE, shared final block placement/threading/fall-through elision and fresh-tail sharing, plus byte-neutral source-unowned terminal-return duplication, dead-register frame-copy shuttles, dying-input commutative result transfer, synthetic high-word reload narrowing, target-priced 67h LEA selection including source-owned loaded scale/add tails and constant/register sums, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware decoded-tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 127. Compose x87 candidates at semantic region boundaries — 2026-09-19
+
+Frontend verbosity must disappear in the common pipeline.  A source frontend
+may spell the same rounded floating value as repeated loads and stores; once
+that value reaches shared LIR, an unrelated source region must not determine
+whether those repetitions survive.  The previous complete-candidate safeguard
+still made one all-body choice, however.  In a function with an x87-empty call
+or barrier, an expensive retained form after the boundary could reject a
+profitable retained form before it.
+
+The fail-first regression contains exactly those two independent regions.  The
+first has one rounded home with three consumers and can replace two memory
+reads without adding an instruction.  The second has nbody's strict-order
+shape: retaining its common value would require an expensive 80387 exchange,
+so three ordinary reads are cheaper.  Before this iteration the whole-body
+choice selected the reread form everywhere and the first home appeared three
+times; the regression now requires one first-region reference, three
+second-region references, no `fxch`, and executes the resulting x87 stream over
+concrete values to prove all six stored answers and an empty final stack.
+
+Both complete allocations now carry region labels established only where the
+x87 stack is empty.  Every region is priced after its actual loads,
+memory/register arithmetic forms, duplication and exchanges exist, and the
+cheaper complete slice is composed into the final body.  This is a shared LIR
+allocation rule: neither C nor QB source form, symbol name, or frontend hint is
+consulted.  Calls, barriers, disconnected roots and other empty-stack
+boundaries therefore isolate profitability without weakening strict exception
+order inside a region.
+
+The real `floatregions.c` probe combines the profitable three-use expression,
+a call, and the nbody-like rejected expression.  On 386 the old whole-body
+choice emitted 111 bytes, 41 instructions, 21 normalized loads, seven stores,
+and 660 weighted units.  Region composition emits 109 bytes, the same 41
+instructions, 19 loads, seven stores, and 652 units.  The raw diff replaces two
+rounded-home memory operands with the retained x87 value before the call and
+leaves the three cheaper reads after it unchanged.  All MIR and pre-allocation
+LIR dumps are identical; `FloatAlloc` is the first changed stage.
+
+Clang 21's advisory flat-i386 listing makes the same region-local structural
+choice and has 32 normalized instructions, eight loads, two stores, and one
+call.  GCC 16.2 under the strict reference flags has 51/18/12/1, including its
+own rounded temporaries; neither is treated as an ABI-equivalent target.  The
+raw before/after, stage dumps, GCC and Clang listings are under
+`build/quality/iter127-floatregions-{before,current}`.
+
+This completes independent empty-stack candidate composition, not global x87
+allocation.  The next allocator step is profile-weighted composition within
+nonempty CFG regions; the larger QB-vs-BC footprint work remains a shared
+canonicalization/allocation problem, never a request for the QB frontend to
+pre-optimize its HIR.  The complete focused allocator module passes 94 tests
+in 0.12 seconds, and Tier 1 passes 271 tests with 31 deselected in 1.41
+seconds.
 
 ### 126. Select complete x87 retention candidates — 2026-09-19
 
