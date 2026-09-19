@@ -68,6 +68,16 @@ def _pair(first: lir.Insn, second: lir.Insn) -> lir.Insn | None:
     (first_dest, first_cell), (second_dest, second_cell) = words
     if not _next_word(first_cell, second_cell) or not _far_pointer_words(first, second):
         return None
+    # A fixed address survives allocation unchanged.  Leave its two semantic
+    # values independent so spilling may rematerialize either word from the
+    # original cell and selector allocation may choose ES, FS or GS directly;
+    # the physical far-load peephole can still fuse adjacent survivors.  A
+    # virtual base/selector/index is different: allocation can reconstruct its
+    # owner separately for each word, destroying the common address before the
+    # physical peephole sees it.  Only that genuinely lossy boundary needs the
+    # early complete-load selection performed here.
+    if not tuple(ir.values(first_cell)):
+        return None
     defined = {first_dest.value, second_dest.value}
     if any(value.value in defined for cell in (first_cell, second_cell) for value in ir.values(cell)):
         return None

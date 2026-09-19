@@ -23,12 +23,55 @@ iteration updates this file in the same commit.
 | Per-CPU measurement | in progress | CPU profiles distinguish native medium-model addressing from the complete costed secondary 67h form, explicitly price x87 stack exchange and every LES/LFS/LGS complete far-pointer load, and carry the complete-peel iteration budget; the C corpus, static and frequency-weighted structural metrics, static and CFG-frequency-weighted per-CPU cost rankings, reference listings, and exact-count preservation across recurrence rewinds, loop rotation, and zero-byte-header threading exist; audited targets and runtime profiles remain. |
 | MIR/LIR provenance and fresh OMF | complete in production | allocated LIR emits directly with external source maps/allocation hints; the remaining compatibility views are test-only and cannot route a compilation through record rewriting. |
 | SROA and scalar promotion | partial | precise SSA pointer identity now refines coarse frontend operand annotations before GVN, LICM, packed-pointer splitting, and SROA; packed 16:16 dereferences are normalized into independent offset/selector SSA values before SROA; fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies expand into exact leaves, and structural candidates transact leaves made singleton by scalar convergence with finite-capacity pressure pricing; far aggregate copies, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
-| Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, dying-base indexed-form unfolding, and local constant, frame, relocatable-address, and provenance-disjoint incoming-argument rematerialization exist; x87 allocation composes complete target-priced reread and retained-home candidates independently at empty-stack regions after all shuffles are materialized; global integer splitting/rematerialization, CFG-frequency weighting within a nonempty x87 region, and broader global x87 allocation remain. |
+| Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, dying-base indexed-form unfolding, and local constant, frame, relocatable-address, and provenance-disjoint incoming-argument rematerialization exist; typed far-pointer loads are selected before allocation only when a virtual address owner would otherwise be lost, while fixed addresses retain independent rematerialization and late LES/LFS/LGS selection; x87 allocation composes complete target-priced reread and retained-home candidates independently at empty-stack regions after all shuffles are materialized; global integer splitting/rematerialization, CFG-frequency weighting within a nonempty x87 region, and broader global x87 allocation remain. |
 | Loop optimization | partial | exact pre/post-tested recurrences and symbolic sentinels, target-priced exact nested-recurrence rewind, complete nested-initializer LICM, dead-control countdowns with zero-trip guards, complete-affine spill/recompute pricing, precise-volatile-aware LICM, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling with exact-trip-amortized growth plus a pre-folding complete-sequence/pressure proof and bounded public defaults, post-specialization associative integer constant composition, and machine-neutral whole-range pressure forecasting exist; versioning, partial unrolling, constraint-complete candidate-set forecasting, and compile-time candidate memoization remain. |
 | Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs (including closed recursive SCCs in C and object paths), constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, post-inline constant folding through phi edges and linear corridors, private immutable numeric-data initializer facts, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
 | Post-allocation quality | partial | copy propagation, machine CSE/DCE, shared final block placement/threading/fall-through elision and fresh-tail sharing, plus byte-neutral source-unowned terminal-return duplication, dead-register frame-copy shuttles, dying-input commutative result transfer, synthetic high-word reload narrowing, target-priced 67h LEA selection including source-owned loaded scale/add tails and constant/register sums, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware decoded-tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 129. Defer lossless far-load selection until physical allocation — 2026-09-19
+
+Frontend-independent cleanup requires selecting a representation at the stage
+that has enough information to make it profitable.  Iteration 128 correctly
+recomposed typed far-pointer fields whose virtual base and selector would be
+reconstructed separately by allocation.  Applying the same early selection to
+a fixed BP-relative parameter was counterproductive, however: it fixed the
+selector in ES before allocation, introduced an ES-to-FS copy, and forced the
+offset into a new frame spill slot.  The final physical peephole could already
+have selected `lfs bx,dword ptr [bp+6]` directly.
+
+The fail-first regression records the general stage boundary rather than the
+one function: fixed memory addresses must remain as independent semantic values
+until allocation, because their exact address cannot be lost and either half
+may be rematerialized independently.  A memory operand with a virtual base,
+selector, or index is fused before allocation, because reconstructing those
+components independently would destroy the shared effective address.  The
+existing type, adjacency, volatility, and dependency proofs remain mandatory.
+The C integration regression additionally rejects the frame growth and spill
+slot caused by early fixed-address fusion.
+
+On the stable 386 `indexed._lru_use` measurement, this iteration improves the
+iteration-128 result from 178 to 170 bytes, 66 to 62 instructions, 295 to 279
+weighted units, and 26.21875 to 23.71875 estimated executed instructions.  The
+new spill store and its frame slot disappear.  Relative to the pre-recomposition
+baseline, the complete change is 239 to 170 bytes and 81 to 62 instructions.
+The Clang advisory dynamic ratio falls from 1.62x to 1.46x and the i686 GCC
+ratio from 1.34x to 1.22x.  Pre-allocation LIR now deliberately retains the
+fixed parameter halves; allocated LIR is the first stage at which they become
+one `LFS`, while virtual far-struct fields remain complete loads before that
+point.  Listings and reports are under
+`build/quality/iter129-{indexed,lru}-after`.
+
+A committed qc-port-shaped C benchmark now drives the same dynamic far-array
+and list update through the Watcom frontend, shared optimizer, fresh OMF
+emitter, DOS linker, and a real 386 run.  Its input is supplied at runtime so
+GCC and Clang cannot replace the computation with a known answer; the linked
+program returns the independently derived checksum 60.  The two focused
+far-load tests pass in 0.03 seconds, the recorded frontend regression in 1.29
+seconds, and the linked DOS oracle in 2.96 seconds.  This iteration changes no
+frontend cleanup rule: both verbose and already-canonical input reach the same
+shared selection machinery.
 
 ### 128. Recompose typed far pointers before allocation — 2026-09-19
 

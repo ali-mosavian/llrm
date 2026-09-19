@@ -26,6 +26,7 @@ BENCHMARKS = (
     ("mandel", "MANDEL", 0, 2),
     ("shellsort", "SHELL", 0, 2),
     ("floats", "FLOATS", 1000, 2),
+    ("lru", "LRU", 1, 2),
     ("nbody", "NBODY", 200, 2),
 )
 
@@ -147,6 +148,16 @@ def test_cloned_c_nbody_returns_its_independent_answer(tmp_path: Path) -> None:
     LINK, and a real DOS 386, rather than merely resemble GCC's listing.
     """
     _answers(tmp_path, (BENCHMARKS[-1],))
+
+
+def test_dynamic_far_pointer_list_update_returns_its_independent_answer(tmp_path: Path) -> None:
+    """Typed pointer-half fusion must preserve qc-port's cache-list update.
+
+    The structural regression proves where fusion is selected; this linked
+    run exercises every updated far array and inline list field on a real DOS
+    386 and checks the independently derived checksum 60.
+    """
+    _answers(tmp_path, (BENCHMARKS[-2],))
 
 
 def test_duplicated_c_return_tail_preserves_both_answers(tmp_path: Path) -> None:

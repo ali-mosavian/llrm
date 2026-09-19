@@ -16,7 +16,7 @@ answer.  In particular, CRC uses the standard `"123456789"` check vector and
 must return `0xcbf43926` for a zero salt.
 
 `tests/test_cbench_e2e.py` is the semantic gate for that corpus. It compiles
-all seven sources through the Watcom frontend and fresh OMF emitter, links
+all eight sources through the Watcom frontend and fresh OMF emitter, links
 them into one medium-model DOS executable, and compares every 32-bit return
 value with `expected.json`. Per-kernel marker files identify the first routine
 that fails to return without mistaking a timeout for a wrong answer.

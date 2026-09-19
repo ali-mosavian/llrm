@@ -877,6 +877,7 @@ def test_dynamic_far_struct_pointer_fields_are_complete_loads() -> None:
         and any(f"{segment}:[" in line for segment in ("es", "fs", "gs"))
         for line in body
     ), body
+    assert "sub sp, 2" not in body and not any("[bp-2]" in line for line in body), body
 
 
 def test_hot_loop_retains_invariant_far_field_owners_under_pressure():

@@ -5,5 +5,6 @@
   "mandel": {"arguments": [0], "result": 8873},
   "shellsort": {"arguments": [0], "result": 6384478},
   "floats": {"arguments": [1000], "result": 162635},
+  "lru": {"arguments": [1], "result": 60},
   "nbody": {"arguments": [200], "result": 4774160}
 }
