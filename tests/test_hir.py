@@ -1827,6 +1827,19 @@ def test_qb_module_instantiates_user_callee_modref_on_pointer_actuals() -> None:
     assert call.stores == ()
 
 
+def test_qb_string_comparison_abi_site_survives_alias_annotation() -> None:
+    """SCMPABI's B$SCMP ABI site was dropped because STRING_EQ is not Op.CALL."""
+    source = qb_driver.parsed(ROOT / "frontends/qb/fixtures/SCMPABI.BAS")
+    function = next(one for one in source.modules[0].functions if one.name == "MATCHES")
+    instruction = next(
+        one for block in function.blocks for one in block.instructions if one.id == function.calls[0].instruction
+    )
+
+    assert instruction.op is hir.Op.STRING_EQ
+    listing = masm.text(qb_compile.assembled(source))
+    assert "call far ptr B$SCMP" in listing
+
+
 def test_far_float_access_splits_selector_and_offset_for_x87_memory() -> None:
     """ent.bas used a SINGLE field through a SEG formal; generic whole-memory expansion is integral only."""
     void = hir.Type(0, "void", hir.TypeKind.VOID, 0)

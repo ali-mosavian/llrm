@@ -1079,11 +1079,16 @@ def _alias_annotated(
         body = alias.annotated(lowered.body)
         calls = {}
         arguments = {}
+        abi_sites = {site.instruction for site in function.calls}
         instructions = {
             instruction.id: instruction
             for block in function.blocks
             for instruction in block.instructions
-            if instruction.op is hir.Op.CALL
+            # HIR's ABI table, rather than one particular operation spelling,
+            # defines a call site.  STRING_EQ and its siblings carry the
+            # B$SCMP ABI site while retaining their typed operation so the
+            # lowering can consume its flags directly.
+            if instruction.id in abi_sites
         }
         call_ops = {
             operation.id: operation
