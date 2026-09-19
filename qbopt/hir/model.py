@@ -156,6 +156,7 @@ class IndirectPlace:
     base: int
     offset: int
     type: int
+    volatile: bool = False
 
 
 type Operand = ValueRef | Constant | PlaceRef | ArrayElement | ProjectedPlace | IndirectPlace

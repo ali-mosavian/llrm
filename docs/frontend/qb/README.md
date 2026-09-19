@@ -129,6 +129,15 @@ to the true arm and the following source line remains reachable on the false
 path. Losing that boundary truncated QRender's `LS_SELFTEST` and `SC_SELFTEST`
 after their first guard; the isolated parser/HIR regression checks both the
 two-statement arm and the surviving success assignment.
+
+Default-`BYREF` pointee reads are volatile HIR indirect places. Raw VBDOS
+`IN_KEYSTROKE` reloads the keyboard flag on every `DO ... LOOP WHILE`
+back-edge because the interrupt handler may release the key without a BASIC
+store in the current function. The frontend initially let GVN reuse the
+entry read and emitted a permanent register-only spin. `BYREFLP.BAS` isolates
+the rule: both reads remain volatile after optimization, and one remains in
+the natural loop. HIR lowering carries the access property into existing MIR;
+the existing backend receives an ordinary memory comparison.
 [memory-model.md](memory-model.md) records the raw comparison.
 `tools/qbstages.py` writes input, HIR, semantic MIR, optimized MIR,
 physical MIR, LIR, every machine pass, and inline-x87 output adjacently under
@@ -343,7 +352,7 @@ revision and the extraction boundary.
 
 This work does not:
 
-- change MIR, optimization passes, lowering, register allocation, or emission;
+- change the MIR representation, machine lowering, register allocation, or emission;
 - introduce p-code or an interpreter stage;
 - support protected mode or a flat address space;
 - generate 8086- or 286-specific code;

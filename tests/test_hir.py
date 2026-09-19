@@ -10,6 +10,7 @@ from qbopt.model import lir
 from qbopt.model import mir
 from qbopt.backend import masm
 from qbopt.backend import frame
+from qbopt.analysis import loops
 from qbopt.model import floating
 from qbopt.objectfile import omf
 from qbopt.backend import floatalloc
@@ -1941,3 +1942,32 @@ def test_float_conversions_and_negation_match_encodable_x87_semantics() -> None:
     assert all(one.kind is not mir.Kind.COPY for one in operations)
     assert operations[3].kind is mir.Kind.FSTORE
     assert lower_mir.lowered("float_convert", body, {}, set(), {}, occurrences={}).insns
+
+
+def test_byref_loop_condition_reloads_the_published_pointee() -> None:
+    """IN_KEYSTROKE held a released key forever after GVN kept its first read.
+
+    A BYREF pointee is published storage: an interrupt or another runtime
+    callback may change it without an ordinary source store.  Both the guard
+    and the back-edge condition must therefore remain observable loads.
+    """
+    source = qb_driver.parsed(
+        ROOT / "frontends/qb/fixtures/BYREFLP.BAS",
+        dialect="vbdos",
+        runtime="vbdos",
+    )
+    function = next(one for one in source.modules[0].functions if one.name == "WAITKEY")
+    semantic = next(one for one in hir.lower(source) if one.name.endswith("WAITKEY"))
+    optimized = qb_compile.optimized(source, function, semantic)
+    loads = [one for block in optimized.body.blocks for one in block.ops if one.kind is mir.Kind.LOAD]
+
+    natural = loops.loops(optimized.body.blocks, optimized.body.entry)
+    inside = {block for loop in natural for block in loop.body}
+
+    assert len(loads) == 2
+    assert all(one.volatile and any(reference.volatile for reference in one.loads) for one in loads)
+    assert any(
+        block.at in inside and one.kind is mir.Kind.LOAD and one.volatile
+        for block in optimized.body.blocks
+        for one in block.ops
+    )

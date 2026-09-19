@@ -75,6 +75,13 @@ carry a chosen segment register, frame register, or x86 addressing mode.
 Aliasing is derived from object identity, slices, escape, and call effects;
 it is never guessed from a numeric address.
 
+An indirect place may additionally be `volatile`. This means the pointed-to
+source object is externally published and can change without an ordinary
+store visible in the current function. It is an access property, not a
+machine address-space or register property. HIR-to-MIR lowering preserves it
+on both the `MemRef` and the operation, so value numbering cannot reuse the
+read and loop motion cannot move it out of its source loop.
+
 Initialized data relocations distinguish near offsets, complete far/huge
 pointers, code identities, and a segment-selector word. The last is required
 by real-mode runtimes: it is not an integer constant and cannot be recreated
@@ -164,6 +171,7 @@ without changing its model:
 | integer arithmetic or comparison | existing integer `Kind` |
 | floating operation | existing floating `Kind` and `FloatingSemantics` |
 | local/global/field place | canonical object, slice, provenance, and `MemRef` from the current memory model |
+| volatile indirect place | the same typed `MemRef`, marked volatile on the memory occurrence and operation |
 | numeric array access | current array request/access raising result and `PTR_OFFSET` where required |
 | direct runtime operation not expanded natively | `CALL` plus the existing runtime contract and call-memory facts |
 | source block/terminator | existing MIR block, branch, switch, and return forms |

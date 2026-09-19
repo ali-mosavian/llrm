@@ -72,12 +72,13 @@ enum Operand {
         base: u32,
         offset: usize,
         type_id: u32,
+        volatile: bool,
     },
 }
 
 enum ProjectionBase {
     Place(u32, Vec<Operand>),
-    Indirect(u32),
+    Indirect(u32, bool),
 }
 
 #[derive(Clone)]
@@ -1991,6 +1992,7 @@ impl Compiler {
                                     base: pointer,
                                     offset: 0,
                                     type_id: BYTE,
+                                    volatile: false,
                                 },
                                 value,
                             ],
@@ -2539,11 +2541,15 @@ impl Compiler {
                 type_id,
             }),
             Operand::Indirect {
-                base, offset: at, ..
+                base,
+                offset: at,
+                volatile,
+                ..
             } => Ok(Operand::Indirect {
                 base: *base,
                 offset: at + offset,
                 type_id,
+                volatile: *volatile,
             }),
             Operand::Value(_) | Operand::Constant(_, _) => {
                 self.fail("aggregate copy operand is not a place")
@@ -2605,6 +2611,7 @@ impl Compiler {
                         base,
                         offset: 0,
                         type_id: variable.type_id,
+                        volatile: true,
                     }
                 } else {
                     Operand::Place(variable.place)
@@ -2634,6 +2641,7 @@ impl Compiler {
                             base: pointer,
                             offset: 0,
                             type_id: element,
+                            volatile: false,
                         },
                         element,
                     ));
@@ -2658,6 +2666,7 @@ impl Compiler {
                         base: pointer,
                         offset: 0,
                         type_id: element,
+                        volatile: false,
                     },
                     element,
                 ))
@@ -2671,10 +2680,11 @@ impl Compiler {
                         offset,
                         type_id,
                     },
-                    ProjectionBase::Indirect(base) => Operand::Indirect {
+                    ProjectionBase::Indirect(base, volatile) => Operand::Indirect {
                         base,
                         offset,
                         type_id,
+                        volatile,
                     },
                 };
                 Ok((operand, type_id))
@@ -2695,7 +2705,7 @@ impl Compiler {
                 }
                 let base = variable
                     .indirect
-                    .map(ProjectionBase::Indirect)
+                    .map(|base| ProjectionBase::Indirect(base, true))
                     .unwrap_or_else(|| ProjectionBase::Place(variable.place, Vec::new()));
                 Ok((base, 0, variable.type_id))
             }
@@ -2717,7 +2727,7 @@ impl Compiler {
                     };
                     let pointer =
                         self.descriptor_element(descriptor, element, arguments, address)?;
-                    return Ok((ProjectionBase::Indirect(pointer), 0, element));
+                    return Ok((ProjectionBase::Indirect(pointer, false), 0, element));
                 }
                 if arguments.len() != variable.bounds.len() {
                     return self.fail(format!("{name} has the wrong number of subscripts"));
@@ -2734,7 +2744,7 @@ impl Compiler {
             }
             Expr::Index { base, indices, .. } => {
                 let (pointer, element) = self.indexed(base, indices)?;
-                Ok((ProjectionBase::Indirect(pointer), 0, element))
+                Ok((ProjectionBase::Indirect(pointer, false), 0, element))
             }
             Expr::Field { base, name, .. } => {
                 let (base, offset, base_type) = self.projection(base)?;
@@ -2784,10 +2794,11 @@ impl Compiler {
                 offset,
                 type_id: array_type,
             },
-            ProjectionBase::Indirect(base) => Operand::Indirect {
+            ProjectionBase::Indirect(base, volatile) => Operand::Indirect {
                 base,
                 offset,
                 type_id: array_type,
+                volatile,
             },
         };
         let array_pointer_type = self.pointer_type(array_type);
@@ -3025,6 +3036,7 @@ impl Compiler {
                 base: descriptor,
                 offset,
                 type_id,
+                volatile: false,
             }],
         );
         self.descriptor_fields.insert(key, value);
@@ -3738,6 +3750,7 @@ impl Compiler {
                         base,
                         offset: 0,
                         type_id: variable.type_id,
+                        volatile: true,
                     }
                 } else {
                     Operand::Place(variable.place)
@@ -3919,6 +3932,7 @@ impl Compiler {
                     base: pointer,
                     offset: 0,
                     type_id: SINGLE,
+                    volatile: false,
                 }],
             );
             return Ok(Some((Operand::Value(result), SINGLE)));
@@ -4178,6 +4192,7 @@ impl Compiler {
                     base: pointer,
                     offset: 0,
                     type_id: BYTE,
+                    volatile: false,
                 }],
             );
             let result = self.convert(Operand::Value(byte), BYTE, INTEGER)?;
@@ -4288,6 +4303,7 @@ impl Compiler {
                     base: pointer,
                     offset: 0,
                     type_id,
+                    volatile: false,
                 }],
             );
             return Ok(Some((Operand::Value(result), type_id)));
@@ -4309,6 +4325,7 @@ impl Compiler {
                     base: pointer,
                     offset: 0,
                     type_id: DOUBLE,
+                    volatile: false,
                 }],
             );
             return Ok(Some((Operand::Value(result), DOUBLE)));
@@ -6185,9 +6202,10 @@ fn operand_json(out: &mut String, operand: &Operand) {
             base,
             offset,
             type_id,
+            volatile,
         } => write!(
             out,
-            "{{\"base\":{base},\"offset\":{offset},\"tag\":\"indirect\",\"type\":{type_id}}}"
+            "{{\"base\":{base},\"offset\":{offset},\"tag\":\"indirect\",\"type\":{type_id},\"volatile\":{volatile}}}"
         )
         .unwrap(),
     }

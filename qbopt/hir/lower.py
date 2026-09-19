@@ -439,7 +439,7 @@ def _function(
                         provenance=provenance,
                     )
                 )
-            case model.IndirectPlace(base, offset, type_id):
+            case model.IndirectPlace(base, offset, type_id, volatile):
                 type_ = types[type_id]
                 pointer_type = value_types[base]
                 provenance = memory.Provenance.one(memory.Object(memory.Kind.PARAMETER, base))
@@ -452,6 +452,7 @@ def _function(
                             space=Space.LITERAL,
                             base_width=pointer_type.width,
                             provenance=provenance,
+                            volatile=volatile,
                         )
                     )
                 pointer = values[base]
@@ -506,6 +507,7 @@ def _function(
                         base_width=pointer_type.width,
                         pointer=True,
                         provenance=provenance,
+                        volatile=volatile,
                     )
                 )
 
@@ -1014,6 +1016,7 @@ def _function(
             args_known=True,
             memory_complete=instruction.op is not model.Op.CALL and instruction.op not in _STRING_COMPARISONS,
             reads_complete=instruction.op is not model.Op.CALL and instruction.op not in _STRING_COMPARISONS,
+            volatile=any(reference.volatile for reference in (*loads, *stores)),
         )
         return (*before, final)
 

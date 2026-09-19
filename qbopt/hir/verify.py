@@ -88,7 +88,7 @@ def _operand_type(operand: model.Operand, values: dict[int, model.Value], places
             if place not in places:
                 raise InvalidHIR(f"unknown place {place}")
             return type_
-        case model.IndirectPlace(base, _, type_):
+        case model.IndirectPlace(base, _, type_, _):
             if base not in values:
                 raise InvalidHIR(f"unknown pointer value {base}")
             return type_
