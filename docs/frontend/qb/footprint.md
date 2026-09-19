@@ -248,3 +248,30 @@ The BASIC-owned scope is **21.9% above BC**; complete linked code, which
 charges BC for the helpers behind its calls, is **11.0% above BC**. Three
 modules already beat BC materially (`D_MDL`, `D_SURF`, and `SND`). `ENT`,
 `SCREEN`, and `PL_MOVE` are the measured next code-quality targets.
+
+## 2026-09-19: preserve published BYREF reads
+
+`IN_KEYSTROKE` and the camera wait loop receive keyboard state through a
+default-`BYREF` formal. VBDOS reloads that pointee on every loop back-edge;
+the frontend formerly let GVN retain the entry value and could wait forever
+after the interrupt handler released a key. `BYREFLP.BAS` is the isolated
+fail-first regression. The HIR now marks published indirect places volatile,
+and optimized MIR retains the memory read in the natural loop.
+
+Only the two affected modules were rebuilt over the preceding complete QGL
+image because an unrelated dirty-worktree alias-analysis experiment blocked a
+full rebuild in `COM_TOKENIZE`. The link map therefore measures this fix
+without attributing that experiment to it.
+
+| Module | BC bytes | qbopt bytes | Delta |
+| --- | ---: | ---: | ---: |
+| IN_MAIN | 677 | 610 | -67 |
+| VIEW | 4,118 | 4,110 | -8 |
+| **BASIC-owned BC_CODE** | **154,222** | **187,240** | **+33,018** |
+| **Complete linked code** | **252,243** | **279,225** | **+26,982** |
+
+The BASIC-owned scope is now **21.4% above BC**, 740 bytes smaller than the
+previous round. Complete linked code is **10.7% above BC**, also 740 bytes
+smaller. The size improvement is secondary to the corrected repeated-read
+semantics; the two measurements agree exactly because runtime selection did
+not change.
