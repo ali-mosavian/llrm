@@ -73,7 +73,7 @@ def _x87(insns, memory):
         if what.op is ir.Operation.NOTHING:
             continue
         assert select.emit(what) is not None, what
-        read = (lambda arg: stack[arg.index] if isinstance(arg, ir.St) else memory[arg])
+        read = lambda arg: stack[arg.index] if isinstance(arg, ir.St) else memory[arg]
         match what.op:
             case ir.Operation.FLOAT_LOAD:
                 stack.insert(0, read(what.sources[0]))
@@ -296,7 +296,9 @@ def test_a_load_read_once_by_the_next_arithmetic_is_its_memory_operand(loaded, n
         [
             ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (value,), (home,)),
             ir.Semantics(ir.Operation.FLOAT_LOAD, loaded, (temporary,), (cell,)),
-            ir.Semantics(ir.Operation.FLOAT_ARITH, name, (answer,), (temporary, value) if loaded_first else (value, temporary)),
+            ir.Semantics(
+                ir.Operation.FLOAT_ARITH, name, (answer,), (temporary, value) if loaded_first else (value, temporary)
+            ),
             ir.Semantics(ir.Operation.FLOAT_STORE, "fstp", (home,), (answer,)),
         ]
     )
@@ -745,7 +747,9 @@ def test_buried_float_operand_is_exchanged_not_duplicated(operation):
     moves = [
         one
         for one in allocated.insns
-        if one.what.op is ir.Operation.EXCHANGE or one.what.sources and isinstance(one.what.sources[0], ir.St)
+        if one.what.op is ir.Operation.EXCHANGE
+        or one.what.sources
+        and isinstance(one.what.sources[0], ir.St)
         and one.what.op is ir.Operation.FLOAT_LOAD
     ]
     # Both operands of the popping subtraction die, so the result overwrites one in place.
@@ -895,6 +899,78 @@ def test_x87_memory_operand_matches_each_public_cpu_cost(profile):
     multiply = next(one.what for one in result.insns if one.what.name.startswith("fmul"))
     folded = any(isinstance(arg, ir.Mem) for arg in multiply.sources)
     assert folded is (target.cost("x87_mul_m") <= target.cost("x87_load") + target.cost("x87_mul"))
+
+
+@pytest.mark.parametrize("profile", cpu.names())
+def test_profitable_multiuse_float_home_is_retained_for_the_selected_cpu(profile):
+    """C nbody reread each rounded dx/dy temporary for every force term.
+
+    Retaining a value used by several x87 operations can avoid repeated memory
+    operands, but only if its initial load and any copies needed by a self-use
+    cost less for this CPU.  K5's unusually cheap memory multiply is the
+    deliberate counterexample: it should continue to use the rounded home.
+    """
+    home, left_cell, right_cell, square_out, left_out, right_out = _cells(-4, -8, -12, -16, -20, -24)
+    shared, left, right, square, left_product, right_product = (ir.Held(index, 10) for index in range(1, 7))
+    body = _body(
+        [
+            _load(shared, home),
+            _arithmetic("fmul", square, shared, shared),
+            _store(square_out, square),
+            _load(left, left_cell),
+            _arithmetic("fmul", left_product, shared, left),
+            _store(left_out, left_product),
+            _load(right, right_cell),
+            _arithmetic("fmul", right_product, shared, right),
+            _store(right_out, right_product),
+        ]
+    )
+    target = cpu.profile(profile)
+    result = floatalloc.allocated(body, cpu=target)
+    load = target.cost("x87_load")
+    multiply = target.cost("x87_mul")
+    memory_multiply = target.cost("x87_mul_m")
+    retain_cost = 2 * load + 3 * multiply
+    home_cost = load + multiply + 2 * min(memory_multiply, load + multiply)
+    expected_reads = 1 if retain_cost < home_cost else 3
+
+    assert sum(home in one.what.sources for one in result.insns) == expected_reads
+    memory, stack = _x87(result.insns, {home: 7, left_cell: 2, right_cell: 3})
+    assert (memory[square_out], memory[left_out], memory[right_out], stack) == (49, 14, 21, [])
+
+
+def test_complete_x87_candidate_rejects_locally_profitable_overlapping_homes(monkeypatch):
+    """C nbody fell from 2,085 to 2,121 estimated instructions after retaining dx.
+
+    The individual load saving did not include the final stack exchanges.
+    Force every rereadable value into the speculative candidate and prove the
+    386 allocator still selects the fully allocated, cheaper home-reading form.
+    """
+    left_cell, right_cell, rounded, square_out, left_out, right_out = _cells(-4, -8, -12, -16, -20, -24)
+    left, right, difference, shared, square, left_product, right_product = (ir.Held(index, 10) for index in range(1, 8))
+    body = _body(
+        [
+            _load(left, left_cell),
+            _load(right, right_cell),
+            _arithmetic("fsub", difference, left, right),
+            _store(rounded, difference),
+            _load(shared, rounded),
+            _arithmetic("fmul", square, shared, shared),
+            _store(square_out, square),
+            _arithmetic("fmul", left_product, shared, left),
+            _store(left_out, left_product),
+            _arithmetic("fmul", right_product, shared, right),
+            _store(right_out, right_product),
+        ]
+    )
+    monkeypatch.setattr(floatalloc._Stack, "retain_home", lambda self, _value: self.retain_homes)
+
+    result = floatalloc.allocated(body, cpu="386")
+
+    assert not any(one.what.name == "fxch" for one in result.insns)
+    assert sum(rounded in one.what.sources for one in result.insns) == 3
+    memory, stack = _x87(result.insns, {left_cell: 7, right_cell: 2})
+    assert (memory[square_out], memory[left_out], memory[right_out], stack) == (25, 35, 10, [])
 
 
 def test_repeated_stable_float_cell_load_is_kept_across_consumers():

@@ -11,9 +11,9 @@ from dataclasses import dataclass
 
 from qbopt.cycles import timings
 from qbopt.model.passes import AddressForm
+from qbopt.model.passes import OperationCosts
 from qbopt.model.passes import DEFAULT_MAX_UNROLL_ITERATIONS
 from qbopt.model.passes import DEFAULT_MAX_UNROLLED_OPERATIONS
-from qbopt.model.passes import OperationCosts
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,6 +110,9 @@ _I386_COSTS = {
     # GCC's i386 tuning table prices x87 loads/stores at eight units and
     # arithmetic at 23/27/88. Memory arithmetic includes both components.
     "x87_load": 8,
+    # 80387 register exchange is an eighteen-clock operation.  It only
+    # becomes nearly free on later pipelined stack implementations.
+    "x87_exchange": 18,
     "x87_store": 8,
     "x87_convert_store": 35,
     "x87_add": 23,

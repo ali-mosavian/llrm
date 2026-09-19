@@ -178,6 +178,11 @@ LATENCY["mul_r32"] = (26, 10, 4, 4, 3, 5, 3)
 #
 #                         486  P5  P6  K5  K6  K7 Core
 _X87_LOAD = (8, 2, 2, 6, 6, 4, 6)
+# 486 is the published four-clock form. Pentium occupies one issue slot but
+# can pair FXCH with suitable floating work; P6/Core report zero added
+# execution latency. GCC's Athlon description records two cycles, and K5/K6
+# conservatively use the corresponding AMD rankings.
+_X87_EXCHANGE = (4, 1, 0, 2, 2, 2, 0)
 _X87_STORE = (8, 4, 4, 6, 4, 6, 6)
 _X87_ADD = (8, 3, 3, 5, 2, 4, 3)
 _X87_MUL = (16, 3, 5, 8, 2, 4, 5)
@@ -195,6 +200,7 @@ COST.update(
         # LEAVE is the target's ordinary frame-register move plus POP ranking.
         "leave": (5, 2, 2, 2, 2, 2, 2),
         "x87_load": _X87_LOAD,
+        "x87_exchange": _X87_EXCHANGE,
         "x87_store": _X87_STORE,
         # Conversion plus store, except K5 whose FISTP int64 form is published
         # directly as seven cycles.
@@ -218,6 +224,7 @@ COST.update(
 for _form in (
     "leave",
     "x87_load",
+    "x87_exchange",
     "x87_store",
     "x87_convert_store",
     "x87_add",

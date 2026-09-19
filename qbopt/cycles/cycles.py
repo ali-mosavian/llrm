@@ -108,6 +108,8 @@ def classify(mnem, ops, raw=""):
         return "nop"
     if mnem in ("fld", "fild"):
         return "x87_load"
+    if mnem == "fxch":
+        return "x87_exchange"
     if mnem in ("fst", "fstp"):
         return "x87_store"
     if mnem in ("fist", "fistp"):

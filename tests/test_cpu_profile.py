@@ -9,10 +9,10 @@ from qbopt.model import mir
 from qbopt.backend import cpu
 from qbopt.backend import lower
 from qbopt.cycles import cycles
+from qbopt.optimize import unroll
 from qbopt.backend import allocate
 from qbopt.backend import schedule
 from qbopt.optimize import strength
-from qbopt.optimize import unroll
 from qbopt.analysis import induction
 from qbopt.backend import floatalloc
 from qbopt.optimize import transform
@@ -84,6 +84,14 @@ def test_memory_pop_is_not_priced_as_a_register_pop() -> None:
     assert cycles.classify("pop", "dword [bp-4]", "668f46fc") == "pop_m"
     assert cpu.profile("386").cost("pop_m") == 5
     assert all(cpu.profile(name).prices("pop_m") for name in cpu.names())
+
+
+def test_x87_exchange_is_explicitly_priced_for_every_cpu() -> None:
+    """Retaining C nbody's dx made the report unpriced as soon as it emitted FXCH."""
+    expected = {"386": 18, "486": 4, "P5": 1, "P6": 0, "K5": 2, "K6": 2, "K7": 2, "Core": 0}
+
+    assert cycles.classify("fxch", "st1", "d9c9") == "x87_exchange"
+    assert {name: cpu.profile(name).cost("x87_exchange") for name in cpu.names()} == expected
 
 
 def test_direct_mir_default_keeps_medium_model_address_legality(monkeypatch: pytest.MonkeyPatch) -> None:

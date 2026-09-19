@@ -20,15 +20,72 @@ iteration updates this file in the same commit.
 
 | Phase | State | Current boundary |
 |---|---|---|
-| Per-CPU measurement | in progress | CPU profiles distinguish native medium-model addressing from the complete costed secondary 67h form and carry the complete-peel iteration budget; the C corpus, static and frequency-weighted structural metrics, static and CFG-frequency-weighted per-CPU cost rankings, reference listings, and exact-count preservation across recurrence rewinds, loop rotation, and zero-byte-header threading exist; audited targets and runtime profiles remain. |
+| Per-CPU measurement | in progress | CPU profiles distinguish native medium-model addressing from the complete costed secondary 67h form, explicitly price x87 stack exchange, and carry the complete-peel iteration budget; the C corpus, static and frequency-weighted structural metrics, static and CFG-frequency-weighted per-CPU cost rankings, reference listings, and exact-count preservation across recurrence rewinds, loop rotation, and zero-byte-header threading exist; audited targets and runtime profiles remain. |
 | MIR/LIR provenance and fresh OMF | complete in production | allocated LIR emits directly with external source maps/allocation hints; the remaining compatibility views are test-only and cannot route a compilation through record rewriting. |
 | SROA and scalar promotion | partial | precise SSA pointer identity now refines coarse frontend operand annotations before GVN, LICM, packed-pointer splitting, and SROA; packed 16:16 dereferences are normalized into independent offset/selector SSA values before SROA; fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies expand into exact leaves, and structural candidates transact leaves made singleton by scalar convergence with finite-capacity pressure pricing; far aggregate copies, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
-| Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, dying-base indexed-form unfolding, and local constant, frame, relocatable-address, and provenance-disjoint incoming-argument rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
+| Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, dying-base indexed-form unfolding, and local constant, frame, relocatable-address, and provenance-disjoint incoming-argument rematerialization exist; x87 allocation compares complete target-priced reread and retained-home candidates after stack shuffles are materialized; global splitting/rematerialization, block-weighted x87 candidate composition, and broader global x87 allocation remain. |
 | Loop optimization | partial | exact pre/post-tested recurrences and symbolic sentinels, target-priced exact nested-recurrence rewind, complete nested-initializer LICM, dead-control countdowns with zero-trip guards, complete-affine spill/recompute pricing, precise-volatile-aware LICM, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling with exact-trip-amortized growth plus a pre-folding complete-sequence/pressure proof and bounded public defaults, post-specialization associative integer constant composition, and machine-neutral whole-range pressure forecasting exist; versioning, partial unrolling, constraint-complete candidate-set forecasting, and compile-time candidate memoization remain. |
 | Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs (including closed recursive SCCs in C and object paths), constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, post-inline constant folding through phi edges and linear corridors, private immutable numeric-data initializer facts, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
 | Post-allocation quality | partial | copy propagation, machine CSE/DCE, shared final block placement/threading/fall-through elision and fresh-tail sharing, plus byte-neutral source-unowned terminal-return duplication, dead-register frame-copy shuttles, dying-input commutative result transfer, synthetic high-word reload narrowing, target-priced 67h LEA selection including source-owned loaded scale/add tails and constant/register sums, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware decoded-tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 126. Select complete x87 retention candidates — 2026-09-19
+
+The C nbody listing repeatedly read its rounded `dx`, `dy`, and scale homes.
+The optimized MIR already contained one SSA value for each rounded temporary;
+the first extra read appeared in `FloatAlloc`, where every stable load was
+unconditionally converted into a rereadable memory home.  This is therefore a
+shared backend issue, not inefficient C HIR to hide in the frontend.
+
+The first local fix retained every individually profitable multi-use home.  It
+proved why the allocated form must be measured: the focused probe dropped four
+loads but grew from 18 to 20 instructions, while nbody fell from 1,234 to 1,036
+estimated loads yet regressed from 2,085 to 2,346 estimated instructions.  The
+overlapping retained values forced stack duplication and `fxch`, costs absent
+from the local comparison.  That rejected result is covered by a fail-first
+regression which forces the locally attractive candidate and requires the
+complete 386 allocation to choose the cheaper reread form.
+
+Allocation now builds both the ordinary reread candidate and a conservative
+retained-home candidate, then prices the complete allocated instruction stream.
+The comparison includes every `fld st(i)`, memory/register arithmetic form,
+store, and final `fxch`; no frontend spelling participates.  Retention starts
+only at a fully priced self-use, leaves two stack positions free, and does not
+open a second overlapping retained interval.  Those restrictions bound the
+current candidate set while final candidate pricing remains the authority.
+
+The measurement failure exposed by the rejected candidate has its own
+regression.  `fxch` was previously `unknown`, so any function using it lost all
+weighted cost.  It is now an explicit form in every CPU profile: 18 units on
+80387, four on 486, one issue slot on P5, zero added execution cost on P6/Core,
+and conservative two-unit AMD rankings.  Local GCC scheduling descriptions,
+Open Watcom's x87 optimizer/scheduler and Pentium pairing notes, and the
+published 486/Intel optimization material are the structural evidence; these
+remain target rankings rather than DOSBox measurements.
+
+On the three-use `floatreload.c` regression, 386 output improves from 44 to 42
+bytes and from 260 to 252 weighted units, with the same 18 instructions and
+loads reduced from eight to six.  Every profile except K5 selects that retained
+form; K5 correctly retains the 44-byte memory form because its published
+memory multiply is cheaper.  GCC 16.2 emits 20 instructions/four loads/two
+stores and Clang 21 emits 13/two/zero under the documented flat-i386 reference
+contract; qbopt emits 18/six/two under the medium-model ABI and mandatory
+rounded local.
+
+For 386 nbody, complete pricing rejects the stack-shuffling candidate and
+preserves iteration 125 exactly at 1,083 bytes, 283 instructions, 2,085
+estimated executed instructions, and 39,081 weighted units.  Its independent
+DOS/OMF oracle still returns 4,774,160.  The first changed stage in the accepted
+probe remains `FloatAlloc`; every MIR pass and pre-allocation LIR dump is
+identical.  Artifacts are under `build/quality/iter126-final` and
+`build/quality/iter126-nbody-after4`.
+
+This advances Phase 4's target- and pressure-aware x87 allocation without
+claiming full global stack scheduling.  The next step is a block-weighted
+candidate composition that can retain one interval in a profitable region
+without forcing an all-body choice; the present complete comparison guarantees
+that such work cannot regress a profile merely by reducing memory references.
 
 ### 125. Make pointer provenance a shared optimization boundary — 2026-09-19
 

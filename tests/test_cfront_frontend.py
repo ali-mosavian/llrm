@@ -103,6 +103,16 @@ def test_exact_pointer_aggregate_copy_keeps_both_address_dependencies() -> None:
     assert "word ptr [bp-6]" not in assembly
 
 
+def test_storage_rounded_float_is_loaded_once_for_repeated_uses() -> None:
+    """C nbody reloaded each rounded dx/dy temporary for every expression use."""
+    source = Path("fixtures/c/floatreload.c")
+    assembly = cfront.compiled(cfront.recorded(source, []), source.stem, optimise=True)
+    repeated = assembly[assembly.index("_repeated proc far") : assembly.index("_repeated endp")]
+
+    assert "fmul qword ptr [bp-16]" not in repeated
+    assert repeated.count("qword ptr [bp-16]") == 2  # the rounding store and its one defining reload
+
+
 def test_unreferenced_private_data_is_not_emitted() -> None:
     """private_data_dce retained static ``unusedValue`` after its sole
     externally visible function had been optimized.  An internal datum with

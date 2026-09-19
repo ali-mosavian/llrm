@@ -8,9 +8,9 @@ from iced_x86 import Register
 
 from qbopt.model import ir
 from qbopt.model import lir
-from qbopt.model.passes import LIRTransform
 from qbopt.backend import cpu as targets
 from qbopt.objectfile.module import Space
+from qbopt.model.passes import LIRTransform
 
 
 def _integer_loads(body: lir.LirBody, frame) -> lir.LirBody:
@@ -338,8 +338,9 @@ class _Stack:
     unwritten: each reader takes the cell as its memory operand or reloads it.
     """
 
-    def __init__(self, frame, floating: set[int], cpu: targets.Profile):
+    def __init__(self, frame, floating: set[int], cpu: targets.Profile, *, retain_homes: bool = True):
         self.frame, self.floating, self.cpu = frame, floating, cpu
+        self.retain_homes = retain_homes
         self.values: list[int] = []  # top first
         self.home: dict[int, lir.Insn] = {}  # the load that reads a value again
         self.defined: dict[int, int] = {}
@@ -350,12 +351,14 @@ class _Stack:
         self.out: list[lir.Insn] = []
         self.one: lir.Insn | None = None
         self.keep: set[int] = set()
+        self.retained: set[int] = set()
         self.vacated: set[int] = set()
 
     def region(self, sequence: list[lir.Insn], reads: defaultdict, aliases: dict[int, int]) -> None:
         self.sequence, self.reads, self.here = sequence, reads, -1
         self.aliases = aliases
         self.home.clear()
+        self.retained.clear()
 
     def canonical(self, value: int) -> int:
         while value in self.aliases:
@@ -378,6 +381,9 @@ class _Stack:
 
     def survives(self, value: int) -> bool:
         """Whether a stack copy of the value is read after this instruction."""
+        value = self.canonical(value)
+        if value in self.retained and value in self.values:
+            return bool(self.pending(value))
         if value not in self.home:
             return bool(self.pending(value))
         return not all(self._reads_cell(value, step) for step in self.pending(value))
@@ -390,19 +396,81 @@ class _Stack:
         left, right = self.canonical(left.value), self.canonical(right.value)
         return left != right and _memory_name(name, left == value, self.home[value]) is not None
 
-    def memory_arithmetic(self, name: str) -> bool:
-        """Whether a cell arithmetic form costs no more than loading it into x87.
-
-        The stack form has one explicit ``fld`` and a register arithmetic;
-        the direct form combines those two effects.  A profile without the
-        form-specific prices keeps the historic legal memory folding policy,
-        rather than treating unavailable data as a zero-cost instruction.
-        """
+    def arithmetic_costs(self, name: str) -> tuple[int, int, int] | None:
+        """The load, register-operation, and memory-operation costs for ``name``."""
         base = {"fadd": "x87_add", "fsub": "x87_add", "fmul": "x87_mul", "fdiv": "x87_div"}[name]
         memory = f"{base}_m"
         if not all(self.cpu.prices(form) for form in ("x87_load", base, memory)):
-            return True
-        return self.cpu.cost(memory) <= self.cpu.cost("x87_load") + self.cpu.cost(base)
+            return None
+        return self.cpu.cost("x87_load"), self.cpu.cost(base), self.cpu.cost(memory)
+
+    def memory_arithmetic(self, name: str, *, preserve_kept: bool = False) -> bool:
+        """Whether a cell arithmetic form costs no more than loading it into x87.
+
+        The stack form has one explicit ``fld`` and a register arithmetic;
+        the direct form combines those two effects.  If the register operand
+        survives, however, the direct form also needs ``fld st(i)`` to keep a
+        copy, while loading the dying cell operand lets the result overwrite
+        it. A profile without the form-specific prices keeps the historic
+        legal memory folding policy only when that preservation copy is not
+        required, rather than treating unavailable data as a zero-cost form.
+        """
+        costs = self.arithmetic_costs(name)
+        if costs is None:
+            return not preserve_kept
+        load, register, memory = costs
+        return memory + preserve_kept * load <= load + register
+
+    def retain_home(self, value: int) -> bool:
+        """Whether keeping a rereadable home on x87 is cheaper than using the home.
+
+        This compares the complete remaining arithmetic use set.  A self-use
+        needs a stack duplicate when the value remains live; an ordinary use
+        can instead load its dying peer and overwrite that peer.  Only fully
+        priced arithmetic-only use sets are candidates, and two spare stack
+        positions are required so the choice cannot manufacture a spill.
+        """
+        if (
+            not self.retain_homes
+            or len(self.values) > 6
+            or any(retained in self.values and self.pending(retained) for retained in self.retained)
+        ):
+            return False
+        positions = tuple(dict.fromkeys(self.pending(value)))
+        if not positions:
+            return False
+        costs_by_step = []
+        for ordinal, step in enumerate(positions):
+            found = _two_values(self.sequence[step].what)
+            if found is None:
+                return False
+            name, left, right = found
+            left, right = self.canonical(left.value), self.canonical(right.value)
+            if value not in (left, right):
+                return False
+            # Retaining several ordinary operands whose live intervals
+            # overlap can make each look profitable alone while forcing
+            # exchanges between them.  Start only a retention interval at a
+            # self-use, whose unavoidable duplicate is completely costed;
+            # later ordinary uses can then consume dying peers around it.
+            if ordinal == 0 and left != right:
+                return False
+            costs = self.arithmetic_costs(name)
+            if costs is None:
+                return False
+            load, register, memory = costs
+            if left == right:
+                home = load + register
+                kept = register + (load if step != positions[-1] else 0)
+            else:
+                operation = _memory_name(name, left == value, self.home[value])
+                home = min(memory, load + register) if operation is not None else load + register
+                kept = register
+            costs_by_step.append((home, kept))
+        load = self.cpu.cost("x87_load")
+        home_cost = sum(home for home, _ in costs_by_step)
+        retained_cost = load + sum(kept for _, kept in costs_by_step)
+        return retained_cost < home_cost
 
     def insert(self, what: ir.Semantics) -> None:
         at = self.one.at
@@ -497,11 +565,7 @@ class _Stack:
         operands = [arg.value for arg in what.sources if _floating(arg)]
         results = [arg.value for arg in what.dests if _floating(arg)]
         self.keep = set(operands)
-        if (
-            _loads_memory(one.what)
-            and len(results) == 1
-            and self.canonical(results[0]) != results[0]
-        ):
+        if _loads_memory(one.what) and len(results) == 1 and self.canonical(results[0]) != results[0]:
             self.vacate()
             return
         if len(results) > 1 or any(result in self.values for result in results):
@@ -529,7 +593,13 @@ class _Stack:
         elif what.op is ir.Operation.FLOAT_LOAD and not operands and results:
             if _rereadable(self.sequence, self.here, self.pending(results[0])):
                 self.home[results[0]] = one
-                self.vacate()
+                if self.retain_home(results[0]):
+                    self.retained.add(results[0])
+                    self.room(1)
+                    self.emit(replace(what, dests=(ir.St(0),)))
+                    self.values.insert(0, results[0])
+                else:
+                    self.vacate()
             else:
                 self.room(1)
                 self.emit(replace(what, dests=(ir.St(0),)))
@@ -617,7 +687,9 @@ class _Stack:
             del self.values[:2]
         at = self.one.at
         status = ir.Semantics(ir.Operation.BARRIER, "fnstsw", (ir.Reg(Register.AX, 2),), ())
-        self.out.append(lir.Insn(at=at, covers=(at, at), what=status, defines=(), uses=(), clobbers=frozenset({Register.EAX})))
+        self.out.append(
+            lir.Insn(at=at, covers=(at, at), what=status, defines=(), uses=(), clobbers=frozenset({Register.EAX}))
+        )
         self.insert(ir.Semantics(ir.Operation.NOTHING, "sahf", (), ()))
 
     def consume(self, source: int, what: ir.Semantics, result: int) -> None:
@@ -642,7 +714,7 @@ class _Stack:
             # Both in their cells: the later one is the memory operand, so the loads keep their order.
             key=lambda pair: -self.defined.get(pair[0], -1),
         )
-        if cells and self.memory_arithmetic(name):
+        if cells and self.memory_arithmetic(name, preserve_kept=self.survives(cells[0][1])):
             cell, kept = cells[0]
             load, covers = self.home[cell], self.one.covers
             operation = _memory_name(name, cell == left, load)
@@ -692,15 +764,80 @@ class _Stack:
             self.values[0] = result
         elif dies_left and dies_right:
             operation = (_REVERSED[name] if forward else name) + "p"
-            self.emit(
-                ir.Semantics(ir.Operation.FLOAT_ARITH_POP, operation, (ir.St(other),), (ir.St(other), ir.St(0)))
-            )
+            self.emit(ir.Semantics(ir.Operation.FLOAT_ARITH_POP, operation, (ir.St(other),), (ir.St(other), ir.St(0))))
             self.values[other] = result
             self.values.pop(0)
         else:
             operation = _REVERSED[name] if forward else name
             self.emit(ir.Semantics(ir.Operation.FLOAT_ARITH, operation, (ir.St(other),), (ir.St(other), ir.St(0))))
             self.values[other] = result
+
+
+def _floating_form(what: ir.Semantics) -> str | None:
+    """The profile cost form of an allocated x87 instruction."""
+    if what.op is ir.Operation.FLOAT_LOAD:
+        return "x87_load"
+    if what.op is ir.Operation.EXCHANGE and what.name == "fxch":
+        return "x87_exchange"
+    if what.op is ir.Operation.FLOAT_STORE:
+        return "x87_convert_store" if what.name.startswith("fist") else "x87_store"
+    if what.op not in (ir.Operation.FLOAT_ARITH, ir.Operation.FLOAT_ARITH_POP):
+        return None
+    name = what.name.removeprefix("fi").removesuffix("p").removesuffix("r")
+    base = {"fadd": "x87_add", "fsub": "x87_add", "fmul": "x87_mul", "fdiv": "x87_div"}.get(name)
+    if base is None:
+        return None
+    return f"{base}_m" if any(isinstance(arg, ir.Mem) for arg in what.sources) else base
+
+
+def _allocation_score(body: lir.LirBody, target: targets.Profile) -> tuple[int, int]:
+    """Target cost and instruction count after every x87 stack shuffle exists."""
+    forms = tuple(form for one in body.insns if one.what and (form := _floating_form(one.what)) is not None)
+    if not all(target.prices(form) for form in forms):
+        return (sum(1 for _one in body.insns), len(forms))
+    return sum(target.cost(form) for form in forms), len(forms)
+
+
+def _allocate_stack(
+    body: lir.LirBody,
+    frame,
+    floating: set[int],
+    target: targets.Profile,
+    continues: set[int],
+    order: tuple[int, ...],
+    *,
+    retain_homes: bool,
+) -> lir.LirBody:
+    """Allocate one complete stack candidate so its real shuffles can be priced."""
+    from qbopt.backend.lower import Unlowered
+    from qbopt.backend.floatregions import boundary
+
+    stack = _Stack(frame, floating, target, retain_homes=retain_homes)
+    blocks = []
+    for index, block in enumerate(body.blocks):
+        if index - 1 not in continues:
+            stack.region(*_region(body.blocks, index, 0, continues))
+        # By identity, so only while every instruction marked is still in `out`.
+        stack.out, stack.vacated = [], set()
+        for position, one in enumerate(block.insns):
+            stack.here += 1
+            what = one.what
+            if what is None or not any(_floating(arg) for arg in (*what.sources, *what.dests)):
+                if floating.intersection((*one.uses, *one.defines)):
+                    raise Unlowered("floating value used by an unmodelled instruction")
+                if boundary(one):
+                    # bridged() gave every value read beyond here its own cell.
+                    if stack.values:
+                        raise Unlowered("floating stack crosses an unmodelled instruction")
+                    stack.region(*_region(body.blocks, index, position + 1, continues))
+                stack.out.append(one)
+                continue
+            stack.allocate(one)
+        if stack.values and index not in continues:
+            raise Unlowered("floating stack live-out requires cross-block allocation")
+        blocks.append(replace(block, insns=tuple(lir.without(stack.out, lambda one: id(one) in stack.vacated))))
+    allocated_blocks = {block.at: block for block in blocks}
+    return replace(body, blocks=tuple(allocated_blocks[at] for at in order))
 
 
 def allocated(
@@ -710,8 +847,6 @@ def allocated(
     basic_semantics: bool = True,
     cpu: str | targets.Profile = "386",
 ) -> lir.LirBody:
-    from qbopt.backend.lower import Unlowered
-
     target = targets.profile(cpu)
     body = _integer_stores(_integer_loads(body, frame), frame, basic_semantics)
     floating = {
@@ -761,8 +896,8 @@ def allocated(
         for index, (block, following) in enumerate(zip(body.blocks, body.blocks[1:]))
         if next_blocks.get(block.at) == following.at
     }
-    from qbopt.backend.floatregions import boundary
     from qbopt.backend.floatregions import bridged
+    from qbopt.backend.floatregions import boundary
 
     # A region is keyed by instruction position: a phi is defined at -1 and
     # read at its predecessor's end.
@@ -796,32 +931,10 @@ def allocated(
         for arg in (*one.what.sources, *one.what.dests)
         if isinstance(arg, ir.Held) and arg.width == 10
     }
-    stack = _Stack(frame, floating, target)
-    blocks = []
-    for index, block in enumerate(body.blocks):
-        if index - 1 not in continues:
-            stack.region(*_region(body.blocks, index, 0, continues))
-        # By identity, so only while every instruction marked is still in `out`.
-        stack.out, stack.vacated = [], set()
-        for position, one in enumerate(block.insns):
-            stack.here += 1
-            what = one.what
-            if what is None or not any(_floating(arg) for arg in (*what.sources, *what.dests)):
-                if floating.intersection((*one.uses, *one.defines)):
-                    raise Unlowered("floating value used by an unmodelled instruction")
-                if boundary(one):
-                    # bridged() gave every value read beyond here its own cell.
-                    if stack.values:
-                        raise Unlowered("floating stack crosses an unmodelled instruction")
-                    stack.region(*_region(body.blocks, index, position + 1, continues))
-                stack.out.append(one)
-                continue
-            stack.allocate(one)
-        if stack.values and index not in continues:
-            raise Unlowered("floating stack live-out requires cross-block allocation")
-        blocks.append(replace(block, insns=tuple(lir.without(stack.out, lambda one: id(one) in stack.vacated))))
-    allocated_blocks = {block.at: block for block in blocks}
-    return _truncating(replace(body, blocks=tuple(allocated_blocks[at] for at in order)), frame)
+    baseline = _allocate_stack(body, frame, floating, target, continues, order, retain_homes=False)
+    retained = _allocate_stack(body, frame, floating, target, continues, order, retain_homes=True)
+    selected = min((baseline, retained), key=lambda candidate: _allocation_score(candidate, target))
+    return _truncating(selected, frame)
 
 
 def _truncating(body: lir.LirBody, frame) -> lir.LirBody:
