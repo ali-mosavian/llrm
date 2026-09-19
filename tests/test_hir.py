@@ -1344,6 +1344,37 @@ def test_byref_call_keeps_the_temporary_values_it_publishes() -> None:
     assert "23:4" in listing
 
 
+def test_unpublished_float_conversion_temporary_does_not_hold_the_x87_stack_across_a_branch() -> None:
+    """FSTKBR's ``PICK = -1/0`` formerly left a volatile FILD live over its arm jump.
+
+    Float allocation then refused the join with ``floating stack live-out
+    requires cross-block allocation``.  `$arg` is only published when an
+    ADDRESS reaches a BYREF call; an ordinary conversion scratch slot must
+    retain neither that publication nor an x87 value after its exact store
+    folds to bits.
+    """
+    source = qb_driver.parsed(ROOT / "frontends/qb/fixtures/FSTKBR.BAS")
+    function = next(one for one in source.modules[0].functions if one.name == "PICK")
+    semantic = hir.lower(source)[list(source.modules[0].functions).index(function)]
+    physical = physicalize(source, function, semantic)
+
+    scratch_loads = [
+        operation
+        for block in physical.lowered.body.blocks
+        for operation in block.ops
+        if operation.kind is mir.Kind.FLOAD and operation.name == "fild"
+    ]
+    assert scratch_loads and all(not operation.volatile for operation in scratch_loads)
+
+    optimized = qb_compile.optimized_physical(source, function, physical.lowered)
+    assert not any(
+        operation.kind is mir.Kind.FLOAD and operation.name == "fild"
+        for block in optimized.body.blocks
+        for operation in block.ops
+    )
+    assert qb_compile.object_bytes(source, "FSTKBR.BAS")
+
+
 def test_positioned_file_calls_have_audited_pascal_cleanup() -> None:
     """The first SEEK stage reached ABI refinement but referenced no base contract."""
     source = qb_driver.parsed(ROOT / "frontends/qb/fixtures/positioned_io.bas")

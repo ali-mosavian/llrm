@@ -79,10 +79,6 @@ def _ref(place: model.Place, type_: model.Type) -> mir.MemRef:
         type_.width,
         space=space,
         provenance=provenance,
-        # `$arg` storage is an addressable source-language temporary whose
-        # address is published to a BYREF callee. It is not an optimizer-only
-        # spill: removing its store changes what the callee reads.
-        volatile=place.name.startswith("$arg"),
     )
 
 
