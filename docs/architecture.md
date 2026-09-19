@@ -1092,6 +1092,10 @@ one documented target without materially regressing another.
   fixed point, and compares exact-trip dynamic work using the selected CPU's
   machine-neutral costs. Added semantic operations pay a target-priced size
   charge; unpriced work and candidates that retain the loop are rejected.
+  The public MIR boundary defaults omitted tuning data to the same 16-trip,
+  200-semantic-operation safeguards as the default 386 profile; only an
+  explicit zero requests an unbounded policy. This makes a frontend omission
+  conservative rather than a request for unlimited code growth.
   Rejected loops no longer hide later candidates. The fail-first synthetic
   regression rejects a five-move expansion whose one-unit dynamic saving does
   not pay for three added operations, while the same branch-heavy shape is

@@ -11,6 +11,8 @@ from dataclasses import dataclass
 
 from qbopt.cycles import timings
 from qbopt.model.passes import AddressForm
+from qbopt.model.passes import DEFAULT_MAX_UNROLL_ITERATIONS
+from qbopt.model.passes import DEFAULT_MAX_UNROLLED_OPERATIONS
 from qbopt.model.passes import OperationCosts
 
 
@@ -43,11 +45,11 @@ class Profile:
     # GCC's target-independent complete-peel default is sixteen iterations.
     # Keep it in the immutable profile so another target can extend the
     # policy without teaching MIR a CPU name.
-    max_unroll_iterations: int = 16
+    max_unroll_iterations: int = DEFAULT_MAX_UNROLL_ITERATIONS
     # GCC's target-independent ``max-completely-peeled-insns`` default. This
     # is a machine-neutral semantic-operation budget at the MIR boundary, not
     # an opcode count; targets may tune it without exposing machine form.
-    max_unrolled_operations: int = 200
+    max_unrolled_operations: int = DEFAULT_MAX_UNROLLED_OPERATIONS
 
     def cost(self, operation: str) -> int:
         """The existing target-ranking cost for one named instruction form."""

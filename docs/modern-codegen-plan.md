@@ -24,11 +24,67 @@ iteration updates this file in the same commit.
 | MIR/LIR provenance and fresh OMF | complete in production | allocated LIR emits directly with external source maps/allocation hints; the remaining compatibility views are test-only and cannot route a compilation through record rewriting. |
 | SROA and scalar promotion | partial | packed 16:16 dereferences are normalized into independent offset/selector SSA values before SROA; fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies expand into exact leaves, and structural candidates transact leaves made singleton by scalar convergence with finite-capacity pressure pricing; far aggregate copies, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, dying-base indexed-form unfolding, and local constant, frame, relocatable-address, and provenance-disjoint incoming-argument rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
-| Loop optimization | partial | exact pre/post-tested recurrences and symbolic sentinels, target-priced exact nested-recurrence rewind, complete nested-initializer LICM, dead-control countdowns with zero-trip guards, complete-affine spill/recompute pricing, precise-volatile-aware LICM, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling with exact-trip-amortized growth plus a pre-folding complete-sequence/pressure proof, post-specialization associative integer constant composition, and machine-neutral whole-range pressure forecasting exist; versioning, partial unrolling, constraint-complete candidate-set forecasting, and compile-time candidate memoization remain. |
+| Loop optimization | partial | exact pre/post-tested recurrences and symbolic sentinels, target-priced exact nested-recurrence rewind, complete nested-initializer LICM, dead-control countdowns with zero-trip guards, complete-affine spill/recompute pricing, precise-volatile-aware LICM, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling with exact-trip-amortized growth plus a pre-folding complete-sequence/pressure proof and bounded public defaults, post-specialization associative integer constant composition, and machine-neutral whole-range pressure forecasting exist; versioning, partial unrolling, constraint-complete candidate-set forecasting, and compile-time candidate memoization remain. |
 | Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs (including closed recursive SCCs in C and object paths), constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, post-inline constant folding through phi edges and linear corridors, private immutable numeric-data initializer facts, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
 | Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing and byte-neutral source-unowned terminal-return duplication, dead-register frame-copy shuttles, dying-input commutative result transfer, synthetic high-word reload narrowing, target-priced 67h LEA selection including source-owned loaded scale/add tails and constant/register sums, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 121. Make omitted complete-peel tuning bounded — 2026-09-19
+
+The QB frontend integration called the shared MIR optimizer with 386 costs and
+register capacities but omitted the profile's two complete-peel limits.  The
+public boundary interpreted both omitted values as zero, and zero meant
+unbounded.  Thus `SC_INIT`'s exact 25-trip initialization loop became 25
+separately encoded far stores even though every established production driver
+already passed the default profile's 16-trip and 200-operation safeguards.
+This was an API default defect, not evidence that the 386 cost model preferred
+the expansion.
+
+The two target-independent defaults now have one machine-neutral definition in
+`model.passes`: 16 iterations and 200 semantic operations.  `Where`, the public
+`transform.applied()` boundary, and the default fields of every immutable CPU
+profile share those constants.  A selected target may still override them,
+and an explicit zero still deliberately requests an unbounded policy.  No MIR
+pass receives a CPU name or machine form.
+
+Two regressions were observed fail before the fix.  The public-boundary probe
+received `(0, 0)` instead of `(16, 200)`, and a profitable-looking 25-way
+straight-line expansion returned no rejection instead of
+`iteration-growth`.  The latter is the output symptom: it asserts the code
+growth decision, not only the fields carrying the policy.
+
+With the real uncommitted QB frontend and qrender's `D_SURF.BAS`, omitting the
+limits now produces assembly byte-for-byte identical to supplying the 386
+profile explicitly (`sha256
+df48f40eac4963cbec288b421a2fe1225c455526924d5eb4febbfdfe6866f8e1`).  The stage trace first proposes
+the 25-trip candidate at 410 semantic operations, settles it to 187, and then
+records `unroll-rejected-iteration-growth`.  It separately accepts the
+seven-trip, three-array initializer, so the safeguard is a bounded policy
+rather than a blanket disabling of exact unrolling.
+
+| `D_SURF` metric | iteration 120 | bounded default | change |
+|---|---:|---:|---:|
+| code bytes | 17,243 | 16,195 | -1,048 (-6.1%) |
+| object bytes | 26,582 | 25,523 | -1,059 (-4.0%) |
+| emitted procedure instructions | 5,502 | 5,265 | -237 (-4.3%) |
+| `SC_INIT` instructions | 270 | 205 | -65 (-24.1%) |
+
+BC's object contains 12,570 code bytes and its `SC_INIT` has 161 instructions,
+so the remaining gaps are now 3,625 bytes (28.8%) and 44 instructions (27.3%).
+The retained loop executes more counter/address work once during startup than
+the former 25-way clone; this is an explicit cold-code size tradeoff, not a
+runtime-speed claim.  Partial unrolling is still required for a better middle
+ground.
+
+Fresh freestanding `-O3 -march=i386` references make that limitation visible.
+GCC 16.2 partially unrolls the analogous 25-dword fill by two; Clang 21 fully
+unrolls it.  Both fully unroll the analogous seven-trip, three-array loop.  The
+references therefore support retaining small expansion while disagreeing on
+the 25-trip form; they do not justify declaring either flat-model result
+optimal under the medium-model selector and six-register constraints.  Raw
+listings, the two QB builds, the fresh OMF object and stage trace are under
+`build/quality/iter121-bounded-unroll`.
 
 ### 120. Expose packed far-pointer address operands before SROA — 2026-09-19
 

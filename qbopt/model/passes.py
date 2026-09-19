@@ -131,6 +131,14 @@ class OperationCosts:
     extend: int = 1
 
 
+# Target-independent complete-peel safeguards.  They are named here because
+# MIR consumes only numeric policy, never a CPU profile or machine form.  A
+# selected target may override them; an omitted selection receives the public
+# default 386 policy instead of accidentally requesting unbounded expansion.
+DEFAULT_MAX_UNROLL_ITERATIONS = 16
+DEFAULT_MAX_UNROLLED_OPERATIONS = 200
+
+
 @dataclass(frozen=True, slots=True)
 class Where:
     """What a pass may be told about the module it is compiling.
@@ -188,12 +196,12 @@ class Where:
     # once; no MIR pass can recover an opcode or register from these prices.
     costs: OperationCosts = OperationCosts()
     # Complete peeling beyond this exact trip count is allowed only when the
-    # optimized expansion erases its own static growth. Zero leaves the policy
-    # unbounded for a caller deliberately supplying no target limit.
-    max_unroll_iterations: int = 0
+    # optimized expansion erases its own static growth. A caller deliberately
+    # requesting an unbounded policy may still pass zero explicitly.
+    max_unroll_iterations: int = DEFAULT_MAX_UNROLL_ITERATIONS
     # Maximum optimized semantic operations in one completely expanded
-    # sequence. Zero leaves the policy unbounded for target-less callers.
-    max_unrolled_operations: int = 0
+    # sequence. An explicit zero leaves this policy unbounded.
+    max_unrolled_operations: int = DEFAULT_MAX_UNROLLED_OPERATIONS
 
     @property
     def named(self) -> dict:

@@ -43,6 +43,8 @@ from qbopt.optimize import loopsimplify
 from qbopt.optimize import pointeraccess
 from qbopt.analysis import loops as loopy
 from qbopt.model.passes import AddressForm
+from qbopt.model.passes import DEFAULT_MAX_UNROLL_ITERATIONS
+from qbopt.model.passes import DEFAULT_MAX_UNROLLED_OPERATIONS
 from qbopt.model.passes import MIRTransform
 from qbopt.model.passes import OperationCosts
 from qbopt.analysis import liveness as alive_at
@@ -2959,8 +2961,8 @@ def applied(
     index_scales: frozenset[int] | None = None,
     address_forms: tuple[AddressForm, ...] | None = None,
     costs: OperationCosts | None = None,
-    max_unroll_iterations: int = 0,
-    max_unrolled_operations: int = 0,
+    max_unroll_iterations: int = DEFAULT_MAX_UNROLL_ITERATIONS,
+    max_unrolled_operations: int = DEFAULT_MAX_UNROLLED_OPERATIONS,
     coverage: dict[int, tuple[tuple[int, int], ...]] | None = None,
     watch=None,
 ) -> MirBody:

@@ -12,6 +12,7 @@ from qbopt.cycles import cycles
 from qbopt.backend import allocate
 from qbopt.backend import schedule
 from qbopt.optimize import strength
+from qbopt.optimize import unroll
 from qbopt.analysis import induction
 from qbopt.backend import floatalloc
 from qbopt.optimize import transform
@@ -106,6 +107,29 @@ def test_direct_mir_default_keeps_medium_model_address_legality(monkeypatch: pyt
     transform.applied(body, frozenset(), {}, only="strength")
 
     assert observed == [frozenset({1})]
+
+
+def test_direct_mir_default_has_a_bounded_complete_peel_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The QB frontend expanded SC_INIT's 25 stores when it omitted two knobs.
+
+    ``transform.applied`` is the shared public optimization boundary.  An
+    omitted target tuning value must mean the default 386 policy, not
+    unlimited code growth; a caller that deliberately wants no ceiling can
+    still pass zero explicitly.
+    """
+    observed = []
+
+    def recording(body, where, *, optimize, watch=None):
+        observed.append((where.max_unroll_iterations, where.max_unrolled_operations))
+        return body
+
+    monkeypatch.setattr(unroll, "optimized", recording)
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (), ()),))
+
+    transform.applied(body, frozenset(), {})
+
+    assert observed
+    assert set(observed) == {(16, 200)}
 
 
 def test_unknown_cpu_is_rejected_at_the_shared_boundary() -> None:

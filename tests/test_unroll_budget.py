@@ -146,6 +146,29 @@ def test_large_complete_peel_must_erase_its_growth_to_cross_the_profile_budget()
     assert unroll._rejection(original, _straight(3), 1, 16, where) is None
 
 
+def test_default_complete_peel_budget_refuses_sc_init_sized_growth() -> None:
+    """QB SC_INIT became 25 separately encoded far stores by omission alone.
+
+    A frontend calling the public MIR boundary without optional tuning data
+    must retain this counted loop.  The regression asserts the observable
+    growth decision rather than only the numeric defaults that implement it.
+    """
+    costs = OperationCosts(add=1, branch=50, move=1)
+    where = Where(costs=costs)
+
+    assert unroll._rejection(_loop(), _straight(25), 1, 25, where) == "iteration-growth"
+    assert (
+        unroll._rejection(
+            _loop(),
+            _straight(25),
+            1,
+            25,
+            replace(where, max_unroll_iterations=0, max_unrolled_operations=0),
+        )
+        is None
+    )
+
+
 def test_bounded_complete_peel_amortizes_growth_over_its_exact_trip_count() -> None:
     """CRC retained its nine-trip outer loop and reloaded every constant byte.
 
