@@ -128,6 +128,74 @@ def test_shared_narrow_load_is_not_folded_into_one_widening_use() -> None:
     assert peephole.extensions(body) == body
 
 
+def test_one_use_compare_folds_before_a_complete_return() -> None:
+    """indexed.lru_use loaded a sign test into DI before immediately returning.
+
+    The C epilogue restores the caller's DI from the stack, so DI's transient
+    body value is dead on the return edge.  Treating callee-saved registers as
+    semantic return operands retained ``mov di,[m]; or di,di`` instead of the
+    direct memory comparison emitted by GCC and Clang.
+    """
+    from qbopt.model import mir
+
+    di = ir.Reg(Register.DI, 2)
+    cell = ir.Mem(Addr(Space.FRAME, -4), 2, Register.BP, 0, 2)
+    load = lir.Insn(1, None, ir.Semantics(ir.Operation.MOVE, "mov", (di,), (cell,)), (1,), ())
+    compare = lir.Insn(
+        2,
+        None,
+        ir.Semantics(ir.Operation.COMPARE, "cmp", (), (di, ir.Imm(0, 2))),
+        (),
+        (1,),
+    )
+    branch = _insn(3, ir.Operation.BRANCH, "jge", target=2)
+    returned = mir.Op(4, ir.Operation.RETURN, "", (), (), kind=mir.Kind.RETURN, reads_complete=True)
+    ret = lir.Insn(4, None, ir.Semantics(ir.Operation.RETURN, ""), (), (), op=returned)
+    body = lir.LirBody(
+        "complete-return-fold",
+        0,
+        (
+            lir.LirBlock(0, (load, compare, branch), (1, 2)),
+            lir.LirBlock(1, (ret,), ()),
+            lir.LirBlock(2, (ret,), ()),
+        ),
+        {},
+        {},
+    )
+
+    result = peephole.fused(body)
+    physical = [one.what for one in result.blocks[0].insns if one.what.op is not ir.Operation.NOTHING]
+
+    assert physical == [ir.Semantics(ir.Operation.COMPARE, "cmp", (), (cell, ir.Imm(0, 2))), branch.what]
+
+
+def test_dead_compare_load_may_overwrite_its_own_address_register() -> None:
+    """lru_use's bnext test used DI for both the pointer and loaded value.
+
+    Folding the one-use load preserves the old DI pointer instead of replacing
+    it with the loaded word.  That is observable for a later use, but when DI
+    is dead after the comparison it is precisely what permits ``cmp [di],0``.
+    Read/modify/write folding must retain the stricter refusal.
+    """
+    di = ir.Reg(Register.DI, 2)
+    cell = ir.Mem(Addr(Space.SEGMENT, 0, base=Register.DI), 2, Register.DI, 0, 2)
+    load = _insn(1, ir.Operation.MOVE, "mov", (di,), (cell,))
+    compare = _insn(2, ir.Operation.COMPARE, "cmp", sources=(di, ir.Imm(0, 2)))
+    overwrite = _insn(3, ir.Operation.MOVE, "mov", (di,), (ir.Reg(Register.AX, 2),))
+    body = lir.LirBody(
+        "self-addressed-compare",
+        0,
+        (lir.LirBlock(0, (load, compare, overwrite, _insn(4, ir.Operation.JUMP, "jmp", target=0)), (0,)),),
+        {},
+        {},
+    )
+
+    result = peephole.fused(body)
+    physical = [one.what for one in result.insns if one.what.op is not ir.Operation.NOTHING]
+
+    assert physical[0] == ir.Semantics(ir.Operation.COMPARE, "cmp", (), (cell, ir.Imm(0, 2)))
+
+
 @pytest.mark.parametrize("hazard", ["uses loaded value", "changes address", "writes memory"])
 def test_memory_round_trip_does_not_cross_a_dependent_or_writing_instruction(hazard: str) -> None:
     """Delayed memory folding must not change which cell or value an add reads.

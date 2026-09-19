@@ -23,8 +23,14 @@ def _terminator(what) -> bool:
     )
 
 
-# What a caller keeps across a call, and so what a return reads beside its results.
-_KEPT = (Register.ESI, Register.EDI, Register.EBP, Register.ESP, Register.DS, Register.SS, Register.CS)
+# Machine state a generated return itself needs beside its explicit results.
+# SI and DI are callee-saved at the ABI boundary, but their incoming values
+# live in the prologue's stack saves, not in transient body registers.  The
+# MASM emitter derives push/pop preservation from surviving body uses, so a
+# dead final write to either register must remain removable.  Treating them as
+# semantic return inputs retained one-use loads and other dead computations
+# immediately before an epilogue.
+_RETURN_STATE = (Register.EBP, Register.ESP, Register.DS, Register.SS, Register.CS)
 
 
 def _universe() -> frozenset:
@@ -74,9 +80,10 @@ def _declared(one) -> "tuple[frozenset, frozenset] | None":
     from qbopt.backend.peephole import _flag_lanes
 
     if one.what is not None and one.what.op is ir.Operation.RETURN and getattr(one.op, "reads_complete", False):
-        # Nothing runs after it: it reads its results and what the caller keeps, and no other lane.
+        # Nothing runs after it: it reads explicit results and only the
+        # architectural state its generated epilogue itself needs.
         reads = {lane for held, register in one.requires for lane in _lanes(register)}
-        for register in _KEPT:
+        for register in _RETURN_STATE:
             reads |= _lanes(register)
         return frozenset(reads), _universe() - reads
     if not one.clobbers or one.symbol is True:

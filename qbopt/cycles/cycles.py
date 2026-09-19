@@ -186,6 +186,13 @@ def classify(mnem, ops, raw=""):
     if mnem in ("shl", "shr", "sar", "rol", "ror", "rcl", "rcr"):
         return "shift_ri"
     if mnem in ALU:
+        # CMP/TEST only read their memory operand.  Charging the first-operand
+        # spelling as ``alu_mr`` gives them the read/modify/write cost of ADD
+        # or SUB and can make a direct memory comparison look slower than a
+        # separate load plus register comparison.  The allocator's folding
+        # model already treats this as the read-only ALU-memory form.
+        if mnem in ("cmp", "test") and (mem(dst) or mem(src)):
+            return "alu_rm"
         if mem(dst):
             return "alu_mr"
         if mem(src):

@@ -20,15 +20,73 @@ iteration updates this file in the same commit.
 
 | Phase | State | Current boundary |
 |---|---|---|
-| Per-CPU measurement | in progress | CPU profiles distinguish native medium-model addressing from the complete costed secondary 67h form, explicitly price x87 stack exchange and every LES/LFS/LGS complete far-pointer load, and carry the complete-peel iteration budget; the C corpus, static and frequency-weighted structural metrics, static and CFG-frequency-weighted per-CPU cost rankings, reference listings, and exact-count preservation across recurrence rewinds, loop rotation, and zero-byte-header threading exist; audited targets and runtime profiles remain. |
+| Per-CPU measurement | in progress | CPU profiles distinguish native medium-model addressing from the complete costed secondary 67h form, explicitly price x87 stack exchange, LES/LFS/LGS complete far-pointer loads, and read-only memory comparisons separately from read/modify/write ALU forms, and carry the complete-peel iteration budget; the C corpus, static and frequency-weighted structural metrics, static and CFG-frequency-weighted per-CPU cost rankings, reference listings, and exact-count preservation across recurrence rewinds, loop rotation, and zero-byte-header threading exist; audited targets and runtime profiles remain. |
 | MIR/LIR provenance and fresh OMF | complete in production | allocated LIR emits directly with external source maps/allocation hints; the remaining compatibility views are test-only and cannot route a compilation through record rewriting. |
 | SROA and scalar promotion | partial | precise SSA pointer identity now refines coarse frontend operand annotations before GVN, LICM, packed-pointer splitting, and SROA; packed 16:16 dereferences are normalized into independent offset/selector SSA values before SROA; fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies expand into exact leaves, and structural candidates transact leaves made singleton by scalar convergence with finite-capacity pressure pricing; far aggregate copies, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, constrained native-address occurrence splitting, dying-base indexed-form unfolding, and local constant, frame, relocatable-address, and provenance-disjoint incoming-argument rematerialization exist; typed far-pointer loads are selected before allocation only when a virtual address owner would otherwise be lost, while fixed addresses retain independent rematerialization and late LES/LFS/LGS selection; x87 allocation composes complete target-priced reread and retained-home candidates independently at empty-stack regions after all shuffles are materialized; global integer splitting/rematerialization, CFG-frequency weighting within a nonempty x87 region, and broader global x87 allocation remain. |
 | Loop optimization | partial | exact pre/post-tested recurrences and symbolic sentinels, target-priced exact nested-recurrence rewind, complete nested-initializer LICM, dead-control countdowns with zero-trip guards, complete-affine spill/recompute pricing, precise-volatile-aware LICM, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling with exact-trip-amortized growth plus a pre-folding complete-sequence/pressure proof and bounded public defaults, post-specialization associative integer constant composition, and machine-neutral whole-range pressure forecasting exist; versioning, partial unrolling, constraint-complete candidate-set forecasting, and compile-time candidate memoization remain. |
 | Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs (including closed recursive SCCs in C and object paths), constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, post-inline constant folding through phi edges and linear corridors, private immutable numeric-data initializer facts, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
-| Post-allocation quality | partial | copy propagation, machine CSE/DCE, shared final block placement/threading/fall-through elision and fresh-tail sharing, plus byte-neutral source-unowned terminal-return duplication, dead-register frame-copy shuttles, dying-input commutative result transfer, synthetic high-word reload narrowing, target-priced 67h LEA selection and repeated-base promotion including exact byte, prefix, length-changing-prefix and partial-register costs, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware decoded-tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
+| Post-allocation quality | partial | copy propagation, machine CSE/DCE, shared final block placement/threading/fall-through elision and fresh-tail sharing, plus byte-neutral source-unowned terminal-return duplication, epilogue-aware dead-register analysis, direct one-use memory comparison folding including self-addressed loads, dead-register frame-copy shuttles, dying-input commutative result transfer, synthetic high-word reload narrowing, target-priced 67h LEA selection and repeated-base promotion including exact byte, prefix, length-changing-prefix and partial-register costs, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware decoded-tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 131. Fold return-edge memory tests with epilogue-aware liveness — 2026-09-19
+
+The GCC and Clang listings test qc-port's `bprev[b]`, `bnext[b]`, and
+`lhead[c]` directly in memory.  The shared MIR already represented each as a
+one-use load followed by a comparison, but the allocated output materialized
+the value and then tested the register.  This was not frontend inefficiency
+surviving MIR: all MIR and allocated-LIR dumps were identical before and after
+the fix, and `Peephole` was the first changed stage.
+
+The late fold already knew how to turn `mov r,[m]; cmp r,x` into `cmp [m],x`,
+but physical liveness treated SI and DI as semantic inputs to every complete C
+return.  Their ABI values are actually restored from the prologue's stack
+saves by the generated epilogue; transient body values in those registers are
+dead.  Complete returns now retain only explicit results plus BP/SP and the
+architectural segment state.  The MASM emitter continues deriving SI/DI
+push/pop preservation from surviving body uses, so removing a dead final write
+also removes an unnecessary save when no other use remains.
+
+A second fail-first case records the related machine rule.  A load may use its
+destination register to address its own cell, as in `mov di,[bx+di]`.  Folding
+its sole comparison leaves the old DI address in place instead of overwriting
+it with the loaded word; that is sound precisely when the destination is dead
+after the comparison.  Read/modify/write folding retains the stricter refusal
+because its later store still needs the original dynamic address.  Both rules
+are general physical-liveness and operand-legality facts, independent of the
+source frontend and symbol names.
+
+The first measurement exposed an instrument defect and received a fail-first
+regression of its own.  The scorer classified `cmp [mem],imm` and
+`test [mem],imm` as memory-writing ALU operations.  They only read memory, and
+the allocator's fold pricing already used the read-only form.  Unifying the
+classification removes the impossible report in which one fewer instruction
+and byte cost more.  The parent code shape was remeasured under the corrected
+instrument before comparing results; its numbers are unchanged and are stored
+under `build/quality/iter131-indexed-corrected-before`.
+
+On 386, `_lru_use` falls from 162 to 158 bytes, 58 to 55 instructions, and
+23.09375 to 22.21875 estimated executed instructions.  Static and dynamic
+weighted costs remain tied at 241 and 103.4375: the 386 read-only memory
+comparison costs exactly the separate load/register-test pair, so the smaller
+form wins without claiming a cycle saving.  The advisory dynamic ratio falls
+from 1.42x to 1.37x against Clang 21 and from 1.18x to 1.14x against i686 GCC
+16.2.  The raw listing now contains the same structural forms as both
+references: `cmp word ptr gs:[bx+si],0`, `cmp word ptr es:[bx+di],0`, and a
+direct comparison of the inline list head.
+
+Every CPU emits 158 bytes and three fewer static instructions.  Corrected
+before/after static weighted costs are: 386 241/241, 486 163/163, P5 113/113,
+P6 122/112, K5 68/64, K6 70/66, K7 96/87, and Core 127/114.  Dynamic weighted
+cost is never worse and improves on K7 from 37.0625 to 36.1875 and Core from
+60.375 to 59.5; estimated executed instructions fall by 0.875 on every target.
+Current listings and stage dumps are under `build/quality/iter131-indexed-cpus`,
+with fresh GCC and Clang references under
+`build/quality/iter131-indexed-final386`.  The real linked medium-model run
+still maps runtime input `block=1` to the independent checksum 60.  Eleven
+focused regressions pass in 0.09 seconds, that DOS oracle in 2.37 seconds, and
+Tier 1 passes 281 tests with 31 deselected in 1.15 seconds.
 
 ### 130. Split constrained address occurrences, then price 67h — 2026-09-19
 

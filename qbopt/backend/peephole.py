@@ -1140,8 +1140,7 @@ def _fused(load, work, store, dead_work, dead_store) -> "tuple[lir.Insn, int] | 
         case _:
             return None
     root = ir.root(register.register)
-    if root in {ir.root(cell.through), ir.root(cell.index_through)}:
-        return None
+    addresses_itself = root in {ir.root(cell.through), ir.root(cell.index_through)}
     lanes = _lanes(register.register)
 
     def operand(one: ir.Loc) -> bool:
@@ -1151,7 +1150,8 @@ def _fused(load, work, store, dead_work, dead_store) -> "tuple[lir.Insn, int] | 
 
     def stored() -> bool:
         return (
-            store is not None
+            not addresses_itself
+            and store is not None
             and plain(store, True)
             and store.what.op is ir.Operation.MOVE
             and store.what.name == "mov"

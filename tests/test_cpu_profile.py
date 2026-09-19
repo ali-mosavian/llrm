@@ -90,6 +90,18 @@ def test_memory_pop_is_not_priced_as_a_register_pop() -> None:
     assert all(cpu.profile(name).prices("pop_m") for name in cpu.names())
 
 
+def test_memory_compare_is_priced_as_a_read_not_a_read_modify_write() -> None:
+    """Folding lru_use's load/test raised its 386 score despite less work.
+
+    CMP and TEST never write their memory operand.  They therefore use the
+    read-only ALU-memory form, matching the allocator's fold discount, rather
+    than the cost of an ADD/SUB that must also write the cell back.
+    """
+    assert cycles.classify("cmp", "word [bp-4],0", "837efc00") == "alu_rm"
+    assert cycles.classify("test", "word [bp-4],1", "f746fc0100") == "alu_rm"
+    assert cycles.classify("add", "word [bp-4],1", "8346fc01") == "alu_mr"
+
+
 @pytest.mark.parametrize("mnemonic", ["les", "lfs", "lgs"])
 def test_complete_far_pointer_loads_share_one_priced_form(mnemonic: str) -> None:
     """indexed.lru_use became unpriced when allocation selected LFS.
