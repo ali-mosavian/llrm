@@ -1652,27 +1652,19 @@ fn finish_if_statement(state: &mut ParseState, condition: Expr, keyword_span: Sp
     if consume_named(state, "tkNewLine") {
         return block_if_statement(state, condition, keyword_span);
     }
-    let before_then = state.statements.len();
-    if statement(&ParserEngine::new(), state) != ParseResult::GoodSyntax {
+    let Ok(then_branch) = single_line_if_branch(state, true) else {
         return ParseResult::BadSyntax;
-    }
-    if state.statements.len() == before_then {
-        return ParseResult::BadSyntax;
-    }
-    let then_branch = state.statements.split_off(before_then);
+    };
     let mut else_branch = Vec::new();
     if consume_named(state, "tkELSE") {
-        let before_else = state.statements.len();
-        if statement(&ParserEngine::new(), state) != ParseResult::GoodSyntax {
+        let Ok(parsed) = single_line_if_branch(state, false) else {
             return ParseResult::BadSyntax;
-        }
-        if state.statements.len() == before_else {
-            return ParseResult::BadSyntax;
-        }
-        else_branch = state.statements.split_off(before_else);
+        };
+        else_branch = parsed;
     }
-    let end = then_branch
+    let end = else_branch
         .last()
+        .or_else(|| then_branch.last())
         .map(statement_end)
         .unwrap_or(condition.span().end);
     let span = Span {
@@ -1687,6 +1679,41 @@ fn finish_if_statement(state: &mut ParseState, condition: Expr, keyword_span: Sp
         span,
     });
     ParseResult::GoodSyntax
+}
+
+fn single_line_if_branch(
+    state: &mut ParseState,
+    stop_at_else: bool,
+) -> Result<Vec<Statement>, ParseResult> {
+    let mut branch = Vec::new();
+    loop {
+        let before = state.statements.len();
+        if statement(&ParserEngine::new(), state) != ParseResult::GoodSyntax {
+            return Err(ParseResult::BadSyntax);
+        }
+        let mut parsed = state.statements.split_off(before);
+        if parsed.is_empty() {
+            return Err(ParseResult::BadSyntax);
+        }
+        branch.append(&mut parsed);
+
+        if state.at >= state.tokens.len()
+            || at_named(state, "tkNewLine")
+            || (stop_at_else && at_named(state, "tkELSE"))
+        {
+            break;
+        }
+        if !consume_named(state, "tkColon") {
+            return Err(ParseResult::BadSyntax);
+        }
+        if state.at >= state.tokens.len()
+            || at_named(state, "tkNewLine")
+            || (stop_at_else && at_named(state, "tkELSE"))
+        {
+            break;
+        }
+    }
+    Ok(branch)
 }
 
 fn block_if_statement(state: &mut ParseState, condition: Expr, span: Span) -> ParseResult {

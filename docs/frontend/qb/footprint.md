@@ -213,9 +213,12 @@ runtime status remain separate gates.
 
 This comparison is the QGL poly-draw branch after matching the canonical
 `dm3ish.bsp`, `assets.zip`, and staged raw assets. The qbopt executable reaches
-the visible `FIRE TO START` frame. The last startup hang was VBDOS's
-control-context `NOT` successor exchange in `R_MARK_LEAVES`; fixing it changed
-HIR control flow and did not add a MIR or backend special case.
+the visible `FIRE TO START` frame. The first startup hang was a top-level
+control `NOT` in `R_MARK_LEAVES`: VBDOS strips the integer operation and tests
+its operand with exchanged successors. Fixing it changed HIR control flow and
+did not add a MIR or backend special case. The subsequent black world remains
+under investigation; reaching the title overlay alone is not a rendering
+success criterion.
 
 | Module | BC bytes | qbopt bytes | Delta |
 | --- | ---: | ---: | ---: |

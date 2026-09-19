@@ -116,10 +116,19 @@ adjusted offset `+0Ah`.
 The all-fresh QGL poly-draw image now loads `dm3ish.bsp` and reaches its visible
 `FIRE TO START` frame. After the descriptor correction, its first walk still
 did not terminate: `WHILE NOT (nodenr AND &H8000)` materialized `NOT &H8000`
-as the true value `&H7FFF`. VBDOS `/O` materializes the same integer result but
-reverses a control expression's successors when `NOT` occurs anywhere in it.
-HIR now records that successor order explicitly; no MIR or backend change was
-needed.
+as the true value `&H7FFF`. Raw VBDOS `/O` code instead strips a top-level
+control `NOT`, tests `nodenr AND &H8000`, and branches to the loop exit on
+nonzero. HIR now records that operand test and exchanged successor order
+explicitly; ordinary value-producing `NOT` is unchanged, and no MIR or backend
+change was needed.
+
+Single-line `IF` arms retain every colon-separated statement through `ELSE`
+or the physical line end. This is a parser boundary, not procedure control
+flow: in `IF failed THEN result = -1 : EXIT FUNCTION`, both statements belong
+to the true arm and the following source line remains reachable on the false
+path. Losing that boundary truncated QRender's `LS_SELFTEST` and `SC_SELFTEST`
+after their first guard; the isolated parser/HIR regression checks both the
+two-statement arm and the surviving success assignment.
 [memory-model.md](memory-model.md) records the raw comparison.
 `tools/qbstages.py` writes input, HIR, semantic MIR, optimized MIR,
 physical MIR, LIR, every machine pass, and inline-x87 output adjacently under

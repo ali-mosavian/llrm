@@ -2458,12 +2458,23 @@ impl Compiler {
         false_target: u32,
         while_true: bool,
     ) -> Result<(), SemanticError> {
+        if let Expr::Unary {
+            op: Unary::Not,
+            operand,
+            ..
+        } = expression
+        {
+            // In a control context BC tests NOT by exchanging the operand's
+            // successors. It does not materialize the integer complement:
+            // NOT &h8000 is &h7fff and therefore cannot implement the common
+            // `WHILE NOT (flags AND &h8000)` mask test. This also preserves
+            // ordinary bitwise NOT when the expression is used as a value.
+            return self.condition(operand, true_target, false_target, !while_true);
+        }
         let condition = self.truth(expression)?;
-        // VBDOS /O materializes integer NOT normally, then reverses the
-        // control transfer when NOT occurs anywhere in an IF/WHILE/DO
-        // expression.  This is observable for non-canonical values and is
-        // relied on by the conventional mask spelling
-        // `WHILE NOT (flags AND bit)`.
+        // Under VBDOS /O, a NOT buried below another operator is still
+        // materialized, but the final control transfer is exchanged.  The
+        // top-level case above is different: BC strips the NOT entirely.
         let branch_on_true = while_true ^ contains_not(expression);
         let targets = if branch_on_true {
             vec![true_target, false_target]

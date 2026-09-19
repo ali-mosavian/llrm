@@ -1,5 +1,5 @@
 use qbfront::semantic::{compile_with_array_order, compile_with_options};
-use qbfront::syntax::{Binary, Expr, Literal, Statement, TypeName};
+use qbfront::syntax::{Binary, ExitTarget, Expr, Literal, Statement, TypeName};
 use qbfront::{compile, parse, Dialect};
 
 #[test]
@@ -97,11 +97,11 @@ fn module_for_temporaries_live_in_module_data_not_a_procedure_frame() {
 }
 
 #[test]
-fn control_not_inverts_the_branch_after_materializing_bitwise_not() {
-    // qb-qrender's camera walk reached node -1, then never left
-    // `while not (nodeIndex and &h8000)`: materializing NOT changed &h8000
-    // into the still-true &h7fff. VBDOS /O still materializes that value, but
-    // exchanges the successors of any control expression containing NOT.
+fn control_not_inverts_the_operand_truth_without_materializing_bitwise_not() {
+    // qb-qrender's BSP walk must enter for node 0 and leave for node &h8000.
+    // Materializing integer NOT cannot express that truth test: NOT &h8000 is
+    // &h7fff, which is still true. In a control condition, NOT exchanges the
+    // operand's true and false successors instead.
     let module = parse(
         "dim nodeIndex as integer\n\
          while not (nodeIndex and &h8000)\n\
@@ -112,9 +112,9 @@ fn control_not_inverts_the_branch_after_materializing_bitwise_not() {
     .unwrap();
     let hir = compile(&module, "control_not", Dialect::VbDos, "vbdos").unwrap();
     assert!(hir.contains("\"op\":\"and\""));
-    assert!(hir.contains("\"op\":\"not\""));
+    assert!(!hir.contains("\"op\":\"not\""));
     assert!(hir.contains(
-        "\"kind\":\"branch\",\"operands\":[{\"tag\":\"value\",\"value\":3}],\"targets\":[4,3]"
+        "\"kind\":\"branch\",\"operands\":[{\"tag\":\"value\",\"value\":2}],\"targets\":[4,3]"
     ));
 }
 
@@ -206,6 +206,33 @@ fn parses_single_line_if_without_pcode() {
     };
     assert!(matches!(then_branch[0], Statement::Assign { .. }));
     assert!(matches!(else_branch[0], Statement::Goto(_, _)));
+}
+
+#[test]
+fn colon_statements_stay_inside_a_single_line_if_arm() {
+    // d_surf's LS_SELFTEST and SC_SELFTEST lost everything after their first
+    // guard because EXIT FUNCTION after the colon escaped the IF arm and
+    // became an unconditional procedure statement.
+    let module = parse(
+        "function classify (value as integer) as integer\n\
+         if value < 0 then classify = -1: exit function\n\
+         classify = 1\n\
+         end function\n",
+        Dialect::VbDos,
+    )
+    .unwrap();
+    let body = &module.procedures[0].body;
+    let Statement::If { then_branch, .. } = &body[0] else {
+        panic!("expected single-line IF")
+    };
+    assert!(matches!(then_branch[0], Statement::Assign { .. }));
+    assert!(matches!(then_branch[1], Statement::Exit(ExitTarget::Function, _)));
+    assert!(matches!(body[1], Statement::Assign { .. }));
+
+    let hir = compile(&module, "colon_if", Dialect::VbDos, "vbdos").unwrap();
+    assert!(hir.contains(
+        "\"op\":\"store\",\"operands\":[{\"place\":1,\"tag\":\"place\"},{\"tag\":\"constant\",\"type\":1,\"value\":1}]"
+    ));
 }
 
 #[test]
