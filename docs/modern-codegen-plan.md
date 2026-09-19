@@ -4744,3 +4744,36 @@ helper-name peephole.  GCC and LLVM remain the best-case structural references
 for the arithmetic and CFG, while BCC/Open Watcom remain authoritative for
 the segmented medium-model ABI, `SS == DS` assumptions, legal address forms,
 and language-runtime scaffolding.
+
+### 78. Qmove direct-edge liveness and address convergence — 2026-09-19
+
+The side-by-side allocated listing made two frontend-dependent costs concrete.
+First, VBDOS `B$EXTS` kept every general-purpose value live on its ordinary
+return edge even though its disassembled returning arm reads none.  The
+contract now separates that empty direct input set from the conservative
+all-path set retained for hidden runtime transfers.  The fail-first contract
+regression saw `direct_inputs=None`; the real qmove listing previously spilled
+and reconstructed both live vector bases around the early-exit call.
+
+Second, BASIC expressed `vector.y` as a word `ADD` and C attached displacement
+four directly to the memory cell.  Address selection already produced
+`[base+4]` for both, but refused to delete BASIC's symbolic add because raising
+had attached a whole-word upper-half congruence edge.  That edge is allocator
+provenance, not a semantic partial write: `mir.partial` is the existing single
+answer.  The address-form legality check now rejects true partial writes while
+allowing a complete word result to disappear with its selected memory form.
+The unit regression reproduces the raised merge exactly; the qmove regression
+requires that no integer add or lea survive in either frontend's floating
+kernel.  The raw BASIC listing lost `mov ax,si / add ax,4` and now opens with
+the same seven x87 operations as C, modulo physical-register choice and frame
+offsets.
+
+The remaining qmove DX:AX reconstruction is deliberately not removed from an
+arbitrary BC object.  BC's object and CodeView formats do not distinguish a
+`SUB` from an implicit-`INTEGER` `FUNCTION`, and the public return edge exposes
+DX:AX; changing it without a source-level procedure-kind fact would change the
+ABI.  It is recorded as language scaffolding, alongside `B$EXSA`/`B$EXTS` and
+frame layout.  Remaining non-scaffolding work is x87 value-form
+canonicalization and Phase 6 inlining/SROA for qbsp's far dynamic-array UDT
+path.  GCC/LLVM remain best-case structural references; BCC/Open Watcom remain
+the segmented ABI authority.

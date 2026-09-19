@@ -194,7 +194,7 @@ def indexed(
     def plain(op: mir.Op, kind: mir.Kind) -> bool:
         return (
             op.kind is kind
-            and not (op.loads or op.stores or op.merges or op.barrier)
+            and not (op.loads or op.stores or mir.partial(op) or op.barrier)
             and len(op.results) == 1
             and isinstance(op.results[0], mir.Held)
             and not any(one.flags and (one.id in other or one.id in bases) for one in op.defines)

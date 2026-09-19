@@ -8,12 +8,12 @@ from tests import corpus
 from qbopt.model import ir
 from qbopt.model import lir
 from qbopt.model import mir
+from qbopt.backend import cpu
 from qbopt.backend import lower
 from qbopt.backend import select
 from qbopt.frontend import blocks
 from qbopt.backend import peephole
 from qbopt.backend import addressforms
-from qbopt.backend import cpu
 from qbopt.frontend.declen import decode
 from qbopt.objectfile.module import Addr
 from qbopt.objectfile.module import Space
@@ -297,6 +297,58 @@ def test_based_constant_offset_address_computation_is_fully_folded() -> None:
 
     _forms, folded, _promoted = addressforms.indexed(body, set())
 
+    assert folded == frozenset({address.id})
+
+
+def test_whole_word_merge_does_not_keep_folded_address_arithmetic() -> None:
+    """qmove's BASIC frontend computed ``vector[1]`` with a word ADD while
+    C put the same constant displacement directly on the cell.  Selection
+    folded the BASIC cells to ``[vector+4]`` but retained ``mov ax,si / add
+    ax,4`` because the raised ADD carried the machine's upper-half merge.
+
+    A word result does not semantically preserve that unrepresented upper
+    half: ``mir.partial`` distinguishes it from a true partial write.  Once
+    cells are the only readers and flags are dead, the congruence hint must
+    not keep the otherwise folded address computation alive.
+    """
+    base = mir.Value(1, 0)
+    address = mir.Value(2, 0)
+    loaded = mir.Value(3, 0)
+    add = mir.Op(
+        1,
+        ir.Operation.BINARY,
+        "add",
+        (address,),
+        (base,),
+        kind=mir.Kind.ADD,
+        args=(mir.Held(base, 2), mir.Const(4, 2)),
+        results=(mir.Held(address, 2),),
+        merges={base: address},
+        symbol=True,
+    )
+    ref = mir.MemRef(
+        Addr(Space.LITERAL, 0),
+        4,
+        base=address,
+        space=Space.LITERAL,
+        base_width=2,
+    )
+    load = mir.Op(
+        2,
+        ir.Operation.MOVE,
+        "mov",
+        (loaded,),
+        (address,),
+        kind=mir.Kind.LOAD,
+        args=(mir.Cell(ref),),
+        results=(mir.Held(loaded, 4),),
+        loads=(ref,),
+    )
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (add, load), ()),))
+
+    forms, folded, _promoted = addressforms.indexed(body, set())
+
+    assert forms == {}
     assert folded == frozenset({address.id})
 
 

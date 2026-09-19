@@ -471,11 +471,13 @@ VARIANTS[("B$PEOS", "vbdos")] = replace(
 VARIANTS[("B$EXTS", "vbdos")] = replace(
     worst("B$EXTS"),
     inputs=frozenset({Reg.AX, Reg.BX, Reg.CX, Reg.DX, Reg.SI, Reg.DI}),
+    direct_inputs=frozenset(),
     cleanup=0,
     evidence=(
         "VBDCL10E.LIB rtenexit.asm 012e..0149: CMP BP,[runtime frame] "
         "kills incoming arithmetic flags. Both conditional branches and the "
-        "state-clearing path reach RETF at 0149; no pushes, pops or dependencies. "
+        "state-clearing path reach RETF at 0149; no pushes, pops or incoming "
+        "GP-register dependencies on the ordinary return edge. "
         "Writes globals and [bp-12h]; all GP inputs and unknown memory/clobber/"
         "control/error effects retained. Library SHA256 "
         "59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301."

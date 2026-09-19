@@ -287,6 +287,21 @@ def test_basic_quake_float_comparisons_do_not_retain_runtime_helper_calls() -> N
     assert sum(one.what is not None and one.what.name in {"fcom", "fcomp", "fcompp"} for one in instructions) == 2
 
 
+def test_quake_move_constant_field_offsets_do_not_survive_the_memory_fold() -> None:
+    """QMOVE selected every second-vector-field access as ``[base+4]`` but
+    retained BASIC's now-unused ``mov ax,si / add ax,4`` address spelling.
+
+    A whole-word congruence hint is not a semantic partial write.  Once the
+    selected cells own the address computation, no frontend-specific integer
+    address work may remain in this floating-point kernel.
+    """
+    from tools.frontend_parity import pair
+
+    basic, c = pair("qmove")
+    assert not [line for _at, line in basic if line.startswith(("add ", "lea "))]
+    assert not [line for _at, line in c if line.startswith(("add ", "lea "))]
+
+
 def test_quake_light_integer_kernel_converges_to_the_same_machine_work() -> None:
     """QLIGHT is a real qc-port clamp/scale kernel, not a synthetic identity.
 

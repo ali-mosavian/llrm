@@ -5,10 +5,10 @@ from dataclasses import replace
 
 import pytest
 
+from qbopt import wholeseg
+from qbopt.abi import runtime
 from qbopt.objectfile import omf
 from qbopt.objectfile import module
-from qbopt.abi import runtime
-from qbopt import wholeseg
 
 
 def loaded() -> module.Module:
@@ -30,8 +30,7 @@ def test_explicit_external_contract_is_shared_by_call_sites():
     found = loaded()
     name = "PROJECT_HELPER"
     found = replace(found, calls={0x40: name, 0x50: name, 0x60: "UNKNOWN"})
-    audited = replace(runtime.worst(name), inputs=frozenset(), cleanup=4,
-                      evidence="audited linked object")
+    audited = replace(runtime.worst(name), inputs=frozenset(), cleanup=4, evidence="audited linked object")
     contracts = runtime.for_module(found, external={name: audited})
     assert contracts[0x40] is audited
     assert contracts[0x50] is audited
@@ -46,8 +45,9 @@ def test_external_contract_cannot_be_applied_under_another_name():
 
 def test_emitter_validates_supplied_external_interfaces():
     with pytest.raises(ValueError, match="name"):
-        wholeseg.emitted(Path("fixtures/omf/procs-v-g3.obj").read_bytes(),
-                         external_contracts={"WRONG": runtime.worst("RIGHT")})
+        wholeseg.emitted(
+            Path("fixtures/omf/procs-v-g3.obj").read_bytes(), external_contracts={"WRONG": runtime.worst("RIGHT")}
+        )
 
 
 @pytest.mark.parametrize("variant", ["nonzero", "relocated", "entry_at_call"])
@@ -62,8 +62,7 @@ def test_unknown_entry_path_keeps_conservative_contract(variant: str) -> None:
         found = replace(found, publics=found.publics | {0xF0})
     contract = runtime.for_module(found)[0xF0]
     assert contract.inputs == frozenset(
-        {runtime.Reg.AX, runtime.Reg.BX, runtime.Reg.CX,
-         runtime.Reg.DX, runtime.Reg.SI, runtime.Reg.DI}
+        {runtime.Reg.AX, runtime.Reg.BX, runtime.Reg.CX, runtime.Reg.DX, runtime.Reg.SI, runtime.Reg.DI}
     )
     assert contract.cleanup is None
     assert contract.clobbers == runtime.EVERY
@@ -102,9 +101,12 @@ def test_vbdos_statement_exit_has_stack_neutral_interface():
     """Qrender COM_TOKENIZE refused B$EXTS at 008a after its string-length call."""
     contract = runtime.per_call({0: "B$EXTS"}, "vbdos")[0]
     assert contract.inputs == frozenset(
-        {runtime.Reg.AX, runtime.Reg.BX, runtime.Reg.CX,
-         runtime.Reg.DX, runtime.Reg.SI, runtime.Reg.DI}
+        {runtime.Reg.AX, runtime.Reg.BX, runtime.Reg.CX, runtime.Reg.DX, runtime.Reg.SI, runtime.Reg.DI}
     )
+    # The complete set above remains conservative for hidden runtime paths.
+    # The disassembled returning path reads no GP input; treating its scratch
+    # survivors as source operands made QMOVE spill both live vector bases.
+    assert contract.direct_inputs == frozenset()
     assert contract.cleanup == 0
     assert contract.clobbers == runtime.EVERY
     assert contract.reads is runtime.Memory.ANY
@@ -113,10 +115,16 @@ def test_vbdos_statement_exit_has_stack_neutral_interface():
     assert contract.raises_error
 
 
-@pytest.mark.parametrize("name,cleanup", [
-    ("B$PCR4", 4), ("B$PSR4", 4),
-    ("B$PCR8", 8), ("B$PSR8", 8), ("B$PER8", 8),
-])
+@pytest.mark.parametrize(
+    "name,cleanup",
+    [
+        ("B$PCR4", 4),
+        ("B$PSR4", 4),
+        ("B$PCR8", 8),
+        ("B$PSR8", 8),
+        ("B$PER8", 8),
+    ],
+)
 def test_vbdos_float_print_interfaces(name, cleanup):
     """Qrender camera refused PRINT's comma-separated SINGLE at 0x8ea."""
     contract = runtime.per_call({0: name}, "vbdos")[0]
