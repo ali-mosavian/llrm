@@ -43,7 +43,23 @@ PAIRS = {
     "control": Pair("PARITYCONTROL", "_parity_control"),
     "loop": Pair("PARITYLOOP", "_parity_loop"),
     "memory": Pair("PARITYMEMORY", "_parity_memory"),
+    "qmove": Pair("PLGROUNDACCEL", "_pl_ground_accel"),
+    "qbsp": Pair("RPOINTLEAF", "_r_point_leaf"),
+    "qlight": Pair("LSSCALEBYTE", "_ls_scale_byte"),
 }
+
+
+class _AnonymousNames(dict):
+    """Stable spellings for raw objects whose private symbols have no names."""
+
+    def __missing__(self, key):
+        space, index = key
+        value = f"{space.value}{index}"
+        self[key] = value
+        return value
+
+
+_NAMES = _AnonymousNames()
 
 
 def _call_name(one: lir.Insn, calls: dict[int, str]) -> str | None:
@@ -94,7 +110,9 @@ def c_core(body: lir.LirBody) -> tuple[tuple[int, str], ...]:
 def _line(one: lir.Insn, calls: dict[int, str]) -> str:
     if callee := _call_name(one, calls):
         return f"call {callee}"
-    lines = masm._instruction(one.what, {}, 0)
+    if one.what is not None and one.what.op is ir.Operation.CALL:
+        return "call"
+    lines = masm._instruction(one.what, _NAMES, 0)
     return " ; ".join(lines)
 
 

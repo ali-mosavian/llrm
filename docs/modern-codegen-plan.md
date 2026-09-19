@@ -4691,3 +4691,56 @@ priority, lightmaps, and SB16 sound configured. Tier 1 passes 258 tests in
 and C ABI work, not a claim that Phase 4 or the broader GCC/Clang-quality plan
 is complete. The raw qc-port loops and GCC/LLVM reference listings still drive
 the remaining spill, folding, scheduling, and whole-module work.
+
+### 77. Real Quake frontend-parity kernels — 2026-09-19
+
+Three paired kernels now come directly from qb-qrender and qc-port rather
+than from optimizer-shaped microexamples: player ground acceleration,
+BSP point-to-leaf traversal, and light-byte scaling/clamping.  Each BASIC and
+C spelling has one independent numeric answer and an end-to-end DOS gate.
+The comparison tool prints both final allocated listings without hiding
+calls, reloads, descriptor traffic, or ABI work.
+
+The first qmove comparison found that two `B$FCMP` calls still crossed the
+MIR boundary as opaque runtime calls.  The established helper contract is a
+pure two-pop x87 comparison, so the raise now represents it as the same
+machine-neutral `FCOMPARE` operation produced by the C frontend.  Float-stack
+reconstruction understands the two-pop effect, lowering carries the helper's
+otherwise-live status-word clobber as an implicit result, and float allocation
+attaches that result to generated `fnstsw` rather than to `fcom`.  Generated
+machine-state barriers are now selected; only decoded opaque barriers retain
+their original bytes.  The real qmove regression first failed with both
+helper calls present, then with the newly exposed lowering and emission gaps,
+and now requires exactly two inline comparisons and no `B$FCMP` call.
+
+The same corpus exposed two independent ownership/instrument defects.  A
+dynamic array allocation was still classified private after its descriptor
+address was passed to a user procedure, so DSE removed initialized BSP nodes
+before that procedure read them.  Publication now follows the descriptor to
+its current allocation while distinguishing DIM/REDIM and ERASE lifecycle
+calls from user publication.  A fail-first unit reproduces the deleted
+allocation; a companion test proves that allocating through a descriptor does
+not retroactively publish the new generation.  Separately, the standalone C
+runtime gate violated the medium-model ABI by leaving `SS != DS`; a callee's
+near pointer to a caller automatic therefore wrote through the wrong segment,
+and qmove returned its untouched `30405` instead of `100405`.  The harness now
+uses a DGROUP stack with `SS == DS` and initializes x87 before user code.
+
+All three pairs now agree at runtime: qmove `100405`, qbsp `120`, and qlight
+`200100255`.  Qlight's selected opcode stream is identical after normalizing
+only BASIC's DX:AX return extraction and the equal-cost zero idiom.  Qmove has
+lost its comparison helpers but BASIC still carries additional frame-pointer
+copies, temporary stores, and its `B$EXTS` procedure-exit ABI.  QBSP remains
+the clearest Phase 3/6 gap: BASIC dynamic-array descriptors, `B$ASSN` UDT
+copies, and the uninlined `rPlaneDist` call produce substantially more work
+than C's direct bounded structs.  Those are recorded gaps, not normalized out
+of the measurement.
+
+This iteration advances Phase 2's raise boundary, Phase 3's ownership proof,
+and Phase 1's realistic measurement corpus.  The next frontend-independence
+work is general descriptor/UDT scalarization and profitable whole-module
+inlining, followed by qmove address/value promotion; it is not another
+helper-name peephole.  GCC and LLVM remain the best-case structural references
+for the arithmetic and CFG, while BCC/Open Watcom remain authoritative for
+the segmented medium-model ABI, `SS == DS` assumptions, legal address forms,
+and language-runtime scaffolding.

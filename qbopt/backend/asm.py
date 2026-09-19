@@ -43,8 +43,8 @@ from qbopt.backend import target
 from qbopt.objectfile.module import Addr
 from qbopt.objectfile.module import Space
 from qbopt.objectfile.module import Module
-from qbopt.objectfile.module import SourceMap
 from qbopt.frontend.declen import STANDS_IN
+from qbopt.objectfile.module import SourceMap
 
 
 @dataclass(frozen=True, slots=True)
@@ -1006,7 +1006,16 @@ def _semantics(op: lir.Insn) -> ir.Semantics | None:
     and that node's semantics is the authority.
     """
     what = op.what
-    return None if what is None or what.op is ir.Operation.BARRIER else what
+    if what is None:
+        return None
+    # A decoded BARRIER means only that the raise cannot describe the source
+    # instruction and its original bytes remain authoritative.  A generated
+    # barrier has no such bytes: lower machine state operations such as
+    # FNSTSW/FNSTCW/FLDCW explicitly, and let selection reject any generated
+    # form for which it has no encoding.
+    if what.op is ir.Operation.BARRIER and op.node is not None:
+        return None
+    return what
 
 
 # The registers a remap may name. Not `target.AT_WIDTH`, which is the whole

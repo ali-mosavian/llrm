@@ -352,7 +352,6 @@ class _Stack:
         self.one: lir.Insn | None = None
         self.keep: set[int] = set()
         self.retained: set[int] = set()
-        self.vacated: set[int] = set()
 
     def region(self, sequence: list[lir.Insn], reads: defaultdict, aliases: dict[int, int]) -> None:
         self.sequence, self.reads, self.here = sequence, reads, -1
@@ -495,7 +494,6 @@ class _Stack:
         if one.covers and one.covers[0] != one.covers[1]:
             nothing = ir.Semantics(ir.Operation.NOTHING, "", (), ())
             self.out.append(replace(one, what=nothing, uses=(), defines=(), widths=(), requires=()))
-            self.vacated.add(id(self.out[-1]))
 
     def exchange(self, slot: int) -> None:
         if slot:
@@ -685,10 +683,29 @@ class _Stack:
                 self.exchange(slot)
             self.emit(ir.Semantics(ir.Operation.COMPARE, "fcompp", (), (ir.St(0), ir.St(1))))
             del self.values[:2]
+        # The comparison defines flags through SAHF. A raised runtime helper
+        # may additionally expose AX as an opaque clobber to later ABI code;
+        # FNSTSW is the instruction that produces that value, not FCOM(PP).
+        produced = frozenset(self.one.defines)
+        comparison = self.out[-1]
+        self.out[-1] = replace(
+            comparison,
+            defines=tuple(value for value in comparison.defines if value not in produced),
+            delivers=tuple((held, register) for held, register in comparison.delivers if held.value not in produced),
+            widths=tuple(pair for pair in comparison.widths if pair[0] not in produced),
+        )
         at = self.one.at
         status = ir.Semantics(ir.Operation.BARRIER, "fnstsw", (ir.Reg(Register.AX, 2),), ())
         self.out.append(
-            lir.Insn(at=at, covers=(at, at), what=status, defines=(), uses=(), clobbers=frozenset({Register.EAX}))
+            lir.Insn(
+                at=at,
+                covers=(at, at),
+                what=status,
+                defines=self.one.defines,
+                uses=(),
+                delivers=self.one.delivers,
+                widths=tuple(pair for pair in self.one.widths if pair[0] in produced),
+            )
         )
         self.insert(ir.Semantics(ir.Operation.NOTHING, "sahf", (), ()))
 
@@ -812,8 +829,7 @@ def _allocate_stack(
         if index - 1 not in continues:
             region += 1
             stack.region(*_region(body.blocks, index, 0, continues))
-        # By identity, so only while every instruction marked is still in `out`.
-        stack.out, stack.vacated = [], set()
+        stack.out = []
         output_regions = []
         for position, one in enumerate(block.insns):
             current_region = region
@@ -838,9 +854,7 @@ def _allocate_stack(
                 region += 1
         if stack.values and index not in continues:
             raise Unlowered("floating stack live-out requires cross-block allocation")
-        kept = tuple(
-            (one, region) for one, region in zip(stack.out, output_regions, strict=True) if id(one) not in stack.vacated
-        )
+        kept = tuple(zip(stack.out, output_regions, strict=True))
         blocks.append(replace(block, insns=tuple(one for one, _region in kept)))
         labels[block.at] = tuple(region for _one, region in kept)
     allocated_blocks = {block.at: block for block in blocks}
@@ -859,7 +873,8 @@ def _region_scores(
         if len(regions) != len(block.insns):
             raise ValueError("x87 candidate region labels do not cover its instructions")
         for one, region in zip(block.insns, regions, strict=True):
-            counts[region] += 1
+            emitted = one.what is not None and not (one.what.op is ir.Operation.NOTHING and not one.what.name)
+            counts[region] += emitted
             form = _floating_form(one.what) if one.what else None
             if form is None:
                 continue

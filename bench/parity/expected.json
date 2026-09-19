@@ -5,5 +5,8 @@
   "loop": 130991,
   "memory": 361001,
   "parity": 1789,
+  "qbsp": 120,
+  "qlight": 200100255,
+  "qmove": 100405,
   "scalar": 1789
 }

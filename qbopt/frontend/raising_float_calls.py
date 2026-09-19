@@ -44,8 +44,7 @@ def _signs(served, width, origin) -> bool:
 
 def raised(body, found, contracts, source_map: module.SourceMap | None = None):
     source_map = source_map or module.SourceMap.from_module(found)
-    if "FIDRQQ" not in omf.externals(found.records):
-        return body
+    emulated = "FIDRQQ" in omf.externals(found.records)
     serial = max((one.id for one in ssa.values(body)), default=0)
     variable = max((one.variable for one in ssa.values(body)), default=0)
     local = module.defines(found.records, found.seg)
@@ -57,7 +56,7 @@ def raised(body, found, contracts, source_map: module.SourceMap | None = None):
         ops = []
         for index, op in enumerate(block.ops):
             name = found.calls.get(op.at)
-            width = _WIDTHS.get(name)
+            width = _WIDTHS.get(name) if emulated else None
             contract = contracts.get(op.at)
             expected = runtime.contract(name) if width else None
             candidate = (
@@ -179,5 +178,67 @@ def raised(body, found, contracts, source_map: module.SourceMap | None = None):
                 source_map.float_protocols[op.id] = 0x34
             ops.append(op)
             definitions.update({value: (index, op) for value in op.defines})
+        blocks.append(replace(block, ops=tuple(ops)))
+    return _comparisons(replace(body, blocks=tuple(blocks)), found, contracts)
+
+
+def _comparisons(body: mir.MirBody, found, contracts) -> mir.MirBody:
+    """Raise B$FCMP as the floating comparison it implements.
+
+    The two operands already stand on the x87 stack.  Giving the helper its
+    semantic stack effect lets ``raising_float_values`` resolve them to the
+    same ordinary value operands emitted by source frontends.
+    """
+    used = {value for block in body.blocks for op in block.ops for value in op.uses}
+    used.update(value for block in body.blocks for phi in block.phis for value in phi.incoming.values())
+    local = module.defines(found.records, found.seg)
+    expected = runtime.contract("B$FCMP")
+    blocks = []
+    for block in body.blocks:
+        ops = []
+        for op in block.ops:
+            name = found.calls.get(op.at)
+            rule = contracts.get(op.at)
+            live_flags = tuple(value for value in op.defines if value.flags and value in used)
+            live_data = tuple(value for value in op.defines if not value.flags and value in used)
+            candidate = (
+                op.kind is mir.Kind.CALL
+                and name == "B$FCMP"
+                and name not in local
+                and rule is not None
+                and rule.established
+                and rule.writes is runtime.Memory.NONE
+                and rule.reads is runtime.Memory.NONE
+                and rule.cleanup == 0
+                and rule.control is runtime.Control.RETURNS
+                and not (rule.enters_user_code or rule.raises_error or rule.error_handling)
+                and rule.inputs == expected.inputs
+                and rule.clobbers == expected.clobbers
+                and len(live_flags) == 1
+                and len(live_data) <= 1
+            )
+            if candidate:
+                op = mir.detached(
+                    op,
+                    op=ir.Operation.NOTHING,
+                    name="",
+                    kind=mir.Kind.FCOMPARE,
+                    defines=(*live_flags, *live_data),
+                    uses=(),
+                    args=(mir.Opaque(ir.St(0), "st0"), mir.Opaque(ir.St(1), "st1")),
+                    results=(),
+                    loads=(),
+                    stores=(),
+                    merges={},
+                    raised=None,
+                    stack=-2,
+                    symbol=False,
+                    args_known=True,
+                    memory_complete=True,
+                    reads_complete=True,
+                    opaque_defs=frozenset(),
+                    opaque_uses=frozenset(),
+                )
+            ops.append(op)
         blocks.append(replace(block, ops=tuple(ops)))
     return replace(body, blocks=tuple(blocks))

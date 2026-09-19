@@ -254,6 +254,64 @@ def test_paired_frontends_converge_on_the_same_final_machine_work() -> None:
     assert work(c_control) - work(basic_control) == Counter({"mov": 1, "sub": 1, "jl": 1})
 
 
+def test_basic_quake_float_comparisons_do_not_retain_runtime_helper_calls() -> None:
+    """QMOVE retained two B$FCMP calls where equivalent C emitted fcompp.
+
+    B$FCMP's established contract is exactly an x87 comparison and status
+    transfer. It must cross the raise boundary as the same FCOMPARE operation
+    a source frontend produces, not remain opaque because BC spelt it as a
+    runtime helper.
+    """
+    from qbopt.model import ir
+
+    fixture = ROOT / "fixtures" / "parity" / "qmove-v-g3.obj"
+    found = module.of(omf.read(fixture))
+    assert found is not None
+    seen = {}
+
+    def watch(stage, name, body):
+        if stage == "jumps" and name == "procedure PLGROUNDACCEL":
+            seen[name] = body
+
+    result = wholeseg.emitted(fixture.read_bytes(), watch=watch)
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    instructions = [one for block in seen["procedure PLGROUNDACCEL"].blocks for one in block.insns]
+    assert not [
+        one
+        for one in instructions
+        if one.what is not None
+        and one.what.op is ir.Operation.CALL
+        and one.op is not None
+        and found.calls.get(one.op.at) == "B$FCMP"
+    ]
+    assert sum(one.what is not None and one.what.name in {"fcom", "fcomp", "fcompp"} for one in instructions) == 2
+
+
+def test_quake_light_integer_kernel_converges_to_the_same_machine_work() -> None:
+    """QLIGHT is a real qc-port clamp/scale kernel, not a synthetic identity.
+
+    The source-language ABIs differ only at the return: BASIC extracts DX:AX,
+    while C already owns the long in EAX.  Zeroing also has two equally cheap
+    spellings.  Apart from those facts, the complete selected opcode stream
+    must be frontend independent.
+    """
+    from tools.frontend_parity import pair
+
+    def work(lines):
+        out = []
+        for _at, line in lines:
+            name = line.split()[0]
+            if name == "shld":
+                continue
+            if line in {"xor eax, eax", "mov ax, 0"}:
+                name = "zero"
+            out.append(name)
+        return tuple(out)
+
+    basic, c = pair("qlight")
+    assert work(basic) == work(c)
+
+
 def test_runtime_frame_is_established_before_allocator_spill_accesses() -> None:
     """Optimized frontend-parity LOOP printed 5000 instead of 130991.
 
@@ -286,15 +344,25 @@ def _c_start(symbol: str) -> str:
     return f"""\
 .model medium
 .386
-.stack 1024
 extrn _{symbol}:far
 .data
 value dd ?
 filename db 'VALUE.BIN', 0
+stack_space db 1024 dup (?)
+stack_top label byte
 .code
 start:
     mov ax, @data
     mov ds, ax
+    ; Near data pointers address stack locals through DS in this ABI.  The
+    ; old standalone harness left DOS's separate startup stack in SS, so a
+    ; callee wrote through the wrong segment and QMOVE returned 30405.
+    cli
+    mov ss, ax
+    mov sp, offset stack_top
+    sti
+    ; A real C runtime also initializes the x87 before calling user code.
+    fninit
     call far ptr _{symbol}
     mov word ptr value, ax
     mov word ptr value+2, dx
@@ -336,7 +404,18 @@ def test_basic_frontend_returns_the_independent_parity_answer(tmp_path: Path) ->
 
     result = e2e.run(
         "v-g3",
-        names=["parity", "scalar", "algebra", "branch", "loop", "memory", "control"],
+        names=[
+            "parity",
+            "scalar",
+            "algebra",
+            "branch",
+            "loop",
+            "memory",
+            "control",
+            "qmove",
+            "qbsp",
+            "qlight",
+        ],
         source_dir=SOURCE,
         golden_dir=SOURCE / "golden",
         work=tmp_path,
@@ -356,6 +435,9 @@ def test_basic_frontend_returns_the_independent_parity_answer(tmp_path: Path) ->
         ("loop", "parity_loop_demo"),
         ("memory", "parity_memory_demo"),
         ("control", "parity_control_demo"),
+        ("qmove", "quake_move_demo"),
+        ("qbsp", "quake_bsp_demo"),
+        ("qlight", "quake_light_demo"),
     ],
 )
 @pytest.mark.e2e

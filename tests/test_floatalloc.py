@@ -315,6 +315,37 @@ def test_a_load_read_once_by_the_next_arithmetic_is_its_memory_operand(loaded, n
     assert all(select.emit(one.what) is not None for one in result.insns)
 
 
+def test_a_load_folded_into_x87_memory_arithmetic_retains_its_source_bytes():
+    """Qmove and qbsp fresh emission refused 32 and 9 unowned bytes.
+
+    Float allocation folded each ``fld m32`` into its only arithmetic reader,
+    then discarded the ownership-only marker for the removed load.  The
+    optimized instruction stream is shorter, but it must still account for
+    every source instruction byte so relocation and layout can rebuild the
+    complete module.
+    """
+    value, temporary, answer = (ir.Held(index, 10) for index in range(1, 4))
+    home, cell = _cells(-4, -8)
+    body = _body(
+        [
+            _load(value, home),
+            _load(temporary, cell),
+            _arithmetic("fmul", answer, value, temporary),
+            _store(home, answer),
+        ]
+    )
+
+    result = floatalloc.allocated(body)
+    covered = {byte for one in result.insns for byte in range(*one.covers)}
+
+    assert covered == set(range(32))
+    assert [one.what.name for one in result.insns if one.what.op is not ir.Operation.NOTHING] == [
+        "fld",
+        "fmul",
+        "fstp",
+    ]
+
+
 def test_square_keeps_the_next_used_operand_on_top():
     """FPDEEP shuffled p back to the top immediately after forming p*p."""
     value, square, total, answer = (ir.Held(index, 10) for index in range(1, 5))

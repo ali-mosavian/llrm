@@ -29,8 +29,8 @@ is what an x87 pass would have to ask first.
 from dataclasses import field
 from dataclasses import dataclass
 
-from qbopt.model import ir, mir
-from qbopt.model.mir import Op
+from qbopt.model import ir
+from qbopt.model import mir
 from qbopt.model.mir import Opaque
 from qbopt.model.mir import MirBody
 
@@ -122,7 +122,7 @@ def readings(body: MirBody) -> dict[int, Reading]:
                 continue
             if op.stack is None:
                 continue
-            if op.stack not in (-1, 0, 1):
+            if op.stack not in (-2, -1, 0, 1):
                 known = False
                 stack = []
                 out[op.at] = Reading(op.at)
@@ -152,9 +152,11 @@ def readings(body: MirBody) -> dict[int, Reading]:
                 made = Float(minted, op.at)
                 stack.insert(0, made)
             elif destinations:
-                if (len(destinations) != 1 or op.op not in (
-                    ir.Operation.FLOAT_ARITH, ir.Operation.FLOAT_ARITH_POP, ir.Operation.FLOAT_UNARY
-                ) or at(destinations[0]) is None):
+                if (
+                    len(destinations) != 1
+                    or op.op not in (ir.Operation.FLOAT_ARITH, ir.Operation.FLOAT_ARITH_POP, ir.Operation.FLOAT_UNARY)
+                    or at(destinations[0]) is None
+                ):
                     known = False
                     stack = []
                     out[op.at] = Reading(op.at)
@@ -163,11 +165,19 @@ def readings(body: MirBody) -> dict[int, Reading]:
                 made = Float(minted, op.at)
                 stack[destinations[0]] = made
             if op.stack < 0:
-                popped = (stack[0],) if stack else ()
-                if stack:
+                removed = []
+                for _ in range(-op.stack):
+                    value = at(0)
+                    if value is None:
+                        known = False
+                        break
+                    removed.append(value)
                     stack.pop(0)
-                elif entering < DEPTH:
-                    entering += 1
+                if not known:
+                    stack = []
+                    out[op.at] = Reading(op.at)
+                    continue
+                popped = tuple(removed)
             out[op.at] = Reading(op.at, uses, made, popped)
     return out
 

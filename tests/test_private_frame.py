@@ -231,3 +231,70 @@ def test_an_owned_allocation_becomes_private_only_after_its_last_load_is_gone() 
     private = observers.private(unread, None, None)
     assert private is not None and private(cell)
     assert stored in avail.dead_stores(unread, frozenset(), {}, private)
+
+
+def _allocation_passed_by_descriptor(lifecycle: bool) -> tuple[mir.MirBody, mir.Op, mir.MemRef]:
+    descriptor = mir.Symbol(Space.FRAME, 0, -38, 2)
+    object_ = memory.Object(memory.Kind.ALLOCATION, (descriptor, 7, "root"), extent=4)
+    cell = mir.MemRef(
+        Addr(Space.FAR, 0),
+        4,
+        space=Space.FAR,
+        allocation=descriptor,
+        provenance=memory.Provenance.one(object_, 0, 4),
+    )
+    stored = mir.Op(
+        1,
+        ir.Operation.MOVE,
+        "mov",
+        (),
+        (),
+        kind=mir.Kind.STORE,
+        args=(mir.Const(37, 4),),
+        results=(mir.Cell(cell),),
+        stores=(cell,),
+    )
+    pointer = mir.Value(2, 1, variable=1, version=1)
+    address = mir.Op(
+        2,
+        ir.Operation.ADDRESS,
+        "address",
+        (pointer,),
+        (),
+        kind=mir.Kind.ADDRESS,
+        args=(mir.FrameAddress(descriptor.offset, descriptor.width),),
+        results=(mir.Held(pointer, descriptor.width),),
+    )
+    argument = mir.Op(
+        3,
+        ir.Operation.PUSH,
+        "push",
+        (),
+        (pointer,),
+        kind=mir.Kind.ARG,
+        args=(mir.Held(pointer, descriptor.width),),
+    )
+    request = mir.ArrayRequest(descriptor, 4, ((0, 0),)) if lifecycle else None
+    call = mir.Op(4, ir.Operation.CALL, "call", (), (), kind=mir.Kind.CALL, array=request)
+    ops = (address, argument, call, stored) if lifecycle else (stored, address, argument, call)
+    return mir.MirBody(0, (mir.MirBlock(0, (), ops, ()),), sealed=True), stored, cell
+
+
+def test_passing_an_array_descriptor_publishes_its_current_allocation() -> None:
+    """QBSP looped forever after DSE erased every initialized BSP child.
+
+    The callee received the dynamic-array descriptor rather than its loaded
+    data pointer.  That still exposes the allocation owned by the descriptor.
+    """
+    body, stored, cell = _allocation_passed_by_descriptor(False)
+    private = observers.private(body, None, None)
+    assert private is not None and not private(cell)
+    assert stored not in avail.dead_stores(body, frozenset(), {}, private)
+
+
+def test_allocating_through_a_descriptor_does_not_publish_the_new_allocation() -> None:
+    """DIM receives the descriptor before the allocation generation exists."""
+    body, stored, cell = _allocation_passed_by_descriptor(True)
+    private = observers.private(body, None, None)
+    assert private is not None and private(cell)
+    assert stored in avail.dead_stores(body, frozenset(), {}, private)

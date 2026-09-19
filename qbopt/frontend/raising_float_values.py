@@ -2,9 +2,9 @@
 
 from dataclasses import replace
 
-from qbopt.frontend import fpstack
 from qbopt.model import mir
 from qbopt.analysis import ssa
+from qbopt.frontend import fpstack
 
 
 def _regions(block):
@@ -12,7 +12,11 @@ def _regions(block):
     run = []
     depth = 0
     for op in block.ops:
-        if op.barrier or op.kind is mir.Kind.CALL or (op.stack is not None and op.floating is None):
+        if (
+            op.barrier
+            or op.kind is mir.Kind.CALL
+            or (op.stack is not None and op.floating is None and op.kind is not mir.Kind.FCOMPARE)
+        ):
             run, depth = [], 0
             continue
         run.append(op)
@@ -34,8 +38,8 @@ def loaded(body: mir.MirBody) -> mir.MirBody:
     """Arithmetic over values: a memory operand becomes its own load, which carries the format."""
     from qbopt.model import ir
     from qbopt.model.floating import Format
-    from qbopt.model.floating import Precision
     from qbopt.model.floating import Rounding
+    from qbopt.model.floating import Precision
     from qbopt.model.floating import Semantics
 
     values = tuple(ssa.values(body))
@@ -113,9 +117,12 @@ def raised(body: mir.MirBody) -> mir.MirBody:
         readings = {}
         for region in regions:
             readings.update(fpstack.readings(replace(body, blocks=(replace(block, ops=region),))))
-        if (not operations or any(op.floating is None for op in operations)
+        if (
+            not operations
+            or any(op.floating is None and op.kind is not mir.Kind.FCOMPARE for op in operations)
             or len({op.at for op in operations}) != len(operations)
-            or sum(op.stack for op in operations) != 0):
+            or sum(op.stack for op in operations) != 0
+        ):
             blocks.append(block)
             continue
         known = set()
@@ -146,14 +153,21 @@ def raised(body: mir.MirBody) -> mir.MirBody:
                 ops.append(op)
                 continue
             reading = readings[op.at]
+
             def source(arg):
                 if isinstance(arg, mir.Opaque) and arg.name.startswith("st") and arg.name[2:].isdigit():
                     return held[reading.uses[int(arg.name[2:])]]
                 return arg
+
             args = tuple(source(arg) for arg in op.args)
             results = tuple(held[reading.defines] if isinstance(arg, mir.Opaque) else arg for arg in op.results)
-            baseline = mir.FloatingOrigin(block.at, sequence, op.at, op.kind, op.floating,
-                                          args, results, op.args, op.results)
+            baseline = (
+                None
+                if op.kind is mir.Kind.FCOMPARE
+                else mir.FloatingOrigin(
+                    block.at, sequence, op.at, op.kind, op.floating, args, results, op.args, op.results
+                )
+            )
             uses = tuple(dict.fromkeys((*op.uses, *(arg.value for arg in args if isinstance(arg, mir.Held)))))
             defines = tuple(dict.fromkeys((*op.defines, *(arg.value for arg in results if isinstance(arg, mir.Held)))))
             ops.append(replace(op, args=args, results=results, uses=uses, defines=defines, floating_origin=baseline))

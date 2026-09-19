@@ -21,11 +21,11 @@ from qbopt.model import ir
 from qbopt.model import lir
 from qbopt.model import mir
 from qbopt.abi import runtime
+from qbopt.analysis import loops
 from qbopt.backend import target
+from qbopt.analysis import consts
 from qbopt.backend import division
 from qbopt.analysis import liveness
-from qbopt.analysis import consts
-from qbopt.analysis import loops
 from qbopt.analysis import induction
 from qbopt.backend import arithmetic
 from qbopt.model.floating import Format
@@ -522,11 +522,11 @@ def lowered(
     without anything having been optimised.
     """
     from qbopt.model import lir
-    from qbopt.backend import comparefold
-    from qbopt.backend import addressforms
-    from qbopt.backend import farload
     from qbopt.backend import rmw
     from qbopt.analysis import ssa
+    from qbopt.backend import farload
+    from qbopt.backend import comparefold
+    from qbopt.backend import addressforms
     from qbopt.backend import lower_floats
     from qbopt.backend import lower_switches
 
@@ -899,9 +899,7 @@ def _extract(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...]:
             # the emitter resolves that view to AX/BX/CX/DX as appropriate.
             # A push/pop round trip is needed only for the high word below.
             if offset == 0:
-                return (
-                    ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(result.id, 2),), (ir.Held(source.id, 2),)),
-                )
+                return (ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(result.id, 2),), (ir.Held(source.id, 2),)),)
             # The halves of a sign extension are the word itself and its sign,
             # and x86 has an instruction for the second. Going through the
             # stack instead cost stride's loop four instructions for what
@@ -1183,16 +1181,15 @@ class Lowering:
         )
 
     def _delivered(self, op: "mir.Op") -> tuple:
-        """Where an operation that names no operand leaves what it writes.
+        """Where an operation leaves a result no ordinary destination names.
 
-        Only the restore idiom: three instructions behind one node, whose
-        semantics have no destination to carry a value. The registers are
-        the pair's own -- `push eax / pop ax / pop dx` puts the low half
-        in ax and the high half in dx -- and which value is which is the
-        register the raise saw it in, which for these is always BC's own
-        because the idiom is BC's own.
+        Calls and the restore idiom name no ordinary operand for their result.
+        A floating comparison does name its floating inputs, but the status
+        word it produces is likewise implicit: FNSTSW writes AX.  In every
+        case the register is a lowering fact and the MIR value remains
+        machine independent.
         """
-        if op.kind is mir.Kind.CALL:
+        if op.kind in (mir.Kind.CALL, mir.Kind.FCOMPARE):
             widths = dict(self._widths(op))
             where = dict(self._origin)
             if self.node(op) is None:
@@ -1649,7 +1646,7 @@ class Lowering:
                     at=op.at,
                     covers=covers,
                     what=what,
-                    defines=made
+                    defines=tuple(dict.fromkeys((*made, *(held.value for held, _ in delivers))))
                     if speaks and op.kind is not mir.Kind.CALL
                     else tuple(
                         one.id for one in op.defines if not one.flags and one.id in self._read and one.id not in floats
