@@ -278,7 +278,7 @@ fn identifier_statement(state: &mut ParseState) -> ParseResult {
         return ParseResult::NotFound;
     };
     state.at += 1;
-    if consume_named(state, "tkColon") {
+    if at_named(state, "tkColon") {
         state.statements.push(Statement::Label(name, token.span));
         return ParseResult::GoodSyntax;
     }
@@ -2323,6 +2323,16 @@ mod tests {
         assert!(matches!(&symbolic.statements[..], [Statement::Label(label, _), Statement::Assign { .. }] if label == "HANDLER"));
         let numbered = module("100 observed = 7 \\ divisor\r\n", Dialect::QuickBasic45);
         assert!(matches!(&numbered.statements[..], [Statement::Label(label, _), Statement::Assign { .. }] if label == "100"));
+    }
+
+    #[test]
+    fn generated_symbolic_label_separates_inline_data() {
+        let parsed = module("mono: data 15, 7, 0\r\n", Dialect::QuickBasic45);
+        assert!(matches!(
+            &parsed.statements[..],
+            [Statement::Label(label, _), Statement::Data { values, .. }]
+                if label == "MONO" && values.len() == 3
+        ));
     }
 
     #[test]
