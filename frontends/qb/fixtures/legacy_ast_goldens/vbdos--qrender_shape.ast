@@ -1,0 +1,693 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: vbdos/qrender_shape
+# dialect: VbDos
+# source: vbdos/qrender.bas
+
+Module {
+    statements: [
+        OptionExplicit(
+            Span {
+                line: 1,
+                start: 0,
+                end: 6,
+            },
+        ),
+        Comment(
+            Span {
+                line: 3,
+                start: 0,
+                end: 8,
+            },
+        ),
+        TypeDecl {
+            name: "FRAME_STATE",
+            fields: [
+                Declaration {
+                    name: "FRAME_COUNT",
+                    type_name: Some(
+                        Long,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 5,
+                        start: 4,
+                        end: 15,
+                    },
+                },
+                Declaration {
+                    name: "MAP_NAME",
+                    type_name: Some(
+                        String,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: Some(
+                        Literal(
+                            Integer(
+                                8,
+                                Integer,
+                            ),
+                            Span {
+                                line: 6,
+                                start: 25,
+                                end: 26,
+                            },
+                        ),
+                    ),
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 6,
+                        start: 4,
+                        end: 12,
+                    },
+                },
+            ],
+            span: Span {
+                line: 4,
+                start: 0,
+                end: 4,
+            },
+        },
+        Comment(
+            Span {
+                line: 8,
+                start: 0,
+                end: 9,
+            },
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "FRAME_STATE",
+                    type_name: Some(
+                        Named(
+                            "FRAME_STATE",
+                        ),
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: true,
+                    span: Span {
+                        line: 15,
+                        start: 4,
+                        end: 30,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "STEP_COUNT",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: true,
+                    span: Span {
+                        line: 16,
+                        start: 4,
+                        end: 25,
+                    },
+                },
+            ],
+        ),
+        Assign {
+            target: Field {
+                base: Name(
+                    "FRAME_STATE",
+                    Span {
+                        line: 18,
+                        start: 0,
+                        end: 11,
+                    },
+                ),
+                name: "FRAME_COUNT",
+                span: Span {
+                    line: 18,
+                    start: 0,
+                    end: 23,
+                },
+            },
+            value: Literal(
+                Integer(
+                    40,
+                    Integer,
+                ),
+                Span {
+                    line: 18,
+                    start: 26,
+                    end: 28,
+                },
+            ),
+            span: Span {
+                line: 18,
+                start: 0,
+                end: 28,
+            },
+        },
+        Assign {
+            target: Field {
+                base: Name(
+                    "FRAME_STATE",
+                    Span {
+                        line: 19,
+                        start: 0,
+                        end: 11,
+                    },
+                ),
+                name: "MAP_NAME",
+                span: Span {
+                    line: 19,
+                    start: 0,
+                    end: 20,
+                },
+            },
+            value: Literal(
+                String(
+                    "QRENDER",
+                ),
+                Span {
+                    line: 19,
+                    start: 23,
+                    end: 32,
+                },
+            ),
+            span: Span {
+                line: 19,
+                start: 0,
+                end: 32,
+            },
+        },
+        Assign {
+            target: Name(
+                "STEP_COUNT",
+                Span {
+                    line: 20,
+                    start: 0,
+                    end: 10,
+                },
+            ),
+            value: Literal(
+                Integer(
+                    2,
+                    Integer,
+                ),
+                Span {
+                    line: 20,
+                    start: 13,
+                    end: 14,
+                },
+            ),
+            span: Span {
+                line: 20,
+                start: 0,
+                end: 14,
+            },
+        },
+        Call {
+            name: "ADVANCE_FRAME",
+            arguments: [
+                Name(
+                    "FRAME_STATE",
+                    Span {
+                        line: 21,
+                        start: 19,
+                        end: 30,
+                    },
+                ),
+                Name(
+                    "STEP_COUNT",
+                    Span {
+                        line: 21,
+                        start: 32,
+                        end: 42,
+                    },
+                ),
+            ],
+            explicit: true,
+            span: Span {
+                line: 21,
+                start: 0,
+                end: 4,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Field {
+                    base: Name(
+                        "FRAME_STATE",
+                        Span {
+                            line: 23,
+                            start: 3,
+                            end: 14,
+                        },
+                    ),
+                    name: "FRAME_COUNT",
+                    span: Span {
+                        line: 23,
+                        start: 3,
+                        end: 26,
+                    },
+                },
+                right: Literal(
+                    Integer(
+                        42,
+                        Integer,
+                    ),
+                    Span {
+                        line: 23,
+                        start: 30,
+                        end: 32,
+                    },
+                ),
+                span: Span {
+                    line: 23,
+                    start: 3,
+                    end: 32,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL qrender_shape frame_count",
+                                ),
+                                Span {
+                                    line: 24,
+                                    start: 10,
+                                    end: 42,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 24,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 25,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 23,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Field {
+                    base: Name(
+                        "FRAME_STATE",
+                        Span {
+                            line: 27,
+                            start: 3,
+                            end: 14,
+                        },
+                    ),
+                    name: "MAP_NAME",
+                    span: Span {
+                        line: 27,
+                        start: 3,
+                        end: 23,
+                    },
+                },
+                right: Literal(
+                    String(
+                        "QRENDER ",
+                    ),
+                    Span {
+                        line: 27,
+                        start: 27,
+                        end: 37,
+                    },
+                ),
+                span: Span {
+                    line: 27,
+                    start: 3,
+                    end: 37,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL qrender_shape fixed_string",
+                                ),
+                                Span {
+                                    line: 28,
+                                    start: 10,
+                                    end: 43,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 28,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 29,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 27,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Name(
+                    "STEP_COUNT",
+                    Span {
+                        line: 31,
+                        start: 3,
+                        end: 13,
+                    },
+                ),
+                right: Literal(
+                    Integer(
+                        2,
+                        Integer,
+                    ),
+                    Span {
+                        line: 31,
+                        start: 17,
+                        end: 18,
+                    },
+                ),
+                span: Span {
+                    line: 31,
+                    start: 3,
+                    end: 18,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL qrender_shape byval",
+                                ),
+                                Span {
+                                    line: 32,
+                                    start: 10,
+                                    end: 36,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 32,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 33,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 31,
+                start: 0,
+                end: 2,
+            },
+        },
+        Print {
+            file: None,
+            items: [
+                PrintItem {
+                    value: Literal(
+                        String(
+                            "PASS qrender_shape",
+                        ),
+                        Span {
+                            line: 36,
+                            start: 6,
+                            end: 26,
+                        },
+                    ),
+                    separator: End,
+                },
+            ],
+            span: Span {
+                line: 36,
+                start: 0,
+                end: 5,
+            },
+        },
+    ],
+    procedures: [
+        Procedure {
+            name: "ADVANCE_FRAME",
+            alias: None,
+            cdecl: false,
+            kind: Sub,
+            parameters: [
+                Parameter {
+                    declaration: Declaration {
+                        name: "STATE",
+                        type_name: Some(
+                            Named(
+                                "FRAME_STATE",
+                            ),
+                        ),
+                        array: false,
+                        bounds: [],
+                        fixed_length: None,
+                        shared: false,
+                        dynamic: false,
+                        span: Span {
+                            line: 10,
+                            start: 32,
+                            end: 52,
+                        },
+                    },
+                    by_value: false,
+                    segmented: false,
+                },
+                Parameter {
+                    declaration: Declaration {
+                        name: "STEP_COUNT",
+                        type_name: Some(
+                            Integer,
+                        ),
+                        array: false,
+                        bounds: [],
+                        fixed_length: None,
+                        shared: false,
+                        dynamic: false,
+                        span: Span {
+                            line: 10,
+                            start: 64,
+                            end: 85,
+                        },
+                    },
+                    by_value: true,
+                    segmented: false,
+                },
+            ],
+            result: None,
+            body: [],
+            declaration: true,
+            is_static: false,
+            span: Span {
+                line: 10,
+                start: 8,
+                end: 11,
+            },
+        },
+        Procedure {
+            name: "ADVANCE_FRAME",
+            alias: None,
+            cdecl: false,
+            kind: Sub,
+            parameters: [
+                Parameter {
+                    declaration: Declaration {
+                        name: "STATE",
+                        type_name: Some(
+                            Named(
+                                "FRAME_STATE",
+                            ),
+                        ),
+                        array: false,
+                        bounds: [],
+                        fixed_length: None,
+                        shared: false,
+                        dynamic: false,
+                        span: Span {
+                            line: 38,
+                            start: 24,
+                            end: 44,
+                        },
+                    },
+                    by_value: false,
+                    segmented: false,
+                },
+                Parameter {
+                    declaration: Declaration {
+                        name: "STEP_COUNT",
+                        type_name: Some(
+                            Integer,
+                        ),
+                        array: false,
+                        bounds: [],
+                        fixed_length: None,
+                        shared: false,
+                        dynamic: false,
+                        span: Span {
+                            line: 38,
+                            start: 56,
+                            end: 77,
+                        },
+                    },
+                    by_value: true,
+                    segmented: false,
+                },
+            ],
+            result: None,
+            body: [
+                Assign {
+                    target: Field {
+                        base: Name(
+                            "STATE",
+                            Span {
+                                line: 42,
+                                start: 4,
+                                end: 9,
+                            },
+                        ),
+                        name: "FRAME_COUNT",
+                        span: Span {
+                            line: 42,
+                            start: 4,
+                            end: 21,
+                        },
+                    },
+                    value: Binary {
+                        op: Add,
+                        left: Field {
+                            base: Name(
+                                "STATE",
+                                Span {
+                                    line: 42,
+                                    start: 24,
+                                    end: 29,
+                                },
+                            ),
+                            name: "FRAME_COUNT",
+                            span: Span {
+                                line: 42,
+                                start: 24,
+                                end: 41,
+                            },
+                        },
+                        right: Name(
+                            "STEP_COUNT",
+                            Span {
+                                line: 42,
+                                start: 44,
+                                end: 54,
+                            },
+                        ),
+                        span: Span {
+                            line: 42,
+                            start: 24,
+                            end: 54,
+                        },
+                    },
+                    span: Span {
+                        line: 42,
+                        start: 4,
+                        end: 54,
+                    },
+                },
+                Assign {
+                    target: Name(
+                        "STEP_COUNT",
+                        Span {
+                            line: 43,
+                            start: 4,
+                            end: 14,
+                        },
+                    ),
+                    value: Literal(
+                        Integer(
+                            99,
+                            Integer,
+                        ),
+                        Span {
+                            line: 43,
+                            start: 17,
+                            end: 19,
+                        },
+                    ),
+                    span: Span {
+                        line: 43,
+                        start: 4,
+                        end: 19,
+                    },
+                },
+            ],
+            declaration: false,
+            is_static: false,
+            span: Span {
+                line: 38,
+                start: 0,
+                end: 3,
+            },
+        },
+    ],
+}

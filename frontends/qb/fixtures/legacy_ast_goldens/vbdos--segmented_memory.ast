@@ -1,0 +1,559 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: vbdos/segmented_memory
+# dialect: VbDos
+# source: vbdos/segmem.bas
+
+Module {
+    statements: [
+        OptionExplicit(
+            Span {
+                line: 1,
+                start: 0,
+                end: 6,
+            },
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "MEMORY_WORDS",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: true,
+                    bounds: [
+                        Bound {
+                            lower: Some(
+                                Literal(
+                                    Integer(
+                                        0,
+                                        Integer,
+                                    ),
+                                    Span {
+                                        line: 3,
+                                        start: 17,
+                                        end: 18,
+                                    },
+                                ),
+                            ),
+                            upper: Literal(
+                                Integer(
+                                    2,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 3,
+                                    start: 22,
+                                    end: 23,
+                                },
+                            ),
+                        },
+                    ],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 3,
+                        start: 4,
+                        end: 35,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "MAPPED_OFFSET",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 4,
+                        start: 4,
+                        end: 28,
+                    },
+                },
+            ],
+        ),
+        Assign {
+            target: Apply {
+                name: "MEMORY_WORDS",
+                arguments: [
+                    Literal(
+                        Integer(
+                            0,
+                            Integer,
+                        ),
+                        Span {
+                            line: 6,
+                            start: 13,
+                            end: 14,
+                        },
+                    ),
+                ],
+                span: Span {
+                    line: 6,
+                    start: 0,
+                    end: 15,
+                },
+            },
+            value: Literal(
+                Integer(
+                    4660,
+                    Integer,
+                ),
+                Span {
+                    line: 6,
+                    start: 18,
+                    end: 24,
+                },
+            ),
+            span: Span {
+                line: 6,
+                start: 0,
+                end: 24,
+            },
+        },
+        Assign {
+            target: Apply {
+                name: "MEMORY_WORDS",
+                arguments: [
+                    Literal(
+                        Integer(
+                            1,
+                            Integer,
+                        ),
+                        Span {
+                            line: 7,
+                            start: 13,
+                            end: 14,
+                        },
+                    ),
+                ],
+                span: Span {
+                    line: 7,
+                    start: 0,
+                    end: 15,
+                },
+            },
+            value: Literal(
+                Integer(
+                    22136,
+                    Integer,
+                ),
+                Span {
+                    line: 7,
+                    start: 18,
+                    end: 24,
+                },
+            ),
+            span: Span {
+                line: 7,
+                start: 0,
+                end: 24,
+            },
+        },
+        Assign {
+            target: Apply {
+                name: "MEMORY_WORDS",
+                arguments: [
+                    Literal(
+                        Integer(
+                            2,
+                            Integer,
+                        ),
+                        Span {
+                            line: 8,
+                            start: 13,
+                            end: 14,
+                        },
+                    ),
+                ],
+                span: Span {
+                    line: 8,
+                    start: 0,
+                    end: 15,
+                },
+            },
+            value: Literal(
+                Integer(
+                    9029,
+                    Integer,
+                ),
+                Span {
+                    line: 8,
+                    start: 18,
+                    end: 24,
+                },
+            ),
+            span: Span {
+                line: 8,
+                start: 0,
+                end: 24,
+            },
+        },
+        Assign {
+            target: Name(
+                "MAPPED_OFFSET",
+                Span {
+                    line: 9,
+                    start: 0,
+                    end: 13,
+                },
+            ),
+            value: Apply {
+                name: "VARPTR",
+                arguments: [
+                    Apply {
+                        name: "MEMORY_WORDS",
+                        arguments: [
+                            Literal(
+                                Integer(
+                                    1,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 9,
+                                    start: 36,
+                                    end: 37,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 9,
+                            start: 23,
+                            end: 38,
+                        },
+                    },
+                ],
+                span: Span {
+                    line: 9,
+                    start: 16,
+                    end: 39,
+                },
+            },
+            span: Span {
+                line: 9,
+                start: 0,
+                end: 39,
+            },
+        },
+        DefSeg {
+            value: Some(
+                Apply {
+                    name: "VARSEG",
+                    arguments: [
+                        Apply {
+                            name: "MEMORY_WORDS",
+                            arguments: [
+                                Literal(
+                                    Integer(
+                                        1,
+                                        Integer,
+                                    ),
+                                    Span {
+                                        line: 10,
+                                        start: 30,
+                                        end: 31,
+                                    },
+                                ),
+                            ],
+                            span: Span {
+                                line: 10,
+                                start: 17,
+                                end: 32,
+                            },
+                        },
+                    ],
+                    span: Span {
+                        line: 10,
+                        start: 10,
+                        end: 33,
+                    },
+                },
+            ),
+            span: Span {
+                line: 10,
+                start: 0,
+                end: 3,
+            },
+        },
+        Runtime {
+            name: "POKE",
+            arguments: [
+                Name(
+                    "MAPPED_OFFSET",
+                    Span {
+                        line: 11,
+                        start: 5,
+                        end: 18,
+                    },
+                ),
+                Literal(
+                    Integer(
+                        42,
+                        Integer,
+                    ),
+                    Span {
+                        line: 11,
+                        start: 20,
+                        end: 22,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 11,
+                start: 0,
+                end: 4,
+            },
+        },
+        DefSeg {
+            value: None,
+            span: Span {
+                line: 12,
+                start: 0,
+                end: 3,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Apply {
+                    name: "MEMORY_WORDS",
+                    arguments: [
+                        Literal(
+                            Integer(
+                                1,
+                                Integer,
+                            ),
+                            Span {
+                                line: 14,
+                                start: 16,
+                                end: 17,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 14,
+                        start: 3,
+                        end: 18,
+                    },
+                },
+                right: Literal(
+                    Integer(
+                        22058,
+                        Integer,
+                    ),
+                    Span {
+                        line: 14,
+                        start: 22,
+                        end: 28,
+                    },
+                ),
+                span: Span {
+                    line: 14,
+                    start: 3,
+                    end: 28,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL segmented_memory poke",
+                                ),
+                                Span {
+                                    line: 15,
+                                    start: 10,
+                                    end: 38,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 15,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 16,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 14,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: Or,
+                left: Binary {
+                    op: NotEqual,
+                    left: Apply {
+                        name: "MEMORY_WORDS",
+                        arguments: [
+                            Literal(
+                                Integer(
+                                    0,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 18,
+                                    start: 16,
+                                    end: 17,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 18,
+                            start: 3,
+                            end: 18,
+                        },
+                    },
+                    right: Literal(
+                        Integer(
+                            4660,
+                            Integer,
+                        ),
+                        Span {
+                            line: 18,
+                            start: 22,
+                            end: 28,
+                        },
+                    ),
+                    span: Span {
+                        line: 18,
+                        start: 3,
+                        end: 28,
+                    },
+                },
+                right: Binary {
+                    op: NotEqual,
+                    left: Apply {
+                        name: "MEMORY_WORDS",
+                        arguments: [
+                            Literal(
+                                Integer(
+                                    2,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 18,
+                                    start: 45,
+                                    end: 46,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 18,
+                            start: 32,
+                            end: 47,
+                        },
+                    },
+                    right: Literal(
+                        Integer(
+                            9029,
+                            Integer,
+                        ),
+                        Span {
+                            line: 18,
+                            start: 51,
+                            end: 57,
+                        },
+                    ),
+                    span: Span {
+                        line: 18,
+                        start: 32,
+                        end: 57,
+                    },
+                },
+                span: Span {
+                    line: 18,
+                    start: 3,
+                    end: 57,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL segmented_memory canary",
+                                ),
+                                Span {
+                                    line: 19,
+                                    start: 10,
+                                    end: 40,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 19,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 20,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 18,
+                start: 0,
+                end: 2,
+            },
+        },
+        Print {
+            file: None,
+            items: [
+                PrintItem {
+                    value: Literal(
+                        String(
+                            "PASS segmented_memory",
+                        ),
+                        Span {
+                            line: 23,
+                            start: 6,
+                            end: 29,
+                        },
+                    ),
+                    separator: End,
+                },
+            ],
+            span: Span {
+                line: 23,
+                start: 0,
+                end: 5,
+            },
+        },
+    ],
+    procedures: [],
+}

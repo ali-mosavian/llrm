@@ -1,0 +1,350 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: qb45/data
+# dialect: QuickBasic45
+# source: qb45/Q45D09.BAS
+
+Module {
+    statements: [
+        Dim(
+            [
+                Declaration {
+                    name: "FIRSTVALUE",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 2,
+                        start: 4,
+                        end: 25,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "TEXT",
+                    type_name: Some(
+                        String,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 3,
+                        start: 4,
+                        end: 18,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "RESTOREDVALUE",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 4,
+                        start: 4,
+                        end: 28,
+                    },
+                },
+            ],
+        ),
+        Read {
+            destinations: [
+                Name(
+                    "FIRSTVALUE",
+                    Span {
+                        line: 6,
+                        start: 5,
+                        end: 15,
+                    },
+                ),
+                Name(
+                    "TEXT",
+                    Span {
+                        line: 6,
+                        start: 17,
+                        end: 21,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 6,
+                start: 0,
+                end: 4,
+            },
+        },
+        Runtime {
+            name: "RESTORE",
+            arguments: [
+                Name(
+                    "SECONDDATA",
+                    Span {
+                        line: 7,
+                        start: 8,
+                        end: 18,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 7,
+                start: 0,
+                end: 7,
+            },
+        },
+        Read {
+            destinations: [
+                Name(
+                    "RESTOREDVALUE",
+                    Span {
+                        line: 8,
+                        start: 5,
+                        end: 18,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 8,
+                start: 0,
+                end: 4,
+            },
+        },
+        If {
+            condition: Binary {
+                op: And,
+                left: Binary {
+                    op: And,
+                    left: Binary {
+                        op: Eq,
+                        left: Name(
+                            "FIRSTVALUE",
+                            Span {
+                                line: 10,
+                                start: 3,
+                                end: 13,
+                            },
+                        ),
+                        right: Literal(
+                            Integer(
+                                7,
+                                Integer,
+                            ),
+                            Span {
+                                line: 10,
+                                start: 16,
+                                end: 17,
+                            },
+                        ),
+                        span: Span {
+                            line: 10,
+                            start: 3,
+                            end: 17,
+                        },
+                    },
+                    right: Binary {
+                        op: Eq,
+                        left: Name(
+                            "TEXT",
+                            Span {
+                                line: 10,
+                                start: 22,
+                                end: 26,
+                            },
+                        ),
+                        right: Literal(
+                            String(
+                                "seven",
+                            ),
+                            Span {
+                                line: 10,
+                                start: 29,
+                                end: 36,
+                            },
+                        ),
+                        span: Span {
+                            line: 10,
+                            start: 22,
+                            end: 36,
+                        },
+                    },
+                    span: Span {
+                        line: 10,
+                        start: 3,
+                        end: 36,
+                    },
+                },
+                right: Binary {
+                    op: Eq,
+                    left: Name(
+                        "RESTOREDVALUE",
+                        Span {
+                            line: 10,
+                            start: 41,
+                            end: 54,
+                        },
+                    ),
+                    right: Literal(
+                        Integer(
+                            11,
+                            Integer,
+                        ),
+                        Span {
+                            line: 10,
+                            start: 57,
+                            end: 59,
+                        },
+                    ),
+                    span: Span {
+                        line: 10,
+                        start: 41,
+                        end: 59,
+                    },
+                },
+                span: Span {
+                    line: 10,
+                    start: 3,
+                    end: 59,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "PASS data",
+                                ),
+                                Span {
+                                    line: 11,
+                                    start: 10,
+                                    end: 21,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 11,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+            ],
+            else_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL data restore",
+                                ),
+                                Span {
+                                    line: 13,
+                                    start: 10,
+                                    end: 29,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 13,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+            ],
+            span: Span {
+                line: 10,
+                start: 0,
+                end: 2,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 15,
+                start: 0,
+                end: 3,
+            },
+        },
+        Data {
+            values: [
+                Literal(
+                    Integer(
+                        7,
+                        Integer,
+                    ),
+                    Span {
+                        line: 17,
+                        start: 5,
+                        end: 6,
+                    },
+                ),
+                Literal(
+                    String(
+                        "seven",
+                    ),
+                    Span {
+                        line: 17,
+                        start: 8,
+                        end: 15,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 17,
+                start: 0,
+                end: 4,
+            },
+        },
+        Label(
+            "SECONDDATA",
+            Span {
+                line: 18,
+                start: 0,
+                end: 10,
+            },
+        ),
+        Data {
+            values: [
+                Literal(
+                    Integer(
+                        11,
+                        Integer,
+                    ),
+                    Span {
+                        line: 19,
+                        start: 5,
+                        end: 7,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 19,
+                start: 0,
+                end: 4,
+            },
+        },
+    ],
+    procedures: [],
+}

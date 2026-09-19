@@ -1,0 +1,951 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: qb45/control
+# dialect: QuickBasic45
+# source: qb45/Q45C02.BAS
+
+Module {
+    statements: [
+        Dim(
+            [
+                Declaration {
+                    name: "INDEX",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 2,
+                        start: 4,
+                        end: 20,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "FORTOTAL",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 3,
+                        start: 4,
+                        end: 23,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "DOTOTAL",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 4,
+                        start: 4,
+                        end: 22,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "WHILETOTAL",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 5,
+                        start: 4,
+                        end: 25,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "CHOICE",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 6,
+                        start: 4,
+                        end: 21,
+                    },
+                },
+            ],
+        ),
+        For {
+            counter: Name(
+                "INDEX",
+                Span {
+                    line: 8,
+                    start: 4,
+                    end: 9,
+                },
+            ),
+            start: Literal(
+                Integer(
+                    1,
+                    Integer,
+                ),
+                Span {
+                    line: 8,
+                    start: 12,
+                    end: 13,
+                },
+            ),
+            end: Literal(
+                Integer(
+                    4,
+                    Integer,
+                ),
+                Span {
+                    line: 8,
+                    start: 17,
+                    end: 18,
+                },
+            ),
+            step: None,
+            body: [
+                Assign {
+                    target: Name(
+                        "FORTOTAL",
+                        Span {
+                            line: 9,
+                            start: 4,
+                            end: 12,
+                        },
+                    ),
+                    value: Binary {
+                        op: Add,
+                        left: Name(
+                            "FORTOTAL",
+                            Span {
+                                line: 9,
+                                start: 15,
+                                end: 23,
+                            },
+                        ),
+                        right: Name(
+                            "INDEX",
+                            Span {
+                                line: 9,
+                                start: 26,
+                                end: 31,
+                            },
+                        ),
+                        span: Span {
+                            line: 9,
+                            start: 15,
+                            end: 31,
+                        },
+                    },
+                    span: Span {
+                        line: 9,
+                        start: 4,
+                        end: 31,
+                    },
+                },
+            ],
+            span: Span {
+                line: 8,
+                start: 0,
+                end: 3,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Name(
+                    "FORTOTAL",
+                    Span {
+                        line: 11,
+                        start: 3,
+                        end: 11,
+                    },
+                ),
+                right: Literal(
+                    Integer(
+                        10,
+                        Integer,
+                    ),
+                    Span {
+                        line: 11,
+                        start: 15,
+                        end: 17,
+                    },
+                ),
+                span: Span {
+                    line: 11,
+                    start: 3,
+                    end: 17,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL control for",
+                                ),
+                                Span {
+                                    line: 12,
+                                    start: 10,
+                                    end: 28,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 12,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 13,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 11,
+                start: 0,
+                end: 2,
+            },
+        },
+        Assign {
+            target: Name(
+                "DOTOTAL",
+                Span {
+                    line: 16,
+                    start: 0,
+                    end: 7,
+                },
+            ),
+            value: Literal(
+                Integer(
+                    7,
+                    Integer,
+                ),
+                Span {
+                    line: 16,
+                    start: 10,
+                    end: 11,
+                },
+            ),
+            span: Span {
+                line: 16,
+                start: 0,
+                end: 11,
+            },
+        },
+        Do {
+            pre: Some(
+                (
+                    true,
+                    Binary {
+                        op: Less,
+                        left: Name(
+                            "DOTOTAL",
+                            Span {
+                                line: 17,
+                                start: 9,
+                                end: 16,
+                            },
+                        ),
+                        right: Literal(
+                            Integer(
+                                10,
+                                Integer,
+                            ),
+                            Span {
+                                line: 17,
+                                start: 19,
+                                end: 21,
+                            },
+                        ),
+                        span: Span {
+                            line: 17,
+                            start: 9,
+                            end: 21,
+                        },
+                    },
+                ),
+            ),
+            post: None,
+            body: [
+                Assign {
+                    target: Name(
+                        "DOTOTAL",
+                        Span {
+                            line: 18,
+                            start: 4,
+                            end: 11,
+                        },
+                    ),
+                    value: Binary {
+                        op: Add,
+                        left: Name(
+                            "DOTOTAL",
+                            Span {
+                                line: 18,
+                                start: 14,
+                                end: 21,
+                            },
+                        ),
+                        right: Literal(
+                            Integer(
+                                1,
+                                Integer,
+                            ),
+                            Span {
+                                line: 18,
+                                start: 24,
+                                end: 25,
+                            },
+                        ),
+                        span: Span {
+                            line: 18,
+                            start: 14,
+                            end: 25,
+                        },
+                    },
+                    span: Span {
+                        line: 18,
+                        start: 4,
+                        end: 25,
+                    },
+                },
+            ],
+            span: Span {
+                line: 17,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Name(
+                    "DOTOTAL",
+                    Span {
+                        line: 20,
+                        start: 3,
+                        end: 10,
+                    },
+                ),
+                right: Literal(
+                    Integer(
+                        10,
+                        Integer,
+                    ),
+                    Span {
+                        line: 20,
+                        start: 14,
+                        end: 16,
+                    },
+                ),
+                span: Span {
+                    line: 20,
+                    start: 3,
+                    end: 16,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL control do",
+                                ),
+                                Span {
+                                    line: 21,
+                                    start: 10,
+                                    end: 27,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 21,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 22,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 20,
+                start: 0,
+                end: 2,
+            },
+        },
+        Assign {
+            target: Name(
+                "WHILETOTAL",
+                Span {
+                    line: 25,
+                    start: 0,
+                    end: 10,
+                },
+            ),
+            value: Literal(
+                Integer(
+                    4,
+                    Integer,
+                ),
+                Span {
+                    line: 25,
+                    start: 13,
+                    end: 14,
+                },
+            ),
+            span: Span {
+                line: 25,
+                start: 0,
+                end: 14,
+            },
+        },
+        While {
+            condition: Binary {
+                op: Less,
+                left: Name(
+                    "WHILETOTAL",
+                    Span {
+                        line: 26,
+                        start: 6,
+                        end: 16,
+                    },
+                ),
+                right: Literal(
+                    Integer(
+                        7,
+                        Integer,
+                    ),
+                    Span {
+                        line: 26,
+                        start: 19,
+                        end: 20,
+                    },
+                ),
+                span: Span {
+                    line: 26,
+                    start: 6,
+                    end: 20,
+                },
+            },
+            body: [
+                Assign {
+                    target: Name(
+                        "WHILETOTAL",
+                        Span {
+                            line: 27,
+                            start: 4,
+                            end: 14,
+                        },
+                    ),
+                    value: Binary {
+                        op: Add,
+                        left: Name(
+                            "WHILETOTAL",
+                            Span {
+                                line: 27,
+                                start: 17,
+                                end: 27,
+                            },
+                        ),
+                        right: Literal(
+                            Integer(
+                                1,
+                                Integer,
+                            ),
+                            Span {
+                                line: 27,
+                                start: 30,
+                                end: 31,
+                            },
+                        ),
+                        span: Span {
+                            line: 27,
+                            start: 17,
+                            end: 31,
+                        },
+                    },
+                    span: Span {
+                        line: 27,
+                        start: 4,
+                        end: 31,
+                    },
+                },
+            ],
+            span: Span {
+                line: 26,
+                start: 0,
+                end: 5,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Name(
+                    "WHILETOTAL",
+                    Span {
+                        line: 29,
+                        start: 3,
+                        end: 13,
+                    },
+                ),
+                right: Literal(
+                    Integer(
+                        7,
+                        Integer,
+                    ),
+                    Span {
+                        line: 29,
+                        start: 17,
+                        end: 18,
+                    },
+                ),
+                span: Span {
+                    line: 29,
+                    start: 3,
+                    end: 18,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL control while",
+                                ),
+                                Span {
+                                    line: 30,
+                                    start: 10,
+                                    end: 30,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 30,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 31,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 29,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: Eq,
+                left: Name(
+                    "FORTOTAL",
+                    Span {
+                        line: 34,
+                        start: 3,
+                        end: 11,
+                    },
+                ),
+                right: Literal(
+                    Integer(
+                        10,
+                        Integer,
+                    ),
+                    Span {
+                        line: 34,
+                        start: 14,
+                        end: 16,
+                    },
+                ),
+                span: Span {
+                    line: 34,
+                    start: 3,
+                    end: 16,
+                },
+            },
+            then_branch: [
+                Assign {
+                    target: Name(
+                        "CHOICE",
+                        Span {
+                            line: 35,
+                            start: 4,
+                            end: 10,
+                        },
+                    ),
+                    value: Literal(
+                        Integer(
+                            1,
+                            Integer,
+                        ),
+                        Span {
+                            line: 35,
+                            start: 13,
+                            end: 14,
+                        },
+                    ),
+                    span: Span {
+                        line: 35,
+                        start: 4,
+                        end: 14,
+                    },
+                },
+            ],
+            else_branch: [
+                If {
+                    condition: Binary {
+                        op: Eq,
+                        left: Name(
+                            "FORTOTAL",
+                            Span {
+                                line: 36,
+                                start: 7,
+                                end: 15,
+                            },
+                        ),
+                        right: Literal(
+                            Integer(
+                                0,
+                                Integer,
+                            ),
+                            Span {
+                                line: 36,
+                                start: 18,
+                                end: 19,
+                            },
+                        ),
+                        span: Span {
+                            line: 36,
+                            start: 7,
+                            end: 19,
+                        },
+                    },
+                    then_branch: [
+                        Assign {
+                            target: Name(
+                                "CHOICE",
+                                Span {
+                                    line: 37,
+                                    start: 4,
+                                    end: 10,
+                                },
+                            ),
+                            value: Literal(
+                                Integer(
+                                    2,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 37,
+                                    start: 13,
+                                    end: 14,
+                                },
+                            ),
+                            span: Span {
+                                line: 37,
+                                start: 4,
+                                end: 14,
+                            },
+                        },
+                    ],
+                    else_branch: [
+                        Assign {
+                            target: Name(
+                                "CHOICE",
+                                Span {
+                                    line: 39,
+                                    start: 4,
+                                    end: 10,
+                                },
+                            ),
+                            value: Literal(
+                                Integer(
+                                    3,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 39,
+                                    start: 13,
+                                    end: 14,
+                                },
+                            ),
+                            span: Span {
+                                line: 39,
+                                start: 4,
+                                end: 14,
+                            },
+                        },
+                    ],
+                    span: Span {
+                        line: 36,
+                        start: 0,
+                        end: 6,
+                    },
+                },
+            ],
+            span: Span {
+                line: 34,
+                start: 0,
+                end: 2,
+            },
+        },
+        Select {
+            selector: Name(
+                "CHOICE",
+                Span {
+                    line: 42,
+                    start: 12,
+                    end: 18,
+                },
+            ),
+            arms: [
+                (
+                    [
+                        Literal(
+                            Integer(
+                                1,
+                                Integer,
+                            ),
+                            Span {
+                                line: 43,
+                                start: 5,
+                                end: 6,
+                            },
+                        ),
+                    ],
+                    [
+                        If {
+                            condition: Binary {
+                                op: And,
+                                left: Binary {
+                                    op: Eq,
+                                    left: Name(
+                                        "DOTOTAL",
+                                        Span {
+                                            line: 44,
+                                            start: 7,
+                                            end: 14,
+                                        },
+                                    ),
+                                    right: Literal(
+                                        Integer(
+                                            10,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 44,
+                                            start: 17,
+                                            end: 19,
+                                        },
+                                    ),
+                                    span: Span {
+                                        line: 44,
+                                        start: 7,
+                                        end: 19,
+                                    },
+                                },
+                                right: Binary {
+                                    op: Eq,
+                                    left: Name(
+                                        "WHILETOTAL",
+                                        Span {
+                                            line: 44,
+                                            start: 24,
+                                            end: 34,
+                                        },
+                                    ),
+                                    right: Literal(
+                                        Integer(
+                                            7,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 44,
+                                            start: 37,
+                                            end: 38,
+                                        },
+                                    ),
+                                    span: Span {
+                                        line: 44,
+                                        start: 24,
+                                        end: 38,
+                                    },
+                                },
+                                span: Span {
+                                    line: 44,
+                                    start: 7,
+                                    end: 38,
+                                },
+                            },
+                            then_branch: [
+                                Print {
+                                    file: None,
+                                    items: [
+                                        PrintItem {
+                                            value: Literal(
+                                                String(
+                                                    "PASS control",
+                                                ),
+                                                Span {
+                                                    line: 45,
+                                                    start: 14,
+                                                    end: 28,
+                                                },
+                                            ),
+                                            separator: End,
+                                        },
+                                    ],
+                                    span: Span {
+                                        line: 45,
+                                        start: 8,
+                                        end: 13,
+                                    },
+                                },
+                            ],
+                            else_branch: [
+                                Print {
+                                    file: None,
+                                    items: [
+                                        PrintItem {
+                                            value: Literal(
+                                                String(
+                                                    "FAIL control checkpoint",
+                                                ),
+                                                Span {
+                                                    line: 47,
+                                                    start: 14,
+                                                    end: 39,
+                                                },
+                                            ),
+                                            separator: End,
+                                        },
+                                    ],
+                                    span: Span {
+                                        line: 47,
+                                        start: 8,
+                                        end: 13,
+                                    },
+                                },
+                            ],
+                            span: Span {
+                                line: 44,
+                                start: 4,
+                                end: 6,
+                            },
+                        },
+                    ],
+                ),
+            ],
+            otherwise: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL control branch",
+                                ),
+                                Span {
+                                    line: 50,
+                                    start: 10,
+                                    end: 31,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 50,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+            ],
+            span: Span {
+                line: 42,
+                start: 0,
+                end: 6,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 52,
+                start: 0,
+                end: 3,
+            },
+        },
+    ],
+    procedures: [],
+}

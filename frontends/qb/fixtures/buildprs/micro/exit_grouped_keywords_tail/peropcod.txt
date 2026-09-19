@@ -1,0 +1,4 @@
+opStExitProc|x
+opStExitDo|x
+opStExitFor|x
+opFnAbs|x

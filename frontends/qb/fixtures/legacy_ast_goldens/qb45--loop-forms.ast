@@ -1,0 +1,1666 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: qb45/loop-forms
+# dialect: QuickBasic45
+# source: qb45/Q45LP57.BAS
+
+Module {
+    statements: [
+        Dim(
+            [
+                Declaration {
+                    name: "LIMITVALUE",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 2,
+                        start: 4,
+                        end: 25,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "LOOPVALUE",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 3,
+                        start: 4,
+                        end: 24,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "PREWHILECOUNT",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 4,
+                        start: 4,
+                        end: 28,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "POSTWHILECOUNT",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 5,
+                        start: 4,
+                        end: 29,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "PREUNTILCOUNT",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 6,
+                        start: 4,
+                        end: 28,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "POSTUNTILCOUNT",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 7,
+                        start: 4,
+                        end: 29,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "EXITDOCOUNT",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 8,
+                        start: 4,
+                        end: 26,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "UPTRACE",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 9,
+                        start: 4,
+                        end: 22,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "DOWNTRACE",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 10,
+                        start: 4,
+                        end: 24,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "SKIPPEDCOUNT",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 11,
+                        start: 4,
+                        end: 27,
+                    },
+                },
+            ],
+        ),
+        Read {
+            destinations: [
+                Name(
+                    "LIMITVALUE",
+                    Span {
+                        line: 13,
+                        start: 5,
+                        end: 15,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 13,
+                start: 0,
+                end: 4,
+            },
+        },
+        Assign {
+            target: Name(
+                "LOOPVALUE",
+                Span {
+                    line: 14,
+                    start: 0,
+                    end: 9,
+                },
+            ),
+            value: Literal(
+                Integer(
+                    0,
+                    Integer,
+                ),
+                Span {
+                    line: 14,
+                    start: 12,
+                    end: 13,
+                },
+            ),
+            span: Span {
+                line: 14,
+                start: 0,
+                end: 13,
+            },
+        },
+        Do {
+            pre: Some(
+                (
+                    true,
+                    Binary {
+                        op: Less,
+                        left: Name(
+                            "LOOPVALUE",
+                            Span {
+                                line: 15,
+                                start: 9,
+                                end: 18,
+                            },
+                        ),
+                        right: Name(
+                            "LIMITVALUE",
+                            Span {
+                                line: 15,
+                                start: 21,
+                                end: 31,
+                            },
+                        ),
+                        span: Span {
+                            line: 15,
+                            start: 9,
+                            end: 31,
+                        },
+                    },
+                ),
+            ),
+            post: None,
+            body: [
+                Assign {
+                    target: Name(
+                        "PREWHILECOUNT",
+                        Span {
+                            line: 16,
+                            start: 4,
+                            end: 17,
+                        },
+                    ),
+                    value: Binary {
+                        op: Add,
+                        left: Name(
+                            "PREWHILECOUNT",
+                            Span {
+                                line: 16,
+                                start: 20,
+                                end: 33,
+                            },
+                        ),
+                        right: Literal(
+                            Integer(
+                                1,
+                                Integer,
+                            ),
+                            Span {
+                                line: 16,
+                                start: 36,
+                                end: 37,
+                            },
+                        ),
+                        span: Span {
+                            line: 16,
+                            start: 20,
+                            end: 37,
+                        },
+                    },
+                    span: Span {
+                        line: 16,
+                        start: 4,
+                        end: 37,
+                    },
+                },
+                Assign {
+                    target: Name(
+                        "LOOPVALUE",
+                        Span {
+                            line: 17,
+                            start: 4,
+                            end: 13,
+                        },
+                    ),
+                    value: Binary {
+                        op: Add,
+                        left: Name(
+                            "LOOPVALUE",
+                            Span {
+                                line: 17,
+                                start: 16,
+                                end: 25,
+                            },
+                        ),
+                        right: Literal(
+                            Integer(
+                                1,
+                                Integer,
+                            ),
+                            Span {
+                                line: 17,
+                                start: 28,
+                                end: 29,
+                            },
+                        ),
+                        span: Span {
+                            line: 17,
+                            start: 16,
+                            end: 29,
+                        },
+                    },
+                    span: Span {
+                        line: 17,
+                        start: 4,
+                        end: 29,
+                    },
+                },
+            ],
+            span: Span {
+                line: 15,
+                start: 0,
+                end: 2,
+            },
+        },
+        Assign {
+            target: Name(
+                "LOOPVALUE",
+                Span {
+                    line: 19,
+                    start: 0,
+                    end: 9,
+                },
+            ),
+            value: Name(
+                "LIMITVALUE",
+                Span {
+                    line: 19,
+                    start: 12,
+                    end: 22,
+                },
+            ),
+            span: Span {
+                line: 19,
+                start: 0,
+                end: 22,
+            },
+        },
+        Do {
+            pre: None,
+            post: Some(
+                (
+                    true,
+                    Binary {
+                        op: Less,
+                        left: Name(
+                            "LOOPVALUE",
+                            Span {
+                                line: 22,
+                                start: 11,
+                                end: 20,
+                            },
+                        ),
+                        right: Name(
+                            "LIMITVALUE",
+                            Span {
+                                line: 22,
+                                start: 23,
+                                end: 33,
+                            },
+                        ),
+                        span: Span {
+                            line: 22,
+                            start: 11,
+                            end: 33,
+                        },
+                    },
+                ),
+            ),
+            body: [
+                Assign {
+                    target: Name(
+                        "POSTWHILECOUNT",
+                        Span {
+                            line: 21,
+                            start: 4,
+                            end: 18,
+                        },
+                    ),
+                    value: Binary {
+                        op: Add,
+                        left: Name(
+                            "POSTWHILECOUNT",
+                            Span {
+                                line: 21,
+                                start: 21,
+                                end: 35,
+                            },
+                        ),
+                        right: Literal(
+                            Integer(
+                                1,
+                                Integer,
+                            ),
+                            Span {
+                                line: 21,
+                                start: 38,
+                                end: 39,
+                            },
+                        ),
+                        span: Span {
+                            line: 21,
+                            start: 21,
+                            end: 39,
+                        },
+                    },
+                    span: Span {
+                        line: 21,
+                        start: 4,
+                        end: 39,
+                    },
+                },
+            ],
+            span: Span {
+                line: 20,
+                start: 0,
+                end: 2,
+            },
+        },
+        Assign {
+            target: Name(
+                "LOOPVALUE",
+                Span {
+                    line: 23,
+                    start: 0,
+                    end: 9,
+                },
+            ),
+            value: Name(
+                "LIMITVALUE",
+                Span {
+                    line: 23,
+                    start: 12,
+                    end: 22,
+                },
+            ),
+            span: Span {
+                line: 23,
+                start: 0,
+                end: 22,
+            },
+        },
+        Do {
+            pre: Some(
+                (
+                    false,
+                    Binary {
+                        op: GreaterEqual,
+                        left: Name(
+                            "LOOPVALUE",
+                            Span {
+                                line: 24,
+                                start: 9,
+                                end: 18,
+                            },
+                        ),
+                        right: Name(
+                            "LIMITVALUE",
+                            Span {
+                                line: 24,
+                                start: 22,
+                                end: 32,
+                            },
+                        ),
+                        span: Span {
+                            line: 24,
+                            start: 9,
+                            end: 32,
+                        },
+                    },
+                ),
+            ),
+            post: None,
+            body: [
+                Assign {
+                    target: Name(
+                        "PREUNTILCOUNT",
+                        Span {
+                            line: 25,
+                            start: 4,
+                            end: 17,
+                        },
+                    ),
+                    value: Binary {
+                        op: Add,
+                        left: Name(
+                            "PREUNTILCOUNT",
+                            Span {
+                                line: 25,
+                                start: 20,
+                                end: 33,
+                            },
+                        ),
+                        right: Literal(
+                            Integer(
+                                1,
+                                Integer,
+                            ),
+                            Span {
+                                line: 25,
+                                start: 36,
+                                end: 37,
+                            },
+                        ),
+                        span: Span {
+                            line: 25,
+                            start: 20,
+                            end: 37,
+                        },
+                    },
+                    span: Span {
+                        line: 25,
+                        start: 4,
+                        end: 37,
+                    },
+                },
+            ],
+            span: Span {
+                line: 24,
+                start: 0,
+                end: 2,
+            },
+        },
+        Assign {
+            target: Name(
+                "LOOPVALUE",
+                Span {
+                    line: 27,
+                    start: 0,
+                    end: 9,
+                },
+            ),
+            value: Name(
+                "LIMITVALUE",
+                Span {
+                    line: 27,
+                    start: 12,
+                    end: 22,
+                },
+            ),
+            span: Span {
+                line: 27,
+                start: 0,
+                end: 22,
+            },
+        },
+        Do {
+            pre: None,
+            post: Some(
+                (
+                    false,
+                    Binary {
+                        op: GreaterEqual,
+                        left: Name(
+                            "LOOPVALUE",
+                            Span {
+                                line: 30,
+                                start: 11,
+                                end: 20,
+                            },
+                        ),
+                        right: Name(
+                            "LIMITVALUE",
+                            Span {
+                                line: 30,
+                                start: 24,
+                                end: 34,
+                            },
+                        ),
+                        span: Span {
+                            line: 30,
+                            start: 11,
+                            end: 34,
+                        },
+                    },
+                ),
+            ),
+            body: [
+                Assign {
+                    target: Name(
+                        "POSTUNTILCOUNT",
+                        Span {
+                            line: 29,
+                            start: 4,
+                            end: 18,
+                        },
+                    ),
+                    value: Binary {
+                        op: Add,
+                        left: Name(
+                            "POSTUNTILCOUNT",
+                            Span {
+                                line: 29,
+                                start: 21,
+                                end: 35,
+                            },
+                        ),
+                        right: Literal(
+                            Integer(
+                                1,
+                                Integer,
+                            ),
+                            Span {
+                                line: 29,
+                                start: 38,
+                                end: 39,
+                            },
+                        ),
+                        span: Span {
+                            line: 29,
+                            start: 21,
+                            end: 39,
+                        },
+                    },
+                    span: Span {
+                        line: 29,
+                        start: 4,
+                        end: 39,
+                    },
+                },
+            ],
+            span: Span {
+                line: 28,
+                start: 0,
+                end: 2,
+            },
+        },
+        Do {
+            pre: None,
+            post: None,
+            body: [
+                Assign {
+                    target: Name(
+                        "EXITDOCOUNT",
+                        Span {
+                            line: 32,
+                            start: 4,
+                            end: 15,
+                        },
+                    ),
+                    value: Binary {
+                        op: Add,
+                        left: Name(
+                            "EXITDOCOUNT",
+                            Span {
+                                line: 32,
+                                start: 18,
+                                end: 29,
+                            },
+                        ),
+                        right: Literal(
+                            Integer(
+                                1,
+                                Integer,
+                            ),
+                            Span {
+                                line: 32,
+                                start: 32,
+                                end: 33,
+                            },
+                        ),
+                        span: Span {
+                            line: 32,
+                            start: 18,
+                            end: 33,
+                        },
+                    },
+                    span: Span {
+                        line: 32,
+                        start: 4,
+                        end: 33,
+                    },
+                },
+                Exit(
+                    Do,
+                    Span {
+                        line: 33,
+                        start: 4,
+                        end: 8,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 31,
+                start: 0,
+                end: 2,
+            },
+        },
+        For {
+            counter: Name(
+                "LOOPVALUE",
+                Span {
+                    line: 35,
+                    start: 4,
+                    end: 13,
+                },
+            ),
+            start: Literal(
+                Integer(
+                    1,
+                    Integer,
+                ),
+                Span {
+                    line: 35,
+                    start: 16,
+                    end: 17,
+                },
+            ),
+            end: Name(
+                "LIMITVALUE",
+                Span {
+                    line: 35,
+                    start: 21,
+                    end: 31,
+                },
+            ),
+            step: Some(
+                Literal(
+                    Integer(
+                        1,
+                        Integer,
+                    ),
+                    Span {
+                        line: 35,
+                        start: 37,
+                        end: 38,
+                    },
+                ),
+            ),
+            body: [
+                Assign {
+                    target: Name(
+                        "UPTRACE",
+                        Span {
+                            line: 36,
+                            start: 4,
+                            end: 11,
+                        },
+                    ),
+                    value: Binary {
+                        op: Add,
+                        left: Binary {
+                            op: Multiply,
+                            left: Name(
+                                "UPTRACE",
+                                Span {
+                                    line: 36,
+                                    start: 14,
+                                    end: 21,
+                                },
+                            ),
+                            right: Literal(
+                                Integer(
+                                    10,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 36,
+                                    start: 24,
+                                    end: 26,
+                                },
+                            ),
+                            span: Span {
+                                line: 36,
+                                start: 14,
+                                end: 26,
+                            },
+                        },
+                        right: Name(
+                            "LOOPVALUE",
+                            Span {
+                                line: 36,
+                                start: 29,
+                                end: 38,
+                            },
+                        ),
+                        span: Span {
+                            line: 36,
+                            start: 14,
+                            end: 38,
+                        },
+                    },
+                    span: Span {
+                        line: 36,
+                        start: 4,
+                        end: 38,
+                    },
+                },
+            ],
+            span: Span {
+                line: 35,
+                start: 0,
+                end: 3,
+            },
+        },
+        For {
+            counter: Name(
+                "LOOPVALUE",
+                Span {
+                    line: 38,
+                    start: 4,
+                    end: 13,
+                },
+            ),
+            start: Name(
+                "LIMITVALUE",
+                Span {
+                    line: 38,
+                    start: 16,
+                    end: 26,
+                },
+            ),
+            end: Literal(
+                Integer(
+                    1,
+                    Integer,
+                ),
+                Span {
+                    line: 38,
+                    start: 30,
+                    end: 31,
+                },
+            ),
+            step: Some(
+                Unary {
+                    op: Negative,
+                    operand: Literal(
+                        Integer(
+                            1,
+                            Integer,
+                        ),
+                        Span {
+                            line: 38,
+                            start: 38,
+                            end: 39,
+                        },
+                    ),
+                    span: Span {
+                        line: 38,
+                        start: 37,
+                        end: 39,
+                    },
+                },
+            ),
+            body: [
+                Assign {
+                    target: Name(
+                        "DOWNTRACE",
+                        Span {
+                            line: 39,
+                            start: 4,
+                            end: 13,
+                        },
+                    ),
+                    value: Binary {
+                        op: Add,
+                        left: Binary {
+                            op: Multiply,
+                            left: Name(
+                                "DOWNTRACE",
+                                Span {
+                                    line: 39,
+                                    start: 16,
+                                    end: 25,
+                                },
+                            ),
+                            right: Literal(
+                                Integer(
+                                    10,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 39,
+                                    start: 28,
+                                    end: 30,
+                                },
+                            ),
+                            span: Span {
+                                line: 39,
+                                start: 16,
+                                end: 30,
+                            },
+                        },
+                        right: Name(
+                            "LOOPVALUE",
+                            Span {
+                                line: 39,
+                                start: 33,
+                                end: 42,
+                            },
+                        ),
+                        span: Span {
+                            line: 39,
+                            start: 16,
+                            end: 42,
+                        },
+                    },
+                    span: Span {
+                        line: 39,
+                        start: 4,
+                        end: 42,
+                    },
+                },
+            ],
+            span: Span {
+                line: 38,
+                start: 0,
+                end: 3,
+            },
+        },
+        For {
+            counter: Name(
+                "LOOPVALUE",
+                Span {
+                    line: 41,
+                    start: 4,
+                    end: 13,
+                },
+            ),
+            start: Name(
+                "LIMITVALUE",
+                Span {
+                    line: 41,
+                    start: 16,
+                    end: 26,
+                },
+            ),
+            end: Literal(
+                Integer(
+                    1,
+                    Integer,
+                ),
+                Span {
+                    line: 41,
+                    start: 30,
+                    end: 31,
+                },
+            ),
+            step: Some(
+                Literal(
+                    Integer(
+                        1,
+                        Integer,
+                    ),
+                    Span {
+                        line: 41,
+                        start: 37,
+                        end: 38,
+                    },
+                ),
+            ),
+            body: [
+                Assign {
+                    target: Name(
+                        "SKIPPEDCOUNT",
+                        Span {
+                            line: 42,
+                            start: 4,
+                            end: 16,
+                        },
+                    ),
+                    value: Binary {
+                        op: Add,
+                        left: Name(
+                            "SKIPPEDCOUNT",
+                            Span {
+                                line: 42,
+                                start: 19,
+                                end: 31,
+                            },
+                        ),
+                        right: Literal(
+                            Integer(
+                                1,
+                                Integer,
+                            ),
+                            Span {
+                                line: 42,
+                                start: 34,
+                                end: 35,
+                            },
+                        ),
+                        span: Span {
+                            line: 42,
+                            start: 19,
+                            end: 35,
+                        },
+                    },
+                    span: Span {
+                        line: 42,
+                        start: 4,
+                        end: 35,
+                    },
+                },
+            ],
+            span: Span {
+                line: 41,
+                start: 0,
+                end: 3,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Name(
+                    "PREWHILECOUNT",
+                    Span {
+                        line: 44,
+                        start: 3,
+                        end: 16,
+                    },
+                ),
+                right: Literal(
+                    Integer(
+                        3,
+                        Integer,
+                    ),
+                    Span {
+                        line: 44,
+                        start: 20,
+                        end: 21,
+                    },
+                ),
+                span: Span {
+                    line: 44,
+                    start: 3,
+                    end: 21,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL loopforms pre-while",
+                                ),
+                                Span {
+                                    line: 45,
+                                    start: 10,
+                                    end: 36,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 45,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 46,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 44,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Name(
+                    "POSTWHILECOUNT",
+                    Span {
+                        line: 48,
+                        start: 3,
+                        end: 17,
+                    },
+                ),
+                right: Literal(
+                    Integer(
+                        1,
+                        Integer,
+                    ),
+                    Span {
+                        line: 48,
+                        start: 21,
+                        end: 22,
+                    },
+                ),
+                span: Span {
+                    line: 48,
+                    start: 3,
+                    end: 22,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL loopforms post-while",
+                                ),
+                                Span {
+                                    line: 49,
+                                    start: 10,
+                                    end: 37,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 49,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 50,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 48,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Name(
+                    "PREUNTILCOUNT",
+                    Span {
+                        line: 52,
+                        start: 3,
+                        end: 16,
+                    },
+                ),
+                right: Literal(
+                    Integer(
+                        0,
+                        Integer,
+                    ),
+                    Span {
+                        line: 52,
+                        start: 20,
+                        end: 21,
+                    },
+                ),
+                span: Span {
+                    line: 52,
+                    start: 3,
+                    end: 21,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL loopforms pre-until",
+                                ),
+                                Span {
+                                    line: 53,
+                                    start: 10,
+                                    end: 36,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 53,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 54,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 52,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Name(
+                    "POSTUNTILCOUNT",
+                    Span {
+                        line: 56,
+                        start: 3,
+                        end: 17,
+                    },
+                ),
+                right: Literal(
+                    Integer(
+                        1,
+                        Integer,
+                    ),
+                    Span {
+                        line: 56,
+                        start: 21,
+                        end: 22,
+                    },
+                ),
+                span: Span {
+                    line: 56,
+                    start: 3,
+                    end: 22,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL loopforms post-until",
+                                ),
+                                Span {
+                                    line: 57,
+                                    start: 10,
+                                    end: 37,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 57,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 58,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 56,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Name(
+                    "EXITDOCOUNT",
+                    Span {
+                        line: 60,
+                        start: 3,
+                        end: 14,
+                    },
+                ),
+                right: Literal(
+                    Integer(
+                        1,
+                        Integer,
+                    ),
+                    Span {
+                        line: 60,
+                        start: 18,
+                        end: 19,
+                    },
+                ),
+                span: Span {
+                    line: 60,
+                    start: 3,
+                    end: 19,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL loopforms exit-do",
+                                ),
+                                Span {
+                                    line: 61,
+                                    start: 10,
+                                    end: 34,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 61,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 62,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 60,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Name(
+                    "UPTRACE",
+                    Span {
+                        line: 64,
+                        start: 3,
+                        end: 10,
+                    },
+                ),
+                right: Literal(
+                    Integer(
+                        123,
+                        Integer,
+                    ),
+                    Span {
+                        line: 64,
+                        start: 14,
+                        end: 17,
+                    },
+                ),
+                span: Span {
+                    line: 64,
+                    start: 3,
+                    end: 17,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL loopforms for-up",
+                                ),
+                                Span {
+                                    line: 65,
+                                    start: 10,
+                                    end: 33,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 65,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 66,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 64,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Name(
+                    "DOWNTRACE",
+                    Span {
+                        line: 68,
+                        start: 3,
+                        end: 12,
+                    },
+                ),
+                right: Literal(
+                    Integer(
+                        321,
+                        Integer,
+                    ),
+                    Span {
+                        line: 68,
+                        start: 16,
+                        end: 19,
+                    },
+                ),
+                span: Span {
+                    line: 68,
+                    start: 3,
+                    end: 19,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL loopforms for-down",
+                                ),
+                                Span {
+                                    line: 69,
+                                    start: 10,
+                                    end: 35,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 69,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 70,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 68,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Name(
+                    "SKIPPEDCOUNT",
+                    Span {
+                        line: 72,
+                        start: 3,
+                        end: 15,
+                    },
+                ),
+                right: Literal(
+                    Integer(
+                        0,
+                        Integer,
+                    ),
+                    Span {
+                        line: 72,
+                        start: 19,
+                        end: 20,
+                    },
+                ),
+                span: Span {
+                    line: 72,
+                    start: 3,
+                    end: 20,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL loopforms for-skip",
+                                ),
+                                Span {
+                                    line: 73,
+                                    start: 10,
+                                    end: 35,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 73,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 74,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 72,
+                start: 0,
+                end: 2,
+            },
+        },
+        Print {
+            file: None,
+            items: [
+                PrintItem {
+                    value: Literal(
+                        String(
+                            "PASS loopforms",
+                        ),
+                        Span {
+                            line: 76,
+                            start: 6,
+                            end: 22,
+                        },
+                    ),
+                    separator: End,
+                },
+            ],
+            span: Span {
+                line: 76,
+                start: 0,
+                end: 5,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 77,
+                start: 0,
+                end: 3,
+            },
+        },
+        Data {
+            values: [
+                Literal(
+                    Integer(
+                        3,
+                        Integer,
+                    ),
+                    Span {
+                        line: 79,
+                        start: 5,
+                        end: 6,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 79,
+                start: 0,
+                end: 4,
+            },
+        },
+    ],
+    procedures: [],
+}

@@ -1,0 +1,806 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: qb45/relational-operators
+# dialect: QuickBasic45
+# source: qb45/Q45RL46.BAS
+
+Module {
+    statements: [
+        Dim(
+            [
+                Declaration {
+                    name: "LOWVALUE",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 2,
+                        start: 4,
+                        end: 23,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "HIGHVALUE",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 3,
+                        start: 4,
+                        end: 24,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "FIRSTTEXT",
+                    type_name: Some(
+                        String,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 4,
+                        start: 4,
+                        end: 23,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "SECONDTEXT",
+                    type_name: Some(
+                        String,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 5,
+                        start: 4,
+                        end: 24,
+                    },
+                },
+            ],
+        ),
+        Read {
+            destinations: [
+                Name(
+                    "LOWVALUE",
+                    Span {
+                        line: 7,
+                        start: 5,
+                        end: 13,
+                    },
+                ),
+                Name(
+                    "HIGHVALUE",
+                    Span {
+                        line: 7,
+                        start: 15,
+                        end: 24,
+                    },
+                ),
+                Name(
+                    "FIRSTTEXT",
+                    Span {
+                        line: 7,
+                        start: 26,
+                        end: 35,
+                    },
+                ),
+                Name(
+                    "SECONDTEXT",
+                    Span {
+                        line: 7,
+                        start: 37,
+                        end: 47,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 7,
+                start: 0,
+                end: 4,
+            },
+        },
+        If {
+            condition: Binary {
+                op: Or,
+                left: Binary {
+                    op: NotEqual,
+                    left: Binary {
+                        op: Less,
+                        left: Name(
+                            "LOWVALUE",
+                            Span {
+                                line: 8,
+                                start: 4,
+                                end: 12,
+                            },
+                        ),
+                        right: Name(
+                            "HIGHVALUE",
+                            Span {
+                                line: 8,
+                                start: 15,
+                                end: 24,
+                            },
+                        ),
+                        span: Span {
+                            line: 8,
+                            start: 4,
+                            end: 24,
+                        },
+                    },
+                    right: Unary {
+                        op: Negative,
+                        operand: Literal(
+                            Integer(
+                                1,
+                                Integer,
+                            ),
+                            Span {
+                                line: 8,
+                                start: 30,
+                                end: 31,
+                            },
+                        ),
+                        span: Span {
+                            line: 8,
+                            start: 29,
+                            end: 31,
+                        },
+                    },
+                    span: Span {
+                        line: 8,
+                        start: 4,
+                        end: 31,
+                    },
+                },
+                right: Binary {
+                    op: NotEqual,
+                    left: Binary {
+                        op: Less,
+                        left: Name(
+                            "HIGHVALUE",
+                            Span {
+                                line: 8,
+                                start: 36,
+                                end: 45,
+                            },
+                        ),
+                        right: Name(
+                            "LOWVALUE",
+                            Span {
+                                line: 8,
+                                start: 48,
+                                end: 56,
+                            },
+                        ),
+                        span: Span {
+                            line: 8,
+                            start: 36,
+                            end: 56,
+                        },
+                    },
+                    right: Literal(
+                        Integer(
+                            0,
+                            Integer,
+                        ),
+                        Span {
+                            line: 8,
+                            start: 61,
+                            end: 62,
+                        },
+                    ),
+                    span: Span {
+                        line: 8,
+                        start: 36,
+                        end: 62,
+                    },
+                },
+                span: Span {
+                    line: 8,
+                    start: 4,
+                    end: 62,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL relation less",
+                                ),
+                                Span {
+                                    line: 9,
+                                    start: 10,
+                                    end: 30,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 9,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 10,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 8,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: Or,
+                left: Binary {
+                    op: NotEqual,
+                    left: Binary {
+                        op: LessEqual,
+                        left: Name(
+                            "LOWVALUE",
+                            Span {
+                                line: 12,
+                                start: 4,
+                                end: 12,
+                            },
+                        ),
+                        right: Name(
+                            "LOWVALUE",
+                            Span {
+                                line: 12,
+                                start: 16,
+                                end: 24,
+                            },
+                        ),
+                        span: Span {
+                            line: 12,
+                            start: 4,
+                            end: 24,
+                        },
+                    },
+                    right: Unary {
+                        op: Negative,
+                        operand: Literal(
+                            Integer(
+                                1,
+                                Integer,
+                            ),
+                            Span {
+                                line: 12,
+                                start: 30,
+                                end: 31,
+                            },
+                        ),
+                        span: Span {
+                            line: 12,
+                            start: 29,
+                            end: 31,
+                        },
+                    },
+                    span: Span {
+                        line: 12,
+                        start: 4,
+                        end: 31,
+                    },
+                },
+                right: Binary {
+                    op: NotEqual,
+                    left: Binary {
+                        op: GreaterEqual,
+                        left: Name(
+                            "HIGHVALUE",
+                            Span {
+                                line: 12,
+                                start: 36,
+                                end: 45,
+                            },
+                        ),
+                        right: Name(
+                            "LOWVALUE",
+                            Span {
+                                line: 12,
+                                start: 49,
+                                end: 57,
+                            },
+                        ),
+                        span: Span {
+                            line: 12,
+                            start: 36,
+                            end: 57,
+                        },
+                    },
+                    right: Unary {
+                        op: Negative,
+                        operand: Literal(
+                            Integer(
+                                1,
+                                Integer,
+                            ),
+                            Span {
+                                line: 12,
+                                start: 63,
+                                end: 64,
+                            },
+                        ),
+                        span: Span {
+                            line: 12,
+                            start: 62,
+                            end: 64,
+                        },
+                    },
+                    span: Span {
+                        line: 12,
+                        start: 36,
+                        end: 64,
+                    },
+                },
+                span: Span {
+                    line: 12,
+                    start: 4,
+                    end: 64,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL relation bounds",
+                                ),
+                                Span {
+                                    line: 13,
+                                    start: 10,
+                                    end: 32,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 13,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 14,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 12,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: Or,
+                left: Binary {
+                    op: NotEqual,
+                    left: Binary {
+                        op: Eq,
+                        left: Name(
+                            "LOWVALUE",
+                            Span {
+                                line: 16,
+                                start: 4,
+                                end: 12,
+                            },
+                        ),
+                        right: Name(
+                            "HIGHVALUE",
+                            Span {
+                                line: 16,
+                                start: 15,
+                                end: 24,
+                            },
+                        ),
+                        span: Span {
+                            line: 16,
+                            start: 4,
+                            end: 24,
+                        },
+                    },
+                    right: Literal(
+                        Integer(
+                            0,
+                            Integer,
+                        ),
+                        Span {
+                            line: 16,
+                            start: 29,
+                            end: 30,
+                        },
+                    ),
+                    span: Span {
+                        line: 16,
+                        start: 4,
+                        end: 30,
+                    },
+                },
+                right: Binary {
+                    op: NotEqual,
+                    left: Binary {
+                        op: NotEqual,
+                        left: Name(
+                            "LOWVALUE",
+                            Span {
+                                line: 16,
+                                start: 35,
+                                end: 43,
+                            },
+                        ),
+                        right: Name(
+                            "HIGHVALUE",
+                            Span {
+                                line: 16,
+                                start: 47,
+                                end: 56,
+                            },
+                        ),
+                        span: Span {
+                            line: 16,
+                            start: 35,
+                            end: 56,
+                        },
+                    },
+                    right: Unary {
+                        op: Negative,
+                        operand: Literal(
+                            Integer(
+                                1,
+                                Integer,
+                            ),
+                            Span {
+                                line: 16,
+                                start: 62,
+                                end: 63,
+                            },
+                        ),
+                        span: Span {
+                            line: 16,
+                            start: 61,
+                            end: 63,
+                        },
+                    },
+                    span: Span {
+                        line: 16,
+                        start: 35,
+                        end: 63,
+                    },
+                },
+                span: Span {
+                    line: 16,
+                    start: 4,
+                    end: 63,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL relation equality",
+                                ),
+                                Span {
+                                    line: 17,
+                                    start: 10,
+                                    end: 34,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 17,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 18,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 16,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: Or,
+                left: Binary {
+                    op: NotEqual,
+                    left: Binary {
+                        op: Less,
+                        left: Name(
+                            "FIRSTTEXT",
+                            Span {
+                                line: 20,
+                                start: 4,
+                                end: 13,
+                            },
+                        ),
+                        right: Name(
+                            "SECONDTEXT",
+                            Span {
+                                line: 20,
+                                start: 16,
+                                end: 26,
+                            },
+                        ),
+                        span: Span {
+                            line: 20,
+                            start: 4,
+                            end: 26,
+                        },
+                    },
+                    right: Unary {
+                        op: Negative,
+                        operand: Literal(
+                            Integer(
+                                1,
+                                Integer,
+                            ),
+                            Span {
+                                line: 20,
+                                start: 32,
+                                end: 33,
+                            },
+                        ),
+                        span: Span {
+                            line: 20,
+                            start: 31,
+                            end: 33,
+                        },
+                    },
+                    span: Span {
+                        line: 20,
+                        start: 4,
+                        end: 33,
+                    },
+                },
+                right: Binary {
+                    op: NotEqual,
+                    left: Binary {
+                        op: Eq,
+                        left: Name(
+                            "FIRSTTEXT",
+                            Span {
+                                line: 20,
+                                start: 38,
+                                end: 47,
+                            },
+                        ),
+                        right: Name(
+                            "SECONDTEXT",
+                            Span {
+                                line: 20,
+                                start: 50,
+                                end: 60,
+                            },
+                        ),
+                        span: Span {
+                            line: 20,
+                            start: 38,
+                            end: 60,
+                        },
+                    },
+                    right: Literal(
+                        Integer(
+                            0,
+                            Integer,
+                        ),
+                        Span {
+                            line: 20,
+                            start: 65,
+                            end: 66,
+                        },
+                    ),
+                    span: Span {
+                        line: 20,
+                        start: 38,
+                        end: 66,
+                    },
+                },
+                span: Span {
+                    line: 20,
+                    start: 4,
+                    end: 66,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL relation string",
+                                ),
+                                Span {
+                                    line: 21,
+                                    start: 10,
+                                    end: 32,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 21,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 22,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 20,
+                start: 0,
+                end: 2,
+            },
+        },
+        Print {
+            file: None,
+            items: [
+                PrintItem {
+                    value: Literal(
+                        String(
+                            "PASS relation",
+                        ),
+                        Span {
+                            line: 24,
+                            start: 6,
+                            end: 21,
+                        },
+                    ),
+                    separator: End,
+                },
+            ],
+            span: Span {
+                line: 24,
+                start: 0,
+                end: 5,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 25,
+                start: 0,
+                end: 3,
+            },
+        },
+        Data {
+            values: [
+                Unary {
+                    op: Negative,
+                    operand: Literal(
+                        Integer(
+                            3,
+                            Integer,
+                        ),
+                        Span {
+                            line: 27,
+                            start: 6,
+                            end: 7,
+                        },
+                    ),
+                    span: Span {
+                        line: 27,
+                        start: 5,
+                        end: 7,
+                    },
+                },
+                Literal(
+                    Integer(
+                        7,
+                        Integer,
+                    ),
+                    Span {
+                        line: 27,
+                        start: 9,
+                        end: 10,
+                    },
+                ),
+                Literal(
+                    String(
+                        "ABC",
+                    ),
+                    Span {
+                        line: 27,
+                        start: 12,
+                        end: 17,
+                    },
+                ),
+                Literal(
+                    String(
+                        "ABD",
+                    ),
+                    Span {
+                        line: 27,
+                        start: 19,
+                        end: 24,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 27,
+                start: 0,
+                end: 4,
+            },
+        },
+    ],
+    procedures: [],
+}

@@ -1,0 +1,1121 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: qb45/explicit-let
+# dialect: QuickBasic45
+# source: qb45/Q45LE71.BAS
+
+Module {
+    statements: [
+        TypeDecl {
+            name: "PAIRTYPE",
+            fields: [
+                Declaration {
+                    name: "COUNTVALUE",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 3,
+                        start: 4,
+                        end: 14,
+                    },
+                },
+                Declaration {
+                    name: "TOTALVALUE",
+                    type_name: Some(
+                        Long,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 4,
+                        start: 4,
+                        end: 14,
+                    },
+                },
+                Declaration {
+                    name: "TAGVALUE",
+                    type_name: Some(
+                        String,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: Some(
+                        Literal(
+                            Integer(
+                                3,
+                                Integer,
+                            ),
+                            Span {
+                                line: 5,
+                                start: 25,
+                                end: 26,
+                            },
+                        ),
+                    ),
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 5,
+                        start: 4,
+                        end: 12,
+                    },
+                },
+            ],
+            span: Span {
+                line: 2,
+                start: 0,
+                end: 4,
+            },
+        },
+        Dim(
+            [
+                Declaration {
+                    name: "INPUTCOUNT",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 8,
+                        start: 4,
+                        end: 25,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "INPUTTOTAL",
+                    type_name: Some(
+                        Long,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 9,
+                        start: 4,
+                        end: 22,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "INPUTTEXT",
+                    type_name: Some(
+                        String,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 10,
+                        start: 4,
+                        end: 23,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "COUNTVALUE",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 11,
+                        start: 4,
+                        end: 25,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "TOTALVALUE",
+                    type_name: Some(
+                        Long,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 12,
+                        start: 4,
+                        end: 22,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "TEXTVALUE",
+                    type_name: Some(
+                        String,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 13,
+                        start: 4,
+                        end: 23,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "SOURCEPAIR",
+                    type_name: Some(
+                        Named(
+                            "PAIRTYPE",
+                        ),
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 14,
+                        start: 4,
+                        end: 26,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "COPIEDPAIR",
+                    type_name: Some(
+                        Named(
+                            "PAIRTYPE",
+                        ),
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 15,
+                        start: 4,
+                        end: 26,
+                    },
+                },
+            ],
+        ),
+        Read {
+            destinations: [
+                Name(
+                    "INPUTCOUNT",
+                    Span {
+                        line: 17,
+                        start: 5,
+                        end: 15,
+                    },
+                ),
+                Name(
+                    "INPUTTOTAL",
+                    Span {
+                        line: 17,
+                        start: 17,
+                        end: 27,
+                    },
+                ),
+                Name(
+                    "INPUTTEXT",
+                    Span {
+                        line: 17,
+                        start: 29,
+                        end: 38,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 17,
+                start: 0,
+                end: 4,
+            },
+        },
+        Assign {
+            target: Name(
+                "COUNTVALUE",
+                Span {
+                    line: 18,
+                    start: 4,
+                    end: 14,
+                },
+            ),
+            value: Name(
+                "INPUTCOUNT",
+                Span {
+                    line: 18,
+                    start: 17,
+                    end: 27,
+                },
+            ),
+            span: Span {
+                line: 18,
+                start: 4,
+                end: 27,
+            },
+        },
+        Assign {
+            target: Name(
+                "TOTALVALUE",
+                Span {
+                    line: 19,
+                    start: 4,
+                    end: 14,
+                },
+            ),
+            value: Name(
+                "INPUTTOTAL",
+                Span {
+                    line: 19,
+                    start: 17,
+                    end: 27,
+                },
+            ),
+            span: Span {
+                line: 19,
+                start: 4,
+                end: 27,
+            },
+        },
+        Assign {
+            target: Name(
+                "TEXTVALUE",
+                Span {
+                    line: 20,
+                    start: 4,
+                    end: 13,
+                },
+            ),
+            value: Name(
+                "INPUTTEXT",
+                Span {
+                    line: 20,
+                    start: 16,
+                    end: 25,
+                },
+            ),
+            span: Span {
+                line: 20,
+                start: 4,
+                end: 25,
+            },
+        },
+        Assign {
+            target: Field {
+                base: Name(
+                    "SOURCEPAIR",
+                    Span {
+                        line: 21,
+                        start: 4,
+                        end: 14,
+                    },
+                ),
+                name: "COUNTVALUE",
+                span: Span {
+                    line: 21,
+                    start: 4,
+                    end: 25,
+                },
+            },
+            value: Binary {
+                op: Add,
+                left: Name(
+                    "INPUTCOUNT",
+                    Span {
+                        line: 21,
+                        start: 28,
+                        end: 38,
+                    },
+                ),
+                right: Literal(
+                    Integer(
+                        2,
+                        Integer,
+                    ),
+                    Span {
+                        line: 21,
+                        start: 41,
+                        end: 42,
+                    },
+                ),
+                span: Span {
+                    line: 21,
+                    start: 28,
+                    end: 42,
+                },
+            },
+            span: Span {
+                line: 21,
+                start: 4,
+                end: 42,
+            },
+        },
+        Assign {
+            target: Field {
+                base: Name(
+                    "SOURCEPAIR",
+                    Span {
+                        line: 22,
+                        start: 4,
+                        end: 14,
+                    },
+                ),
+                name: "TOTALVALUE",
+                span: Span {
+                    line: 22,
+                    start: 4,
+                    end: 25,
+                },
+            },
+            value: Binary {
+                op: Subtract,
+                left: Name(
+                    "INPUTTOTAL",
+                    Span {
+                        line: 22,
+                        start: 28,
+                        end: 38,
+                    },
+                ),
+                right: Literal(
+                    Integer(
+                        7,
+                        Integer,
+                    ),
+                    Span {
+                        line: 22,
+                        start: 41,
+                        end: 42,
+                    },
+                ),
+                span: Span {
+                    line: 22,
+                    start: 28,
+                    end: 42,
+                },
+            },
+            span: Span {
+                line: 22,
+                start: 4,
+                end: 42,
+            },
+        },
+        Assign {
+            target: Field {
+                base: Name(
+                    "SOURCEPAIR",
+                    Span {
+                        line: 23,
+                        start: 4,
+                        end: 14,
+                    },
+                ),
+                name: "TAGVALUE",
+                span: Span {
+                    line: 23,
+                    start: 4,
+                    end: 23,
+                },
+            },
+            value: Apply {
+                name: "LEFT$",
+                arguments: [
+                    Name(
+                        "INPUTTEXT",
+                        Span {
+                            line: 23,
+                            start: 32,
+                            end: 41,
+                        },
+                    ),
+                    Literal(
+                        Integer(
+                            3,
+                            Integer,
+                        ),
+                        Span {
+                            line: 23,
+                            start: 43,
+                            end: 44,
+                        },
+                    ),
+                ],
+                span: Span {
+                    line: 23,
+                    start: 26,
+                    end: 45,
+                },
+            },
+            span: Span {
+                line: 23,
+                start: 4,
+                end: 45,
+            },
+        },
+        Assign {
+            target: Name(
+                "COPIEDPAIR",
+                Span {
+                    line: 24,
+                    start: 4,
+                    end: 14,
+                },
+            ),
+            value: Name(
+                "SOURCEPAIR",
+                Span {
+                    line: 24,
+                    start: 17,
+                    end: 27,
+                },
+            ),
+            span: Span {
+                line: 24,
+                start: 4,
+                end: 27,
+            },
+        },
+        Assign {
+            target: Field {
+                base: Name(
+                    "SOURCEPAIR",
+                    Span {
+                        line: 26,
+                        start: 0,
+                        end: 10,
+                    },
+                ),
+                name: "COUNTVALUE",
+                span: Span {
+                    line: 26,
+                    start: 0,
+                    end: 21,
+                },
+            },
+            value: Literal(
+                Integer(
+                    0,
+                    Integer,
+                ),
+                Span {
+                    line: 26,
+                    start: 24,
+                    end: 25,
+                },
+            ),
+            span: Span {
+                line: 26,
+                start: 0,
+                end: 25,
+            },
+        },
+        Assign {
+            target: Field {
+                base: Name(
+                    "SOURCEPAIR",
+                    Span {
+                        line: 27,
+                        start: 0,
+                        end: 10,
+                    },
+                ),
+                name: "TOTALVALUE",
+                span: Span {
+                    line: 27,
+                    start: 0,
+                    end: 21,
+                },
+            },
+            value: Literal(
+                Integer(
+                    0,
+                    Integer,
+                ),
+                Span {
+                    line: 27,
+                    start: 24,
+                    end: 25,
+                },
+            ),
+            span: Span {
+                line: 27,
+                start: 0,
+                end: 25,
+            },
+        },
+        Assign {
+            target: Field {
+                base: Name(
+                    "SOURCEPAIR",
+                    Span {
+                        line: 28,
+                        start: 0,
+                        end: 10,
+                    },
+                ),
+                name: "TAGVALUE",
+                span: Span {
+                    line: 28,
+                    start: 0,
+                    end: 19,
+                },
+            },
+            value: Literal(
+                String(
+                    "BAD",
+                ),
+                Span {
+                    line: 28,
+                    start: 22,
+                    end: 27,
+                },
+            ),
+            span: Span {
+                line: 28,
+                start: 0,
+                end: 27,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Name(
+                    "COUNTVALUE",
+                    Span {
+                        line: 29,
+                        start: 3,
+                        end: 13,
+                    },
+                ),
+                right: Unary {
+                    op: Negative,
+                    operand: Literal(
+                        Integer(
+                            1234,
+                            Integer,
+                        ),
+                        Span {
+                            line: 29,
+                            start: 18,
+                            end: 22,
+                        },
+                    ),
+                    span: Span {
+                        line: 29,
+                        start: 17,
+                        end: 22,
+                    },
+                },
+                span: Span {
+                    line: 29,
+                    start: 3,
+                    end: 22,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL let integer",
+                                ),
+                                Span {
+                                    line: 30,
+                                    start: 10,
+                                    end: 28,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 30,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 31,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 29,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Name(
+                    "TOTALVALUE",
+                    Span {
+                        line: 33,
+                        start: 3,
+                        end: 13,
+                    },
+                ),
+                right: Literal(
+                    Integer(
+                        100007,
+                        Integer,
+                    ),
+                    Span {
+                        line: 33,
+                        start: 17,
+                        end: 23,
+                    },
+                ),
+                span: Span {
+                    line: 33,
+                    start: 3,
+                    end: 23,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL let long",
+                                ),
+                                Span {
+                                    line: 34,
+                                    start: 10,
+                                    end: 25,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 34,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 35,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 33,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Name(
+                    "TEXTVALUE",
+                    Span {
+                        line: 37,
+                        start: 3,
+                        end: 12,
+                    },
+                ),
+                right: Literal(
+                    String(
+                        "QB45",
+                    ),
+                    Span {
+                        line: 37,
+                        start: 16,
+                        end: 22,
+                    },
+                ),
+                span: Span {
+                    line: 37,
+                    start: 3,
+                    end: 22,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL let string",
+                                ),
+                                Span {
+                                    line: 38,
+                                    start: 10,
+                                    end: 27,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 38,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 39,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 37,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: Or,
+                left: Binary {
+                    op: NotEqual,
+                    left: Field {
+                        base: Name(
+                            "COPIEDPAIR",
+                            Span {
+                                line: 41,
+                                start: 3,
+                                end: 13,
+                            },
+                        ),
+                        name: "COUNTVALUE",
+                        span: Span {
+                            line: 41,
+                            start: 3,
+                            end: 24,
+                        },
+                    },
+                    right: Unary {
+                        op: Negative,
+                        operand: Literal(
+                            Integer(
+                                1232,
+                                Integer,
+                            ),
+                            Span {
+                                line: 41,
+                                start: 29,
+                                end: 33,
+                            },
+                        ),
+                        span: Span {
+                            line: 41,
+                            start: 28,
+                            end: 33,
+                        },
+                    },
+                    span: Span {
+                        line: 41,
+                        start: 3,
+                        end: 33,
+                    },
+                },
+                right: Binary {
+                    op: NotEqual,
+                    left: Field {
+                        base: Name(
+                            "COPIEDPAIR",
+                            Span {
+                                line: 41,
+                                start: 37,
+                                end: 47,
+                            },
+                        ),
+                        name: "TOTALVALUE",
+                        span: Span {
+                            line: 41,
+                            start: 37,
+                            end: 58,
+                        },
+                    },
+                    right: Literal(
+                        Integer(
+                            100000,
+                            Integer,
+                        ),
+                        Span {
+                            line: 41,
+                            start: 62,
+                            end: 68,
+                        },
+                    ),
+                    span: Span {
+                        line: 41,
+                        start: 37,
+                        end: 68,
+                    },
+                },
+                span: Span {
+                    line: 41,
+                    start: 3,
+                    end: 68,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL let record numbers",
+                                ),
+                                Span {
+                                    line: 42,
+                                    start: 10,
+                                    end: 35,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 42,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 43,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 41,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Field {
+                    base: Name(
+                        "COPIEDPAIR",
+                        Span {
+                            line: 45,
+                            start: 3,
+                            end: 13,
+                        },
+                    ),
+                    name: "TAGVALUE",
+                    span: Span {
+                        line: 45,
+                        start: 3,
+                        end: 22,
+                    },
+                },
+                right: Literal(
+                    String(
+                        "QB4",
+                    ),
+                    Span {
+                        line: 45,
+                        start: 26,
+                        end: 31,
+                    },
+                ),
+                span: Span {
+                    line: 45,
+                    start: 3,
+                    end: 31,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL let record string",
+                                ),
+                                Span {
+                                    line: 46,
+                                    start: 10,
+                                    end: 34,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 46,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 47,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 45,
+                start: 0,
+                end: 2,
+            },
+        },
+        Print {
+            file: None,
+            items: [
+                PrintItem {
+                    value: Literal(
+                        String(
+                            "PASS let",
+                        ),
+                        Span {
+                            line: 49,
+                            start: 6,
+                            end: 16,
+                        },
+                    ),
+                    separator: End,
+                },
+            ],
+            span: Span {
+                line: 49,
+                start: 0,
+                end: 5,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 50,
+                start: 0,
+                end: 3,
+            },
+        },
+        Data {
+            values: [
+                Unary {
+                    op: Negative,
+                    operand: Literal(
+                        Integer(
+                            1234,
+                            Integer,
+                        ),
+                        Span {
+                            line: 52,
+                            start: 6,
+                            end: 10,
+                        },
+                    ),
+                    span: Span {
+                        line: 52,
+                        start: 5,
+                        end: 10,
+                    },
+                },
+                Literal(
+                    Integer(
+                        100007,
+                        Integer,
+                    ),
+                    Span {
+                        line: 52,
+                        start: 12,
+                        end: 18,
+                    },
+                ),
+                Literal(
+                    String(
+                        "QB45",
+                    ),
+                    Span {
+                        line: 52,
+                        start: 20,
+                        end: 26,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 52,
+                start: 0,
+                end: 4,
+            },
+        },
+    ],
+    procedures: [],
+}

@@ -1,0 +1,1191 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: qb45/binary-file-io
+# dialect: QuickBasic45
+# source: qb45/Q45BI55.BAS
+
+Module {
+    statements: [
+        Dim(
+            [
+                Declaration {
+                    name: "FILENUMBER",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 2,
+                        start: 4,
+                        end: 25,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "FIRSTVALUE",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 3,
+                        start: 4,
+                        end: 25,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "SECONDVALUE",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 4,
+                        start: 4,
+                        end: 26,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "READFIRST",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 5,
+                        start: 4,
+                        end: 24,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "READSECOND",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 6,
+                        start: 4,
+                        end: 25,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "RAWTEXT",
+                    type_name: Some(
+                        String,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 7,
+                        start: 4,
+                        end: 21,
+                    },
+                },
+            ],
+        ),
+        Read {
+            destinations: [
+                Name(
+                    "FIRSTVALUE",
+                    Span {
+                        line: 9,
+                        start: 5,
+                        end: 15,
+                    },
+                ),
+                Name(
+                    "SECONDVALUE",
+                    Span {
+                        line: 9,
+                        start: 17,
+                        end: 28,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 9,
+                start: 0,
+                end: 4,
+            },
+        },
+        Assign {
+            target: Name(
+                "FILENUMBER",
+                Span {
+                    line: 10,
+                    start: 0,
+                    end: 10,
+                },
+            ),
+            value: Name(
+                "FREEFILE",
+                Span {
+                    line: 10,
+                    start: 13,
+                    end: 21,
+                },
+            ),
+            span: Span {
+                line: 10,
+                start: 0,
+                end: 21,
+            },
+        },
+        Open {
+            path: Literal(
+                String(
+                    "Q45BI55.DAT",
+                ),
+                Span {
+                    line: 11,
+                    start: 5,
+                    end: 18,
+                },
+            ),
+            mode: Binary,
+            file: Name(
+                "FILENUMBER",
+                Span {
+                    line: 11,
+                    start: 34,
+                    end: 44,
+                },
+            ),
+            span: Span {
+                line: 11,
+                start: 0,
+                end: 4,
+            },
+        },
+        FileTransfer {
+            write: true,
+            file: Name(
+                "FILENUMBER",
+                Span {
+                    line: 12,
+                    start: 5,
+                    end: 15,
+                },
+            ),
+            position: Some(
+                Literal(
+                    Integer(
+                        1,
+                        Integer,
+                    ),
+                    Span {
+                        line: 12,
+                        start: 17,
+                        end: 18,
+                    },
+                ),
+            ),
+            target: Name(
+                "FIRSTVALUE",
+                Span {
+                    line: 12,
+                    start: 20,
+                    end: 30,
+                },
+            ),
+            span: Span {
+                line: 12,
+                start: 0,
+                end: 3,
+            },
+        },
+        FileTransfer {
+            write: true,
+            file: Name(
+                "FILENUMBER",
+                Span {
+                    line: 13,
+                    start: 5,
+                    end: 15,
+                },
+            ),
+            position: Some(
+                Literal(
+                    Integer(
+                        3,
+                        Integer,
+                    ),
+                    Span {
+                        line: 13,
+                        start: 17,
+                        end: 18,
+                    },
+                ),
+            ),
+            target: Name(
+                "SECONDVALUE",
+                Span {
+                    line: 13,
+                    start: 20,
+                    end: 31,
+                },
+            ),
+            span: Span {
+                line: 13,
+                start: 0,
+                end: 3,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Apply {
+                    name: "LOF",
+                    arguments: [
+                        Name(
+                            "FILENUMBER",
+                            Span {
+                                line: 14,
+                                start: 7,
+                                end: 17,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 14,
+                        start: 3,
+                        end: 18,
+                    },
+                },
+                right: Literal(
+                    Integer(
+                        4,
+                        Integer,
+                    ),
+                    Span {
+                        line: 14,
+                        start: 22,
+                        end: 23,
+                    },
+                ),
+                span: Span {
+                    line: 14,
+                    start: 3,
+                    end: 23,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL binaryio length",
+                                ),
+                                Span {
+                                    line: 15,
+                                    start: 10,
+                                    end: 32,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 15,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Close {
+                    files: [
+                        Name(
+                            "FILENUMBER",
+                            Span {
+                                line: 16,
+                                start: 11,
+                                end: 21,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 16,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Call {
+                    name: "KILL",
+                    arguments: [
+                        Literal(
+                            String(
+                                "Q45BI55.DAT",
+                            ),
+                            Span {
+                                line: 17,
+                                start: 9,
+                                end: 22,
+                            },
+                        ),
+                    ],
+                    explicit: false,
+                    span: Span {
+                        line: 17,
+                        start: 4,
+                        end: 8,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 18,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 14,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Apply {
+                    name: "SEEK",
+                    arguments: [
+                        Name(
+                            "FILENUMBER",
+                            Span {
+                                line: 20,
+                                start: 8,
+                                end: 18,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 20,
+                        start: 3,
+                        end: 19,
+                    },
+                },
+                right: Literal(
+                    Integer(
+                        5,
+                        Integer,
+                    ),
+                    Span {
+                        line: 20,
+                        start: 23,
+                        end: 24,
+                    },
+                ),
+                span: Span {
+                    line: 20,
+                    start: 3,
+                    end: 24,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL binaryio seek-after-put",
+                                ),
+                                Span {
+                                    line: 21,
+                                    start: 10,
+                                    end: 40,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 21,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Close {
+                    files: [
+                        Name(
+                            "FILENUMBER",
+                            Span {
+                                line: 22,
+                                start: 11,
+                                end: 21,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 22,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Call {
+                    name: "KILL",
+                    arguments: [
+                        Literal(
+                            String(
+                                "Q45BI55.DAT",
+                            ),
+                            Span {
+                                line: 23,
+                                start: 9,
+                                end: 22,
+                            },
+                        ),
+                    ],
+                    explicit: false,
+                    span: Span {
+                        line: 23,
+                        start: 4,
+                        end: 8,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 24,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 20,
+                start: 0,
+                end: 2,
+            },
+        },
+        FileTransfer {
+            write: false,
+            file: Name(
+                "FILENUMBER",
+                Span {
+                    line: 26,
+                    start: 5,
+                    end: 15,
+                },
+            ),
+            position: Some(
+                Literal(
+                    Integer(
+                        3,
+                        Integer,
+                    ),
+                    Span {
+                        line: 26,
+                        start: 17,
+                        end: 18,
+                    },
+                ),
+            ),
+            target: Name(
+                "READSECOND",
+                Span {
+                    line: 26,
+                    start: 20,
+                    end: 30,
+                },
+            ),
+            span: Span {
+                line: 26,
+                start: 0,
+                end: 3,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Apply {
+                    name: "LOC",
+                    arguments: [
+                        Name(
+                            "FILENUMBER",
+                            Span {
+                                line: 27,
+                                start: 7,
+                                end: 17,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 27,
+                        start: 3,
+                        end: 18,
+                    },
+                },
+                right: Literal(
+                    Integer(
+                        4,
+                        Integer,
+                    ),
+                    Span {
+                        line: 27,
+                        start: 22,
+                        end: 23,
+                    },
+                ),
+                span: Span {
+                    line: 27,
+                    start: 3,
+                    end: 23,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL binaryio loc-after-get",
+                                ),
+                                Span {
+                                    line: 28,
+                                    start: 10,
+                                    end: 39,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 28,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Close {
+                    files: [
+                        Name(
+                            "FILENUMBER",
+                            Span {
+                                line: 29,
+                                start: 11,
+                                end: 21,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 29,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Call {
+                    name: "KILL",
+                    arguments: [
+                        Literal(
+                            String(
+                                "Q45BI55.DAT",
+                            ),
+                            Span {
+                                line: 30,
+                                start: 9,
+                                end: 22,
+                            },
+                        ),
+                    ],
+                    explicit: false,
+                    span: Span {
+                        line: 30,
+                        start: 4,
+                        end: 8,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 31,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 27,
+                start: 0,
+                end: 2,
+            },
+        },
+        FileTransfer {
+            write: false,
+            file: Name(
+                "FILENUMBER",
+                Span {
+                    line: 33,
+                    start: 5,
+                    end: 15,
+                },
+            ),
+            position: Some(
+                Literal(
+                    Integer(
+                        1,
+                        Integer,
+                    ),
+                    Span {
+                        line: 33,
+                        start: 17,
+                        end: 18,
+                    },
+                ),
+            ),
+            target: Name(
+                "READFIRST",
+                Span {
+                    line: 33,
+                    start: 20,
+                    end: 29,
+                },
+            ),
+            span: Span {
+                line: 33,
+                start: 0,
+                end: 3,
+            },
+        },
+        Close {
+            files: [
+                Name(
+                    "FILENUMBER",
+                    Span {
+                        line: 34,
+                        start: 7,
+                        end: 17,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 34,
+                start: 0,
+                end: 5,
+            },
+        },
+        If {
+            condition: Binary {
+                op: Or,
+                left: Binary {
+                    op: NotEqual,
+                    left: Name(
+                        "READFIRST",
+                        Span {
+                            line: 35,
+                            start: 3,
+                            end: 12,
+                        },
+                    ),
+                    right: Name(
+                        "FIRSTVALUE",
+                        Span {
+                            line: 35,
+                            start: 16,
+                            end: 26,
+                        },
+                    ),
+                    span: Span {
+                        line: 35,
+                        start: 3,
+                        end: 26,
+                    },
+                },
+                right: Binary {
+                    op: NotEqual,
+                    left: Name(
+                        "READSECOND",
+                        Span {
+                            line: 35,
+                            start: 30,
+                            end: 40,
+                        },
+                    ),
+                    right: Name(
+                        "SECONDVALUE",
+                        Span {
+                            line: 35,
+                            start: 44,
+                            end: 55,
+                        },
+                    ),
+                    span: Span {
+                        line: 35,
+                        start: 30,
+                        end: 55,
+                    },
+                },
+                span: Span {
+                    line: 35,
+                    start: 3,
+                    end: 55,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL binaryio values",
+                                ),
+                                Span {
+                                    line: 36,
+                                    start: 10,
+                                    end: 32,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 36,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Call {
+                    name: "KILL",
+                    arguments: [
+                        Literal(
+                            String(
+                                "Q45BI55.DAT",
+                            ),
+                            Span {
+                                line: 37,
+                                start: 9,
+                                end: 22,
+                            },
+                        ),
+                    ],
+                    explicit: false,
+                    span: Span {
+                        line: 37,
+                        start: 4,
+                        end: 8,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 38,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 35,
+                start: 0,
+                end: 2,
+            },
+        },
+        Open {
+            path: Literal(
+                String(
+                    "Q45BI55.DAT",
+                ),
+                Span {
+                    line: 40,
+                    start: 5,
+                    end: 18,
+                },
+            ),
+            mode: Input,
+            file: Name(
+                "FILENUMBER",
+                Span {
+                    line: 40,
+                    start: 33,
+                    end: 43,
+                },
+            ),
+            span: Span {
+                line: 40,
+                start: 0,
+                end: 4,
+            },
+        },
+        Assign {
+            target: Name(
+                "RAWTEXT",
+                Span {
+                    line: 41,
+                    start: 0,
+                    end: 7,
+                },
+            ),
+            value: Apply {
+                name: "INPUT$",
+                arguments: [
+                    Apply {
+                        name: "LOF",
+                        arguments: [
+                            Name(
+                                "FILENUMBER",
+                                Span {
+                                    line: 41,
+                                    start: 21,
+                                    end: 31,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 41,
+                            start: 17,
+                            end: 32,
+                        },
+                    },
+                    Name(
+                        "FILENUMBER",
+                        Span {
+                            line: 41,
+                            start: 34,
+                            end: 44,
+                        },
+                    ),
+                ],
+                span: Span {
+                    line: 41,
+                    start: 10,
+                    end: 45,
+                },
+            },
+            span: Span {
+                line: 41,
+                start: 0,
+                end: 45,
+            },
+        },
+        Close {
+            files: [
+                Name(
+                    "FILENUMBER",
+                    Span {
+                        line: 42,
+                        start: 7,
+                        end: 17,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 42,
+                start: 0,
+                end: 5,
+            },
+        },
+        Call {
+            name: "KILL",
+            arguments: [
+                Literal(
+                    String(
+                        "Q45BI55.DAT",
+                    ),
+                    Span {
+                        line: 43,
+                        start: 5,
+                        end: 18,
+                    },
+                ),
+            ],
+            explicit: false,
+            span: Span {
+                line: 43,
+                start: 0,
+                end: 4,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Name(
+                    "RAWTEXT",
+                    Span {
+                        line: 44,
+                        start: 3,
+                        end: 10,
+                    },
+                ),
+                right: Binary {
+                    op: Add,
+                    left: Binary {
+                        op: Add,
+                        left: Binary {
+                            op: Add,
+                            left: Apply {
+                                name: "CHR$",
+                                arguments: [
+                                    Literal(
+                                        Integer(
+                                            52,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 44,
+                                            start: 19,
+                                            end: 21,
+                                        },
+                                    ),
+                                ],
+                                span: Span {
+                                    line: 44,
+                                    start: 14,
+                                    end: 22,
+                                },
+                            },
+                            right: Apply {
+                                name: "CHR$",
+                                arguments: [
+                                    Literal(
+                                        Integer(
+                                            18,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 44,
+                                            start: 30,
+                                            end: 32,
+                                        },
+                                    ),
+                                ],
+                                span: Span {
+                                    line: 44,
+                                    start: 25,
+                                    end: 33,
+                                },
+                            },
+                            span: Span {
+                                line: 44,
+                                start: 14,
+                                end: 33,
+                            },
+                        },
+                        right: Apply {
+                            name: "CHR$",
+                            arguments: [
+                                Literal(
+                                    Integer(
+                                        254,
+                                        Integer,
+                                    ),
+                                    Span {
+                                        line: 44,
+                                        start: 41,
+                                        end: 44,
+                                    },
+                                ),
+                            ],
+                            span: Span {
+                                line: 44,
+                                start: 36,
+                                end: 45,
+                            },
+                        },
+                        span: Span {
+                            line: 44,
+                            start: 14,
+                            end: 45,
+                        },
+                    },
+                    right: Apply {
+                        name: "CHR$",
+                        arguments: [
+                            Literal(
+                                Integer(
+                                    255,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 44,
+                                    start: 53,
+                                    end: 56,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 44,
+                            start: 48,
+                            end: 57,
+                        },
+                    },
+                    span: Span {
+                        line: 44,
+                        start: 14,
+                        end: 57,
+                    },
+                },
+                span: Span {
+                    line: 44,
+                    start: 3,
+                    end: 57,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL binaryio bytes",
+                                ),
+                                Span {
+                                    line: 45,
+                                    start: 10,
+                                    end: 31,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 45,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 46,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 44,
+                start: 0,
+                end: 2,
+            },
+        },
+        Print {
+            file: None,
+            items: [
+                PrintItem {
+                    value: Literal(
+                        String(
+                            "PASS binaryio",
+                        ),
+                        Span {
+                            line: 48,
+                            start: 6,
+                            end: 21,
+                        },
+                    ),
+                    separator: End,
+                },
+            ],
+            span: Span {
+                line: 48,
+                start: 0,
+                end: 5,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 49,
+                start: 0,
+                end: 3,
+            },
+        },
+        Data {
+            values: [
+                Literal(
+                    Integer(
+                        4660,
+                        Integer,
+                    ),
+                    Span {
+                        line: 51,
+                        start: 5,
+                        end: 11,
+                    },
+                ),
+                Unary {
+                    op: Negative,
+                    operand: Literal(
+                        Integer(
+                            2,
+                            Integer,
+                        ),
+                        Span {
+                            line: 51,
+                            start: 14,
+                            end: 15,
+                        },
+                    ),
+                    span: Span {
+                        line: 51,
+                        start: 13,
+                        end: 15,
+                    },
+                },
+            ],
+            span: Span {
+                line: 51,
+                start: 0,
+                end: 4,
+            },
+        },
+    ],
+    procedures: [],
+}

@@ -1,0 +1,305 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: qb45/negative-square-root
+# dialect: QuickBasic45
+# source: qb45/Q45ER62.BAS
+
+Module {
+    statements: [
+        Dim(
+            [
+                Declaration {
+                    name: "INPUTVALUE",
+                    type_name: Some(
+                        Double,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 2,
+                        start: 4,
+                        end: 24,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "RESULTVALUE",
+                    type_name: Some(
+                        Double,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 3,
+                        start: 4,
+                        end: 25,
+                    },
+                },
+            ],
+        ),
+        OnError {
+            label: "UNEXPECTEDERROR",
+            local: false,
+            span: Span {
+                line: 5,
+                start: 0,
+                end: 2,
+            },
+        },
+        Read {
+            destinations: [
+                Name(
+                    "INPUTVALUE",
+                    Span {
+                        line: 6,
+                        start: 5,
+                        end: 15,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 6,
+                start: 0,
+                end: 4,
+            },
+        },
+        Label(
+            "100",
+            Span {
+                line: 7,
+                start: 0,
+                end: 3,
+            },
+        ),
+        Assign {
+            target: Name(
+                "RESULTVALUE",
+                Span {
+                    line: 7,
+                    start: 4,
+                    end: 15,
+                },
+            ),
+            value: Apply {
+                name: "SQR",
+                arguments: [
+                    Name(
+                        "INPUTVALUE",
+                        Span {
+                            line: 7,
+                            start: 22,
+                            end: 32,
+                        },
+                    ),
+                ],
+                span: Span {
+                    line: 7,
+                    start: 18,
+                    end: 33,
+                },
+            },
+            span: Span {
+                line: 7,
+                start: 4,
+                end: 33,
+            },
+        },
+        If {
+            condition: Binary {
+                op: Eq,
+                left: Name(
+                    "RESULTVALUE",
+                    Span {
+                        line: 8,
+                        start: 3,
+                        end: 14,
+                    },
+                ),
+                right: Name(
+                    "RESULTVALUE",
+                    Span {
+                        line: 8,
+                        start: 17,
+                        end: 28,
+                    },
+                ),
+                span: Span {
+                    line: 8,
+                    start: 3,
+                    end: 28,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL sqrt-negative ordered",
+                                ),
+                                Span {
+                                    line: 9,
+                                    start: 10,
+                                    end: 38,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 9,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 10,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 8,
+                start: 0,
+                end: 2,
+            },
+        },
+        Print {
+            file: None,
+            items: [
+                PrintItem {
+                    value: Literal(
+                        String(
+                            "PASS sqrt-negative",
+                        ),
+                        Span {
+                            line: 12,
+                            start: 6,
+                            end: 26,
+                        },
+                    ),
+                    separator: End,
+                },
+            ],
+            span: Span {
+                line: 12,
+                start: 0,
+                end: 5,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 13,
+                start: 0,
+                end: 3,
+            },
+        },
+        Label(
+            "UNEXPECTEDERROR",
+            Span {
+                line: 15,
+                start: 0,
+                end: 15,
+            },
+        ),
+        Print {
+            file: None,
+            items: [
+                PrintItem {
+                    value: Literal(
+                        String(
+                            "FAIL sqrt-negative error",
+                        ),
+                        Span {
+                            line: 16,
+                            start: 6,
+                            end: 32,
+                        },
+                    ),
+                    separator: Semicolon,
+                },
+                PrintItem {
+                    value: Name(
+                        "ERR",
+                        Span {
+                            line: 16,
+                            start: 34,
+                            end: 37,
+                        },
+                    ),
+                    separator: Semicolon,
+                },
+                PrintItem {
+                    value: Name(
+                        "ERL",
+                        Span {
+                            line: 16,
+                            start: 39,
+                            end: 42,
+                        },
+                    ),
+                    separator: End,
+                },
+            ],
+            span: Span {
+                line: 16,
+                start: 0,
+                end: 5,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 17,
+                start: 0,
+                end: 3,
+            },
+        },
+        Data {
+            values: [
+                Unary {
+                    op: Negative,
+                    operand: Literal(
+                        Integer(
+                            1,
+                            Integer,
+                        ),
+                        Span {
+                            line: 19,
+                            start: 6,
+                            end: 7,
+                        },
+                    ),
+                    span: Span {
+                        line: 19,
+                        start: 5,
+                        end: 7,
+                    },
+                },
+            ],
+            span: Span {
+                line: 19,
+                start: 0,
+                end: 4,
+            },
+        },
+    ],
+    procedures: [],
+}

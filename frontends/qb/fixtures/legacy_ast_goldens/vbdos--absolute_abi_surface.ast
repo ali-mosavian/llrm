@@ -1,0 +1,55 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: vbdos/absolute_abi_surface
+# dialect: VbDos
+# source: vbdos/absabi.bas
+
+Module {
+    statements: [
+        OptionExplicit(
+            Span {
+                line: 1,
+                start: 0,
+                end: 6,
+            },
+        ),
+    ],
+    procedures: [
+        Procedure {
+            name: "ABSOLUTE",
+            alias: None,
+            cdecl: false,
+            kind: Sub,
+            parameters: [
+                Parameter {
+                    declaration: Declaration {
+                        name: "ADDRESS",
+                        type_name: Some(
+                            Integer,
+                        ),
+                        array: false,
+                        bounds: [],
+                        fixed_length: None,
+                        shared: false,
+                        dynamic: false,
+                        span: Span {
+                            line: 3,
+                            start: 22,
+                            end: 40,
+                        },
+                    },
+                    by_value: false,
+                    segmented: false,
+                },
+            ],
+            result: None,
+            body: [],
+            declaration: true,
+            is_static: false,
+            span: Span {
+                line: 3,
+                start: 8,
+                end: 11,
+            },
+        },
+    ],
+}

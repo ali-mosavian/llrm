@@ -1,0 +1,19 @@
+TOKENS:
+   tkCIRCLE ("CIRCLE"),
+   tkABS ("ABS"),
+   tkComma (","),
+   tkX ("X");
+
+Statements:
+   tkCIRCLE coordStep commaExp [tkComma [Exp MARK(1)] commaExp EMIT(opCircleStart)];
+
+Functions:
+   tkABS Exp EMIT(opFnAbs);
+
+NonTerminals:
+Exp:
+   EXTERNAL MSG_ExpExp;
+coordStep:
+   EXTERNAL MSG_ExpExp;
+commaExp:
+   tkComma Exp;

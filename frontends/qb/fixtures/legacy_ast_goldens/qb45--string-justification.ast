@@ -1,0 +1,700 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: qb45/string-justification
+# dialect: QuickBasic45
+# source: qb45/Q45LR63.BAS
+
+Module {
+    statements: [
+        Dim(
+            [
+                Declaration {
+                    name: "SOURCETEXT",
+                    type_name: Some(
+                        String,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 2,
+                        start: 4,
+                        end: 24,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "LONGTEXT",
+                    type_name: Some(
+                        String,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 3,
+                        start: 4,
+                        end: 22,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "LEFTFIXED",
+                    type_name: Some(
+                        String,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: Some(
+                        Literal(
+                            Integer(
+                                6,
+                                Integer,
+                            ),
+                            Span {
+                                line: 4,
+                                start: 26,
+                                end: 27,
+                            },
+                        ),
+                    ),
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 4,
+                        start: 4,
+                        end: 27,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "RIGHTFIXED",
+                    type_name: Some(
+                        String,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: Some(
+                        Literal(
+                            Integer(
+                                6,
+                                Integer,
+                            ),
+                            Span {
+                                line: 5,
+                                start: 27,
+                                end: 28,
+                            },
+                        ),
+                    ),
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 5,
+                        start: 4,
+                        end: 28,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "TRUNCATED",
+                    type_name: Some(
+                        String,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: Some(
+                        Literal(
+                            Integer(
+                                4,
+                                Integer,
+                            ),
+                            Span {
+                                line: 6,
+                                start: 26,
+                                end: 27,
+                            },
+                        ),
+                    ),
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 6,
+                        start: 4,
+                        end: 27,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "DYNAMICTEXT",
+                    type_name: Some(
+                        String,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 7,
+                        start: 4,
+                        end: 25,
+                    },
+                },
+            ],
+        ),
+        Read {
+            destinations: [
+                Name(
+                    "SOURCETEXT",
+                    Span {
+                        line: 9,
+                        start: 5,
+                        end: 15,
+                    },
+                ),
+                Name(
+                    "LONGTEXT",
+                    Span {
+                        line: 9,
+                        start: 17,
+                        end: 25,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 9,
+                start: 0,
+                end: 4,
+            },
+        },
+        Call {
+            name: "LSET",
+            arguments: [
+                Binary {
+                    op: Eq,
+                    left: Name(
+                        "LEFTFIXED",
+                        Span {
+                            line: 10,
+                            start: 5,
+                            end: 14,
+                        },
+                    ),
+                    right: Name(
+                        "SOURCETEXT",
+                        Span {
+                            line: 10,
+                            start: 17,
+                            end: 27,
+                        },
+                    ),
+                    span: Span {
+                        line: 10,
+                        start: 5,
+                        end: 27,
+                    },
+                },
+            ],
+            explicit: false,
+            span: Span {
+                line: 10,
+                start: 0,
+                end: 4,
+            },
+        },
+        Call {
+            name: "RSET",
+            arguments: [
+                Binary {
+                    op: Eq,
+                    left: Name(
+                        "RIGHTFIXED",
+                        Span {
+                            line: 11,
+                            start: 5,
+                            end: 15,
+                        },
+                    ),
+                    right: Name(
+                        "SOURCETEXT",
+                        Span {
+                            line: 11,
+                            start: 18,
+                            end: 28,
+                        },
+                    ),
+                    span: Span {
+                        line: 11,
+                        start: 5,
+                        end: 28,
+                    },
+                },
+            ],
+            explicit: false,
+            span: Span {
+                line: 11,
+                start: 0,
+                end: 4,
+            },
+        },
+        Call {
+            name: "LSET",
+            arguments: [
+                Binary {
+                    op: Eq,
+                    left: Name(
+                        "TRUNCATED",
+                        Span {
+                            line: 12,
+                            start: 5,
+                            end: 14,
+                        },
+                    ),
+                    right: Name(
+                        "LONGTEXT",
+                        Span {
+                            line: 12,
+                            start: 17,
+                            end: 25,
+                        },
+                    ),
+                    span: Span {
+                        line: 12,
+                        start: 5,
+                        end: 25,
+                    },
+                },
+            ],
+            explicit: false,
+            span: Span {
+                line: 12,
+                start: 0,
+                end: 4,
+            },
+        },
+        Assign {
+            target: Name(
+                "DYNAMICTEXT",
+                Span {
+                    line: 13,
+                    start: 0,
+                    end: 11,
+                },
+            ),
+            value: Apply {
+                name: "SPACE$",
+                arguments: [
+                    Literal(
+                        Integer(
+                            7,
+                            Integer,
+                        ),
+                        Span {
+                            line: 13,
+                            start: 21,
+                            end: 22,
+                        },
+                    ),
+                ],
+                span: Span {
+                    line: 13,
+                    start: 14,
+                    end: 23,
+                },
+            },
+            span: Span {
+                line: 13,
+                start: 0,
+                end: 23,
+            },
+        },
+        Call {
+            name: "RSET",
+            arguments: [
+                Binary {
+                    op: Eq,
+                    left: Name(
+                        "DYNAMICTEXT",
+                        Span {
+                            line: 14,
+                            start: 5,
+                            end: 16,
+                        },
+                    ),
+                    right: Name(
+                        "SOURCETEXT",
+                        Span {
+                            line: 14,
+                            start: 19,
+                            end: 29,
+                        },
+                    ),
+                    span: Span {
+                        line: 14,
+                        start: 5,
+                        end: 29,
+                    },
+                },
+            ],
+            explicit: false,
+            span: Span {
+                line: 14,
+                start: 0,
+                end: 4,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Name(
+                    "LEFTFIXED",
+                    Span {
+                        line: 16,
+                        start: 3,
+                        end: 12,
+                    },
+                ),
+                right: Literal(
+                    String(
+                        "AB    ",
+                    ),
+                    Span {
+                        line: 16,
+                        start: 16,
+                        end: 24,
+                    },
+                ),
+                span: Span {
+                    line: 16,
+                    start: 3,
+                    end: 24,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL justify lset",
+                                ),
+                                Span {
+                                    line: 17,
+                                    start: 10,
+                                    end: 29,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 17,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 18,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 16,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Name(
+                    "RIGHTFIXED",
+                    Span {
+                        line: 20,
+                        start: 3,
+                        end: 13,
+                    },
+                ),
+                right: Literal(
+                    String(
+                        "    AB",
+                    ),
+                    Span {
+                        line: 20,
+                        start: 17,
+                        end: 25,
+                    },
+                ),
+                span: Span {
+                    line: 20,
+                    start: 3,
+                    end: 25,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL justify rset",
+                                ),
+                                Span {
+                                    line: 21,
+                                    start: 10,
+                                    end: 29,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 21,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 22,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 20,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Name(
+                    "TRUNCATED",
+                    Span {
+                        line: 24,
+                        start: 3,
+                        end: 12,
+                    },
+                ),
+                right: Literal(
+                    String(
+                        "WXYZ",
+                    ),
+                    Span {
+                        line: 24,
+                        start: 16,
+                        end: 22,
+                    },
+                ),
+                span: Span {
+                    line: 24,
+                    start: 3,
+                    end: 22,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL justify truncate",
+                                ),
+                                Span {
+                                    line: 25,
+                                    start: 10,
+                                    end: 33,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 25,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 26,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 24,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Name(
+                    "DYNAMICTEXT",
+                    Span {
+                        line: 28,
+                        start: 3,
+                        end: 14,
+                    },
+                ),
+                right: Literal(
+                    String(
+                        "     AB",
+                    ),
+                    Span {
+                        line: 28,
+                        start: 18,
+                        end: 27,
+                    },
+                ),
+                span: Span {
+                    line: 28,
+                    start: 3,
+                    end: 27,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL justify dynamic",
+                                ),
+                                Span {
+                                    line: 29,
+                                    start: 10,
+                                    end: 32,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 29,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 30,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 28,
+                start: 0,
+                end: 2,
+            },
+        },
+        Print {
+            file: None,
+            items: [
+                PrintItem {
+                    value: Literal(
+                        String(
+                            "PASS justify",
+                        ),
+                        Span {
+                            line: 32,
+                            start: 6,
+                            end: 20,
+                        },
+                    ),
+                    separator: End,
+                },
+            ],
+            span: Span {
+                line: 32,
+                start: 0,
+                end: 5,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 33,
+                start: 0,
+                end: 3,
+            },
+        },
+        Data {
+            values: [
+                Literal(
+                    String(
+                        "AB",
+                    ),
+                    Span {
+                        line: 35,
+                        start: 5,
+                        end: 9,
+                    },
+                ),
+                Literal(
+                    String(
+                        "WXYZ123",
+                    ),
+                    Span {
+                        line: 35,
+                        start: 11,
+                        end: 20,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 35,
+                start: 0,
+                end: 4,
+            },
+        },
+    ],
+    procedures: [],
+}

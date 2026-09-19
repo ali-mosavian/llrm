@@ -1,0 +1,23 @@
+TOKENS:
+   tkFIELD ("FIELD"),
+   tkABS ("ABS"),
+   tkAS ("AS"),
+   tkComma (",");
+
+Statements:
+   tkFIELD optFilenum EMIT(opFieldInit)
+      commaExp tkAS IdAryElem EMIT(opFieldItem)
+      {commaExp tkAS IdAryElem EMIT(opFieldItem)};
+
+Functions:
+   tkABS IdAryElem EMIT(opFnAbs);
+
+NonTerminals:
+Exp:
+   EXTERNAL MSG_ExpExp;
+IdAryElem:
+   EXTERNAL MSG_ExpVar;
+optFilenum:
+   EXTERNAL;
+commaExp:
+   tkComma Exp;

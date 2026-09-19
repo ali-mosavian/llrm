@@ -1,0 +1,149 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: qb45/include
+# dialect: QuickBasic45
+# source: qb45/Q45I33.BAS
+
+Module {
+    statements: [
+        Dim(
+            [
+                Declaration {
+                    name: "INCLUDEVALUE",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 2,
+                        start: 4,
+                        end: 27,
+                    },
+                },
+            ],
+        ),
+        Assign {
+            target: Name(
+                "INCLUDEVALUE",
+                Span {
+                    line: 3,
+                    start: 0,
+                    end: 12,
+                },
+            ),
+            value: Literal(
+                Integer(
+                    17,
+                    Integer,
+                ),
+                Span {
+                    line: 3,
+                    start: 15,
+                    end: 17,
+                },
+            ),
+            span: Span {
+                line: 3,
+                start: 0,
+                end: 17,
+            },
+        },
+        If {
+            condition: Binary {
+                op: Eq,
+                left: Name(
+                    "INCLUDEVALUE",
+                    Span {
+                        line: 5,
+                        start: 3,
+                        end: 15,
+                    },
+                ),
+                right: Literal(
+                    Integer(
+                        17,
+                        Integer,
+                    ),
+                    Span {
+                        line: 5,
+                        start: 18,
+                        end: 20,
+                    },
+                ),
+                span: Span {
+                    line: 5,
+                    start: 3,
+                    end: 20,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "PASS include",
+                                ),
+                                Span {
+                                    line: 6,
+                                    start: 10,
+                                    end: 24,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 6,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+            ],
+            else_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL include value",
+                                ),
+                                Span {
+                                    line: 8,
+                                    start: 10,
+                                    end: 30,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 8,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+            ],
+            span: Span {
+                line: 5,
+                start: 0,
+                end: 2,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 10,
+                start: 0,
+                end: 3,
+            },
+        },
+    ],
+    procedures: [],
+}

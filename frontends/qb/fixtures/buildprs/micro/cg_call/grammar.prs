@@ -1,0 +1,14 @@
+TOKENS:
+   tkCALL ("CALL"),
+   tkX ("X"),
+   tkLParen ("("),
+   tkRParen (")"),
+   tkComma (",");
+
+Statements:
+   tkCALL MARK(1) tkX [tkLParen tkX {tkComma tkX} tkRParen];
+     <CgCall(opStCall)>
+
+Functions:
+
+NonTerminals:

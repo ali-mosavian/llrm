@@ -1,0 +1,18 @@
+TOKENS:
+   tkON ("ON"),
+   tkABS ("ABS"),
+   tkGOTO ("GOTO"),
+   tkGOSUB ("GOSUB"),
+   tkComma (",");
+
+Statements:
+   tkON Exp (tkGOTO MARK(1)) | (tkGOSUB MARK(2)) LabLn {tkComma LabLn};
+
+Functions:
+   tkABS Exp EMIT(opFnAbs);
+
+NonTerminals:
+Exp:
+   EXTERNAL MSG_ExpExp;
+LabLn:
+   EXTERNAL MSG_ExpLab;

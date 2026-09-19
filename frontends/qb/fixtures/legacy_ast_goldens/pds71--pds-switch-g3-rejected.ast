@@ -1,0 +1,42 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: pds71/pds-switch-g3-rejected
+# dialect: Pds71
+# source: pds71/PDG3NEG.BAS
+
+Module {
+    statements: [
+        Print {
+            file: None,
+            items: [
+                PrintItem {
+                    value: Literal(
+                        String(
+                            "REFERENCE ONLY pds-switch-g3-rejected",
+                        ),
+                        Span {
+                            line: 4,
+                            start: 6,
+                            end: 45,
+                        },
+                    ),
+                    separator: End,
+                },
+            ],
+            span: Span {
+                line: 4,
+                start: 0,
+                end: 5,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 5,
+                start: 0,
+                end: 3,
+            },
+        },
+    ],
+    procedures: [],
+}

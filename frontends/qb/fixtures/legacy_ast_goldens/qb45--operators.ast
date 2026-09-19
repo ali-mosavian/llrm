@@ -1,0 +1,1347 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: qb45/operators
+# dialect: QuickBasic45
+# source: qb45/Q45O29.BAS
+
+Module {
+    statements: [
+        Dim(
+            [
+                Declaration {
+                    name: "PASSED",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 2,
+                        start: 4,
+                        end: 21,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "TWOVALUE",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 3,
+                        start: 4,
+                        end: 23,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "THREEVALUE",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 4,
+                        start: 4,
+                        end: 25,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "FOURVALUE",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 5,
+                        start: 4,
+                        end: 24,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "SEVENVALUE",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 6,
+                        start: 4,
+                        end: 25,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "ZEROVALUE",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 7,
+                        start: 4,
+                        end: 24,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "LEFTTEXT",
+                    type_name: Some(
+                        String,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 8,
+                        start: 4,
+                        end: 22,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "RIGHTTEXT",
+                    type_name: Some(
+                        String,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 9,
+                        start: 4,
+                        end: 23,
+                    },
+                },
+            ],
+        ),
+        Read {
+            destinations: [
+                Name(
+                    "TWOVALUE",
+                    Span {
+                        line: 11,
+                        start: 5,
+                        end: 13,
+                    },
+                ),
+                Name(
+                    "THREEVALUE",
+                    Span {
+                        line: 11,
+                        start: 15,
+                        end: 25,
+                    },
+                ),
+                Name(
+                    "FOURVALUE",
+                    Span {
+                        line: 11,
+                        start: 27,
+                        end: 36,
+                    },
+                ),
+                Name(
+                    "SEVENVALUE",
+                    Span {
+                        line: 11,
+                        start: 38,
+                        end: 48,
+                    },
+                ),
+                Name(
+                    "ZEROVALUE",
+                    Span {
+                        line: 11,
+                        start: 50,
+                        end: 59,
+                    },
+                ),
+                Name(
+                    "LEFTTEXT",
+                    Span {
+                        line: 11,
+                        start: 61,
+                        end: 69,
+                    },
+                ),
+                Name(
+                    "RIGHTTEXT",
+                    Span {
+                        line: 11,
+                        start: 71,
+                        end: 80,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 11,
+                start: 0,
+                end: 4,
+            },
+        },
+        Assign {
+            target: Name(
+                "PASSED",
+                Span {
+                    line: 12,
+                    start: 0,
+                    end: 6,
+                },
+            ),
+            value: Binary {
+                op: Eq,
+                left: Binary {
+                    op: Add,
+                    left: Name(
+                        "TWOVALUE",
+                        Span {
+                            line: 12,
+                            start: 9,
+                            end: 17,
+                        },
+                    ),
+                    right: Binary {
+                        op: Multiply,
+                        left: Name(
+                            "THREEVALUE",
+                            Span {
+                                line: 12,
+                                start: 20,
+                                end: 30,
+                            },
+                        ),
+                        right: Name(
+                            "FOURVALUE",
+                            Span {
+                                line: 12,
+                                start: 33,
+                                end: 42,
+                            },
+                        ),
+                        span: Span {
+                            line: 12,
+                            start: 20,
+                            end: 42,
+                        },
+                    },
+                    span: Span {
+                        line: 12,
+                        start: 9,
+                        end: 42,
+                    },
+                },
+                right: Literal(
+                    Integer(
+                        14,
+                        Integer,
+                    ),
+                    Span {
+                        line: 12,
+                        start: 45,
+                        end: 47,
+                    },
+                ),
+                span: Span {
+                    line: 12,
+                    start: 9,
+                    end: 47,
+                },
+            },
+            span: Span {
+                line: 12,
+                start: 0,
+                end: 47,
+            },
+        },
+        If {
+            condition: Name(
+                "PASSED",
+                Span {
+                    line: 13,
+                    start: 3,
+                    end: 9,
+                },
+            ),
+            then_branch: [
+                Assign {
+                    target: Name(
+                        "PASSED",
+                        Span {
+                            line: 13,
+                            start: 15,
+                            end: 21,
+                        },
+                    ),
+                    value: Binary {
+                        op: And,
+                        left: Binary {
+                            op: Eq,
+                            left: Binary {
+                                op: Modulo,
+                                left: Literal(
+                                    Integer(
+                                        17,
+                                        Integer,
+                                    ),
+                                    Span {
+                                        line: 13,
+                                        start: 24,
+                                        end: 26,
+                                    },
+                                ),
+                                right: Literal(
+                                    Integer(
+                                        5,
+                                        Integer,
+                                    ),
+                                    Span {
+                                        line: 13,
+                                        start: 31,
+                                        end: 32,
+                                    },
+                                ),
+                                span: Span {
+                                    line: 13,
+                                    start: 24,
+                                    end: 32,
+                                },
+                            },
+                            right: Literal(
+                                Integer(
+                                    2,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 13,
+                                    start: 35,
+                                    end: 36,
+                                },
+                            ),
+                            span: Span {
+                                line: 13,
+                                start: 24,
+                                end: 36,
+                            },
+                        },
+                        right: Binary {
+                            op: Eq,
+                            left: Binary {
+                                op: Power,
+                                left: Name(
+                                    "TWOVALUE",
+                                    Span {
+                                        line: 13,
+                                        start: 41,
+                                        end: 49,
+                                    },
+                                ),
+                                right: Name(
+                                    "THREEVALUE",
+                                    Span {
+                                        line: 13,
+                                        start: 52,
+                                        end: 62,
+                                    },
+                                ),
+                                span: Span {
+                                    line: 13,
+                                    start: 41,
+                                    end: 62,
+                                },
+                            },
+                            right: Literal(
+                                Integer(
+                                    8,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 13,
+                                    start: 65,
+                                    end: 66,
+                                },
+                            ),
+                            span: Span {
+                                line: 13,
+                                start: 41,
+                                end: 66,
+                            },
+                        },
+                        span: Span {
+                            line: 13,
+                            start: 24,
+                            end: 66,
+                        },
+                    },
+                    span: Span {
+                        line: 13,
+                        start: 15,
+                        end: 66,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 13,
+                start: 0,
+                end: 66,
+            },
+        },
+        If {
+            condition: Name(
+                "PASSED",
+                Span {
+                    line: 14,
+                    start: 3,
+                    end: 9,
+                },
+            ),
+            then_branch: [
+                Assign {
+                    target: Name(
+                        "PASSED",
+                        Span {
+                            line: 14,
+                            start: 15,
+                            end: 21,
+                        },
+                    ),
+                    value: Binary {
+                        op: And,
+                        left: Binary {
+                            op: Greater,
+                            left: Name(
+                                "SEVENVALUE",
+                                Span {
+                                    line: 14,
+                                    start: 24,
+                                    end: 34,
+                                },
+                            ),
+                            right: Name(
+                                "THREEVALUE",
+                                Span {
+                                    line: 14,
+                                    start: 37,
+                                    end: 47,
+                                },
+                            ),
+                            span: Span {
+                                line: 14,
+                                start: 24,
+                                end: 47,
+                            },
+                        },
+                        right: Binary {
+                            op: GreaterEqual,
+                            left: Name(
+                                "SEVENVALUE",
+                                Span {
+                                    line: 14,
+                                    start: 52,
+                                    end: 62,
+                                },
+                            ),
+                            right: Name(
+                                "SEVENVALUE",
+                                Span {
+                                    line: 14,
+                                    start: 66,
+                                    end: 76,
+                                },
+                            ),
+                            span: Span {
+                                line: 14,
+                                start: 52,
+                                end: 76,
+                            },
+                        },
+                        span: Span {
+                            line: 14,
+                            start: 24,
+                            end: 76,
+                        },
+                    },
+                    span: Span {
+                        line: 14,
+                        start: 15,
+                        end: 76,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 14,
+                start: 0,
+                end: 76,
+            },
+        },
+        If {
+            condition: Name(
+                "PASSED",
+                Span {
+                    line: 15,
+                    start: 3,
+                    end: 9,
+                },
+            ),
+            then_branch: [
+                Assign {
+                    target: Name(
+                        "PASSED",
+                        Span {
+                            line: 15,
+                            start: 15,
+                            end: 21,
+                        },
+                    ),
+                    value: Binary {
+                        op: And,
+                        left: Binary {
+                            op: Less,
+                            left: Name(
+                                "THREEVALUE",
+                                Span {
+                                    line: 15,
+                                    start: 24,
+                                    end: 34,
+                                },
+                            ),
+                            right: Name(
+                                "SEVENVALUE",
+                                Span {
+                                    line: 15,
+                                    start: 37,
+                                    end: 47,
+                                },
+                            ),
+                            span: Span {
+                                line: 15,
+                                start: 24,
+                                end: 47,
+                            },
+                        },
+                        right: Binary {
+                            op: LessEqual,
+                            left: Name(
+                                "THREEVALUE",
+                                Span {
+                                    line: 15,
+                                    start: 52,
+                                    end: 62,
+                                },
+                            ),
+                            right: Name(
+                                "THREEVALUE",
+                                Span {
+                                    line: 15,
+                                    start: 66,
+                                    end: 76,
+                                },
+                            ),
+                            span: Span {
+                                line: 15,
+                                start: 52,
+                                end: 76,
+                            },
+                        },
+                        span: Span {
+                            line: 15,
+                            start: 24,
+                            end: 76,
+                        },
+                    },
+                    span: Span {
+                        line: 15,
+                        start: 15,
+                        end: 76,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 15,
+                start: 0,
+                end: 76,
+            },
+        },
+        If {
+            condition: Name(
+                "PASSED",
+                Span {
+                    line: 16,
+                    start: 3,
+                    end: 9,
+                },
+            ),
+            then_branch: [
+                Assign {
+                    target: Name(
+                        "PASSED",
+                        Span {
+                            line: 16,
+                            start: 15,
+                            end: 21,
+                        },
+                    ),
+                    value: Binary {
+                        op: NotEqual,
+                        left: Name(
+                            "THREEVALUE",
+                            Span {
+                                line: 16,
+                                start: 24,
+                                end: 34,
+                            },
+                        ),
+                        right: Name(
+                            "FOURVALUE",
+                            Span {
+                                line: 16,
+                                start: 38,
+                                end: 47,
+                            },
+                        ),
+                        span: Span {
+                            line: 16,
+                            start: 24,
+                            end: 47,
+                        },
+                    },
+                    span: Span {
+                        line: 16,
+                        start: 15,
+                        end: 47,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 16,
+                start: 0,
+                end: 47,
+            },
+        },
+        If {
+            condition: Name(
+                "PASSED",
+                Span {
+                    line: 17,
+                    start: 3,
+                    end: 9,
+                },
+            ),
+            then_branch: [
+                Assign {
+                    target: Name(
+                        "PASSED",
+                        Span {
+                            line: 17,
+                            start: 15,
+                            end: 21,
+                        },
+                    ),
+                    value: Binary {
+                        op: Eq,
+                        left: Unary {
+                            op: Not,
+                            operand: Name(
+                                "ZEROVALUE",
+                                Span {
+                                    line: 17,
+                                    start: 29,
+                                    end: 38,
+                                },
+                            ),
+                            span: Span {
+                                line: 17,
+                                start: 25,
+                                end: 38,
+                            },
+                        },
+                        right: Unary {
+                            op: Negative,
+                            operand: Literal(
+                                Integer(
+                                    1,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 17,
+                                    start: 43,
+                                    end: 44,
+                                },
+                            ),
+                            span: Span {
+                                line: 17,
+                                start: 42,
+                                end: 44,
+                            },
+                        },
+                        span: Span {
+                            line: 17,
+                            start: 25,
+                            end: 44,
+                        },
+                    },
+                    span: Span {
+                        line: 17,
+                        start: 15,
+                        end: 44,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 17,
+                start: 0,
+                end: 44,
+            },
+        },
+        If {
+            condition: Name(
+                "PASSED",
+                Span {
+                    line: 18,
+                    start: 3,
+                    end: 9,
+                },
+            ),
+            then_branch: [
+                Assign {
+                    target: Name(
+                        "PASSED",
+                        Span {
+                            line: 18,
+                            start: 15,
+                            end: 21,
+                        },
+                    ),
+                    value: Binary {
+                        op: And,
+                        left: Binary {
+                            op: Eq,
+                            left: Binary {
+                                op: And,
+                                left: Literal(
+                                    Integer(
+                                        1,
+                                        Integer,
+                                    ),
+                                    Span {
+                                        line: 18,
+                                        start: 25,
+                                        end: 26,
+                                    },
+                                ),
+                                right: Name(
+                                    "THREEVALUE",
+                                    Span {
+                                        line: 18,
+                                        start: 31,
+                                        end: 41,
+                                    },
+                                ),
+                                span: Span {
+                                    line: 18,
+                                    start: 25,
+                                    end: 41,
+                                },
+                            },
+                            right: Literal(
+                                Integer(
+                                    1,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 18,
+                                    start: 45,
+                                    end: 46,
+                                },
+                            ),
+                            span: Span {
+                                line: 18,
+                                start: 25,
+                                end: 46,
+                            },
+                        },
+                        right: Binary {
+                            op: Eq,
+                            left: Binary {
+                                op: Or,
+                                left: Literal(
+                                    Integer(
+                                        1,
+                                        Integer,
+                                    ),
+                                    Span {
+                                        line: 18,
+                                        start: 52,
+                                        end: 53,
+                                    },
+                                ),
+                                right: Name(
+                                    "TWOVALUE",
+                                    Span {
+                                        line: 18,
+                                        start: 57,
+                                        end: 65,
+                                    },
+                                ),
+                                span: Span {
+                                    line: 18,
+                                    start: 52,
+                                    end: 65,
+                                },
+                            },
+                            right: Literal(
+                                Integer(
+                                    3,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 18,
+                                    start: 69,
+                                    end: 70,
+                                },
+                            ),
+                            span: Span {
+                                line: 18,
+                                start: 52,
+                                end: 70,
+                            },
+                        },
+                        span: Span {
+                            line: 18,
+                            start: 25,
+                            end: 70,
+                        },
+                    },
+                    span: Span {
+                        line: 18,
+                        start: 15,
+                        end: 70,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 18,
+                start: 0,
+                end: 70,
+            },
+        },
+        If {
+            condition: Name(
+                "PASSED",
+                Span {
+                    line: 19,
+                    start: 3,
+                    end: 9,
+                },
+            ),
+            then_branch: [
+                Assign {
+                    target: Name(
+                        "PASSED",
+                        Span {
+                            line: 19,
+                            start: 15,
+                            end: 21,
+                        },
+                    ),
+                    value: Binary {
+                        op: And,
+                        left: Binary {
+                            op: Eq,
+                            left: Binary {
+                                op: Xor,
+                                left: Literal(
+                                    Integer(
+                                        1,
+                                        Integer,
+                                    ),
+                                    Span {
+                                        line: 19,
+                                        start: 25,
+                                        end: 26,
+                                    },
+                                ),
+                                right: Name(
+                                    "THREEVALUE",
+                                    Span {
+                                        line: 19,
+                                        start: 31,
+                                        end: 41,
+                                    },
+                                ),
+                                span: Span {
+                                    line: 19,
+                                    start: 25,
+                                    end: 41,
+                                },
+                            },
+                            right: Literal(
+                                Integer(
+                                    2,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 19,
+                                    start: 45,
+                                    end: 46,
+                                },
+                            ),
+                            span: Span {
+                                line: 19,
+                                start: 25,
+                                end: 46,
+                            },
+                        },
+                        right: Binary {
+                            op: Eq,
+                            left: Binary {
+                                op: Eqv,
+                                left: Literal(
+                                    Integer(
+                                        1,
+                                        Integer,
+                                    ),
+                                    Span {
+                                        line: 19,
+                                        start: 52,
+                                        end: 53,
+                                    },
+                                ),
+                                right: Literal(
+                                    Integer(
+                                        1,
+                                        Integer,
+                                    ),
+                                    Span {
+                                        line: 19,
+                                        start: 58,
+                                        end: 59,
+                                    },
+                                ),
+                                span: Span {
+                                    line: 19,
+                                    start: 52,
+                                    end: 59,
+                                },
+                            },
+                            right: Unary {
+                                op: Negative,
+                                operand: Literal(
+                                    Integer(
+                                        1,
+                                        Integer,
+                                    ),
+                                    Span {
+                                        line: 19,
+                                        start: 64,
+                                        end: 65,
+                                    },
+                                ),
+                                span: Span {
+                                    line: 19,
+                                    start: 63,
+                                    end: 65,
+                                },
+                            },
+                            span: Span {
+                                line: 19,
+                                start: 52,
+                                end: 65,
+                            },
+                        },
+                        span: Span {
+                            line: 19,
+                            start: 25,
+                            end: 65,
+                        },
+                    },
+                    span: Span {
+                        line: 19,
+                        start: 15,
+                        end: 65,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 19,
+                start: 0,
+                end: 65,
+            },
+        },
+        If {
+            condition: Name(
+                "PASSED",
+                Span {
+                    line: 20,
+                    start: 3,
+                    end: 9,
+                },
+            ),
+            then_branch: [
+                Assign {
+                    target: Name(
+                        "PASSED",
+                        Span {
+                            line: 20,
+                            start: 15,
+                            end: 21,
+                        },
+                    ),
+                    value: Binary {
+                        op: Eq,
+                        left: Binary {
+                            op: Imp,
+                            left: Name(
+                                "ZEROVALUE",
+                                Span {
+                                    line: 20,
+                                    start: 25,
+                                    end: 34,
+                                },
+                            ),
+                            right: Name(
+                                "ZEROVALUE",
+                                Span {
+                                    line: 20,
+                                    start: 39,
+                                    end: 48,
+                                },
+                            ),
+                            span: Span {
+                                line: 20,
+                                start: 25,
+                                end: 48,
+                            },
+                        },
+                        right: Unary {
+                            op: Negative,
+                            operand: Literal(
+                                Integer(
+                                    1,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 20,
+                                    start: 53,
+                                    end: 54,
+                                },
+                            ),
+                            span: Span {
+                                line: 20,
+                                start: 52,
+                                end: 54,
+                            },
+                        },
+                        span: Span {
+                            line: 20,
+                            start: 25,
+                            end: 54,
+                        },
+                    },
+                    span: Span {
+                        line: 20,
+                        start: 15,
+                        end: 54,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 20,
+                start: 0,
+                end: 54,
+            },
+        },
+        If {
+            condition: Name(
+                "PASSED",
+                Span {
+                    line: 21,
+                    start: 3,
+                    end: 9,
+                },
+            ),
+            then_branch: [
+                Assign {
+                    target: Name(
+                        "PASSED",
+                        Span {
+                            line: 21,
+                            start: 15,
+                            end: 21,
+                        },
+                    ),
+                    value: Binary {
+                        op: Eq,
+                        left: Binary {
+                            op: Add,
+                            left: Name(
+                                "LEFTTEXT",
+                                Span {
+                                    line: 21,
+                                    start: 24,
+                                    end: 32,
+                                },
+                            ),
+                            right: Name(
+                                "RIGHTTEXT",
+                                Span {
+                                    line: 21,
+                                    start: 35,
+                                    end: 44,
+                                },
+                            ),
+                            span: Span {
+                                line: 21,
+                                start: 24,
+                                end: 44,
+                            },
+                        },
+                        right: Literal(
+                            String(
+                                "QB45",
+                            ),
+                            Span {
+                                line: 21,
+                                start: 47,
+                                end: 53,
+                            },
+                        ),
+                        span: Span {
+                            line: 21,
+                            start: 24,
+                            end: 53,
+                        },
+                    },
+                    span: Span {
+                        line: 21,
+                        start: 15,
+                        end: 53,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 21,
+                start: 0,
+                end: 53,
+            },
+        },
+        If {
+            condition: Name(
+                "PASSED",
+                Span {
+                    line: 23,
+                    start: 3,
+                    end: 9,
+                },
+            ),
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "PASS operators",
+                                ),
+                                Span {
+                                    line: 24,
+                                    start: 10,
+                                    end: 26,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 24,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+            ],
+            else_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL operators truth",
+                                ),
+                                Span {
+                                    line: 26,
+                                    start: 10,
+                                    end: 32,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 26,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+            ],
+            span: Span {
+                line: 23,
+                start: 0,
+                end: 2,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 28,
+                start: 0,
+                end: 3,
+            },
+        },
+        Data {
+            values: [
+                Literal(
+                    Integer(
+                        2,
+                        Integer,
+                    ),
+                    Span {
+                        line: 30,
+                        start: 5,
+                        end: 6,
+                    },
+                ),
+                Literal(
+                    Integer(
+                        3,
+                        Integer,
+                    ),
+                    Span {
+                        line: 30,
+                        start: 8,
+                        end: 9,
+                    },
+                ),
+                Literal(
+                    Integer(
+                        4,
+                        Integer,
+                    ),
+                    Span {
+                        line: 30,
+                        start: 11,
+                        end: 12,
+                    },
+                ),
+                Literal(
+                    Integer(
+                        7,
+                        Integer,
+                    ),
+                    Span {
+                        line: 30,
+                        start: 14,
+                        end: 15,
+                    },
+                ),
+                Literal(
+                    Integer(
+                        0,
+                        Integer,
+                    ),
+                    Span {
+                        line: 30,
+                        start: 17,
+                        end: 18,
+                    },
+                ),
+                Literal(
+                    String(
+                        "QB",
+                    ),
+                    Span {
+                        line: 30,
+                        start: 20,
+                        end: 24,
+                    },
+                ),
+                Literal(
+                    String(
+                        "45",
+                    ),
+                    Span {
+                        line: 30,
+                        start: 26,
+                        end: 30,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 30,
+                start: 0,
+                end: 4,
+            },
+        },
+    ],
+    procedures: [],
+}

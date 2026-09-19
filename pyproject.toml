@@ -40,6 +40,11 @@ select = ["E", "F", "W", "UP", "B", "SIM", "ANN"]
 # measurement scripts, not the pass: they take MIR and module objects whose
 # annotations would be noise here and are checked where they are defined
 "tools/*" = ["ANN001", "ANN202"]
+# mechanically imported qbasic-port corpus generators; keep their source
+# layout recognizable while the typed wrapper in tools/qbgen owns validation
+"tools/qbgen/qbasic_port/*" = ["B007", "E402", "E501"]
+# declarative generated-case data is clearer one case per physical line
+"tools/qbgen/families.py" = ["E501"]
 
 [tool.isort]
 skip_glob = ["qbopt/cycles/*"]

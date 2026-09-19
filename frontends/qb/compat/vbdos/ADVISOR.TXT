@@ -1,0 +1,1237 @@
+:z3
+:nMicrosoft Advisor
+:l21
+                                                             ◄Index► ◄Back►
+───Microsoft Advisor────────────────────────────────────────────────────────
+
+┌──Edit/Debug──────────────┐┌──Languages─────────┐┌──Classes, APIs─────────┐
+│                          ││                    ││                        │
+│ ◄Programmer's WorkBench► ││ ◄C/C++ Language►   ││ ◄MS Foundation Classes►│
+│ ◄CodeView►               ││ ◄Run-Time Library► ││ ◄Windows API►          │
+│ ◄Profiler►               ││ ◄Assembly►         ││                        │
+│                          ││ ◄Basic►            ││ ◄iostream►             │
+│ ◄P-Code►                 ││ ◄COBOL►            ││                        │
+│ ◄Errors►                 ││ ◄FORTRAN►          ││ ◄PWB Extensions►       │
+└──────────────────────────┘└────────────────────┘└────────────────────────┘
+┌──Microsoft Utilities─────┐┌──Command Line──────┐┌────────────────────────┐
+│                          ││                    ││                        │
+│ ◄LINK►             ◄QH►  ││ ◄C/C++ Compiler►   ││ ◄Using Help►           │
+│ ◄NMAKE►                  ││ ◄Macro Assembler►  ││                        │
+│ ◄HELPMAKE►               ││ ◄Basic Compiler►   ││ ◄ASCII Table►          │
+│ ◄LIB►                    ││ ◄COBOL System►     ││                        │
+│ ◄Miscellaneous►          ││ ◄FORTRAN Compiler► ││ ◄Product Support►      │
+└──────────────────────────┘└────────────────────┘└────────────────────────┘
+                                    -♦-
+
+:z3
+:nMicrosoft Advisor Indexes
+:l31
+                                                  ◄Contents►         ◄Back►
+─────Microsoft Advisor──────────────────────────────────────────────────────
+
+    Edit/Debug Indexes      ◄Programmer's WorkBench►
+                            ◄CodeView►
+                            ◄Profiler►
+                            ◄P-Code►
+
+    Language Indexes        ◄C/C++ Language and Libraries►
+                            ◄Assembler►
+                            ◄Basic►
+                            ◄FORTRAN►
+                            ◄COBOL►
+
+    Command Line Indexes    ◄C/C++ Compiler►
+                            ◄Macro Assembler►
+                            ◄Basic Compiler►
+                            ◄FORTRAN Compiler►
+                            ◄COBOL Compiler►
+
+    Utilities Indexes       ◄LINK and EXEHDR►
+                            ◄NMAKE►
+                            ◄LIB►
+                            ◄HELPMAKE►
+                            ◄Miscellaneous Utilities►
+
+    Class, API Indexes      ◄Microsoft Foundation Classes►
+                            ◄Windows API►
+                            ◄iostream Classes►
+                            ◄PWB Extensions►
+                                    -♦-
+
+:z3
+:nErrors Help
+:l43
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+─────Microsoft Advisor──────────────────────────────────────────────────────
+
+     ◄How to View Errors Help►
+
+
+     Compiler, Assembler, and Profiler Errors
+
+     ◄C/C++ Compiler and Run-Time Errors►
+
+     ◄Macro Assembler Errors►
+
+     ◄Basic Compiler Errors►
+
+     ◄FORTRAN Compiler Errors►
+
+     ◄COBOL Messages►
+
+     ◄Profiler Errors►
+
+
+     Utility Errors
+
+     ◄BSCMAKE Errors and Warnings►
+
+     ◄CVPACK Errors►
+
+     ◄EXEHDR Errors►
+
+     ◄HELPMAKE Errors and Warnings►
+
+     ◄IMPLIB Errors and Warnings►
+
+     ◄LIB Errors and Warnings►
+
+     ◄LINK Errors and Warnings►
+
+     ◄MPC Errors and Warnings►
+
+     ◄NMAKE Errors and Warnings►
+
+     ◄SBRPACK Errors►
+                                    -♦-
+
+:z3
+:nMiscellaneous Utilities Contents
+:l21
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+─────Microsoft Advisor──────────────────────────────────────────────────────
+
+     Utility      Description
+
+     ◄BSCMAKE►    Browser Database Maintenance Utility
+
+     ◄CVPACK►     CodeView Debugging Information Compactor
+
+     ◄EXEHDR►     EXE File Header Utility
+
+     ◄EXP►        File Expunge Utility
+
+     ◄IMPLIB►     Import Library Manager
+
+     ◄RM►         File Removal Utility
+
+     ◄SBRPACK►    Browse Information Compactor
+
+     ◄UNDEL►      File Undelete Utility
+                                    -♦-
+
+:l1
+Microsoft Advisor
+
+:i
+:l4
+Microsoft Advisor
+Programmer's Workbench
+Utilities
+Product Support
+
+:i
+:l12
+BSCMAKE        Browser Database Maintenance Utility
+CVPACK         Debugging Information Compactor
+EXEHDR         EXE File Header Utility
+EXP            File Expunge Utility
+HELPMAKE       Help File Maintenance Utility
+IMPLIB         Import Library Manager
+LIB            Library Manager
+LINK           Segmented Executable Linker
+NMAKE          Program Maintenance Utility
+RM             File Removal Utility
+SBRPACK        Browse Information Compactor
+UNDEL          File Undelete Utility
+
+:z3
+:nMicrosoft Corporation
+:l18
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+─────Microsoft Advisor──────────────────────────────────────────────────────
+
+                    ╔═════════════════════════════╗
+                    ║                             ║
+                    ║    Microsoft Corporation    ║
+                    ║                             ║
+                    ║    One Microsoft Way        ║
+                    ║                             ║
+                    ║    Redmond, Washington      ║
+                    ║                             ║
+                    ║               98052-6399    ║
+                    ║                             ║
+                    ╚═════════════════════════════╝
+
+            For correspondence outside of the United States
+                contact your local Microsoft subsidiary
+                                    -♦-
+
+:nMicrosoft Product Support Services
+:l6
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+─────Microsoft Advisor──────────────────────────────────────────────────────
+
+     This topic will explain how to obtain support from Microsoft Product
+     Support Services through CompuServe, standard mail, and by telephone.
+                                    -♦-
+
+:z3
+:nCopyright
+:l52
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+─────Microsoft Advisor──────────────────────────────────────────────────────
+
+     Information in this online help system is subject to change without
+     notice and does not represent a commitment on the part of Microsoft
+     Corporation. The software and/or files described in this online
+     help system are furnished under a license agreement or
+     nondisclosure agreement. The software and/or files may be used or
+     copied only in accordance with the terms of the agreement. The
+     purchaser may make one copy of the software for backup purposes. No
+     part of this online help system may be reproduced or transmitted in
+     any form or by any means, electronic or mechanical, including
+     photocopying, recording, or information storage and retrieval
+     systems, for any purpose other than the purchaser's personal use,
+     without the written permission of Microsoft Corporation.
+
+     (C)  Copyright Microsoft Corporation, 1985-1992.
+          All rights reserved.
+
+     Microsoft, MS, MS-DOS, CodeView, QuickC, and XENIX are registered
+     trademarks of Microsoft Corporation. Windows is a trademark of
+     Microsoft Corporation.
+
+     U.S. Patent No. 4,955,066
+
+     Microsoft documentation uses the term "DOS" to refer to both the
+     MS-DOS and IBM Personal Computer DOS operating systems. The name
+     of a specific operating system is used to note features that are
+     unique to that system.
+
+     UNIX is a registered trademark of AT&T Bell Laboratories.
+
+     Hercules is a registered trademark of Hercules Computer Technology.
+
+     Olivetti is a registered trademark of Ing. C. Olivetti.
+
+     Intel is a registered trademark and 386 and 486 are trademarks of
+     Intel Corporation.
+
+     IBM, PC/AT, PC/XT, and PS/2 are registered trademarks of
+     International Business Machines Corporation.
+
+     Lotus is a registered trademark of Lotus Development Corporation.
+
+     WordStar is a registered trademark of MicroPro International
+     Corporation.
+
+     NEC and V25 are registered trademarks and V35 is a trademark of
+     NEC Corporation.
+
+     Epson is a registered trademark of Epson America, Inc.
+                                    -♦-
+
+:nTypographic Conventions
+:l2
+:u
+                                    -♦-
+:z3
+:l50
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+───Microsoft Advisor────────────────────────────────────────────────────────
+
+     Help uses the following typographic conventions:
+
+     Example         Description
+
+     README.DOC,     Uppercase represents filenames and operating-
+     COPY            system commands.
+
+     ESC, F1,        Uppercase also denotes names of keys on the
+     CTRL+ENTER      keyboard. A plus (+) indicates a combination of
+                     keys. For example, SHIFT+F5 means holding down the
+                     SHIFT key while pressing the F5 key. In PWB Help,
+                     key names appear in mixed case.
+
+     <expression>    Angle brackets indicate placeholders for additional
+                     syntax or information you must supply, such as a
+                     filename.
+
+     [argument]      Items inside square brackets are optional.
+
+     [ a │ b ]       Brackets and vertical bars indicate a choice
+                     between two or more optional items.
+
+     { a │ b }       Braces and vertical bars indicate a choice
+                     between two or more required items.
+
+     'COUNT'         Single right quotation marks denote user input or
+                     program output within text or refer to a string
+                     or word from an example.
+
+     Repeating       Three dots (an ellipsis) following an item
+     elements...     indicate that more items having the same form can
+                     be entered.
+
+     ∙ ∙ ∙           Three dots with a space between them indicate a
+                     vertical ellipsis.
+
+     "hyperlinks"    Double quotation marks enclose a new term the
+                     first time it is defined. They are also used when
+                     required by the syntax of a command.
+
+     kilobytes (K)   An acronym or abbreviation is spelled out the
+                     first time it appears.
+
+     «PWB function»  In Help for the Programmer's WorkBench, PWB
+                     replaces a function name in chevrons by a key
+                     combination assigned to that function.
+                                    -♦-
+
+:z3
+:nUsing Help
+:l22
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+─────Microsoft Advisor──────────────────────────────────────────────────────
+
+      To receive more information on using Help, double-click one of the
+      following topics or move the cursor to a topic and press F1:
+
+      ┌─Overview─────────────────────────────────────────────────────┐
+      │ ◄Getting into Help►                                          │
+      │ ◄Organization of Help►                                       │
+      └──────────────────────────────────────────────────────────────┘
+      ┌─Getting In and Out of Help──────┐   ┌─Moving Around in Help──┐
+      │ ◄Help on Language Keywords►     │   │ ◄Help Quick Reference► │
+      │ ◄Help on Menu Commands►         │   │ ◄What Is a Link?►      │
+      │ ◄Help on Error Messages►        │   │ ◄Example Programs►     │
+      │ ◄Help on Dialog Boxes►          │   │ ◄Contents Screens►     │
+      │ ◄Help for Topics Not on Screen► │   │ ◄Using the Index►      │
+      │ ◄Closing a Help Window►         │   │                        │
+      └─────────────────────────────────┘   └────────────────────────┘
+
+      See: ◄Typographic Conventions►
+           ◄Copyright Information►
+                                    -♦-
+
+:z3
+:nGetting into Help
+:l17
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+─────Microsoft Advisor──────────────────────────────────────────────────────
+
+     Getting Help
+       ┌──┐  Move the cursor to    ┌─┴─┐  Point to a topic with
+       │F1│  a word, or open a     │▀ ▀│  the mouse pointer and double-
+       └──┘  menu or dialog box;   └───┘  click the left mouse button,
+             then press F1                or click the right mouse
+                                          button
+
+     Leaving Help
+       ┌───┐                              Point to the close icon in the
+       │ESC│  Close Help            │◘│   upper-left corner of the window,
+       └───┘                              then click the left mouse button
+
+     See: ◄Help Quick Reference►
+                                    -♦-
+
+:z3
+:nOrganization of Help
+:l21
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+─────Microsoft Advisor──────────────────────────────────────────────────────
+
+     The Microsoft Advisor Help system is divided into multiple files.
+     Each file has its own contents screen and index.
+
+     A global contents screen and a global index screen allow you to
+     move easily from one file to another.
+
+                         Microsoft Advisor
+
+                  ┌──────────────────────────────┐
+            Global Contents                Global Index
+                  │                              │
+         ┌────────┼──────────┐          ┌────────┼─────────┐
+     Contents  Contents  Contents     Index    Index     Index
+
+
+     See: ◄Contents Screens►
+          ◄Using the Index►
+                                    -♦-
+
+:z3
+:nHelp on Language Keywords
+:l18
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+─────Microsoft Advisor──────────────────────────────────────────────────────
+
+     ┌───────────────────┐
+     │ main()            │
+     │ {                 │  You can get Help on language keywords in
+     │  printf("Aloha");◄┼─ your program.
+     │ }                 │
+     └───────────────────┘
+
+     To get Help on a keyword:
+     ─────────────────────────────────────────────────────────────
+     Using the Mouse             │  Using the Keyboard
+                                 │
+     Point to the keyword and    │  Move your cursor to the
+     click the right mouse       │  keyword and press F1.
+     button.                     │
+                                    -♦-
+
+:z3
+:nKeyword Help
+:l18
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+─────Microsoft Advisor──────────────────────────────────────────────────────
+
+     ┌───────────────────┐
+     │ main()        ┌───┴───────────────────────────┐
+     │ {             │                               │ge keywords in
+     │  printf("Aloha│ Select one:                   │
+     │ }             │                               │
+     └───────────────┤ ■ Go ◄Back► to previous Help  │
+                     │   screen                      │
+     To get Help on a│                               │
+     ────────────────┤ ■ Go to the ◄printf example►  ├────────────
+     Using the Mouse │   Help screen                 │
+                     │                               │
+     Point to the key│                               │o the
+     click the right │                               │F1.
+     button.         └───────────────────────────────┘
+                                    -♦-
+
+:z3
+:nMenu Command Help
+:l18
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+─────Microsoft Advisor──────────────────────────────────────────────────────
+
+     Help is available for every command on a menu.
+
+          File
+        ┌───────────────┐       ┌──┐      ┌───────────────┐
+        ▐▌New▐██████████▌   ──► │F1│ ──►  │               │
+        │ Open...       │       └──┘      │ Help on "New" │
+        │ Save          │                 │               │
+        └───────────────┘                 └───────────────┘
+
+     To get Help on a menu command:
+
+       1. Open the menu.
+       2. Use the ARROW keys to highlight the command you want.
+       3. Click the right mouse button or press F1.
+                                    -♦-
+
+:z3
+:nError Message Help
+:l15
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+─────Microsoft Advisor──────────────────────────────────────────────────────
+
+     Help is available for every error message.
+
+     To get Help on an error message:
+     ──────────────────────────────────────────────────────────────
+     Using the Mouse              │  Using the Keyboard
+                                  │
+     Point to the error number    │  Move the cursor to the error
+     and click the right mouse    │  number, and press F1.
+     button.                      │
+
+     See: ◄How to View Errors Help►
+                                    -♦-
+
+:z3
+:nDialog Box Help
+:l18
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+─────Microsoft Advisor──────────────────────────────────────────────────────
+
+     A dialog box provides more information on a menu command before it
+     is executed and provides Help on error messages.
+
+        ┌─ Dialog Box ─┐               ┌───────────────┐
+        │      <Help>  │   ─────────►  │   Help Info   │
+        └──────────────┘               └───────────────┘
+
+     To get Help on a dialog box:
+     ──────────────────────────────────────────────────────────────
+     Using the Mouse              │  Using the Keyboard
+                                  │
+     Point to the Help button,    │  Press F1.
+     and click the left mouse     │
+     button.                      │
+                                    -♦-
+
+:z3
+:nTopics Not on the Screen
+:l10
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+─────Microsoft Advisor──────────────────────────────────────────────────────
+
+     You can get Help on a keyword or command not displayed on the
+     screen.
+
+     To get Help on a keyword not on the screen, type the topic in the
+     Command window and press F1, or use the Help (H) Command-window
+     command.
+                                    -♦-
+
+:z3
+:nClose a Help Window
+:l17
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+─────Microsoft Advisor──────────────────────────────────────────────────────
+
+     Help is displayed in either a window or a pop-up box.
+
+     To close a Help window:
+     ──────────────────────────────────────────────────────────────
+     Using the Mouse              │  Using the Keyboard
+                                  │
+     In a window: Click the left  │  In a window: Press ESC.
+     mouse button on the close    │
+     icon (│◘│) in the upper-left │
+     corner of the window.        │
+                                  │
+     In a pop-up box: Click the   │  In a pop-up box: Press ESC.
+     Cancel button.               │
+                                    -♦-
+
+:z3
+:nList of Keystrokes
+:l47
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+─────Microsoft Advisor──────────────────────────────────────────────────────
+
+  Task                     Keyboard              Mouse
+  Get Help on a language   Move cursor to the    Point mouse to the
+  keyword or function      word, and press F1    word and click the
+                                                 right mouse button
+
+  Get Help on a menu       Move cursor to the    Point mouse to the
+  command                  menu command, and     command, and click the
+                           press F1              right mouse button
+
+  Get Help on a dialog     Press F1              Point mouse to the
+  box                                            Help button, and
+                                                 click the left mouse
+                                                 button
+
+  Get Help on an error     Move cursor to the    Point mouse to the
+  message                  error message and     error number, and
+                           press F1              click the right mouse
+                                                 button
+
+  Get Help for a topic     In CodeView, type     ───
+  not on the screen        H <topic>
+                           In PWB, type
+                           «arg» <topic> «_pwbhelpcontext»
+
+  Move cursor to a         Press TAB or the      Point with the mouse
+  link on a Help screen    first letter of the   and click the left
+                           name                  mouse button
+
+  Move up one topic in     Move cursor to ◄Up►   Double-click ◄Up►
+  the Help hierarchy       and press ENTER
+
+  Open table of contents   Press SHIFT+F1        Double-click ◄Contents►
+
+  Look at the previously   Press ALT+F1          Double-click ◄Back►
+  viewed Help screen
+
+  Look at the next screen  Press CTRL+F1         ───
+  in the Help file
+
+  Get Help on a            Type H <command> in   Double-click the
+  CodeView Command-        the Command window    command in the list
+  window command                                 of Command-window
+                                                 commands
+                                    -♦-
+
+:z3
+:nWhat Is a Link?
+:l20
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+─────Microsoft Advisor──────────────────────────────────────────────────────
+
+     A link is a word or phrase, that when chosen, brings up a screen
+     that gives more information on that topic. A link can appear
+     anywhere on a Help screen.
+
+     There are two types of links in the Help system: links identified
+     by triangles and links to language keywords and functions (which
+     are not surrounded by triangles).
+
+     To choose a link surrounded by ◄ ►:
+     ──────────────────────────────────────────────────────────────
+     Using the Mouse              │  Using the Keyboard
+                                  │
+     Point to anywhere on the     │  Press TAB or the first letter
+     link, and double-click the   │  of the link to move the cursor
+     left mouse button or press   │  to the link, and press ENTER.
+     the right mouse button.      │
+                                    -♦-
+
+:z3
+:nExample Programs
+:l17
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+─────Microsoft Advisor──────────────────────────────────────────────────────
+
+     Example programs exist for many keywords, functions, and other
+     topics. To examine an example program, select the "Example" link
+     at the top of the Help screen (see below).
+
+     You can copy the example program from Help and paste it into your
+     program, then modify the example.
+
+     ┌───────────────────── Help: PRINTF ───────────────────────┐
+     │ ◄Example►                                                │
+     ├──────────────────────────────────────────────────────────┤
+     │                                                          │
+     │   Syntax: int printf( char * format[, argument]...);     │
+     │                                                          │
+                                    -♦-
+
+:z3
+:nExample Programs
+:l17
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+─────Microsoft Advisor──────────────────────────────────────────────────────
+
+     Example progra┌────────────────────────────────┐ons, and other
+     topics. To exa│                                │e "Example" link
+     at the top of │ Select one:                    │
+                   │                                │
+     You can copy t│ ■ Go ◄Back► to previous Help   │aste it into your
+     program, then │   screen                       │
+                   │                                │
+     ┌─────────────┤ ■ Go to the ◄printf example►   ├───────────┐
+     │ ◄Example►   │   Help screen                  │           │
+     ├─────────────┤                                ├───────────┤
+     │             │                                │           │
+     │   Syntax: in│                                │]...);     │
+     │             └────────────────────────────────┘           │
+                                    -♦-
+
+:nSample Example Screen
+:l24
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+─────Microsoft Advisor──────────────────────────────────────────────────────
+
+/* SAMPLE.C  This is a sample example program.
+ *        (a list of demonstrated functions appears here)
+ *
+ * A brief description of the program and a list of additional
+ * functions or examples appears here.
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+
+void main( void )
+{
+     /* define string */
+     char message[] = "Hi, I'm demonstrating printf!";
+
+     printf( "%s", message );      /* print message */
+
+     exit( 0 );                    /* return normal exit status */
+
+}
+                                    -♦-
+
+:z3
+:nContents Screens
+:l23
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+─────Microsoft Advisor──────────────────────────────────────────────────────
+
+     The Contents link on each Help screen takes you to the global
+     contents. From this screen, you can move to any part of the Help
+     system.
+
+
+                             ┌───────────┐
+      ◄Contents► ──────────► │ Advisor   │
+                             │ Contents  │
+                             └─────┬─────┘
+               ┌────────────┬──────┴─────┬──────────────┐
+           ┌───┴────┐   ┌───┴────┐   ┌───┴─────┐   ┌────┴─────┐
+           │  PWB   │   │CodeView│   │Utilities│   │C Language│
+           │Contents│   │Contents│   │Contents │   │ Contents │
+           └────────┘   └────────┘   └─────────┘   └──────────┘
+
+     In some Help files, the Contents button takes you to the contents
+     for that Help file. You can always get to the top-level contents by
+     choosing Contents from the Help menu or by requesting Help on the
+     word "Advisor."
+                                    -♦-
+
+:z3
+:nLearning Help
+:l18
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+─────Microsoft Advisor──────────────────────────────────────────────────────
+
+     The ◄Contents► l┌─────────────────────────────────┐o the global
+     contents. From t│                                 │t of the Help
+     system.         │ Select one:                     │
+                     │                                 │
+                     │ ■ Go ◄Back► to previous Help    │
+                     │   screen                        │
+      ◄Contents► ────┤                                 │
+                     │ ■ Go to Advisor ◄Contents►      │
+                     │   Help screen                   │
+               ┌─────┤                                 ├┐
+           ┌───┴────┐│                                 ├┴─────┐
+           │  PWB   │└──┬────────┬───┬─────────┬───┬───┘nguage│
+           │Contents│   │Contents│   │Contents │   │Contents  │
+           └────────┘   └────────┘   └─────────┘   └──────────┘
+                                    -♦-
+
+:z3
+:nUsing the Index
+:l20
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+─────Microsoft Advisor──────────────────────────────────────────────────────
+
+     Each index has an alphabet bar across the top of the screen. Each
+     letter brings up index entries that begin with that letter.
+
+     If you don't find what you are looking for in one index, choose
+     ◄Index► at the top of each screen to view a list of all indexes in
+     the Help system. Then choose the name of another index.
+
+     To choose a letter from the index alphabet bar:
+     ─────────────────────────────────────────────────────────────────
+     Using the Mouse              │  Using the Keyboard
+                                  │
+     Point to the letter, and     │  Type the letter you want, and
+     double-click the left mouse  │  press ENTER.
+     button.                      │
+                                  │  TAB to the letter you want, and
+                                  │  press ENTER.
+                                    -♦-
+
+:z3
+:nHow to View Errors Help
+:l58
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+─────Microsoft Advisor──────────────────────────────────────────────────────
+
+     You can use either PWB or QuickHelp to view Help for errors that
+     are generated by the compilers and utilities. In the following
+     examples, <errornumber> is an error code in the form of a letter
+     followed by four digits.
+
+     Getting Error Help Using PWB
+
+     You can request Help on a specific error number just as you would
+     for any other topic using either of the following methods:
+
+        ■  In a source window, type the error code and press F1 or click
+           the error number with the right mouse button.
+
+        ■  Enter the command Arg <errornumber> _pwbhelp_context
+           («arg» <errornumber> «_pwbhelp_context»).
+
+     If you don't know the specific error number or you just want to
+     browse through the error messages, follow these steps:
+
+        ■  Choose Errors Help from the Microsoft Advisor contents.
+           See: ◄Microsoft Advisor Contents►
+
+        ■  Choose the category of errors you wish to view.
+
+        ■  Place your cursor on the error number and press F1, or click
+           the error number with the right mouse button.
+
+     Errors that occur when building a program in the PWB environment
+     are displayed in the Build Results window. To view errors listed in
+     this window, choose the Build Results command from the PWB Windows
+     cascaded menu on the Window menu. In the Build Results window,
+     move your cursor to the error number and press F1, or click the
+     error number with the right mouse button.
+
+     To step through an errors database one entry at a time, use
+     PwbHelpnext («pwbHelpnext»).
+
+     Getting Error Help Using QuickHelp
+
+     You can get Help on an error using QuickHelp at the operating-
+     system prompt by typing:
+
+         QH <errornumber>
+
+     To get Help on an error from within QuickHelp:
+
+        ■  If the error is visible on screen, point to the error number
+           and click the right mouse button.
+
+        ■  If the error number is not shown on screen or you do not have
+           a mouse, press S and type the error number in the dialog box.
+
+     You can use QuickHelp commands to navigate and search the errors
+     Help databases.
+                                    -♦-
+
+:z3
+:nUsing Help Lists
+:l16
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+─────Microsoft Advisor──────────────────────────────────────────────────────
+
+     Some topics are not a screen of text with fixed hyperlink buttons
+     at the top. Instead, they are a list of topics in which each line
+     is a hyperlink. The entire line is highlighted at a time.
+
+     To activate a hyperlink line:
+
+        ■  Point to the line and click the right mouse button.
+
+       OR
+
+       ■  Press the UP ARROW and DOWN ARROW keys to select a topic.
+          Then press F1 or ENTER to go to that topic.
+                                    -♦-
+
+:z3
+:nUsing Menus
+:l34
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+─────Microsoft Advisor──────────────────────────────────────────────────────
+
+     The name of each menu is listed at the top of the screen.
+
+     To pull down a menu:
+
+     Mouse: Click the name of the menu with the left mouse button.
+
+     Keyboard: Press ALT and the first letter of the menu you want.
+
+     To choose a command from a menu:
+
+       File
+     ┌──────────────┐
+     │ New          │    Point to the command and click the left mouse
+     │ Open...      │    button
+     ├──────────────┤
+     │ Print...     │    OR
+     ├──────────────┤
+     │ More Files  →│    Use the UP and DOWN keys to select the command,
+     │ Exit         │    and press ENTER
+     └──────────────┘
+
+     Commands followed by an ellipsis (...) open a dialog box.
+
+     Commands followed by a right arrow (→) open a cascaded menu.
+     See: ◄Using Cascaded Menus►
+
+     See
+
+     ◄Tips for Using Menus►
+     ◄Using Dialog Boxes►
+                                    -♦-
+
+:z3
+:nUsing Cascaded Menus
+:l26
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+─────Microsoft Advisor──────────────────────────────────────────────────────
+
+     A menu command followed by a right arrow opens a cascaded menu.
+
+       File
+     ┌──────────────┐
+     │ New          │
+     │ Open...      │
+     ├──────────────┤
+     │ Print...     │
+     ├──────────────┤
+     │ More Files  →┌───────────────┐
+     │ Exit         │ 1 First File  │
+     └──────────────│ 2 Second File │
+                    │ 3 Second File │
+                    └───────────────┘
+
+     To open a cascaded menu, click the command or select the command
+     and press ENTER or the RIGHT ARROW key.
+
+     To close a cascaded menu, click the command or press the LEFT ARROW
+     key.
+
+     To close all open menus, press ESC.
+                                    -♦-
+
+:z3
+:nTips for Using Menus
+:l18
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+─────Microsoft Advisor──────────────────────────────────────────────────────
+
+     Follow these tips to open a menu or choose a command.
+
+       ■  Pull down a menu by pressing both the ALT key and the first
+          letter of the menu you want.
+
+       ■  If a command has a shortcut key, it appears after the command
+          name on the menu. Press this key to choose the command
+          without pulling down the menu.
+
+       ■  In CodeView, you can enter a command quickly by typing it in
+          the command window.
+
+          For more information on using the Command window in CodeView,
+          see: ◄Description of Command-Window Commands►
+                                    -♦-
+
+:z3
+:nUsing Dialog Boxes
+:l19
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+─────Microsoft Advisor──────────────────────────────────────────────────────
+
+     Dialog boxes generally require you to:
+
+       ■ ◄Enter text► to identify the object that a command uses or
+         operates upon.
+
+       ■ ◄Select items from a list► to identify the object that a
+         command uses or operates upon.
+
+       ■ ◄Select items from a drop-down list► to identify the object
+         that a command uses or operates upon.
+
+       ■ ◄Turn options on and off► to determine how the program should
+         perform an operation
+
+       ■ ◄Choose Commands► to execute when you close the dialog box.
+                                    -♦-
+
+:z3
+:nUsing Dialog Boxes to Enter Text
+:l14
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+─────Microsoft Advisor──────────────────────────────────────────────────────
+
+     Enter Text
+
+     Empty brackets signify that    [···························]
+     you can type information
+     in this field.
+
+     For many commands, the text that is selected in the active window
+     is placed in the first text box when you choose the command.
+
+     See: ◄Tips for Using Dialog Boxes►
+                                    -♦-
+
+:z3
+:nSelecting Items from a List
+:l40
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+─────Microsoft Advisor──────────────────────────────────────────────────────
+
+     Select Items from a List
+
+     You can select items from a list to change directories and drives,
+     you can also select those items you do or do not want from a list
+     box.
+
+     ┌ Dirs/Drives─┐                        ┌─List Boxes────────┐
+     │ BIN         ↑   As you change the    │ app.c    pcd.twr  │
+     │ LIB         █   Dirs/Drives, the     │ back.c   side.c   │
+     │ ..          ▒   contents of the ───► │ color.h  yaroz.c  │
+     │ [-C-]       ▒   list box changes     │ ipad.txt zero.bas │
+     │ [-Z-]       ↓   to reflect the       │                   │
+     └─────────────┘   new contents         └←█▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒→┘
+
+
+                              ┌───────────────────┐
+     Your current drive       │ File:[menu.c··]   │  Current drive
+     and directory appear     │ C:\BIN\menu.c   ◄─┼─ and directory
+     on the second line                              selection
+     of the dialog box
+
+     Select the double dots (..) to move up one directory level.
+
+     To select items from a list box:
+
+     Mouse:
+        ■ Click the arrows or drag the scroll box to move through
+          the list of drives and directories.
+        ■ Double-click the directory or drive you want.
+
+     Keyboard:
+        ■ Press TAB to move the cursor into the list box
+        ■ Use the ARROW keys to highlight your selection.
+        ■ Press ENTER.
+
+     See: ◄Tips for Using Dialog Boxes►
+                                    -♦-
+
+:z3
+:nUsing a Drop-Down List
+:l32
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+─────Microsoft Advisor──────────────────────────────────────────────────────
+
+     Drop-Down Lists
+
+     Some dialog boxes contain a drop-down list:
+
+     ┌─Drop-Down List───┐
+     │[Item 1·········]↓│
+     └──────────────────┘
+
+     To select an item in the list, press the ARROW keys until the item
+     appears in the box.
+
+     To open the list, click the highlighted arrow or press ALT+DOWN.
+     The opened list appears as follows:
+
+     ┌─Drop-Down List───┐
+     │[Item 1·········]↓│
+     └┌────────────────┐┘
+      │Item 1          ↑
+      │Item 2          █
+      │Item 3          ▒
+      │Item 4          ↓
+      └────────────────┘
+
+     To select an item from the list, click it or press the ARROW keys.
+     The list works like other lists.
+     See: ◄Selecting Items from a List►
+
+     To close the list box, click the highlighted arrow or press ALT+UP.
+                                    -♦-
+
+:z3
+:nUsing Dialog Boxes to Select Options
+:l31
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+─────Microsoft Advisor──────────────────────────────────────────────────────
+
+     Select Options
+
+     There are two ways to select options: check boxes and radio
+     buttons.
+
+     Check boxes allow you to select any number of options from a list.
+     An X indicates that the option is selected.
+
+               Selected  ──────► [X] Option One
+               Not selected ───► [ ] Option Two
+               Selected  ──────► [X] Option Three
+
+     Click the box or press the SPACEBAR to make a selection in a check
+     box.
+
+     Radio buttons allow you to select only one item from a list. This
+     list is contained in a box. A bullet (•) indicates a selection.
+                                 ┌──────────────┐
+               Selected  ──────► │ (•) Button 1 │
+               Not selected ───► │ ( ) Button 2 │
+                                 └──────────────┘
+
+     Click the button to select an option. You can also move the cursor
+     to the list of options and use the ARROW keys to move among the
+     options.
+
+     See: ◄Tips for Using Dialog Boxes►
+                                    -♦-
+
+:z3
+:nChoosing a Command Button
+:l25
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+─────Microsoft Advisor──────────────────────────────────────────────────────
+
+     Choosing a Command Button
+
+     Use command buttons to perform an action.
+
+     Command buttons appear on the   ├────────────────────────┤
+     last line of the dialog box.    │ < OK > <Cancel> <Help> │
+                                     └────────────────────────┘
+
+     Click the action desired, or press TAB to move the cursor to your
+     selection and press ENTER.
+
+     Button       Action
+
+     < OK >       Acknowledges the message or saves your changes.
+
+     <Cancel>     Closes the dialog box without saving your changes.
+
+     <Help>       Provides information about the contents of the
+                  dialog box.
+
+     See: ◄Tips for Using Dialog Boxes►
+                                    -♦-
+
+:z3
+:nTips for Using Dialog Boxes
+:l25
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+─────Microsoft Advisor──────────────────────────────────────────────────────
+
+     Follow these tips when using a dialog box:
+
+        ■ Move the cursor to an item in the dialog box by repeatedly
+          pressing the TAB key or by holding down the ALT key and
+          pressing the highlighted key for the item.
+
+        ■ To move quickly to an entry in a list box:
+
+            1. Move the cursor to the list box.
+
+            2. Type a letter to select the first entry that starts with
+               that letter.
+
+            3. Type the letter again to move to the next entry starting
+               with that letter. Repeat this process until the entry you
+               want is highlighted, or use the ARROW keys.
+
+        ■ Press ESC or choose Cancel to quickly exit a dialog box
+          without performing any other action.
+
+        ■ Press F1 or choose Help to get Help on using the dialog box.
+                                    -♦-
+
+:z3
+:nASCII Chart (Decimal)
+:l40
+:u
+ ◄ASCII (Hex)► ◄Box Chars►                   ◄Up► ◄Contents► ◄Index► ◄Back►
+───Microsoft Advisor────────────────────────────────────────────────────────
+
+    0   nul      16 ► dle ^P   32     48 0   64 @   80 P   96 `  112 p
+    1 ☺ soh ^A   17 ◄ dc1 ^Q   33 !   49 1   65 A   81 Q   97 a  113 q
+    2 ☻ stx ^B   18 ↕ dc2 ^R   34 "   50 2   66 B   82 R   98 b  114 r
+    3 ♥ etx ^C   19 ‼ dc3 ^S   35 #   51 3   67 C   83 S   99 c  115 s
+    4 ♦ eot ^D   20 ¶ dc4 ^T   36 $   52 4   68 D   84 T  100 d  116 t
+    5 ♣ enq ^E   21 § nak ^U   37 %   53 5   69 E   85 U  101 e  117 u
+    6 ♠ ack ^F   22 ▬ syn ^V   38 &   54 6   70 F   86 V  102 f  118 v
+    7 • bel ^G   23 ↨ etb ^W   39 '   55 7   71 G   87 W  103 g  119 w
+    8 ◘ bs  ^H   24 ↑ can ^X   40 (   56 8   72 H   88 X  104 h  120 x
+    9   tab ^I   25 ↓ em  ^Y   41 )   57 9   73 I   89 Y  105 i  121 y
+   10   lf  ^J   26 → eof ^Z   42 *   58 :   74 J   90 Z  106 j  122 z
+   11 ♂ vt  ^K   27 ← esc ^[   43 +   59 ;   75 K   91 [  107 k  123 {
+   12 ♀ np  ^L   28 ∟ fs  ^\   44 ,   60 <   76 L   92 \  108 l  124 |
+   13   cr  ^M   29 ↔ gs  ^]   45 -   61 =   77 M   93 ]  109 m  125 }
+   14 ♫ so  ^N   30 ▲ rs  ^^   46 .   62 >   78 N   94 ^  110 n  126 ~
+   15 ☼ si  ^O   31 ▼ us  ^_   47 /   63 ?   79 O   95 _  111 o  127 
+
+  128 Ç         144 É         160 á  176 ░  192 └  208 ╨  224 α  240 ≡
+  129 ü         145 æ         161 í  177 ▒  193 ┴  209 ╤  225 ß  241 ±
+  130 é         146 Æ         162 ó  178 ▓  194 ┬  210 ╥  226 Γ  242 ≥
+  131 â         147 ô         163 ú  179 │  195 ├  211 ╙  227 π  243 ≤
+  132 ä         148 ö         164 ñ  180 ┤  196 ─  212 ╘  228 Σ  244 ⌠
+  133 à         149 ò         165 Ñ  181 ╡  197 ┼  213 ╒  229 σ  245 ⌡
+  134 å         150 û         166 ª  182 ╢  198 ╞  214 ╓  230 µ  246 ÷
+  135 ç         151 ù         167 º  183 ╖  199 ╟  215 ╫  231 τ  247 ≈
+  136 ê         152 ÿ         168 ¿  184 ╕  200 ╚  216 ╪  232 Φ  248 °
+  137 ë         153 Ö         169 ⌐  185 ╣  201 ╔  217 ┘  233 Θ  249 ∙
+  138 è         154 Ü         170 ¬  186 ║  202 ╩  218 ┌  234 Ω  250 ·
+  139 ï         155 ¢         171 ½  187 ╗  203 ╦  219 █  235 δ  251 √
+  140 î         156 £         172 ¼  188 ╝  204 ╠  220 ▄  236 ∞  252 ⁿ
+  141 ì         157 ¥         173 ¡  189 ╜  205 ═  221 ▌  237 φ  253 ²
+  142 Ä         158 ₧         174 «  190 ╛  206 ╬  222 ▐  238 ε  254 ■
+  143 Å         159 ƒ         175 »  191 ┐  207 ╧  223 ▀  239 ∩  255
+
+  See: ◄Inserting ASCII Characters►
+                                    -♦-
+
+:z3
+:nASCII Chart (Hexadecimal)
+:l40
+:u
+ ◄ASCII (Dec)► ◄Box Chars►                   ◄Up► ◄Contents► ◄Index► ◄Back►
+───Microsoft Advisor────────────────────────────────────────────────────────
+
+   00   nul      10 ► dle ^P   20     30 0   40 @   50 P   60 `   70 p
+   01 ☺ soh ^A   11 ◄ dc1 ^Q   21 !   31 1   41 A   51 Q   61 a   71 q
+   02 ☻ stx ^B   12 ↕ dc2 ^R   22 "   32 2   42 B   52 R   62 b   72 r
+   03 ♥ etx ^C   13 ‼ dc3 ^S   23 #   33 3   43 C   53 S   63 c   73 s
+   04 ♦ eot ^D   14 ¶ dc4 ^T   24 $   34 4   44 D   54 T   64 d   74 t
+   05 ♣ enq ^E   15 § nak ^U   25 %   35 5   45 E   55 U   65 e   75 u
+   06 ♠ ack ^F   16 ▬ syn ^V   26 &   36 6   46 F   56 V   66 f   76 v
+   07 • bel ^G   17 ↨ etb ^W   27 '   37 7   47 G   57 W   67 g   77 w
+   08 ◘ bs  ^H   18 ↑ can ^X   28 (   38 8   48 H   58 X   68 h   78 x
+   09   tab ^I   19 ↓ em  ^Y   29 )   39 9   49 I   59 Y   69 i   79 y
+   0a   lf  ^J   1a → eof ^Z   2a *   3a :   4a J   5a Z   6a j   7a z
+   0b ♂ vt  ^K   1b ← esc ^[   2b +   3b ;   4b K   5b [   6b k   7b {
+   0c ♀ np  ^L   1c ∟ fs  ^\   2c ,   3c <   4c L   5c \   6c l   7c |
+   0d   cr  ^M   1d ↔ gs  ^]   2d -   3d =   4d M   5d ]   6d m   7d }
+   0e ♫ so  ^N   1e ▲ rs  ^^   2e .   3e >   4e N   5e ^   6e n   7e ~
+   0f ☼ si  ^O   1f ▼ us  ^_   2f /   3f ?   4f O   5f _   6f o   7f 
+
+   80 Ç          90 É          a0 á   b0 ░   c0 └   d0 ╨   e0 α   f0 ≡
+   81 ü          91 æ          a1 í   b1 ▒   c1 ┴   d1 ╤   e1 ß   f1 ±
+   82 é          92 Æ          a2 ó   b2 ▓   c2 ┬   d2 ╥   e2 Γ   f2 ≥
+   83 â          93 ô          a3 ú   b3 │   c3 ├   d3 ╙   e3 π   f3 ≤
+   84 ä          94 ö          a4 ñ   b4 ┤   c4 ─   d4 ╘   e4 Σ   f4 ⌠
+   85 à          95 ò          a5 Ñ   b5 ╡   c5 ┼   d5 ╒   e5 σ   f5 ⌡
+   86 å          96 û          a6 ª   b6 ╢   c6 ╞   d6 ╓   e6 µ   f6 ÷
+   87 ç          97 ù          a7 º   b7 ╖   c7 ╟   d7 ╫   e7 τ   f7 ≈
+   88 ê          98 ÿ          a8 ¿   b8 ╕   c8 ╚   d8 ╪   e8 Φ   f8 °
+   89 ë          99 Ö          a9 ⌐   b9 ╣   c9 ╔   d9 ┘   e9 Θ   f9 ∙
+   8a è          9a Ü          aa ¬   ba ║   ca ╩   da ┌   ea Ω   fa ·
+   8b ï          9b ¢          ab ½   bb ╗   cb ╦   db █   eb δ   fb √
+   8c î          9c £          ac ¼   bc ╝   cc ╠   dc ▄   ec ∞   fc ⁿ
+   8d ì          9d ¥          ad ¡   bd ╜   cd ═   dd ▌   ed φ   fd ²
+   8e Ä          9e ₧          ae «   be ╛   ce ╬   de ▐   ee ε   fe ■
+   8f Å          9f ƒ          af »   bf ┐   cf ╧   df ▀   ef ∩   ff
+
+  See: ◄Inserting ASCII Characters►
+                                    -♦-
+
+:z3
+:nBox Drawing Characters
+:l27
+:u
+ ◄ASCII (Dec)► ◄ASCII (Hex)►                 ◄Up► ◄Contents► ◄Index► ◄Back►
+───Microsoft Advisor────────────────────────────────────────────────────────
+
+     ┌───┬───┐                          ╔═══╦═══╗
+     │   │   │  196 ─         179 │     ║   ║   ║  205 ═         186 ║
+     ├───┼───┤  218 ┌  194 ┬  191 ┐     ╠═══╬═══╣  201 ╔  203 ╦  187 ╗
+     │   │   │  195 ├  197 ┼  180 ┤     ║   ║   ║  204 ╠  206 ╬  185 ╣
+     └───┴───┘  192 └  193 ┴  217 ┘     ╚═══╩═══╝  200 ╚  202 ╩  188 ╝
+
+     ╓───╥───╖                          ╒═══╤═══╕
+     ║   ║   ║  214 ╓  210 ╥  183 ╖     │   │   │  213 ╒  209 ╤  184 ╕
+     ╟───╫───╢  199 ╟  215 ╫  182 ╢     ╞═══╪═══╡  198 ╞  216 ╪  181 ╡
+     ║   ║   ║  211 ╙  208 ╨  189 ╜     │   │   │  212 ╘  207 ╧  190 ╛
+     ╙───╨───╜                          ╘═══╧═══╛
+
+     Miscellaneous Characters:
+
+     176 ░   177 ▒   178 ▓  219 █   220 ▄   221 ▌  222 ▐   223 ▀
+     254 ■   250 ·
+
+     24  ↑       30  ▲       18 ↕   174 «
+     27 ← → 26   17 ◄ ► 16   29 ↔   175 »
+     25  ↓       31  ▼       23 ↨
+
+     See: ◄Inserting ASCII Characters►
+                                    -♦-
+

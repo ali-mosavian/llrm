@@ -1,0 +1,525 @@
+schema = 1
+inherits = "../pds71/suite.toml"
+
+# VBDOS.HLP is four concatenated LN databases.  The offsets, counts, and the
+# mechanical exclusion of its non-language databases are documented in
+# evidence.md.  SHA-256 pins the exact installed evidence, not a web copy.
+help_files = [
+  { path = "/Users/alim/work/other/d32x/toolchains/vbdos/HLP/VBDOS.HLP", sha256 = "34d192f06af2d028326ab759e14b84d8f4f390a5da8024aec9a45a79ad5ee795" },
+  { path = "/Users/alim/work/other/d32x/toolchains/vbdos/HLP/VBDPSS.HLP", sha256 = "bf2741caa417376fa0a1d3b4aedec1ec488e61e237e83311e97f9113adfad920" },
+  { path = "/Users/alim/work/other/d32x/toolchains/vbdos/HLP/ADVISOR.HLP", sha256 = "cfbaf4acdc55b274b1e6c55ba5d24a5e9315284cea12c457e3b0835be426eae9" },
+]
+help_extracts = [
+  { path = "VBDOS.TXT", lines = 48051, sha256 = "38521f0c35b71c6a718aa7beeb013adc11d4613c17f317ddfa4519c6a149566e" },
+  { path = "VBDPSS.TXT", lines = 11244, sha256 = "c028087169acbfdf6f4920ff9ff414fb8faeaece98bfb3cb842243384d0679dd" },
+  { path = "ADVISOR.TXT", lines = 1237, sha256 = "a7a2bbb3daa49705f627fd4315cc7a634385c98af92b80cbe9aad6858fb80540" },
+]
+
+# VBDOS.TXT contains four consecutive databases (622 qck, 329 advisor,
+# 389 error-reference, 243 worked-example headings).  Executable contracts in
+# the first three are obligations unless an inherited QB/PDS title or an exact
+# coverage row accounts for them.  Example/support/navigation databases remain
+# checked in and hashed but do not manufacture duplicate language features.
+help_inventory = [
+  { path = "VBDOS.TXT", source = "VBDOS.HLP#qck", first_heading = 1, headings = 622, disposition = "classify", inherits_titles = true },
+  { path = "VBDOS.TXT", source = "VBDOS.HLP#advr", first_heading = 623, headings = 329, disposition = "classify", inherits_titles = true },
+  { path = "VBDOS.TXT", source = "VBDOS.HLP#ener", first_heading = 952, headings = 389, disposition = "classify", inherits_titles = true },
+  { path = "VBDOS.TXT", source = "VBDOS.HLP#ex", first_heading = 1341, headings = 243, disposition = "out-of-scope", rationale = "Worked examples exercise contracts defined by qck/advisor; they are retained as oracle prose, not counted as separate features." },
+  { path = "VBDPSS.TXT", source = "VBDPSS.HLP", first_heading = 1, headings = 197, disposition = "out-of-scope", rationale = "Product-support navigation and troubleshooting, not compiled BASIC behavior." },
+  { path = "ADVISOR.TXT", source = "ADVISOR.HLP", first_heading = 1, headings = 41, disposition = "out-of-scope", rationale = "Host help-system navigation, not compiled BASIC behavior." },
+]
+
+help_exclusions = [
+  { kind = "isam", rationale = "The user explicitly excluded the complete ISAM language/runtime family; these exact headings are not coverage rows or gaps.", titles = ["BEGINTRANS Statement", "CHECKPOINT Statement", "COMMITTRANS Statement", "ROLLBACK Statement", "SAVEPOINT Function", "CREATEINDEX Statement", "DELETE Statement", "DELETEINDEX Statement", "DELETETABLE Statement", "GETINDEX$ Function", "INSERT Statement", "MOVEFIRST, MOVELAST, MOVENEXT, MOVEPREVIOUS Statements", "RETRIEVE Statement", "SEEKGT, SEEKGE, SEEKEQ Statements", "SETINDEX Statement", "TEXTCOMP Function", "BOF Function", "UPDATE Statement"] },
+  { kind = "os2", rationale = "The user explicitly excluded OS/2 event signaling; this exact heading is not a coverage row or gap.", titles = ["SIGNAL Statements"] },
+]
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = ".bc.exe"
+title = "BC command-line options"
+class = "compiler"
+cases = ["g2_byval_long", "g3_byval_long", "financial-functions"]
+status = "covered"
+evidence = "suite.toml:g2_byval_long.switches"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = "explicit"
+title = "OPTION EXPLICIT Statement"
+class = "language"
+cases = ["underscore_identifiers", "option_explicit_negative"]
+status = "covered"
+evidence = "underid.bas:1"
+
+[[topic]]
+source = "BIN/README.TXT"
+context = "1.3 Language / Line Continuation"
+title = "Whitespace-prefixed continuation and underscore identifiers"
+class = "language"
+cases = ["underscore_identifiers", "continuation_terminal_probe", "qrender_shape"]
+status = "covered"
+evidence = "contterm.bas:4"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = "DATESERIAL"
+title = "DATESERIAL Function"
+class = "language"
+cases = ["date_serial_surface"]
+status = "covered"
+evidence = "dateser.bas:7"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = "DATEVALUE"
+title = "DATEVALUE Function"
+class = "language"
+cases = ["date_serial_surface"]
+status = "covered"
+evidence = "dateser.bas:25"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = "TIMESERIAL"
+title = "TIMESERIAL Function"
+class = "language"
+cases = ["date_serial_surface"]
+status = "covered"
+evidence = "dateser.bas:8"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = "TIMEVALUE"
+title = "TIMEVALUE Function"
+class = "language"
+cases = ["date_serial_surface"]
+status = "covered"
+evidence = "dateser.bas:25"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = "ON ERROR"
+title = "ON LOCAL ERROR Statement"
+class = "language"
+cases = ["local_error"]
+status = "covered"
+evidence = "locerr.bas:18"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = "ERR, ERL"
+title = "ERR and ERL Functions"
+class = "language"
+cases = ["local_error"]
+status = "covered"
+evidence = "locerr.bas:28"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = "RESUME"
+title = "RESUME Statement"
+class = "language"
+cases = ["local_error"]
+status = "covered"
+evidence = "locerr.bas:33"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = "SSEG"
+title = "SSEG Function"
+class = "runtime"
+cases = ["string_far_address"]
+status = "covered"
+evidence = "sseg.bas:11"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = "SSEGADD"
+title = "SSEGADD Function"
+class = "runtime"
+cases = ["string_far_address"]
+status = "covered"
+evidence = "sseg.bas:13"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = "SSEG-details"
+title = "SSEG Function Details"
+class = "runtime"
+cases = ["string_far_address"]
+status = "covered"
+evidence = "sseg.bas:11"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = "SSEGADD-details"
+title = "SSEGADD Function Details"
+class = "runtime"
+cases = ["string_far_address"]
+status = "covered"
+evidence = "sseg.bas:13"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = ".vbdos.bi"
+title = "VBDOS.BI File"
+class = "runtime"
+cases = ["interrupt_abi", "interruptx_abi_surface", "absolute_abi_surface", "legacy_interrupt_abi_surface"]
+status = "covered"
+evidence = "intabi.bas:3"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = ".cdeclnb"
+title = "DECLARE Statement (Non-Basic Procedures)"
+class = "language"
+cases = ["cdecl_alias_external"]
+status = "required-reference"
+evidence = "cdeclabi.bas:3"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = "ALIAS"
+title = "ALIAS Clause"
+class = "language"
+cases = ["cdecl_alias_external"]
+status = "required-reference"
+evidence = "cdeclabi.bas:3"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = "CDECL"
+title = "CDECL Keyword"
+class = "language"
+cases = ["cdecl_alias_external"]
+status = "required-reference"
+evidence = "cdeclabi.bas:3"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = "BYVAL"
+title = "BYVAL Clause and /G2-/G3 ABI"
+class = "compiler"
+cases = ["g2_byval_long", "g3_byval_long", "cdecl_alias_external", "financial-functions"]
+status = "covered"
+evidence = "suite.toml:g2_byval_long.switches"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = "$FORM"
+title = "$FORM Metacommand"
+class = "ide"
+cases = ["form_event_surface", "form_lifecycle_surface", "object_runtime_surface"]
+status = "required-reference"
+evidence = "formevt.bas:3"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = ".formdesigner"
+title = "Designing Forms"
+class = "ide"
+cases = ["form_event_surface", "form_lifecycle_surface", "timer_event_surface"]
+status = "required-reference"
+evidence = "formevt.bas:3"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = ".events"
+title = "Object Events Summary"
+class = "runtime"
+cases = ["form_event_surface", "form_lifecycle_surface", "timer_event_surface", "custom_control_surface"]
+status = "required-reference"
+evidence = "formevt.bas:3"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = ".properties"
+title = "Properties Summary"
+class = "runtime"
+cases = ["form_event_surface", "form_lifecycle_surface", "object_runtime_surface", "custom_control_surface"]
+status = "required-reference"
+evidence = "formevt.bas:3"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = ".controls"
+title = "Controls Summary"
+class = "runtime"
+cases = ["form_event_surface", "timer_event_surface", "object_runtime_surface", "custom_control_surface"]
+status = "required-reference"
+evidence = "formevt.bas:3"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = ".METHODS"
+title = "Methods Summary"
+class = "runtime"
+cases = ["form_event_surface", "form_lifecycle_surface", "object_runtime_surface", "custom_control_surface"]
+status = "required-reference"
+evidence = "formevt.bas:3"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = "typeof"
+title = "IF TYPEOF Statement"
+class = "language"
+cases = ["object_runtime_surface"]
+status = "required-reference"
+evidence = "objrun.bas:3"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = "load"
+title = "LOAD Statement"
+class = "runtime"
+cases = ["object_runtime_surface"]
+status = "required-reference"
+evidence = "objrun.bas:3"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = ".unloadm"
+title = "UNLOAD Statement"
+class = "runtime"
+cases = ["object_runtime_surface", "form_lifecycle_surface"]
+status = "required-reference"
+evidence = "objrun.bas:3"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = "doevents"
+title = "DOEVENTS Function"
+class = "runtime"
+cases = ["object_runtime_surface"]
+status = "required-reference"
+evidence = "objrun.bas:3"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = ".Timerc"
+title = "Timer Control and Timer event"
+class = "runtime"
+cases = ["timer_event_surface"]
+status = "required-reference"
+evidence = "timerevt.bas:3"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = ".custcont"
+title = "Custom Control"
+class = "runtime"
+cases = ["custom_control_surface"]
+status = "required-reference"
+evidence = "custctl.bas:3"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = ".project"
+title = "Project Definition"
+class = "ide"
+cases = ["form_event_surface", "form_lifecycle_surface", "object_runtime_surface"]
+status = "required-reference"
+evidence = "formevt.bas:3"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = ".MSG"
+title = "MSGBOX Statement"
+class = "runtime"
+cases = ["dialog_surface"]
+status = "required-reference"
+evidence = "dialog.bas:3"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = "MSGBOX"
+title = "MSGBOX Function"
+class = "runtime"
+cases = ["dialog_surface"]
+status = "required-reference"
+evidence = "dialog.bas:3"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = "inputbox$"
+title = "INPUTBOX$ Function"
+class = "runtime"
+cases = ["dialog_surface"]
+status = "required-reference"
+evidence = "dialog.bas:3"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = ".validctltype"
+title = "Valid Control Types"
+class = "language"
+cases = ["object_runtime_surface", "custom_control_surface"]
+status = "required-reference"
+evidence = "objrun.bas:3"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = "DDB#"
+title = "DDB# Function"
+class = "runtime"
+cases = ["financial-functions"]
+status = "covered"
+evidence = "finabi.bas:25"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = "FV#"
+title = "FV# Function"
+class = "runtime"
+cases = ["financial-functions"]
+status = "covered"
+evidence = "finabi.bas:26"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = "IPmt#"
+title = "IPmt# Function"
+class = "runtime"
+cases = ["financial-functions"]
+status = "covered"
+evidence = "finabi.bas:27"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = "IRR#"
+title = "IRR# Function"
+class = "runtime"
+cases = ["financial-functions"]
+status = "covered"
+evidence = "finabi.bas:28"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = "MIRR#"
+title = "MIRR# Function"
+class = "runtime"
+cases = ["financial-functions"]
+status = "covered"
+evidence = "finabi.bas:29"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = "NPer#"
+title = "NPer# Function"
+class = "runtime"
+cases = ["financial-functions"]
+status = "covered"
+evidence = "finabi.bas:30"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = "NPV#"
+title = "NPV# Function"
+class = "runtime"
+cases = ["financial-functions"]
+status = "covered"
+evidence = "finabi.bas:31"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = "Pmt#"
+title = "Pmt# Function"
+class = "runtime"
+cases = ["financial-functions"]
+status = "covered"
+evidence = "finabi.bas:32"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = "PPmt#"
+title = "PPmt# Function"
+class = "runtime"
+cases = ["financial-functions"]
+status = "covered"
+evidence = "finabi.bas:33"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = "PV#"
+title = "PV# Function"
+class = "runtime"
+cases = ["financial-functions"]
+status = "covered"
+evidence = "finabi.bas:34"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = "Rate#"
+title = "Rate# Function"
+class = "runtime"
+cases = ["financial-functions"]
+status = "covered"
+evidence = "finabi.bas:35"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = "SLN#"
+title = "SLN# Function"
+class = "runtime"
+cases = ["financial-functions"]
+status = "covered"
+evidence = "finabi.bas:36"
+
+[[topic]]
+source = "VBDOS.HLP#qck"
+context = "SYD#"
+title = "SYD# Function"
+class = "runtime"
+cases = ["financial-functions"]
+status = "covered"
+evidence = "finabi.bas:37"
+
+# These three databases are concatenated after qck.  They are not compiler
+# or language specifications: advisor is IDE navigation/error help, ener is
+# error-reference text, and ex is worked examples.  Each is retained as
+# evidence and excluded as a whole by class/count, not silently omitted.
+[[topic]]
+source = "VBDOS.HLP#advr"
+context = "all 329 topics"
+title = "Advisor / programming-environment database"
+class = "ide"
+cases = []
+status = "out-of-scope"
+rationale = "IDE navigation and dialog help; qck topics cover the source/project contracts tested by this compiler suite."
+
+[[topic]]
+source = "VBDOS.HLP#ener"
+context = "all 389 topics"
+title = "Error-reference database"
+class = "ide"
+cases = []
+status = "out-of-scope"
+rationale = "Error-message prose is not a source, ABI, or runtime contract; negative compiler cases retain their observed diagnostics in evidence.md."
+
+[[topic]]
+source = "VBDOS.HLP#ex"
+context = "all 243 topics"
+title = "Worked-example database"
+class = "tooling"
+cases = []
+status = "out-of-scope"
+rationale = "Examples are evidence for qck syntax, not an independent language surface; installed source projects are cited in evidence.md."
+
+[[topic]]
+source = "VBDPSS.HLP"
+context = "all 197 topics"
+title = "Product-support knowledge-base database"
+class = "tooling"
+cases = []
+status = "out-of-scope"
+rationale = "Support articles are advisory and are not a stable VBDOS compiler contract; the relevant local toolchain facts are recorded in evidence.md."
+
+[[topic]]
+source = "ADVISOR.HLP"
+context = "all 44 topics"
+title = "Microsoft Advisor host database"
+class = "ide"
+cases = []
+status = "out-of-scope"
+rationale = "Generic Advisor navigation/help shell, not VBDOS language or runtime behavior."

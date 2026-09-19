@@ -1,0 +1,359 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: pds71/pds-runtime-check
+# dialect: Pds71
+# source: pds71/PDRTC.BAS
+
+Module {
+    statements: [
+        Dim(
+            [
+                Declaration {
+                    name: "ITEMS",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: true,
+                    bounds: [
+                        Bound {
+                            lower: None,
+                            upper: Literal(
+                                Integer(
+                                    1,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 1,
+                                    start: 10,
+                                    end: 11,
+                                },
+                            ),
+                        },
+                    ],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 1,
+                        start: 4,
+                        end: 23,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "HANDLED",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 2,
+                        start: 4,
+                        end: 22,
+                    },
+                },
+            ],
+        ),
+        OnError {
+            label: "BOUNDSERROR",
+            local: false,
+            span: Span {
+                line: 4,
+                start: 0,
+                end: 2,
+            },
+        },
+        Label(
+            "100",
+            Span {
+                line: 5,
+                start: 0,
+                end: 3,
+            },
+        ),
+        Assign {
+            target: Apply {
+                name: "ITEMS",
+                arguments: [
+                    Literal(
+                        Integer(
+                            2,
+                            Integer,
+                        ),
+                        Span {
+                            line: 5,
+                            start: 10,
+                            end: 11,
+                        },
+                    ),
+                ],
+                span: Span {
+                    line: 5,
+                    start: 4,
+                    end: 12,
+                },
+            },
+            value: Literal(
+                Integer(
+                    7,
+                    Integer,
+                ),
+                Span {
+                    line: 5,
+                    start: 15,
+                    end: 16,
+                },
+            ),
+            span: Span {
+                line: 5,
+                start: 4,
+                end: 16,
+            },
+        },
+        Print {
+            file: None,
+            items: [
+                PrintItem {
+                    value: Literal(
+                        String(
+                            "FAIL pds-runtime-check no-error",
+                        ),
+                        Span {
+                            line: 6,
+                            start: 6,
+                            end: 39,
+                        },
+                    ),
+                    separator: End,
+                },
+            ],
+            span: Span {
+                line: 6,
+                start: 0,
+                end: 5,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 7,
+                start: 0,
+                end: 3,
+            },
+        },
+        Label(
+            "BOUNDSERROR",
+            Span {
+                line: 9,
+                start: 0,
+                end: 11,
+            },
+        ),
+        If {
+            condition: Binary {
+                op: And,
+                left: Binary {
+                    op: Eq,
+                    left: Name(
+                        "ERR",
+                        Span {
+                            line: 10,
+                            start: 3,
+                            end: 6,
+                        },
+                    ),
+                    right: Literal(
+                        Integer(
+                            9,
+                            Integer,
+                        ),
+                        Span {
+                            line: 10,
+                            start: 9,
+                            end: 10,
+                        },
+                    ),
+                    span: Span {
+                        line: 10,
+                        start: 3,
+                        end: 10,
+                    },
+                },
+                right: Binary {
+                    op: Eq,
+                    left: Name(
+                        "ERL",
+                        Span {
+                            line: 10,
+                            start: 15,
+                            end: 18,
+                        },
+                    ),
+                    right: Literal(
+                        Integer(
+                            100,
+                            Integer,
+                        ),
+                        Span {
+                            line: 10,
+                            start: 21,
+                            end: 24,
+                        },
+                    ),
+                    span: Span {
+                        line: 10,
+                        start: 15,
+                        end: 24,
+                    },
+                },
+                span: Span {
+                    line: 10,
+                    start: 3,
+                    end: 24,
+                },
+            },
+            then_branch: [
+                Assign {
+                    target: Name(
+                        "HANDLED",
+                        Span {
+                            line: 10,
+                            start: 30,
+                            end: 37,
+                        },
+                    ),
+                    value: Unary {
+                        op: Negative,
+                        operand: Literal(
+                            Integer(
+                                1,
+                                Integer,
+                            ),
+                            Span {
+                                line: 10,
+                                start: 41,
+                                end: 42,
+                            },
+                        ),
+                        span: Span {
+                            line: 10,
+                            start: 40,
+                            end: 42,
+                        },
+                    },
+                    span: Span {
+                        line: 10,
+                        start: 30,
+                        end: 42,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 10,
+                start: 0,
+                end: 42,
+            },
+        },
+        Resume {
+            target: Label(
+                "FINISHED",
+            ),
+            span: Span {
+                line: 11,
+                start: 0,
+                end: 6,
+            },
+        },
+        Label(
+            "FINISHED",
+            Span {
+                line: 13,
+                start: 0,
+                end: 8,
+            },
+        ),
+        If {
+            condition: Name(
+                "HANDLED",
+                Span {
+                    line: 14,
+                    start: 3,
+                    end: 10,
+                },
+            ),
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "PASS pds-runtime-check",
+                                ),
+                                Span {
+                                    line: 15,
+                                    start: 10,
+                                    end: 34,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 15,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+            ],
+            else_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL pds-runtime-check err",
+                                ),
+                                Span {
+                                    line: 17,
+                                    start: 10,
+                                    end: 38,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 17,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+            ],
+            span: Span {
+                line: 14,
+                start: 0,
+                end: 2,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 19,
+                start: 0,
+                end: 3,
+            },
+        },
+    ],
+    procedures: [],
+}

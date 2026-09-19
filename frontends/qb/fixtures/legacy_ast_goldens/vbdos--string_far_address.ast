@@ -1,0 +1,755 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: vbdos/string_far_address
+# dialect: VbDos
+# source: vbdos/sseg.bas
+
+Module {
+    statements: [
+        OptionExplicit(
+            Span {
+                line: 1,
+                start: 0,
+                end: 6,
+            },
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "TEXTVALUE",
+                    type_name: Some(
+                        String,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 3,
+                        start: 4,
+                        end: 23,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "NULLVALUE",
+                    type_name: Some(
+                        String,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 4,
+                        start: 4,
+                        end: 23,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "SEGMENTVALUE",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 5,
+                        start: 4,
+                        end: 27,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "OFFSETVALUE",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 6,
+                        start: 4,
+                        end: 26,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "FARADDRESS",
+                    type_name: Some(
+                        Long,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 7,
+                        start: 4,
+                        end: 22,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "EXPECTEDADDRESS",
+                    type_name: Some(
+                        Long,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 8,
+                        start: 4,
+                        end: 27,
+                    },
+                },
+            ],
+        ),
+        Assign {
+            target: Name(
+                "TEXTVALUE",
+                Span {
+                    line: 10,
+                    start: 0,
+                    end: 9,
+                },
+            ),
+            value: Literal(
+                String(
+                    "ABCD",
+                ),
+                Span {
+                    line: 10,
+                    start: 12,
+                    end: 18,
+                },
+            ),
+            span: Span {
+                line: 10,
+                start: 0,
+                end: 18,
+            },
+        },
+        Assign {
+            target: Name(
+                "SEGMENTVALUE",
+                Span {
+                    line: 11,
+                    start: 0,
+                    end: 12,
+                },
+            ),
+            value: Apply {
+                name: "SSEG",
+                arguments: [
+                    Name(
+                        "TEXTVALUE",
+                        Span {
+                            line: 11,
+                            start: 20,
+                            end: 29,
+                        },
+                    ),
+                ],
+                span: Span {
+                    line: 11,
+                    start: 15,
+                    end: 30,
+                },
+            },
+            span: Span {
+                line: 11,
+                start: 0,
+                end: 30,
+            },
+        },
+        Assign {
+            target: Name(
+                "OFFSETVALUE",
+                Span {
+                    line: 12,
+                    start: 0,
+                    end: 11,
+                },
+            ),
+            value: Apply {
+                name: "SADD",
+                arguments: [
+                    Name(
+                        "TEXTVALUE",
+                        Span {
+                            line: 12,
+                            start: 19,
+                            end: 28,
+                        },
+                    ),
+                ],
+                span: Span {
+                    line: 12,
+                    start: 14,
+                    end: 29,
+                },
+            },
+            span: Span {
+                line: 12,
+                start: 0,
+                end: 29,
+            },
+        },
+        Assign {
+            target: Name(
+                "FARADDRESS",
+                Span {
+                    line: 13,
+                    start: 0,
+                    end: 10,
+                },
+            ),
+            value: Apply {
+                name: "SSEGADD",
+                arguments: [
+                    Name(
+                        "TEXTVALUE",
+                        Span {
+                            line: 13,
+                            start: 21,
+                            end: 30,
+                        },
+                    ),
+                ],
+                span: Span {
+                    line: 13,
+                    start: 13,
+                    end: 31,
+                },
+            },
+            span: Span {
+                line: 13,
+                start: 0,
+                end: 31,
+            },
+        },
+        Assign {
+            target: Name(
+                "EXPECTEDADDRESS",
+                Span {
+                    line: 14,
+                    start: 0,
+                    end: 15,
+                },
+            ),
+            value: Binary {
+                op: Add,
+                left: Binary {
+                    op: Multiply,
+                    left: Apply {
+                        name: "CLNG",
+                        arguments: [
+                            Name(
+                                "SEGMENTVALUE",
+                                Span {
+                                    line: 14,
+                                    start: 23,
+                                    end: 35,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 14,
+                            start: 18,
+                            end: 36,
+                        },
+                    },
+                    right: Literal(
+                        Integer(
+                            65536,
+                            Integer,
+                        ),
+                        Span {
+                            line: 14,
+                            start: 39,
+                            end: 44,
+                        },
+                    ),
+                    span: Span {
+                        line: 14,
+                        start: 18,
+                        end: 44,
+                    },
+                },
+                right: Binary {
+                    op: And,
+                    left: Apply {
+                        name: "CLNG",
+                        arguments: [
+                            Name(
+                                "OFFSETVALUE",
+                                Span {
+                                    line: 14,
+                                    start: 53,
+                                    end: 64,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 14,
+                            start: 48,
+                            end: 65,
+                        },
+                    },
+                    right: Literal(
+                        Integer(
+                            65535,
+                            Long,
+                        ),
+                        Span {
+                            line: 14,
+                            start: 70,
+                            end: 77,
+                        },
+                    ),
+                    span: Span {
+                        line: 14,
+                        start: 48,
+                        end: 77,
+                    },
+                },
+                span: Span {
+                    line: 14,
+                    start: 18,
+                    end: 77,
+                },
+            },
+            span: Span {
+                line: 14,
+                start: 0,
+                end: 77,
+            },
+        },
+        If {
+            condition: Binary {
+                op: Or,
+                left: Binary {
+                    op: Eq,
+                    left: Name(
+                        "SEGMENTVALUE",
+                        Span {
+                            line: 15,
+                            start: 3,
+                            end: 15,
+                        },
+                    ),
+                    right: Literal(
+                        Integer(
+                            0,
+                            Integer,
+                        ),
+                        Span {
+                            line: 15,
+                            start: 18,
+                            end: 19,
+                        },
+                    ),
+                    span: Span {
+                        line: 15,
+                        start: 3,
+                        end: 19,
+                    },
+                },
+                right: Binary {
+                    op: NotEqual,
+                    left: Name(
+                        "FARADDRESS",
+                        Span {
+                            line: 15,
+                            start: 23,
+                            end: 33,
+                        },
+                    ),
+                    right: Name(
+                        "EXPECTEDADDRESS",
+                        Span {
+                            line: 15,
+                            start: 37,
+                            end: 52,
+                        },
+                    ),
+                    span: Span {
+                        line: 15,
+                        start: 23,
+                        end: 52,
+                    },
+                },
+                span: Span {
+                    line: 15,
+                    start: 3,
+                    end: 52,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL string_address value",
+                                ),
+                                Span {
+                                    line: 16,
+                                    start: 10,
+                                    end: 37,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 16,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 17,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 15,
+                start: 0,
+                end: 2,
+            },
+        },
+        DefSeg {
+            value: Some(
+                Name(
+                    "SEGMENTVALUE",
+                    Span {
+                        line: 19,
+                        start: 10,
+                        end: 22,
+                    },
+                ),
+            ),
+            span: Span {
+                line: 19,
+                start: 0,
+                end: 3,
+            },
+        },
+        If {
+            condition: Binary {
+                op: Or,
+                left: Binary {
+                    op: NotEqual,
+                    left: Apply {
+                        name: "PEEK",
+                        arguments: [
+                            Name(
+                                "OFFSETVALUE",
+                                Span {
+                                    line: 20,
+                                    start: 8,
+                                    end: 19,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 20,
+                            start: 3,
+                            end: 20,
+                        },
+                    },
+                    right: Apply {
+                        name: "ASC",
+                        arguments: [
+                            Literal(
+                                String(
+                                    "A",
+                                ),
+                                Span {
+                                    line: 20,
+                                    start: 28,
+                                    end: 31,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 20,
+                            start: 24,
+                            end: 32,
+                        },
+                    },
+                    span: Span {
+                        line: 20,
+                        start: 3,
+                        end: 32,
+                    },
+                },
+                right: Binary {
+                    op: NotEqual,
+                    left: Apply {
+                        name: "PEEK",
+                        arguments: [
+                            Binary {
+                                op: Add,
+                                left: Name(
+                                    "OFFSETVALUE",
+                                    Span {
+                                        line: 20,
+                                        start: 41,
+                                        end: 52,
+                                    },
+                                ),
+                                right: Literal(
+                                    Integer(
+                                        3,
+                                        Integer,
+                                    ),
+                                    Span {
+                                        line: 20,
+                                        start: 55,
+                                        end: 56,
+                                    },
+                                ),
+                                span: Span {
+                                    line: 20,
+                                    start: 41,
+                                    end: 56,
+                                },
+                            },
+                        ],
+                        span: Span {
+                            line: 20,
+                            start: 36,
+                            end: 57,
+                        },
+                    },
+                    right: Apply {
+                        name: "ASC",
+                        arguments: [
+                            Literal(
+                                String(
+                                    "D",
+                                ),
+                                Span {
+                                    line: 20,
+                                    start: 65,
+                                    end: 68,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 20,
+                            start: 61,
+                            end: 69,
+                        },
+                    },
+                    span: Span {
+                        line: 20,
+                        start: 36,
+                        end: 69,
+                    },
+                },
+                span: Span {
+                    line: 20,
+                    start: 3,
+                    end: 69,
+                },
+            },
+            then_branch: [
+                DefSeg {
+                    value: None,
+                    span: Span {
+                        line: 21,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL string_address memory",
+                                ),
+                                Span {
+                                    line: 22,
+                                    start: 10,
+                                    end: 38,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 22,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 23,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 20,
+                start: 0,
+                end: 2,
+            },
+        },
+        DefSeg {
+            value: None,
+            span: Span {
+                line: 25,
+                start: 0,
+                end: 3,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Apply {
+                    name: "SSEG",
+                    arguments: [
+                        Name(
+                            "NULLVALUE",
+                            Span {
+                                line: 26,
+                                start: 8,
+                                end: 17,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 26,
+                        start: 3,
+                        end: 18,
+                    },
+                },
+                right: Literal(
+                    Integer(
+                        0,
+                        Integer,
+                    ),
+                    Span {
+                        line: 26,
+                        start: 22,
+                        end: 23,
+                    },
+                ),
+                span: Span {
+                    line: 26,
+                    start: 3,
+                    end: 23,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL string_address null",
+                                ),
+                                Span {
+                                    line: 27,
+                                    start: 10,
+                                    end: 36,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 27,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 28,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 26,
+                start: 0,
+                end: 2,
+            },
+        },
+        Print {
+            file: None,
+            items: [
+                PrintItem {
+                    value: Literal(
+                        String(
+                            "PASS string_address",
+                        ),
+                        Span {
+                            line: 30,
+                            start: 6,
+                            end: 27,
+                        },
+                    ),
+                    separator: End,
+                },
+            ],
+            span: Span {
+                line: 30,
+                start: 0,
+                end: 5,
+            },
+        },
+    ],
+    procedures: [],
+}

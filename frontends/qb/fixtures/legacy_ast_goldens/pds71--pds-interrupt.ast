@@ -1,0 +1,535 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: pds71/pds-interrupt
+# dialect: Pds71
+# source: pds71/reference/PDINTR.BAS
+
+Module {
+    statements: [
+        TypeDecl {
+            name: "REGTYPE",
+            fields: [
+                Declaration {
+                    name: "AX",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 3,
+                        start: 4,
+                        end: 6,
+                    },
+                },
+                Declaration {
+                    name: "BX",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 4,
+                        start: 4,
+                        end: 6,
+                    },
+                },
+                Declaration {
+                    name: "CX",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 5,
+                        start: 4,
+                        end: 6,
+                    },
+                },
+                Declaration {
+                    name: "DX",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 6,
+                        start: 4,
+                        end: 6,
+                    },
+                },
+                Declaration {
+                    name: "BP",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 7,
+                        start: 4,
+                        end: 6,
+                    },
+                },
+                Declaration {
+                    name: "SI",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 8,
+                        start: 4,
+                        end: 6,
+                    },
+                },
+                Declaration {
+                    name: "DI",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 9,
+                        start: 4,
+                        end: 6,
+                    },
+                },
+                Declaration {
+                    name: "FLAGS",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 10,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+            ],
+            span: Span {
+                line: 2,
+                start: 0,
+                end: 4,
+            },
+        },
+        TypeDecl {
+            name: "REGTYPEX",
+            fields: [
+                Declaration {
+                    name: "AX",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 14,
+                        start: 4,
+                        end: 6,
+                    },
+                },
+                Declaration {
+                    name: "BX",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 15,
+                        start: 4,
+                        end: 6,
+                    },
+                },
+                Declaration {
+                    name: "CX",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 16,
+                        start: 4,
+                        end: 6,
+                    },
+                },
+                Declaration {
+                    name: "DX",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 17,
+                        start: 4,
+                        end: 6,
+                    },
+                },
+                Declaration {
+                    name: "BP",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 18,
+                        start: 4,
+                        end: 6,
+                    },
+                },
+                Declaration {
+                    name: "SI",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 19,
+                        start: 4,
+                        end: 6,
+                    },
+                },
+                Declaration {
+                    name: "DI",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 20,
+                        start: 4,
+                        end: 6,
+                    },
+                },
+                Declaration {
+                    name: "FLAGS",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 21,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Declaration {
+                    name: "DS",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 22,
+                        start: 4,
+                        end: 6,
+                    },
+                },
+                Declaration {
+                    name: "ES",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 23,
+                        start: 4,
+                        end: 6,
+                    },
+                },
+            ],
+            span: Span {
+                line: 13,
+                start: 0,
+                end: 4,
+            },
+        },
+        Dim(
+            [
+                Declaration {
+                    name: "INPUTREGS",
+                    type_name: Some(
+                        Named(
+                            "REGTYPE",
+                        ),
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 26,
+                        start: 4,
+                        end: 24,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "OUTPUTREGS",
+                    type_name: Some(
+                        Named(
+                            "REGTYPE",
+                        ),
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 27,
+                        start: 4,
+                        end: 25,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "INPUTREGSX",
+                    type_name: Some(
+                        Named(
+                            "REGTYPEX",
+                        ),
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 28,
+                        start: 4,
+                        end: 26,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "OUTPUTREGSX",
+                    type_name: Some(
+                        Named(
+                            "REGTYPEX",
+                        ),
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 29,
+                        start: 4,
+                        end: 27,
+                    },
+                },
+            ],
+        ),
+        If {
+            condition: Literal(
+                Integer(
+                    0,
+                    Integer,
+                ),
+                Span {
+                    line: 31,
+                    start: 3,
+                    end: 4,
+                },
+            ),
+            then_branch: [
+                Call {
+                    name: "INTERRUPT",
+                    arguments: [
+                        Literal(
+                            Integer(
+                                33,
+                                Integer,
+                            ),
+                            Span {
+                                line: 32,
+                                start: 19,
+                                end: 23,
+                            },
+                        ),
+                        Name(
+                            "INPUTREGS",
+                            Span {
+                                line: 32,
+                                start: 25,
+                                end: 34,
+                            },
+                        ),
+                        Name(
+                            "OUTPUTREGS",
+                            Span {
+                                line: 32,
+                                start: 36,
+                                end: 46,
+                            },
+                        ),
+                    ],
+                    explicit: true,
+                    span: Span {
+                        line: 32,
+                        start: 4,
+                        end: 8,
+                    },
+                },
+                Call {
+                    name: "INTERRUPTX",
+                    arguments: [
+                        Literal(
+                            Integer(
+                                33,
+                                Integer,
+                            ),
+                            Span {
+                                line: 33,
+                                start: 20,
+                                end: 24,
+                            },
+                        ),
+                        Name(
+                            "INPUTREGSX",
+                            Span {
+                                line: 33,
+                                start: 26,
+                                end: 36,
+                            },
+                        ),
+                        Name(
+                            "OUTPUTREGSX",
+                            Span {
+                                line: 33,
+                                start: 38,
+                                end: 49,
+                            },
+                        ),
+                    ],
+                    explicit: true,
+                    span: Span {
+                        line: 33,
+                        start: 4,
+                        end: 8,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 31,
+                start: 0,
+                end: 2,
+            },
+        },
+        Print {
+            file: None,
+            items: [
+                PrintItem {
+                    value: Literal(
+                        String(
+                            "REFERENCE ONLY pds-interrupt",
+                        ),
+                        Span {
+                            line: 35,
+                            start: 6,
+                            end: 36,
+                        },
+                    ),
+                    separator: End,
+                },
+            ],
+            span: Span {
+                line: 35,
+                start: 0,
+                end: 5,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 36,
+                start: 0,
+                end: 3,
+            },
+        },
+    ],
+    procedures: [],
+}

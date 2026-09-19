@@ -1,0 +1,156 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: qb45/memorymodel
+# dialect: QuickBasic45
+# source: qb45/Q45M28.BAS
+
+Module {
+    statements: [
+        Comment(
+            Span {
+                line: 1,
+                start: 0,
+                end: 9,
+            },
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "LOCALVALUE",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 2,
+                        start: 4,
+                        end: 25,
+                    },
+                },
+            ],
+        ),
+        Assign {
+            target: Name(
+                "LOCALVALUE",
+                Span {
+                    line: 4,
+                    start: 0,
+                    end: 10,
+                },
+            ),
+            value: Literal(
+                Integer(
+                    99,
+                    Integer,
+                ),
+                Span {
+                    line: 4,
+                    start: 13,
+                    end: 15,
+                },
+            ),
+            span: Span {
+                line: 4,
+                start: 0,
+                end: 15,
+            },
+        },
+        If {
+            condition: Binary {
+                op: Eq,
+                left: Name(
+                    "LOCALVALUE",
+                    Span {
+                        line: 5,
+                        start: 3,
+                        end: 13,
+                    },
+                ),
+                right: Literal(
+                    Integer(
+                        99,
+                        Integer,
+                    ),
+                    Span {
+                        line: 5,
+                        start: 16,
+                        end: 18,
+                    },
+                ),
+                span: Span {
+                    line: 5,
+                    start: 3,
+                    end: 18,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "PASS memorymodel",
+                                ),
+                                Span {
+                                    line: 6,
+                                    start: 10,
+                                    end: 28,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 6,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+            ],
+            else_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL memorymodel static",
+                                ),
+                                Span {
+                                    line: 8,
+                                    start: 10,
+                                    end: 35,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 8,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+            ],
+            span: Span {
+                line: 5,
+                start: 0,
+                end: 2,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 10,
+                start: 0,
+                end: 3,
+            },
+        },
+    ],
+    procedures: [],
+}

@@ -1,0 +1,24 @@
+TOKENS:
+   tkINPUT ("INPUT"),
+   tkABS ("ABS"),
+   tkComma (","),
+   tkSColon (";");
+
+Statements:
+   tkINPUT
+    [(lbsInpExpComma MARK(16)) |
+     (tkSColon MARK(2) [LitString MARK(4) (tkSColon | (tkComma MARK(1)))]) |
+     (LitString MARK(4) (tkSColon | (tkComma MARK(1))))]
+    MARK(8) IdAryElemRef EMIT(opStInput) {tkComma IdAryElemRef EMIT(opStInput)}
+    EMIT(opInputEos);
+
+Functions:
+   tkABS LitString EMIT(opFnAbs);
+
+NonTerminals:
+lbsInpExpComma:
+   EXTERNAL;
+LitString:
+   EXTERNAL MSG_ExpExp;
+IdAryElemRef:
+   EXTERNAL MSG_ExpVar;

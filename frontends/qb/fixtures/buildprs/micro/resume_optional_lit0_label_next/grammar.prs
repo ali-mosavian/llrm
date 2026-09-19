@@ -1,0 +1,18 @@
+TOKENS:
+   tkRESUME ("RESUME"),
+   tkABS ("ABS"),
+   tkNEXT ("NEXT");
+
+Statements:
+   tkRESUME MARK(1) [(Lit0 MARK(3)) | (LabLn MARK(2)) | (tkNEXT MARK(4))];
+
+Functions:
+   tkABS Exp EMIT(opFnAbs);
+
+NonTerminals:
+Exp:
+   EXTERNAL MSG_ExpExp;
+Lit0:
+   EXTERNAL MSG_ExpLit0;
+LabLn:
+   EXTERNAL MSG_ExpLab;

@@ -1,0 +1,207 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: vbdos/cdecl_alias_external
+# dialect: VbDos
+# source: vbdos/cdeclabi.bas
+
+Module {
+    statements: [
+        OptionExplicit(
+            Span {
+                line: 1,
+                start: 0,
+                end: 6,
+            },
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "ANSWER_VALUE",
+                    type_name: Some(
+                        Long,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 5,
+                        start: 4,
+                        end: 24,
+                    },
+                },
+            ],
+        ),
+        Assign {
+            target: Name(
+                "ANSWER_VALUE",
+                Span {
+                    line: 7,
+                    start: 0,
+                    end: 12,
+                },
+            ),
+            value: Apply {
+                name: "COMPAT_EXTERNAL",
+                arguments: [
+                    Literal(
+                        Integer(
+                            41,
+                            Integer,
+                        ),
+                        Span {
+                            line: 7,
+                            start: 31,
+                            end: 33,
+                        },
+                    ),
+                ],
+                span: Span {
+                    line: 7,
+                    start: 15,
+                    end: 34,
+                },
+            },
+            span: Span {
+                line: 7,
+                start: 0,
+                end: 34,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Name(
+                    "ANSWER_VALUE",
+                    Span {
+                        line: 8,
+                        start: 3,
+                        end: 15,
+                    },
+                ),
+                right: Literal(
+                    Integer(
+                        42,
+                        Integer,
+                    ),
+                    Span {
+                        line: 8,
+                        start: 19,
+                        end: 21,
+                    },
+                ),
+                span: Span {
+                    line: 8,
+                    start: 3,
+                    end: 21,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL cdecl_alias_external result",
+                                ),
+                                Span {
+                                    line: 9,
+                                    start: 10,
+                                    end: 44,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 9,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 10,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 8,
+                start: 0,
+                end: 2,
+            },
+        },
+        Print {
+            file: None,
+            items: [
+                PrintItem {
+                    value: Literal(
+                        String(
+                            "PASS cdecl_alias_external",
+                        ),
+                        Span {
+                            line: 13,
+                            start: 6,
+                            end: 33,
+                        },
+                    ),
+                    separator: End,
+                },
+            ],
+            span: Span {
+                line: 13,
+                start: 0,
+                end: 5,
+            },
+        },
+    ],
+    procedures: [
+        Procedure {
+            name: "COMPAT_EXTERNAL",
+            alias: Some(
+                "compat_external",
+            ),
+            cdecl: true,
+            kind: Function,
+            parameters: [
+                Parameter {
+                    declaration: Declaration {
+                        name: "SOURCE_VALUE",
+                        type_name: Some(
+                            Long,
+                        ),
+                        array: false,
+                        bounds: [],
+                        fixed_length: None,
+                        shared: false,
+                        dynamic: false,
+                        span: Span {
+                            line: 3,
+                            start: 70,
+                            end: 90,
+                        },
+                    },
+                    by_value: true,
+                    segmented: false,
+                },
+            ],
+            result: Some(
+                Long,
+            ),
+            body: [],
+            declaration: true,
+            is_static: false,
+            span: Span {
+                line: 3,
+                start: 8,
+                end: 16,
+            },
+        },
+    ],
+}

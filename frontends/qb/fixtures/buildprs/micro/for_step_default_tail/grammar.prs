@@ -1,0 +1,22 @@
+TOKENS:
+   tkFOR ("FOR"),
+   tkABS ("ABS"),
+   tkEQ ("="),
+   tkTO ("TO"),
+   tkSTEP ("STEP");
+
+Statements:
+   tkFOR IdFor tkEQ Exp tkTO Exp
+     ((tkSTEP Exp EMIT(opStForStep)) | EMIT(opStFor))
+     EMITFFFF EMITFFFF;
+
+Functions:
+   tkABS Exp EMIT(opFnAbs);
+
+NonTerminals:
+EMITFFFF:
+   EMIT(UNDEFINED);
+Exp:
+   EXTERNAL MSG_ExpExp;
+IdFor:
+   EXTERNAL MSG_ExpVar;

@@ -1,0 +1,2 @@
+opStBload1|x
+opFnAbs|x

@@ -1,0 +1,664 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: qb45/logical-operators
+# dialect: QuickBasic45
+# source: qb45/Q45LG47.BAS
+
+Module {
+    statements: [
+        Dim(
+            [
+                Declaration {
+                    name: "LEFTVALUE",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 2,
+                        start: 4,
+                        end: 24,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "RIGHTVALUE",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 3,
+                        start: 4,
+                        end: 25,
+                    },
+                },
+            ],
+        ),
+        Read {
+            destinations: [
+                Name(
+                    "LEFTVALUE",
+                    Span {
+                        line: 5,
+                        start: 5,
+                        end: 14,
+                    },
+                ),
+                Name(
+                    "RIGHTVALUE",
+                    Span {
+                        line: 5,
+                        start: 16,
+                        end: 26,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 5,
+                start: 0,
+                end: 4,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Binary {
+                    op: And,
+                    left: Name(
+                        "LEFTVALUE",
+                        Span {
+                            line: 6,
+                            start: 4,
+                            end: 13,
+                        },
+                    ),
+                    right: Name(
+                        "RIGHTVALUE",
+                        Span {
+                            line: 6,
+                            start: 18,
+                            end: 28,
+                        },
+                    ),
+                    span: Span {
+                        line: 6,
+                        start: 4,
+                        end: 28,
+                    },
+                },
+                right: Literal(
+                    Integer(
+                        8,
+                        Integer,
+                    ),
+                    Span {
+                        line: 6,
+                        start: 33,
+                        end: 34,
+                    },
+                ),
+                span: Span {
+                    line: 6,
+                    start: 4,
+                    end: 34,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL logical and",
+                                ),
+                                Span {
+                                    line: 7,
+                                    start: 10,
+                                    end: 28,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 7,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 8,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 6,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Binary {
+                    op: Or,
+                    left: Name(
+                        "LEFTVALUE",
+                        Span {
+                            line: 10,
+                            start: 4,
+                            end: 13,
+                        },
+                    ),
+                    right: Name(
+                        "RIGHTVALUE",
+                        Span {
+                            line: 10,
+                            start: 17,
+                            end: 27,
+                        },
+                    ),
+                    span: Span {
+                        line: 10,
+                        start: 4,
+                        end: 27,
+                    },
+                },
+                right: Literal(
+                    Integer(
+                        14,
+                        Integer,
+                    ),
+                    Span {
+                        line: 10,
+                        start: 32,
+                        end: 34,
+                    },
+                ),
+                span: Span {
+                    line: 10,
+                    start: 4,
+                    end: 34,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL logical or",
+                                ),
+                                Span {
+                                    line: 11,
+                                    start: 10,
+                                    end: 27,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 11,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 12,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 10,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Binary {
+                    op: Xor,
+                    left: Name(
+                        "LEFTVALUE",
+                        Span {
+                            line: 14,
+                            start: 4,
+                            end: 13,
+                        },
+                    ),
+                    right: Name(
+                        "RIGHTVALUE",
+                        Span {
+                            line: 14,
+                            start: 18,
+                            end: 28,
+                        },
+                    ),
+                    span: Span {
+                        line: 14,
+                        start: 4,
+                        end: 28,
+                    },
+                },
+                right: Literal(
+                    Integer(
+                        6,
+                        Integer,
+                    ),
+                    Span {
+                        line: 14,
+                        start: 33,
+                        end: 34,
+                    },
+                ),
+                span: Span {
+                    line: 14,
+                    start: 4,
+                    end: 34,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL logical xor",
+                                ),
+                                Span {
+                                    line: 15,
+                                    start: 10,
+                                    end: 28,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 15,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 16,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 14,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Binary {
+                    op: Eqv,
+                    left: Name(
+                        "LEFTVALUE",
+                        Span {
+                            line: 18,
+                            start: 4,
+                            end: 13,
+                        },
+                    ),
+                    right: Name(
+                        "RIGHTVALUE",
+                        Span {
+                            line: 18,
+                            start: 18,
+                            end: 28,
+                        },
+                    ),
+                    span: Span {
+                        line: 18,
+                        start: 4,
+                        end: 28,
+                    },
+                },
+                right: Unary {
+                    op: Negative,
+                    operand: Literal(
+                        Integer(
+                            7,
+                            Integer,
+                        ),
+                        Span {
+                            line: 18,
+                            start: 34,
+                            end: 35,
+                        },
+                    ),
+                    span: Span {
+                        line: 18,
+                        start: 33,
+                        end: 35,
+                    },
+                },
+                span: Span {
+                    line: 18,
+                    start: 4,
+                    end: 35,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL logical eqv",
+                                ),
+                                Span {
+                                    line: 19,
+                                    start: 10,
+                                    end: 28,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 19,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 20,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 18,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Binary {
+                    op: Imp,
+                    left: Name(
+                        "LEFTVALUE",
+                        Span {
+                            line: 22,
+                            start: 4,
+                            end: 13,
+                        },
+                    ),
+                    right: Name(
+                        "RIGHTVALUE",
+                        Span {
+                            line: 22,
+                            start: 18,
+                            end: 28,
+                        },
+                    ),
+                    span: Span {
+                        line: 22,
+                        start: 4,
+                        end: 28,
+                    },
+                },
+                right: Unary {
+                    op: Negative,
+                    operand: Literal(
+                        Integer(
+                            5,
+                            Integer,
+                        ),
+                        Span {
+                            line: 22,
+                            start: 34,
+                            end: 35,
+                        },
+                    ),
+                    span: Span {
+                        line: 22,
+                        start: 33,
+                        end: 35,
+                    },
+                },
+                span: Span {
+                    line: 22,
+                    start: 4,
+                    end: 35,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL logical imp",
+                                ),
+                                Span {
+                                    line: 23,
+                                    start: 10,
+                                    end: 28,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 23,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 24,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 22,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Unary {
+                    op: Not,
+                    operand: Name(
+                        "LEFTVALUE",
+                        Span {
+                            line: 26,
+                            start: 8,
+                            end: 17,
+                        },
+                    ),
+                    span: Span {
+                        line: 26,
+                        start: 4,
+                        end: 17,
+                    },
+                },
+                right: Unary {
+                    op: Negative,
+                    operand: Literal(
+                        Integer(
+                            13,
+                            Integer,
+                        ),
+                        Span {
+                            line: 26,
+                            start: 23,
+                            end: 25,
+                        },
+                    ),
+                    span: Span {
+                        line: 26,
+                        start: 22,
+                        end: 25,
+                    },
+                },
+                span: Span {
+                    line: 26,
+                    start: 4,
+                    end: 25,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL logical not",
+                                ),
+                                Span {
+                                    line: 27,
+                                    start: 10,
+                                    end: 28,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 27,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 28,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 26,
+                start: 0,
+                end: 2,
+            },
+        },
+        Print {
+            file: None,
+            items: [
+                PrintItem {
+                    value: Literal(
+                        String(
+                            "PASS logical",
+                        ),
+                        Span {
+                            line: 30,
+                            start: 6,
+                            end: 20,
+                        },
+                    ),
+                    separator: End,
+                },
+            ],
+            span: Span {
+                line: 30,
+                start: 0,
+                end: 5,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 31,
+                start: 0,
+                end: 3,
+            },
+        },
+        Data {
+            values: [
+                Literal(
+                    Integer(
+                        12,
+                        Integer,
+                    ),
+                    Span {
+                        line: 33,
+                        start: 5,
+                        end: 7,
+                    },
+                ),
+                Literal(
+                    Integer(
+                        10,
+                        Integer,
+                    ),
+                    Span {
+                        line: 33,
+                        start: 9,
+                        end: 11,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 33,
+                start: 0,
+                end: 4,
+            },
+        },
+    ],
+    procedures: [],
+}

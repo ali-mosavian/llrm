@@ -1,0 +1,27 @@
+TOKENS:
+   tkEND ("END"),
+   tkDEF ("DEF"),
+   tkFUNCTION ("FUNCTION"),
+   tkIF ("IF"),
+   tkSELECT ("SELECT"),
+   tkSUB ("SUB"),
+   tkTYPE ("TYPE"),
+   tkABS ("ABS");
+
+Statements:
+   tkEND (tkDEF EMIT(opStEndDef) EMIT(2) EMITFFFF) |
+         (tkFUNCTION EMIT(opStEndProc)) |
+         (tkIF EMIT(opStEndIfBlock) ErrIfNot1st) |
+         (tkSELECT EMIT(opStEndSelect)) |
+         (tkSUB EMIT(opStEndProc)) |
+         (tkTYPE EMIT(opStEndType) EMITFFFF) |
+         (EMIT(opStEnd));
+
+Functions:
+   tkABS EMIT(opFnAbs);
+
+NonTerminals:
+EMITFFFF:
+   EMIT(UNDEFINED);
+ErrIfNot1st:
+   EXTERNAL;

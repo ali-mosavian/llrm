@@ -1,0 +1,806 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: pds71/pds-huge-array
+# dialect: Pds71
+# source: pds71/PDHUGE.BAS
+
+Module {
+    statements: [
+        Comment(
+            Span {
+                line: 2,
+                start: 0,
+                end: 10,
+            },
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "ITEMS",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: true,
+                    bounds: [
+                        Bound {
+                            lower: Some(
+                                Literal(
+                                    Integer(
+                                        0,
+                                        Integer,
+                                    ),
+                                    Span {
+                                        line: 4,
+                                        start: 10,
+                                        end: 11,
+                                    },
+                                ),
+                            ),
+                            upper: Literal(
+                                Integer(
+                                    200,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 4,
+                                    start: 15,
+                                    end: 18,
+                                },
+                            ),
+                        },
+                        Bound {
+                            lower: Some(
+                                Unary {
+                                    op: Negative,
+                                    operand: Literal(
+                                        Integer(
+                                            2,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 4,
+                                            start: 21,
+                                            end: 22,
+                                        },
+                                    ),
+                                    span: Span {
+                                        line: 4,
+                                        start: 20,
+                                        end: 22,
+                                    },
+                                },
+                            ),
+                            upper: Literal(
+                                Integer(
+                                    198,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 4,
+                                    start: 26,
+                                    end: 29,
+                                },
+                            ),
+                        },
+                    ],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: true,
+                    span: Span {
+                        line: 4,
+                        start: 4,
+                        end: 41,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "PASSED",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: true,
+                    span: Span {
+                        line: 5,
+                        start: 4,
+                        end: 21,
+                    },
+                },
+            ],
+        ),
+        Assign {
+            target: Apply {
+                name: "ITEMS",
+                arguments: [
+                    Literal(
+                        Integer(
+                            0,
+                            Integer,
+                        ),
+                        Span {
+                            line: 7,
+                            start: 6,
+                            end: 7,
+                        },
+                    ),
+                    Unary {
+                        op: Negative,
+                        operand: Literal(
+                            Integer(
+                                2,
+                                Integer,
+                            ),
+                            Span {
+                                line: 7,
+                                start: 10,
+                                end: 11,
+                            },
+                        ),
+                        span: Span {
+                            line: 7,
+                            start: 9,
+                            end: 11,
+                        },
+                    },
+                ],
+                span: Span {
+                    line: 7,
+                    start: 0,
+                    end: 12,
+                },
+            },
+            value: Literal(
+                Integer(
+                    123,
+                    Integer,
+                ),
+                Span {
+                    line: 7,
+                    start: 15,
+                    end: 18,
+                },
+            ),
+            span: Span {
+                line: 7,
+                start: 0,
+                end: 18,
+            },
+        },
+        Assign {
+            target: Apply {
+                name: "ITEMS",
+                arguments: [
+                    Literal(
+                        Integer(
+                            4,
+                            Integer,
+                        ),
+                        Span {
+                            line: 8,
+                            start: 6,
+                            end: 7,
+                        },
+                    ),
+                    Literal(
+                        Integer(
+                            161,
+                            Integer,
+                        ),
+                        Span {
+                            line: 8,
+                            start: 9,
+                            end: 12,
+                        },
+                    ),
+                ],
+                span: Span {
+                    line: 8,
+                    start: 0,
+                    end: 13,
+                },
+            },
+            value: Literal(
+                Integer(
+                    456,
+                    Integer,
+                ),
+                Span {
+                    line: 8,
+                    start: 16,
+                    end: 19,
+                },
+            ),
+            span: Span {
+                line: 8,
+                start: 0,
+                end: 19,
+            },
+        },
+        Assign {
+            target: Apply {
+                name: "ITEMS",
+                arguments: [
+                    Literal(
+                        Integer(
+                            5,
+                            Integer,
+                        ),
+                        Span {
+                            line: 9,
+                            start: 6,
+                            end: 7,
+                        },
+                    ),
+                    Literal(
+                        Integer(
+                            161,
+                            Integer,
+                        ),
+                        Span {
+                            line: 9,
+                            start: 9,
+                            end: 12,
+                        },
+                    ),
+                ],
+                span: Span {
+                    line: 9,
+                    start: 0,
+                    end: 13,
+                },
+            },
+            value: Literal(
+                Integer(
+                    789,
+                    Integer,
+                ),
+                Span {
+                    line: 9,
+                    start: 16,
+                    end: 19,
+                },
+            ),
+            span: Span {
+                line: 9,
+                start: 0,
+                end: 19,
+            },
+        },
+        Assign {
+            target: Apply {
+                name: "ITEMS",
+                arguments: [
+                    Literal(
+                        Integer(
+                            163,
+                            Integer,
+                        ),
+                        Span {
+                            line: 10,
+                            start: 6,
+                            end: 9,
+                        },
+                    ),
+                    Literal(
+                        Integer(
+                            2,
+                            Integer,
+                        ),
+                        Span {
+                            line: 10,
+                            start: 11,
+                            end: 12,
+                        },
+                    ),
+                ],
+                span: Span {
+                    line: 10,
+                    start: 0,
+                    end: 13,
+                },
+            },
+            value: Literal(
+                Integer(
+                    111,
+                    Integer,
+                ),
+                Span {
+                    line: 10,
+                    start: 16,
+                    end: 19,
+                },
+            ),
+            span: Span {
+                line: 10,
+                start: 0,
+                end: 19,
+            },
+        },
+        Assign {
+            target: Apply {
+                name: "ITEMS",
+                arguments: [
+                    Literal(
+                        Integer(
+                            163,
+                            Integer,
+                        ),
+                        Span {
+                            line: 11,
+                            start: 6,
+                            end: 9,
+                        },
+                    ),
+                    Literal(
+                        Integer(
+                            3,
+                            Integer,
+                        ),
+                        Span {
+                            line: 11,
+                            start: 11,
+                            end: 12,
+                        },
+                    ),
+                ],
+                span: Span {
+                    line: 11,
+                    start: 0,
+                    end: 13,
+                },
+            },
+            value: Literal(
+                Integer(
+                    222,
+                    Integer,
+                ),
+                Span {
+                    line: 11,
+                    start: 16,
+                    end: 19,
+                },
+            ),
+            span: Span {
+                line: 11,
+                start: 0,
+                end: 19,
+            },
+        },
+        Assign {
+            target: Name(
+                "PASSED",
+                Span {
+                    line: 13,
+                    start: 0,
+                    end: 6,
+                },
+            ),
+            value: Binary {
+                op: And,
+                left: Binary {
+                    op: Eq,
+                    left: Apply {
+                        name: "ITEMS",
+                        arguments: [
+                            Literal(
+                                Integer(
+                                    0,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 13,
+                                    start: 15,
+                                    end: 16,
+                                },
+                            ),
+                            Unary {
+                                op: Negative,
+                                operand: Literal(
+                                    Integer(
+                                        2,
+                                        Integer,
+                                    ),
+                                    Span {
+                                        line: 13,
+                                        start: 19,
+                                        end: 20,
+                                    },
+                                ),
+                                span: Span {
+                                    line: 13,
+                                    start: 18,
+                                    end: 20,
+                                },
+                            },
+                        ],
+                        span: Span {
+                            line: 13,
+                            start: 9,
+                            end: 21,
+                        },
+                    },
+                    right: Literal(
+                        Integer(
+                            123,
+                            Integer,
+                        ),
+                        Span {
+                            line: 13,
+                            start: 24,
+                            end: 27,
+                        },
+                    ),
+                    span: Span {
+                        line: 13,
+                        start: 9,
+                        end: 27,
+                    },
+                },
+                right: Binary {
+                    op: Eq,
+                    left: Apply {
+                        name: "ITEMS",
+                        arguments: [
+                            Literal(
+                                Integer(
+                                    4,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 13,
+                                    start: 38,
+                                    end: 39,
+                                },
+                            ),
+                            Literal(
+                                Integer(
+                                    161,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 13,
+                                    start: 41,
+                                    end: 44,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 13,
+                            start: 32,
+                            end: 45,
+                        },
+                    },
+                    right: Literal(
+                        Integer(
+                            456,
+                            Integer,
+                        ),
+                        Span {
+                            line: 13,
+                            start: 48,
+                            end: 51,
+                        },
+                    ),
+                    span: Span {
+                        line: 13,
+                        start: 32,
+                        end: 51,
+                    },
+                },
+                span: Span {
+                    line: 13,
+                    start: 9,
+                    end: 51,
+                },
+            },
+            span: Span {
+                line: 13,
+                start: 0,
+                end: 51,
+            },
+        },
+        Assign {
+            target: Name(
+                "PASSED",
+                Span {
+                    line: 14,
+                    start: 0,
+                    end: 6,
+                },
+            ),
+            value: Binary {
+                op: And,
+                left: Name(
+                    "PASSED",
+                    Span {
+                        line: 14,
+                        start: 9,
+                        end: 15,
+                    },
+                ),
+                right: Binary {
+                    op: Eq,
+                    left: Apply {
+                        name: "ITEMS",
+                        arguments: [
+                            Literal(
+                                Integer(
+                                    5,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 14,
+                                    start: 26,
+                                    end: 27,
+                                },
+                            ),
+                            Literal(
+                                Integer(
+                                    161,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 14,
+                                    start: 29,
+                                    end: 32,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 14,
+                            start: 20,
+                            end: 33,
+                        },
+                    },
+                    right: Literal(
+                        Integer(
+                            789,
+                            Integer,
+                        ),
+                        Span {
+                            line: 14,
+                            start: 36,
+                            end: 39,
+                        },
+                    ),
+                    span: Span {
+                        line: 14,
+                        start: 20,
+                        end: 39,
+                    },
+                },
+                span: Span {
+                    line: 14,
+                    start: 9,
+                    end: 39,
+                },
+            },
+            span: Span {
+                line: 14,
+                start: 0,
+                end: 39,
+            },
+        },
+        Assign {
+            target: Name(
+                "PASSED",
+                Span {
+                    line: 15,
+                    start: 0,
+                    end: 6,
+                },
+            ),
+            value: Binary {
+                op: And,
+                left: Binary {
+                    op: And,
+                    left: Name(
+                        "PASSED",
+                        Span {
+                            line: 15,
+                            start: 9,
+                            end: 15,
+                        },
+                    ),
+                    right: Binary {
+                        op: Eq,
+                        left: Apply {
+                            name: "ITEMS",
+                            arguments: [
+                                Literal(
+                                    Integer(
+                                        163,
+                                        Integer,
+                                    ),
+                                    Span {
+                                        line: 15,
+                                        start: 26,
+                                        end: 29,
+                                    },
+                                ),
+                                Literal(
+                                    Integer(
+                                        2,
+                                        Integer,
+                                    ),
+                                    Span {
+                                        line: 15,
+                                        start: 31,
+                                        end: 32,
+                                    },
+                                ),
+                            ],
+                            span: Span {
+                                line: 15,
+                                start: 20,
+                                end: 33,
+                            },
+                        },
+                        right: Literal(
+                            Integer(
+                                111,
+                                Integer,
+                            ),
+                            Span {
+                                line: 15,
+                                start: 36,
+                                end: 39,
+                            },
+                        ),
+                        span: Span {
+                            line: 15,
+                            start: 20,
+                            end: 39,
+                        },
+                    },
+                    span: Span {
+                        line: 15,
+                        start: 9,
+                        end: 39,
+                    },
+                },
+                right: Binary {
+                    op: Eq,
+                    left: Apply {
+                        name: "ITEMS",
+                        arguments: [
+                            Literal(
+                                Integer(
+                                    163,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 15,
+                                    start: 50,
+                                    end: 53,
+                                },
+                            ),
+                            Literal(
+                                Integer(
+                                    3,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 15,
+                                    start: 55,
+                                    end: 56,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 15,
+                            start: 44,
+                            end: 57,
+                        },
+                    },
+                    right: Literal(
+                        Integer(
+                            222,
+                            Integer,
+                        ),
+                        Span {
+                            line: 15,
+                            start: 60,
+                            end: 63,
+                        },
+                    ),
+                    span: Span {
+                        line: 15,
+                        start: 44,
+                        end: 63,
+                    },
+                },
+                span: Span {
+                    line: 15,
+                    start: 9,
+                    end: 63,
+                },
+            },
+            span: Span {
+                line: 15,
+                start: 0,
+                end: 63,
+            },
+        },
+        If {
+            condition: Name(
+                "PASSED",
+                Span {
+                    line: 17,
+                    start: 3,
+                    end: 9,
+                },
+            ),
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "PASS pds-huge-array",
+                                ),
+                                Span {
+                                    line: 18,
+                                    start: 10,
+                                    end: 31,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 18,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+            ],
+            else_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL pds-huge-array indexing",
+                                ),
+                                Span {
+                                    line: 20,
+                                    start: 10,
+                                    end: 40,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 20,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+            ],
+            span: Span {
+                line: 17,
+                start: 0,
+                end: 2,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 22,
+                start: 0,
+                end: 3,
+            },
+        },
+    ],
+    procedures: [],
+}

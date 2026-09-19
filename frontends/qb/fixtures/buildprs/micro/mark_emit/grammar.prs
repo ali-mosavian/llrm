@@ -1,0 +1,9 @@
+TOKENS:
+   tkA ("A");
+
+Statements:
+   tkA MARK(3) EMIT(opStBeep);
+
+Functions:
+
+NonTerminals:

@@ -1,0 +1,11 @@
+TOKENS:
+   tkA ("A"),
+   tkB ("B"),
+   tkC ("C");
+
+Statements:
+   tkA (tkB | tkC) EMIT(opStBeep);
+
+Functions:
+
+NonTerminals:

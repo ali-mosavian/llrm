@@ -1,0 +1,24 @@
+TOKENS:
+   tkGET ("GET"),
+   tkABS ("ABS"),
+   tkComma (",");
+
+Statements:
+   tkGET optFilenum
+    (((tkComma
+     ((Exp (tkComma IdAryElemRef EMIT(opStGetRec3) EMITFFFF) | EMIT(opStGet2)) |
+      (tkComma IdAryElemRef EMIT(opStGetRec2) EMITFFFF)))) |
+     EMIT(opStGet1));
+
+Functions:
+   tkABS Exp EMIT(opFnAbs);
+
+NonTerminals:
+EMITFFFF:
+   EMIT(UNDEFINED);
+Exp:
+   EXTERNAL MSG_ExpExp;
+IdAryElemRef:
+   EXTERNAL MSG_ExpVar;
+optFilenum:
+   EXTERNAL;

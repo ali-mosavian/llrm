@@ -1,0 +1,611 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: qb45/operator-precedence
+# dialect: QuickBasic45
+# source: qb45/Q45PR48.BAS
+
+Module {
+    statements: [
+        Dim(
+            [
+                Declaration {
+                    name: "FIRSTVALUE",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 2,
+                        start: 4,
+                        end: 25,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "SECONDVALUE",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 3,
+                        start: 4,
+                        end: 26,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "THIRDVALUE",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 4,
+                        start: 4,
+                        end: 25,
+                    },
+                },
+            ],
+        ),
+        Read {
+            destinations: [
+                Name(
+                    "FIRSTVALUE",
+                    Span {
+                        line: 6,
+                        start: 5,
+                        end: 15,
+                    },
+                ),
+                Name(
+                    "SECONDVALUE",
+                    Span {
+                        line: 6,
+                        start: 17,
+                        end: 28,
+                    },
+                ),
+                Name(
+                    "THIRDVALUE",
+                    Span {
+                        line: 6,
+                        start: 30,
+                        end: 40,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 6,
+                start: 0,
+                end: 4,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Binary {
+                    op: Add,
+                    left: Name(
+                        "FIRSTVALUE",
+                        Span {
+                            line: 7,
+                            start: 3,
+                            end: 13,
+                        },
+                    ),
+                    right: Binary {
+                        op: Multiply,
+                        left: Name(
+                            "SECONDVALUE",
+                            Span {
+                                line: 7,
+                                start: 16,
+                                end: 27,
+                            },
+                        ),
+                        right: Name(
+                            "THIRDVALUE",
+                            Span {
+                                line: 7,
+                                start: 30,
+                                end: 40,
+                            },
+                        ),
+                        span: Span {
+                            line: 7,
+                            start: 16,
+                            end: 40,
+                        },
+                    },
+                    span: Span {
+                        line: 7,
+                        start: 3,
+                        end: 40,
+                    },
+                },
+                right: Literal(
+                    Integer(
+                        17,
+                        Integer,
+                    ),
+                    Span {
+                        line: 7,
+                        start: 44,
+                        end: 46,
+                    },
+                ),
+                span: Span {
+                    line: 7,
+                    start: 3,
+                    end: 46,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL precedence multiply",
+                                ),
+                                Span {
+                                    line: 8,
+                                    start: 10,
+                                    end: 36,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 8,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 9,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 7,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Binary {
+                    op: Multiply,
+                    left: Binary {
+                        op: Add,
+                        left: Name(
+                            "FIRSTVALUE",
+                            Span {
+                                line: 11,
+                                start: 4,
+                                end: 14,
+                            },
+                        ),
+                        right: Name(
+                            "SECONDVALUE",
+                            Span {
+                                line: 11,
+                                start: 17,
+                                end: 28,
+                            },
+                        ),
+                        span: Span {
+                            line: 11,
+                            start: 4,
+                            end: 28,
+                        },
+                    },
+                    right: Name(
+                        "THIRDVALUE",
+                        Span {
+                            line: 11,
+                            start: 32,
+                            end: 42,
+                        },
+                    ),
+                    span: Span {
+                        line: 11,
+                        start: 4,
+                        end: 42,
+                    },
+                },
+                right: Literal(
+                    Integer(
+                        25,
+                        Integer,
+                    ),
+                    Span {
+                        line: 11,
+                        start: 46,
+                        end: 48,
+                    },
+                ),
+                span: Span {
+                    line: 11,
+                    start: 4,
+                    end: 48,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL precedence parentheses",
+                                ),
+                                Span {
+                                    line: 12,
+                                    start: 10,
+                                    end: 39,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 12,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 13,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 11,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Binary {
+                    op: Multiply,
+                    left: Binary {
+                        op: Power,
+                        left: Literal(
+                            Integer(
+                                2,
+                                Integer,
+                            ),
+                            Span {
+                                line: 15,
+                                start: 3,
+                                end: 4,
+                            },
+                        ),
+                        right: Name(
+                            "SECONDVALUE",
+                            Span {
+                                line: 15,
+                                start: 7,
+                                end: 18,
+                            },
+                        ),
+                        span: Span {
+                            line: 15,
+                            start: 3,
+                            end: 18,
+                        },
+                    },
+                    right: Literal(
+                        Integer(
+                            4,
+                            Integer,
+                        ),
+                        Span {
+                            line: 15,
+                            start: 21,
+                            end: 22,
+                        },
+                    ),
+                    span: Span {
+                        line: 15,
+                        start: 3,
+                        end: 22,
+                    },
+                },
+                right: Literal(
+                    Integer(
+                        32,
+                        Integer,
+                    ),
+                    Span {
+                        line: 15,
+                        start: 26,
+                        end: 28,
+                    },
+                ),
+                span: Span {
+                    line: 15,
+                    start: 3,
+                    end: 28,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL precedence power",
+                                ),
+                                Span {
+                                    line: 16,
+                                    start: 10,
+                                    end: 33,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 16,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 17,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 15,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Binary {
+                    op: And,
+                    left: Binary {
+                        op: Less,
+                        left: Name(
+                            "FIRSTVALUE",
+                            Span {
+                                line: 19,
+                                start: 5,
+                                end: 15,
+                            },
+                        ),
+                        right: Name(
+                            "SECONDVALUE",
+                            Span {
+                                line: 19,
+                                start: 18,
+                                end: 29,
+                            },
+                        ),
+                        span: Span {
+                            line: 19,
+                            start: 5,
+                            end: 29,
+                        },
+                    },
+                    right: Binary {
+                        op: Less,
+                        left: Name(
+                            "SECONDVALUE",
+                            Span {
+                                line: 19,
+                                start: 36,
+                                end: 47,
+                            },
+                        ),
+                        right: Name(
+                            "THIRDVALUE",
+                            Span {
+                                line: 19,
+                                start: 50,
+                                end: 60,
+                            },
+                        ),
+                        span: Span {
+                            line: 19,
+                            start: 36,
+                            end: 60,
+                        },
+                    },
+                    span: Span {
+                        line: 19,
+                        start: 5,
+                        end: 60,
+                    },
+                },
+                right: Unary {
+                    op: Negative,
+                    operand: Literal(
+                        Integer(
+                            1,
+                            Integer,
+                        ),
+                        Span {
+                            line: 19,
+                            start: 67,
+                            end: 68,
+                        },
+                    ),
+                    span: Span {
+                        line: 19,
+                        start: 66,
+                        end: 68,
+                    },
+                },
+                span: Span {
+                    line: 19,
+                    start: 5,
+                    end: 68,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL precedence relation",
+                                ),
+                                Span {
+                                    line: 20,
+                                    start: 10,
+                                    end: 36,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 20,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 21,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 19,
+                start: 0,
+                end: 2,
+            },
+        },
+        Print {
+            file: None,
+            items: [
+                PrintItem {
+                    value: Literal(
+                        String(
+                            "PASS precedence",
+                        ),
+                        Span {
+                            line: 23,
+                            start: 6,
+                            end: 23,
+                        },
+                    ),
+                    separator: End,
+                },
+            ],
+            span: Span {
+                line: 23,
+                start: 0,
+                end: 5,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 24,
+                start: 0,
+                end: 3,
+            },
+        },
+        Data {
+            values: [
+                Literal(
+                    Integer(
+                        2,
+                        Integer,
+                    ),
+                    Span {
+                        line: 26,
+                        start: 5,
+                        end: 6,
+                    },
+                ),
+                Literal(
+                    Integer(
+                        3,
+                        Integer,
+                    ),
+                    Span {
+                        line: 26,
+                        start: 8,
+                        end: 9,
+                    },
+                ),
+                Literal(
+                    Integer(
+                        5,
+                        Integer,
+                    ),
+                    Span {
+                        line: 26,
+                        start: 11,
+                        end: 12,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 26,
+                start: 0,
+                end: 4,
+            },
+        },
+    ],
+    procedures: [],
+}

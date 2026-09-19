@@ -1,0 +1,472 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: vbdos/interrupt_abi
+# dialect: VbDos
+# source: vbdos/intabi.bas
+
+Module {
+    statements: [
+        OptionExplicit(
+            Span {
+                line: 1,
+                start: 0,
+                end: 6,
+            },
+        ),
+        TypeDecl {
+            name: "REGTYPE",
+            fields: [
+                Declaration {
+                    name: "AX",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 4,
+                        start: 4,
+                        end: 6,
+                    },
+                },
+                Declaration {
+                    name: "BX",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 5,
+                        start: 4,
+                        end: 6,
+                    },
+                },
+                Declaration {
+                    name: "CX",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 6,
+                        start: 4,
+                        end: 6,
+                    },
+                },
+                Declaration {
+                    name: "DX",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 7,
+                        start: 4,
+                        end: 6,
+                    },
+                },
+                Declaration {
+                    name: "BP",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 8,
+                        start: 4,
+                        end: 6,
+                    },
+                },
+                Declaration {
+                    name: "SI",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 9,
+                        start: 4,
+                        end: 6,
+                    },
+                },
+                Declaration {
+                    name: "DI",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 10,
+                        start: 4,
+                        end: 6,
+                    },
+                },
+                Declaration {
+                    name: "FLAGS",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 11,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+            ],
+            span: Span {
+                line: 3,
+                start: 0,
+                end: 4,
+            },
+        },
+        Dim(
+            [
+                Declaration {
+                    name: "IN_REGISTERS",
+                    type_name: Some(
+                        Named(
+                            "REGTYPE",
+                        ),
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 16,
+                        start: 4,
+                        end: 27,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "OUT_REGISTERS",
+                    type_name: Some(
+                        Named(
+                            "REGTYPE",
+                        ),
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 17,
+                        start: 4,
+                        end: 28,
+                    },
+                },
+            ],
+        ),
+        Assign {
+            target: Field {
+                base: Name(
+                    "IN_REGISTERS",
+                    Span {
+                        line: 19,
+                        start: 0,
+                        end: 12,
+                    },
+                ),
+                name: "AX",
+                span: Span {
+                    line: 19,
+                    start: 0,
+                    end: 15,
+                },
+            },
+            value: Literal(
+                Integer(
+                    12288,
+                    Integer,
+                ),
+                Span {
+                    line: 19,
+                    start: 18,
+                    end: 24,
+                },
+            ),
+            span: Span {
+                line: 19,
+                start: 0,
+                end: 24,
+            },
+        },
+        Call {
+            name: "INTERRUPT",
+            arguments: [
+                Literal(
+                    Integer(
+                        33,
+                        Integer,
+                    ),
+                    Span {
+                        line: 20,
+                        start: 15,
+                        end: 19,
+                    },
+                ),
+                Name(
+                    "IN_REGISTERS",
+                    Span {
+                        line: 20,
+                        start: 21,
+                        end: 33,
+                    },
+                ),
+                Name(
+                    "OUT_REGISTERS",
+                    Span {
+                        line: 20,
+                        start: 35,
+                        end: 48,
+                    },
+                ),
+            ],
+            explicit: true,
+            span: Span {
+                line: 20,
+                start: 0,
+                end: 4,
+            },
+        },
+        If {
+            condition: Binary {
+                op: Eq,
+                left: Binary {
+                    op: And,
+                    left: Field {
+                        base: Name(
+                            "OUT_REGISTERS",
+                            Span {
+                                line: 22,
+                                start: 4,
+                                end: 17,
+                            },
+                        ),
+                        name: "AX",
+                        span: Span {
+                            line: 22,
+                            start: 4,
+                            end: 20,
+                        },
+                    },
+                    right: Literal(
+                        Integer(
+                            255,
+                            Integer,
+                        ),
+                        Span {
+                            line: 22,
+                            start: 25,
+                            end: 28,
+                        },
+                    ),
+                    span: Span {
+                        line: 22,
+                        start: 4,
+                        end: 28,
+                    },
+                },
+                right: Literal(
+                    Integer(
+                        0,
+                        Integer,
+                    ),
+                    Span {
+                        line: 22,
+                        start: 32,
+                        end: 33,
+                    },
+                ),
+                span: Span {
+                    line: 22,
+                    start: 4,
+                    end: 33,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL interrupt_abi dos_version",
+                                ),
+                                Span {
+                                    line: 23,
+                                    start: 10,
+                                    end: 42,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 23,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 24,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 22,
+                start: 0,
+                end: 2,
+            },
+        },
+        Print {
+            file: None,
+            items: [
+                PrintItem {
+                    value: Literal(
+                        String(
+                            "PASS interrupt_abi",
+                        ),
+                        Span {
+                            line: 27,
+                            start: 6,
+                            end: 26,
+                        },
+                    ),
+                    separator: End,
+                },
+            ],
+            span: Span {
+                line: 27,
+                start: 0,
+                end: 5,
+            },
+        },
+    ],
+    procedures: [
+        Procedure {
+            name: "INTERRUPT",
+            alias: None,
+            cdecl: false,
+            kind: Sub,
+            parameters: [
+                Parameter {
+                    declaration: Declaration {
+                        name: "INTNUM",
+                        type_name: Some(
+                            Integer,
+                        ),
+                        array: false,
+                        bounds: [],
+                        fixed_length: None,
+                        shared: false,
+                        dynamic: false,
+                        span: Span {
+                            line: 14,
+                            start: 23,
+                            end: 40,
+                        },
+                    },
+                    by_value: false,
+                    segmented: false,
+                },
+                Parameter {
+                    declaration: Declaration {
+                        name: "INREG",
+                        type_name: Some(
+                            Named(
+                                "REGTYPE",
+                            ),
+                        ),
+                        array: false,
+                        bounds: [],
+                        fixed_length: None,
+                        shared: false,
+                        dynamic: false,
+                        span: Span {
+                            line: 14,
+                            start: 42,
+                            end: 58,
+                        },
+                    },
+                    by_value: false,
+                    segmented: false,
+                },
+                Parameter {
+                    declaration: Declaration {
+                        name: "OUTREG",
+                        type_name: Some(
+                            Named(
+                                "REGTYPE",
+                            ),
+                        ),
+                        array: false,
+                        bounds: [],
+                        fixed_length: None,
+                        shared: false,
+                        dynamic: false,
+                        span: Span {
+                            line: 14,
+                            start: 60,
+                            end: 77,
+                        },
+                    },
+                    by_value: false,
+                    segmented: false,
+                },
+            ],
+            result: None,
+            body: [],
+            declaration: true,
+            is_static: false,
+            span: Span {
+                line: 14,
+                start: 8,
+                end: 11,
+            },
+        },
+    ],
+}

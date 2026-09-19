@@ -1,0 +1,1135 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: qb45/string-parts
+# dialect: QuickBasic45
+# source: qb45/Q45ST38.BAS
+
+Module {
+    statements: [
+        Dim(
+            [
+                Declaration {
+                    name: "SOURCETEXT",
+                    type_name: Some(
+                        String,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 2,
+                        start: 4,
+                        end: 24,
+                    },
+                },
+            ],
+        ),
+        Read {
+            destinations: [
+                Name(
+                    "SOURCETEXT",
+                    Span {
+                        line: 4,
+                        start: 5,
+                        end: 15,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 4,
+                start: 0,
+                end: 4,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Apply {
+                    name: "LEFT$",
+                    arguments: [
+                        Name(
+                            "SOURCETEXT",
+                            Span {
+                                line: 5,
+                                start: 9,
+                                end: 19,
+                            },
+                        ),
+                        Literal(
+                            Integer(
+                                3,
+                                Integer,
+                            ),
+                            Span {
+                                line: 5,
+                                start: 21,
+                                end: 22,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 5,
+                        start: 3,
+                        end: 23,
+                    },
+                },
+                right: Literal(
+                    String(
+                        "ABC",
+                    ),
+                    Span {
+                        line: 5,
+                        start: 27,
+                        end: 32,
+                    },
+                ),
+                span: Span {
+                    line: 5,
+                    start: 3,
+                    end: 32,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL stringparts left",
+                                ),
+                                Span {
+                                    line: 6,
+                                    start: 10,
+                                    end: 33,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 6,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 7,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 5,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Apply {
+                    name: "MID$",
+                    arguments: [
+                        Name(
+                            "SOURCETEXT",
+                            Span {
+                                line: 9,
+                                start: 8,
+                                end: 18,
+                            },
+                        ),
+                        Literal(
+                            Integer(
+                                3,
+                                Integer,
+                            ),
+                            Span {
+                                line: 9,
+                                start: 20,
+                                end: 21,
+                            },
+                        ),
+                        Literal(
+                            Integer(
+                                3,
+                                Integer,
+                            ),
+                            Span {
+                                line: 9,
+                                start: 23,
+                                end: 24,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 9,
+                        start: 3,
+                        end: 25,
+                    },
+                },
+                right: Literal(
+                    String(
+                        "CDE",
+                    ),
+                    Span {
+                        line: 9,
+                        start: 29,
+                        end: 34,
+                    },
+                ),
+                span: Span {
+                    line: 9,
+                    start: 3,
+                    end: 34,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL stringparts mid",
+                                ),
+                                Span {
+                                    line: 10,
+                                    start: 10,
+                                    end: 32,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 10,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 11,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 9,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Apply {
+                    name: "RIGHT$",
+                    arguments: [
+                        Name(
+                            "SOURCETEXT",
+                            Span {
+                                line: 13,
+                                start: 10,
+                                end: 20,
+                            },
+                        ),
+                        Literal(
+                            Integer(
+                                2,
+                                Integer,
+                            ),
+                            Span {
+                                line: 13,
+                                start: 22,
+                                end: 23,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 13,
+                        start: 3,
+                        end: 24,
+                    },
+                },
+                right: Literal(
+                    String(
+                        "FG",
+                    ),
+                    Span {
+                        line: 13,
+                        start: 28,
+                        end: 32,
+                    },
+                ),
+                span: Span {
+                    line: 13,
+                    start: 3,
+                    end: 32,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL stringparts right",
+                                ),
+                                Span {
+                                    line: 14,
+                                    start: 10,
+                                    end: 34,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 14,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 15,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 13,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Apply {
+                    name: "INSTR",
+                    arguments: [
+                        Literal(
+                            Integer(
+                                2,
+                                Integer,
+                            ),
+                            Span {
+                                line: 17,
+                                start: 9,
+                                end: 10,
+                            },
+                        ),
+                        Name(
+                            "SOURCETEXT",
+                            Span {
+                                line: 17,
+                                start: 12,
+                                end: 22,
+                            },
+                        ),
+                        Literal(
+                            String(
+                                "CD",
+                            ),
+                            Span {
+                                line: 17,
+                                start: 24,
+                                end: 28,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 17,
+                        start: 3,
+                        end: 29,
+                    },
+                },
+                right: Literal(
+                    Integer(
+                        3,
+                        Integer,
+                    ),
+                    Span {
+                        line: 17,
+                        start: 33,
+                        end: 34,
+                    },
+                ),
+                span: Span {
+                    line: 17,
+                    start: 3,
+                    end: 34,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL stringparts instr",
+                                ),
+                                Span {
+                                    line: 18,
+                                    start: 10,
+                                    end: 34,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 18,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 19,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 17,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Binary {
+                    op: Add,
+                    left: Apply {
+                        name: "SPACE$",
+                        arguments: [
+                            Literal(
+                                Integer(
+                                    2,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 21,
+                                    start: 10,
+                                    end: 11,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 21,
+                            start: 3,
+                            end: 12,
+                        },
+                    },
+                    right: Apply {
+                        name: "STRING$",
+                        arguments: [
+                            Literal(
+                                Integer(
+                                    3,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 21,
+                                    start: 23,
+                                    end: 24,
+                                },
+                            ),
+                            Literal(
+                                String(
+                                    "x",
+                                ),
+                                Span {
+                                    line: 21,
+                                    start: 26,
+                                    end: 29,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 21,
+                            start: 15,
+                            end: 30,
+                        },
+                    },
+                    span: Span {
+                        line: 21,
+                        start: 3,
+                        end: 30,
+                    },
+                },
+                right: Literal(
+                    String(
+                        "  xxx",
+                    ),
+                    Span {
+                        line: 21,
+                        start: 34,
+                        end: 41,
+                    },
+                ),
+                span: Span {
+                    line: 21,
+                    start: 3,
+                    end: 41,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL stringparts build",
+                                ),
+                                Span {
+                                    line: 22,
+                                    start: 10,
+                                    end: 34,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 22,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 23,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 21,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Apply {
+                    name: "LEFT$",
+                    arguments: [
+                        Name(
+                            "SOURCETEXT",
+                            Span {
+                                line: 25,
+                                start: 9,
+                                end: 19,
+                            },
+                        ),
+                        Literal(
+                            Integer(
+                                0,
+                                Integer,
+                            ),
+                            Span {
+                                line: 25,
+                                start: 21,
+                                end: 22,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 25,
+                        start: 3,
+                        end: 23,
+                    },
+                },
+                right: Literal(
+                    String(
+                        "",
+                    ),
+                    Span {
+                        line: 25,
+                        start: 27,
+                        end: 29,
+                    },
+                ),
+                span: Span {
+                    line: 25,
+                    start: 3,
+                    end: 29,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL stringparts left-zero",
+                                ),
+                                Span {
+                                    line: 26,
+                                    start: 10,
+                                    end: 38,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 26,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 27,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 25,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Apply {
+                    name: "MID$",
+                    arguments: [
+                        Name(
+                            "SOURCETEXT",
+                            Span {
+                                line: 29,
+                                start: 8,
+                                end: 18,
+                            },
+                        ),
+                        Literal(
+                            Integer(
+                                8,
+                                Integer,
+                            ),
+                            Span {
+                                line: 29,
+                                start: 20,
+                                end: 21,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 29,
+                        start: 3,
+                        end: 22,
+                    },
+                },
+                right: Literal(
+                    String(
+                        "",
+                    ),
+                    Span {
+                        line: 29,
+                        start: 26,
+                        end: 28,
+                    },
+                ),
+                span: Span {
+                    line: 29,
+                    start: 3,
+                    end: 28,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL stringparts mid-past-end",
+                                ),
+                                Span {
+                                    line: 30,
+                                    start: 10,
+                                    end: 41,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 30,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 31,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 29,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Apply {
+                    name: "RIGHT$",
+                    arguments: [
+                        Name(
+                            "SOURCETEXT",
+                            Span {
+                                line: 33,
+                                start: 10,
+                                end: 20,
+                            },
+                        ),
+                        Literal(
+                            Integer(
+                                0,
+                                Integer,
+                            ),
+                            Span {
+                                line: 33,
+                                start: 22,
+                                end: 23,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 33,
+                        start: 3,
+                        end: 24,
+                    },
+                },
+                right: Literal(
+                    String(
+                        "",
+                    ),
+                    Span {
+                        line: 33,
+                        start: 28,
+                        end: 30,
+                    },
+                ),
+                span: Span {
+                    line: 33,
+                    start: 3,
+                    end: 30,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL stringparts right-zero",
+                                ),
+                                Span {
+                                    line: 34,
+                                    start: 10,
+                                    end: 39,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 34,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 35,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 33,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Apply {
+                    name: "INSTR",
+                    arguments: [
+                        Literal(
+                            Integer(
+                                8,
+                                Integer,
+                            ),
+                            Span {
+                                line: 37,
+                                start: 9,
+                                end: 10,
+                            },
+                        ),
+                        Name(
+                            "SOURCETEXT",
+                            Span {
+                                line: 37,
+                                start: 12,
+                                end: 22,
+                            },
+                        ),
+                        Literal(
+                            String(
+                                "A",
+                            ),
+                            Span {
+                                line: 37,
+                                start: 24,
+                                end: 27,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 37,
+                        start: 3,
+                        end: 28,
+                    },
+                },
+                right: Literal(
+                    Integer(
+                        0,
+                        Integer,
+                    ),
+                    Span {
+                        line: 37,
+                        start: 32,
+                        end: 33,
+                    },
+                ),
+                span: Span {
+                    line: 37,
+                    start: 3,
+                    end: 33,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL stringparts instr-past-end",
+                                ),
+                                Span {
+                                    line: 38,
+                                    start: 10,
+                                    end: 43,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 38,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 39,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 37,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Apply {
+                    name: "SPACE$",
+                    arguments: [
+                        Literal(
+                            Integer(
+                                0,
+                                Integer,
+                            ),
+                            Span {
+                                line: 41,
+                                start: 10,
+                                end: 11,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 41,
+                        start: 3,
+                        end: 12,
+                    },
+                },
+                right: Literal(
+                    String(
+                        "",
+                    ),
+                    Span {
+                        line: 41,
+                        start: 16,
+                        end: 18,
+                    },
+                ),
+                span: Span {
+                    line: 41,
+                    start: 3,
+                    end: 18,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL stringparts space-zero",
+                                ),
+                                Span {
+                                    line: 42,
+                                    start: 10,
+                                    end: 39,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 42,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 43,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 41,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Apply {
+                    name: "STRING$",
+                    arguments: [
+                        Literal(
+                            Integer(
+                                0,
+                                Integer,
+                            ),
+                            Span {
+                                line: 45,
+                                start: 11,
+                                end: 12,
+                            },
+                        ),
+                        Literal(
+                            String(
+                                "x",
+                            ),
+                            Span {
+                                line: 45,
+                                start: 14,
+                                end: 17,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 45,
+                        start: 3,
+                        end: 18,
+                    },
+                },
+                right: Literal(
+                    String(
+                        "",
+                    ),
+                    Span {
+                        line: 45,
+                        start: 22,
+                        end: 24,
+                    },
+                ),
+                span: Span {
+                    line: 45,
+                    start: 3,
+                    end: 24,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL stringparts string-zero",
+                                ),
+                                Span {
+                                    line: 46,
+                                    start: 10,
+                                    end: 40,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 46,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 47,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 45,
+                start: 0,
+                end: 2,
+            },
+        },
+        Print {
+            file: None,
+            items: [
+                PrintItem {
+                    value: Literal(
+                        String(
+                            "PASS stringparts",
+                        ),
+                        Span {
+                            line: 49,
+                            start: 6,
+                            end: 24,
+                        },
+                    ),
+                    separator: End,
+                },
+            ],
+            span: Span {
+                line: 49,
+                start: 0,
+                end: 5,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 50,
+                start: 0,
+                end: 3,
+            },
+        },
+        Data {
+            values: [
+                Literal(
+                    String(
+                        "ABCDEFG",
+                    ),
+                    Span {
+                        line: 52,
+                        start: 5,
+                        end: 14,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 52,
+                start: 0,
+                end: 4,
+            },
+        },
+    ],
+    procedures: [],
+}

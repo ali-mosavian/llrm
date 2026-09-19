@@ -1,0 +1,173 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: qb45/errors
+# dialect: QuickBasic45
+# source: qb45/Q45E11.BAS
+
+Module {
+    statements: [
+        OnError {
+            label: "HANDLER",
+            local: false,
+            span: Span {
+                line: 3,
+                start: 0,
+                end: 2,
+            },
+        },
+        Runtime {
+            name: "ERROR",
+            arguments: [
+                Literal(
+                    Integer(
+                        13,
+                        Integer,
+                    ),
+                    Span {
+                        line: 4,
+                        start: 6,
+                        end: 8,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 4,
+                start: 0,
+                end: 5,
+            },
+        },
+        Print {
+            file: None,
+            items: [
+                PrintItem {
+                    value: Literal(
+                        String(
+                            "FAIL errors no-trap",
+                        ),
+                        Span {
+                            line: 5,
+                            start: 6,
+                            end: 27,
+                        },
+                    ),
+                    separator: End,
+                },
+            ],
+            span: Span {
+                line: 5,
+                start: 0,
+                end: 5,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 6,
+                start: 0,
+                end: 3,
+            },
+        },
+        Label(
+            "HANDLER",
+            Span {
+                line: 8,
+                start: 0,
+                end: 7,
+            },
+        ),
+        If {
+            condition: Binary {
+                op: Eq,
+                left: Name(
+                    "ERR",
+                    Span {
+                        line: 9,
+                        start: 3,
+                        end: 6,
+                    },
+                ),
+                right: Literal(
+                    Integer(
+                        13,
+                        Integer,
+                    ),
+                    Span {
+                        line: 9,
+                        start: 9,
+                        end: 11,
+                    },
+                ),
+                span: Span {
+                    line: 9,
+                    start: 3,
+                    end: 11,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "PASS errors",
+                                ),
+                                Span {
+                                    line: 10,
+                                    start: 10,
+                                    end: 23,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 10,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+            ],
+            else_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL errors code",
+                                ),
+                                Span {
+                                    line: 12,
+                                    start: 10,
+                                    end: 28,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 12,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+            ],
+            span: Span {
+                line: 9,
+                start: 0,
+                end: 2,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 14,
+                start: 0,
+                end: 3,
+            },
+        },
+    ],
+    procedures: [],
+}

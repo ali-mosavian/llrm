@@ -1,0 +1,530 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: qb45/tangent-function
+# dialect: QuickBasic45
+# source: qb45/Q45TN74.BAS
+
+Module {
+    statements: [
+        Dim(
+            [
+                Declaration {
+                    name: "POSITIVEINPUT",
+                    type_name: Some(
+                        Double,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 2,
+                        start: 4,
+                        end: 27,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "NEGATIVEINPUT",
+                    type_name: Some(
+                        Double,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 3,
+                        start: 4,
+                        end: 27,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "POSITIVEVALUE",
+                    type_name: Some(
+                        Double,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 4,
+                        start: 4,
+                        end: 27,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "NEGATIVEVALUE",
+                    type_name: Some(
+                        Double,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 5,
+                        start: 4,
+                        end: 27,
+                    },
+                },
+            ],
+        ),
+        Read {
+            destinations: [
+                Name(
+                    "POSITIVEINPUT",
+                    Span {
+                        line: 7,
+                        start: 5,
+                        end: 18,
+                    },
+                ),
+                Name(
+                    "NEGATIVEINPUT",
+                    Span {
+                        line: 7,
+                        start: 20,
+                        end: 33,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 7,
+                start: 0,
+                end: 4,
+            },
+        },
+        Assign {
+            target: Name(
+                "POSITIVEVALUE",
+                Span {
+                    line: 8,
+                    start: 0,
+                    end: 13,
+                },
+            ),
+            value: Apply {
+                name: "TAN",
+                arguments: [
+                    Name(
+                        "POSITIVEINPUT",
+                        Span {
+                            line: 8,
+                            start: 20,
+                            end: 33,
+                        },
+                    ),
+                ],
+                span: Span {
+                    line: 8,
+                    start: 16,
+                    end: 34,
+                },
+            },
+            span: Span {
+                line: 8,
+                start: 0,
+                end: 34,
+            },
+        },
+        Assign {
+            target: Name(
+                "NEGATIVEVALUE",
+                Span {
+                    line: 9,
+                    start: 0,
+                    end: 13,
+                },
+            ),
+            value: Apply {
+                name: "TAN",
+                arguments: [
+                    Name(
+                        "NEGATIVEINPUT",
+                        Span {
+                            line: 9,
+                            start: 20,
+                            end: 33,
+                        },
+                    ),
+                ],
+                span: Span {
+                    line: 9,
+                    start: 16,
+                    end: 34,
+                },
+            },
+            span: Span {
+                line: 9,
+                start: 0,
+                end: 34,
+            },
+        },
+        If {
+            condition: Binary {
+                op: Greater,
+                left: Apply {
+                    name: "ABS",
+                    arguments: [
+                        Binary {
+                            op: Subtract,
+                            left: Name(
+                                "POSITIVEVALUE",
+                                Span {
+                                    line: 10,
+                                    start: 7,
+                                    end: 20,
+                                },
+                            ),
+                            right: Literal(
+                                Real(
+                                    ".5463024898437905",
+                                    Double,
+                                ),
+                                Span {
+                                    line: 10,
+                                    start: 23,
+                                    end: 40,
+                                },
+                            ),
+                            span: Span {
+                                line: 10,
+                                start: 7,
+                                end: 40,
+                            },
+                        },
+                    ],
+                    span: Span {
+                        line: 10,
+                        start: 3,
+                        end: 41,
+                    },
+                },
+                right: Literal(
+                    Real(
+                        ".000000000001",
+                        Single,
+                    ),
+                    Span {
+                        line: 10,
+                        start: 44,
+                        end: 57,
+                    },
+                ),
+                span: Span {
+                    line: 10,
+                    start: 3,
+                    end: 57,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL tangent positive",
+                                ),
+                                Span {
+                                    line: 11,
+                                    start: 10,
+                                    end: 33,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 11,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 12,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 10,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: Greater,
+                left: Apply {
+                    name: "ABS",
+                    arguments: [
+                        Binary {
+                            op: Add,
+                            left: Name(
+                                "NEGATIVEVALUE",
+                                Span {
+                                    line: 14,
+                                    start: 7,
+                                    end: 20,
+                                },
+                            ),
+                            right: Literal(
+                                Real(
+                                    ".9315964599440725",
+                                    Double,
+                                ),
+                                Span {
+                                    line: 14,
+                                    start: 23,
+                                    end: 40,
+                                },
+                            ),
+                            span: Span {
+                                line: 14,
+                                start: 7,
+                                end: 40,
+                            },
+                        },
+                    ],
+                    span: Span {
+                        line: 14,
+                        start: 3,
+                        end: 41,
+                    },
+                },
+                right: Literal(
+                    Real(
+                        ".000000000001",
+                        Single,
+                    ),
+                    Span {
+                        line: 14,
+                        start: 44,
+                        end: 57,
+                    },
+                ),
+                span: Span {
+                    line: 14,
+                    start: 3,
+                    end: 57,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL tangent negative",
+                                ),
+                                Span {
+                                    line: 15,
+                                    start: 10,
+                                    end: 33,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 15,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 16,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 14,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Apply {
+                    name: "TAN",
+                    arguments: [
+                        Literal(
+                            Integer(
+                                0,
+                                Integer,
+                            ),
+                            Span {
+                                line: 18,
+                                start: 7,
+                                end: 8,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 18,
+                        start: 3,
+                        end: 9,
+                    },
+                },
+                right: Literal(
+                    Integer(
+                        0,
+                        Integer,
+                    ),
+                    Span {
+                        line: 18,
+                        start: 13,
+                        end: 14,
+                    },
+                ),
+                span: Span {
+                    line: 18,
+                    start: 3,
+                    end: 14,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL tangent zero",
+                                ),
+                                Span {
+                                    line: 19,
+                                    start: 10,
+                                    end: 29,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 19,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 20,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 18,
+                start: 0,
+                end: 2,
+            },
+        },
+        Print {
+            file: None,
+            items: [
+                PrintItem {
+                    value: Literal(
+                        String(
+                            "PASS tangent",
+                        ),
+                        Span {
+                            line: 22,
+                            start: 6,
+                            end: 20,
+                        },
+                    ),
+                    separator: End,
+                },
+            ],
+            span: Span {
+                line: 22,
+                start: 0,
+                end: 5,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 23,
+                start: 0,
+                end: 3,
+            },
+        },
+        Data {
+            values: [
+                Literal(
+                    Real(
+                        ".5",
+                        Single,
+                    ),
+                    Span {
+                        line: 25,
+                        start: 5,
+                        end: 7,
+                    },
+                ),
+                Unary {
+                    op: Negative,
+                    operand: Literal(
+                        Real(
+                            ".75",
+                            Single,
+                        ),
+                        Span {
+                            line: 25,
+                            start: 10,
+                            end: 13,
+                        },
+                    ),
+                    span: Span {
+                        line: 25,
+                        start: 9,
+                        end: 13,
+                    },
+                },
+            ],
+            span: Span {
+                line: 25,
+                start: 0,
+                end: 4,
+            },
+        },
+    ],
+    procedures: [],
+}

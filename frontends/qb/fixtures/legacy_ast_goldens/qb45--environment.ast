@@ -1,0 +1,474 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: qb45/environment
+# dialect: QuickBasic45
+# source: qb45/Q45EV70.BAS
+
+Module {
+    statements: [
+        Dim(
+            [
+                Declaration {
+                    name: "FIRSTVALUE",
+                    type_name: Some(
+                        String,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 2,
+                        start: 4,
+                        end: 24,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "SECONDVALUE",
+                    type_name: Some(
+                        String,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 3,
+                        start: 4,
+                        end: 25,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "REMOVEDVALUE",
+                    type_name: Some(
+                        String,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 4,
+                        start: 4,
+                        end: 26,
+                    },
+                },
+            ],
+        ),
+        Call {
+            name: "ENVIRON",
+            arguments: [
+                Literal(
+                    String(
+                        "QBCOMPAT=Alpha42",
+                    ),
+                    Span {
+                        line: 6,
+                        start: 8,
+                        end: 26,
+                    },
+                ),
+            ],
+            explicit: false,
+            span: Span {
+                line: 6,
+                start: 0,
+                end: 7,
+            },
+        },
+        Assign {
+            target: Name(
+                "FIRSTVALUE",
+                Span {
+                    line: 7,
+                    start: 0,
+                    end: 10,
+                },
+            ),
+            value: Apply {
+                name: "ENVIRON$",
+                arguments: [
+                    Literal(
+                        String(
+                            "QBCOMPAT",
+                        ),
+                        Span {
+                            line: 7,
+                            start: 22,
+                            end: 32,
+                        },
+                    ),
+                ],
+                span: Span {
+                    line: 7,
+                    start: 13,
+                    end: 33,
+                },
+            },
+            span: Span {
+                line: 7,
+                start: 0,
+                end: 33,
+            },
+        },
+        Call {
+            name: "ENVIRON",
+            arguments: [
+                Literal(
+                    String(
+                        "QBCOMPAT=Beta7",
+                    ),
+                    Span {
+                        line: 8,
+                        start: 8,
+                        end: 24,
+                    },
+                ),
+            ],
+            explicit: false,
+            span: Span {
+                line: 8,
+                start: 0,
+                end: 7,
+            },
+        },
+        Assign {
+            target: Name(
+                "SECONDVALUE",
+                Span {
+                    line: 9,
+                    start: 0,
+                    end: 11,
+                },
+            ),
+            value: Apply {
+                name: "ENVIRON$",
+                arguments: [
+                    Literal(
+                        String(
+                            "QBCOMPAT",
+                        ),
+                        Span {
+                            line: 9,
+                            start: 23,
+                            end: 33,
+                        },
+                    ),
+                ],
+                span: Span {
+                    line: 9,
+                    start: 14,
+                    end: 34,
+                },
+            },
+            span: Span {
+                line: 9,
+                start: 0,
+                end: 34,
+            },
+        },
+        Call {
+            name: "ENVIRON",
+            arguments: [
+                Literal(
+                    String(
+                        "QBCOMPAT=",
+                    ),
+                    Span {
+                        line: 10,
+                        start: 8,
+                        end: 19,
+                    },
+                ),
+            ],
+            explicit: false,
+            span: Span {
+                line: 10,
+                start: 0,
+                end: 7,
+            },
+        },
+        Assign {
+            target: Name(
+                "REMOVEDVALUE",
+                Span {
+                    line: 11,
+                    start: 0,
+                    end: 12,
+                },
+            ),
+            value: Apply {
+                name: "ENVIRON$",
+                arguments: [
+                    Literal(
+                        String(
+                            "QBCOMPAT",
+                        ),
+                        Span {
+                            line: 11,
+                            start: 24,
+                            end: 34,
+                        },
+                    ),
+                ],
+                span: Span {
+                    line: 11,
+                    start: 15,
+                    end: 35,
+                },
+            },
+            span: Span {
+                line: 11,
+                start: 0,
+                end: 35,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Name(
+                    "FIRSTVALUE",
+                    Span {
+                        line: 13,
+                        start: 3,
+                        end: 13,
+                    },
+                ),
+                right: Literal(
+                    String(
+                        "Alpha42",
+                    ),
+                    Span {
+                        line: 13,
+                        start: 17,
+                        end: 26,
+                    },
+                ),
+                span: Span {
+                    line: 13,
+                    start: 3,
+                    end: 26,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL environ first",
+                                ),
+                                Span {
+                                    line: 14,
+                                    start: 10,
+                                    end: 30,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 14,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 15,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 13,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Name(
+                    "SECONDVALUE",
+                    Span {
+                        line: 17,
+                        start: 3,
+                        end: 14,
+                    },
+                ),
+                right: Literal(
+                    String(
+                        "Beta7",
+                    ),
+                    Span {
+                        line: 17,
+                        start: 18,
+                        end: 25,
+                    },
+                ),
+                span: Span {
+                    line: 17,
+                    start: 3,
+                    end: 25,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL environ replace",
+                                ),
+                                Span {
+                                    line: 18,
+                                    start: 10,
+                                    end: 32,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 18,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 19,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 17,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Name(
+                    "REMOVEDVALUE",
+                    Span {
+                        line: 21,
+                        start: 3,
+                        end: 15,
+                    },
+                ),
+                right: Literal(
+                    String(
+                        "",
+                    ),
+                    Span {
+                        line: 21,
+                        start: 19,
+                        end: 21,
+                    },
+                ),
+                span: Span {
+                    line: 21,
+                    start: 3,
+                    end: 21,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL environ remove",
+                                ),
+                                Span {
+                                    line: 22,
+                                    start: 10,
+                                    end: 31,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 22,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 23,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 21,
+                start: 0,
+                end: 2,
+            },
+        },
+        Print {
+            file: None,
+            items: [
+                PrintItem {
+                    value: Literal(
+                        String(
+                            "PASS environ",
+                        ),
+                        Span {
+                            line: 25,
+                            start: 6,
+                            end: 20,
+                        },
+                    ),
+                    separator: End,
+                },
+            ],
+            span: Span {
+                line: 25,
+                start: 0,
+                end: 5,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 26,
+                start: 0,
+                end: 3,
+            },
+        },
+    ],
+    procedures: [],
+}

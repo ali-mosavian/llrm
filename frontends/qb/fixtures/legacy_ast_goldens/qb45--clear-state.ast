@@ -1,0 +1,1424 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: qb45/clear-state
+# dialect: QuickBasic45
+# source: qb45/Q45CL66.BAS
+
+Module {
+    statements: [
+        Dim(
+            [
+                Declaration {
+                    name: "NUMBERVALUE",
+                    type_name: Some(
+                        Long,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 2,
+                        start: 4,
+                        end: 23,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "TEXTVALUE",
+                    type_name: Some(
+                        String,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 3,
+                        start: 4,
+                        end: 23,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "FIXEDVALUES",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: true,
+                    bounds: [
+                        Bound {
+                            lower: Some(
+                                Literal(
+                                    Integer(
+                                        1,
+                                        Integer,
+                                    ),
+                                    Span {
+                                        line: 4,
+                                        start: 16,
+                                        end: 17,
+                                    },
+                                ),
+                            ),
+                            upper: Literal(
+                                Integer(
+                                    3,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 4,
+                                    start: 21,
+                                    end: 22,
+                                },
+                            ),
+                        },
+                    ],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 4,
+                        start: 4,
+                        end: 34,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "ERRORNUMBER",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 5,
+                        start: 4,
+                        end: 26,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "ERRORLINE",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 6,
+                        start: 4,
+                        end: 24,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "RESUMED",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 7,
+                        start: 4,
+                        end: 22,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "FILETEXT",
+                    type_name: Some(
+                        String,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 8,
+                        start: 4,
+                        end: 22,
+                    },
+                },
+            ],
+        ),
+        Assign {
+            target: Name(
+                "NUMBERVALUE",
+                Span {
+                    line: 10,
+                    start: 0,
+                    end: 11,
+                },
+            ),
+            value: Literal(
+                Integer(
+                    81,
+                    Integer,
+                ),
+                Span {
+                    line: 10,
+                    start: 14,
+                    end: 16,
+                },
+            ),
+            span: Span {
+                line: 10,
+                start: 0,
+                end: 16,
+            },
+        },
+        Assign {
+            target: Name(
+                "TEXTVALUE",
+                Span {
+                    line: 11,
+                    start: 0,
+                    end: 9,
+                },
+            ),
+            value: Literal(
+                String(
+                    "not empty",
+                ),
+                Span {
+                    line: 11,
+                    start: 12,
+                    end: 23,
+                },
+            ),
+            span: Span {
+                line: 11,
+                start: 0,
+                end: 23,
+            },
+        },
+        Assign {
+            target: Apply {
+                name: "FIXEDVALUES",
+                arguments: [
+                    Literal(
+                        Integer(
+                            1,
+                            Integer,
+                        ),
+                        Span {
+                            line: 12,
+                            start: 12,
+                            end: 13,
+                        },
+                    ),
+                ],
+                span: Span {
+                    line: 12,
+                    start: 0,
+                    end: 14,
+                },
+            },
+            value: Literal(
+                Integer(
+                    11,
+                    Integer,
+                ),
+                Span {
+                    line: 12,
+                    start: 17,
+                    end: 19,
+                },
+            ),
+            span: Span {
+                line: 12,
+                start: 0,
+                end: 19,
+            },
+        },
+        Assign {
+            target: Apply {
+                name: "FIXEDVALUES",
+                arguments: [
+                    Literal(
+                        Integer(
+                            2,
+                            Integer,
+                        ),
+                        Span {
+                            line: 13,
+                            start: 12,
+                            end: 13,
+                        },
+                    ),
+                ],
+                span: Span {
+                    line: 13,
+                    start: 0,
+                    end: 14,
+                },
+            },
+            value: Literal(
+                Integer(
+                    22,
+                    Integer,
+                ),
+                Span {
+                    line: 13,
+                    start: 17,
+                    end: 19,
+                },
+            ),
+            span: Span {
+                line: 13,
+                start: 0,
+                end: 19,
+            },
+        },
+        Assign {
+            target: Apply {
+                name: "FIXEDVALUES",
+                arguments: [
+                    Literal(
+                        Integer(
+                            3,
+                            Integer,
+                        ),
+                        Span {
+                            line: 14,
+                            start: 12,
+                            end: 13,
+                        },
+                    ),
+                ],
+                span: Span {
+                    line: 14,
+                    start: 0,
+                    end: 14,
+                },
+            },
+            value: Literal(
+                Integer(
+                    33,
+                    Integer,
+                ),
+                Span {
+                    line: 14,
+                    start: 17,
+                    end: 19,
+                },
+            ),
+            span: Span {
+                line: 14,
+                start: 0,
+                end: 19,
+            },
+        },
+        Open {
+            path: Literal(
+                String(
+                    "CL66.DAT",
+                ),
+                Span {
+                    line: 15,
+                    start: 5,
+                    end: 15,
+                },
+            ),
+            mode: Output,
+            file: Literal(
+                Integer(
+                    1,
+                    Integer,
+                ),
+                Span {
+                    line: 15,
+                    start: 31,
+                    end: 32,
+                },
+            ),
+            span: Span {
+                line: 15,
+                start: 0,
+                end: 4,
+            },
+        },
+        Print {
+            file: Some(
+                Literal(
+                    Integer(
+                        1,
+                        Integer,
+                    ),
+                    Span {
+                        line: 16,
+                        start: 7,
+                        end: 8,
+                    },
+                ),
+            ),
+            items: [
+                PrintItem {
+                    value: Binary {
+                        op: Add,
+                        left: Binary {
+                            op: Add,
+                            left: Apply {
+                                name: "CHR$",
+                                arguments: [
+                                    Name(
+                                        "NUMBERVALUE",
+                                        Span {
+                                            line: 16,
+                                            start: 15,
+                                            end: 26,
+                                        },
+                                    ),
+                                ],
+                                span: Span {
+                                    line: 16,
+                                    start: 10,
+                                    end: 27,
+                                },
+                            },
+                            right: Apply {
+                                name: "LEFT$",
+                                arguments: [
+                                    Name(
+                                        "TEXTVALUE",
+                                        Span {
+                                            line: 16,
+                                            start: 36,
+                                            end: 45,
+                                        },
+                                    ),
+                                    Literal(
+                                        Integer(
+                                            1,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 16,
+                                            start: 47,
+                                            end: 48,
+                                        },
+                                    ),
+                                ],
+                                span: Span {
+                                    line: 16,
+                                    start: 30,
+                                    end: 49,
+                                },
+                            },
+                            span: Span {
+                                line: 16,
+                                start: 10,
+                                end: 49,
+                            },
+                        },
+                        right: Apply {
+                            name: "CHR$",
+                            arguments: [
+                                Binary {
+                                    op: Add,
+                                    left: Binary {
+                                        op: Add,
+                                        left: Apply {
+                                            name: "FIXEDVALUES",
+                                            arguments: [
+                                                Literal(
+                                                    Integer(
+                                                        1,
+                                                        Integer,
+                                                    ),
+                                                    Span {
+                                                        line: 16,
+                                                        start: 69,
+                                                        end: 70,
+                                                    },
+                                                ),
+                                            ],
+                                            span: Span {
+                                                line: 16,
+                                                start: 57,
+                                                end: 71,
+                                            },
+                                        },
+                                        right: Apply {
+                                            name: "FIXEDVALUES",
+                                            arguments: [
+                                                Literal(
+                                                    Integer(
+                                                        2,
+                                                        Integer,
+                                                    ),
+                                                    Span {
+                                                        line: 16,
+                                                        start: 86,
+                                                        end: 87,
+                                                    },
+                                                ),
+                                            ],
+                                            span: Span {
+                                                line: 16,
+                                                start: 74,
+                                                end: 88,
+                                            },
+                                        },
+                                        span: Span {
+                                            line: 16,
+                                            start: 57,
+                                            end: 88,
+                                        },
+                                    },
+                                    right: Apply {
+                                        name: "FIXEDVALUES",
+                                        arguments: [
+                                            Literal(
+                                                Integer(
+                                                    3,
+                                                    Integer,
+                                                ),
+                                                Span {
+                                                    line: 16,
+                                                    start: 103,
+                                                    end: 104,
+                                                },
+                                            ),
+                                        ],
+                                        span: Span {
+                                            line: 16,
+                                            start: 91,
+                                            end: 105,
+                                        },
+                                    },
+                                    span: Span {
+                                        line: 16,
+                                        start: 57,
+                                        end: 105,
+                                    },
+                                },
+                            ],
+                            span: Span {
+                                line: 16,
+                                start: 52,
+                                end: 106,
+                            },
+                        },
+                        span: Span {
+                            line: 16,
+                            start: 10,
+                            end: 106,
+                        },
+                    },
+                    separator: Semicolon,
+                },
+            ],
+            span: Span {
+                line: 16,
+                start: 0,
+                end: 5,
+            },
+        },
+        Call {
+            name: "CLEAR",
+            arguments: [],
+            explicit: false,
+            span: Span {
+                line: 17,
+                start: 0,
+                end: 5,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Name(
+                    "NUMBERVALUE",
+                    Span {
+                        line: 19,
+                        start: 3,
+                        end: 14,
+                    },
+                ),
+                right: Literal(
+                    Integer(
+                        0,
+                        Integer,
+                    ),
+                    Span {
+                        line: 19,
+                        start: 18,
+                        end: 19,
+                    },
+                ),
+                span: Span {
+                    line: 19,
+                    start: 3,
+                    end: 19,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL clear number",
+                                ),
+                                Span {
+                                    line: 20,
+                                    start: 10,
+                                    end: 29,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 20,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 21,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 19,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Name(
+                    "TEXTVALUE",
+                    Span {
+                        line: 23,
+                        start: 3,
+                        end: 12,
+                    },
+                ),
+                right: Literal(
+                    String(
+                        "",
+                    ),
+                    Span {
+                        line: 23,
+                        start: 16,
+                        end: 18,
+                    },
+                ),
+                span: Span {
+                    line: 23,
+                    start: 3,
+                    end: 18,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL clear string",
+                                ),
+                                Span {
+                                    line: 24,
+                                    start: 10,
+                                    end: 29,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 24,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 25,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 23,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: Or,
+                left: Binary {
+                    op: Or,
+                    left: Binary {
+                        op: NotEqual,
+                        left: Apply {
+                            name: "FIXEDVALUES",
+                            arguments: [
+                                Literal(
+                                    Integer(
+                                        1,
+                                        Integer,
+                                    ),
+                                    Span {
+                                        line: 27,
+                                        start: 15,
+                                        end: 16,
+                                    },
+                                ),
+                            ],
+                            span: Span {
+                                line: 27,
+                                start: 3,
+                                end: 17,
+                            },
+                        },
+                        right: Literal(
+                            Integer(
+                                0,
+                                Integer,
+                            ),
+                            Span {
+                                line: 27,
+                                start: 21,
+                                end: 22,
+                            },
+                        ),
+                        span: Span {
+                            line: 27,
+                            start: 3,
+                            end: 22,
+                        },
+                    },
+                    right: Binary {
+                        op: NotEqual,
+                        left: Apply {
+                            name: "FIXEDVALUES",
+                            arguments: [
+                                Literal(
+                                    Integer(
+                                        2,
+                                        Integer,
+                                    ),
+                                    Span {
+                                        line: 27,
+                                        start: 38,
+                                        end: 39,
+                                    },
+                                ),
+                            ],
+                            span: Span {
+                                line: 27,
+                                start: 26,
+                                end: 40,
+                            },
+                        },
+                        right: Literal(
+                            Integer(
+                                0,
+                                Integer,
+                            ),
+                            Span {
+                                line: 27,
+                                start: 44,
+                                end: 45,
+                            },
+                        ),
+                        span: Span {
+                            line: 27,
+                            start: 26,
+                            end: 45,
+                        },
+                    },
+                    span: Span {
+                        line: 27,
+                        start: 3,
+                        end: 45,
+                    },
+                },
+                right: Binary {
+                    op: NotEqual,
+                    left: Apply {
+                        name: "FIXEDVALUES",
+                        arguments: [
+                            Literal(
+                                Integer(
+                                    3,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 27,
+                                    start: 61,
+                                    end: 62,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 27,
+                            start: 49,
+                            end: 63,
+                        },
+                    },
+                    right: Literal(
+                        Integer(
+                            0,
+                            Integer,
+                        ),
+                        Span {
+                            line: 27,
+                            start: 67,
+                            end: 68,
+                        },
+                    ),
+                    span: Span {
+                        line: 27,
+                        start: 49,
+                        end: 68,
+                    },
+                },
+                span: Span {
+                    line: 27,
+                    start: 3,
+                    end: 68,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL clear array",
+                                ),
+                                Span {
+                                    line: 28,
+                                    start: 10,
+                                    end: 28,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 28,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 29,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 27,
+                start: 0,
+                end: 2,
+            },
+        },
+        OnError {
+            label: "ERRORHANDLER",
+            local: false,
+            span: Span {
+                line: 32,
+                start: 0,
+                end: 2,
+            },
+        },
+        Label(
+            "100",
+            Span {
+                line: 33,
+                start: 0,
+                end: 3,
+            },
+        ),
+        Print {
+            file: Some(
+                Literal(
+                    Integer(
+                        1,
+                        Integer,
+                    ),
+                    Span {
+                        line: 33,
+                        start: 11,
+                        end: 12,
+                    },
+                ),
+            ),
+            items: [
+                PrintItem {
+                    value: Literal(
+                        String(
+                            "X",
+                        ),
+                        Span {
+                            line: 33,
+                            start: 14,
+                            end: 17,
+                        },
+                    ),
+                    separator: Semicolon,
+                },
+            ],
+            span: Span {
+                line: 33,
+                start: 4,
+                end: 9,
+            },
+        },
+        Assign {
+            target: Name(
+                "RESUMED",
+                Span {
+                    line: 34,
+                    start: 0,
+                    end: 7,
+                },
+            ),
+            value: Literal(
+                Integer(
+                    1,
+                    Integer,
+                ),
+                Span {
+                    line: 34,
+                    start: 10,
+                    end: 11,
+                },
+            ),
+            span: Span {
+                line: 34,
+                start: 0,
+                end: 11,
+            },
+        },
+        OnError {
+            label: "0",
+            local: false,
+            span: Span {
+                line: 35,
+                start: 0,
+                end: 2,
+            },
+        },
+        Open {
+            path: Literal(
+                String(
+                    "CL66.DAT",
+                ),
+                Span {
+                    line: 36,
+                    start: 5,
+                    end: 15,
+                },
+            ),
+            mode: Input,
+            file: Literal(
+                Integer(
+                    1,
+                    Integer,
+                ),
+                Span {
+                    line: 36,
+                    start: 30,
+                    end: 31,
+                },
+            ),
+            span: Span {
+                line: 36,
+                start: 0,
+                end: 4,
+            },
+        },
+        Assign {
+            target: Name(
+                "FILETEXT",
+                Span {
+                    line: 37,
+                    start: 0,
+                    end: 8,
+                },
+            ),
+            value: Apply {
+                name: "INPUT$",
+                arguments: [
+                    Apply {
+                        name: "LOF",
+                        arguments: [
+                            Literal(
+                                Integer(
+                                    1,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 37,
+                                    start: 22,
+                                    end: 23,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 37,
+                            start: 18,
+                            end: 24,
+                        },
+                    },
+                    Literal(
+                        Integer(
+                            1,
+                            Integer,
+                        ),
+                        Span {
+                            line: 37,
+                            start: 26,
+                            end: 27,
+                        },
+                    ),
+                ],
+                span: Span {
+                    line: 37,
+                    start: 11,
+                    end: 28,
+                },
+            },
+            span: Span {
+                line: 37,
+                start: 0,
+                end: 28,
+            },
+        },
+        Close {
+            files: [
+                Literal(
+                    Integer(
+                        1,
+                        Integer,
+                    ),
+                    Span {
+                        line: 38,
+                        start: 7,
+                        end: 8,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 38,
+                start: 0,
+                end: 5,
+            },
+        },
+        Call {
+            name: "KILL",
+            arguments: [
+                Literal(
+                    String(
+                        "CL66.DAT",
+                    ),
+                    Span {
+                        line: 39,
+                        start: 5,
+                        end: 15,
+                    },
+                ),
+            ],
+            explicit: false,
+            span: Span {
+                line: 39,
+                start: 0,
+                end: 4,
+            },
+        },
+        If {
+            condition: Binary {
+                op: Or,
+                left: Binary {
+                    op: Or,
+                    left: Binary {
+                        op: NotEqual,
+                        left: Name(
+                            "ERRORNUMBER",
+                            Span {
+                                line: 40,
+                                start: 3,
+                                end: 14,
+                            },
+                        ),
+                        right: Literal(
+                            Integer(
+                                52,
+                                Integer,
+                            ),
+                            Span {
+                                line: 40,
+                                start: 18,
+                                end: 20,
+                            },
+                        ),
+                        span: Span {
+                            line: 40,
+                            start: 3,
+                            end: 20,
+                        },
+                    },
+                    right: Binary {
+                        op: NotEqual,
+                        left: Name(
+                            "ERRORLINE",
+                            Span {
+                                line: 40,
+                                start: 24,
+                                end: 33,
+                            },
+                        ),
+                        right: Literal(
+                            Integer(
+                                100,
+                                Integer,
+                            ),
+                            Span {
+                                line: 40,
+                                start: 37,
+                                end: 40,
+                            },
+                        ),
+                        span: Span {
+                            line: 40,
+                            start: 24,
+                            end: 40,
+                        },
+                    },
+                    span: Span {
+                        line: 40,
+                        start: 3,
+                        end: 40,
+                    },
+                },
+                right: Binary {
+                    op: NotEqual,
+                    left: Name(
+                        "RESUMED",
+                        Span {
+                            line: 40,
+                            start: 44,
+                            end: 51,
+                        },
+                    ),
+                    right: Literal(
+                        Integer(
+                            1,
+                            Integer,
+                        ),
+                        Span {
+                            line: 40,
+                            start: 55,
+                            end: 56,
+                        },
+                    ),
+                    span: Span {
+                        line: 40,
+                        start: 44,
+                        end: 56,
+                    },
+                },
+                span: Span {
+                    line: 40,
+                    start: 3,
+                    end: 56,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL clear close",
+                                ),
+                                Span {
+                                    line: 41,
+                                    start: 10,
+                                    end: 28,
+                                },
+                            ),
+                            separator: Semicolon,
+                        },
+                        PrintItem {
+                            value: Name(
+                                "ERRORNUMBER",
+                                Span {
+                                    line: 41,
+                                    start: 30,
+                                    end: 41,
+                                },
+                            ),
+                            separator: Semicolon,
+                        },
+                        PrintItem {
+                            value: Name(
+                                "ERRORLINE",
+                                Span {
+                                    line: 41,
+                                    start: 43,
+                                    end: 52,
+                                },
+                            ),
+                            separator: Semicolon,
+                        },
+                        PrintItem {
+                            value: Name(
+                                "RESUMED",
+                                Span {
+                                    line: 41,
+                                    start: 54,
+                                    end: 61,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 41,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 42,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 40,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Name(
+                    "FILETEXT",
+                    Span {
+                        line: 44,
+                        start: 3,
+                        end: 11,
+                    },
+                ),
+                right: Literal(
+                    String(
+                        "QnB",
+                    ),
+                    Span {
+                        line: 44,
+                        start: 15,
+                        end: 20,
+                    },
+                ),
+                span: Span {
+                    line: 44,
+                    start: 3,
+                    end: 20,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL clear flush",
+                                ),
+                                Span {
+                                    line: 45,
+                                    start: 10,
+                                    end: 28,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 45,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 46,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 44,
+                start: 0,
+                end: 2,
+            },
+        },
+        Print {
+            file: None,
+            items: [
+                PrintItem {
+                    value: Literal(
+                        String(
+                            "PASS clear",
+                        ),
+                        Span {
+                            line: 48,
+                            start: 6,
+                            end: 18,
+                        },
+                    ),
+                    separator: End,
+                },
+            ],
+            span: Span {
+                line: 48,
+                start: 0,
+                end: 5,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 49,
+                start: 0,
+                end: 3,
+            },
+        },
+        Label(
+            "ERRORHANDLER",
+            Span {
+                line: 51,
+                start: 0,
+                end: 12,
+            },
+        ),
+        Assign {
+            target: Name(
+                "ERRORNUMBER",
+                Span {
+                    line: 52,
+                    start: 0,
+                    end: 11,
+                },
+            ),
+            value: Name(
+                "ERR",
+                Span {
+                    line: 52,
+                    start: 14,
+                    end: 17,
+                },
+            ),
+            span: Span {
+                line: 52,
+                start: 0,
+                end: 17,
+            },
+        },
+        Assign {
+            target: Name(
+                "ERRORLINE",
+                Span {
+                    line: 53,
+                    start: 0,
+                    end: 9,
+                },
+            ),
+            value: Name(
+                "ERL",
+                Span {
+                    line: 53,
+                    start: 12,
+                    end: 15,
+                },
+            ),
+            span: Span {
+                line: 53,
+                start: 0,
+                end: 15,
+            },
+        },
+        Resume {
+            target: Next,
+            span: Span {
+                line: 54,
+                start: 0,
+                end: 6,
+            },
+        },
+    ],
+    procedures: [],
+}

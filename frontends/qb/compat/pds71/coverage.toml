@@ -1,0 +1,223 @@
+schema = 1
+
+# Extracted with /Users/alim/work/personal/qb-qrender/tools/hlpextract.py.
+# BAS7ENER's header says 282 topics.  BC.HLP is a concatenation of BC.HLP
+# (20 topics) and PWBBC.HLP (22 topics), so both databases are pinned here.
+help_files = [
+  { path = "/Users/alim/work/other/d32x/toolchains/pds71/HELP/BAS7QCK.HLP", sha256 = "43503f8c91c7eb436de759b1f4ef78951ff06cc43d212feb1eb39a22e11552e3" },
+  { path = "/Users/alim/work/other/d32x/toolchains/pds71/HELP/BAS7ADVR.HLP", sha256 = "5516ba3e2803da084ab9bd6d4c07d5286d3c9927e633fc10ba7ec7c65fde74cd" },
+  { path = "/Users/alim/work/other/d32x/toolchains/pds71/HELP/BAS7ENER.HLP", sha256 = "6a7addb22525b98e115dd0822cc572508bef530739415ff19f27eb444a457767" },
+  { path = "/Users/alim/work/other/d32x/toolchains/pds71/HELP/BAS7EX.HLP", sha256 = "094ee262fd19311036e740045f5a3c051702c09a0afb006c154fed402fc5a7cc" },
+  { path = "/Users/alim/work/other/d32x/toolchains/pds71/HELP/BC.HLP", sha256 = "4bda68d5bc63c51309600892d2464f3abe4e1277ef205efe6e50a412294e6aea" },
+]
+help_extracts = [
+  { path = "B7QCK.TXT", lines = 9787, sha256 = "dbccbed40c6ade79dad91315254fb0a1357577a51a29e9d86300a8e15158b3c9" },
+  { path = "B7ADVR.TXT", lines = 10726, sha256 = "cfe2bd3679f5dd163ead1ef3fd2643755889623f79ab20d54b1f89fd0b343547" },
+  { path = "B7ENER.TXT", lines = 3055, sha256 = "243ad722aecd266496366ae85f3028078688aafaa6a446ac4e2c355505e87335" },
+  { path = "B7EX.TXT", lines = 6842, sha256 = "c4434187912e5d33f38a99103af2a89a194a19f9140e0343d49afb3b85581ee3" },
+  { path = "BCHELP.TXT", lines = 753, sha256 = "9bc49736af807bec8c4122c0f8349a1055abab4d1b374c795939e0e69d7dfe40" },
+]
+
+# FULL-extraction ranges are part of the gap instrument.  QCK, Advisor,
+# run-time/compiler errors, and BC options may define observable contracts.
+# Worked examples duplicate those contracts and are retained as oracle prose,
+# not counted a second time as independent language features.
+help_inventory = [
+  { path = "B7QCK.TXT", source = "BAS7QCK.HLP", first_heading = 1, headings = 428, disposition = "classify", inherits_titles = true },
+  { path = "B7ADVR.TXT", source = "BAS7ADVR.HLP", first_heading = 1, headings = 268, disposition = "classify", inherits_titles = true },
+  { path = "B7ENER.TXT", source = "BAS7ENER.HLP", first_heading = 1, headings = 280, disposition = "classify", inherits_titles = true },
+  { path = "B7EX.TXT", source = "BAS7EX.HLP", first_heading = 1, headings = 168, disposition = "out-of-scope", rationale = "Worked examples exercise contracts defined by QCK/Advisor; they are retained as oracle prose, not counted as separate features." },
+  { path = "BCHELP.TXT", source = "BC.HLP", first_heading = 1, headings = 39, disposition = "classify", inherits_titles = true },
+]
+
+help_exclusions = [
+  { kind = "isam", rationale = "The user explicitly excluded the complete ISAM language/runtime family; these exact headings are not coverage rows or gaps.", titles = ["CREATEINDEX Statement", "INSERT Statement", "RETRIEVE Statement", "BEGINTRANS Statement", "SAVEPOINT Function", "CHECKPOINT Statement", "ROLLBACK, ROLLBACK ALL Statements", "COMMITTRANS Statement", "MOVEFIRST, MOVELAST, MOVENEXT, MOVEPREVIOUS Statements", "BOF Function", "GETINDEX$ Function", "SEEKGT, SEEKGE, SEEKEQ Statements", "SETINDEX Statement", "UPDATE Statement", "TEXTCOMP Function", "DELETE Statement", "DELETEINDEX Statement", "DELETETABLE Statement"] },
+  { kind = "os2", rationale = "The user explicitly excluded OS/2 event signaling; this exact heading is not a coverage row or gap.", titles = ["SIGNAL Statements"] },
+]
+
+help_databases = [
+  { file = "BAS7QCK.HLP", topics = 428 },
+  { file = "BAS7ADVR.HLP", topics = 269 },
+  { file = "BAS7ENER.HLP", topics = 282 },
+  { file = "BAS7EX.HLP", topics = 169 },
+  { file = "BC.HLP", database = "bc.hlp", topics = 20 },
+  { file = "BC.HLP", database = "pwbbc.hlp", topics = 22 },
+]
+
+# A row is a PDS delta or records why an otherwise familiar QuickHelp topic is
+# inherited from QB 4.5 rather than copied.  “required-reference” means the
+# source is required to parse/lower, while delivery needs the named DOS service,
+# hardware, or library environment.
+
+[[topic]]
+source = "BAS7QCK.HLP"
+context = ".var.dastor"
+title = "Huge Dynamic Array Storage"
+class = "runtime"
+cases = ["pds-huge-array"]
+status = "covered"
+evidence = "PDHUGE.BAS:2"
+
+[[topic]]
+source = "BAS7QCK.HLP"
+context = ".var.vlstor"
+title = "Variable-Length String Storage"
+class = "runtime"
+cases = ["pds-far-string"]
+status = "covered"
+evidence = "PDFAR.BAS:9"
+
+[[topic]]
+source = "BAS7QCK.HLP"
+context = ".ComSupport"
+title = "Far String descriptor format"
+class = "runtime"
+cases = ["pds-far-string"]
+status = "covered"
+evidence = "PDFAR.BAS:2"
+
+[[topic]]
+source = "BAS7QCK.HLP"
+context = "CURRENCY"
+title = "Data Type Keywords"
+class = "language"
+cases = ["pds-currency"]
+status = "covered"
+evidence = "PDCUR.BAS:2"
+
+[[topic]]
+source = "BAS7QCK.HLP"
+context = "CVC"
+title = "CVC Function"
+class = "language"
+cases = ["pds-currency"]
+status = "covered"
+evidence = "PDCUR.BAS:16"
+
+[[topic]]
+source = "BAS7QCK.HLP"
+context = "MKC$"
+title = "MKC$ Function"
+class = "language"
+cases = ["pds-currency"]
+status = "covered"
+evidence = "PDCUR.BAS:10"
+
+[[topic]]
+source = "BAS7QCK.HLP"
+context = "LOCAL"
+title = "LOCAL Keyword"
+class = "language"
+cases = ["pds-local-error"]
+status = "covered"
+evidence = "PDLOCAL.BAS:18"
+
+[[topic]]
+source = "BAS7QCK.HLP"
+context = "INTERRUPT"
+title = "Interrupt, InterruptX Routines"
+class = "runtime"
+cases = ["pds-interrupt"]
+status = "required-reference"
+rationale = "Calls need QBX.LIB and a controlled DOS interrupt contract."
+evidence = "reference/PDINTR.BAS:33"
+
+[[topic]]
+source = "BAS7ADVR.HLP"
+context = ".onur"
+title = "ON UEVENT Statement Details"
+class = "runtime"
+cases = ["pds-uevent"]
+status = "required-reference"
+rationale = "Delivery requires an external ISR which calls SetUEvent."
+evidence = "reference/PDUEVT.BAS:5"
+
+[[topic]]
+source = "BAS7QCK.HLP"
+context = ".bccmd"
+title = "BC Command Line"
+class = "compiler"
+cases = ["pds-switch-g3-rejected"]
+status = "required-reference"
+evidence = "suite.toml:186"
+
+[[topic]]
+source = "BC.HLP"
+context = "d.7100"
+title = "BASIC Compiler Options"
+class = "compiler"
+cases = ["pds-huge-array", "pds-far-string", "pds-row-major-array", "pds-runtime-check", "pds-quick-call"]
+status = "covered"
+evidence = "suite.toml:11"
+
+[[topic]]
+source = "BAS7QCK.HLP"
+context = "MBF"
+title = "Microsoft Binary Format compiler option"
+class = "compiler"
+cases = ["pds-mbf"]
+status = "covered"
+evidence = "PDMBF.BAS:12"
+
+[[topic]]
+source = "BAS7QCK.HLP"
+context = "FPa"
+title = "Alternate Math compiler option"
+class = "compiler"
+cases = ["pds-fpa"]
+status = "covered"
+evidence = "PDFPA.BAS:10"
+
+[[topic]]
+source = "BAS7QCK.HLP"
+context = "V"
+title = "Event checking compiler options"
+class = "compiler"
+cases = ["pds-timer-event", "pds-com-event", "pds-uevent"]
+status = "covered"
+evidence = "suite.toml:130"
+
+[[topic]]
+source = "BAS7QCK.HLP"
+context = "ABSOLUTE"
+title = "Absolute Routine"
+class = "language"
+cases = ["absolute"]
+status = "required-reference"
+evidence = "../qb45/Q45A27.BAS:6"
+
+[[topic]]
+source = "BAS7QCK.HLP"
+context = "CHAIN"
+title = "CHAIN Statement"
+class = "language"
+cases = ["commonchain"]
+status = "required-reference"
+evidence = "../qb45/Q45C17.BAS:2"
+
+[[topic]]
+source = "BC.HLP"
+context = "d.7120"
+title = "CodeView and browse information"
+class = "ide"
+cases = []
+status = "out-of-scope"
+rationale = "The compatibility runner consumes executable behavior, not PWB/CodeView editor metadata."
+
+[[topic]]
+source = "BAS7QCK.HLP"
+context = "qbx"
+title = "QBX IDE and Quick Library loading"
+class = "ide"
+cases = []
+status = "out-of-scope"
+rationale = "Interactive QBX state and QLB loading are not executable-compiler compatibility tests."
+
+[[topic]]
+source = "BAS7QCK.HLP"
+context = "h.pg1"
+title = "PDS toolbox libraries (UI, chart, font, and date tools)"
+class = "tooling"
+cases = []
+status = "out-of-scope"
+rationale = "Those separately linked libraries need a declared library-specific ABI and golden before they can be tested honestly."

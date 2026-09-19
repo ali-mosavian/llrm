@@ -1,0 +1,430 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: qb45/conversions
+# dialect: QuickBasic45
+# source: qb45/Q45CV36.BAS
+
+Module {
+    statements: [
+        Dim(
+            [
+                Declaration {
+                    name: "POSITIVEVALUE",
+                    type_name: Some(
+                        Double,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 2,
+                        start: 4,
+                        end: 27,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "NEGATIVEVALUE",
+                    type_name: Some(
+                        Double,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 3,
+                        start: 4,
+                        end: 27,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "LONGVALUE",
+                    type_name: Some(
+                        Double,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 4,
+                        start: 4,
+                        end: 23,
+                    },
+                },
+            ],
+        ),
+        Read {
+            destinations: [
+                Name(
+                    "POSITIVEVALUE",
+                    Span {
+                        line: 6,
+                        start: 5,
+                        end: 18,
+                    },
+                ),
+                Name(
+                    "NEGATIVEVALUE",
+                    Span {
+                        line: 6,
+                        start: 20,
+                        end: 33,
+                    },
+                ),
+                Name(
+                    "LONGVALUE",
+                    Span {
+                        line: 6,
+                        start: 35,
+                        end: 44,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 6,
+                start: 0,
+                end: 4,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Apply {
+                    name: "CINT",
+                    arguments: [
+                        Name(
+                            "POSITIVEVALUE",
+                            Span {
+                                line: 7,
+                                start: 8,
+                                end: 21,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 7,
+                        start: 3,
+                        end: 22,
+                    },
+                },
+                right: Literal(
+                    Integer(
+                        13,
+                        Integer,
+                    ),
+                    Span {
+                        line: 7,
+                        start: 26,
+                        end: 28,
+                    },
+                ),
+                span: Span {
+                    line: 7,
+                    start: 3,
+                    end: 28,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL conversions cint-positive",
+                                ),
+                                Span {
+                                    line: 8,
+                                    start: 10,
+                                    end: 42,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 8,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 9,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 7,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Apply {
+                    name: "CINT",
+                    arguments: [
+                        Name(
+                            "NEGATIVEVALUE",
+                            Span {
+                                line: 11,
+                                start: 8,
+                                end: 21,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 11,
+                        start: 3,
+                        end: 22,
+                    },
+                },
+                right: Unary {
+                    op: Negative,
+                    operand: Literal(
+                        Integer(
+                            13,
+                            Integer,
+                        ),
+                        Span {
+                            line: 11,
+                            start: 27,
+                            end: 29,
+                        },
+                    ),
+                    span: Span {
+                        line: 11,
+                        start: 26,
+                        end: 29,
+                    },
+                },
+                span: Span {
+                    line: 11,
+                    start: 3,
+                    end: 29,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL conversions cint-negative",
+                                ),
+                                Span {
+                                    line: 12,
+                                    start: 10,
+                                    end: 42,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 12,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 13,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 11,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Apply {
+                    name: "CLNG",
+                    arguments: [
+                        Name(
+                            "LONGVALUE",
+                            Span {
+                                line: 15,
+                                start: 8,
+                                end: 17,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 15,
+                        start: 3,
+                        end: 18,
+                    },
+                },
+                right: Literal(
+                    Integer(
+                        40000,
+                        Integer,
+                    ),
+                    Span {
+                        line: 15,
+                        start: 22,
+                        end: 27,
+                    },
+                ),
+                span: Span {
+                    line: 15,
+                    start: 3,
+                    end: 27,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL conversions clng-range",
+                                ),
+                                Span {
+                                    line: 16,
+                                    start: 10,
+                                    end: 39,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 16,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 17,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 15,
+                start: 0,
+                end: 2,
+            },
+        },
+        Print {
+            file: None,
+            items: [
+                PrintItem {
+                    value: Literal(
+                        String(
+                            "PASS conversions",
+                        ),
+                        Span {
+                            line: 19,
+                            start: 6,
+                            end: 24,
+                        },
+                    ),
+                    separator: End,
+                },
+            ],
+            span: Span {
+                line: 19,
+                start: 0,
+                end: 5,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 20,
+                start: 0,
+                end: 3,
+            },
+        },
+        Data {
+            values: [
+                Literal(
+                    Real(
+                        "12.6",
+                        Single,
+                    ),
+                    Span {
+                        line: 22,
+                        start: 5,
+                        end: 9,
+                    },
+                ),
+                Unary {
+                    op: Negative,
+                    operand: Literal(
+                        Real(
+                            "12.6",
+                            Single,
+                        ),
+                        Span {
+                            line: 22,
+                            start: 12,
+                            end: 16,
+                        },
+                    ),
+                    span: Span {
+                        line: 22,
+                        start: 11,
+                        end: 16,
+                    },
+                },
+                Literal(
+                    Real(
+                        "40000.4",
+                        Single,
+                    ),
+                    Span {
+                        line: 22,
+                        start: 18,
+                        end: 25,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 22,
+                start: 0,
+                end: 4,
+            },
+        },
+    ],
+    procedures: [],
+}

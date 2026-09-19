@@ -1,0 +1,85 @@
+TOKENS:
+   tkBLOAD ("BLOAD"),
+   tkBSAVE ("BSAVE"),
+   tkWAIT ("WAIT"),
+   tkPRINT ("PRINT"),
+   tkWRITE ("WRITE"),
+   tkABS ("ABS"),
+   tkPOINT ("POINT"),
+   tkLBOUND ("LBOUND"),
+   tkUBOUND ("UBOUND"),
+   tkINPUT_ ("INPUT$"),
+   tkIOCTL_ ("IOCTL$"),
+   tkLbs ("#"),
+   tkLParen ("("),
+   tkRParen (")"),
+   tkComma (","),
+   tkSColon (";"),
+   tkTAB ("TAB"),
+   tkSPC ("SPC"),
+   tkUSING ("USING");
+
+Statements:
+   tkBLOAD Exp optCommaExp;
+     <Cg1or2Args(opStBload1)>
+   tkBSAVE expCommaExp commaExp EMIT(opStBsave);
+   tkWAIT Exp exp12;
+   tkPRINT [lbsExpComma] printList;
+   tkWRITE EMIT(opStWrite) [lbsExpComma] printList;
+
+Functions:
+   tkABS fn1arg EMIT(opFnAbs);
+   tkPOINT fn12arg;
+     <Cg1or2Args(opFnPoint1)>
+   tkLBOUND fnBoundArg;
+     <Cg1or2Args(opFnLbound1)>
+   tkUBOUND fnBoundArg;
+     <Cg1or2Args(opFnUbound1)>
+   tkINPUT_ tkLParen Exp [tkComma optFilenum] tkRParen;
+   tkIOCTL_ tkLParen optFilenum tkRParen EMIT(opFnIoctl_);
+
+NonTerminals:
+commaExp:
+   tkComma Exp;
+EndPrint:
+   EXTERNAL;
+EndPrintExp:
+   EXTERNAL;
+Exp:
+   EXTERNAL MSG_ExpExp;
+exp12:
+   commaExp optCommaExp;
+expCommaExp:
+   Exp tkComma Exp;
+fn1arg:
+   tkLParen Exp tkRParen;
+fn12arg:
+   tkLParen Exp optCommaExp tkRParen;
+fnBoundArg:
+   tkLParen IdArray optCommaExp tkRParen;
+IdArray:
+   EXTERNAL MSG_ExpVar;
+lbsExpComma:
+   tkLbs Exp EMIT(opLbs) EMIT(opChanOut) tkComma;
+optCommaExp:
+   [commaExp];
+optFilenum:
+   (tkLbs Exp EMIT(opLbs)) | Exp;
+printItem:
+   (EndPrint) |
+   (tkTAB fn1arg EMIT(opPrintTab)) |
+   (tkSPC fn1arg EMIT(opPrintSpc)) |
+   (tkComma EMIT(opPrintComma)) |
+   (tkSColon EMIT(opPrintSemi)) |
+   (Exp (tkComma EMIT(opPrintItemComma)) |
+        (tkSColon EMIT(opPrintItemSemi)) |
+        (EndPrintExp));
+printList:
+   {printItem} [tkUSING Exp EMIT(opUsing) tkSColon {printUsingItem}];
+printUsingItem:
+   (EndPrint) |
+   (((tkTAB fn1arg EMIT(opPrintTab)) |
+     (tkSPC fn1arg EMIT(opPrintSpc)))
+           [tkSColon | tkComma]) |
+   (Exp ((tkComma | tkSColon) EMIT(opPrintItemSemi)) |
+        (EndPrintExp));

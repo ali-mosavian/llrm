@@ -1,0 +1,26 @@
+TOKENS:
+   tkCOM ("COM"),
+   tkPEN ("PEN"),
+   tkPLAY ("PLAY"),
+   tkON ("ON"),
+   tkOFF ("OFF"),
+   tkSTOP ("STOP"),
+   tkABS ("ABS"),
+   tkLParen ("("),
+   tkRParen (")");
+
+Statements:
+   tkCOM fn1arg EMIT(opEvCom) evSwitch;
+   tkPEN EMIT(opEvPen) evSwitch;
+   tkPLAY EMIT(opEvPlay0) evSwitch;
+
+Functions:
+   tkABS Exp EMIT(opFnAbs);
+
+NonTerminals:
+evSwitch:
+   (tkON EMIT(opEvOn)) | (tkOFF EMIT(opEvOff)) | (tkSTOP EMIT(opEvStop));
+Exp:
+   EXTERNAL MSG_ExpExp;
+fn1arg:
+   tkLParen Exp tkRParen;

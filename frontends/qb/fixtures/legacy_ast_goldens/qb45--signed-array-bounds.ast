@@ -1,0 +1,658 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: qb45/signed-array-bounds
+# dialect: QuickBasic45
+# source: qb45/Q45AR40.BAS
+
+Module {
+    statements: [
+        Dim(
+            [
+                Declaration {
+                    name: "VALUES",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: true,
+                    bounds: [
+                        Bound {
+                            lower: Some(
+                                Unary {
+                                    op: Negative,
+                                    operand: Literal(
+                                        Integer(
+                                            2,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 2,
+                                            start: 12,
+                                            end: 13,
+                                        },
+                                    ),
+                                    span: Span {
+                                        line: 2,
+                                        start: 11,
+                                        end: 13,
+                                    },
+                                },
+                            ),
+                            upper: Literal(
+                                Integer(
+                                    2,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 2,
+                                    start: 17,
+                                    end: 18,
+                                },
+                            ),
+                        },
+                    ],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 2,
+                        start: 4,
+                        end: 30,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "INDEX",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 3,
+                        start: 4,
+                        end: 20,
+                    },
+                },
+            ],
+        ),
+        For {
+            counter: Name(
+                "INDEX",
+                Span {
+                    line: 5,
+                    start: 4,
+                    end: 9,
+                },
+            ),
+            start: Unary {
+                op: Negative,
+                operand: Literal(
+                    Integer(
+                        2,
+                        Integer,
+                    ),
+                    Span {
+                        line: 5,
+                        start: 13,
+                        end: 14,
+                    },
+                ),
+                span: Span {
+                    line: 5,
+                    start: 12,
+                    end: 14,
+                },
+            },
+            end: Literal(
+                Integer(
+                    2,
+                    Integer,
+                ),
+                Span {
+                    line: 5,
+                    start: 18,
+                    end: 19,
+                },
+            ),
+            step: None,
+            body: [
+                Assign {
+                    target: Apply {
+                        name: "VALUES",
+                        arguments: [
+                            Name(
+                                "INDEX",
+                                Span {
+                                    line: 6,
+                                    start: 11,
+                                    end: 16,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 6,
+                            start: 4,
+                            end: 17,
+                        },
+                    },
+                    value: Binary {
+                        op: Add,
+                        left: Binary {
+                            op: Multiply,
+                            left: Name(
+                                "INDEX",
+                                Span {
+                                    line: 6,
+                                    start: 20,
+                                    end: 25,
+                                },
+                            ),
+                            right: Literal(
+                                Integer(
+                                    11,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 6,
+                                    start: 28,
+                                    end: 30,
+                                },
+                            ),
+                            span: Span {
+                                line: 6,
+                                start: 20,
+                                end: 30,
+                            },
+                        },
+                        right: Literal(
+                            Integer(
+                                100,
+                                Integer,
+                            ),
+                            Span {
+                                line: 6,
+                                start: 33,
+                                end: 36,
+                            },
+                        ),
+                        span: Span {
+                            line: 6,
+                            start: 20,
+                            end: 36,
+                        },
+                    },
+                    span: Span {
+                        line: 6,
+                        start: 4,
+                        end: 36,
+                    },
+                },
+            ],
+            span: Span {
+                line: 5,
+                start: 0,
+                end: 3,
+            },
+        },
+        If {
+            condition: Binary {
+                op: Or,
+                left: Binary {
+                    op: NotEqual,
+                    left: Apply {
+                        name: "LBOUND",
+                        arguments: [
+                            Name(
+                                "VALUES",
+                                Span {
+                                    line: 8,
+                                    start: 10,
+                                    end: 16,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 8,
+                            start: 3,
+                            end: 17,
+                        },
+                    },
+                    right: Unary {
+                        op: Negative,
+                        operand: Literal(
+                            Integer(
+                                2,
+                                Integer,
+                            ),
+                            Span {
+                                line: 8,
+                                start: 22,
+                                end: 23,
+                            },
+                        ),
+                        span: Span {
+                            line: 8,
+                            start: 21,
+                            end: 23,
+                        },
+                    },
+                    span: Span {
+                        line: 8,
+                        start: 3,
+                        end: 23,
+                    },
+                },
+                right: Binary {
+                    op: NotEqual,
+                    left: Apply {
+                        name: "UBOUND",
+                        arguments: [
+                            Name(
+                                "VALUES",
+                                Span {
+                                    line: 8,
+                                    start: 34,
+                                    end: 40,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 8,
+                            start: 27,
+                            end: 41,
+                        },
+                    },
+                    right: Literal(
+                        Integer(
+                            2,
+                            Integer,
+                        ),
+                        Span {
+                            line: 8,
+                            start: 45,
+                            end: 46,
+                        },
+                    ),
+                    span: Span {
+                        line: 8,
+                        start: 27,
+                        end: 46,
+                    },
+                },
+                span: Span {
+                    line: 8,
+                    start: 3,
+                    end: 46,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL arraybounds bounds",
+                                ),
+                                Span {
+                                    line: 9,
+                                    start: 10,
+                                    end: 35,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 9,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 10,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 8,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: Or,
+                left: Binary {
+                    op: Or,
+                    left: Binary {
+                        op: Or,
+                        left: Binary {
+                            op: Or,
+                            left: Binary {
+                                op: NotEqual,
+                                left: Apply {
+                                    name: "VALUES",
+                                    arguments: [
+                                        Unary {
+                                            op: Negative,
+                                            operand: Literal(
+                                                Integer(
+                                                    2,
+                                                    Integer,
+                                                ),
+                                                Span {
+                                                    line: 12,
+                                                    start: 11,
+                                                    end: 12,
+                                                },
+                                            ),
+                                            span: Span {
+                                                line: 12,
+                                                start: 10,
+                                                end: 12,
+                                            },
+                                        },
+                                    ],
+                                    span: Span {
+                                        line: 12,
+                                        start: 3,
+                                        end: 13,
+                                    },
+                                },
+                                right: Literal(
+                                    Integer(
+                                        78,
+                                        Integer,
+                                    ),
+                                    Span {
+                                        line: 12,
+                                        start: 17,
+                                        end: 19,
+                                    },
+                                ),
+                                span: Span {
+                                    line: 12,
+                                    start: 3,
+                                    end: 19,
+                                },
+                            },
+                            right: Binary {
+                                op: NotEqual,
+                                left: Apply {
+                                    name: "VALUES",
+                                    arguments: [
+                                        Unary {
+                                            op: Negative,
+                                            operand: Literal(
+                                                Integer(
+                                                    1,
+                                                    Integer,
+                                                ),
+                                                Span {
+                                                    line: 12,
+                                                    start: 31,
+                                                    end: 32,
+                                                },
+                                            ),
+                                            span: Span {
+                                                line: 12,
+                                                start: 30,
+                                                end: 32,
+                                            },
+                                        },
+                                    ],
+                                    span: Span {
+                                        line: 12,
+                                        start: 23,
+                                        end: 33,
+                                    },
+                                },
+                                right: Literal(
+                                    Integer(
+                                        89,
+                                        Integer,
+                                    ),
+                                    Span {
+                                        line: 12,
+                                        start: 37,
+                                        end: 39,
+                                    },
+                                ),
+                                span: Span {
+                                    line: 12,
+                                    start: 23,
+                                    end: 39,
+                                },
+                            },
+                            span: Span {
+                                line: 12,
+                                start: 3,
+                                end: 39,
+                            },
+                        },
+                        right: Binary {
+                            op: NotEqual,
+                            left: Apply {
+                                name: "VALUES",
+                                arguments: [
+                                    Literal(
+                                        Integer(
+                                            0,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 12,
+                                            start: 50,
+                                            end: 51,
+                                        },
+                                    ),
+                                ],
+                                span: Span {
+                                    line: 12,
+                                    start: 43,
+                                    end: 52,
+                                },
+                            },
+                            right: Literal(
+                                Integer(
+                                    100,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 12,
+                                    start: 56,
+                                    end: 59,
+                                },
+                            ),
+                            span: Span {
+                                line: 12,
+                                start: 43,
+                                end: 59,
+                            },
+                        },
+                        span: Span {
+                            line: 12,
+                            start: 3,
+                            end: 59,
+                        },
+                    },
+                    right: Binary {
+                        op: NotEqual,
+                        left: Apply {
+                            name: "VALUES",
+                            arguments: [
+                                Literal(
+                                    Integer(
+                                        1,
+                                        Integer,
+                                    ),
+                                    Span {
+                                        line: 12,
+                                        start: 70,
+                                        end: 71,
+                                    },
+                                ),
+                            ],
+                            span: Span {
+                                line: 12,
+                                start: 63,
+                                end: 72,
+                            },
+                        },
+                        right: Literal(
+                            Integer(
+                                111,
+                                Integer,
+                            ),
+                            Span {
+                                line: 12,
+                                start: 76,
+                                end: 79,
+                            },
+                        ),
+                        span: Span {
+                            line: 12,
+                            start: 63,
+                            end: 79,
+                        },
+                    },
+                    span: Span {
+                        line: 12,
+                        start: 3,
+                        end: 79,
+                    },
+                },
+                right: Binary {
+                    op: NotEqual,
+                    left: Apply {
+                        name: "VALUES",
+                        arguments: [
+                            Literal(
+                                Integer(
+                                    2,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 12,
+                                    start: 90,
+                                    end: 91,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 12,
+                            start: 83,
+                            end: 92,
+                        },
+                    },
+                    right: Literal(
+                        Integer(
+                            122,
+                            Integer,
+                        ),
+                        Span {
+                            line: 12,
+                            start: 96,
+                            end: 99,
+                        },
+                    ),
+                    span: Span {
+                        line: 12,
+                        start: 83,
+                        end: 99,
+                    },
+                },
+                span: Span {
+                    line: 12,
+                    start: 3,
+                    end: 99,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL arraybounds values",
+                                ),
+                                Span {
+                                    line: 13,
+                                    start: 10,
+                                    end: 35,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 13,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 14,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 12,
+                start: 0,
+                end: 2,
+            },
+        },
+        Print {
+            file: None,
+            items: [
+                PrintItem {
+                    value: Literal(
+                        String(
+                            "PASS arraybounds",
+                        ),
+                        Span {
+                            line: 16,
+                            start: 6,
+                            end: 24,
+                        },
+                    ),
+                    separator: End,
+                },
+            ],
+            span: Span {
+                line: 16,
+                start: 0,
+                end: 5,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 17,
+                start: 0,
+                end: 3,
+            },
+        },
+    ],
+    procedures: [],
+}
