@@ -195,6 +195,7 @@ pub enum Statement {
         span: Span,
     },
     Dim(Vec<Declaration>),
+    Static(Vec<Declaration>),
     Redim(Vec<Declaration>),
     Erase(Vec<Expr>),
     Const {

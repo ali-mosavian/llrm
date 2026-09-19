@@ -72,6 +72,7 @@ const AST_SOURCE_FACTS: &[&str] = &[
     "separator",
     "shared",
     "span",
+    "storage",
     "target",
     "then_branch",
     "type_name",

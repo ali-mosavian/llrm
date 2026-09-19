@@ -61,6 +61,7 @@ pub(crate) struct Checkpoint {
 pub(crate) enum DeclarationForm {
     Dim,
     Redim,
+    Static,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

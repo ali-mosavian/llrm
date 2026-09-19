@@ -725,6 +725,24 @@ fn nonstatic_procedure_arrays_are_dynamic_despite_module_static_default() {
 }
 
 #[test]
+fn static_statement_declares_persistent_procedure_storage() {
+    // Q45S15 stopped in the generated parser at NtACTIONidStatic. Once
+    // parsed, QCOUNT's tally must be a data object, not a BP-relative local.
+    let module = parse(
+        "function qCount (qInput as integer)\n\
+         static qTally as integer\n\
+         qTally = qTally + 1\n\
+         qCount = qTally + qInput\n\
+         end function\n",
+        Dialect::QuickBasic45,
+    )
+    .unwrap();
+    assert!(matches!(module.procedures[0].body[0], Statement::Static(_)));
+    let hir = compile(&module, "static_statement", Dialect::QuickBasic45, "qb45").unwrap();
+    assert!(hir.contains("\"name\":\"QTALLY\",\"offset\":0,\"storage\":\"static\""));
+}
+
+#[test]
 fn sin_cos_and_tan_are_inline_float_hir() {
     // Math must remain visible computation and must not survive as a BASIC
     // runtime call. TAN is the reusable sin/cos/div identity.

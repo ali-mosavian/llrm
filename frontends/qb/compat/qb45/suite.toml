@@ -868,8 +868,9 @@ features = ["function static", "static local lifetime", "zero-argument function 
 switches = []
 expected = "PASS static"
 parser = "required"
-lowering = "pending"
-runtime = "pending"
+lowering = "required"
+runtime = "required"
+verification = "Separate calls observe a STATIC statement scalar advancing from 1 to 2."
 
 [[case]]
 name = "graphics"

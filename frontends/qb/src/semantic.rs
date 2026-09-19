@@ -984,6 +984,11 @@ impl Compiler {
                         }
                     }
                 }
+                Statement::Static(items) => {
+                    for item in items {
+                        self.declare_as(item, "static")?;
+                    }
+                }
                 Statement::DefType { .. }
                 | Statement::TypeDecl { .. }
                 | Statement::OptionBase(_, _) => {}
@@ -1458,6 +1463,7 @@ impl Compiler {
             let metadata_only = matches!(
                 statement,
                 Statement::Dim(_)
+                    | Statement::Static(_)
                     | Statement::DefType { .. }
                     | Statement::TypeDecl { .. }
                     | Statement::Const { .. }
@@ -1479,6 +1485,7 @@ impl Compiler {
             }
             match statement {
                 Statement::Dim(_)
+                | Statement::Static(_)
                 | Statement::DefType { .. }
                 | Statement::TypeDecl { .. }
                 | Statement::Const { .. }

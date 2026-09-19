@@ -332,6 +332,13 @@ pub(crate) fn external_action(
             state.declaration_shared = true;
             ParseResult::GoodSyntax
         }
+        ExternalAction::StaticDeclaration => {
+            state.declaration_form = Some(DeclarationForm::Static);
+            ParseResult::GoodSyntax
+        }
+        ExternalAction::StaticVariableDeclaration => {
+            declaration(state, DeclarationForm::Static, false)
+        }
         ExternalAction::DimDeclaration => declaration(state, DeclarationForm::Dim, false),
         ExternalAction::RedimDeclaration => declaration(state, DeclarationForm::Redim, true),
         ExternalAction::EndPrint => end_print(state, false),
@@ -861,6 +868,7 @@ fn synthesize_statement(
         let statement = match state.declaration_form {
             Some(DeclarationForm::Dim) => Statement::Dim(declarations),
             Some(DeclarationForm::Redim) => Statement::Redim(declarations),
+            Some(DeclarationForm::Static) => Statement::Static(declarations),
             None => return false,
         };
         state.expressions.truncate(expression_base);
@@ -2123,7 +2131,7 @@ fn previous_end(state: &ParseState) -> usize {
 
 fn statement_end(statement: &Statement) -> usize {
     match statement {
-        Statement::Dim(items) | Statement::Redim(items) => {
+        Statement::Dim(items) | Statement::Static(items) | Statement::Redim(items) => {
             items.last().map_or(0, |item| item.span.end)
         }
         Statement::Erase(items) => items.last().map_or(0, |item| item.span().end),
