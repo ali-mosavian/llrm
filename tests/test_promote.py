@@ -412,6 +412,231 @@ def test_sroa_uses_exact_frame_pointer_provenance_as_a_leaf() -> None:
     assert all(not isinstance(arg, mir.Cell) for arg in after.args)
 
 
+def test_sroa_refines_a_conservative_aggregate_range_from_the_exact_pointer() -> None:
+    """PARITY kept every ``points[i].y`` reload after exact unrolling.
+
+    The frontend correctly described the original indexed field as the broad
+    byte lane 2..34.  After unrolling, pointer analysis proved each cloned
+    access selected one exact address, but SROA accepted that proof only when
+    the older annotation covered the *whole* object.  A conservative subrange
+    must not veto a more precise same-object pointer fact.
+    """
+    from qbopt.model import ir
+    from qbopt.model import memory
+    from qbopt.model.passes import Where
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
+
+    object_ = memory.Object(memory.Kind.FRAME, ("points", -36), extent=32)
+    broad = memory.Provenance.one(object_, 2, 34, stride=1, width=2)
+    root = mir.Value(1, 0, variable=1, version=1)
+    first = mir.Value(2, 1, variable=2, version=1)
+    second = mir.Value(3, 2, variable=3, version=1)
+    loaded = mir.Value(4, 4, variable=4, version=1)
+    address = mir.Op(
+        0,
+        ir.Operation.ADDRESS,
+        "lea",
+        (root,),
+        (),
+        kind=mir.Kind.ADDRESS,
+        args=(mir.FrameAddress(-36, 2, (-36, -4)),),
+        results=(mir.Held(root, 2),),
+    )
+
+    def offset(at: int, result: mir.Value) -> mir.Op:
+        return mir.Op(
+            at,
+            ir.Operation.BINARY,
+            "add",
+            (result,),
+            (root,),
+            kind=mir.Kind.ADD,
+            args=(mir.Held(root, 2), mir.Const(6, 2)),
+            results=(mir.Held(result, 2),),
+        )
+
+    ref = mir.MemRef(
+        Addr(Space.LITERAL, 0),
+        2,
+        base=first,
+        space=Space.FRAME,
+        base_width=2,
+        typed=("int2", False),
+        provenance=broad,
+    )
+    equivalent = replace(ref, base=second)
+    store = mir.Op(
+        3,
+        ir.Operation.MOVE,
+        "mov",
+        (),
+        (first,),
+        kind=mir.Kind.STORE,
+        args=(mir.Const(29, 2),),
+        results=(mir.Cell(ref),),
+        stores=(ref,),
+    )
+    load = mir.Op(
+        4,
+        ir.Operation.MOVE,
+        "mov",
+        (loaded,),
+        (second,),
+        kind=mir.Kind.LOAD,
+        args=(mir.Cell(equivalent),),
+        results=(mir.Held(loaded, 2),),
+        loads=(equivalent,),
+    )
+    body = mir.MirBody(
+        0,
+        (mir.MirBlock(0, (), (address, offset(1, first), offset(2, second), store, load), ()),),
+        pointer_values=frozenset({root}),
+        pointer_seeds={root: memory.Provenance.one(object_, 0, 1)},
+    )
+
+    result = promote.Sroa(Where()).transform(body)
+
+    after = next(op for op in result.blocks[0].ops if op.at == load.at)
+    assert not after.loads
+    assert all(not isinstance(arg, mir.Cell) for arg in after.args)
+
+
+def test_sroa_matches_equivalent_affine_addresses_inside_one_dynamic_allocation() -> None:
+    """BASIC PARITY reloaded all 16 fields after its loops were unrolled.
+
+    Stores used a 16-bit ``descriptor_base + offset`` expression while the
+    loads used an equivalent zero-extended and reassociated expression.  The
+    allocation proof supplies object identity; scalar replacement must use the
+    normalized object-relative offset instead of the physical address SSA id.
+    """
+    from qbopt.model import ir
+    from qbopt.model.passes import Where
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
+
+    descriptor = mir.Symbol(Space.FRAME, 0, -38, 2)
+    root_cell = mir.MemRef(Addr(Space.FRAME, -28), 2, space=Space.FRAME)
+    narrow = mir.Value(1, 1, variable=1, version=1)
+    displaced = mir.Value(2, 2, variable=2, version=1)
+    extended = mir.Value(3, 3, variable=3, version=1)
+    advanced = mir.Value(4, 4, variable=4, version=1)
+    equivalent = mir.Value(5, 5, variable=5, version=1)
+    loaded = mir.Value(6, 8, variable=6, version=1)
+    allocated = mir.Op(
+        0,
+        ir.Operation.CALL,
+        "call",
+        (),
+        (),
+        kind=mir.Kind.CALL,
+        array=mir.ArrayRequest(descriptor, 4, ((0, 7),)),
+    )
+
+    def binary(at: int, kind: mir.Kind, left: mir.Arg, right: mir.Arg, result: mir.Value, width: int) -> mir.Op:
+        return mir.Op(
+            at,
+            ir.Operation.BINARY,
+            kind.value,
+            (result,),
+            tuple(arg.value for arg in (left, right) if isinstance(arg, mir.Held)),
+            kind=kind,
+            args=(left, right),
+            results=(mir.Held(result, width),),
+        )
+
+    first = binary(1, mir.Kind.ADD, mir.Cell(root_cell), mir.Const(0, 2), narrow, 2)
+    second = binary(2, mir.Kind.ADD, mir.Cell(root_cell), mir.Const(2, 2), displaced, 2)
+    widen = mir.Op(
+        3,
+        ir.Operation.UNARY,
+        "movzx",
+        (extended,),
+        (displaced,),
+        kind=mir.Kind.ZERO_EXTEND,
+        args=(mir.Held(displaced, 2),),
+        results=(mir.Held(extended, 4),),
+    )
+    add = binary(4, mir.Kind.ADD, mir.Held(extended, 4), mir.Const(32, 4), advanced, 4)
+    cancel = binary(5, mir.Kind.ADD, mir.Held(advanced, 4), mir.Const(0xFFFFFFDE, 4), equivalent, 4)
+    stored_ref = mir.MemRef(
+        Addr(Space.FAR, 0),
+        2,
+        base=narrow,
+        space=Space.FAR,
+        allocation=descriptor,
+        base_width=2,
+    )
+    loaded_ref = replace(stored_ref, base=equivalent, base_width=4)
+    store = mir.Op(
+        7,
+        ir.Operation.MOVE,
+        "mov",
+        (),
+        (narrow,),
+        kind=mir.Kind.STORE,
+        args=(mir.Const(29, 2),),
+        results=(mir.Cell(stored_ref),),
+        stores=(stored_ref,),
+    )
+    load = mir.Op(
+        8,
+        ir.Operation.MOVE,
+        "mov",
+        (loaded,),
+        (equivalent,),
+        kind=mir.Kind.LOAD,
+        args=(mir.Cell(loaded_ref),),
+        results=(mir.Held(loaded, 2),),
+        loads=(loaded_ref,),
+    )
+    body = mir.MirBody(
+        0,
+        (mir.MirBlock(0, (), (allocated, first, second, widen, add, cancel, store, load), ()),),
+    )
+
+    result = promote.Sroa(Where()).transform(body)
+
+    after = next(op for op in result.blocks[0].ops if op.at == load.at)
+    assert not after.loads
+    assert all(not isinstance(arg, mir.Cell) for arg in after.args)
+
+
+def test_sroa_does_not_treat_sign_extension_as_address_preserving() -> None:
+    """A sign-extended 16-bit offset is not the same 386 address as its zero extension."""
+    from qbopt.model import ir
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
+
+    cell = mir.MemRef(Addr(Space.FRAME, -4), 2, space=Space.FRAME)
+    narrow = mir.Value(1, 1, variable=1, version=1)
+    wide = mir.Value(2, 2, variable=2, version=1)
+    load = mir.Op(
+        1,
+        ir.Operation.MOVE,
+        "mov",
+        (narrow,),
+        (),
+        kind=mir.Kind.LOAD,
+        args=(mir.Cell(cell),),
+        results=(mir.Held(narrow, 2),),
+        loads=(cell,),
+    )
+    extend = mir.Op(
+        2,
+        ir.Operation.UNARY,
+        "movsx",
+        (wide,),
+        (narrow,),
+        kind=mir.Kind.SIGN_EXTEND,
+        args=(mir.Held(narrow, 2),),
+        results=(mir.Held(wide, 4),),
+    )
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (load, extend), ()),))
+
+    assert wide not in promote._affine_values(body)
+
+
 def test_sroa_never_promotes_a_volatile_aggregate_leaf() -> None:
     """A volatile struct field store followed by a load lost the load.
 

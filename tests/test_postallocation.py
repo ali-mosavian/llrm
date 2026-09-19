@@ -34,6 +34,83 @@ def _pair(operation: ir.Operation, name: str, tail: tuple[lir.Insn, ...]) -> tup
     return lir.LirBody("pair", 0, (lir.LirBlock(0, (combined, copied, *tail), ()),), {}, {}), copied
 
 
+def test_dword_constant_is_narrowed_when_the_abi_reads_only_its_low_word() -> None:
+    """C SCALAR emitted ``mov eax,1789`` where BASIC needed only AX."""
+    value = mir.Value(1, 1)
+    source = lir.Insn(
+        1,
+        (1, 1),
+        ir.Semantics(
+            ir.Operation.MOVE,
+            "mov",
+            (ir.Reg(Register.EAX, 4),),
+            (ir.Imm(1789, 4),),
+        ),
+        (value.id,),
+        (),
+    )
+    returned = mir.Op(
+        2,
+        ir.Operation.RETURN,
+        "ret",
+        (),
+        (value,),
+        kind=mir.Kind.RETURN,
+        args=(mir.Held(value, 2),),
+        reads_complete=True,
+    )
+    finish = lir.Insn(
+        2,
+        (2, 2),
+        ir.Semantics(ir.Operation.RETURN, "ret", (), ()),
+        (),
+        (value.id,),
+        requires=((ir.Held(value.id, 2), Register.AX),),
+        op=returned,
+    )
+    # Source/symbol ownership anchors from the unrolled frontend body must be
+    # transparent to physical liveness even though they constrain layout.
+    anchor = lir.Insn(
+        2,
+        (2, 2),
+        ir.Semantics(ir.Operation.NOTHING, "", (), ()),
+        (),
+        (),
+        symbol=True,
+    )
+    body = lir.LirBody("return-low", 1, (lir.LirBlock(1, (source, anchor, finish), ()),), {}, {})
+
+    result = peephole.narrowed_moves(body)
+
+    assert result.insns[0].what == ir.Semantics(
+        ir.Operation.MOVE,
+        "mov",
+        (ir.Reg(Register.AX, 2),),
+        (ir.Imm(1789, 2),),
+    )
+
+
+def test_dword_constant_stays_wide_when_any_upper_lane_is_live() -> None:
+    wide = ir.Reg(Register.EAX, 4)
+    source = lir.Insn(
+        1,
+        (1, 1),
+        ir.Semantics(ir.Operation.MOVE, "mov", (wide,), (ir.Imm(1789, 4),)),
+        (1,),
+        (),
+    )
+    use = lir.Insn(
+        2,
+        (2, 2),
+        ir.Semantics(ir.Operation.COMPARE, "cmp", (), (wide, ir.Imm(0, 4))),
+        (),
+        (1,),
+    )
+    body = lir.LirBody("return-wide", 1, (lir.LirBlock(1, (source, use), ()),), {}, {})
+
+    assert peephole.narrowed_moves(body) == body
+
+
 @pytest.mark.parametrize(
     "operation,name",
     [

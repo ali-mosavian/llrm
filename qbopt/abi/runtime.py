@@ -156,6 +156,13 @@ class Contract:
     # takes its long in dx:ax, nothing recorded that, and removing the
     # moves that set it up printed FADD= 918528 for 1049600.
     inputs: frozenset[Reg] | None = field(default=None)
+    # Values the call's ordinary, fall-through continuation observes. Most
+    # routines use exactly ``inputs``. A control-transfer boundary may also
+    # inspect register state on a hidden error/resume path, however, and
+    # keeping that conservative all-path set in ``inputs`` must not turn
+    # caller-saved scratch values into source-program operands on the direct
+    # edge. None means the ordinary continuation has the same inputs.
+    direct_inputs: frozenset[Reg] | None = field(default=None)
     # `clobbers` was proven over every path the call can return along,
     # whatever code those paths reach.
     clobbers_reached: bool = field(default=False)
@@ -801,6 +808,17 @@ for _name, _cleanup, _evidence in (
         ),
     )
 
+# VBDOS's array eraser receives its descriptor entirely on the stack. The
+# broad ``inputs`` set above remains the conservative bound for unresolved
+# dependency/error transfers, while the ordinary return edge observes no
+# incoming GP value. Keeping both facts separate prevents unrelated helper
+# clobbers in the caller from becoming semantic operands solely because ERASE
+# follows them.
+VARIANTS[("B$ERAS", "vbdos")] = replace(
+    VARIANTS[("B$ERAS", "vbdos")],
+    direct_inputs=frozenset(),
+)
+
 # Emission-facing interfaces for QB45 routines newly reached by the demo
 # corpus. These deliberately do not turn into complete contracts: each call
 # keeps worst-case memory, clobber, control and error effects. The sole claim
@@ -940,6 +958,7 @@ for _name, _cleanup in (("B$PCR4", 4), ("B$PSR4", 4), ("B$PCR8", 8), ("B$PSR8", 
 VARIANTS[("B$EXSA", "vbdos")] = replace(
     worst("B$EXSA"),
     inputs=frozenset({Reg.AX, Reg.BX, Reg.CX, Reg.DX, Reg.SI, Reg.DI}),
+    direct_inputs=frozenset({Reg.AX, Reg.DX}),
     cleanup=0,
     evidence=(
         "VBDCL10E.LIB rtenexit.asm, seg 1:0x68: CMP [bp-12h],0 kills incoming arithmetic flags. "
@@ -965,6 +984,7 @@ VARIANTS[("B$EXSA", "vbdos")] = replace(
 VARIANTS[("B$EXSA", "pds71")] = replace(
     worst("B$EXSA"),
     inputs=frozenset({Reg.AX, Reg.CX, Reg.DX, Reg.SI, Reg.DI}),
+    direct_inputs=frozenset({Reg.AX, Reg.DX}),
     cleanup=0,
     evidence=(
         "disassembled from the linked image at 0x1d6c: the returning path reads no register "
@@ -979,6 +999,7 @@ VARIANTS[("B$EXSA", "pds71")] = replace(
 VARIANTS[("B$EXSA", "qb45")] = replace(
     worst("B$EXSA"),
     inputs=frozenset({Reg.AX, Reg.DX}),
+    direct_inputs=frozenset({Reg.AX, Reg.DX}),
     cleanup=0,
     enters_user_code=False,
     evidence=(
@@ -1135,6 +1156,20 @@ def slots(routine: Contract) -> tuple[Reg, ...]:
     if not routine.inputs:
         return ()
     return tuple(one for one in SLOTS if one in routine.inputs)
+
+
+def direct_slots(routine: Contract) -> tuple[Reg, ...]:
+    """Register values observed by the syntactic continuation of a call.
+
+    ``inputs`` remains the conservative all-path contract used by analyses
+    that must account for hidden runtime transfers. MIR and lowering describe
+    the explicit CFG edge and therefore use this narrower set where one has
+    been established.
+    """
+    chosen = routine.inputs if routine.direct_inputs is None else routine.direct_inputs
+    if not chosen:
+        return ()
+    return tuple(one for one in SLOTS if one in chosen)
 
 
 def writes_caller_memory(routine: Contract) -> bool:

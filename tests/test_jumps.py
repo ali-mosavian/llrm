@@ -120,6 +120,34 @@ def test_jump_to_the_next_block_is_dropped():
     ) == ["L0_1:", "mov ax, bx", "L0_4:", "ret"]
 
 
+def test_source_owned_jump_to_fallthrough_becomes_an_anchor() -> None:
+    """SCALAR lost the three decoded bytes of its preheader jump after unrolling."""
+    jump = lir.Insn(
+        1,
+        (1, 4),
+        ir.Semantics(ir.Operation.JUMP, "jmp", (), (), 4),
+        (),
+        (),
+    )
+    body = lir.LirBody(
+        "f",
+        1,
+        (
+            lir.LirBlock(1, (jump,), (4,)),
+            lir.LirBlock(4, (_return(4),), ()),
+        ),
+        {},
+        {},
+    )
+
+    result = jumps.threaded(body)
+
+    kept = result.blocks[0].insns
+    assert len(kept) == 1
+    assert kept[0].covers == (1, 4)
+    assert kept[0].what is not None and kept[0].what.op is ir.Operation.NOTHING
+
+
 def test_jump_over_a_block_nothing_reaches_is_dropped():
     """cfg_trim kept `jne L0_18; jmp L0_13` over an empty block 12 nothing enters:
     unreachable blocks went only once some other rule had fired."""
@@ -128,6 +156,96 @@ def test_jump_over_a_block_nothing_reaches_is_dropped():
         lir.LirBlock(5, (), ()),
         lir.LirBlock(9, (_return(9),), ()),
     ) == ["L0_1:", "mov ax, bx", "L0_9:", "ret"]
+
+
+def test_unreachable_inert_source_ownership_survives_threading() -> None:
+    """SCALAR unrolled to 1789, then final threading lost the old loop bytes.
+
+    The unreachable block contains no machine work, but its nonempty source
+    spans prove that optimization deliberately replaced the decoded region.
+    Layout must still receive those anchors for fresh OMF emission.
+    """
+    owned = lir.Insn(
+        5,
+        (5, 9),
+        ir.Semantics(ir.Operation.NOTHING, "", (), ()),
+        (),
+        (),
+    )
+    body = lir.LirBody(
+        "f",
+        1,
+        (
+            lir.LirBlock(1, (_return(1),), ()),
+            lir.LirBlock(5, (owned,), ()),
+        ),
+        {},
+        {},
+    )
+
+    result = jumps.threaded(body)
+
+    assert tuple(block.at for block in result.blocks) == (1, 5)
+    assert result.blocks[1].insns == (owned,)
+
+
+def test_unreachable_inert_carrier_without_a_byte_span_does_not_crash_threading() -> None:
+    """A carried, non-generated LIR occurrence can have no contiguous ``covers`` span."""
+    carrier = lir.Insn(
+        5,
+        None,
+        ir.Semantics(ir.Operation.NOTHING, "", (), ()),
+        (),
+        (),
+    )
+    body = lir.LirBody(
+        "f",
+        1,
+        (
+            lir.LirBlock(1, (_return(1),), ()),
+            lir.LirBlock(5, (carrier,), ()),
+        ),
+        {},
+        {},
+    )
+
+    result = jumps.threaded(body)
+
+    assert tuple(block.at for block in result.blocks) == (1,)
+
+
+def test_reachable_inert_source_ownership_is_not_a_transparent_passage() -> None:
+    """PARITY's fully unrolled BASIC loop left only source-map anchors.
+
+    Jump threading treated that reachable block as empty, redirected its
+    predecessor around it, and then discarded 53 bytes of deliberate source
+    ownership.  Fresh OMF emission consequently refused the apparent hole.
+    An inert block is transparent only when it owns no decoded source bytes.
+    """
+    owned = lir.Insn(
+        5,
+        (5, 9),
+        ir.Semantics(ir.Operation.NOTHING, "", (), ()),
+        (),
+        (),
+    )
+    body = lir.LirBody(
+        "f",
+        1,
+        (
+            lir.LirBlock(1, (_jump(1, 5),), (5,)),
+            lir.LirBlock(5, (owned,), (9,)),
+            lir.LirBlock(9, (_return(9),), ()),
+        ),
+        {},
+        {},
+    )
+
+    result = jumps.threaded(body)
+
+    assert tuple(block.at for block in result.blocks) == (1, 5, 9)
+    assert result.blocks[0].succ == (5,)
+    assert result.blocks[1].insns == (owned,)
 
 
 def test_threading_preserves_an_exact_empty_loop_header() -> None:

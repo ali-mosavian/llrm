@@ -1511,7 +1511,7 @@ def _call_args(routine: "runtime.Contract | None", holds: dict, at: int = 0) -> 
     if not runtime.established_inputs(routine):
         return (), False
     made = []
-    for one in runtime.slots(routine):
+    for one in runtime.direct_slots(routine):
         value = holds.get(FROM_CONTRACT.get(one))
         width = target.width_of(AS_NAMED[one]) if one in AS_NAMED else None
         if value is None or width is None:
@@ -1567,7 +1567,8 @@ def _call_touches(
         # B$EXSA preserve a documented set and their code is not in the
         # tree, so every register is an input until it is.
         return disturbed, frozenset(TRACKED) | {FLAGS}
-    reads = {FROM_CONTRACT[one] for one in routine.inputs if one in FROM_CONTRACT}
+    direct = routine.inputs if routine.direct_inputs is None else routine.direct_inputs
+    reads = {FROM_CONTRACT[one] for one in direct if one in FROM_CONTRACT}
     return disturbed, frozenset(reads)
 
 

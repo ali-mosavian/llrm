@@ -205,6 +205,15 @@ def test_qbdemo_main_calls_lower(symbol):
     assert seen
 
 
+def test_vbdos_erase_has_no_direct_register_operand() -> None:
+    """PARITY's B$MUI4 clobbers looked live only because ERASE followed them."""
+    rule = runtime.per_call({0: "B$ERAS"}, "vbdos")[0]
+    assert rule.inputs == frozenset(
+        {runtime.Reg.AX, runtime.Reg.BX, runtime.Reg.CX, runtime.Reg.DX, runtime.Reg.SI, runtime.Reg.DI}
+    )
+    assert runtime.direct_slots(rule) == ()
+
+
 @pytest.mark.parametrize("name,cleanup", [("B$ASSN", 12), ("B$PER8", 8)])
 def test_qb45_string_assignment_and_double_print_have_fixed_cleanup(name, cleanup):
     """QB45 NESTUD and BYREF2 were refused: B$ASSN's and B$PER8's interfaces were

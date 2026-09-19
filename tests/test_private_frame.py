@@ -186,3 +186,48 @@ def test_a_canonical_pointer_load_reads_a_private_frame_store() -> None:
     private = observers.private(body, None, None)
     assert private is not None and private(cell)
     assert store not in avail.dead_stores(body, frozenset(), {}, private)
+
+
+def test_an_owned_allocation_becomes_private_only_after_its_last_load_is_gone() -> None:
+    """PARITY's first optimization round must not delete stores needed by the next SROA round."""
+    descriptor = mir.Symbol(Space.FRAME, 0, -38, 2)
+    object_ = memory.Object(memory.Kind.ALLOCATION, (descriptor, 7, "root"), extent=4)
+    cell = mir.MemRef(
+        Addr(Space.FAR, 0),
+        4,
+        space=Space.FAR,
+        allocation=descriptor,
+        provenance=memory.Provenance.one(object_, 0, 4),
+    )
+    stored = mir.Op(
+        1,
+        ir.Operation.MOVE,
+        "mov",
+        (),
+        (),
+        kind=mir.Kind.STORE,
+        args=(mir.Const(37, 4),),
+        results=(mir.Cell(cell),),
+        stores=(cell,),
+    )
+    value = mir.Value(2, 2, variable=2, version=1)
+    loaded = mir.Op(
+        2,
+        ir.Operation.MOVE,
+        "mov",
+        (value,),
+        (),
+        kind=mir.Kind.LOAD,
+        args=(mir.Cell(cell),),
+        results=(mir.Held(value, 4),),
+        loads=(cell,),
+    )
+    observed = mir.MirBody(0, (mir.MirBlock(0, (), (stored, loaded), ()),), sealed=True)
+    private = observers.private(observed, None, None)
+    assert private is not None and not private(cell)
+    assert stored not in avail.dead_stores(observed, frozenset(), {}, private)
+
+    unread = replace(observed, blocks=(replace(observed.blocks[0], ops=(stored,)),))
+    private = observers.private(unread, None, None)
+    assert private is not None and private(cell)
+    assert stored in avail.dead_stores(unread, frozenset(), {}, private)

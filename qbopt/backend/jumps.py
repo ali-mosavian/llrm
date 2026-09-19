@@ -381,10 +381,17 @@ def _step(body: lir.LirBody) -> tuple[lir.LirBody, bool]:
         if target != last.what.target:
             blocks[index] = _retargeted(block, last, target)
             return _reachable(body, blocks), True
-        # Dropped outright, not through lir.without: that keeps an instruction whose bytes it
-        # cannot hand on, and the printed path has no bytes to account for.
         if last.what.op is ir.Operation.JUMP and target == after:
-            blocks[index] = replace(block, insns=tuple(one for one in block.insns if one is not last))
+            # A fall-through needs no machine jump.  A decoded jump may still
+            # own source bytes, though; retain those as an inert anchor so
+            # fresh layout can account for the replaced range.  A frontend-
+            # inserted jump owns no bytes and disappears outright.
+            kept = tuple(
+                lir.anchor(one) if one is last and not one.inserted else one
+                for one in block.insns
+                if one is not last or not one.inserted
+            )
+            blocks[index] = replace(block, insns=kept)
             return _reachable(body, blocks), True
         if last.what.op is ir.Operation.JUMP and len(real) > 1 and real[-2].what.op is ir.Operation.BRANCH:
             branch = real[-2]
@@ -426,8 +433,20 @@ def _real(block: lir.LirBlock) -> list[lir.Insn]:
 
 
 def _passage(block: lir.LirBlock) -> int | None:
-    """Where a block that does nothing but go somewhere goes."""
-    if block.phis:
+    """Where a block with no owned inert work goes.
+
+    An inert anchor emits no machine instruction, but it still owns decoded
+    bytes that fresh layout must account for.  Redirecting the incoming edge
+    makes the block unreachable and can strand that ownership.  Executable
+    jump passages retain the existing threading rule; source-owned jumps are
+    handled when a chosen fall-through removes the instruction itself.
+    """
+    if block.phis or any(
+        one.what is not None
+        and one.what.op is ir.Operation.NOTHING
+        and (not one.inserted or one.spread)
+        for one in block.insns
+    ):
         return None
     real = _real(block)
     if not real and len(block.succ) == 1:
@@ -478,4 +497,29 @@ def _reachable(body: lir.LirBody, blocks: list) -> lir.LirBody:
             continue
         reached.add(one)
         work.extend(by_at[one].succ)
-    return replace(body, blocks=tuple(block for block in blocks if block.at in reached))
+    # An optimizer may make a decoded region unreachable while leaving its
+    # byte ownership on inert NOTHING anchors.  Those anchors emit no code,
+    # but layout still needs them to prove that every source byte was
+    # deliberately replaced.  Dropping the block made a fully unrolled BC
+    # loop refuse fresh emission with an apparent hole in its source map.
+    # Keep only genuinely inert orphan blocks; unreachable machine work still
+    # disappears as before.
+    ownership = {
+        block.at
+        for block in blocks
+        if block.at not in reached
+        and block.insns
+        and all(one.what is not None and one.what.op is ir.Operation.NOTHING for one in block.insns)
+        and any(
+            one.covers is not None and one.covers[0] < one.covers[1] or one.spread
+            for one in block.insns
+        )
+    }
+    return replace(
+        body,
+        blocks=tuple(
+            replace(block, succ=()) if block.at in ownership else block
+            for block in blocks
+            if block.at in reached or block.at in ownership
+        ),
+    )

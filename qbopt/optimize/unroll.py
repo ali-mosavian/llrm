@@ -366,9 +366,36 @@ def _expanded(body, loop, header, latch, bridge_ops, latch_ops, exit_at, entry, 
     )
     changed = []
     dominators = loops.dominators(body.blocks, body.entry)
+    (first_iteration,) = set(header.succ) & loop.body
     for block in body.blocks:
         if block.at == header.at:
-            block = replace(block, phis=(), ops=tuple(ssa.substituted(op, initial) for op in block.ops))
+            ops = tuple(ssa.substituted(op, initial) for op in block.ops)
+            # ``trip_count`` established a positive exact count before this
+            # expansion was built.  The original zero-trip edge is therefore
+            # impossible: retaining its guard leaves address calculations,
+            # a branch and an exit phi around an otherwise constant body.
+            # Keep the source occurrence as an unconditional control anchor;
+            # the ordinary CFG cleanup will remove it when it falls through.
+            guard = ops[-1]
+            enter = replace(
+                guard,
+                kind=mir.Kind.JUMP,
+                name="",
+                args=(),
+                results=(),
+                uses=(),
+                defines=(),
+                loads=(),
+                stores=(),
+                merges={},
+                source_backed=False,
+                raised=((), ()),
+                absorbed=guard.absorbed,
+                target=first_iteration,
+                test=None,
+                symbol=False,
+            )
+            block = replace(block, phis=(), ops=(*ops[:-1], enter), succ=(first_iteration,))
         elif block.at == latch.at:
             block = replace(block, ops=tuple(expanded), succ=(exit_at,))
         elif block.at in loop.body:
@@ -394,15 +421,12 @@ def _expanded(body, loop, header, latch, bridge_ops, latch_ops, exit_at, entry, 
                 for phi in block.phis
             )
             if block.at == exit_at:
-                # The entry test still owns its exit edge until branch folding.
-                # The expanded latch reaches the exit with the final iteration.
+                # A positive exact trip count removed the zero-trip edge.  The
+                # expanded latch is the exit's sole remaining predecessor.
                 phis = tuple(
                     replace(
                         phi,
-                        incoming={
-                            header.at: ssa.provider(phi.incoming[header.at], initial),
-                            latch.at: ssa.provider(phi.incoming[header.at], swap),
-                        },
+                        incoming={latch.at: ssa.provider(phi.incoming[header.at], swap)},
                     )
                     for phi in block.phis
                 )

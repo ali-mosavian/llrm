@@ -144,6 +144,9 @@ def private(body: mir.MirBody, found: Module | None, blocks: list | None) -> Cal
     escapes = frameescape.analysed(body)
     pointers = alias.points_to(body)
     published = set(pointers.escaped)
+    read_allocations = {
+        ref.allocation for block in body.blocks for op in block.ops for ref in op.loads if ref.allocation is not None
+    }
     unknown_frame_publication = False
     publishing = frozenset({mir.Kind.ARG, mir.Kind.CALL, mir.Kind.RETURN, mir.Kind.ESCAPE, mir.Kind.OPAQUE})
     for block in body.blocks:
@@ -170,19 +173,37 @@ def private(body: mir.MirBody, found: Module | None, blocks: list | None) -> Cal
 
     def unobserved(ref: mir.MemRef) -> bool:
         provenance = pointers.reference(ref)
-        if provenance is not None and provenance.slices and not unknown_frame_publication:
-            canonical_frame = all(
+        if provenance is not None and provenance.slices:
+            canonical_allocation = all(
+                one.object.kind is memory.Kind.ALLOCATION
+                and one.object.extent is not None
+                and 0 <= one.low < one.high
+                and one.high + one.width - 1 <= one.object.extent
+                and (
+                    not isinstance(one.object.identity, tuple)
+                    or not one.object.identity
+                    or one.object.identity[0] not in read_allocations
+                )
+                for one in provenance.slices
+            )
+            canonical_frame = not unknown_frame_publication and all(
                 one.object.kind is memory.Kind.FRAME
                 and one.object.extent is not None
                 and 0 <= one.low < one.high
                 and one.high + one.width - 1 <= one.object.extent
                 for one in provenance.slices
             )
-            if canonical_frame:
+            if canonical_frame or canonical_allocation:
                 # Canonical object identity is a complete answer in both
-                # directions. Falling through to the raw BP-offset rule after
-                # finding a published object made that same object private
-                # again and let DSE erase stores before a BYREF call.
+                # directions.  A current owning allocation is private for the
+                # same reason as a current frame object once no load in this
+                # body can still observe it: only publishing a pointer can
+                # then let code outside the body inspect its contents.
+                # Passing the *descriptor's* frame address to its allocator or
+                # deallocator does not publish the separate allocation object.
+                # Falling through to the raw BP-offset rule after finding a
+                # published object made that same object private again and let
+                # DSE erase stores before a BYREF call.
                 return all(one.object not in published for one in provenance.slices)
         addr = ref.addr
         if addr is None or addr.base != Register.NONE or ref.base is not None or ref.segment is not None:

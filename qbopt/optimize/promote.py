@@ -31,6 +31,7 @@ saying the same thing twice.
 from collections import Counter
 from dataclasses import dataclass
 from dataclasses import replace
+from math import prod
 
 from qbopt.model import mir
 from qbopt.model import memory
@@ -76,6 +77,14 @@ class _Leaf:
     low: int
     high: int
     type_class: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _Affine:
+    """One symbolic address root plus a mathematical byte displacement."""
+
+    root: object | None
+    offset: int
 
 
 def _leaf(ref: mir.MemRef) -> _Leaf | None:
@@ -215,10 +224,161 @@ class Sroa(MIRTransform):
         self.where = where
 
     def transform(self, body: MirBody) -> MirBody:
+        body = _allocation_leaves(body)
         body = _bounded_leaves(body)
         body = _canonical_leaf_types(body)
         body = _split_copies(body)
         return promoted(body, self.where.dgroup, self.where.bounds, aggregate_only=True)
+
+
+def _signed(number: int, width: int) -> int:
+    sign = 1 << (width * 8 - 1)
+    return ((number & ((sign << 1) - 1)) ^ sign) - sign
+
+
+def _affine_values(body: MirBody) -> dict[mir.Value, _Affine]:
+    """Normalize address arithmetic without giving physical locations meaning.
+
+    A direct cell is an opaque symbolic root.  Addition, subtraction and
+    width conversion retain that root and combine only byte displacements.
+    This is deliberately not general symbolic algebra: two roots, products,
+    phis and unknown operations are refused.
+    """
+    definitions = {
+        result.value: op
+        for block in body.blocks
+        for op in block.ops
+        for result in op.results
+        if isinstance(result, mir.Held)
+    }
+    cache: dict[mir.Value, _Affine | None] = {}
+    active: set[mir.Value] = set()
+
+    def operand(arg: mir.Arg) -> _Affine | None:
+        if isinstance(arg, mir.Const):
+            return _Affine(None, _signed(arg.n, arg.width))
+        if isinstance(arg, mir.Held):
+            return value(arg.value)
+        if not isinstance(arg, mir.Cell) or arg.ref.volatile:
+            return None
+        ref = mir._symbolic_ref(arg.ref)
+        if ref.addr is None or ref.base is not None or ref.segment is not None:
+            return None
+        return _Affine(("cell", ref.addr, ref.width, ref.space), 0)
+
+    def combined(kind: mir.Kind, left: _Affine, right: _Affine) -> _Affine | None:
+        if kind is mir.Kind.ADD:
+            if left.root is not None and right.root is not None:
+                return None
+            return _Affine(left.root if left.root is not None else right.root, left.offset + right.offset)
+        if kind is mir.Kind.SUB and right.root is None:
+            return _Affine(left.root, left.offset - right.offset)
+        return None
+
+    def value(one: mir.Value) -> _Affine | None:
+        if one in cache:
+            return cache[one]
+        if one in active:
+            return None
+        active.add(one)
+        op = definitions.get(one)
+        result = None
+        if op is not None and not op.barrier and not op.volatile:
+            args = tuple(operand(arg) for arg in op.args)
+            if all(arg is not None for arg in args):
+                known = tuple(arg for arg in args if arg is not None)
+                if op.kind in (mir.Kind.COPY, mir.Kind.LOAD, mir.Kind.ZERO_EXTEND):
+                    result = known[0] if len(known) == 1 else None
+                elif op.kind in (mir.Kind.ADD, mir.Kind.SUB) and len(known) == 2:
+                    result = combined(op.kind, known[0], known[1])
+                elif op.kind is mir.Kind.INCREMENT and len(known) == 1:
+                    result = replace(known[0], offset=known[0].offset + 1)
+                elif op.kind is mir.Kind.DECREMENT and len(known) == 1:
+                    result = replace(known[0], offset=known[0].offset - 1)
+        active.remove(one)
+        cache[one] = result
+        return result
+
+    return {one: fact for one in definitions if (fact := value(one)) is not None}
+
+
+def _allocation_leaves(body: MirBody) -> MirBody:
+    """Attach exact relative leaves to affine accesses of one allocation.
+
+    ``MemRef.allocation`` already proves that an access is inside the current
+    owning allocation.  Frontends may nevertheless spell its physical offset
+    with different SSA expressions and widths.  Group expressions by their
+    opaque root, normalize their constant differences, and make those byte
+    ranges ordinary canonical memory provenance.  The minimum observed offset
+    is only a coordinate origin; no assumption is made about the heap address.
+    """
+    requests: dict[mir.Symbol, list[tuple[int, int]]] = {}
+    for block in body.blocks:
+        for op in block.ops:
+            request = op.array
+            if request is None or request.replaces or request.element_width <= 0:
+                continue
+            count = prod(high - low + 1 for low, high in request.bounds)
+            extent = request.element_width * count
+            if count > 0 and 0 < extent < 1 << 31:
+                requests.setdefault(request.descriptor, []).append((op.id if op.id is not None else op.at, extent))
+    unique = {descriptor: found[0] for descriptor, found in requests.items() if len(found) == 1}
+    if not unique:
+        return body
+
+    affine = _affine_values(body)
+    grouped: dict[tuple[mir.Symbol, int, int, object], list[tuple[mir.MemRef, int]]] = {}
+    for block in body.blocks:
+        for op in block.ops:
+            for ref in (*op.loads, *op.stores):
+                request = unique.get(ref.allocation)
+                fact = affine.get(ref.base) if ref.base is not None else None
+                if request is None or fact is None or fact.root is None or ref.addr is None or ref.width <= 0:
+                    continue
+                generation, extent = request
+                grouped.setdefault((ref.allocation, generation, extent, fact.root), []).append(
+                    (ref, fact.offset + ref.addr.disp)
+                )
+
+    exact: dict[mir.MemRef, memory.Provenance] = {}
+    for (descriptor, generation, extent, root), accesses in grouped.items():
+        origin = min(offset for _ref, offset in accesses)
+        if any(not 0 <= offset - origin <= extent - ref.width for ref, offset in accesses):
+            continue
+        object_ = memory.Object(memory.Kind.ALLOCATION, (descriptor, generation, root), extent=extent)
+        for ref, offset in accesses:
+            low = offset - origin
+            exact[ref] = memory.Provenance.one(object_, low, low + ref.width)
+    if not exact:
+        return body
+
+    def reference(ref: mir.MemRef) -> mir.MemRef:
+        provenance = exact.get(ref)
+        return ref if provenance is None else replace(ref, provenance=provenance)
+
+    def operand(arg: mir.Arg) -> mir.Arg:
+        return mir.Cell(reference(arg.ref)) if isinstance(arg, mir.Cell) else arg
+
+    return replace(
+        body,
+        blocks=tuple(
+            replace(
+                block,
+                ops=tuple(
+                    replace(
+                        op,
+                        loads=tuple(map(reference, op.loads)),
+                        stores=tuple(map(reference, op.stores)),
+                        args=tuple(map(operand, op.args)),
+                        results=tuple(map(operand, op.results)),
+                        memory_values=tuple((reference(ref), value) for ref, value in op.memory_values),
+                    )
+                    for op in block.ops
+                ),
+            )
+            for block in body.blocks
+        ),
+    )
 
 
 def _bounded_ref(ref: mir.MemRef, known: dict) -> mir.MemRef:
@@ -267,23 +427,30 @@ def _pointed_ref(
     if ref.base is None or ref.provenance is None or len(ref.provenance.slices) != 1:
         return ref
     source = next(iter(ref.provenance.slices))
-    extent = source.object.extent
-    if extent is None or source.low > 0 or source.high < extent:
-        return ref
     provenance = pointers.get(ref.base)
     if provenance is None or len(provenance.slices) != 1:
         return ref
     address = next(iter(provenance.slices))
-    if (
-        address.object != source.object
-        or address.stride != 1
-        or address.width != 1
-        or address.high - address.low != 1
-    ):
+    if address.object != source.object or address.stride != 1 or address.width != 1 or address.high - address.low != 1:
         return ref
     low = address.low + (0 if ref.addr is None else ref.addr.disp)
     high = low + ref.width
-    if not 0 <= low < high <= extent:
+    extent = address.object.extent
+    if extent is None or not 0 <= low < high <= extent:
+        return ref
+    # The frontend annotation may be the conservative lane selected by the
+    # original indexed expression rather than the whole aggregate.  An exact
+    # same-object pointer fact is allowed to refine it only when that lane
+    # really covers every byte of the candidate access.  Requiring a whole
+    # object here made exact cloned accesses depend on which broad spelling
+    # their frontend happened to retain after unrolling.
+    def covered(byte: int) -> bool:
+        return any(
+            source.low <= byte - lane < source.high and (byte - lane - source.low) % source.stride == 0
+            for lane in range(source.width)
+        )
+
+    if not all(covered(byte) for byte in range(low, high)):
         return ref
     exact = memory.Provenance(
         frozenset({memory.Slice(source.object, low, high)}),

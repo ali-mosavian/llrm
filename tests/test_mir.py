@@ -1030,9 +1030,17 @@ def test_the_exit_routine_declares_what_it_reads_where_that_is_established() -> 
     assert runtime.per_call({0: "B$EXSA"}, module.Family.PDS)[0].inputs == pds
     assert runtime.per_call({0: "B$EXSA"}, module.Family.QUICKBASIC)[0].inputs == {runtime.Reg.AX, runtime.Reg.DX}
     assert runtime.per_call({0: "B$EXSA"}, module.Family.VBDOS)[0].inputs == vbdos
+    assert runtime.direct_slots(runtime.per_call({0: "B$EXSA"}, module.Family.PDS)[0]) == (
+        runtime.Reg.AX,
+        runtime.Reg.DX,
+    )
+    assert runtime.direct_slots(runtime.per_call({0: "B$EXSA"}, module.Family.VBDOS)[0]) == (
+        runtime.Reg.AX,
+        runtime.Reg.DX,
+    )
 
     made = _raised_calls("procs-p-g2.obj")
     assert "B$EXSA" in made, f"no B$EXSA raised; found {sorted(made)}"
     for op in made["B$EXSA"]:
         assert op.args_known is True, f"{op.at:#06x}: known={op.args_known}"
-        assert [one.width for one in op.args] == [2, 2, 2, 2, 2], f"{op.at:#06x}: {op.args}"
+        assert [one.width for one in op.args] == [2, 2], f"{op.at:#06x}: {op.args}"

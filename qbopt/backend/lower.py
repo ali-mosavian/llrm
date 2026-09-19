@@ -1340,7 +1340,7 @@ class Lowering:
             # the allocation move whatever it was handed; refusing keeps
             # BC's own layout, which is the answer that still works.
             raise Unlowered(f"{op.at:#06x}: {self._calls.get(op.at)} has no established inputs")
-        where = runtime.slots(routine)
+        where = runtime.direct_slots(routine)
         if not where:
             return ()
         # A declared contract whose arguments do not answer it: emitting the

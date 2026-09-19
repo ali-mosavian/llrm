@@ -18,11 +18,16 @@ from qbopt.objectfile import omf
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "bench" / "parity"
 FIXTURE = ROOT / "fixtures" / "parity" / "parity-v-g3.obj"
+SCALAR_FIXTURE = ROOT / "fixtures" / "parity" / "scalar-v-g3.obj"
 JWASM = shutil.which("jwasm") or str(Path.home() / "work/other/d32x/toolchains/native/bin/jwasm")
 
 
 def _expected() -> int:
     return json.loads((SOURCE / "expected.json").read_text())["parity"]
+
+
+def _expected_for(name: str) -> int:
+    return json.loads((SOURCE / "expected.json").read_text())[name]
 
 
 def test_both_frontends_reach_the_shared_optimizer_and_fresh_omf_writer() -> None:
@@ -34,7 +39,9 @@ def test_both_frontends_reach_the_shared_optimizer_and_fresh_omf_writer() -> Non
     """
     basic = wholeseg.emitted(FIXTURE.read_bytes())
     assert basic.outcome is wholeseg.Emission.LIR, basic.reason
-    assert module.of(omf.parse(basic.data)).code
+    basic_module = module.of(omf.parse(basic.data))
+    assert basic_module is not None and basic_module.code
+    assert "B$MUI4" not in basic_module.calls.values()
 
     source = SOURCE / "parity.c"
     c_module = cfront.assembled(cfront.recorded(source, []), source.stem, optimise=True)
@@ -42,12 +49,172 @@ def test_both_frontends_reach_the_shared_optimizer_and_fresh_omf_writer() -> Non
     assert module.of(omf.parse(c_object)).code
 
 
-def _c_start() -> str:
-    return """\
+def test_basic_aggregate_drops_unobserved_dynamic_array_contents() -> None:
+    """PARITY returned 1789 but still initialized all 16 erased array fields.
+
+    Exact SROA proves the loads are constants.  The owning allocation never
+    escapes and B$ERAS discards it, so retaining stores to its unread contents
+    is a frontend-dependent code-generation difference, not BASIC semantics.
+    """
+    import corpus
+
+    from qbopt.model import mir
+    from qbopt.optimize import transform
+
+    found = corpus.loaded(FIXTURE)
+    partitioned = corpus.partitioned(FIXTURE)
+    raised = mir.bodies(found, partitioned)
+    _name, body = next((name, body) for name, body in raised if "PARITYKERNEL" in name)
+    optimized = transform.applied(body, found.dgroup, found.calls, blocks=partitioned, found=found)
+
+    assert not [
+        ref
+        for block in optimized.blocks
+        for op in block.ops
+        for ref in (*op.loads, *op.stores)
+        if ref.allocation is not None
+    ]
+
+
+def test_c_aggregate_exact_nonzero_loops_leave_only_the_constant_result() -> None:
+    """C PARITY still compared ``base`` with ``base + 32`` after peeling.
+
+    Both loops have the independently proven exact trip count eight.  A full
+    expansion must not retain the original zero-trip guard, its address
+    calculations, or the now-private array traffic.
+    """
+    from qbopt.model import ir
+
+    source = SOURCE / "parity.c"
+    built = cfront.assembled(cfront.recorded(source, []), source.stem, optimise=True)
+    procedure = next(one for one in built.procedures if one.name == "_parity_kernel")
+    real = [
+        one.what
+        for block in procedure.body.blocks
+        for one in block.insns
+        if one.what is not None and one.what.op not in {ir.Operation.NOTHING, ir.Operation.RETURN}
+    ]
+
+    assert [one.name for one in real] == ["mov", "mov"]
+    assert [one.sources for one in real] == [(ir.Imm(1789, 2),), (ir.Imm(0, 2),)]
+
+
+def test_basic_scalar_frontend_does_not_preserve_runtime_scratch_as_program_data() -> None:
+    """SCALAR kept its eight-iteration loop and B$MUI4 while C returned 1789.
+
+    VBDOS B$EXSA has conservative survivor inputs for hidden error-transfer
+    paths. Those machine-only values must not make B$MUI4's BX/CX clobbers
+    semantic on the ordinary function-return edge.
+    """
+    import corpus
+    from qbopt.model import mir
+    from qbopt.optimize import transform
+
+    found = corpus.loaded(SCALAR_FIXTURE)
+    partitioned = corpus.partitioned(SCALAR_FIXTURE)
+    raised = mir.bodies(found, partitioned)
+    _name, body = next((name, body) for name, body in raised if "PARITYSCALAR" in name)
+    assert any(
+        op.kind is mir.Kind.MUL and op.results and op.results[0].width == 4 for block in body.blocks for op in block.ops
+    )
+    assert not any(
+        op.kind is mir.Kind.CALL and found.calls.get(op.at) == "B$MUI4" for block in body.blocks for op in block.ops
+    )
+
+    optimized = transform.applied(body, found.dgroup, found.calls, blocks=partitioned, found=found)
+    assert not any(op.kind is mir.Kind.MUL for block in optimized.blocks for op in block.ops)
+    assert not any(
+        op.kind is mir.Kind.CALL and found.calls.get(op.at) == "B$MUI4"
+        for block in optimized.blocks
+        for op in block.ops
+    )
+    assert not any(len(block.succ) > 1 for block in optimized.blocks)
+    constants = {
+        (arg.n, arg.width)
+        for block in optimized.blocks
+        for op in block.ops
+        for arg in op.args
+        if op.kind is mir.Kind.COPY and isinstance(arg, mir.Const)
+    }
+    expected = _expected_for("scalar")
+    assert (expected & 0xFFFF, 2) in constants
+    assert ((expected >> 16) & 0xFFFF, 2) in constants
+
+
+def test_scalar_frontends_emit_the_same_machine_core() -> None:
+    """Equivalent scalar source must converge beyond merely returning 1789.
+
+    BASIC's frame entry/exit calls are explicit language ABI scaffolding.
+    Between them, its final allocated machine operations must be identical to
+    C's complete function body; loops, helper calls, wider moves, spills, and
+    recomputation are not normalized away.
+    """
+    import corpus
+
+    from qbopt.model import ir
+
+    found = corpus.loaded(SCALAR_FIXTURE)
+    basic_bodies = {}
+
+    def basic_watch(stage, name, body):
+        if stage == "jumps":
+            basic_bodies[name] = body
+
+    basic = wholeseg.emitted(SCALAR_FIXTURE.read_bytes(), watch=basic_watch)
+    assert basic.outcome is wholeseg.Emission.LIR, basic.reason
+    basic_body = next(body for name, body in basic_bodies.items() if "PARITYSCALAR" in name)
+    basic_real = [
+        one
+        for block in basic_body.blocks
+        for one in block.insns
+        if one.what is not None and one.what.op is not ir.Operation.NOTHING
+    ]
+    entry = next(
+        index
+        for index, one in enumerate(basic_real)
+        if one.what.op is ir.Operation.CALL and one.op is not None and found.calls.get(one.op.at) == "B$ENRA"
+    )
+    leave = next(
+        index
+        for index, one in enumerate(basic_real)
+        if one.what.op is ir.Operation.CALL and one.op is not None and found.calls.get(one.op.at) == "B$EXSA"
+    )
+    basic_core = [one.what for one in basic_real[entry + 1 : leave]]
+    assert sum(one.what.op is ir.Operation.RETURN for one in basic_real) == 1
+
+    c_bodies = {}
+
+    def c_watch(stage, name, body):
+        if stage == "lir-jumps":
+            c_bodies[name] = body
+
+    source = SOURCE / "scalar.c"
+    cfront.assembled(cfront.recorded(source, []), source.stem, optimise=True, watch=c_watch)
+    c_body = next(iter(c_bodies.values()))
+    c_core = [
+        one.what
+        for block in c_body.blocks
+        for one in block.insns
+        if one.what is not None and one.what.op not in {ir.Operation.NOTHING, ir.Operation.RETURN}
+    ]
+    assert (
+        sum(
+            one.what is not None and one.what.op is ir.Operation.RETURN
+            for block in c_body.blocks
+            for one in block.insns
+        )
+        == 1
+    )
+
+    assert basic_core == c_core
+
+
+def _c_start(symbol: str) -> str:
+    return f"""\
 .model medium
 .386
 .stack 1024
-extrn _parity_kernel:far
+extrn _{symbol}:far
 .data
 value dd ?
 filename db 'VALUE.BIN', 0
@@ -55,7 +222,7 @@ filename db 'VALUE.BIN', 0
 start:
     mov ax, @data
     mov ds, ax
-    call far ptr _parity_kernel
+    call far ptr _{symbol}
     mov word ptr value, ax
     mov word ptr value+2, dx
     mov ah, 3ch
@@ -96,28 +263,29 @@ def test_basic_frontend_returns_the_independent_parity_answer(tmp_path: Path) ->
 
     result = e2e.run(
         "v-g3",
-        names=["parity"],
+        names=["parity", "scalar"],
         source_dir=SOURCE,
         golden_dir=SOURCE / "golden",
         work=tmp_path,
         timeout=30,
     )
     assert result.ok, result.verdicts
-    assert _expected() == 1789
+    assert _expected() == _expected_for("scalar") == 1789
 
 
+@pytest.mark.parametrize("name,symbol", [("parity", "parity_kernel"), ("scalar", "parity_scalar")])
 @pytest.mark.e2e
 @pytest.mark.skipif(not _runtime_available(), reason="DOSBox or the DOS toolchains are unavailable")
-def test_c_frontend_returns_the_independent_parity_answer(tmp_path: Path) -> None:
+def test_c_frontend_returns_the_independent_parity_answer(tmp_path: Path, name: str, symbol: str) -> None:
     """The C frontend's fresh object must return the BASIC corpus oracle."""
     from configs import CONFIGS
     from dosbox import launch
 
-    source = SOURCE / "parity.c"
+    source = SOURCE / f"{name}.c"
     c_module = cfront.assembled(cfront.recorded(source, []), source.stem, optimise=True)
     (tmp_path / "PARITY.OBJ").write_bytes(omfwrite.written(c_module, source.name))
     start = tmp_path / "START.ASM"
-    start.write_text(_c_start())
+    start.write_text(_c_start(symbol))
     assembled = subprocess.run(
         [JWASM, "-q", "-c", "-Cp", "-Zg", "-omf", f"-Fo{tmp_path / 'START.OBJ'}", str(start)],
         capture_output=True,
@@ -137,4 +305,4 @@ def test_c_frontend_returns_the_independent_parity_answer(tmp_path: Path) -> Non
     assert "error l" not in link and "unresolved external" not in link, link
     value = next((tmp_path / name for name in ("VALUE.BIN", "value.bin") if (tmp_path / name).is_file()), None)
     assert value is not None
-    assert int.from_bytes(value.read_bytes(), "little", signed=True) == _expected()
+    assert int.from_bytes(value.read_bytes(), "little", signed=True) == _expected_for(name)

@@ -51,7 +51,7 @@ class Peephole(LIRTransform):
         body = addresses(body, cpu=self.cpu)
         body = secondary_bases(body, cpu=self.cpu)
         body = machinecse.eliminated(body)
-        body = waits(zero_compares(tested(zeroes(body))))
+        body = waits(zero_compares(tested(zeroes(narrowed_moves(body)))))
         return self._frame(machinedce.eliminated(body))
 
     def _frame(self, body):
@@ -461,6 +461,59 @@ def _lanes(register):
     return {(full, byte) for byte in range(start, start + RegisterExt.size(register))}
 
 
+def narrowed_moves(body: lir.LirBody) -> lir.LirBody:
+    """Write only the live low word of a register-only dword move.
+
+    Frontends may naturally keep a scalar as a dword until an ABI boundary
+    that consumes only its low word.  Once allocation and physical liveness
+    prove the upper lanes dead, retaining the operand-size prefix and wide
+    immediate is not part of the program semantics.  Memory sources are
+    excluded because narrowing an access can change volatility or faults.
+    """
+    from qbopt.backend import liveness
+    from qbopt.backend import regthrash
+    from qbopt.backend import select
+
+    exits = liveness.dead_at_exit(body)
+    blocks = []
+    for block in body.blocks:
+        dead_after = regthrash._dead_after(block, set(exits[block.at]))
+        insns = []
+        for one in block.insns:
+            what = one.what
+            changed = None
+            if (
+                what is not None
+                and what.op is ir.Operation.MOVE
+                and what.name == "mov"
+                and len(what.dests) == len(what.sources) == 1
+                and isinstance(what.dests[0], ir.Reg)
+                and what.dests[0].width == 4
+                and isinstance(what.sources[0], (ir.Reg, ir.Imm))
+                and what.sources[0].width == 4
+                and not (one.clobbers or one.clobbers_high or one.requires or one.delivers)
+                and one.group is None
+                and one.symbol is not True
+                and not one.frame_adjust
+            ):
+                destination = what.dests[0]
+                upper = {lane for lane in _lanes(destination.register) if lane[1] >= 2}
+                if upper and upper <= dead_after[id(one)]:
+                    dest = ir.Reg(target.named(destination.register, 2), 2)
+                    source = what.sources[0]
+                    source = (
+                        ir.Reg(target.named(source.register, 2), 2)
+                        if isinstance(source, ir.Reg)
+                        else ir.Imm(source.value & 0xFFFF, 2)
+                    )
+                    candidate = replace(what, dests=(dest,), sources=(source,))
+                    if select.emit(candidate) is not None:
+                        changed = replace(one, what=candidate)
+            insns.append(changed or one)
+        blocks.append(replace(block, insns=tuple(insns)))
+    return replace(body, blocks=tuple(blocks))
+
+
 def commuted(body: lir.LirBody) -> lir.LirBody:
     """Use a saved accumulator in place for commutative two-address operations."""
     blocks = []
@@ -800,6 +853,19 @@ def _register_effects(one, *, may_write=False, flags: bool = False):
     from qbopt.frontend.declen import INFO
     from qbopt.frontend.declen import READS
 
+    # A symbol/source anchor is a placement fact, not an unknown machine
+    # instruction.  Complete unrolling can leave many of these between a
+    # definition and its ABI use; clearing liveness at each one kept dead
+    # upper register lanes alive and defeated width selection.  A NOTHING
+    # carrying a real clobber mask remains a barrier below.
+    if (
+        one.what is not None
+        and one.what.op is ir.Operation.NOTHING
+        and not one.what.name
+        and not one.clobbers
+        and not one.clobbers_high
+    ):
+        return set(), set()
     if one.clobbers or one.symbol is True:
         return None
     if one.what is None or one.what.op is ir.Operation.BARRIER:
@@ -809,8 +875,6 @@ def _register_effects(one, *, may_write=False, flags: bool = False):
             return None
         instructions = (decoded.insn,)
     else:
-        if one.what.op is ir.Operation.NOTHING and not one.what.name:
-            return set(), set()
         encoded = select.emit(one.what)
         if encoded is None:
             return None
