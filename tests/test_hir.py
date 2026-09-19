@@ -535,6 +535,29 @@ def test_qb_numeric_procedure_emits_a_fresh_far_pascal_object() -> None:
     assert procedure[:statement_table].endswith(bytes.fromhex("ca0400"))
 
 
+def test_source_procedure_names_match_all_three_microsoft_omf_dialects() -> None:
+    """Cross-module calls must use BC's uppercase, unsuffixed Pascal symbols."""
+    from qbopt.objectfile import omf
+
+    expected = {"REPORT", "TWICE"}
+    for fixture in (
+        "procs-q-O-zi.obj",
+        "procs-p-ot.obj",
+        "procs-v-g3-zi.obj",
+    ):
+        records = omf.read(ROOT / "fixtures/omf" / fixture)
+        assert set(omf.public_definitions(records)) == expected
+        assert expected <= set(omf.externals(records))
+
+    source = qb_driver.parsed(ROOT / "frontends/qb/fixtures/interop.bas")
+    records = omf.parse(qb_compile.object_bytes(source, "interop.bas"))
+    assert set(omf.public_definitions(records)) == expected
+
+    caller = qb_driver.parsed(ROOT / "frontends/qb/fixtures/interop-external.bas")
+    records = omf.parse(qb_compile.object_bytes(caller, "interop-external.bas"))
+    assert expected <= set(omf.externals(records))
+
+
 @pytest.mark.parametrize("dialect,runtime", [("qb45", "qb45"), ("pds71", "pds71"), ("vbdos", "vbdos")])
 def test_default_typed_len_emits_for_each_microsoft_runtime(dialect: str, runtime: str) -> None:
     """The default-type probe emitted only for VBDOS: PDS/QB rejected B$FLEN's missing ABI."""
