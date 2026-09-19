@@ -85,7 +85,7 @@ fn main() -> ExitCode {
         );
         return ExitCode::from(2);
     };
-    let source = match qbfront::source::load(std::path::Path::new(&input), &include_dirs) {
+    let source = match qbfront::source::load_with_map(std::path::Path::new(&input), &include_dirs) {
         Ok(source) => source,
         Err(error) => {
             eprintln!("qbfront: {input}: {error}");
@@ -93,12 +93,12 @@ fn main() -> ExitCode {
         }
     };
     if let Some(path) = dump_source {
-        if let Err(error) = fs::write(&path, &source) {
+        if let Err(error) = fs::write(&path, &source.text) {
             eprintln!("qbfront: {}: {error}", path.display());
             return ExitCode::FAILURE;
         }
     }
-    match parse(&source, dialect) {
+    match parse(&source.text, dialect) {
         Ok(module) => {
             if syntax {
                 println!(
@@ -135,9 +135,14 @@ fn main() -> ExitCode {
             }
         }
         Err(error) => {
+            let location = source.location(error.span.line);
+            let path = location
+                .map(|location| location.path.display().to_string())
+                .unwrap_or_else(|| input.clone());
+            let line = location.map_or(error.span.line, |location| location.line);
             eprintln!(
-                "{input}:{}:{}: {}",
-                error.span.line,
+                "{path}:{}:{}: {}",
+                line,
                 error.span.start + 1,
                 error.message
             );

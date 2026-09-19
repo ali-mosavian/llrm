@@ -283,25 +283,17 @@ fn identifier_statement(state: &mut ParseState) -> ParseResult {
         return ParseResult::GoodSyntax;
     }
 
-    let arguments = if consume_named(state, "tkLParen") {
-        match expression_list(state) {
-            Ok(arguments) => arguments,
+    let mut arguments = Vec::new();
+    while !at_named(state, "tkNewLine") && !at_named(state, "tkColon") {
+        let argument = match expression(state, 0) {
+            Ok(argument) => argument,
             Err(result) => return result,
+        };
+        arguments.push(argument);
+        if !consume_named(state, "tkComma") {
+            break;
         }
-    } else {
-        let mut arguments = Vec::new();
-        while !at_named(state, "tkNewLine") && !at_named(state, "tkColon") {
-            let argument = match expression(state, 0) {
-                Ok(argument) => argument,
-                Err(result) => return result,
-            };
-            arguments.push(argument);
-            if !consume_named(state, "tkComma") {
-                break;
-            }
-        }
-        arguments
-    };
+    }
     state.statements.push(Statement::Call {
         name,
         arguments,
@@ -2317,6 +2309,24 @@ mod tests {
         assert!(!explicit);
         assert_eq!(name(&arguments[0]), "FIRSTVALUE");
         assert!(matches!(&arguments[1], Expr::Binary { op: Binary::Add, .. }));
+    }
+
+    #[test]
+    fn implicit_call_parentheses_group_the_first_argument() {
+        // QGL's ENT module stopped at the closing parenthesis and discarded
+        // both the following arithmetic and the second argument.
+        let parsed = module(
+            "qglMousePos (screenWidth - 1) * yaw / 360, screenHeight * pitch\r\n",
+            Dialect::VbDos,
+        );
+        let Statement::Call { name, arguments, explicit, .. } = &parsed.statements[0] else {
+            panic!("expected implicit call, got {:#?}", parsed.statements[0]);
+        };
+        assert_eq!(name, "QGLMOUSEPOS");
+        assert!(!explicit);
+        assert_eq!(arguments.len(), 2);
+        assert!(matches!(arguments[0], Expr::Binary { op: Binary::Divide, .. }));
+        assert!(matches!(arguments[1], Expr::Binary { op: Binary::Multiply, .. }));
     }
 
     #[test]
