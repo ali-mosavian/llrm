@@ -25,6 +25,22 @@ fn parses_long_array_and_whole_expression() {
 }
 
 #[test]
+fn view_print_preserves_the_reset_and_bounded_runtime_forms() {
+    // VBDOS emits B$VWPT(-1, -1) for the reset and B$VWPT(3, 22) for the
+    // bounded form. Nibbles uses the reset before its opening CLS.
+    let module = parse("view print\r\nview print 3 to 22\r\n", Dialect::VbDos).unwrap();
+    assert!(matches!(
+        &module.statements[..],
+        [Statement::Runtime { name, arguments, .. }, Statement::Runtime { name: bounded, arguments: bounds, .. }]
+            if name == "VIEW_PRINT" && arguments.is_empty() && bounded == "VIEW_PRINT" && bounds.len() == 2
+    ));
+    let hir = compile(&module, "view_print", Dialect::VbDos, "vbdos").unwrap();
+    assert_eq!(hir.matches("B$VWPT").count(), 2);
+    assert!(hir.contains("\"value\":-1"), "reset sentinels: {hir}");
+    assert!(hir.contains("\"value\":3") && hir.contains("\"value\":22"), "bounds: {hir}");
+}
+
+#[test]
 fn parses_default_type_ranges_as_declarations_not_calls() {
     // DEFLNG previously reached semantic analysis as a call to a nonexistent
     // procedure, so ordinary Microsoft BASIC default typing could not compile.

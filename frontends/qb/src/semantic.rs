@@ -1966,6 +1966,27 @@ impl Compiler {
                         };
                         self.emit_runtime_call("B$SCLS", Vec::new(), vec![selector]);
                     }
+                    "VIEW_PRINT" => {
+                        // VBDOS prview.asm's B$VWPT takes (top, bottom) as
+                        // INTEGERs, cleans four bytes, and uses -1, -1 for
+                        // VIEW PRINT with no bounds. Its source order is the
+                        // push order: [bp+8] is top, [bp+6] is bottom.
+                        let bounds = match arguments.as_slice() {
+                            [] => vec![
+                                Operand::Constant(INTEGER, Number::Integer(-1)),
+                                Operand::Constant(INTEGER, Number::Integer(-1)),
+                            ],
+                            [top, bottom] => {
+                                let (top, top_type) = self.expression(top)?;
+                                let top = self.convert(top, top_type, INTEGER)?;
+                                let (bottom, bottom_type) = self.expression(bottom)?;
+                                let bottom = self.convert(bottom, bottom_type, INTEGER)?;
+                                vec![top, bottom]
+                            }
+                            _ => return self.fail("VIEW PRINT expects zero or two row bounds"),
+                        };
+                        self.emit_runtime_call("B$VWPT", Vec::new(), bounds);
+                    }
                     "POKE" => {
                         if arguments.len() != 2 {
                             return self.fail("POKE expects an offset and byte value");

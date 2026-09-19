@@ -238,6 +238,18 @@ operand = "CLS"
 shape = "Runtime"
 
 [[emit]]
+identity = "opStViewPrint0"
+action = "Runtime"
+operand = "VIEW_PRINT"
+shape = "Runtime"
+
+[[emit]]
+identity = "opStViewPrint2"
+action = "Runtime"
+operand = "VIEW_PRINT"
+shape = "Runtime"
+
+[[emit]]
 identity = "opStDraw"
 action = "Runtime"
 operand = "DRAW"
