@@ -699,7 +699,8 @@ switches = []
 expected = "PASS staticdynamic"
 parser = "required"
 lowering = "required"
-runtime = "pending"
+runtime = "required"
+verification = "After writing 9, ERASE clears the static element to zero while preserving UBOUND 2."
 
 [[case]]
 name = "resume"
@@ -845,7 +846,8 @@ switches = []
 expected = "PASS memorymodel"
 parser = "required"
 lowering = "required"
-runtime = "pending"
+runtime = "required"
+verification = "A bounded array local to a STATIC function increments from 1 to 2 across separate calls."
 
 [[case]]
 name = "events"

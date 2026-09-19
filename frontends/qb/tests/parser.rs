@@ -685,6 +685,46 @@ fn procedure_locals_are_below_bp_and_parameters_start_above_the_return_address()
 }
 
 #[test]
+fn static_procedure_arrays_use_persistent_storage_without_exit_cleanup() {
+    // Q45M28 printed "FAIL memorymodel lifetime": NEXTVALUE's COUNTS array
+    // was allocated in the call frame and erased at every function return,
+    // so two calls both returned 1 instead of returning 1 then 2.
+    let module = parse(
+        "declare function nextValue () as integer\n\
+         function nextValue () as integer static\n\
+         dim counts(0 to 0) as integer\n\
+         counts(0) = counts(0) + 1\n\
+         nextValue = counts(0)\n\
+         end function\n",
+        Dialect::QuickBasic45,
+    )
+    .unwrap();
+    let hir = compile(&module, "static_array", Dialect::QuickBasic45, "qb45").unwrap();
+    assert!(hir.contains("\"name\":\"COUNTS\",\"offset\":0,\"storage\":\"static\""));
+    assert!(!hir.contains("\"callee\":\"B$ERAS\""));
+}
+
+#[test]
+fn nonstatic_procedure_arrays_are_dynamic_despite_module_static_default() {
+    // PDS and VBDOS document this exception explicitly. Treating COUNTS as
+    // a fixed frame array gave it a static descriptor but then called B$ERAS
+    // on that descriptor at exit, combining two incompatible representations.
+    let module = parse(
+        "' $STATIC\n\
+         sub worker\n\
+         dim counts(0 to 0) as integer\n\
+         counts(0) = 1\n\
+         end sub\n",
+        Dialect::QuickBasic45,
+    )
+    .unwrap();
+    let hir = compile(&module, "dynamic_local", Dialect::QuickBasic45, "qb45").unwrap();
+    assert!(hir.contains("\"callee\":\"B$DDIM\""));
+    assert!(hir.contains("\"callee\":\"B$ERAS\""));
+    assert!(hir.contains("\"name\":\"COUNTS$descriptor\"") && hir.contains("\"storage\":\"local\""));
+}
+
+#[test]
 fn sin_cos_and_tan_are_inline_float_hir() {
     // Math must remain visible computation and must not survive as a BASIC
     // runtime call. TAN is the reusable sin/cos/div identity.

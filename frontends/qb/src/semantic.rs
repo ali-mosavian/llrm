@@ -304,6 +304,11 @@ pub fn compile_with_options(
             module_constants.clone(),
             module_places.clone(),
         );
+        compiler.implicit_storage = if procedure.is_static {
+            "static"
+        } else {
+            "local"
+        };
         compiler.default_types = module_default_types;
         let mut parameters = Vec::new();
         let mut parameter_bytes = 0;
@@ -419,7 +424,7 @@ pub fn compile_with_options(
         // directives govern all declarations in the body regardless of
         // source order, but not the already-declared procedure signature.
         compiler.apply_default_types(&procedure.body)?;
-        compiler.declarations_in(&procedure.body, "local")?;
+        compiler.declarations_in(&procedure.body, compiler.implicit_storage)?;
         compiler.reserve_labels(&procedure.body)?;
         compiler
             .statement_list(&procedure.body)
@@ -967,7 +972,16 @@ impl Compiler {
             match statement {
                 Statement::Dim(items) => {
                     for item in items {
-                        self.declare_as(item, storage)?;
+                        if storage == "local" && item.array {
+                            // Microsoft documents every explicitly DIMmed
+                            // array in a non-STATIC procedure as dynamic,
+                            // regardless of the module's $STATIC default.
+                            let mut dynamic = item.clone();
+                            dynamic.dynamic = true;
+                            self.declare_as(&dynamic, storage)?;
+                        } else {
+                            self.declare_as(item, storage)?;
+                        }
                     }
                 }
                 Statement::DefType { .. }
@@ -1046,7 +1060,11 @@ impl Compiler {
                 Ok((lower, upper))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        if declaration.array && !bounds.is_empty() && (element == STRING || declaration.dynamic) {
+        if declaration.array
+            && !bounds.is_empty()
+            && storage != "static"
+            && (element == STRING || declaration.dynamic)
+        {
             // Variable-length STRING elements are always managed. $DYNAMIC
             // makes the same runtime-owned representation apply to every
             // bounded array. BC creates it with B$DDIM, leaving a mutable
@@ -1205,13 +1223,37 @@ impl Compiler {
             );
             (id, extent, Some(element))
         };
-        if self.data_offset + extent > 65536 {
+        if storage == "static" && extent > 65536
+            || storage != "static" && self.data_offset + extent > 65536
+        {
             return self.fail(format!(
                 "{} exceeds the 64 KiB near-data budget",
                 declaration.name
             ));
         }
-        let place_offset = self.place_offset(storage, extent);
+        let (place_offset, place_symbol) = if storage == "static" {
+            let symbol = self.next_data;
+            self.next_data += 1;
+            self.data.push(DataObject {
+                id: symbol,
+                name: format!("{}$static", declaration.name),
+                bytes: vec![0; extent],
+                readonly: false,
+                relocations: Vec::new(),
+                linkage: "internal",
+                address: "near",
+            });
+            (0, symbol)
+        } else {
+            (
+                self.place_offset(storage, extent),
+                if matches!(storage, "local" | "parameter") {
+                    0
+                } else {
+                    1
+                },
+            )
+        };
         let place = self.next_place;
         self.next_place += 1;
         self.places.push(Place {
@@ -1221,14 +1263,12 @@ impl Compiler {
             offset: place_offset,
             extent,
             storage,
-            symbol: if matches!(storage, "local" | "parameter") {
-                0
-            } else {
-                1
-            },
+            symbol: place_symbol,
         });
-        self.data_offset += extent;
-        self.reserve_module_data(storage);
+        if storage != "static" {
+            self.data_offset += extent;
+            self.reserve_module_data(storage);
+        }
         let descriptor_place = if array_element.is_some() {
             let descriptor_type = self.opaque_type(
                 format!("{} descriptor", declaration.name),
@@ -1241,7 +1281,7 @@ impl Compiler {
             } else {
                 let symbol = self.static_array_descriptor(
                     &declaration.name,
-                    1,
+                    place_symbol,
                     place_offset as usize,
                     self.width(element),
                     &bounds,
