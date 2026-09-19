@@ -438,3 +438,74 @@ def test_a_value_already_in_the_register_an_idiom_wants_is_not_copied() -> None:
     got, fixed = constrain.constrained(body, {2: Register.EAX})
     assert fixed == {}, f"a copy was minted for a value already in eax: {fixed}"
     assert got.insns[0].uses == (2,), "the instruction was given a fresh value it did not need"
+
+
+def test_address_class_is_split_at_each_constrained_occurrence() -> None:
+    """lru_use stored long-lived address values instead of making short copies.
+
+    A native memory occurrence requires BX/SI/DI, but its source value may
+    remain in any GPR between occurrences.  Splitting must therefore remove
+    the narrow class from the original and give each memory instruction its
+    own coalescible address value.
+    """
+    from qbopt.backend import allocate
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
+
+    source = _insn(
+        ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(1, 2),), (ir.Imm(7, 2),)),
+        (1,),
+        (),
+        at=1,
+    )
+
+    def read(at: int, result: int) -> lir.Insn:
+        cell = ir.Mem(Addr(Space.FAR, at), 2, base=ir.Held(1, 2))
+        return _insn(
+            ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(result, 2),), (cell,)),
+            (result,),
+            (1,),
+            at=at,
+        )
+
+    split, opened = constrain.addressed(_body(source, read(2, 2), read(3, 3)), frozenset({1}))
+    copies = [one for one in split.insns if one.what.name == "mov" and one.uses == (1,)]
+    confined = allocate.classes(split)
+
+    assert opened == frozenset({1})
+    assert len(copies) == 2
+    assert 1 not in confined
+    assert all(confined[one.defines[0]] <= allocate.target.ADDRESSING for one in copies)
+
+
+def test_address_occurrence_split_refuses_a_value_also_used_as_selector() -> None:
+    """A base and far selector sharing one value cannot be partially renamed."""
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
+
+    owner = _insn(
+        ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(1, 2),), (ir.Imm(7, 2),)),
+        (1,),
+        (),
+        at=1,
+    )
+
+    def read(at: int, result: int) -> lir.Insn:
+        cell = ir.Mem(
+            Addr(Space.FAR, at),
+            2,
+            base=ir.Held(1, 2),
+            selector=ir.Held(1, 2),
+        )
+        return _insn(
+            ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(result, 2),), (cell,)),
+            (result,),
+            (1,),
+            at=at,
+        )
+
+    body = _body(owner, read(2, 2), read(3, 3))
+    split, opened = constrain.addressed(body, frozenset({1}))
+
+    assert split == body
+    assert not opened

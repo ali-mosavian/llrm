@@ -50,6 +50,11 @@ class Profile:
     # is a machine-neutral semantic-operation budget at the MIR boundary, not
     # an opcode count; targets may tune it without exposing machine form.
     max_unrolled_operations: int = DEFAULT_MAX_UNROLLED_OPERATIONS
+    # A 67h address-size override changes the decoded instruction length on
+    # targets whose predecoder tracks the default address form.  Keep this
+    # separate from the ordinary prefix issue cost: the final cycle scorer
+    # charges both, and profitability must make the same comparison.
+    address_prefix_stall: int = 0
 
     def cost(self, operation: str) -> int:
         """The existing target-ranking cost for one named instruction form."""
@@ -151,7 +156,7 @@ def _operation_costs(costs: dict[str, int], prefix: int) -> OperationCosts:
     )
 
 
-def _address_forms(costs: OperationCosts, prefix: int) -> tuple[AddressForm, ...]:
+def _address_forms(costs: OperationCosts, prefix: int, address_stall: int = 0) -> tuple[AddressForm, ...]:
     """Native medium-model addressing, then the legal secondary 67h form."""
     return (
         AddressForm(2, frozenset({1})),
@@ -159,7 +164,7 @@ def _address_forms(costs: OperationCosts, prefix: int) -> tuple[AddressForm, ...
             4,
             frozenset({1, 2, 4, 8}),
             extra_bytes=1,
-            use_cost=prefix,
+            use_cost=prefix + address_stall,
             extension_cost=costs.extend,
             secondary=True,
         ),
@@ -194,7 +199,8 @@ def _profile(name: str) -> Profile:
         operations=operations,
         _costs=tuple(costs.items()),
         _latencies=tuple((operation, values[at]) for operation, values in timings.LATENCY.items()),
-        address_forms=_address_forms(operations, timings.PREFIX[at]),
+        address_forms=_address_forms(operations, timings.PREFIX[at], timings.LCP_STALL[at]),
+        address_prefix_stall=timings.LCP_STALL[at],
     )
 
 

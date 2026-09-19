@@ -23,12 +23,64 @@ iteration updates this file in the same commit.
 | Per-CPU measurement | in progress | CPU profiles distinguish native medium-model addressing from the complete costed secondary 67h form, explicitly price x87 stack exchange and every LES/LFS/LGS complete far-pointer load, and carry the complete-peel iteration budget; the C corpus, static and frequency-weighted structural metrics, static and CFG-frequency-weighted per-CPU cost rankings, reference listings, and exact-count preservation across recurrence rewinds, loop rotation, and zero-byte-header threading exist; audited targets and runtime profiles remain. |
 | MIR/LIR provenance and fresh OMF | complete in production | allocated LIR emits directly with external source maps/allocation hints; the remaining compatibility views are test-only and cannot route a compilation through record rewriting. |
 | SROA and scalar promotion | partial | precise SSA pointer identity now refines coarse frontend operand annotations before GVN, LICM, packed-pointer splitting, and SROA; packed 16:16 dereferences are normalized into independent offset/selector SSA values before SROA; fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies expand into exact leaves, and structural candidates transact leaves made singleton by scalar convergence with finite-capacity pressure pricing; far aggregate copies, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
-| Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, dying-base indexed-form unfolding, and local constant, frame, relocatable-address, and provenance-disjoint incoming-argument rematerialization exist; typed far-pointer loads are selected before allocation only when a virtual address owner would otherwise be lost, while fixed addresses retain independent rematerialization and late LES/LFS/LGS selection; x87 allocation composes complete target-priced reread and retained-home candidates independently at empty-stack regions after all shuffles are materialized; global integer splitting/rematerialization, CFG-frequency weighting within a nonempty x87 region, and broader global x87 allocation remain. |
+| Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, constrained native-address occurrence splitting, dying-base indexed-form unfolding, and local constant, frame, relocatable-address, and provenance-disjoint incoming-argument rematerialization exist; typed far-pointer loads are selected before allocation only when a virtual address owner would otherwise be lost, while fixed addresses retain independent rematerialization and late LES/LFS/LGS selection; x87 allocation composes complete target-priced reread and retained-home candidates independently at empty-stack regions after all shuffles are materialized; global integer splitting/rematerialization, CFG-frequency weighting within a nonempty x87 region, and broader global x87 allocation remain. |
 | Loop optimization | partial | exact pre/post-tested recurrences and symbolic sentinels, target-priced exact nested-recurrence rewind, complete nested-initializer LICM, dead-control countdowns with zero-trip guards, complete-affine spill/recompute pricing, precise-volatile-aware LICM, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling with exact-trip-amortized growth plus a pre-folding complete-sequence/pressure proof and bounded public defaults, post-specialization associative integer constant composition, and machine-neutral whole-range pressure forecasting exist; versioning, partial unrolling, constraint-complete candidate-set forecasting, and compile-time candidate memoization remain. |
 | Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs (including closed recursive SCCs in C and object paths), constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, post-inline constant folding through phi edges and linear corridors, private immutable numeric-data initializer facts, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
-| Post-allocation quality | partial | copy propagation, machine CSE/DCE, shared final block placement/threading/fall-through elision and fresh-tail sharing, plus byte-neutral source-unowned terminal-return duplication, dead-register frame-copy shuttles, dying-input commutative result transfer, synthetic high-word reload narrowing, target-priced 67h LEA selection including source-owned loaded scale/add tails and constant/register sums, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware decoded-tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
+| Post-allocation quality | partial | copy propagation, machine CSE/DCE, shared final block placement/threading/fall-through elision and fresh-tail sharing, plus byte-neutral source-unowned terminal-return duplication, dead-register frame-copy shuttles, dying-input commutative result transfer, synthetic high-word reload narrowing, target-priced 67h LEA selection and repeated-base promotion including exact byte, prefix, length-changing-prefix and partial-register costs, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware decoded-tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 130. Split constrained address occurrences, then price 67h — 2026-09-19
+
+An inefficient frontend spelling is not an excuse for inefficient output.
+After iteration 129, `indexed._lru_use` already had one semantic SSA value for
+its stable list owner, but native 16-bit memory operands confined that value's
+entire live range to BX/SI/DI.  Under pressure, allocation reconstructed the
+same owner at each access.  MIR and pre-allocation LIR were already canonical;
+`lir-regalloc` was the first stage to introduce the redundant traffic, so this
+iteration changes no C, BC, or QB frontend rule.
+
+The allocator now treats the narrow address class as a constraint on each
+memory occurrence.  A value used only as a repeated base or index receives a
+short coalescible copy at every constrained instruction and may otherwise live
+in any general register.  Retained stable bases are considered in acyclic code
+as well as natural loops, and commutative native `[base+index]` roles reserve
+the unique BX side for the transient value.  Mixed ordinary, selector, grouped
+or fixed-register uses refuse the split; a fail-first selector/base-alias
+regression proves that no partially renamed memory operand can escape.
+
+After physical allocation, the common peephole may replace several allocator
+copies with one zero-extension and 67h addressing.  It recognizes only the
+short copies allocation inserted, validates every consumer, compares exact
+encoded byte totals, and uses the selected CPU's complete cost.  The latter
+includes ordinary prefix cost, P6/Core length-changing-prefix stalls and the
+16-to-32-bit partial-register transition.  A fail-first per-CPU regression
+records the measurement defect: the incomplete model selected the smaller
+67h form on P6/Core even while the authoritative scorer reported it slower.
+The corrected model keeps native copies there and selects 67h on targets where
+the complete price wins.  This is the requested ordering: 67h is considered
+before a spill or recomputation, but is not assumed free.
+
+On 386, `_lru_use` improves from 170 to 162 bytes, 62 to 58 instructions,
+279 to 241 static weighted units, 111.4375 to 103.4375 dynamic weighted units,
+23.71875 to 23.09375 estimated executed instructions, and 7.40625 to 5.28125
+estimated loads.  Regalloc spill-reload markers fall from twelve to zero; the
+peephole turns the repeated native copies into one `movzx edx,dx` and addresses
+the far fields through EDX.  The advisory dynamic ratio falls from 1.46x to
+1.42x against Clang 21 and from 1.22x to 1.18x against i686 GCC 16.2.
+
+The complete CPU matrix reduces code size from 170 to 162 bytes everywhere.
+Static/dynamic weighted cost changes are: 386 279/111.4375 to 241/103.4375,
+486 167/71.4375 to 163/70.53125, P5 117/43.53125 to 113/42.625, P6
+130/61.1875 to 122/56.9375, K5 78/30.65625 to 68/27.1875, K6 78/30.65625
+to 70/27.6875, K7 108/41.28125 to 96/37.0625, and Core 141/65.875 to
+127/60.375.  The explicit audited tradeoff is that 486, P5, P6 and Core keep
+native short copies, raising their static count from 62 to 63--64 and estimated
+executed count by less than one instruction while reducing bytes, memory
+traffic and their own target-weighted execution cost.  Raw listings and stage
+dumps are under `build/quality/iter130-indexed-cpus-final`.  The nine focused
+regressions pass in 3.37 seconds, the linked DOS checksum oracle in 5.17
+seconds, and Tier 1 passes 278 tests with 31 deselected in 3.37 seconds.
 
 ### 129. Defer lossless far-load selection until physical allocation — 2026-09-19
 

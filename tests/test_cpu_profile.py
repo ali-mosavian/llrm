@@ -72,8 +72,12 @@ def test_medium_model_profiles_distinguish_native_and_67h_addressing() -> None:
         assert native.index_width == 2 and not native.secondary
         assert secondary.index_width == 4 and secondary.scales == frozenset({1, 2, 4, 8})
         assert secondary.secondary and secondary.extra_bytes == 1
-        assert secondary.use_cost == target.prefix_cost
+        assert secondary.use_cost == target.prefix_cost + target.address_prefix_stall
         assert secondary.extension_cost == target.operations.extend
+
+    assert cpu.profile("P6").address_prefix_stall == 6
+    assert cpu.profile("Core").address_prefix_stall == 3
+    assert not any(cpu.profile(name).address_prefix_stall for name in ("386", "486", "P5", "K5", "K6", "K7"))
 
     legacy = AddressForm(4, frozenset({1, 2, 4, 8}), fallback=True)
     assert legacy.secondary and legacy.fallback

@@ -162,3 +162,85 @@ def test_unallocatable_retention_plan_falls_back_to_ordinary_spilling() -> None:
 
     assert retained == frozenset()
     assert 2 not in result.spilled
+
+
+def test_repeated_acyclic_stable_address_base_is_a_retention_candidate() -> None:
+    """indexed.lru_use reconstructed its stable frame argument ten times.
+
+    Reuse is profitable even when branches, rather than a loop backedge,
+    separate the accesses.  The candidate rule is weighted address reuse:
+    one defining load followed by more than one encoded base reference.
+    It must not depend on a C procedure name or on a natural loop existing.
+    """
+    base = _frame_load(1, 1, 6)
+    reads = tuple(
+        _instruction(
+            at,
+            ir.Semantics(
+                ir.Operation.MOVE,
+                "mov",
+                (ir.Held(at, 2),),
+                (ir.Mem(Addr(Space.FAR, at * 2), 2, base=ir.Held(1, 2)),),
+            ),
+            (at,),
+            (1,),
+        )
+        for at in (2, 3)
+    )
+    body = lir.LirBody("acyclic-stable-base", 0, (lir.LirBlock(0, (base, *reads), ()),), {}, {})
+
+    assert allocate._retainable_bases(body, frozenset({1})) == frozenset({1})
+
+
+def test_retained_owner_influences_commutative_address_roles_before_allocation() -> None:
+    """A retained owner cannot be moved to SI/DI after classes fix it to BX.
+
+    Native ``[bx+si]`` is commutative.  When a complete pressure plan protects
+    one side, choose that side from the two-register SI/DI class and reserve
+    the unique BX role for its transient counterpart.  This is a soft role
+    orientation; hard operand and call-crossing constraints still win.
+    """
+    base = _frame_load(1, 1, 6)
+    index = _frame_load(2, 2, 8)
+    read = _instruction(
+        3,
+        ir.Semantics(
+            ir.Operation.MOVE,
+            "mov",
+            (ir.Held(3, 2),),
+            (
+                ir.Mem(
+                    Addr(Space.FAR, 0),
+                    2,
+                    base=ir.Held(1, 2),
+                    index=ir.Held(2, 2),
+                ),
+            ),
+        ),
+        (3,),
+        (1, 2),
+    )
+    body = lir.LirBody("retained-address-role", 0, (lir.LirBlock(0, (base, index, read), ()),), {}, {})
+
+    confined = allocate.classes(body, frozenset({1}))
+
+    assert confined[1] == frozenset(allocate.target.WORD_INDEXES)
+    assert confined[2] == frozenset(allocate.target.WORD_BASES)
+
+
+def test_32_bit_secondary_base_is_not_confined_to_16_bit_address_registers() -> None:
+    """A 67h base may use every GPR; only native 16-bit bases need BX/BP/SI/DI."""
+    read = _instruction(
+        2,
+        ir.Semantics(
+            ir.Operation.MOVE,
+            "mov",
+            (ir.Held(2, 2),),
+            (ir.Mem(Addr(Space.FAR, 0), 2, base=ir.Held(1, 4)),),
+        ),
+        (2,),
+        (1,),
+    )
+    body = lir.LirBody("secondary-base-class", 0, (lir.LirBlock(0, (read,), ()),), {}, {})
+
+    assert 1 not in allocate.classes(body)

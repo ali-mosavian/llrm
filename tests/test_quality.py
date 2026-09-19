@@ -76,7 +76,7 @@ def test_report_refuses_incomplete_target_evidence(target: dict) -> None:
 
 def test_corpus_has_independent_inputs_and_canonical_crc() -> None:
     expected = json.loads((CORPUS / "expected.json").read_text())
-    assert set(expected) == {"sieve", "crc", "matmul", "mandel", "shellsort", "floats", "nbody"}
+    assert set(expected) == {"sieve", "crc", "matmul", "mandel", "shellsort", "floats", "lru", "nbody"}
     assert expected["crc"] == {"arguments": [0], "result": 0xCBF43926}
     for name, oracle in expected.items():
         assert (CORPUS / f"{name}.c").is_file()

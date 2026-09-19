@@ -48,7 +48,9 @@ class Peephole(LIRTransform):
         body = storecombine.combined(body)
         body = pushed_constants(body)
         body = far_loads(fused(overwritten(shuttles(high_extracts(transferred(commuted(constants(pushes(body)))))))))
-        body = machinecse.eliminated(addresses(body, cpu=self.cpu))
+        body = addresses(body, cpu=self.cpu)
+        body = secondary_bases(body, cpu=self.cpu)
+        body = machinecse.eliminated(body)
         body = waits(zero_compares(tested(zeroes(body))))
         return self._frame(machinedce.eliminated(body))
 
@@ -1361,12 +1363,7 @@ def _loaded_scaled_add(
     expects the temporary to contain its shifted value.
     """
     if len(parts) != 3 or any(
-        one.what is None
-        or one.clobbers
-        or one.clobbers_high
-        or one.spread
-        or one.group is not None
-        or one.frame_adjust
+        one.what is None or one.clobbers or one.clobbers_high or one.spread or one.group is not None or one.frame_adjust
         for one in parts
     ):
         return None
@@ -1523,6 +1520,165 @@ def addresses(body: lir.LirBody, *, cpu: str | targets.Profile = "386") -> lir.L
     return replace(body, blocks=tuple(blocks))
 
 
+def secondary_bases(body: lir.LirBody, *, cpu: str | targets.Profile = "386") -> lir.LirBody:
+    """Replace repeated allocated address shuttles with one clean 67h base.
+
+    Constrained-occurrence splitting keeps a long-lived word value in any GPR
+    and creates short BX/SI/DI copies at native memory uses.  Once allocation
+    has chosen physical registers, several such copies may be dearer than
+    zero-extending the owner once and addressing through its 32-bit root.  The
+    latter is the medium model's legal address-size-prefixed fallback.
+
+    This is deliberately post-allocation: it recognizes only copies created
+    by allocation, changes no program algebra, checks every virtual consumer,
+    and compares both the selected CPU cost and exact encoded byte totals.
+    """
+    from qbopt.backend import select
+
+    profile = targets.profile(cpu)
+    secondary = next((form for form in profile.address_forms if form.secondary and form.index_width == 4), None)
+    if secondary is None:
+        return body
+
+    definitions: dict[int, lir.Insn | None] = {}
+    uses: dict[int, list[lir.Insn]] = {}
+    for one in body.insns:
+        for value in one.defines:
+            if value in definitions:
+                definitions[value] = None
+            else:
+                definitions[value] = one
+        for value in set(one.uses):
+            uses.setdefault(value, []).append(one)
+
+    def source_register(one: lir.Insn, value: int) -> ir.Reg | None:
+        if one.what is None:
+            return None
+        for named, destination in zip(one.defines, one.what.dests, strict=False):
+            if named == value and isinstance(destination, ir.Reg) and destination.width == 2:
+                return destination
+        return None
+
+    def derived(value: int, original: int, source: ir.Reg) -> tuple[lir.Insn, list[lir.Insn]] | None:
+        definition = definitions.get(value)
+        consumers = uses.get(value, [])
+        if definition is None or not definition.inserted or definition.uses != (original,) or len(consumers) != 1:
+            return None
+        what = definition.what
+        if what is not None and what.op is not ir.Operation.NOTHING:
+            match what:
+                case ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg() as destination,), (ir.Reg() as copied,)):
+                    if destination.width != 2 or copied != source:
+                        return None
+                case _:
+                    return None
+        consumer = consumers[0]
+        if consumer is definition or consumer.what is None:
+            return None
+        seen = 0
+        for operand in (*consumer.what.dests, *consumer.what.sources):
+            selector_alias = (
+                isinstance(operand, ir.Mem) and operand.selector is not None and operand.selector.value == value
+            )
+            for held in ir.values(operand):
+                if held.value == value:
+                    seen += 1
+                    if not (
+                        isinstance(operand, ir.Mem)
+                        and operand.base == held
+                        and operand.index is None
+                        and not selector_alias
+                        and target.width_of(operand.through) == 2
+                    ):
+                        return None
+        return (definition, consumers) if seen else None
+
+    def rewritten(one: lir.Insn, substitutions: dict[int, tuple[int, Register_]]) -> lir.Insn:
+        def operand(where):
+            if not isinstance(where, ir.Mem) or where.base is None or where.base.value not in substitutions:
+                return where
+            original, register = substitutions[where.base.value]
+            return replace(where, base=ir.Held(original, 4), through=register)
+
+        return replace(
+            one,
+            what=replace(
+                one.what,
+                dests=tuple(map(operand, one.what.dests)),
+                sources=tuple(map(operand, one.what.sources)),
+            ),
+            uses=tuple(substitutions.get(value, (value, Register.NONE))[0] for value in one.uses),
+        )
+
+    substitutions: dict[int, tuple[int, Register_]] = {}
+    remove: set[int] = set()
+    insert_after: dict[int, lir.Insn] = {}
+    for candidate, definition in tuple(definitions.items()):
+        if definition is None or (source := source_register(definition, candidate)) is None:
+            continue
+        root = ir.ROOT.get(source.register)
+        if root is None or target.width_of(root) != 4:
+            continue
+        group = []
+        for value, made in definitions.items():
+            if value == candidate or made is None:
+                continue
+            found = derived(value, candidate, source)
+            if found is not None:
+                group.append((value, *found))
+        if not group:
+            continue
+        trial_substitutions = {value: (candidate, root) for value, _made, _consumers in group}
+        consumers = {id(one): rewritten(one, trial_substitutions) for _v, _d, found in group for one in found}
+        extension = lir.Insn(
+            definition.at,
+            (definition.at, definition.at),
+            ir.Semantics(
+                ir.Operation.EXTEND,
+                "movzx",
+                (ir.Reg(root, 4),),
+                (source,),
+            ),
+            (candidate,),
+            (candidate,),
+            op=definition.op,
+        )
+        copies = [made.what for _value, made, _found in group if made.what is not None and made.what.name == "mov"]
+        before_parts = [*copies, *(one.what for _value, _made, found in group for one in found)]
+        after_parts = [extension.what, *(one.what for one in consumers.values())]
+        before_encoded = [select.emit(what) for what in before_parts]
+        after_encoded = [select.emit(what) for what in after_parts]
+        if any(one is None for one in (*before_encoded, *after_encoded)):
+            continue
+        before_cost = len(copies) * profile.cost("mov_rr")
+        # The defining word write is immediately read as a full register by
+        # MOVZX.  This is exactly the partial-register transition charged by
+        # the final scorer; omitting it made P6/Core select a locally smaller
+        # sequence that was substantially slower under their own profiles.
+        after_cost = profile.cost("movzx") + profile.partial_register_stall + len(consumers) * secondary.use_cost
+        before_bytes = sum(len(one.code) for one in before_encoded if one is not None)
+        after_bytes = sum(len(one.code) for one in after_encoded if one is not None)
+        if after_cost >= before_cost or after_bytes > before_bytes:
+            continue
+        substitutions.update(trial_substitutions)
+        remove.update(id(made) for _value, made, _found in group)
+        insert_after[id(definition)] = extension
+
+    if not substitutions:
+        return body
+    blocks = []
+    for block in body.blocks:
+        insns = []
+        for one in block.insns:
+            if id(one) in remove:
+                continue
+            insns.append(rewritten(one, substitutions) if any(value in substitutions for value in one.uses) else one)
+            if (extension := insert_after.get(id(one))) is not None:
+                insns.append(extension)
+        blocks.append(replace(block, insns=tuple(insns)))
+    return replace(body, blocks=tuple(blocks))
+
+
 def _sum_address(parts: tuple[lir.Insn, ...], *, cpu: str | targets.Profile = "386") -> lir.Insn | None:
     """Fold ``mov result,left; add result,term`` into one 67h LEA.
 
@@ -1532,12 +1688,7 @@ def _sum_address(parts: tuple[lir.Insn, ...], *, cpu: str | targets.Profile = "3
     address-size override is the secondary legal form in 16-bit mode.
     """
     if len(parts) != 2 or any(
-        one.what is None
-        or one.clobbers
-        or one.clobbers_high
-        or one.spread
-        or one.group is not None
-        or one.frame_adjust
+        one.what is None or one.clobbers or one.clobbers_high or one.spread or one.group is not None or one.frame_adjust
         for one in parts
     ):
         return None

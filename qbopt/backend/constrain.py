@@ -247,6 +247,105 @@ def required(body: lir.LirBody) -> "dict[int, Register_]":
     return out
 
 
+def addressed(body: lir.LirBody, values: frozenset[int]) -> "tuple[lir.LirBody, frozenset[int]]":
+    """Split address-class occurrences from an otherwise general value.
+
+    Native 16-bit memory operands admit only BX/BP/SI/DI, but that is a
+    requirement of each occurrence, not of a value's complete lifetime.  If
+    allocation would spill a value used exclusively as a base or index, give
+    every instruction a short copy of its own.  The original may then occupy
+    any GPR; copy hints coalesce the move when the address register is already
+    available, and otherwise the register move is cheaper than a stack
+    store/reload pair.
+
+    Values with any ordinary, hidden, selector, grouped, or fixed-register use
+    are left alone.  Those need a region or instruction-specific plan rather
+    than silently changing only part of their dataflow.
+    """
+    if not values:
+        return body, frozenset()
+
+    eligible = set(values)
+    occurrences: dict[int, int] = {value: 0 for value in values}
+    for block in body.blocks:
+        for one in block.insns:
+            address: set[int] = set()
+            ordinary: set[int] = set()
+            if one.what is not None:
+                for operand in one.what.dests:
+                    if isinstance(operand, ir.Mem):
+                        for held in (operand.base, operand.index):
+                            if held is not None:
+                                address.add(held.value)
+                        if operand.selector is not None:
+                            ordinary.add(operand.selector.value)
+                for operand in one.what.sources:
+                    if isinstance(operand, ir.Mem):
+                        address.update(held.value for held in (operand.base, operand.index) if held is not None)
+                        if operand.selector is not None:
+                            ordinary.add(operand.selector.value)
+                    else:
+                        ordinary.update(held.value for held in ir.values(operand))
+            hidden = set(one.uses) - address
+            forbidden = ordinary | hidden
+            forbidden.update(held.value for held, _register in (*one.requires, *one.delivers))
+            eligible.difference_update(forbidden)
+            if one.group is not None:
+                eligible.difference_update(address)
+            for value in address.intersection(values):
+                occurrences[value] += 1
+
+    eligible = {value for value in eligible if occurrences.get(value, 0) > 1}
+    if not eligible:
+        return body, frozenset()
+
+    fresh = _next_value(body)
+    blocks = []
+    for block in body.blocks:
+        insns: list[lir.Insn] = []
+        for one in block.insns:
+            if one.what is None:
+                insns.append(one)
+                continue
+            widths: dict[int, int] = {}
+            for operand in (*one.what.dests, *one.what.sources):
+                if not isinstance(operand, ir.Mem):
+                    continue
+                for held in (operand.base, operand.index):
+                    if held is not None and held.value in eligible:
+                        widths[held.value] = held.width
+            if not widths:
+                insns.append(one)
+                continue
+            swap = {value: fresh + index for index, value in enumerate(sorted(widths))}
+            fresh += len(swap)
+            for value in sorted(swap):
+                insns.append(_move(one, ir.Held(swap[value], widths[value]), ir.Held(value, widths[value])))
+
+            def operand(where, substitutions=swap):
+                if not isinstance(where, ir.Mem):
+                    return where
+
+                def renamed(held, substitutions=substitutions):
+                    return None if held is None else ir.Held(substitutions.get(held.value, held.value), held.width)
+
+                return replace(where, base=renamed(where.base), index=renamed(where.index))
+
+            insns.append(
+                replace(
+                    one,
+                    what=replace(
+                        one.what,
+                        dests=tuple(map(operand, one.what.dests)),
+                        sources=tuple(map(operand, one.what.sources)),
+                    ),
+                    uses=tuple(swap.get(value, value) for value in one.uses),
+                )
+            )
+        blocks.append(replace(block, insns=tuple(insns)))
+    return replace(body, blocks=tuple(blocks)), frozenset(eligible)
+
+
 def _delivered(one: lir.Insn) -> dict:
     """Each value this instruction writes in a register it names nowhere.
 

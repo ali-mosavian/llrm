@@ -216,7 +216,7 @@ class Stage(IntEnum):
     DONE = 3
 
 
-def classes(body: lir.LirBody) -> dict[int, frozenset[Register_]]:
+def classes(body: lir.LirBody, prefer_indexes: frozenset[int] = frozenset()) -> dict[int, frozenset[Register_]]:
     """The register class each value is confined to, where it is confined.
 
     LLVM allocates within a `TargetRegisterClass` and orders the candidates
@@ -261,7 +261,12 @@ def classes(body: lir.LirBody) -> dict[int, frozenset[Register_]]:
                 # else, so the value is confined to those.
                 # Unless it is scaled: `[base+index*scale]` is 32-bit addressing,
                 # which any general register reaches memory through.
-                if isinstance(where, ir.Mem) and where.base is not None and where.index is None:
+                if (
+                    isinstance(where, ir.Mem)
+                    and where.base is not None
+                    and where.base.width == 2
+                    and where.index is None
+                ):
                     restrict(where.base.value, target.ADDRESSING)
                 if isinstance(where, ir.Mem) and where.index is not None:
                     numeric.add(where.index.value)
@@ -281,12 +286,15 @@ def classes(body: lir.LirBody) -> dict[int, frozenset[Register_]]:
                     restrict(where.value, frozenset({Register.AX, Register.BX, Register.CX, Register.DX}))
     for value in selecting - numeric:
         restrict(value, frozenset(target.SELECTORS))
-    _word_address_roles(word_pairs, out, body)
+    _word_address_roles(word_pairs, out, body, prefer_indexes)
     return out
 
 
 def _word_address_roles(
-    pairs: list[tuple[int, int]], confined: dict[int, frozenset[Register_]], body: lir.LirBody
+    pairs: list[tuple[int, int]],
+    confined: dict[int, frozenset[Register_]],
+    body: lir.LirBody,
+    prefer_indexes: frozenset[int] = frozenset(),
 ) -> None:
     """Choose BX versus SI/DI for commutative ``[word+word]`` graphs.
 
@@ -364,7 +372,12 @@ def _word_address_roles(
             continue
         bases, indexes = min(
             options,
-            key=lambda option: (base_penalty(option[0]), len(option[0]), tuple(sorted(option[0]))),
+            key=lambda option: (
+                base_penalty(option[0]),
+                len(option[0] & prefer_indexes),
+                len(option[0]),
+                tuple(sorted(option[0])),
+            ),
         )
         restrict(bases, target.WORD_BASES)
         restrict(indexes, target.WORD_INDEXES)
@@ -519,7 +532,7 @@ def allocate(
     # being too short to spill again: spiller.py owns which spills are
     # possible, and choosing one of these as a victim buys nothing --
     # the reload lands tied at the same instruction and the round repeats.
-    confined = classes(body)
+    confined = classes(body, frozenset(protected or ()))
     fixed = dict(pinned or {})
     hints = _copy_hints(body)
 
@@ -1004,6 +1017,26 @@ class RegAlloc(LIRTransform):
             self.pinned = {**prefer, **constrain.required(body)}
             got = assigned(body)
             if got.spilled:
+                # A native memory operand's narrow register class belongs to
+                # that occurrence, not to the value's whole live range.  Try
+                # repeated short address copies before unfolding or spilling;
+                # they coalesce when the original already has a legal address
+                # register and otherwise replace stack traffic with moves.
+                # Single-use addresses deliberately fall through to the
+                # cheaper destructive unfolding candidate below.
+                separated, opened = constrain.addressed(body, got.spilled)
+                if opened:
+                    try:
+                        trial = allocate(separated, self.pinned, reloads, protected=retained, cpu=self.cpu)
+                    except Unplaced:
+                        trial = None
+                    if (
+                        trial is not None
+                        and opened.isdisjoint(trial.spilled)
+                        and _traffic(separated, trial.spilled) < _traffic(body, got.spilled)
+                    ):
+                        body, got = separated, trial
+            if got.spilled:
                 # Lowering folds base+index into memory before allocation,
                 # which can make a cheap short-lived index compete only for
                 # the four 16-bit address registers. If allocation would
@@ -1104,31 +1137,35 @@ class RegAlloc(LIRTransform):
                             and _traffic(prepared, trial.spilled) < _traffic(body, got.spilled)
                         ):
                             body, retained, got, reloads = prepared, keep, trial, reloads | made
-                # The global version is useful where a source cell is stable
-                # over the whole body.  Keep it as a separate candidate: a
-                # loop-scoped split is not a reason to make a once-used owner
-                # live through unrelated cold code.
-                if retained:
-                    pass
-                else:
-                    keep = _retainable_bases(body, got.spilled)
-                    if keep:
+                # The body-wide version is useful wherever a source cell is
+                # stable and repeatedly forms an encoded address.  Acyclic
+                # branches do not make its second reconstruction free.  Try
+                # candidates in descending saved-traffic order and retain
+                # them incrementally: one impossible group must not hide an
+                # individually profitable owner.  The loop-scoped form above
+                # stays separate because it avoids extending a value through
+                # unrelated cold code.
+                if not retained:
+                    candidates = _retainable_bases(body, got.spilled)
+                    for candidate in sorted(candidates, key=lambda value: (-_traffic(body, frozenset({value})), value)):
+                        keep = retained | frozenset({candidate})
                         try:
                             trial = allocate(body, self.pinned, reloads, protected=keep, cpu=self.cpu)
                         except Unplaced:
-                            trial = None
+                            continue
                         # A retained invariant is accepted only when every new
                         # spill has a target-legal direct recovery: it is either
                         # rematerialized, or its word index folds into the base
-                        # that access kills.  This compares whole allocations,
-                        # rather than raising an owner's priority and hoping the
+                        # that access kills. Compare the complete weighted
+                        # recovery traffic with the current allocation rather
+                        # than raising an owner's priority and hoping the
                         # spiller later finds room for whatever it displaced.
                         if (
-                            trial is not None
-                            and keep.isdisjoint(trial.spilled)
+                            keep.isdisjoint(trial.spilled)
                             and trial.spilled
                             <= spiller.rematerializable(body, trial.spilled)
                             | spiller.foldable_indexes(body, trial.spilled)
+                            and _traffic(body, trial.spilled) < _traffic(body, got.spilled)
                         ):
                             retained, got = keep, trial
             if not got.spilled:
@@ -1274,14 +1311,15 @@ def _traffic(body: lir.LirBody, spilled: "frozenset[int]") -> float:
 
 
 def _retainable_bases(body: lir.LirBody, spilled: "frozenset[int]") -> frozenset[int]:
-    """Spilled invariant frame loads that repeatedly form hot addresses.
+    """Spilled invariant frame loads that repeatedly form addresses.
 
     A stable frame load ordinarily rematerializes cheaply, which is exactly
     right for an occasional use.  It is wrong for a loop-invariant pointer
-    whose only useful role is as the base of a memory operand in a hot block:
-    every rematerialization then reconstructs the same address.  This names
-    the semantic shape, not a procedure, source register, or physical
-    register; allocation still chooses a legal member of the address class.
+    or an acyclic branch-shared owner used by several memory operands: every
+    rematerialization then reconstructs the same address.  Weight references
+    by loop depth, and require more work than the owner's one defining load.
+    This names the semantic shape, not a procedure, source register, or
+    physical register; allocation still chooses a legal address register.
     """
     if not spilled:
         return frozenset()
@@ -1291,16 +1329,19 @@ def _retainable_bases(body: lir.LirBody, spilled: "frozenset[int]") -> frozenset
     if not stable:
         return frozenset()
     deep = ranges.depths(body)
-    hot_bases = {
-        where.base.value
-        for block in body.blocks
-        if deep.get(block.at, 0) > 0
-        for one in block.insns
-        if one.what is not None
-        for where in (*one.what.dests, *one.what.sources)
-        if isinstance(where, ir.Mem) and isinstance(where.base, ir.Held)
-    }
-    return stable & hot_bases
+    references: Counter[int] = Counter()
+    for block in body.blocks:
+        weight = ranges.PER_LEVEL ** deep.get(block.at, 0)
+        for one in block.insns:
+            bases = {
+                where.base.value
+                for where in ((*one.what.dests, *one.what.sources) if one.what is not None else ())
+                if isinstance(where, ir.Mem) and isinstance(where.base, ir.Held)
+            }
+            for value in stable.intersection(bases):
+                references[value] += weight
+    repeated = {value for value, weight in references.items() if weight > 1}
+    return stable & repeated
 
 
 def _scoped_foldable_indexes(body: lir.LirBody, bases: frozenset[int]) -> frozenset[int]:

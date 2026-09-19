@@ -653,6 +653,80 @@ def test_loaded_scaled_add_uses_67h_lea() -> None:
     assert address.scale == 2
 
 
+def test_repeated_allocated_address_copies_use_one_clean_67h_base() -> None:
+    """lru_use copied one retained owner into BX/SI/DI at every field access.
+
+    Once allocation has exposed several such shuttles, zero-extending the
+    owner's physical register once makes it a legal 67h base.  The rewrite is
+    accepted only when the selected CPU cost and exact bytes beat the complete
+    native copy sequence.
+    """
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
+
+    owner = lir.Insn(
+        1,
+        (1, 3),
+        ir.Semantics(
+            ir.Operation.MOVE,
+            "mov",
+            (ir.Reg(Register.DX, 2),),
+            (ir.Mem(Addr(Space.FRAME, 6), 2, Register.BP),),
+        ),
+        (1,),
+        (),
+    )
+    registers = (Register.BX, Register.SI, Register.DI, Register.BX)
+    insns = [owner]
+    for index, register in enumerate(registers, start=2):
+        copy = lir.Insn(
+            index,
+            (index, index),
+            ir.Semantics(
+                ir.Operation.MOVE,
+                "mov",
+                (ir.Reg(register, 2),),
+                (ir.Reg(Register.DX, 2),),
+            ),
+            (index,),
+            (1,),
+        )
+        cell = ir.Mem(
+            Addr(Space.FAR, index, segment=Register.FS),
+            2,
+            through=register,
+            base=ir.Held(index, 2),
+            selector=ir.Held(20, 2),
+        )
+        load = lir.Insn(
+            index,
+            (index, index),
+            ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg(Register.AX, 2),), (cell,)),
+            (30 + index,),
+            (index, 20),
+        )
+        insns.extend((copy, load))
+    body = lir.LirBody("secondary-base", 1, (lir.LirBlock(1, tuple(insns)),), {}, {})
+
+    result = peephole.secondary_bases(body, cpu="386")
+
+    moves = [one for one in result.insns if one.what.name == "mov"]
+    assert len(moves) == 5  # the owner load and four actual memory loads
+    extension = next(one for one in result.insns if one.what.name == "movzx")
+    assert extension.what.dests == (ir.Reg(Register.EDX, 4),)
+    cells = [one.what.sources[0] for one in moves[1:]]
+    assert all(isinstance(cell, ir.Mem) and cell.through == Register.EDX for cell in cells)
+    assert all(cell.base == ir.Held(1, 4) for cell in cells)
+
+    # P6 and Core charge both a partial-register merge and a length-changing
+    # 67h decode stall.  The final scorer already rejected this form there;
+    # selection must not optimize against a cheaper, incomplete cost model.
+    for target_cpu in ("P6", "Core"):
+        expensive = peephole.secondary_bases(body, cpu=target_cpu)
+        assert not any(one.what.name == "movzx" for one in expensive.insns)
+        assert len([one for one in expensive.insns if one.what.name == "mov"]) == 9
+
+
 def test_loaded_scaled_add_skips_metadata_only_anchors() -> None:
     """Matmul retained ``load; shl; add`` when metadata anchors separated it.
 
