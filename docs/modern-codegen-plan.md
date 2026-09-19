@@ -4894,3 +4894,40 @@ qbsp still exposes the segmented dynamic-array descriptor and far-address
 construction around its otherwise strength-reduced index.  Those are the next
 real parity gaps.  They require general scalar-memory/FP representation facts
 and descriptor SROA, not more BC-call recognition or program-named peepholes.
+
+### 81. Canonical FAR field addressing and QB whole-module mod/ref — 2026-09-19
+
+Adjacent QBSP stage dumps located the descriptor explosion precisely.  The
+array element initially remained a direct selector plus 16-bit offset, but
+selecting `child0` or `child1` packed both words, applied the generic DOS HUGE
+pointer correction, extracted the words again, and finally loaded the field.
+This was a type-semantics error, not an instruction-selection opportunity.
+HIR lowering now splits an ordinary FAR pointer once and represents a constant
+field selection as a 16-bit offset addition on the resulting segmented memory
+reference.  Explicit HUGE pointers retain the old normalization path.  Open
+Watcom independently makes the same distinction: `bld/cg/c/addrfold.c`
+refuses address folding only for `TY_HUGE_POINTER`, while ordinary long/far
+pointers remain foldable.  A paired FAR/HUGE regression proves both sides of
+the rule, and the emitted QBSP regression rejects the former correction
+sequence rather than naming a particular source field.
+
+The dump also showed that the QB frontend had never connected the repository's
+existing interprocedural alias fixed point.  C already supplied source-order
+pointer actuals, computed call-graph summaries, and instantiated each callee's
+mod/ref footprint before body optimization; QB left every user call as an
+unknown memory clobber.  The QB module now performs the same machine-neutral
+sequence over HIR-lowered bodies.  Pascal push order remains solely an ABI
+physicalization fact and cannot affect summary parameter numbering.  Direct
+pointer references also use the formal's ordinal canonical object identity,
+not its frontend-local value number; derived pointers without a proof remain
+unknown rather than acquiring a fictitious parameter object.
+
+Together these mechanisms reduce native QB RPOINTLEAF's visible core to 39
+instructions versus C's 29.  It no longer has parameter home stores or either
+huge-pointer correction, and each post-call child selection is one `les` plus
+one segmented field load.  The remaining ten-instruction difference is the
+real medium-model language/ABI boundary: descriptor-field loads, a 16:16 node
+address preserved across the far Pascal call, the hidden SINGLE result slot,
+and x87 status transfer.  Phase 3's canonical aggregate/address work and Phase
+6's mod/ref integration therefore advance without adding a QBSP-, descriptor-,
+or runtime-routine-specific optimizer case.

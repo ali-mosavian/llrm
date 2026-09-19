@@ -360,6 +360,27 @@ def test_quake_bsp_integer_index_does_not_preserve_a_dead_long_high_half() -> No
     assert not [line for _at, line in basic if line.startswith(("add word ptr [bp-", "shl word ptr [bp-"))]
 
 
+def test_quake_bsp_far_fields_never_become_huge_pointer_arithmetic() -> None:
+    """RPOINTLEAF expanded each child field into a packed huge-pointer correction.
+
+    Its ordinary dynamic arrays use FAR selector:offset addresses. Selecting a
+    constant UDT field must remain a direct segmented load; only an explicitly
+    HUGE pointer may propagate offset carry into its selector. Whole-module
+    mod/ref must also keep the unrelated descriptor parameters out of the
+    entry spill homes merely because RPLANEDIST is called in the loop.
+    """
+    from tools.frontend_parity import pair
+
+    basic, _c = pair("qbsp")
+    entry = [line for block, line in basic if block == 1]
+
+    assert not any(line.startswith(("shr ", "push eax", "pop es")) for _block, line in basic)
+    assert any("s:[" in line and line.endswith("+2]") for _block, line in basic)
+    assert any("s:[" in line and line.endswith("+4]") for _block, line in basic)
+    assert not any("[bp+" in line or "[bp-" in line for line in entry)
+    assert len(basic) <= 39
+
+
 def test_runtime_frame_is_established_before_allocator_spill_accesses() -> None:
     """Optimized frontend-parity LOOP printed 5000 instead of 130991.
 

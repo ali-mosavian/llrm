@@ -264,6 +264,7 @@ def _function(
         return 10 if type_.kind is model.TypeKind.FLOAT else type_.width
 
     places = {one.id: one for one in function.places}
+    parameter_numbers = {value: number for number, value in enumerate(function.parameters)}
     next_frame_offset = min(
         (one.offset for one in function.places if one.storage in (model.Storage.LOCAL, model.Storage.PARAMETER)),
         default=0,
@@ -442,7 +443,12 @@ def _function(
             case model.IndirectPlace(base, offset, type_id, volatile):
                 type_ = types[type_id]
                 pointer_type = value_types[base]
-                provenance = memory.Provenance.one(memory.Object(memory.Kind.PARAMETER, base))
+                parameter = parameter_numbers.get(base)
+                provenance = (
+                    memory.Provenance.one(memory.Object(memory.Kind.PARAMETER, parameter))
+                    if parameter is not None
+                    else None
+                )
                 if pointer_type.address is model.AddressKind.NEAR:
                     return mir.Cell(
                         mir.MemRef(
@@ -456,6 +462,67 @@ def _function(
                         )
                     )
                 pointer = values[base]
+                if pointer_type.address is model.AddressKind.FAR:
+                    # A far pointer's selector and offset are independent
+                    # address components.  Constant field selection advances
+                    # only the 16-bit offset; unlike a huge pointer it must not
+                    # normalize carry into the selector.  Preserve that form
+                    # in MIR so every consumer, integral or floating, reaches
+                    # lowering as one segmented memory reference.
+                    halves = []
+                    for bit in (0, 16):
+                        half = mir.Value(next_value, at + 1, variable=next_value, version=1)
+                        next_value += 1
+                        at += 1
+                        before.append(
+                            mir.Op(
+                                at,
+                                ir.Operation.MOVE,
+                                "extract",
+                                (half,),
+                                (pointer,),
+                                kind=mir.Kind.EXTRACT,
+                                args=(mir.Held(pointer, 4), mir.Const(bit, 1)),
+                                results=(mir.Held(half, 2),),
+                                id=at,
+                                reads_complete=True,
+                                memory_complete=True,
+                            )
+                        )
+                        halves.append(half)
+                    offset_value, segment_value = halves
+                    if offset:
+                        adjusted = mir.Value(next_value, at + 1, variable=next_value, version=1)
+                        next_value += 1
+                        at += 1
+                        before.append(
+                            mir.Op(
+                                at,
+                                ir.Operation.NOTHING,
+                                "",
+                                (adjusted,),
+                                (offset_value,),
+                                kind=mir.Kind.ADD,
+                                args=(mir.Held(offset_value, 2), mir.Const(offset, 2)),
+                                results=(mir.Held(adjusted, 2),),
+                                id=at,
+                                reads_complete=True,
+                                memory_complete=True,
+                            )
+                        )
+                        offset_value = adjusted
+                    return mir.Cell(
+                        mir.MemRef(
+                            Addr(Space.FAR, 0),
+                            type_.width,
+                            base=offset_value,
+                            segment=segment_value,
+                            space=Space.FAR,
+                            base_width=2,
+                            provenance=provenance,
+                            volatile=volatile,
+                        )
+                    )
                 if offset:
                     adjusted = arithmetic(
                         mir.Kind.PTR_OFFSET,
@@ -1194,7 +1261,6 @@ def _function(
     pointer_values = frozenset(
         values[one.id] for one in function.values if types[one.type].kind is model.TypeKind.POINTER
     )
-    parameter_numbers = {value: number for number, value in enumerate(function.parameters)}
     pointer_seeds = {
         values[value]: memory.Provenance.one(memory.Object(memory.Kind.PARAMETER, number))
         for value, number in parameter_numbers.items()

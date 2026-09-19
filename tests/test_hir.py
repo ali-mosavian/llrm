@@ -1709,7 +1709,12 @@ def test_hir_lowers_whole_pointer_indirect_memory_without_machine_registers() ->
 
 
 def test_hir_lowers_whole_pointer_field_offset_before_memory_access() -> None:
-    """ent.bas first exposed a nonzero UDT field offset through a SEG formal."""
+    """QBSP expanded each far UDT field into a complete huge-pointer correction.
+
+    A FAR pointer advances only its offset word.  Keep selector, offset, and
+    constant field displacement as address components instead of packing them
+    into a scalar PTR_OFFSET which lowering must normalize and unpack again.
+    """
     void = hir.Type(0, "void", hir.TypeKind.VOID, 0)
     integer = hir.Type(1, "integer", hir.TypeKind.INTEGER, 2, signed=True)
     aggregate = hir.Type(2, "pair", hir.TypeKind.OPAQUE, 4)
@@ -1727,9 +1732,99 @@ def test_hir_lowers_whole_pointer_field_offset_before_memory_access() -> None:
         (hir.Module(1, "pointer", (void, integer, aggregate, pointer), (function,)),),
     )
     operations = hir.lower(source)[0].body.blocks[0].ops
+    assert [one.kind for one in operations[:4]] == [
+        mir.Kind.EXTRACT,
+        mir.Kind.EXTRACT,
+        mir.Kind.ADD,
+        mir.Kind.LOAD,
+    ]
+    reference = operations[3].loads[0]
+    assert reference.addr is not None and reference.addr.space is Space.FAR
+    assert reference.base == operations[2].results[0].value
+    assert reference.segment == operations[1].results[0].value
+    assert not reference.pointer
+
+
+def test_huge_pointer_field_offset_retains_selector_normalization() -> None:
+    """FAR field folding must not weaken /AH's distinct huge-pointer semantics."""
+    void = hir.Type(0, "void", hir.TypeKind.VOID, 0)
+    integer = hir.Type(1, "integer", hir.TypeKind.INTEGER, 2, signed=True)
+    aggregate = hir.Type(2, "pair", hir.TypeKind.OPAQUE, 4)
+    pointer = hir.Type(3, "huge*pair", hir.TypeKind.POINTER, 4, element=2, address=hir.AddressKind.HUGE)
+    values = (hir.Value(1, 3), hir.Value(2, 1))
+    block = hir.Block(
+        1,
+        (hir.Instruction(1, hir.Op.LOAD, (2,), (hir.IndirectPlace(1, 2, 1),)),),
+        hir.Terminator(hir.TerminatorKind.RETURN),
+    )
+    function = hir.Function(1, "field", 0, values, (), (block,), 1, parameters=(1,))
+    source = hir.Program(
+        hir.Dialect.PDS71,
+        hir.RuntimeProfile.PDS71,
+        (hir.Module(1, "pointer", (void, integer, aggregate, pointer), (function,)),),
+    )
+
+    operations = hir.lower(source)[0].body.blocks[0].ops
+
     assert [one.kind for one in operations[:2]] == [mir.Kind.PTR_OFFSET, mir.Kind.LOAD]
     assert operations[1].loads[0].pointer
-    assert operations[1].loads[0].base == operations[0].results[0].value
+
+
+def test_qb_module_instantiates_user_callee_modref_on_pointer_actuals() -> None:
+    """RPOINTLEAF treated readonly RPLANEDIST as a write to every descriptor."""
+    from qbopt.hir.model import Callable
+
+    void = hir.Type(0, "void", hir.TypeKind.VOID, 0)
+    integer = hir.Type(1, "integer", hir.TypeKind.INTEGER, 2, signed=True)
+    pointer = hir.Type(2, "near*integer", hir.TypeKind.POINTER, 2, element=1, address=hir.AddressKind.NEAR)
+    caller = hir.Function(
+        1,
+        "CALLER",
+        0,
+        (hir.Value(1, 2),),
+        (),
+        (
+            hir.Block(
+                1,
+                (hir.Instruction(1, hir.Op.CALL, operands=(hir.ValueRef(1),), callee="READ"),),
+                hir.Terminator(hir.TerminatorKind.RETURN),
+            ),
+        ),
+        1,
+        parameters=(1,),
+        calls=(hir.CallAbi(1, (0,), hir.StackCleanup.CALLEE, hir.CallDistance.FAR, callee=1),),
+    )
+    callee = hir.Function(
+        2,
+        "READ",
+        0,
+        (hir.Value(1, 2), hir.Value(2, 1)),
+        (),
+        (
+            hir.Block(
+                1,
+                (hir.Instruction(1, hir.Op.LOAD, (2,), (hir.IndirectPlace(1, 0, 1),)),),
+                hir.Terminator(hir.TerminatorKind.RETURN),
+            ),
+        ),
+        1,
+        parameters=(1,),
+    )
+    module = hir.Module(
+        1,
+        "modref",
+        (void, integer, pointer),
+        (caller, callee),
+        callables=(Callable(1, "READ", None, (1,), (False,), (False,), (False,), True),),
+    )
+    program = hir.Program(hir.Dialect.VBDOS, hir.RuntimeProfile.VBDOS, (module,))
+
+    bodies = qb_compile._alias_annotated(module, module.functions, hir.lower(program))
+    call = next(one for block in bodies[0].body.blocks for one in block.ops if one.kind is mir.Kind.CALL)
+
+    assert call.memory_complete
+    assert call.loads
+    assert call.stores == ()
 
 
 def test_far_float_access_splits_selector_and_offset_for_x87_memory() -> None:

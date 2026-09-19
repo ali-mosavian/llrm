@@ -1058,6 +1058,67 @@ def _basic_segment_classes(data: bytes, code: str) -> bytes:
     return b"".join(record.emit() for record in rewritten)
 
 
+def _alias_annotated(
+    module: hir.Module,
+    functions: tuple[hir.Function, ...],
+    semantic: tuple[hir.Lowered, ...],
+) -> tuple[hir.Lowered, ...]:
+    """Apply the shared source-level call-graph mod/ref fixed point."""
+    # Give every source frontend the same whole-module mod/ref boundary before
+    # its bodies enter the ordinary optimizer.  HIR call operands remain in
+    # source-parameter order regardless of the later Pascal stack order, so
+    # the common alias fixed point can instantiate each callee's parameter
+    # effects on the caller's actual objects without knowing the QB ABI.
+    from qbopt.analysis import alias
+
+    types = {one.id: one for one in module.types}
+    callables = {one.id: one for one in module.callables}
+    alias_procedures = {}
+    lowered_by_name = {}
+    for function, lowered in zip(functions, semantic, strict=True):
+        body = alias.annotated(lowered.body)
+        calls = {}
+        arguments = {}
+        instructions = {
+            instruction.id: instruction
+            for block in function.blocks
+            for instruction in block.instructions
+            if instruction.op is hir.Op.CALL
+        }
+        call_ops = {
+            operation.id: operation
+            for block in body.blocks
+            for operation in block.ops
+            if operation.kind is mir.Kind.CALL
+        }
+        value_types = {one.id: types[one.type] for one in function.values}
+        for site in function.calls:
+            operation = call_ops.get(site.instruction)
+            instruction = instructions.get(site.instruction)
+            if operation is None or instruction is None:
+                raise EmissionError(f"{function.name}: call {site.instruction} did not survive HIR lowering")
+            target = callables[site.callee].name if site.callee is not None else operation.name
+            calls[operation.at] = _object_name(target)
+            arguments[operation.at] = tuple(
+                (lowered.values[operand.value], 0)
+                if isinstance(operand, hir.ValueRef) and value_types[operand.value].kind is hir.TypeKind.POINTER
+                else None
+                for operand in instruction.operands
+            )
+        name = _object_name(function.name)
+        procedure = alias.Procedure(body, calls, arguments)
+        alias_procedures[name] = procedure
+        lowered_by_name[name] = replace(lowered, body=body)
+    summaries = alias.summaries(alias_procedures)
+    return tuple(
+        replace(
+            lowered_by_name[_object_name(function.name)],
+            body=alias.calls_annotated(alias_procedures[_object_name(function.name)], summaries),
+        )
+        for function in functions
+    )
+
+
 def assembled(program: hir.Program) -> masm.Module:
     """Compile one QB HIR module to the shared assembly model."""
     hir.verify(program)
@@ -1068,6 +1129,7 @@ def assembled(program: hir.Program) -> masm.Module:
     functions = tuple(module.functions)
     if len(semantic) != len(functions):
         raise EmissionError("HIR lowering did not preserve the function table")
+    semantic = _alias_annotated(module, functions, semantic)
 
     callable_names = {one.name: _object_name(one.name) for one in module.callables}
     defined = {_object_name(one.name) for one in module.callables if one.defined}
