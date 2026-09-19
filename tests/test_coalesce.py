@@ -92,8 +92,6 @@ def test_equal_resource_values_coalesce_without_consuming_a_gpr():
 def test_resource_constraints_survive_coalescing(other):
     from iced_x86 import Register
 
-    from qbopt.backend import allocate
-
     insns = (_define(0, 1), _move(3, 2, 1), _use(6, 2))
     pins = {1: Register.ES, 2: Register.FS if other == "different_resource" else Register.ES}
     if other == "clobber":
@@ -106,7 +104,7 @@ def test_resource_constraints_survive_coalescing(other):
     if other == "different_resource":
         assert len(done.insns) == len(body.insns)
     else:
-        assert allocate.allocate(done, done.pins).spilled
+        assert len(done.insns) == len(body.insns)
 
 
 def test_a_copy_can_share_a_register_while_its_equal_source_is_still_read() -> None:

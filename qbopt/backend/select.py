@@ -1157,24 +1157,25 @@ def fill(name: str, at: int = 0, repeated: bool = True) -> Emitted | None:
 SHIFTS = ("shl", "shr", "sar", "rol", "ror", "rcl", "rcr", "sal")
 
 
-def funnel(dest: Register_, high: Register_, count: int | None, at: int = 0) -> Emitted | None:
-    """`shrd dest,high,count` -- two registers shifted right as one number.
+def funnel(name: str, dest: Register_, other: Register_, count: int | None, at: int = 0) -> Emitted | None:
+    """`shld`/`shrd dest,other,count` -- two registers shifted as one number.
 
     `count` of None means cl, which is the only register the instruction
     can take a count from. Both operands are 32-bit: there is a 16-bit
     form, and nothing here has a use for it.
     """
-    if WIDTHS.get(dest) != 4 or WIDTHS.get(high) != 4:
+    if name not in {"shld", "shrd"} or WIDTHS.get(dest) != 4 or WIDTHS.get(other) != 4:
         return None
+    opcode = name.upper()
     if count is None:
-        code = _code("SHRD_RM32_R32_CL")
+        code = _code(f"{opcode}_RM32_R32_CL")
         if code is None:
             return None
-        return _assemble(Instruction.create_reg_reg_reg(code, dest, high, Register.CL), at)
-    code = _code("SHRD_RM32_R32_IMM8")
+        return _assemble(Instruction.create_reg_reg_reg(code, dest, other, Register.CL), at)
+    code = _code(f"{opcode}_RM32_R32_IMM8")
     if code is None:
         return None
-    return _assemble(Instruction.create_reg_reg_i32(code, dest, high, count), at)
+    return _assemble(Instruction.create_reg_reg_i32(code, dest, other, count), at)
 
 
 def shift(name: str, dest: Register_ | ir.Mem, count: int | None, at: int = 0) -> Emitted | None:
@@ -1590,10 +1591,10 @@ def emit(
                     return restore_of(wide, low, high, at)
         case ir.Operation.FUNNEL if len(dests) == 1 and len(sources) == 3:
             match (dests[0], sources[1], sources[2]):
-                case (ir.Reg(register=into), ir.Reg(register=high), ir.Imm(value=count)):
-                    return funnel(into, high, count, at)
-                case (ir.Reg(register=into), ir.Reg(register=high), ir.Reg(register=Register.CL)):
-                    return funnel(into, high, None, at)
+                case (ir.Reg(register=into), ir.Reg(register=other), ir.Imm(value=count)):
+                    return funnel(what.name or "", into, other, count, at)
+                case (ir.Reg(register=into), ir.Reg(register=other), ir.Reg(register=Register.CL)):
+                    return funnel(what.name or "", into, other, None, at)
         case ir.Operation.BINARY if (what.name or "") in SHIFTS and len(dests) == 1 and len(sources) == 2:
             match (dests[0], sources[1]):
                 case (ir.Reg(register=into), ir.Imm(value=count)):

@@ -457,12 +457,14 @@ def test_return_duplication_rejects_growth_and_source_owned_tails() -> None:
 
 
 def test_qglsurf_shares_all_three_zero_result_tails() -> None:
-    """QGL surface failure exits share one zero store and emit 56 instructions.
+    """QGL surface failure exits share one zero result and emit at most 56 instructions.
 
     The zero can be materialised as either `xor r,r` or `mov r,0`; the tail
     sharing is the property this regression protects, not that local encoding
     choice.  Narrowing the synthetic high-word return reload removed the 57th
-    instruction.
+    instruction, and eliminating a redundant low-word return shuttle removed
+    the 56th.  Future general improvements may remove more; growth is the
+    regression this bound catches.
     """
     source = Path("fixtures/c/qglsurf.cgs")
     module = cfront.assembled(source.read_text(), source.stem, optimise=True)
@@ -474,34 +476,30 @@ def test_qglsurf_shares_all_three_zero_result_tails() -> None:
         if one.what is not None and one.what.op is not ir.Operation.NOTHING
     ]
 
-    assert len(physical) == 56
-    zero_tails = 0
+    assert len(physical) <= 56
+    shared_zero_tails = []
     for block in procedure.body.blocks:
         real = [one.what for one in block.insns if one.what is not None and one.what.op is not ir.Operation.NOTHING]
-        if len(real) not in {2, 3} or (len(real) == 3 and real[-1].op is not ir.Operation.JUMP):
+        if len(real) != 1 or len(block.succ) != 1:
             continue
-        zero, store = real[:2]
+        (zero,) = real
         zeroed = (
             zero.op is ir.Operation.BINARY
             and zero.name == "xor"
+            and zero.dests == (ir.Reg(Register.EAX, 4),)
             and len(zero.sources) == 2
             and zero.sources[0] == zero.sources[1]
         ) or (
             zero.op is ir.Operation.MOVE
+            and zero.dests == (ir.Reg(Register.EAX, 4),)
             and len(zero.sources) == 1
             and isinstance(zero.sources[0], ir.Imm)
             and zero.sources[0].value == 0
         )
-        if (
-            zeroed
-            and store.op is ir.Operation.MOVE
-            and store.dests
-            and isinstance(store.dests[0], ir.Mem)
-            and store.dests[0].addr is not None
-            and store.dests[0].addr.disp == -14
-        ):
-            zero_tails += 1
-    assert zero_tails == 1
+        predecessors = sum(block.at in other.succ for other in procedure.body.blocks)
+        if zeroed and predecessors >= 3:
+            shared_zero_tails.append(block.at)
+    assert len(shared_zero_tails) == 1
 
 
 def test_loop_test_is_placed_after_its_latch():

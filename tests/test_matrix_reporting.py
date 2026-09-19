@@ -73,3 +73,19 @@ def test_a_real_difference_is_still_a_difference_even_after_a_timeout(tmp_path: 
 
     got = e2e.judge(work, "prog", golden, "", Run(finished=False, timed_out=True, seconds=300.0))
     assert got.status == "DIFF"
+
+
+def test_long_program_names_use_the_same_dos_output_stem_when_judged(tmp_path: Path) -> None:
+    """ALGEBRA ran and printed correctly but the gate looked for an impossible 9-character DOS stem."""
+    golden = tmp_path / "golden"
+    golden.mkdir()
+    (golden / "algebra.txt").write_text("RESULT= 702774\nDONE\n")
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "ALGEBRA.OBJ").write_bytes(b"\0")
+    (work / "B_ALGEBR.TXT").write_text("RESULT= 702774\nDONE\n")
+    (work / "O_ALGEBR.TXT").write_text("RESULT= 702774\nDONE\n")
+
+    got = e2e.judge(work, "algebra", golden)
+
+    assert got.status == "PASS"

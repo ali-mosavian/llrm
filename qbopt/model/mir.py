@@ -61,12 +61,12 @@ an optimization pass.
 
 import itertools
 from enum import StrEnum
+from typing import overload
 from dataclasses import field
 from dataclasses import fields
 from dataclasses import replace
 from dataclasses import dataclass
 from collections.abc import Iterator
-from typing import overload
 
 from iced_x86 import Code
 from iced_x86 import Register
@@ -1100,6 +1100,12 @@ def _live_outs(body: _RaisedBody) -> dict[int, frozenset[Value]]:
     predecessors = loops.predecessors(list(body.blocks))
     arriving: dict[Register_, set[Value]] = {}
     for value in alive_at.entry_values(body):
+        # FLAGS is not part of the procedure's value-return ABI.  Recognition
+        # can remove a source instruction while a dead flag phi still names
+        # its old result; that dangling SSA name is neither a caller input nor
+        # an observable machine exit value.
+        if value.flags:
+            continue
         register = body.origin.get(value)
         if register is not None:
             arriving.setdefault(ir.ROOT.get(register, register), set()).add(value)
@@ -1190,10 +1196,7 @@ def exposed(body: MirBody) -> frozenset[Value]:
     source register happened to contain a value at an exit.
     """
     return frozenset(
-        value
-        for block in body.blocks
-        if not block.succ and block.ops
-        for value in exit_values(block.ops[-1])
+        value for block in body.blocks if not block.succ and block.ops for value in exit_values(block.ops[-1])
     )
 
 
@@ -1322,11 +1325,7 @@ def _with_raise_context(body: MirBody, hints: AllocationHints, source: module.So
     """
 
     def occurrence(op: Op) -> Op:
-        spans = tuple(
-            span
-            for identity in op.absorbed
-            for span in source.occurrences.get(identity, ())
-        )
+        spans = tuple(span for identity in op.absorbed for span in source.occurrences.get(identity, ()))
         node = source.nodes.get(op.id) if op.id is not None else None
         if not spans and node is None:
             return op
@@ -1339,10 +1338,7 @@ def _with_raise_context(body: MirBody, hints: AllocationHints, source: module.So
 
     private = replace(
         body,
-        blocks=tuple(
-            replace(block, ops=tuple(occurrence(op) for op in block.ops))
-            for block in body.blocks
-        ),
+        blocks=tuple(replace(block, ops=tuple(occurrence(op) for op in block.ops)) for block in body.blocks),
     )
     return _with_hints(private, hints)
 
@@ -2448,19 +2444,15 @@ def resolved(body: MirBody, calls: dict[int, str] | None = None) -> MirBody | st
 
     rename(start)
     resolved_blocks = tuple(
-            MirBlock(
-                block.at,
-                tuple(phis[block.at].values()),
-                tuple(out[block.at]),
-                tuple(one for one in block.succ if one in reachable),
-            )
-            for block in blocks
+        MirBlock(
+            block.at,
+            tuple(phis[block.at].values()),
+            tuple(out[block.at]),
+            tuple(one for one in block.succ if one in reachable),
         )
-    pointer_values = frozenset(
-        new
-        for old in body.pointer_values
-        for new in renamed.get(old, ())
+        for block in blocks
     )
+    pointer_values = frozenset(new for old in body.pointer_values for new in renamed.get(old, ()))
     pointer_seeds: dict[Value, memory.Provenance] = {}
     conflicting: set[Value] = set()
     for old, provenance in body.pointer_seeds.items():

@@ -2,9 +2,11 @@ from pathlib import Path
 from dataclasses import FrozenInstanceError
 
 import pytest
+from iced_x86 import Register
 
 from qbopt import flow
 from qbopt.model import ir
+from qbopt.model import lir
 from qbopt.model import mir
 from qbopt.backend import cpu
 from qbopt.backend import lower
@@ -100,6 +102,26 @@ def test_memory_compare_is_priced_as_a_read_not_a_read_modify_write() -> None:
     assert cycles.classify("cmp", "word [bp-4],0", "837efc00") == "alu_rm"
     assert cycles.classify("test", "word [bp-4],1", "f746fc0100") == "alu_rm"
     assert cycles.classify("add", "word [bp-4],1", "8346fc01") == "alu_mr"
+
+
+@pytest.mark.parametrize("mnemonic", ["shld", "shrd"])
+def test_scalar_double_shifts_use_the_integer_shift_price(mnemonic: str) -> None:
+    """DX:AX extraction became artificially cheap as an unknown/generic ALU.
+
+    GCC classifies scalar SHLD/SHRD with its ordinary integer-shift type.  The
+    report and scheduler must use that same explicit profile row rather than
+    hiding the newly selected instruction behind an unknown/default cost.
+    """
+    assert cycles.classify(mnemonic, "edx,eax,16", "") == "shift_ri"
+    what = ir.Semantics(
+        ir.Operation.FUNNEL,
+        mnemonic,
+        (ir.Reg(Register.EDX, 4),),
+        (ir.Reg(Register.EDX, 4), ir.Reg(Register.EAX, 4), ir.Imm(16, 1)),
+    )
+    one = lir.Insn(0, (0, 0), what, (), ())
+    assert schedule._form(one) == "shift_ri"
+    assert schedule._pair_class(one) == "np"
 
 
 @pytest.mark.parametrize("mnemonic", ["les", "lfs", "lgs"])
@@ -401,9 +423,7 @@ def test_secondary_address_form_is_ranked_against_reload_and_spill_work() -> Non
     K5/K6/K7 and Core while retaining native reloads on 486, P5 and P6.
     """
     selected = {
-        name
-        for name in cpu.names()
-        if cpu.profile(name).address_forms[1].before_spill(cpu.profile(name).operations)
+        name for name in cpu.names() if cpu.profile(name).address_forms[1].before_spill(cpu.profile(name).operations)
     }
 
     assert selected == {"386", "K5", "K6", "K7", "Core"}

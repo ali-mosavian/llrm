@@ -128,7 +128,7 @@ def _root(register: Register_) -> Register_:
 def _shifted(what: ir.Semantics) -> bool:
     """A shift whose count is a register takes it in cl and says so.
 
-    A funnel shift is one of them: `shrd` counts from cl and from nowhere
+    A funnel shift is one of them: `shld`/`shrd` count from cl and from nowhere
     else, and its own two register sources are wherever the allocation put
     them.
     """

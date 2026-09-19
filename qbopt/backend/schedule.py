@@ -14,16 +14,13 @@ from dataclasses import replace
 from iced_x86 import Register
 from iced_x86 import RegisterExt
 
-from qbopt.backend import cpu as targets
 from qbopt.model import ir
 from qbopt.model import lir
-from qbopt.model.passes import LIRTransform
+from qbopt.backend import cpu as targets
 from qbopt.objectfile.module import Space
+from qbopt.model.passes import LIRTransform
 
-
-_GENERAL = frozenset(
-    {Register.EAX, Register.EBX, Register.ECX, Register.EDX, Register.ESI, Register.EDI, Register.EBP}
-)
+_GENERAL = frozenset({Register.EAX, Register.EBX, Register.ECX, Register.EDX, Register.ESI, Register.EDI, Register.EBP})
 
 
 class Scheduler(LIRTransform):
@@ -121,11 +118,11 @@ def _form(one: lir.Insn) -> str:
         if what.name == "movzx":
             return "movzx"
         return "mov_ri" if any(isinstance(where, ir.Imm) for where in what.sources) else "mov_rr"
-    if what.name in {"shl", "shr", "sar", "rol", "ror"}:
+    if what.name in {"shl", "shr", "sar", "rol", "ror"} or what.op is ir.Operation.FUNNEL:
         return "shift_ri"
     if what.name in {"cwd", "cdq"}:
         return "cdq"
-    if what.op in {ir.Operation.BINARY, ir.Operation.UNARY, ir.Operation.COMPARE, ir.Operation.FUNNEL}:
+    if what.op in {ir.Operation.BINARY, ir.Operation.UNARY, ir.Operation.COMPARE}:
         return "alu_rr"
     return "unknown"
 
@@ -165,9 +162,7 @@ def _partial_merge_delay(window: list[lir.Insn], producer: int, consumer: int, c
     for crossed in window[producer + 1 : consumer]:
         what = crossed.what
         if what is not None and any(
-            isinstance(where, ir.Reg)
-            and where.width == 4
-            and RegisterExt.full_register32(where.register) in wide
+            isinstance(where, ir.Reg) and where.width == 4 and RegisterExt.full_register32(where.register) in wide
             for where in what.dests
         ):
             return 0
@@ -207,6 +202,10 @@ def _pair_class(one: lir.Insn) -> str:
     encoded = select.emit(one.what)
     if encoded is None:
         return "np"
+    # GCC's Pentium description marks scalar SHLD/SHRD `pent_pair=np` even
+    # though their 32-bit form also carries the otherwise-U-only 66h prefix.
+    if one.what.op is ir.Operation.FUNNEL:
+        return "np"
     if encoded.code[:1] in {b"\x66", b"\x67", b"\xf2", b"\xf3"}:
         return "u"
     if one.what.name == "imul" or any(isinstance(where, ir.Imm) for where in one.what.sources):
@@ -235,8 +234,7 @@ def _pentium_ordered(window: list[lir.Insn], cpu: targets.Profile) -> list[lir.I
         pair_starters = [
             index
             for index in ready
-            if classes[index] in {"u", "uv"}
-            and any(other != index and classes[other] == "uv" for other in ready)
+            if classes[index] in {"u", "uv"} and any(other != index and classes[other] == "uv" for other in ready)
         ]
         first = min(pair_starters or ready, key=lambda index: index)
         emitted.append(window[first])

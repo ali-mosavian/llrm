@@ -27,6 +27,7 @@ def test_pl_move_exchange_with_frame_memory(register, width, memory_first):
     """PL_MOVE refused at 2f4b: XCHG AX,[BP-1Ch] lacked a memory encoding."""
     from qbopt.objectfile.module import Addr
     from qbopt.objectfile.module import Space
+
     cell = ir.Mem(Addr(Space.FRAME, -28), width)
     held = ir.Reg(register, width)
     dests = (cell, held) if memory_first else (held, cell)
@@ -36,7 +37,7 @@ def test_pl_move_exchange_with_frame_memory(register, width, memory_first):
     instruction = next(iter(Decoder(16, emitted.code)))
     assert instruction.code == getattr(Code, f"XCHG_RM{width * 8}_R{width * 8}")
     assert instruction.memory_base == Register.BP
-    assert instruction.memory_displacement & 0xffff == 0xffe4
+    assert instruction.memory_displacement & 0xFFFF == 0xFFE4
     assert instruction.op1_register == register
 
 
@@ -55,6 +56,7 @@ def test_byte_copy_for_nbody_timer(source):
 def test_signed_word_extension_uses_explicit_operands():
     """ADDRM's signed whole store needs MOVSX, not a width-mismatched MOV or CWD's fixed pair."""
     from qbopt.backend import target
+
     what = ir.Semantics(ir.Operation.EXTEND, "movsx", (ir.Reg(Register.EBX, 4),), (ir.Reg(Register.SI, 2),))
     emitted = select.emit(what)
     assert emitted is not None
@@ -67,19 +69,22 @@ def test_signed_word_extension_uses_explicit_operands():
 def test_load_accepts_unsigned_dword_bit_pattern():
     """CHAIN refused a folded 0xbffffff9 because iced's i32 constructor requires a signed integer."""
     from iced_x86 import Register
-    emitted = select.load(Register.ESI, 0xbffffff9)
+
+    emitted = select.load(Register.ESI, 0xBFFFFFF9)
     assert emitted is not None
     assert emitted.code == bytes.fromhex("66bef9ffffbf")
 
 
-@pytest.mark.parametrize("value", [0x80000000, 0xedcba987, 0xffffffff])
+@pytest.mark.parametrize("value", [0x80000000, 0xEDCBA987, 0xFFFFFFFF])
 def test_push_accepts_unsigned_dword_bit_patterns(value):
     """NOTS refused constant arguments with the sign bit set at the encoder's signed-i32 boundary."""
     emitted = select.push_imm(value, 4)
     assert emitted is not None
     instruction = next(iter(Decoder(16, emitted.code)))
     assert instruction.stack_pointer_increment == -4
-    assert instruction.immediate(0) & 0xffffffff == value
+    assert instruction.immediate(0) & 0xFFFFFFFF == value
+
+
 from qbopt.frontend.declen import BITNESS
 
 
@@ -87,10 +92,12 @@ def test_store_accepts_unsigned_dword_bit_pattern():
     """CHAIN refused its whole 0xc1747c23 initializer at 0x48 instead of emitting it."""
     from qbopt.objectfile.module import Addr
     from qbopt.objectfile.module import Space
+
     cell = ir.Mem(Addr(Space.FRAME, -4), 4)
-    emitted = select.store_imm(cell, 0xc1747c23)
+    emitted = select.store_imm(cell, 0xC1747C23)
     assert emitted is not None
     assert emitted.code == bytes.fromhex("66c746fc237c74c1")
+
 
 ROOTS = (Register.EAX, Register.ECX, Register.EDX, Register.EBX, Register.ESI, Register.EDI)
 HALVES = (Register.AX, Register.CX, Register.DX, Register.BX, Register.SI, Register.DI)
@@ -483,6 +490,7 @@ def test_spilled_shift_is_encodable(count, hex_bytes) -> None:
     """Nbody refused a hoisted index spilled to [bp-22h] because memory SHL was missing."""
     from qbopt.objectfile.module import Addr
     from qbopt.objectfile.module import Space
+
     cell = ir.Mem(Addr(Space.FRAME, -0x22), 2)
     source = ir.Reg(Register.CL, 1) if count is None else ir.Imm(count, 1)
     made = select.emit(ir.Semantics(ir.Operation.BINARY, "shl", (cell,), (cell, source)))
@@ -637,8 +645,10 @@ def test_a_relocated_field_never_changes_width(obj: Path) -> None:
     program to 31 lines and diffing the two linked images, where one said
     `add ax,0DCh` and the other `add ax,0FFDCh`.
     """
-    from qbopt.model import lir, mir
-    from qbopt.backend import asm, lower
+    from qbopt.model import lir
+    from qbopt.model import mir
+    from qbopt.backend import asm
+    from qbopt.backend import lower
     from qbopt.objectfile import omf
     from qbopt.frontend import declen
     from qbopt.frontend import blocks as split
@@ -901,12 +911,12 @@ def test_an_absorbed_site_comes_back_with_a_field_for_every_fixup() -> None:
     assert both, "none of them carried two, which is the case this exists for"
 
 
-def _funnel(count) -> ir.Semantics:
-    """`shrd eax,edx,count` as this layer says it."""
+def _funnel(count, name="shrd") -> ir.Semantics:
+    """`shld`/`shrd eax,edx,count` as this layer says it."""
     low = ir.Reg(Register.EAX, 4)
     return ir.Semantics(
         ir.Operation.FUNNEL,
-        "shrd",
+        name,
         dests=(low,),
         sources=(low, ir.Reg(Register.EDX, 4), count),
     )
@@ -941,6 +951,13 @@ def test_a_funnel_shift_emits_the_form_its_count_asks_for(count, want: str) -> N
     made = select.emit(_funnel(count))
     assert made is not None
     assert made.code.hex() == want.replace(" ", "")
+
+
+def test_a_left_funnel_shift_emits_shld() -> None:
+    """DX:AX return extraction needs SHLD's incoming high bits, not SHRD's low bits."""
+    made = select.emit(_funnel(ir.Imm(16, 1), "shld"))
+    assert made is not None
+    assert made.code.hex() == "660fa4d010"
 
 
 def _restoring(wide: Register_, low: Register_, high: Register_) -> ir.Semantics:

@@ -1,15 +1,19 @@
 from collections import Counter
 from dataclasses import replace
 
+from qbopt.model import ir
+from qbopt.model import mir
 from qbopt.analysis import consts
-from qbopt.model import ir, mir
 
 
 def simplified(body: mir.MirBody, wanted: set[mir.Value], wide: set[mir.Value]) -> mir.MirBody:
-    from qbopt.optimize import wholephis, wholestores
+    from qbopt.optimize import wholephis
+    from qbopt.optimize import wholestores
 
     body = wholestores.joined(wholephis.joined(body))
     body = _halved(_divisions(body))
+    body = _reassociated_recurrences(body)
+    body = _forwarded_zero_tests(body)
     mentioned = {value for block in body.blocks for op in block.ops for value in op.uses if value not in op.merges} | {
         value for block in body.blocks for phi in block.phis for value in phi.incoming.values()
     }
@@ -67,6 +71,194 @@ def simplified(body: mir.MirBody, wanted: set[mir.Value], wide: set[mir.Value]) 
                 ),
             )
             for block in changed.blocks
+        ),
+    )
+
+
+_ZERO_FLAGS = frozenset(
+    {
+        mir.Kind.ADD,
+        mir.Kind.SUB,
+        mir.Kind.AND,
+        mir.Kind.OR,
+        mir.Kind.XOR,
+        mir.Kind.SHL,
+        mir.Kind.SHR,
+        mir.Kind.SAR,
+        mir.Kind.NEG,
+        mir.Kind.INCREMENT,
+        mir.Kind.DECREMENT,
+    }
+)
+
+
+def _forwarded_zero_tests(body: mir.MirBody) -> mir.MirBody:
+    """Make an idempotent zero test consume its producer's condition.
+
+    Frontends commonly spell ``if (x & mask)`` either as a branch consuming
+    the AND's zero flag or as ``OR result,result`` followed by that branch.
+    MIR makes both condition values explicit, so forward the latter only
+    when the result of the idempotent operation is dead and every condition
+    consumer asks solely whether it is zero.  The ordinary dead pass then
+    removes the redundant operation while retaining its source ownership.
+    """
+    from qbopt.analysis import ssa
+
+    definitions = {value: op for block in body.blocks for op in block.ops for value in op.defines}
+    phi_inputs = {value for block in body.blocks for phi in block.phis for value in phi.incoming.values()}
+    exposed = set(mir.exposed(body))
+    users = {
+        value: [op for block in body.blocks for op in block.ops if value in mir.consumed(op)] for value in definitions
+    }
+    swaps: dict[int, mir.Value] = {}
+    for block in body.blocks:
+        for op in block.ops:
+            if (
+                op.kind not in (mir.Kind.AND, mir.Kind.OR)
+                or op.loads
+                or op.stores
+                or op.barrier
+                or len(op.args) != 2
+                or op.args[0] != op.args[1]
+                or not isinstance(source := op.args[0], mir.Held)
+                or len(op.results) != 1
+                or not isinstance(result := op.results[0], mir.Held)
+                or result.width != source.width
+                or result.value in phi_inputs
+                or result.value in exposed
+                or users.get(result.value)
+            ):
+                continue
+            conditions = [value for value in op.defines if value.flags]
+            if len(conditions) != 1:
+                continue
+            condition = conditions[0]
+            consumers = users.get(condition, [])
+            if (
+                not consumers
+                or condition in phi_inputs
+                or condition in exposed
+                or any(
+                    one.kind is not mir.Kind.BRANCH or one.test not in (mir.Kind.EQ, mir.Kind.NE) for one in consumers
+                )
+            ):
+                continue
+            producer = definitions.get(source.value)
+            if producer is None or producer.kind not in _ZERO_FLAGS:
+                continue
+            produced = [value for value in producer.defines if value.flags]
+            if len(produced) != 1 or not any(isinstance(one, mir.Held) and one == source for one in producer.results):
+                continue
+            swaps[condition.id] = produced[0]
+    if not swaps:
+        return body
+    return replace(
+        body,
+        blocks=tuple(
+            replace(block, ops=tuple(ssa.substituted(op, swaps) for op in block.ops)) for block in body.blocks
+        ),
+    )
+
+
+def _reassociated_recurrences(body: mir.MirBody) -> mir.MirBody:
+    """Put a loop-carried operand at the root of an integer ADD tree.
+
+    Frontends may spell ``total + product + constant`` as either
+    ``(product + total) + constant`` or ``total + (product + constant)``.
+    Both are the same fixed-width modular sum, but only the latter leaves the
+    recurrence in place and exposes a compact two-address update.  This is
+    the target-independent analogue of LLVM/GCC reassociation rank: a value
+    carried around a natural loop has the highest rank and is combined last.
+
+    Rotate only a two-level, single-use, memory-free ADD tree that is the
+    actual back-edge value of that phi.  Intermediate flags, partial results,
+    or shared values make the tree observable and therefore ineligible.
+    """
+    from qbopt.analysis import loops
+
+    indexed = {block.at: block for block in body.blocks}
+    updates: dict[mir.Value, mir.Value] = {}
+    for loop in loops.loops(body.blocks, body.entry):
+        header = indexed[loop.header]
+        for phi in header.phis:
+            for latch in loop.latches:
+                if (value := phi.incoming.get(latch)) is not None:
+                    updates[value] = phi.result
+    if not updates:
+        return body
+
+    definitions = {value: op for block in body.blocks for op in block.ops for value in op.defines}
+    uses = Counter(
+        value
+        for block in body.blocks
+        for op in block.ops
+        for value in _operands_read(op) | (set(op.uses) - op.merges.keys())
+    )
+    uses.update(value for block in body.blocks for phi in block.phis for value in phi.incoming.values())
+    locations = {id(op): block.at for block in body.blocks for op in block.ops}
+    replacements: dict[int, mir.Op] = {}
+
+    def plain(op: mir.Op | None) -> bool:
+        return bool(
+            op is not None
+            and op.kind is mir.Kind.ADD
+            and op.op is ir.Operation.BINARY
+            and not (op.loads or op.stores or op.barrier or op.merges)
+            and len(op.args) == 2
+            and len(op.results) == 1
+            and isinstance(op.results[0], mir.Held)
+            and op.defines == (op.results[0].value,)
+        )
+
+    for block in body.blocks:
+        for outer in block.ops:
+            if not plain(outer) or outer.results[0].value not in updates:
+                continue
+            recurrence = updates[outer.results[0].value]
+            result = outer.results[0]
+            for position, candidate in enumerate(outer.args):
+                if not isinstance(candidate, mir.Held):
+                    continue
+                inner = definitions.get(candidate.value)
+                if (
+                    not plain(inner)
+                    or locations[id(inner)] != block.at
+                    or uses[candidate.value] != 1
+                    or inner.results != (candidate,)
+                ):
+                    continue
+                recurrent = [arg for arg in inner.args if isinstance(arg, mir.Held) and arg.value == recurrence]
+                if len(recurrent) != 1:
+                    continue
+                other = outer.args[1 - position]
+                leaves = [arg for arg in inner.args if arg != recurrent[0]] + [other]
+                if len(leaves) != 2 or any(
+                    not isinstance(arg, (mir.Held, mir.Const)) or arg.width != result.width for arg in leaves
+                ):
+                    continue
+                inner_result = inner.results[0]
+                replacements[id(inner)] = replace(
+                    inner,
+                    args=tuple(leaves),
+                    uses=tuple(arg.value for arg in leaves if isinstance(arg, mir.Held)),
+                    source_backed=False,
+                    raised=None,
+                )
+                replacements[id(outer)] = replace(
+                    outer,
+                    args=(recurrent[0], inner_result),
+                    uses=(recurrent[0].value, inner_result.value),
+                    source_backed=False,
+                    raised=None,
+                )
+                break
+
+    if not replacements:
+        return body
+    return replace(
+        body,
+        blocks=tuple(
+            replace(block, ops=tuple(replacements.get(id(op), op) for op in block.ops)) for block in body.blocks
         ),
     )
 

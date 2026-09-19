@@ -1,4 +1,9 @@
 {
+  "algebra": 702774,
+  "branch": -87904,
+  "control": 15007,
+  "loop": 130991,
+  "memory": 361001,
   "parity": 1789,
   "scalar": 1789
 }

@@ -1,15 +1,16 @@
 """Whole values must exist before LICM, not be reconstructed after it."""
 
-from dataclasses import replace
 from pathlib import Path
+from dataclasses import replace
 
-import corpus
 import pytest
 
-from qbopt.model import ir, mir
-from qbopt.frontend import raising_longs
-from qbopt.optimize import transform
+import corpus
 from qbopt import wholeseg
+from qbopt.model import ir
+from qbopt.model import mir
+from qbopt.optimize import transform
+from qbopt.frontend import raising_longs
 
 
 def test_event_arithmetic_keeps_a_pair_when_its_flags_cross_the_machine_exit():
@@ -22,7 +23,7 @@ def test_udtacc_second_field_is_a_whole_long():
     """UDTACC emitted two-word loads and ADD/ADC for y because its zero-offset access was unnamed."""
     path = Path("fixtures/regressions/udtacc-p-g2.obj")
     body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
-    load = next(op for block in body.blocks for op in block.ops if op.at == 0xb1 and op.loads)
+    load = next(op for block in body.blocks for op in block.ops if op.at == 0xB1 and op.loads)
     assert load.loads[0].width == 4
     assert not any(op.kind is mir.Kind.ADD_CARRY for block in body.blocks for op in block.ops)
 
@@ -31,27 +32,38 @@ def test_nbody_timing_helper_stores_the_signed_whole_value():
     """PITSNAP split its signed byte into two stores and reloaded it, raising NBODY cost by 20."""
     path = Path("fixtures/bench/nbody-v-g3.obj")
     body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[1][1]
-    stores = [op for block in body.blocks for op in block.ops
-              if op.at in (0x47b, 0x47e) and op.stores]
+    stores = [op for block in body.blocks for op in block.ops if op.at in (0x47B, 0x47E) and op.stores]
     assert len(stores) == 1
     assert stores[0].stores[0].width == 4
     assert stores[0].stores[0].addr.disp == -0x22
     assert stores[0].args[0].width == 4
 
 
-@pytest.mark.parametrize("seed,expected", [(0, 0), (1, 0), (0x7fff, 0), (0x8000, 0xffff), (-1, 0xffff)])
+@pytest.mark.parametrize("seed,expected", [(0, 0), (1, 0), (0x7FFF, 0), (0x8000, 0xFFFF), (-1, 0xFFFF)])
 def test_nbody_counter_seed_has_a_known_high_word(seed, expected):
     """NBODY's initial long 1 had an opaque high word, blocking whole-value loop phis."""
     from qbopt.analysis import consts
+
     path = Path("fixtures/bench/nbody-v-g3.obj")
     found = corpus.loaded(path)
     body = mir.bodies(found, corpus.partitioned(path))[0][1]
-    body = replace(body, blocks=tuple(replace(block, ops=tuple(
-        replace(op, args=(mir.Const(seed, 2),)) if op.at == 0xe0 and op.kind is mir.Kind.COPY else op
-        for op in block.ops)) for block in body.blocks))
+    body = replace(
+        body,
+        blocks=tuple(
+            replace(
+                block,
+                ops=tuple(
+                    replace(op, args=(mir.Const(seed, 2),)) if op.at == 0xE0 and op.kind is mir.Kind.COPY else op
+                    for op in block.ops
+                ),
+            )
+            for block in body.blocks
+        ),
+    )
     facts = consts.known(body, found.dgroup, found.calls)
-    high = next(op for block in body.blocks for op in block.ops
-                if op.at == 0xe3 and op.results and op.results[0].width == 2)
+    high = next(
+        op for block in body.blocks for op in block.ops if op.at == 0xE3 and op.results and op.results[0].width == 2
+    )
     assert facts.get(high.results[0].value) == consts.Known(expected, 2)
 
 
@@ -65,11 +77,12 @@ def test_whole_negation_requires_exact_carry_chain(mismatch, monkeypatch):
         body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
     ops = {op.at: op for block in body.blocks for op in block.ops}
     definitions = {value: op for block in body.blocks for op in block.ops for value in op.defines}
-    low, high, carry = ops[0x278], ops[0x27d], ops[0x27a]
+    low, high, carry = ops[0x278], ops[0x27D], ops[0x27A]
     match mismatch:
         case "carry":
-            carry = replace(carry, uses=tuple(mir.Value(9999, 0, flags=True) if value.flags else value
-                                              for value in carry.uses))
+            carry = replace(
+                carry, uses=tuple(mir.Value(9999, 0, flags=True) if value.flags else value for value in carry.uses)
+            )
         case "constant":
             carry = replace(carry, args=(carry.args[0], mir.Const(1, 2)))
         case "width":
@@ -82,10 +95,10 @@ def test_whole_negation_requires_exact_carry_chain(mismatch, monkeypatch):
         assert source is None
         return
     assert source is not None and source.width == 4
-    for value in (0, 1, 65535, 65536, 0x7fffffff, 0x80000000, 0xffffffff):
+    for value in (0, 1, 65535, 65536, 0x7FFFFFFF, 0x80000000, 0xFFFFFFFF):
         lower, upper = value & 65535, value >> 16
         result = (((-(upper + (lower != 0))) & 65535) << 16) | ((-lower) & 65535)
-        assert result == (-value) & 0xffffffff
+        assert result == (-value) & 0xFFFFFFFF
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
@@ -95,12 +108,17 @@ def test_addrm_stores_and_reuses_the_signed_whole_value(tag):
     found = corpus.loaded(path)
     partition = corpus.partitioned(path)
     body = mir.bodies(found, partition)[0][1]
-    stores = [op for block in body.blocks for op in block.ops
-              if any(ref.base is not None and ref.width == 4 for ref in op.stores)]
+    stores = [
+        op
+        for block in body.blocks
+        for op in block.ops
+        if any(ref.base is not None and ref.width == 4 for ref in op.stores)
+    ]
     assert stores
     result = transform.applied(body, found.dgroup, found.calls, blocks=partition, found=found)
-    assert not any(ref.base is not None and ref.width == 4
-                   for block in result.blocks for op in block.ops for ref in op.loads)
+    assert not any(
+        ref.base is not None and ref.width == 4 for block in result.blocks for op in block.ops for ref in op.loads
+    )
 
 
 @pytest.mark.parametrize("mismatch", ["source", "width", "kind"])
@@ -113,7 +131,7 @@ def test_signed_store_requires_the_matching_sign_word(mismatch, monkeypatch):
         raised = mir.bodies(corpus.loaded(path), corpus.partitioned(path))
         public = raised[0][1]
         body = mir._with_raise_context(public, raised.hints[public.entry], raised.source)
-    extension = next(op for block in body.blocks for op in block.ops if op.at == 0x5c)
+    extension = next(op for block in body.blocks for op in block.ops if op.at == 0x5C)
     match mismatch:
         case "source":
             changed = replace(extension, args=(mir.Held(mir.Value(9999, 0), 2),))
@@ -121,8 +139,12 @@ def test_signed_store_requires_the_matching_sign_word(mismatch, monkeypatch):
             changed = replace(extension, results=(replace(extension.results[0], width=4),))
         case "kind":
             changed = replace(extension, kind=mir.Kind.COPY)
-    body = replace(body, blocks=tuple(replace(block, ops=tuple(changed if op is extension else op for op in block.ops))
-                                     for block in body.blocks))
+    body = replace(
+        body,
+        blocks=tuple(
+            replace(block, ops=tuple(changed if op is extension else op for op in block.ops)) for block in body.blocks
+        ),
+    )
     result = recognize(body)
     assert not any(op.kind is mir.Kind.SIGN_EXTEND for block in result.blocks for op in block.ops)
 
@@ -144,7 +166,7 @@ def test_accumulator_initializers_are_whole_values(nbody):
     """Nbody's split zero stores blocked promotion of its whole-long accumulators."""
     body, recognize = nbody
     done = recognize(body)
-    for at in (0xf0, 0xfc):
+    for at in (0xF0, 0xFC):
         op = next(op for block in done.blocks for op in block.ops if op.at == at)
         assert op.args == (mir.Const(0, 4),)
         assert op.stores[0].width == 4
@@ -153,7 +175,7 @@ def test_accumulator_initializers_are_whole_values(nbody):
 @pytest.mark.parametrize("mismatch", ["base", "gap", "address"])
 def test_constant_stores_require_identical_adjacent_addresses(nbody, mismatch):
     body, _ = nbody
-    block = next(block for block in body.blocks if block.at == 0xf0)
+    block = next(block for block in body.blocks if block.at == 0xF0)
     low, high = block.ops[:2]
     match mismatch:
         case "base":
@@ -171,9 +193,9 @@ def test_position_arithmetic_is_scalar_before_optimization(nbody):
     body, recognize = nbody
     done = recognize(body)
     ops = [op for block in done.blocks for op in block.ops]
-    load = next(op for op in ops if op.at == 0x11d)
-    subtract = next(op for op in ops if op.at == 0x12d and op.kind is mir.Kind.SUB)
-    current = next(op for op in ops if op.at == 0x12d and op.kind is mir.Kind.LOAD)
+    load = next(op for op in ops if op.at == 0x11D)
+    subtract = next(op for op in ops if op.at == 0x12D and op.kind is mir.Kind.SUB)
+    current = next(op for op in ops if op.at == 0x12D and op.kind is mir.Kind.LOAD)
     store = next(op for op in ops if op.at == 0x135)
     assert load.kind is mir.Kind.LOAD and load.results[0].width == 4
     assert subtract.kind is mir.Kind.SUB and subtract.args[0] == load.results[0]
@@ -189,12 +211,12 @@ def test_nbody_whole_position_loads_leave_the_inner_loop():
     found = corpus.loaded(path)
     blocks = corpus.partitioned(path)
     body = mir.bodies(found, blocks)[0][1]
-    sites = [op for block in body.blocks for op in block.ops if op.at in (0x12d, 0x144) and op.loads]
+    sites = [op for block in body.blocks for op in block.ops if op.at in (0x12D, 0x144) and op.loads]
     assert len(sites) == 2
     done = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
     for site in sites:
         block, load = next((block, op) for block in done.blocks for op in block.ops if op.id == site.id)
-        assert block.at == 0xf0
+        assert block.at == 0xF0
         assert load.kind is mir.Kind.LOAD and load.results[0].width == 4
         assert load.loads[0].addr == site.loads[0].addr
 
@@ -204,8 +226,8 @@ def test_nbody_scalar_results_feed_constant_and_accumulator_arithmetic(nbody):
     body, recognize = nbody
     done = recognize(body)
     ops = [op for block in done.blocks for op in block.ops]
-    increment = next(op for op in ops if op.at == 0x1a5 and op.kind is mir.Kind.ADD)
-    accumulator = next(op for op in ops if op.at == 0x1d9 and op.kind is mir.Kind.ADD)
+    increment = next(op for op in ops if op.at == 0x1A5 and op.kind is mir.Kind.ADD)
+    accumulator = next(op for op in ops if op.at == 0x1D9 and op.kind is mir.Kind.ADD)
     assert increment.args[1] == mir.Const(1, 4)
     assert all(arg.width == 4 for arg in increment.args)
     assert all(arg.width == 4 for arg in accumulator.args)
@@ -218,14 +240,14 @@ def test_nbody_stores_whole_results_through_half_copies(nbody):
     done = recognize(body)
     ops = [op for block in done.blocks for op in block.ops]
     delta = next(op for op in ops if op.at == 0x144 and op.kind is mir.Kind.SUB).results[0]
-    falloff = next(op for op in ops if op.at == 0x1b2 and op.kind is mir.Kind.DIVMOD).results[0]
-    for at, source in ((0x150, delta), (0x1b7, falloff)):
+    falloff = next(op for op in ops if op.at == 0x1B2 and op.kind is mir.Kind.DIVMOD).results[0]
+    for at, source in ((0x150, delta), (0x1B7, falloff)):
         store = next(op for op in ops if op.at == at and op.kind is mir.Kind.STORE)
         assert store.stores[0].width == 4
         assert store.args == (source,)
 
 
-@pytest.mark.parametrize("producer", [0x12d, 0x131])
+@pytest.mark.parametrize("producer", [0x12D, 0x131])
 def test_live_half_flags_prevent_scalar_arithmetic(nbody, producer):
     body, recognize = nbody
     block = next(block for block in body.blocks if block.at == 0x117)
@@ -235,32 +257,73 @@ def test_live_half_flags_prevent_scalar_arithmetic(nbody, producer):
     changed = replace(block, ops=(*block.ops, reader))
     body = replace(body, blocks=tuple(changed if one is block else one for one in body.blocks))
     done = recognize(body)
-    subtract = next(op for block in done.blocks for op in block.ops if op.at == 0x12d)
+    subtract = next(op for block in done.blocks for op in block.ops if op.at == 0x12D)
     assert subtract.results[0].width == 2
 
 
 def test_same_machine_address_with_different_ssa_base_is_not_a_pair(nbody):
     body, recognize = nbody
+
     def changed(op):
         if op.at != 0x121:
             return op
         ref = replace(op.loads[0], base=mir.Value(99999, op.at))
         return replace(op, loads=(ref,), args=(mir.Cell(ref),))
+
     body = replace(body, blocks=tuple(replace(block, ops=tuple(map(changed, block.ops))) for block in body.blocks))
     done = recognize(body)
-    load = next(op for block in done.blocks for op in block.ops if op.at == 0x11d)
+    load = next(op for block in done.blocks for op in block.ops if op.at == 0x11D)
     assert load.results[0].width == 2
+
+
 @pytest.mark.parametrize("tag", ["q-O", "p-g2", "v-g3"])
 def test_localp_signed_index_addition_is_a_whole_long(tag):
     """LOCALP kept ADD/ADC halves because sign extension was exposed after pair recognition."""
-    from qbopt.objectfile import module, omf
+    from qbopt.objectfile import omf
     from qbopt.frontend import blocks
+    from qbopt.objectfile import module
+
     found = module.of(omf.parse(Path(f"fixtures/regressions/localp-{tag}.obj").read_bytes()))
     bodies = mir.bodies(found, blocks.partition(found, blocks.code_map(found)))
     ops = [op for _, body in bodies for block in body.blocks for op in block.ops]
-    assert any(op.kind is mir.Kind.ADD and len(op.results) == 1
-               and isinstance(op.results[0], mir.Held) and op.results[0].width == 4 for op in ops)
+    assert any(
+        op.kind is mir.Kind.ADD
+        and len(op.results) == 1
+        and isinstance(op.results[0], mir.Held)
+        and op.results[0].width == 4
+        for op in ops
+    )
     assert not any(op.kind is mir.Kind.ADD_CARRY for op in ops)
+
+
+def test_control_branch_updates_are_whole_longs_before_optimization():
+    """PARITYCONTROL retained split ADD/ADC accumulator updates in both arms.
+
+    Its branch join contained unused flag phis.  Those frontend-only SSA
+    artifacts must not make otherwise identical BASIC and C arithmetic take
+    different optimizer paths.
+    """
+    path = Path("fixtures/parity/control-v-g3.obj")
+    bodies = mir.bodies(corpus.loaded(path), corpus.partitioned(path))
+    body = next(body for name, body in bodies if name == "procedure PARITYCONTROL")
+
+    assert not any(op.kind is mir.Kind.ADD_CARRY for block in body.blocks for op in block.ops)
+    updates = [op for block in body.blocks for op in block.ops if op.at in (0x9D, 0xC9) and op.kind is mir.Kind.ADD]
+    assert len(updates) == 2
+    assert all(op.results[0].width == 4 for op in updates)
+
+
+def test_removed_half_flags_do_not_become_machine_exit_inputs():
+    """PARITYCONTROL fresh emission refused its scalar add as crossing live flags.
+
+    Removing the source ADC left its old flag value only on dead phis.  A
+    second exit-materialization pass mistook that now-undefined flag as a
+    caller input and made it observable at RETURN.
+    """
+    path = Path("fixtures/parity/control-v-g3.obj")
+    emitted = wholeseg.emitted(path.read_bytes())
+
+    assert emitted.outcome is wholeseg.Emission.LIR, emitted.reason
 
 
 def test_production_does_not_recognize_long_pairs_after_optimization():

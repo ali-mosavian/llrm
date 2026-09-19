@@ -50,9 +50,12 @@ def joined(body: lir.LirBody, pinned: dict | None = None) -> lir.LirBody:
         getattr(value, "id", value): ir.ROOT.get(register, register)
         for value, register in {**body.pins, **(pinned or {})}.items()
     }
-    live = ranges.intervals(body)
     from qbopt.backend import allocate
 
+    index = ranges.indexed(body)
+    live = ranges.intervals(body, index)
+    masks = allocate._masks(body, index)
+    widths = allocate._widest(body)
     where_of = allocate.classes(body)
     everything = frozenset(target.AVAILABLE)
     may: dict[int, frozenset] = {one: frozenset(target.order(where_of.get(one))) for one in live}
@@ -93,6 +96,21 @@ def joined(body: lir.LirBody, pinned: dict | None = None) -> lir.LirBody:
             allowed = may.get(here, everything) & may.get(there, everything)
             if not allowed:
                 continue
+            # A legal copy join can still create an impossible lifetime.  In
+            # LOOP the literal zero used by B$ENRA was joined to the loop
+            # phi's post-call seed.  The merged value crossed a call that
+            # destroys every GPR, so allocation stored it through BP before
+            # B$ENRA had established the frame.  Register masks constrain the
+            # merged interval just as they constrain allocation: refuse a join
+            # with no surviving register, and let the copy rematerialize or
+            # occupy a fresh post-call range instead.
+            merged = _merged(mine, theirs)
+            width = max(widths.get(here, 0), widths.get(there, 0), 1)
+            allowed = frozenset(
+                register for register in allowed if not allocate._clobbered(merged, register, masks, width)
+            )
+            if not allowed:
+                continue
             if any(pin is not None and pin not in allowed for pin in (mine_pin, theirs_pin)):
                 continue
             neighbours = (near.get(here, set()) | near.get(there, set())) - {here, there}
@@ -122,10 +140,12 @@ def joined(body: lir.LirBody, pinned: dict | None = None) -> lir.LirBody:
             if mine_pin is not None and theirs_pin is None:
                 here, there = there, here
             parent[here] = there
-            live[there] = _merged(mine, theirs)
+            live[there] = merged
             live.pop(here, None)
             may[there] = allowed
             may.pop(here, None)
+            widths[there] = width
+            widths.pop(here, None)
             if mine_pin is not None or theirs_pin is not None:
                 held[there] = mine_pin if mine_pin is not None else theirs_pin
             held.pop(here, None)

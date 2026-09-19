@@ -571,6 +571,54 @@ def test_hotlpx_uses_scaled_address_for_factor_five(tag):
     assert any(one.mnemonic == Mnemonic.LEA and one.memory_index_scale == 4 for one in insns)
 
 
+def test_source_owned_scale_converges_with_a_synthetic_frontend() -> None:
+    """Frontend-parity ALGEBRA left BASIC's ``mov; shl 2; add`` intact.
+
+    C selected one 67h LEA from the same optimized MIR because all three LIR
+    operations were synthetic.  BASIC's SHL owned five decoded input bytes,
+    which is provenance for fresh OMF layout rather than a semantic reason to
+    retain the instruction.  The LEA must inherit that exact interval.
+    """
+    source = ir.Reg(Register.EDX, 4)
+    dest = ir.Reg(Register.ECX, 4)
+    copy = lir.Insn(
+        0x90,
+        (0x90, 0x90),
+        ir.Semantics(ir.Operation.MOVE, "mov", (dest,), (source,)),
+        (77,),
+        (72,),
+    )
+    shift = lir.Insn(
+        0x90,
+        (0x90, 0x95),
+        ir.Semantics(ir.Operation.BINARY, "shl", (dest,), (dest, ir.Imm(2, 1))),
+        (77,),
+        (77,),
+    )
+    addition = lir.Insn(
+        0x90,
+        (0x90, 0x90),
+        ir.Semantics(ir.Operation.BINARY, "add", (dest,), (dest, source)),
+        (77,),
+        (77, 72),
+    )
+    compare = lir.Insn(
+        0x95,
+        (0x95, 0x95),
+        ir.Semantics(ir.Operation.COMPARE, "cmp", (), (dest, ir.Imm(0, 4))),
+        (),
+        (77,),
+    )
+    body = lir.LirBody("frontend-scale", 0x90, (lir.LirBlock(0x90, (copy, shift, addition, compare), ()),), {}, {})
+
+    result = peephole.addresses(body, cpu="386").insns
+
+    assert [one.what.name for one in result] == ["lea", "cmp"]
+    assert result[0].covers == (0x90, 0x95)
+    assert result[0].defines == addition.defines
+    assert result[0].uses == copy.uses
+
+
 @pytest.mark.parametrize("amount", [1, 2, 3])
 @pytest.mark.parametrize("following", ["cmp", "adc", "je"])
 @pytest.mark.parametrize("width", [2, 4])
@@ -869,7 +917,7 @@ def test_loaded_scaled_add_preserves_a_shifted_value_live_into_a_successor() -> 
 
 
 @pytest.mark.parametrize(
-    "guard", ["none", "dword", "carry", "zero_shift", "bytes", "wrong_source", "same", "stack", "relocation"]
+    "guard", ["none", "dword", "carry", "zero_shift", "wrong_source", "same", "stack", "relocation"]
 )
 def test_scaled_address_requires_dead_flags_and_exact_allocated_operands(guard):
     """HOTLPX's LEA must retain low-word arithmetic without losing flags or owned bytes."""

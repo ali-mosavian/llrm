@@ -20,15 +20,76 @@ iteration updates this file in the same commit.
 
 | Phase | State | Current boundary |
 |---|---|---|
-| Per-CPU measurement | in progress | CPU profiles distinguish native medium-model addressing from the complete costed secondary 67h form, explicitly price x87 stack exchange, LES/LFS/LGS complete far-pointer loads, and read-only memory comparisons separately from read/modify/write ALU forms, and carry the complete-peel iteration budget; the C corpus, paired BASIC/C known-answer gates, an exact final-allocated scalar parity gate, static and frequency-weighted structural metrics, static and CFG-frequency-weighted per-CPU cost rankings, reference listings, and exact-count preservation across recurrence rewinds, loop rotation, and zero-byte-header threading exist; audited targets and runtime profiles remain. |
+| Per-CPU measurement | in progress | CPU profiles distinguish native medium-model addressing from the complete costed secondary 67h form, explicitly price x87 stack exchange, LES/LFS/LGS complete far-pointer loads, and read-only memory comparisons separately from read/modify/write ALU forms, and carry the complete-peel iteration budget; the C corpus, seven paired BASIC/C known-answer gates, six raw final-allocated structural pairs, static and frequency-weighted structural metrics, static and CFG-frequency-weighted per-CPU cost rankings, reference listings, and exact-count preservation across recurrence rewinds, loop rotation, and zero-byte-header threading exist; audited targets and runtime profiles remain. |
 | MIR/LIR provenance and fresh OMF | complete in production | allocated LIR emits directly with external source maps/allocation hints; unreachable and reachable passage blocks retain inert decoded-byte owners after control simplification; the remaining compatibility views are test-only and cannot route a compilation through record rewriting. |
 | SROA and scalar promotion | partial | precise SSA pointer identity, including address-of canonical frontend cells, and scalar TBAA for both direct and indirect lvalues now refine coarse frontend operand annotations before observer analysis, DSE, GVN, LICM, packed-pointer splitting, and SROA, while exact-address incompatible views retain the conservative union rule; packed 16:16 dereferences are normalized into independent offset/selector SSA values before SROA; fixed/disjoint, singleton-indexed, and single-generation affine dynamic-allocation leaves promote; direct and exact-near-pointer C aggregate copies expand into exact leaves, and structural candidates transact leaves made singleton by scalar convergence with finite-capacity pressure pricing; far aggregate copies, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, constrained native-address occurrence splitting, dying-base indexed-form unfolding, direct composition of spilled frame addresses into their sole memory use, and local constant, frame, relocatable-address, and provenance-disjoint incoming-argument rematerialization exist; GVN now retains store-crossing providers under existing pressure only when the selected target has a secondary address form cheaper than the reload/spill alternative; typed far-pointer loads are selected before allocation only when a virtual address owner would otherwise be lost, while fixed addresses retain independent rematerialization and late LES/LFS/LGS selection; x87 allocation composes complete target-priced reread and retained-home candidates independently at empty-stack regions after all shuffles are materialized; global integer splitting/rematerialization, CFG-frequency weighting within a nonempty x87 region, and broader global x87 allocation remain. |
 | Loop optimization | partial | exact pre/post-tested recurrences and symbolic sentinels, target-priced exact nested-recurrence rewind, complete nested-initializer LICM, dead-control countdowns with zero-trip guards, complete-affine spill/recompute pricing, precise-volatile-aware LICM, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling with exact-trip-amortized growth plus a pre-folding complete-sequence/pressure proof and bounded public defaults, removal of impossible zero-trip edges for positive exact counts, post-specialization associative integer constant composition, and machine-neutral whole-range pressure forecasting exist; versioning, partial unrolling, constraint-complete candidate-set forecasting, and compile-time candidate memoization remain. |
 | Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs (including closed recursive SCCs in C and object paths), constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, post-inline constant folding through phi edges and linear corridors, private immutable numeric-data initializer facts, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
-| Post-allocation quality | partial | copy propagation, machine CSE/DCE, shared final block placement/threading/fall-through elision and fresh-tail sharing, plus byte-neutral source-unowned terminal-return duplication, epilogue-aware dead-register analysis, direct one-use memory comparison folding including self-addressed loads, pre-allocation selection of those comparison operands, dead-register frame-copy shuttles, dying-input commutative result transfer, dead-upper-lane register-move narrowing, synthetic high-word reload narrowing, target-priced 67h LEA selection and repeated-base promotion including exact byte, prefix, length-changing-prefix and partial-register costs, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware decoded-tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
+| Post-allocation quality | partial | copy propagation, machine CSE/DCE, shared final block placement/threading/fall-through elision and fresh-tail sharing, plus byte-neutral source-unowned terminal-return duplication, epilogue-aware dead-register analysis, direct one-use memory comparison folding including self-addressed loads, pre-allocation selection of those comparison operands, dead-register frame-copy shuttles, dying-input commutative result transfer, dead-upper-lane register-move narrowing, direct `shld` high-word return extraction from either portable or already-selected input, redundant save/restore removal, synthetic high-word reload narrowing, target-priced 67h LEA selection and repeated-base promotion including exact byte, prefix, length-changing-prefix and partial-register costs, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware decoded-tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 136. Multi-shape frontend convergence and direct DX:AX extraction — 2026-09-19
+
+The scalar pair in iteration 135 was deliberately exact but too small to
+establish that frontend spelling disappears in ordinary generated code.  The
+paired corpus now also covers algebraic reassociation, a two-arm branch, a
+counted loop, folded memory traffic, and mixed loop/control flow.  A raw report
+prints the complete final allocated BASIC and C kernels side by side.  It
+omits only the named BASIC frame-entry/frame-exit calls and both languages'
+return instruction; it does not normalize registers, instructions, memory
+traffic, branches, spills, or helpers.  All seven BASIC and C programs pass
+their independent DOS known-answer gates.
+
+The first raw listings exposed shared optimizer/backend defects rather than
+frontend defects: final layout inverted a conditional against a stale
+fall-through; join coalescing ignored call-clobber palettes; a legal scaled
+LEA was selected according to source provenance; loop recurrence arithmetic
+was not reassociated; a loaded addend and direct memory update stayed split;
+dead phi inputs inflated physical pressure; removed flag values returned as
+fake ABI inputs; equivalent zero tests and flag-dead zero idioms remained;
+and high-word extraction retained both portable stack joins and redundant
+low-word save/restore traffic.  Each symptom has a fail-first regression.  The
+fixes are general CFG, SSA-liveness, algebraic, memory-folding, allocation, or
+physical-liveness rules and name no frontend, fixture, or source symbol.
+
+The final return comparison found one more machine-form opportunity.  With a
+32-bit result in a general register and the medium-model return in `DX:AX`,
+`shrd edx,source,16` is the wrong direction: it places `source.low16` in
+`EDX.high16` and leaves `DX` unrelated.  `shld edx,source,16` instead places
+`source.high16` directly in `DX` while leaving `AX` untouched.  Where the
+upper half of EDX and the resulting flags are dead, the final peephole now
+canonicalizes both the portable `push/pop/pop` extraction and an already
+selected `mov edx,source; shr edx,16` to that one instruction.  When the wide
+source already occupies EDX, the existing single `shr edx,16` remains best.
+The selector now models and emits both SHLD and SHRD; GCC classifies the scalar
+forms with ordinary integer shifts, and Open Watcom's own 386 runtime uses
+SHLD for the same high-bit flow.  The first measurement classified both forms
+as unknown/generic ALU work, so a fail-first instrument regression now binds
+the cycle scorer and scheduler to the explicit per-profile integer-shift row;
+the P5 scheduler also retains GCC's audited non-pairable classification rather
+than mistaking the 66h-prefixed form for an ordinary U-pipe instruction.
+
+The raw result is materially stronger than answer parity.  SCALAR is exactly
+two moves.  BRANCH and MEMORY have identical mnemonic sequences; MEMORY ends
+on `movsx`/`imul`/`shld` on both paths.  ALGEBRA has the same thirteen
+instruction families and expression work, differing only in register choice
+and the independent order of the two return-register definitions.  LOOP has
+the same sixteen instruction families, with the equivalent opposite compare
+orientation and independent return-definition order.  CONTROL has 23
+instructions on each side and no helper, spill, `adc`/`sbb`, or stack shuttle;
+its complete remaining opcode delta is explained by BASIC's inclusive `FOR`
+bound adjustment and an algebraically equivalent odd-arm association.  A
+Tier-2 structural regression records these exact boundaries instead of
+turning them into an overbroad normalized score.
+
+This advances Phases 1, 4, 5, and 7.  It establishes frontend-independent
+generation for the covered scalar/branch/loop/memory mechanisms, not for every
+source-language construct or the final GCC/LLVM per-CPU target gates.  GCC and
+LLVM remain best-case flat-i386 structural references; BCC/WC and executed
+medium-model objects remain authoritative for ABI, segments, legal forms, and
+answers.
 
 ### 135. Final-code frontend parity and aggregate scalar closure — 2026-09-19
 

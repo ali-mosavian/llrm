@@ -8,8 +8,8 @@ from iced_x86 import Register
 from qbopt.model import ir
 from qbopt.model import lir
 from qbopt.backend import masm
-from qbopt.backend import comparefold
 from qbopt.backend import peephole
+from qbopt.backend import comparefold
 from qbopt.objectfile.module import Addr
 from qbopt.objectfile.module import Space
 
@@ -106,6 +106,32 @@ def test_memory_round_trip_folds_across_an_independent_operand_load() -> None:
     printed = [line for one in result.insns for line in masm._instruction(one.what, {}, 0)]
 
     assert printed == ["mov ecx, dword ptr [bp-8]", "add dword ptr [bp-4], ecx"]
+
+
+def test_single_use_loaded_addend_folds_into_the_arithmetic_operand() -> None:
+    """Frontend-parity MEMORY emitted C's ``mov cx,[si]; add ax,cx``.
+
+    BASIC selected ``add ax,[si]`` from the same optimized value graph.  A
+    dead single-use load temporary must not make instruction selection depend
+    on which frontend first materialized the memory read.
+    """
+    ax, cx = ir.Reg(Register.AX, 2), ir.Reg(Register.CX, 2)
+    delta = ir.Mem(Addr(Space.SEGMENT, 0, base=Register.SI), 2, Register.SI, 0, 0)
+    load = _insn(0, ir.Operation.MOVE, "mov", (cx,), (delta,))
+    addition = _insn(1, ir.Operation.BINARY, "add", (ax,), (ax, cx))
+    from qbopt.model import mir
+
+    returned = mir.Op(2, ir.Operation.RETURN, "", (), (), kind=mir.Kind.RETURN, reads_complete=True)
+    finish = lir.Insn(2, None, ir.Semantics(ir.Operation.RETURN, "retf"), (), (), op=returned)
+    body = lir.LirBody("loaded-addend", 0, (lir.LirBlock(0, (load, addition, finish)),), {}, {})
+
+    result = peephole.fused(body).insns
+    physical = [one.what for one in result if one.what.op is not ir.Operation.NOTHING]
+
+    assert physical == [
+        ir.Semantics(ir.Operation.BINARY, "add", (ax,), (ax, delta)),
+        finish.what,
+    ]
 
 
 def test_narrow_load_folds_into_its_only_widening_use() -> None:

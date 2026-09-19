@@ -147,7 +147,7 @@ def _turned(block, last, destination: int, after: "int | None"):
     """
     if last is None or last.op is not ir.Operation.BRANCH or after is None or last.target != after:
         return None
-    return _inverted(block, last.name)
+    return _inverted(block, last.name, destination)
 
 
 def _inverted(block, name: "str | None", target: "int | None" = None):
@@ -399,7 +399,15 @@ def lay_out(
     source: SourceMap | None = None,
 ) -> Laid | str:
     """Every op in `body`, emitted in order from `at`, or why it could not be."""
-    return asm.assemble(_ordered(body), at, found, fields, labels=_labels(body), source=source)
+    return asm.assemble(
+        _ordered(body),
+        at,
+        found,
+        fields,
+        labels=_labels(body),
+        anchors=_anchors(body),
+        source=source,
+    )
 
 
 def _labels(body: lir.LirBody) -> dict[int, int]:
@@ -561,7 +569,11 @@ def rebuild(
     for _name, body in bodies:
         origin.update(body.origin)
     labels = {label: target for _, body in bodies for label, target in _labels(body).items()}
-    anchors = {label: op for _, body in bodies for label, op in _anchors(body).items()} if sequenced else None
+    # A block label names an instruction occurrence.  Its source address is
+    # only provenance and may be shared by inserted instructions in several
+    # blocks.  Address-based labels are retained for external mappings, but
+    # every internal block target is grounded on its concrete occurrence.
+    anchors = {label: op for _, body in bodies for label, op in _anchors(body).items()}
     return asm.assemble(
         _interleaved(ops, inside),
         lowest,

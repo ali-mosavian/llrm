@@ -183,7 +183,7 @@ def classify(mnem, ops, raw=""):
         if src and (src.startswith("0x") or src.isdigit()):
             return "mov_ri"
         return "mov_rr"
-    if mnem in ("shl", "shr", "sar", "rol", "ror", "rcl", "rcr"):
+    if mnem in ("shl", "shr", "sar", "rol", "ror", "rcl", "rcr", "shld", "shrd"):
         return "shift_ri"
     if mnem in ALU:
         # CMP/TEST only read their memory operand.  Charging the first-operand

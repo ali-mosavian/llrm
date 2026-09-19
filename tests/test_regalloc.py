@@ -11,8 +11,8 @@ import corpus
 from qbopt.model import ir
 from qbopt.model import mir
 from qbopt.backend import target
-from qbopt.analysis import liveness
 from qbopt.legacy import regalloc
+from qbopt.analysis import liveness
 
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 
@@ -101,6 +101,28 @@ def test_an_entry_value_is_defined_where_the_body_starts() -> None:
         found = liveness.live(body)
         assert not (arriving & found.live_in[body.entry]), "defined on entry, so not live into it"
     assert seen, "divmod's own main body reads registers BC passed in"
+
+
+def test_a_dead_phi_does_not_keep_its_edge_operand_live() -> None:
+    """PARITYCONTROL's dead join-flag phis kept ADD/ADC live as word operations.
+
+    A phi reads its predecessor operand only when the phi result itself is
+    live.  Treating every syntactic incoming edge as a use made frontend SSA
+    scaffolding consume pressure and blocked whole-long recognition.
+    """
+    incoming = mir.Value(1, 0x10, flags=True)
+    merged = mir.Value(2, 0x20, flags=True)
+    body = mir.MirBody(
+        0x10,
+        (
+            mir.MirBlock(0x10, (), (), (0x20,)),
+            mir.MirBlock(0x20, (mir.Phi(merged, {0x10: incoming}),), (), ()),
+        ),
+    )
+
+    found = liveness.live(body)
+
+    assert incoming not in found.live_out[0x10]
 
 
 @pytest.mark.parametrize("obj", FIXTURES[:20], ids=lambda p: p.stem)
@@ -199,9 +221,7 @@ def test_moving_one_side_of_a_phi_moves_the_whole_class() -> None:
     latch = mir.MirBlock(
         0x20, (mir.Phi(merged, {0x10: start, 0x20: again}),), (op(0x20, (again,), (merged,)),), (0x20,)
     )
-    body = mir._RaisedBody(
-        0x10, (head, latch), origin={start: Register.AX, again: Register.AX, merged: Register.AX}
-    )
+    body = mir._RaisedBody(0x10, (head, latch), origin={start: Register.AX, again: Register.AX, merged: Register.AX})
 
     assert regalloc.congruent(body)[start] is regalloc.congruent(body)[merged], "a phi ties them together"
 
@@ -242,9 +262,7 @@ def test_a_class_wanted_across_its_own_phi_may_stay_but_may_not_move() -> None:
         (op(0x20, (again,), (merged,)), op(0x24, (), (again, merged))),
         (0x20,),
     )
-    body = mir._RaisedBody(
-        0x10, (head, latch), origin={start: Register.AX, again: Register.AX, merged: Register.AX}
-    )
+    body = mir._RaisedBody(0x10, (head, latch), origin={start: Register.AX, again: Register.AX, merged: Register.AX})
 
     assert not isinstance(regalloc.colour(body, {}), str), "staying put is always allowed"
     moved = regalloc.colour(body, {start: Register.DX})

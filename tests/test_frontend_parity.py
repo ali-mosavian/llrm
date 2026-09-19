@@ -1,24 +1,25 @@
 """Paired source programs must survive either frontend and share one oracle."""
 
+import sys
 import json
 import shutil
 import subprocess
-import sys
 from pathlib import Path
+from collections import Counter
 
 import pytest
 
 from qbopt import wholeseg
-from qbopt.backend import omfwrite
-from qbopt.cfront import compile as cfront
-from qbopt.objectfile import module
 from qbopt.objectfile import omf
-
+from qbopt.backend import omfwrite
+from qbopt.objectfile import module
+from qbopt.cfront import compile as cfront
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "bench" / "parity"
 FIXTURE = ROOT / "fixtures" / "parity" / "parity-v-g3.obj"
 SCALAR_FIXTURE = ROOT / "fixtures" / "parity" / "scalar-v-g3.obj"
+LOOP_FIXTURE = ROOT / "fixtures" / "parity" / "loop-v-g3.obj"
 JWASM = shutil.which("jwasm") or str(Path.home() / "work/other/d32x/toolchains/native/bin/jwasm")
 
 
@@ -57,7 +58,6 @@ def test_basic_aggregate_drops_unobserved_dynamic_array_contents() -> None:
     is a frontend-dependent code-generation difference, not BASIC semantics.
     """
     import corpus
-
     from qbopt.model import mir
     from qbopt.optimize import transform
 
@@ -150,7 +150,6 @@ def test_scalar_frontends_emit_the_same_machine_core() -> None:
     recomputation are not normalized away.
     """
     import corpus
-
     from qbopt.model import ir
 
     found = corpus.loaded(SCALAR_FIXTURE)
@@ -209,6 +208,80 @@ def test_scalar_frontends_emit_the_same_machine_core() -> None:
     assert basic_core == c_core
 
 
+def test_paired_frontends_converge_on_the_same_final_machine_work() -> None:
+    """Equivalent frontends once left helpers, spills, ADC pairs and reloads.
+
+    Compare the raw final allocated listings rather than a score that can hide
+    work.  Register choice and independent parameter order may differ.  LOOP's
+    opposite branch orientation expresses the same recurrence, while CONTROL
+    retains BASIC's inclusive ``FOR`` bound adjustment and a different valid
+    association of its odd arm.  Every other paired instruction family must
+    agree exactly, including the one-instruction DX:AX high extraction.
+    """
+    from tools.frontend_parity import pair
+
+    def mnemonics(lines):
+        return tuple(line.split()[0] for _at, line in lines)
+
+    def work(lines, *, loop_branch=False):
+        names = mnemonics(lines)
+        if loop_branch:
+            names = tuple("loop-jcc" if one in {"jg", "jl"} else one for one in names)
+        return Counter(names)
+
+    listings = {name: pair(name) for name in ("scalar", "algebra", "branch", "memory", "loop", "control")}
+    forbidden = {"adc", "sbb", "push", "pop", "call"}
+    for name, (basic, c) in listings.items():
+        assert not (set(mnemonics(basic)) | set(mnemonics(c))) & forbidden, name
+        assert len(basic) == len(c), name
+        assert mnemonics(basic).count("shld") == mnemonics(c).count("shld") == (name != "scalar"), name
+
+    for name in ("scalar", "algebra", "branch", "memory"):
+        basic, c = listings[name]
+        assert work(basic) == work(c), name
+    assert mnemonics(listings["branch"][0]) == mnemonics(listings["branch"][1])
+    assert mnemonics(listings["memory"][0]) == mnemonics(listings["memory"][1])
+
+    basic_loop, c_loop = listings["loop"]
+    assert work(basic_loop, loop_branch=True) == work(c_loop, loop_branch=True)
+
+    basic_control, c_control = listings["control"]
+    # Source-language semantics explain the complete remaining opcode delta:
+    # BASIC decrements an inclusive FOR bound and branches <=; C branches <.
+    # Their odd-arm additions/subtractions are algebraically associated in
+    # opposite directions, with one C move replacing BASIC's extra add.
+    assert work(basic_control) - work(c_control) == Counter({"dec": 1, "add": 1, "jle": 1})
+    assert work(c_control) - work(basic_control) == Counter({"mov": 1, "sub": 1, "jl": 1})
+
+
+def test_runtime_frame_is_established_before_allocator_spill_accesses() -> None:
+    """Optimized frontend-parity LOOP printed 5000 instead of 130991.
+
+    Its zero loop seed was joined to a phi destination.  Allocation expanded
+    that spill web only after considering rematerialization, stored the zero
+    through ``BP`` before B$ENRA established the callee frame, and reloaded an
+    unrelated caller-frame word afterwards.  Spill-web expansion must expose
+    cheap constants to rematerialization before any frame slot is committed.
+    """
+    import corpus
+
+    found = corpus.loaded(LOOP_FIXTURE)
+    seen = {}
+
+    def watch(stage, name, body):
+        if stage == "regalloc" and name == "procedure PARITYLOOP":
+            seen[stage] = body
+
+    result = wholeseg.emitted(LOOP_FIXTURE.read_bytes(), watch=watch)
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    body = seen["regalloc"]
+    entry = next(block for block in body.blocks if block.at == body.entry)
+    runtime_entry = next(
+        index for index, one in enumerate(entry.insns) if one.op is not None and found.calls.get(one.op.at) == "B$ENRA"
+    )
+    assert not any(one.spill_store or one.spill_reload for one in entry.insns[:runtime_entry])
+
+
 def _c_start(symbol: str) -> str:
     return f"""\
 .model medium
@@ -263,7 +336,7 @@ def test_basic_frontend_returns_the_independent_parity_answer(tmp_path: Path) ->
 
     result = e2e.run(
         "v-g3",
-        names=["parity", "scalar"],
+        names=["parity", "scalar", "algebra", "branch", "loop", "memory", "control"],
         source_dir=SOURCE,
         golden_dir=SOURCE / "golden",
         work=tmp_path,
@@ -273,13 +346,24 @@ def test_basic_frontend_returns_the_independent_parity_answer(tmp_path: Path) ->
     assert _expected() == _expected_for("scalar") == 1789
 
 
-@pytest.mark.parametrize("name,symbol", [("parity", "parity_kernel"), ("scalar", "parity_scalar")])
+@pytest.mark.parametrize(
+    "name,symbol",
+    [
+        ("parity", "parity_kernel"),
+        ("scalar", "parity_scalar"),
+        ("algebra", "parity_algebra_demo"),
+        ("branch", "parity_branch_demo"),
+        ("loop", "parity_loop_demo"),
+        ("memory", "parity_memory_demo"),
+        ("control", "parity_control_demo"),
+    ],
+)
 @pytest.mark.e2e
 @pytest.mark.skipif(not _runtime_available(), reason="DOSBox or the DOS toolchains are unavailable")
 def test_c_frontend_returns_the_independent_parity_answer(tmp_path: Path, name: str, symbol: str) -> None:
     """The C frontend's fresh object must return the BASIC corpus oracle."""
-    from configs import CONFIGS
     from dosbox import launch
+    from configs import CONFIGS
 
     source = SOURCE / f"{name}.c"
     c_module = cfront.assembled(cfront.recorded(source, []), source.stem, optimise=True)

@@ -10,34 +10,46 @@ before rather than at whatever now sits at the old address.
 """
 
 from pathlib import Path
+
 import pytest
 from iced_x86 import OpKind
+from iced_x86 import Decoder
 from iced_x86 import Mnemonic
+from iced_x86 import Register
 
 import corpus
 from qbopt.model import ir
 from qbopt.model import lir
-from qbopt.backend import asm
 from qbopt.model import mir
-from qbopt.objectfile import omf
+from qbopt.backend import asm
 from qbopt.backend import layout
-from qbopt.objectfile.module import SourceMap
+from qbopt.objectfile import omf
 from qbopt.frontend import blocks as split
 from qbopt.frontend.blocks import code_map
+from qbopt.objectfile.module import SourceMap
 
 
 @pytest.mark.parametrize("conditional", [False, True])
 def test_reordered_block_materializes_its_cfg_fallthrough(conditional):
     """Peeled IVARM's latch fell into its own header instead of the next iteration."""
-    what = ir.Semantics(ir.Operation.BRANCH, "jne", target=30) if conditional else ir.Semantics(
-        ir.Operation.NOTHING, "nop")
+    what = (
+        ir.Semantics(ir.Operation.BRANCH, "jne", target=30)
+        if conditional
+        else ir.Semantics(ir.Operation.NOTHING, "nop")
+    )
     op = lir.Insn(10, (10, 11), what, (), ())
-    body = lir.LirBody("fallthrough", 10, (
-        lir.LirBlock(10, (op,), (30, 40) if conditional else (40,)),
-        lir.LirBlock(20, (), ()),
-        lir.LirBlock(30, (), ()),
-        lir.LirBlock(40, (), ()),
-    ), {}, {})
+    body = lir.LirBody(
+        "fallthrough",
+        10,
+        (
+            lir.LirBlock(10, (op,), (30, 40) if conditional else (40,)),
+            lir.LirBlock(20, (), ()),
+            lir.LirBlock(30, (), ()),
+            lir.LirBlock(40, (), ()),
+        ),
+        {},
+        {},
+    )
     changed = layout._fallthroughs(body)
     jump = next(block for block in changed.blocks if block.at == 10).insns[-1]
     assert jump.what == ir.Semantics(ir.Operation.JUMP, "jmp", target=40)
@@ -47,12 +59,93 @@ def test_reordered_block_materializes_its_cfg_fallthrough(conditional):
 
 
 def test_empty_reordered_block_gets_its_own_jump_anchor():
-    body = lir.LirBody("empty", 10, (lir.LirBlock(10, (), (30,)),
-                            lir.LirBlock(20, (), ()), lir.LirBlock(30, (), ())), {}, {})
+    body = lir.LirBody(
+        "empty", 10, (lir.LirBlock(10, (), (30,)), lir.LirBlock(20, (), ()), lir.LirBlock(30, (), ())), {}, {}
+    )
     changed = layout._fallthroughs(body)
     first = next(block for block in changed.blocks if block.at == 10).insns[0]
     assert layout._anchors(changed)[10] is first
     assert first.what.target == 30
+
+
+def test_branch_target_is_the_block_occurrence_not_a_reused_source_address():
+    """Frontend-parity LOOP hung after its exit branch became ``jmp self``.
+
+    Allocation inserted an exit-block instruction at the same source address
+    as the loop test's branch.  Source addresses describe provenance and may
+    repeat; a block label designates the first instruction *occurrence* in
+    that block.  Resolving it through the address map instead sent the exit
+    edge back to the first occurrence and made the loop infinite.
+    """
+    from types import SimpleNamespace
+
+    def insn(at, what):
+        return lir.Insn(at, (at, at), what, (), ())
+
+    branch = insn(10, ir.Semantics(ir.Operation.JUMP, "jmp", target=30))
+    middle = insn(
+        20,
+        ir.Semantics(
+            ir.Operation.MOVE,
+            "mov",
+            (ir.Reg(Register.AX, 2),),
+            (ir.Imm(1, 2),),
+        ),
+    )
+    # Deliberately shares ``at`` with the branch: this is the post-allocation
+    # shape that the BASIC loop exposed.
+    exit_ = insn(10, ir.Semantics(ir.Operation.RETURN, "ret"))
+    body = lir.LirBody(
+        "same-source-address",
+        10,
+        (
+            lir.LirBlock(10, (branch,), (30,)),
+            lir.LirBlock(20, (middle,), ()),
+            lir.LirBlock(30, (exit_,), ()),
+        ),
+        {},
+        {},
+    )
+    found = SimpleNamespace(code=bytes(40), absorbed={}, fixup_at={}, calls={}, refs={}, float_protocols={})
+
+    emitted = layout.lay_out(body, 0, found, source=SourceMap())
+
+    assert not isinstance(emitted, str), emitted
+    decoded = list(Decoder(16, emitted.code))
+    assert decoded[0].near_branch_target == decoded[-1].ip
+
+
+def test_inverted_fallthrough_branch_targets_the_other_edge():
+    """Frontend-parity LOOP changed its exit edge into a branch to its body.
+
+    With the taken edge placed next, layout can invert the condition and
+    avoid an extra jump.  The inverted branch must target the former
+    fall-through edge; retaining the old target makes both outcomes enter the
+    placed-next block and, for LOOP, made its backedge infinite.
+    """
+
+    def insn(at, what):
+        return lir.Insn(at, (at, at), what, (), ())
+
+    branch = insn(10, ir.Semantics(ir.Operation.BRANCH, "jg", target=20))
+    placed_next = insn(20, ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg(Register.AX, 2),), (ir.Imm(1, 2),)))
+    exit_ = insn(40, ir.Semantics(ir.Operation.RETURN, "ret"))
+    body = lir.LirBody(
+        "inverted-exit",
+        10,
+        (
+            lir.LirBlock(10, (branch,), (20, 40)),
+            lir.LirBlock(20, (placed_next,), (10,)),
+            lir.LirBlock(40, (exit_,), ()),
+        ),
+        {},
+        {},
+    )
+
+    changed = layout._fallthroughs(body)
+    last = changed.blocks[0].insns[-1].what
+
+    assert last == ir.Semantics(ir.Operation.BRANCH, "jle", target=40)
 
 
 @pytest.mark.parametrize("tag", ["q-O", "p-g2", "v-g3"])
@@ -60,15 +153,17 @@ def test_peeled_ivarm_emission_keeps_every_iteration_reachable(monkeypatch, tag)
     """PDS's peeled latch reentered itself, leaving emitted bytes 0x57..0x70 unreachable."""
     from qbopt import wholeseg
     from qbopt.analysis import loops
+    from qbopt.optimize import lcssa
     from qbopt.objectfile import module
-    from qbopt.optimize import lcssa, loopclone, transform
+    from qbopt.optimize import loopclone
+    from qbopt.optimize import transform
 
     original = transform.applied
 
     def candidate(body, *args, **kwargs):
         kwargs["unswitch_"] = False
         body = lcssa.closed(original(body, *args, **kwargs))
-        loop, = loops.loops(body.blocks, body.entry)
+        (loop,) = loops.loops(body.blocks, body.entry)
         changed = loopclone.peeled(body, loop, 2)
         assert changed is not None
         return changed
@@ -84,6 +179,7 @@ def test_peeled_ivarm_emission_keeps_every_iteration_reachable(monkeypatch, tag)
 def test_pressx_has_no_jump_to_the_following_instruction():
     """PRESSX retained an unconditional jump to its exit immediately after loop elimination."""
     from qbopt import wholeseg
+
     result = wholeseg.emitted(Path("fixtures/omf/pressx-p-g2.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     for block in corpus.partitioned(result.data):
@@ -97,10 +193,13 @@ def test_pressx_has_no_jump_to_the_following_instruction():
 def test_fallthrough_relaxation_preserves_targets_and_intervening_data(shape):
     """Removing PRESSX's empty exit jump must not remove a loop or execute skipped data."""
     from types import SimpleNamespace
+
     def jump(at, to):
         return lir.Insn(at, (at, at + 2), ir.Semantics(ir.Operation.JUMP, "jmp", target=to), (), ())
+
     def ret(at):
         return lir.Insn(at, (at, at + 1), ir.Semantics(ir.Operation.RETURN, "ret"), (), ())
+
     ops = [jump(0, 2), ret(2)]
     code = bytes.fromhex("eb00c3")
     if shape == "chain":
@@ -123,17 +222,18 @@ def test_fallthrough_relaxation_preserves_targets_and_intervening_data(shape):
 def test_emulator_load_uses_the_allocated_address() -> None:
     """nbody's copied FLD still read SI after allocation moved its pointer."""
     from types import SimpleNamespace
+
     from iced_x86 import Register
+
     from qbopt.frontend import declen
 
     raw = bytes.fromhex("cd3504")
-    original = ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (ir.St(0),),
-                            (ir.Mem(None, 4, through=Register.SI),))
-    changed = ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (ir.St(0),),
-                           (ir.Mem(None, 4, through=Register.DI),))
+    original = ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (ir.St(0),), (ir.Mem(None, 4, through=Register.SI),))
+    changed = ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (ir.St(0),), (ir.Mem(None, 4, through=Register.DI),))
     node = ir.Opaque(declen.decode(raw, 0), ir.NO_EFFECT, original)
-    source = mir.Op(0, ir.Operation.FLOAT_LOAD, "fld", (), (), kind=mir.Kind.FLOAD,
-                    source_backed=True, id=1, absorbed=(1,))
+    source = mir.Op(
+        0, ir.Operation.FLOAT_LOAD, "fld", (), (), kind=mir.Kind.FLOAD, source_backed=True, id=1, absorbed=(1,)
+    )
     op = lir.Insn(0, (0, 3), changed, (), (), op=source, node=node)
     found = SimpleNamespace(code=raw, absorbed={}, fixup_at={}, calls={}, refs={}, float_protocols={})
     done = asm.assemble([op], 0, found, source=SourceMap())
@@ -283,11 +383,11 @@ def test_a_moved_operation_keeps_its_fixup() -> None:
             op.at,
             bodies.source.occurrences[op.id][0],
             lower.current(op, node=bodies.source.nodes.get(op.id)),
-                tuple(one.id for one in op.defines),
-                tuple(one.id for one in op.uses),
-                op=op,
-                node=bodies.source.nodes.get(op.id),
-                symbol=op.symbol,
+            tuple(one.id for one in op.defines),
+            tuple(one.id for one in op.uses),
+            op=op,
+            node=bodies.source.nodes.get(op.id),
+            symbol=op.symbol,
         )
         for _, body in bodies
         for block in body.blocks
@@ -384,7 +484,9 @@ def test_a_jump_over_a_block_holding_a_phi_copy_is_kept() -> None:
     result = wholeseg.emitted(Path("fixtures/omf/rcflip-q-O.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
-    insns = sorted((one for block in split.partition(found, code_map(found)) for one in block.insns), key=lambda one: one.at)
+    insns = sorted(
+        (one for block in split.partition(found, code_map(found)) for one in block.insns), key=lambda one: one.at
+    )
     collapsed = [
         f"{one.at:#x}: {one.insn}"
         for one, following in zip(insns, insns[1:])

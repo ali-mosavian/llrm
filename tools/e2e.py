@@ -90,15 +90,24 @@ def compile_all(cfg: Config, work: Path, names: list[str], timeout: int, source_
     )
 
 
+def _run_stem(name: str) -> str:
+    """The six name characters left after DOS's ``B_``/``O_`` prefix."""
+    return name.upper()[:6]
+
+
 def link_and_run(cfg: Config, work: Path, names: list[str], timeout: int) -> Run:
+    stems = [_run_stem(name) for name in names]
+    if len(stems) != len(set(stems)):
+        raise ValueError("program names collide in DOS output stems")
     steps = []
     for n in names:
         u = n.upper()
+        run = _run_stem(n)
         steps += [
-            f"{cfg.link} {u}.OBJ, B_{u}.EXE,, {cfg.runtime}; >> LINK.OUT",
-            f"{cfg.link} {u}Q.OBJ, O_{u}.EXE,, {cfg.runtime}; >> LINK.OUT",
-            f"B_{u}.EXE > B_{u}.TXT",
-            f"O_{u}.EXE > O_{u}.TXT",
+            f"{cfg.link} {u}.OBJ, B_{run}.EXE,, {cfg.runtime}; >> LINK.OUT",
+            f"{cfg.link} {u}Q.OBJ, O_{run}.EXE,, {cfg.runtime}; >> LINK.OUT",
+            f"B_{run}.EXE > B_{run}.TXT",
+            f"O_{run}.EXE > O_{run}.TXT",
         ]
     # Returned rather than discarded. A DOSBox run killed at the timeout and
     # a program that stopped on its own both leave a short output file, and
@@ -139,6 +148,7 @@ def judge(
     run: Run | None = None,
 ) -> Verdict:
     u = name.upper()
+    run_name = _run_stem(name)
     obj = work / f"{u}.OBJ"
     if not obj.is_file():
         errs = [ln for ln in lines(read_dos(work, "BC.OUT")) if "rror" in ln or "arning" in ln]
@@ -151,7 +161,8 @@ def judge(
         bad = [ln for ln in lines(link_text) if "rror" in ln.lower() or "unresolved" in ln.lower()]
         return Verdict(name, "LINKFAIL", "; ".join(bad[:3]))
 
-    base, opt = lines(read_dos(work, f"B_{u}.TXT")), lines(read_dos(work, f"O_{u}.TXT"))
+    base = lines(read_dos(work, f"B_{run_name}.TXT"))
+    opt = lines(read_dos(work, f"O_{run_name}.TXT"))
     if not base:
         return Verdict(name, "RUNFAIL", "the baseline produced no output")
     golden = lines((golden_dir / f"{name}.txt").read_text())
@@ -238,13 +249,19 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("config", choices=list(CONFIGS))
     ap.add_argument("--prog")
     from qbopt.cycles.timings import ARCHS
+
     ap.add_argument("--cpu", choices=("386", *ARCHS), default="386")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--timeout", type=int, default=300)
     args = ap.parse_args(argv)
 
-    result = run(args.config, args.prog, dry_run=args.dry_run, timeout=args.timeout,
-                 transform=lambda data: rewrite(data, dry_run=False, cpu=args.cpu)[0])
+    result = run(
+        args.config,
+        args.prog,
+        dry_run=args.dry_run,
+        timeout=args.timeout,
+        transform=lambda data: rewrite(data, dry_run=False, cpu=args.cpu)[0],
+    )
     for v in result.verdicts:
         print(f"  {v.program:10} {v.status:9} {v.detail}")
     print(f"{args.config}: {'PASS' if result.ok else 'FAIL'}   (build/e2e/{args.config})")

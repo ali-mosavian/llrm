@@ -23,16 +23,18 @@ def _defines(block: mir.MirBlock) -> set[Value]:
 
 
 def _exposed(block: mir.MirBlock) -> set[Value]:
-    """Values this block reads before writing -- phi arguments excluded.
+    """Values the ordinary operations read before writing.
 
     A phi's arguments belong to the edges they arrive on, so they are the
-    predecessor's business and never this block's.
+    predecessor's business and never this block's. Phi results remain here
+    when an operation reads them: that demand decides whether the matching
+    edge argument is live at all.
     """
     live: set[Value] = set()
     for op in reversed(block.ops):
         live -= set(op.defines)
         live |= set(op.uses)
-    return live - {phi.result for phi in block.phis}
+    return live
 
 
 def entry_values(body: mir.MirBody) -> frozenset[Value]:
@@ -86,9 +88,32 @@ def pressure(
     return peak
 
 
+def phi_inputs(body: mir.MirBody, found: "Liveness | None" = None) -> frozenset[Value]:
+    """The edge operands of phis whose results are actually live.
+
+    SSA construction may create phis for machine state which no operation
+    observes.  Such a phi is not a use of every incoming value.  Walk from
+    ordinary live-out back to the point immediately after the phis, then
+    select only the incoming edges of demanded results.
+    """
+    found = found or live(body)
+    inputs: set[Value] = set()
+    for block in body.blocks:
+        alive = set(found.live_out[block.at])
+        for op in reversed(block.ops):
+            alive.difference_update(op.defines)
+            alive.update(op.uses)
+        inputs.update(incoming for phi in block.phis if phi.result in alive for incoming in phi.incoming.values())
+    return frozenset(inputs)
+
+
 def live(body: mir.MirBody) -> Liveness:
     """What is live at each block's entry and exit, to a fixed point."""
-    defines = {block.at: _defines(block) for block in body.blocks}
+    # Phi definitions happen before ordinary operations and read one selected
+    # predecessor edge. Keeping the two kinds of definition separate avoids
+    # making every syntactic phi input live when the phi result is dead.
+    op_defines = {block.at: {one for op in block.ops for one in op.defines} for block in body.blocks}
+    phi_defines = {block.at: {phi.result for phi in block.phis} for block in body.blocks}
     exposed = {block.at: _exposed(block) for block in body.blocks}
     if body.blocks:
         # Defined at the top of the entry block, before its first
@@ -97,10 +122,11 @@ def live(body: mir.MirBody) -> Liveness:
         # (live_out - defines) + exposed, so an exposed use puts the value
         # straight back and the kill never happens.
         arriving = set(entry_values(body))
-        defines[body.entry] |= arriving
+        op_defines[body.entry] |= arriving
         exposed[body.entry] -= arriving
     live_in: dict[int, set[Value]] = {block.at: set() for block in body.blocks}
     live_out: dict[int, set[Value]] = {block.at: set() for block in body.blocks}
+    after_phis: dict[int, set[Value]] = {block.at: set() for block in body.blocks}
 
     changing = True
     while changing:
@@ -110,18 +136,21 @@ def live(body: mir.MirBody) -> Liveness:
             # Seeding live-out, rather than treating it as an operand, lets a
             # terminal call define the value its caller observes without also
             # pretending that the call reads its own result.
-            out: set[Value] = {
-                value for op in block.ops for value in mir.exit_values(op)
-            }
+            out: set[Value] = {value for op in block.ops for value in mir.exit_values(op)}
             for successor in block.succ:
                 found = body.block(successor)
                 if found is None:
                     continue
                 out |= live_in[successor]
-                out |= {phi.incoming[block.at] for phi in found.phis if block.at in phi.incoming}
-            inside = (out - defines[block.at]) | exposed[block.at]
-            if out != live_out[block.at] or inside != live_in[block.at]:
-                live_out[block.at], live_in[block.at] = out, inside
+                out |= {
+                    phi.incoming[block.at]
+                    for phi in found.phis
+                    if phi.result in after_phis[successor] and block.at in phi.incoming
+                }
+            after = (out - op_defines[block.at]) | exposed[block.at]
+            inside = after - phi_defines[block.at]
+            if out != live_out[block.at] or inside != live_in[block.at] or after != after_phis[block.at]:
+                live_out[block.at], live_in[block.at], after_phis[block.at] = out, inside, after
                 changing = True
 
     return Liveness(

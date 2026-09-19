@@ -47,9 +47,18 @@ class Peephole(LIRTransform):
         body = spillforward.forwarded(body)
         body = storecombine.combined(body)
         body = pushed_constants(body)
-        body = far_loads(fused(overwritten(shuttles(high_extracts(transferred(commuted(constants(pushes(body)))))))))
+        body = far_loads(
+            fused(
+                overwritten(
+                    shuttles(
+                        restored_copies(high_extracts(transferred(commuted(constants(pushes(body)))), cpu=self.cpu))
+                    )
+                )
+            )
+        )
         body = addresses(body, cpu=self.cpu)
         body = secondary_bases(body, cpu=self.cpu)
+        body = increments(body)
         body = machinecse.eliminated(body)
         body = waits(zero_compares(tested(zeroes(narrowed_moves(body)))))
         return self._frame(machinedce.eliminated(body))
@@ -470,9 +479,9 @@ def narrowed_moves(body: lir.LirBody) -> lir.LirBody:
     immediate is not part of the program semantics.  Memory sources are
     excluded because narrowing an access can change volatility or faults.
     """
+    from qbopt.backend import select
     from qbopt.backend import liveness
     from qbopt.backend import regthrash
-    from qbopt.backend import select
 
     exits = liveness.dead_at_exit(body)
     blocks = []
@@ -643,18 +652,25 @@ def _transferred(parts: tuple[lir.Insn, ...], dead_after: dict[int, set]) -> tup
     return replace(combined, what=what), lir.anchor(copied)
 
 
-def high_extracts(body: lir.LirBody) -> lir.LirBody:
-    """Narrow a synthetic dword reload shifted down to its high word.
+def high_extracts(body: lir.LirBody, *, cpu: str | targets.Profile = "386") -> lir.LirBody:
+    """Select direct register or memory forms for a dword's high word.
 
     A spilled value's high-half extraction can reach allocated LIR as
     ``mov R32,[slot]; shr R32,16``.  When only R16 survives, reading
     ``word [slot+2]`` computes the same value without the shift.  The proof is
     necessarily physical: the preserved upper register lanes and every flag
     the shift would write must both be dead.
+
+    The portable register form is ``push R32; pop dead16; pop high16``.  Once
+    registers are allocated, one ``shld high32,R32,16`` avoids all three stack
+    accesses when its wider destination lanes and flags are dead.  An already
+    selected ``mov``/``shr`` pair converges to that same final form.
     """
     from qbopt.backend import liveness
     from qbopt.backend import regthrash
 
+    profile = targets.profile(cpu)
+    virtual_uses = Counter(value for block in body.blocks for one in block.insns for value in one.uses)
     exits = liveness.dead_at_exit(body)
     blocks = []
     for block in body.blocks:
@@ -662,8 +678,19 @@ def high_extracts(body: lir.LirBody) -> lir.LirBody:
         insns = []
         index = 0
         while index < len(block.insns):
+            triple = block.insns[index : index + 3]
+            changed = _register_high_extract(triple, dead_after, virtual_uses, profile) if len(triple) == 3 else None
+            if changed is not None:
+                insns.extend(changed)
+                index += 3
+                continue
             pair = block.insns[index : index + 2]
-            changed = _high_extract(pair, dead_after) if len(pair) == 2 else None
+            changed = (
+                _selected_register_high_extract(pair, dead_after, virtual_uses, profile)
+                or _high_extract(pair, dead_after)
+                if len(pair) == 2
+                else None
+            )
             if changed is not None:
                 insns.extend(changed)
                 index += 2
@@ -672,6 +699,165 @@ def high_extracts(body: lir.LirBody) -> lir.LirBody:
             index += 1
         blocks.append(replace(block, insns=tuple(insns)))
     return replace(body, blocks=tuple(blocks))
+
+
+def _register_high_extract(
+    parts: tuple[lir.Insn, ...],
+    dead_after: dict[int, set],
+    virtual_uses: Counter,
+    cpu: targets.Profile,
+) -> tuple[lir.Insn, ...] | None:
+    pushed, discarded, kept = parts
+    if any(
+        one.what is None
+        or one.clobbers
+        or one.clobbers_high
+        or one.requires
+        or one.delivers
+        or one.spread
+        or one.group is not None
+        or one.symbol is True
+        or one.frame_adjust
+        or one.spill_reload
+        or one.spill_store
+        for one in parts
+    ):
+        return None
+    match pushed.what, discarded.what, kept.what:
+        case (
+            ir.Semantics(ir.Operation.PUSH, "push", (), (ir.Reg(width=4) as source,)),
+            ir.Semantics(ir.Operation.POP, "pop", (ir.Reg(width=2),), ()),
+            ir.Semantics(ir.Operation.POP, "pop", (ir.Reg(width=2) as high,), ()),
+        ):
+            pass
+        case _:
+            return None
+    if (
+        len(pushed.uses) != 1
+        or len(discarded.defines) != 1
+        or len(kept.defines) != 1
+        or virtual_uses[discarded.defines[0]] != 0
+    ):
+        return None
+    wide_high = ir.Reg(target.named(high.register, 4), 4)
+    count = ir.Imm(16, 1)
+    shift = ir.Semantics(ir.Operation.BINARY, "shr", (wide_high,), (wide_high, count))
+    from qbopt.backend import select
+
+    effects = _register_effects(replace(kept, what=shift), flags=True)
+    if effects is None:
+        return None
+    upper = _lanes(wide_high.register) - _lanes(high.register)
+    flags = effects[1] & _flag_lanes(0xFFFFFFFF)
+    if not (upper | flags) <= dead_after[id(kept)]:
+        return None
+    old_cost = cpu.cost("push_r") + 2 * cpu.cost("pop_r")
+    if ir.root(source.register) == ir.root(high.register):
+        # The low-half extraction has already copied the return value away.
+        # Reusing the dying source root for its own high half needs no move.
+        # Lanes outside HIGH must die here because SHR writes the whole root.
+        if (
+            _lanes(source.register) - _lanes(high.register) <= dead_after[id(kept)]
+            and cpu.cost("shift_ri") <= old_cost
+            and select.emit(shift) is not None
+        ):
+            return (replace(pushed, what=shift, defines=kept.defines),)
+        return None
+    # Only DX is part of the medium-model return ABI.  With EDX's upper lanes
+    # dead, SHLD's otherwise-observable old-destination contribution is dead
+    # too: EDX <- EDX<<16 | SOURCE>>16 puts SOURCE.high16 directly in DX.
+    # SHRD would put SOURCE.low16 in EDX.high16 and leave DX unrelated.
+    extract = ir.Semantics(ir.Operation.FUNNEL, "shld", (wide_high,), (wide_high, source, count))
+    if cpu.cost("shift_ri") > old_cost or select.emit(extract) is None:
+        return None
+    return (replace(pushed, what=extract, defines=kept.defines),)
+
+
+def _selected_register_high_extract(
+    parts: tuple[lir.Insn, ...],
+    dead_after: dict[int, set],
+    virtual_uses: Counter,
+    cpu: targets.Profile,
+) -> tuple[lir.Insn, ...] | None:
+    """Collapse an allocated ``mov R32,S32; shr R32,16`` to one SHLD.
+
+    Lowering may select this shape directly while a portable half extraction
+    reaches the same point as PUSH/POP/POP.  Both spellings implement the same
+    operation when only the destination's low word survives, so final machine
+    selection must canonicalize both independently of frontend provenance.
+    """
+    move, shift = parts
+    if any(
+        one.what is None
+        or one.clobbers
+        or one.clobbers_high
+        or one.requires
+        or one.delivers
+        or one.spread
+        or one.group is not None
+        or one.symbol is True
+        or one.frame_adjust
+        or one.spill_reload
+        or one.spill_store
+        for one in parts
+    ):
+        return None
+    match move.what, shift.what:
+        case (
+            ir.Semantics(
+                ir.Operation.MOVE,
+                "mov",
+                (ir.Reg(width=4) as destination,),
+                (ir.Reg(width=4) as source,),
+            ),
+            ir.Semantics(
+                ir.Operation.BINARY,
+                "shr",
+                (ir.Reg(width=4) as shifted,),
+                (ir.Reg(width=4) as read, ir.Imm(16, 1)),
+            ),
+        ):
+            if destination != shifted or shifted != read:
+                return None
+        case _:
+            return None
+    if (
+        ir.root(destination.register) == ir.root(source.register)
+        or len(move.defines) != 1
+        or len(move.uses) != 1
+        or len(shift.defines) != 1
+        or len(shift.uses) != 1
+    ):
+        return None
+    shared_two_address = move.defines == shift.defines == shift.uses
+    temporary_chain = shift.uses == move.defines and virtual_uses[move.defines[0]] == 1
+    if not (shared_two_address or temporary_chain):
+        return None
+
+    count = ir.Imm(16, 1)
+    extract = ir.Semantics(
+        ir.Operation.FUNNEL,
+        "shld",
+        (destination,),
+        (destination, source, count),
+    )
+    old_effects = _register_effects(shift, flags=True)
+    new_effects = _register_effects(replace(move, what=extract), flags=True)
+    if old_effects is None or new_effects is None:
+        return None
+    low = target.named(destination.register, 2)
+    upper = _lanes(destination.register) - _lanes(low)
+    flags = (old_effects[1] | new_effects[1]) & _flag_lanes(0xFFFFFFFF)
+    if not (upper | flags) <= dead_after[id(shift)]:
+        return None
+    new_cost = cpu.cost("shift_ri")
+    old_cost = cpu.cost("mov_rr") + cpu.cost("shift_ri")
+    if new_cost > old_cost:
+        return None
+
+    combined = replace(move, what=extract, defines=shift.defines)
+    folded = tuple(lir.without((combined, shift), lambda one: one is shift))
+    return folded if len(folded) == 1 else None
 
 
 def _high_extract(parts: tuple[lir.Insn, ...], dead_after: dict[int, set]) -> tuple[lir.Insn, lir.Insn] | None:
@@ -768,6 +954,84 @@ def shuttles(body: lir.LirBody) -> lir.LirBody:
             index += 1
         blocks.append(replace(block, insns=tuple(out)))
     return replace(body, blocks=tuple(blocks))
+
+
+def restored_copies(body: lir.LirBody) -> lir.LirBody:
+    """Remove a synthetic save/restore when the source survives between them.
+
+    Allocation may preserve a low word in a temporary around a portable
+    high-word extraction.  Once the extraction has become a direct copy and
+    shift of another register, the original source is visibly untouched.
+    Retain both virtual operations as anchors, but emit neither physical move
+    when no intervening instruction writes the source or observes/changes the
+    temporary and the temporary is dead after the restore.
+    """
+    from qbopt.backend import liveness
+    from qbopt.backend import regthrash
+
+    exits = liveness.dead_at_exit(body)
+    blocks = []
+    for block in body.blocks:
+        dead_after = regthrash._dead_after(block, set(exits[block.at]))
+        insns = list(block.insns)
+        changed: set[int] = set()
+        for index, saved in enumerate(insns):
+            if id(saved) in changed or not _synthetic_register_copy(saved):
+                continue
+            match saved.what:
+                case ir.Semantics(
+                    ir.Operation.MOVE,
+                    "mov",
+                    (ir.Reg() as temporary,),
+                    (ir.Reg() as source,),
+                ):
+                    pass
+                case _:
+                    continue
+            if temporary.width != source.width or temporary.width not in (1, 2, 4):
+                continue
+            temporary_lanes, source_lanes = _lanes(temporary.register), _lanes(source.register)
+            if not temporary_lanes or not source_lanes or temporary_lanes & source_lanes:
+                continue
+            for restored in insns[index + 1 :]:
+                if _inverse_synthetic_copy(restored, source, temporary):
+                    if temporary_lanes <= dead_after[id(restored)]:
+                        insns[index] = lir.anchor(saved)
+                        restore_at = insns.index(restored, index + 1)
+                        insns[restore_at] = lir.anchor(restored)
+                        changed.update((id(saved), id(restored)))
+                    break
+                effects = _register_effects(restored, may_write=True)
+                if effects is None:
+                    break
+                reads, writes = effects
+                if reads & temporary_lanes or writes & (temporary_lanes | source_lanes):
+                    break
+        blocks.append(replace(block, insns=tuple(insns)))
+    return replace(body, blocks=tuple(blocks))
+
+
+def _synthetic_register_copy(one: lir.Insn) -> bool:
+    return (
+        one.what is not None
+        and one.what.op is ir.Operation.MOVE
+        and one.what.name == "mov"
+        and len(one.what.dests) == len(one.what.sources) == 1
+        and isinstance(one.what.dests[0], ir.Reg)
+        and isinstance(one.what.sources[0], ir.Reg)
+        and one.covers is not None
+        and one.covers[0] == one.covers[1]
+        and not (one.clobbers or one.clobbers_high or one.requires or one.delivers or one.spread)
+        and one.group is None
+        and one.symbol is not True
+        and not (one.frame_adjust or one.spill_reload or one.spill_store)
+    )
+
+
+def _inverse_synthetic_copy(one: lir.Insn, destination: ir.Reg, source: ir.Reg) -> bool:
+    if not _synthetic_register_copy(one):
+        return False
+    return one.what.dests == (destination,) and one.what.sources == (source,)
 
 
 def _shuttle(parts: tuple[lir.Insn, ...]) -> tuple[lir.Insn, lir.Insn] | None:
@@ -1052,26 +1316,19 @@ def fused(body: lir.LirBody) -> lir.LirBody:
     Only instructions that stand for no object bytes are dropped.
     """
     from qbopt.backend import liveness
+    from qbopt.backend import regthrash
 
     exits = liveness.dead_at_exit(body)
     blocks = []
     for block in body.blocks:
         insns = list(block.insns)
-        dead_after: list[frozenset] = [frozenset()] * len(insns)
-        dead = set(exits[block.at])
-        for index in range(len(insns) - 1, -1, -1):
-            dead_after[index] = frozenset(dead)
-            one = insns[index]
-            if liveness._terminator(one.what):
-                if one.what.op is ir.Operation.BRANCH:
-                    dead -= _branch_reads(one.what)
-                continue
-            effects = _register_effects(one, flags=True)
-            if effects is None:
-                dead.clear()
-                continue
-            reads, writes = effects
-            dead = (dead | writes) - reads
+        # Use the one physical-liveness implementation.  Its declared-call
+        # and complete-return fallback knows that caller-clobbered registers
+        # die at a function exit; this local copy used to treat RETURN as a
+        # terminator before consulting that contract and kept C's last CX
+        # load alive for no semantic reason.
+        dead_by_insn = regthrash._dead_after(block, set(exits[block.at]))
+        dead_after = [frozenset(dead_by_insn[id(one)]) for one in insns]
         # A NOTHING is no machine instruction even when it still carries an
         # SSA edge.  Allocation leaves such anchors behind for identity
         # copies; looking only through edge-free anchors made physically
@@ -1238,15 +1495,24 @@ def _fused(load, work, store, dead_work, dead_store) -> "tuple[lir.Insn, int] | 
                 other = ir.Imm(0, cell.width)
             made, used = ir.Semantics(ir.Operation.COMPARE, "cmp", (), (cell, other)), 2
         case ir.Semantics(ir.Operation.BINARY, name, (ir.Reg() as dest,), (ir.Reg() as source, other)):
-            if (
-                extension is not None
-                or name not in _FUSED_BINARY
-                or not dest == source == register
-                or not operand(other)
-                or not stored()
-            ):
+            if extension is not None or name not in _FUSED_BINARY:
                 return None
-            made, used = ir.Semantics(ir.Operation.BINARY, name, (cell,), (cell, other)), 3
+            if dest == source == register and operand(other) and stored():
+                made, used = ir.Semantics(ir.Operation.BINARY, name, (cell,), (cell, other)), 3
+            # A frontend load is not a register-allocation decision.  When
+            # its only physical consumer accepts a memory source, retain the
+            # read at that consumer and let the temporary die.  This is the
+            # source-operand counterpart of the destination round trip above.
+            elif (
+                dest == source
+                and isinstance(other, ir.Reg)
+                and other == register
+                and ir.root(dest.register) != root
+                and lanes <= dead_work
+            ):
+                made, used = ir.Semantics(ir.Operation.BINARY, name, (dest,), (source, cell)), 2
+            else:
+                return None
         case ir.Semantics(ir.Operation.UNARY, name, (ir.Reg() as dest,), sources):
             if (
                 extension is not None
@@ -1363,7 +1629,7 @@ def _scaled_address(
     if len(parts) not in (3, 4) or any(one.what is None or one.clobbers or one.symbol is True for one in parts):
         return None
     copy, shift, add = parts[:3]
-    if any(one.spread or (one.covers and one.covers[0] != one.covers[1]) for one in (shift, add)):
+    if any(one.spread for one in (copy, shift, add)):
         return None
     match copy.what:
         case ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg() as dest,), (ir.Reg() as source,)):
@@ -1411,7 +1677,29 @@ def _scaled_address(
     what = ir.Semantics(
         ir.Operation.ADDRESS, "lea", (dest,), (ir.Address(None, through=base, index=base, scale=1 << amount),)
     )
-    return replace(copy, what=what, defines=add.defines)
+    owned = tuple(one for one in (copy, shift, add) if one.covers and one.covers[0] != one.covers[1])
+    # Fresh emission may replace an original instruction just as safely as a
+    # synthetic one, provided there is one unambiguous owner for its source
+    # interval.  Keeping the old blanket refusal here made identical MIR
+    # select LEA for C and MOV/SHL/ADD for BASIC solely because the latter had
+    # decoded-byte provenance.  The surviving LEA inherits that provenance;
+    # multiple owners still need a more general interval merge and are kept.
+    if len(owned) > 1:
+        return None
+    owner = owned[0] if owned else copy
+    intermediate = set(copy.defines)
+    uses = tuple(dict.fromkeys((*copy.uses, *(value for value in add.uses if value not in intermediate))))
+    live = set(uses) | set(add.defines)
+    widths = tuple(dict.fromkeys(pair for pair in (*copy.widths, *add.widths) if pair[0] in live))
+    return replace(
+        owner,
+        what=what,
+        defines=add.defines,
+        uses=uses,
+        widths=widths,
+        requires=tuple(dict.fromkeys((*copy.requires, *add.requires))),
+        delivers=tuple(dict.fromkeys((*copy.delivers, *add.delivers))),
+    )
 
 
 def _loaded_scaled_add(
@@ -1894,6 +2182,48 @@ def _sum_address_is_cheaper(sources: tuple[ir.Reg, ...], cpu: targets.Profile) -
     return new <= old
 
 
+def increments(body: lir.LirBody) -> lir.LirBody:
+    """Select compact INC/DEC for a unit add whose carry result is dead.
+
+    MIR deliberately treats a source ``inc`` and ``add x,1`` as the same
+    arithmetic value.  Their allocated x86 forms differ only in CF: INC/DEC
+    preserve it.  Once physical flag liveness proves CF unobserved, retaining
+    the frontend's original spelling is neither semantic nor profitable.
+    """
+    from qbopt.backend import select
+    from qbopt.backend import liveness
+    from qbopt.backend import regthrash
+
+    exits = liveness.dead_at_exit(body)
+    blocks = []
+    carry = _flag_lanes(RflagsBits.CF)
+    for block in body.blocks:
+        dead_after = regthrash._dead_after(block, set(exits[block.at]))
+        insns = []
+        for one in block.insns:
+            candidate = None
+            match one.what:
+                case ir.Semantics(
+                    ir.Operation.BINARY,
+                    "add" | "sub" as name,
+                    (ir.Reg() as destination,),
+                    (ir.Reg() as source, ir.Imm(value=1, address=None)),
+                ) if destination == source:
+                    candidate = ir.Semantics(
+                        ir.Operation.UNARY,
+                        "inc" if name == "add" else "dec",
+                        (destination,),
+                        (source,),
+                    )
+            if candidate is not None and carry <= dead_after[id(one)]:
+                before, after = select.emit(one.what), select.emit(candidate)
+                if before is not None and after is not None and len(after.code) <= len(before.code):
+                    one = replace(one, what=candidate)
+            insns.append(one)
+        blocks.append(replace(block, insns=tuple(insns)))
+    return replace(body, blocks=tuple(blocks))
+
+
 def _flags_before(one: lir.Insn, flags_dead: bool) -> bool:
     if one.what is None or one.clobbers:
         return False
@@ -1904,6 +2234,11 @@ def _flags_before(one: lir.Insn, flags_dead: bool) -> bool:
             return True
         case ir.Semantics(ir.Operation.UNARY, "neg"):
             return True
+        case ir.Semantics(ir.Operation.UNARY, "inc" | "dec"):
+            # INC/DEC preserve carry, but a carry which is dead afterwards
+            # is dead beforehand too.  Other arithmetic flags are replaced
+            # by the operation, so an all-dead state crosses it unchanged.
+            return flags_dead
         case ir.Semantics(ir.Operation.MOVE, "mov") | ir.Semantics(ir.Operation.ADDRESS, "lea"):
             return flags_dead
         case ir.Semantics(ir.Operation.EXTEND, "movsx" | "movzx" | "cwd" | "cdq"):
