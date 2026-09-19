@@ -135,6 +135,7 @@ def dumped(
             physical.calls,
             set(),
             physical.contracts,
+            cpu=qb_compile.lowering_target(),
             occurrences={},
             hints=physical.hints,
             pointer_model=physical.pointer_model,

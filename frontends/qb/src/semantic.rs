@@ -1631,6 +1631,22 @@ impl Compiler {
                     name, arguments, ..
                 } => match name.as_str() {
                     "BLOAD" | "BSAVE" => self.binary_memory_statement(name, arguments)?,
+                    "RANDOMIZE" => {
+                        let [seed] = arguments.as_slice() else {
+                            return self.fail(
+                                "the audited RANDOMIZE form requires one seed expression",
+                            );
+                        };
+                        let (seed, seed_type) = self.expression(seed)?;
+                        let seed = self.convert(seed, seed_type, DOUBLE)?;
+                        // VBDOS BC emits the seed as an eight-byte R8 value,
+                        // high dword first, then calls B$RNZP. Preserve the
+                        // rounding boundary in a typed temporary so ordinary
+                        // runtime-call lowering materializes those stack bytes.
+                        let place = self.temporary(DOUBLE)?;
+                        self.emit("store", Vec::new(), vec![Operand::Place(place), seed]);
+                        self.emit_runtime_call("B$RNZP", Vec::new(), vec![Operand::Place(place)]);
+                    }
                     _ => {
                         self.call(name, arguments, false)?;
                     }
@@ -1945,16 +1961,69 @@ impl Compiler {
                         if arguments.len() != 2 {
                             return self.fail("POKE expects an offset and byte value");
                         }
-                        let mut operands = Vec::new();
-                        for argument in arguments {
-                            let (value, type_id) = self.expression(argument)?;
-                            operands.push(self.convert(value, type_id, INTEGER)?);
+                        let (offset, offset_type) = self.expression(&arguments[0])?;
+                        let offset = self.convert(offset, offset_type, INTEGER)?;
+                        let (value, value_type) = self.expression(&arguments[1])?;
+                        let value = self.convert(value, value_type, BYTE)?;
+                        let segment_place = self.def_segment_place();
+                        let segment = self.value(INTEGER);
+                        self.emit("load", vec![segment], vec![Operand::Place(segment_place)]);
+                        let pointer_type = self.far_pointer_type(BYTE);
+                        let pointer = self.value(pointer_type);
+                        self.emit(
+                            "concat",
+                            vec![pointer],
+                            vec![Operand::Value(segment), offset],
+                        );
+                        self.emit(
+                            "store",
+                            Vec::new(),
+                            vec![
+                                Operand::Indirect {
+                                    base: pointer,
+                                    offset: 0,
+                                    type_id: BYTE,
+                                },
+                                value,
+                            ],
+                        );
+                    }
+                    "SWAP" => {
+                        let [left, right] = arguments.as_slice() else {
+                            return self.fail("SWAP expects two variables");
+                        };
+                        let (left, left_type) = self.destination(left)?;
+                        let (right, right_type) = self.destination(right)?;
+                        if left_type != right_type {
+                            return self.fail("SWAP variables must have identical types");
                         }
-                        // QB45 rt/peek.asm declares addr then val as two
-                        // Pascal words. B$POKE itself selects the current
-                        // DEF SEG through b$seg; do not manufacture a memory
-                        // operation whose alias/provenance differs from it.
-                        self.emit_runtime_call("B$POKE", Vec::new(), operands);
+                        let aggregate = self
+                            .udts
+                            .values()
+                            .any(|record| record.type_id == left_type)
+                            || self.string_width(left_type).is_some_and(|width| width != 0);
+                        if aggregate {
+                            let temporary = Operand::Place(self.temporary(left_type)?);
+                            let width = self.width(left_type);
+                            self.aggregate_assignment(temporary.clone(), left.clone(), width)?;
+                            self.aggregate_assignment(left, right.clone(), width)?;
+                            self.aggregate_assignment(right, temporary, width)?;
+                        } else {
+                            let left_value = self.value(left_type);
+                            self.emit("load", vec![left_value], vec![left.clone()]);
+                            let right_value = self.value(right_type);
+                            self.emit("load", vec![right_value], vec![right.clone()]);
+                            self.emit(
+                                "store",
+                                Vec::new(),
+                                vec![left, Operand::Value(right_value)],
+                            );
+                            self.emit(
+                                "store",
+                                Vec::new(),
+                                vec![right, Operand::Value(left_value)],
+                            );
+                        }
                     }
                     "SCREEN" => {
                         if arguments.len() != 1 {
@@ -1997,9 +2066,9 @@ impl Compiler {
                         };
                         self.emit_runtime_call("B$SLEP", Vec::new(), vec![duration]);
                     }
-                    "END" => {
+                    "END" | "SYSTEM" => {
                         if !arguments.is_empty() {
-                            return self.fail("END takes no arguments");
+                            return self.fail(format!("{name} takes no arguments"));
                         }
                         self.emit_runtime_call("B$CEND", Vec::new(), Vec::new());
                         // B$CEND does not return. Keep following labels as
@@ -2201,11 +2270,23 @@ impl Compiler {
         self.emit("store", Vec::new(), vec![destination.clone(), start_value]);
         let (end_value, end_type) = self.expression(end)?;
         let end_value = self.convert(end_value, end_type, counter_type)?;
+        let end_place = self.compiler_temporary("$forEnd", counter_type)?;
+        self.emit(
+            "store",
+            Vec::new(),
+            vec![Operand::Place(end_place), end_value],
+        );
         let (step_value, step_type) = match step {
             Some(step) => self.expression(step)?,
             None => (Operand::Constant(INTEGER, Number::Integer(1)), INTEGER),
         };
         let step_value = self.convert(step_value, step_type, counter_type)?;
+        let step_place = self.compiler_temporary("$forStep", counter_type)?;
+        self.emit(
+            "store",
+            Vec::new(),
+            vec![Operand::Place(step_place), step_value],
+        );
 
         let test_block = self.new_block();
         let positive_test = self.new_block();
@@ -2214,14 +2295,23 @@ impl Compiler {
         let done_block = self.new_block();
         self.terminate("jump", Vec::new(), vec![test_block])?;
         self.select_block(test_block);
-        let counter_value = self.load_destination(counter)?;
+        let step_value = self.value(counter_type);
+        self.emit(
+            "load",
+            vec![step_value],
+            vec![Operand::Place(step_place)],
+        );
         let direction = self.value(BOOLEAN);
         let zero = if matches!(counter_type, SINGLE | DOUBLE) {
             self.floating_literal("0.0", counter_type)?
         } else {
             Operand::Constant(counter_type, Number::Integer(0))
         };
-        self.emit("ge", vec![direction], vec![step_value.clone(), zero]);
+        self.emit(
+            "ge",
+            vec![direction],
+            vec![Operand::Value(step_value), zero],
+        );
         self.terminate(
             "branch",
             vec![Operand::Value(direction)],
@@ -2229,11 +2319,18 @@ impl Compiler {
         )?;
 
         self.select_block(positive_test);
+        let counter_value = self.load_destination(counter)?;
+        let end_value = self.value(counter_type);
+        self.emit(
+            "load",
+            vec![end_value],
+            vec![Operand::Place(end_place)],
+        );
         let within = self.value(BOOLEAN);
         self.emit(
             "le",
             vec![within],
-            vec![counter_value.clone(), end_value.clone()],
+            vec![counter_value, Operand::Value(end_value)],
         );
         self.terminate(
             "branch",
@@ -2242,8 +2339,19 @@ impl Compiler {
         )?;
 
         self.select_block(negative_test);
+        let counter_value = self.load_destination(counter)?;
+        let end_value = self.value(counter_type);
+        self.emit(
+            "load",
+            vec![end_value],
+            vec![Operand::Place(end_place)],
+        );
         let within = self.value(BOOLEAN);
-        self.emit("ge", vec![within], vec![counter_value, end_value]);
+        self.emit(
+            "ge",
+            vec![within],
+            vec![counter_value, Operand::Value(end_value)],
+        );
         self.terminate(
             "branch",
             vec![Operand::Value(within)],
@@ -2256,6 +2364,12 @@ impl Compiler {
         self.exits.pop();
         if self.block_open() {
             let counter_value = self.load_destination(counter)?;
+            let step_value = self.value(counter_type);
+            self.emit(
+                "load",
+                vec![step_value],
+                vec![Operand::Place(step_place)],
+            );
             let advanced = self.value(counter_type);
             self.emit(
                 if matches!(counter_type, SINGLE | DOUBLE) {
@@ -2264,7 +2378,7 @@ impl Compiler {
                     "add"
                 },
                 vec![advanced],
-                vec![counter_value, step_value],
+                vec![counter_value, Operand::Value(step_value)],
             );
             self.emit(
                 "store",
@@ -3738,6 +3852,21 @@ impl Compiler {
             return Ok(Some((Operand::Value(result), INTEGER)));
         }
         if intrinsic.lowering == Lowering::HeapFree {
+            if self.string_syntax(&arguments[0]) {
+                // FRE has two source-level overloads. VBDOS selects FRSD for
+                // strings and passes the near descriptor address; its empty
+                // literal has the canonical null descriptor address used by
+                // BC itself. Numeric selectors use the distinct FRI2 entry.
+                let selector = match &arguments[0] {
+                    Expr::Literal(Literal::String(text), _) if text.is_empty() => {
+                        Operand::Constant(INTEGER, Number::Integer(0))
+                    }
+                    expression => self.string_descriptor(expression)?,
+                };
+                let result = self.value(LONG);
+                self.emit_runtime_call("B$FRSD", vec![result], vec![selector]);
+                return Ok(Some((Operand::Value(result), LONG)));
+            }
             let (selector, selector_type) = self.expression(&arguments[0])?;
             let selector = self.convert(selector, selector_type, INTEGER)?;
             let result = self.value(LONG);
@@ -4336,14 +4465,30 @@ impl Compiler {
                         base, offset: 0, ..
                     } => operands.push(Operand::Value(base)),
                     Operand::Indirect { base, offset, .. } => {
-                        let pointer_type = self.pointer_type(*parameter_type);
+                        // Offsetting a field preserves the address space of
+                        // its containing object. In particular, a field of a
+                        // dynamic-array UDT remains a far pointer; rebuilding
+                        // its type from the scalar formal silently narrowed it
+                        // to a near pointer before the BYREF call.
+                        let pointer_type = self
+                            .values
+                            .iter()
+                            .find_map(|(id, type_id)| (*id == base).then_some(*type_id))
+                            .ok_or_else(|| SemanticError {
+                                message: "BYREF indirect base has no pointer type".into(),
+                            })?;
+                        let offset_type = if self.width(pointer_type) == 4 {
+                            LONG
+                        } else {
+                            INTEGER
+                        };
                         let adjusted = self.value(pointer_type);
                         self.emit(
                             "ptr_offset",
                             vec![adjusted],
                             vec![
                                 Operand::Value(base),
-                                Operand::Constant(INTEGER, Number::Integer(offset as i64)),
+                                Operand::Constant(offset_type, Number::Integer(offset as i64)),
                             ],
                         );
                         operands.push(Operand::Value(adjusted));
@@ -4586,6 +4731,78 @@ impl Compiler {
     }
 
     fn power(&mut self, left: &Expr, right: &Expr) -> Result<(Operand, u32), SemanticError> {
+        if let Ok((exponent_type, exponent_number)) = self.constant(right) {
+            let exponent_real = as_real(&exponent_number)?;
+            if exponent_real.fract() == 0.0
+                && exponent_real >= i64::MIN as f64
+                && exponent_real <= i64::MAX as f64
+            {
+                // An integral constant exponent is valid for a signed base.
+                // Exponentiation by squaring keeps it entirely in HIR and
+                // needs logarithmic multiplies; negative powers add one
+                // reciprocal. This is QGL's pervasive signed `delta ^ 2`.
+                let exponent = exponent_real as i64;
+                let (base, base_type) = self.expression(left)?;
+                let common = common_type(base_type, exponent_type, Binary::Power)?;
+                let mut factor = self.convert(base, base_type, common)?;
+                let mut result = None;
+                let mut magnitude = exponent.unsigned_abs();
+                while magnitude != 0 {
+                    if magnitude & 1 != 0 {
+                        result = Some(if let Some(product) = result {
+                            let multiplied = self.value(common);
+                            self.emit("fmul", vec![multiplied], vec![product, factor.clone()]);
+                            Operand::Value(multiplied)
+                        } else {
+                            factor.clone()
+                        });
+                    }
+                    magnitude >>= 1;
+                    if magnitude != 0 {
+                        // A self-multiply names one HIR value twice. Keep the
+                        // two x87 operands distinct at the frontend boundary:
+                        // the backend deliberately has no cross-block or
+                        // duplicate-value float-stack repair tier.
+                        let factor_place = self.temporary(common)?;
+                        self.emit(
+                            "store",
+                            Vec::new(),
+                            vec![Operand::Place(factor_place), factor],
+                        );
+                        let left_factor = self.value(common);
+                        self.emit(
+                            "load",
+                            vec![left_factor],
+                            vec![Operand::Place(factor_place)],
+                        );
+                        let right_factor = self.value(common);
+                        self.emit(
+                            "load",
+                            vec![right_factor],
+                            vec![Operand::Place(factor_place)],
+                        );
+                        let squared = self.value(common);
+                        self.emit(
+                            "fmul",
+                            vec![squared],
+                            vec![Operand::Value(left_factor), Operand::Value(right_factor)],
+                        );
+                        factor = Operand::Value(squared);
+                    }
+                }
+                let Some(result) = result else {
+                    return Ok((self.floating_literal("1.0", common)?, common));
+                };
+                if exponent < 0 {
+                    let one = self.floating_literal("1.0", common)?;
+                    let reciprocal = self.value(common);
+                    self.emit("fdiv", vec![reciprocal], vec![one, result]);
+                    return Ok((Operand::Value(reciprocal), common));
+                }
+                return Ok((result, common));
+            }
+        }
+
         // x87 has no single POW instruction. Keep the mathematical structure
         // visible as log2(base), exponent multiply, exp2. This identity is
         // valid for a positive base; reject other domains until their
@@ -4746,6 +4963,10 @@ impl Compiler {
     }
 
     fn temporary(&mut self, type_id: u32) -> Result<u32, SemanticError> {
+        self.compiler_temporary("$arg", type_id)
+    }
+
+    fn compiler_temporary(&mut self, prefix: &str, type_id: u32) -> Result<u32, SemanticError> {
         let extent = self.width(type_id);
         if self.data_offset + extent > 65536 {
             return self.fail("temporary exceeds the 64 KiB frame budget");
@@ -4754,7 +4975,7 @@ impl Compiler {
         self.next_place += 1;
         self.places.push(Place {
             id,
-            name: format!("$arg{id}"),
+            name: format!("{prefix}{id}"),
             type_id,
             offset: -((self.data_offset + extent) as isize),
             extent,

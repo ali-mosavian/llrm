@@ -250,6 +250,12 @@ operand = "END"
 shape = "Runtime"
 
 [[emit]]
+identity = "opStSystem"
+action = "Runtime"
+operand = "SYSTEM"
+shape = "Runtime"
+
+[[emit]]
 identity = "opStError"
 action = "Runtime"
 operand = "ERROR"
@@ -259,6 +265,12 @@ shape = "Runtime"
 identity = "opStPoke"
 action = "Runtime"
 operand = "POKE"
+shape = "Runtime"
+
+[[emit]]
+identity = "opStSwap"
+action = "Runtime"
+operand = "SWAP"
 shape = "Runtime"
 
 [[emit]]

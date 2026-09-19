@@ -1095,6 +1095,117 @@ def test_resume_statement_entries_are_optimizer_roots() -> None:
     assert qb_compile.object_bytes(source, "Q45ER52.BAS")
 
 
+def test_for_bounds_survive_resume_statement_side_entries(tmp_path: Path) -> None:
+    """QGL MAIN's FOR bound was SSA-only, so RESUME side entries bypassed its definition."""
+    basic = tmp_path / "FORRES.BAS"
+    basic.write_bytes(
+        b"on error goto handler\r\n"
+        b"dim i as integer, limit as integer\r\n"
+        b"limit = 2\r\n"
+        b"for i = 0 to limit\r\n"
+        b"print i\r\n"
+        b"next i\r\n"
+        b"end\r\n"
+        b"handler:\r\n"
+        b"resume next\r\n"
+    )
+    source = qb_driver.parsed(basic, dialect="vbdos", runtime="vbdos")
+    lowered = hir.lower(source)
+    assert all(not mir.verify(function.body) for function in lowered)
+    assert qb_compile.object_bytes(source, "FORRES.BAS")
+
+
+def test_inline_square_leaves_no_float_live_out(tmp_path: Path) -> None:
+    """QGL HOST_RENDER's three `delta ^ 2` terms left duplicate x87 values live."""
+    basic = tmp_path / "SQUARE.BAS"
+    basic.write_bytes(b"dim x as single, answer as single\r\nanswer = x ^ 2\r\n")
+    source = qb_driver.parsed(basic, dialect="vbdos", runtime="vbdos")
+    assert qb_compile.object_bytes(source, "SQUARE.BAS")
+
+
+def test_string_fre_emits_the_measured_vbdos_runtime_call(tmp_path: Path) -> None:
+    """SYS_MEM_MARK stopped before HIR because FRE("") was sent through numeric lowering."""
+    basic = tmp_path / "FRESTR.BAS"
+    basic.write_bytes(b'dim available as long\r\navailable = fre("")\r\n')
+    source = qb_driver.parsed(basic, dialect="vbdos", runtime="vbdos")
+
+    records = omf.parse(qb_compile.object_bytes(source, "FRESTR.BAS"))
+    assert "B$FRSD" in omf.externals(records)
+
+
+def test_dynamic_array_walk_keeps_far_pointer_halves_defined(tmp_path: Path) -> None:
+    """D_SURF SC_FTAKE lost far-array address definitions during secondary folding."""
+    basic = tmp_path / "FARWALK.BAS"
+    basic.write_bytes(
+        b"option explicit\r\n"
+        b"dim shared head() as integer\r\n"
+        b"dim shared link() as integer\r\n"
+        b"dim shared group() as integer\r\n"
+        b"function take (byval order as integer, byval wanted as integer) as integer\r\n"
+        b"dim block as integer, previous as integer\r\n"
+        b"block = head(order)\r\n"
+        b"previous = -1\r\n"
+        b"while block >= 0\r\n"
+        b"if group(block) = wanted then\r\n"
+        b"if previous >= 0 then link(previous) = link(block) else head(order) = link(block)\r\n"
+        b"take = block\r\n"
+        b"exit function\r\n"
+        b"end if\r\n"
+        b"previous = block\r\n"
+        b"block = link(block)\r\n"
+        b"wend\r\n"
+        b"take = -1\r\n"
+        b"end function\r\n"
+    )
+    source = qb_driver.parsed(basic, dialect="vbdos", runtime="vbdos", array_order="row-major")
+
+    assert qb_compile.object_bytes(source, "FARWALK.BAS")
+
+
+def test_bare_def_seg_reaches_object_emission(tmp_path: Path) -> None:
+    """SCREEN stopped at ABI lowering although VBDOS B$DSG0 is a zero-argument RETF."""
+    basic = tmp_path / "DEFSEG.BAS"
+    basic.write_bytes(b"def seg = 40960\r\npoke 12, 34\r\ndef seg\r\n")
+    source = qb_driver.parsed(basic, dialect="vbdos", runtime="vbdos")
+
+    records = omf.parse(qb_compile.object_bytes(source, "DEFSEG.BAS"))
+    assert "B$DSG0" in omf.externals(records)
+    assert "B$POKE" not in omf.externals(records)
+
+
+def test_byref_dynamic_array_field_preserves_far_pointer_width(tmp_path: Path) -> None:
+    """ENT_MOVE_TRIGS narrowed a far UDT-field address before its BYREF call."""
+    basic = tmp_path / "FARFIELD.BAS"
+    basic.write_bytes(
+        b"option explicit\r\n"
+        b"type Item\r\npad as integer\r\nvalue as integer\r\nend type\r\n"
+        b"declare sub consume (number as integer)\r\n"
+        b"dim shared items() as Item\r\n"
+        b"sub invoke (byval index as integer)\r\n"
+        b"consume items(index).value\r\n"
+        b"end sub\r\n"
+    )
+    source = qb_driver.parsed(basic, dialect="vbdos", runtime="vbdos", array_order="row-major")
+
+    module = source.modules[0]
+    invoke = next(function for function in module.functions if function.name == "INVOKE")
+    types = {type_.id: type_ for type_ in module.types}
+    values = {value.id: types[value.type] for value in invoke.values}
+    offsets = [
+        instruction
+        for block in invoke.blocks
+        for instruction in block.instructions
+        if instruction.op is hir.Op.PTR_OFFSET
+    ]
+    assert offsets
+    for instruction in offsets:
+        base = instruction.operands[0]
+        assert isinstance(base, hir.ValueRef)
+        assert values[instruction.results[0]].address is values[base.value].address
+
+    assert qb_compile.object_bytes(source, "FARFIELD.BAS")
+
+
 def test_runtime_frame_owns_spill_reservation_without_a_native_prefix() -> None:
     """Q45N01's native SUB SP shifted B$ENRA's documented frame fields by four bytes."""
     source = qb_driver.parsed(

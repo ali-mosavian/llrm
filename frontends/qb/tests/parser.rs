@@ -270,6 +270,25 @@ fn select_case_builds_explicit_comparison_cfg() {
 }
 
 #[test]
+fn select_case_accepts_same_line_arm_bodies() {
+    // D_MDL keeps compact CASE labels and their assignments on one physical
+    // line. A colon is a BASIC statement boundary here, just as a newline is.
+    let module = parse(
+        "dim n as integer\ndim result as integer\nselect case n\ncase 1: result = 10\ncase else: result = 20\nend select\n",
+        Dialect::VbDos,
+    )
+    .unwrap();
+    let Statement::Select {
+        arms, otherwise, ..
+    } = &module.statements[2]
+    else {
+        panic!("expected select")
+    };
+    assert_eq!(arms[0].1.len(), 1);
+    assert_eq!(otherwise.len(), 1);
+}
+
+#[test]
 fn bare_end_inside_structured_blocks_is_not_the_block_terminator() {
     // Most compatibility cases stop immediately on a failed checkpoint.
     // Consuming that END as the prefix of END IF/SELECT rejected the whole
@@ -314,7 +333,7 @@ fn bare_def_seg_restores_ds_through_the_audited_runtime_entry() {
 }
 
 #[test]
-fn cls_and_poke_are_runtime_statements_with_observable_arguments() {
+fn cls_is_runtime_and_poke_is_an_inline_segmented_store() {
     // Q45M12 previously became a call to an undeclared POKE procedure, and
     // the screen cases did the same for CLS.  The omitted CLS argument is
     // semantically distinct from CLS 0: QB45 represents it with -1.
@@ -322,8 +341,26 @@ fn cls_and_poke_are_runtime_statements_with_observable_arguments() {
     let hir = compile(&module, "screen_memory", Dialect::QuickBasic45, "qb45").unwrap();
     assert_eq!(hir.matches("\"callee\":\"B$SCLS\"").count(), 2);
     assert!(hir.contains("\"type\":1,\"value\":-1"));
-    assert!(hir.contains("\"callee\":\"B$POKE\""));
+    assert!(!hir.contains("\"callee\":\"B$POKE\""));
+    assert!(hir.contains("\"op\":\"concat\""));
+    assert!(hir.contains("\"op\":\"store\""));
+    assert!(hir.contains("\"name\":\"b$seg\""));
     assert!(hir.contains("\"type\":1,\"value\":42"));
+}
+
+#[test]
+fn swap_is_a_typed_inline_exchange() {
+    // PL_MOVE uses SWAP inside a single-line IF. The recovered grammar emits
+    // opStSwap; it must become value exchange HIR rather than a runtime call.
+    let module = parse(
+        "dim first as single\ndim second as single\nif first > second then swap first, second\n",
+        Dialect::VbDos,
+    )
+    .unwrap();
+    let hir = compile(&module, "swap", Dialect::VbDos, "vbdos").unwrap();
+    assert!(!hir.contains("\"callee\":\"SWAP\""));
+    assert!(hir.matches("\"op\":\"load\"").count() >= 2);
+    assert!(hir.matches("\"op\":\"store\"").count() >= 2);
 }
 
 #[test]
@@ -982,6 +1019,21 @@ fn simple_file_lifecycle_keeps_measured_runtime_operands() {
 }
 
 #[test]
+fn fre_dispatches_numeric_and_string_selectors_to_their_runtime_entries() {
+    // SYS_MEM_MARK uses both forms. VBDOS emits B$FRI2(-1) for numeric
+    // heap selection and B$FRSD(&descriptor) for a string selector; treating
+    // the latter as a numeric expression rejects valid source before HIR.
+    let module = parse(
+        "dim nearFree as long\ndim stringFree as long\nnearFree = fre(-1)\nstringFree = fre(\"\")\n",
+        Dialect::VbDos,
+    )
+    .unwrap();
+    let hir = compile(&module, "fre_forms", Dialect::VbDos, "vbdos").unwrap();
+    assert!(hir.contains("\"callee\":\"B$FRI2\""));
+    assert!(hir.contains("\"callee\":\"B$FRSD\""));
+}
+
+#[test]
 fn line_input_keeps_disk_selection_and_destination_descriptor() {
     // common.bas emits B$DSKI(file), then B$LNIN(0, DS:&dynamic-string,
     // 0, 1). The latter is ten bytes of arguments and returns with RETF 10.
@@ -1087,6 +1139,21 @@ fn integral_operators_explicitly_round_floating_operands() {
     assert!(hir.contains("\"op\":\"fexp2\""));
     assert!(hir.contains("\"op\":\"convert\""));
     assert!(hir.contains("\"op\":\"div\""));
+}
+
+#[test]
+fn constant_integral_powers_inline_variable_bases() {
+    // QGL squares three signed coordinate differences. The base is not known
+    // positive, so log2/exp2 is both needlessly expensive and domain-wrong.
+    let module = parse(
+        "dim x as single\ndim squared as single\nsquared = x ^ 2\n",
+        Dialect::VbDos,
+    )
+    .unwrap();
+    let hir = compile(&module, "square", Dialect::VbDos, "vbdos").unwrap();
+    assert!(hir.contains("\"op\":\"fmul\""));
+    assert!(!hir.contains("\"op\":\"flog2\""));
+    assert!(!hir.contains("\"op\":\"fexp2\""));
 }
 
 #[test]
@@ -1405,6 +1472,19 @@ fn terminal_statements_keep_the_measured_vbdos_call_shapes() {
     assert!(hir.contains("\"callee\":\"B$WIDT\""));
     assert!(hir.contains("\"callee\":\"B$SLEP\""));
     assert!(hir.contains("\"callee\":\"B$CEND\""));
+
+    // QGL uses SYSTEM for its self-check exit. VBDOS lowers it through
+    // the same B$CEND process-termination entry as END in a compiled EXE.
+    let module = parse("system\n", Dialect::VbDos).unwrap();
+    let hir = compile(&module, "system", Dialect::VbDos, "vbdos").unwrap();
+    assert!(hir.contains("\"callee\":\"B$CEND\""));
+
+    // QGL's deterministic and TIMER seeds both pass an R8 value. BC's raw
+    // MAIN.OBJ pushes 3ff00000:00000000 for RANDOMIZE 1 before B$RNZP.
+    let module = parse("randomize 1\n", Dialect::VbDos).unwrap();
+    let hir = compile(&module, "randomize", Dialect::VbDos, "vbdos").unwrap();
+    assert!(hir.contains("\"callee\":\"B$RNZP\""));
+    assert!(hir.contains("\"type\":4"));
 }
 
 #[test]

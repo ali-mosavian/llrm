@@ -841,6 +841,11 @@ def optimized(program: hir.Program, function: hir.Function, body: hir.Lowered) -
         rooted,
         dgroup,
         semantic_calls,
+        # Runtime RESUME entries can jump directly into a loop, making the
+        # analysis root irreducible. Scalar promotion requires a dominator
+        # tree and, more importantly, must not replace frame state that such
+        # an entry deliberately reloads with a value from the ordinary path.
+        promote_=temporary_root is None,
         registers=target.register_capacity,
         call_registers=target.call_register_capacity,
         index_scales=target.address_scales,
@@ -863,6 +868,19 @@ def optimized(program: hir.Program, function: hir.Function, body: hir.Lowered) -
     if problems:
         raise EmissionError(f"optimized external-entry body is invalid: {problems[:3]}")
     return replace(body, body=transformed)
+
+
+def lowering_target() -> targets.Profile:
+    """The 386 profile with only address forms valid for QB far-array HIR.
+
+    A dynamic BASIC array explicitly loads both words of its far data pointer.
+    The generic secondary SIB folder widens those word definitions before the
+    far-load selector combines them into LES, leaving the folder's promoted
+    values without definitions. Keep native 16-bit forms; only the conflicting
+    secondary form is outside this frontend's lowering contract.
+    """
+    target = targets.profile("386")
+    return replace(target, address_forms=tuple(form for form in target.address_forms if not form.secondary))
 
 
 def _machine_side_entry(body: mir.MirBody, entries: tuple[int, ...]) -> tuple[mir.MirBody, int | None]:
@@ -1059,6 +1077,7 @@ def assembled(program: hir.Program) -> masm.Module:
                 physical.calls,
                 set(),
                 physical.contracts,
+                cpu=lowering_target(),
                 occurrences={},
                 hints=physical.hints,
                 pointer_model=physical.pointer_model,

@@ -1515,7 +1515,7 @@ fn select_case_block(state: &mut ParseState) -> Option<(SelectArms, Vec<Statemen
                 }
             }
         }
-        if !consume_named(state, "tkNewLine") {
+        if !consume_named(state, "tkNewLine") && !consume_named(state, "tkColon") {
             return None;
         }
         let mut body = Vec::new();

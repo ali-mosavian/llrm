@@ -517,6 +517,21 @@ def _contract(name: str, cleanup: model.StackCleanup, pushed: int, family: model
                 "Display, alias and error effects remain conservative."
             ),
         )
+    if name == "B$DSG0" and pushed == 0:
+        return replace(
+            found,
+            cleanup=0,
+            control=runtime.Control.RETURNS,
+            enters_user_code=False,
+            established=True,
+            inputs=frozenset(),
+            i386=True,
+            evidence=(
+                f"{found.evidence} QB45, PDS71 and VBDOS rtinit.asm B$DSG0 "
+                "store DS into the runtime DEF SEG word and immediately RETF; "
+                "the typed bare DEF SEG form has no stack arguments."
+            ),
+        )
     if name in {"B$FERR", "B$FERL"} and pushed == 0:
         return replace(
             found,
@@ -546,6 +561,22 @@ def _contract(name: str, cleanup: model.StackCleanup, pushed: int, family: model
                 "PDS71 PDLOCAL.OBJ call likewise has no preceding argument push."
             ),
         )
+    if name == "B$FRSD" and pushed == 2:
+        return replace(
+            found,
+            cleanup=2,
+            control=runtime.Control.RETURNS,
+            enters_user_code=False,
+            established=True,
+            inputs=frozenset(),
+            i386=True,
+            evidence=(
+                f"{found.evidence} QB45, PDS71 and VBDOS stfree.asm B$FRSD "
+                "read the descriptor word at [BP+6] and join a RETF 2 epilogue; "
+                'the FRE("") VBDOS probe pushes the canonical null descriptor. '
+                "Heap and error effects remain conservative."
+            ),
+        )
     if name == "B$FLOF" and pushed == 2:
         return replace(
             found,
@@ -559,6 +590,21 @@ def _contract(name: str, cleanup: model.StackCleanup, pushed: int, family: model
                 f"{found.evidence} Typed LOF supplies the single file-number word; "
                 "MAIN.OBJ 0ec4..0ecc shows that exact call shape and the runtime "
                 "wrapper's normal return consumes it. Device/error effects remain conservative."
+            ),
+        )
+    if name == "B$RNZP" and pushed == 8:
+        return replace(
+            found,
+            cleanup=8,
+            control=runtime.Control.RETURNS,
+            enters_user_code=False,
+            established=True,
+            inputs=frozenset(),
+            i386=True,
+            evidence=(
+                f"{found.evidence} VBDCL10E.LIB random.asm B$RNZP at 0079 "
+                "reads its R8 seed at [BP+0Ah] and returns with RETF 8; "
+                "MAIN.OBJ 07fe..080c pushes the high and low dwords before the call."
             ),
         )
     if found.established and found.cleanup is not None:
