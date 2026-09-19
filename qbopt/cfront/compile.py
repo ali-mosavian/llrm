@@ -30,7 +30,6 @@ from qbopt.backend import phielim
 from qbopt.backend import omfwrite
 from qbopt.backend import prologue
 from qbopt.cfront import raise_hir
-from qbopt.backend import machinedce
 from qbopt.backend import lower_int64
 from qbopt.backend import cpu as targets
 from qbopt.objectfile.module import Addr
@@ -621,18 +620,6 @@ def assembled(
                 _write(dump, f"phases/{raised.name}.{number:02d}-{type(phase).__name__}", _lir_text(raised.name, low))
                 if watch is not None:
                     watch(f"lir-{phase.name or type(phase).__name__}", raised.name, low)
-        low = jumps.placed(low)
-        baseline = jumps.threaded(low)
-        # Merging one physical tail may make the condition selecting between
-        # its former copies dead; deleting that compare can in turn make the
-        # predecessor tails identical. Settle those two machine facts before
-        # final threading chooses fall-throughs.
-        for _round in range(max(1, len(low.blocks) + len(low.insns))):
-            before = low
-            low = machinedce.eliminated(jumps.merged(low))
-            if low is before:
-                break
-        low = jumps.preferred(baseline, jumps.threaded(low))
         reserve = -min(min(frame.slots.values(), default=0), frame.floor)
         callees = {
             at: masm.Callee(one.object_name, one.far, raised.inline.get(at, ())) for at, one in raised.callees.items()

@@ -175,6 +175,33 @@ def test_identical_result_tails_are_merged() -> None:
         1,
         (
             lir.LirBlock(1, (_compare(1), _branch(2, "je", 20)), (20, 10)),
+            lir.LirBlock(10, (_inserted(_move(10, ir.Imm(0, 2))), _inserted(_jump(11, 30))), (30,)),
+            lir.LirBlock(20, (_inserted(_move(20, ir.Imm(0, 2))), _inserted(_jump(21, 30))), (30,)),
+            lir.LirBlock(30, (_return(30),), ()),
+        ),
+        {},
+        {},
+    )
+
+    result = jumps.merged(jumps.placed(body))
+    physical = [
+        one.what
+        for block in result.blocks
+        for one in block.insns
+        if one.what is not None and one.what.op is not ir.Operation.NOTHING
+    ]
+
+    assert sum(what.op is ir.Operation.MOVE for what in physical) == 1
+    assert sum(what.op is ir.Operation.BRANCH for what in physical) == 0
+
+
+def test_identical_source_owned_tails_keep_their_distinct_anchors() -> None:
+    """Decoded tails cannot share one copy without reconciling source maps."""
+    body = lir.LirBody(
+        "f",
+        1,
+        (
+            lir.LirBlock(1, (_compare(1), _branch(2, "je", 20)), (20, 10)),
             lir.LirBlock(10, (_move(10, ir.Imm(0, 2)), _jump(11, 30)), (30,)),
             lir.LirBlock(20, (_move(20, ir.Imm(0, 2)), _jump(21, 30)), (30,)),
             lir.LirBlock(30, (_return(30),), ()),
@@ -184,6 +211,34 @@ def test_identical_result_tails_are_merged() -> None:
     )
 
     result = jumps.merged(jumps.placed(body))
+
+    assert (
+        sum(one.what is not None and one.what.op is ir.Operation.MOVE for block in result.blocks for one in block.insns)
+        == 2
+    )
+
+
+def test_shared_machine_pipeline_merges_fresh_identical_tails() -> None:
+    """Fresh frontends inherited C's two identical failure-result tails.
+
+    Tail sharing used to be called only by the C driver after the common
+    machine pipeline.  The allocated shape is frontend-independent, while
+    source-owned decoded instructions still need their distinct anchors.
+    """
+    body = lir.LirBody(
+        "f",
+        1,
+        (
+            lir.LirBlock(1, (_compare(1), _branch(2, "je", 20)), (20, 10)),
+            lir.LirBlock(10, (_inserted(_move(10, ir.Imm(0, 2))), _inserted(_jump(11, 30))), (30,)),
+            lir.LirBlock(20, (_inserted(_move(20, ir.Imm(0, 2))), _inserted(_jump(21, 30))), (30,)),
+            lir.LirBlock(30, (_return(30),), ()),
+        ),
+        {},
+        {},
+    )
+
+    result = flow.machine({}, frame.Frame(0), {})[-1].transform(body)
     physical = [
         one.what
         for block in result.blocks

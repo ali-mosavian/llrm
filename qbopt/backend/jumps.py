@@ -16,12 +16,30 @@ from qbopt.model.passes import LIRTransform
 
 
 class ControlFlow(LIRTransform):
-    """Thread and fold allocated edges after every machine-shaping phase."""
+    """Settle allocated tails and edges after every machine-shaping phase."""
 
     name = "jumps"
 
     def transform(self, body: lir.LirBody) -> lir.LirBody:
-        return threaded(placed(body))
+        return optimized(body)
+
+
+def optimized(body: lir.LirBody) -> lir.LirBody:
+    """Choose the cheapest common-tail fixed point without adding hot work."""
+    from qbopt.backend import machinedce
+
+    candidate = placed(body)
+    baseline = threaded(candidate)
+    # Merging one physical tail may make the condition selecting between its
+    # former copies dead; deleting that compare can in turn make predecessor
+    # tails identical.  Settle those two machine facts before final threading
+    # chooses fall-throughs.  Source-owned tails are refused by ``_tail_key``.
+    for _round in range(max(1, len(candidate.blocks) + len(candidate.insns))):
+        before = candidate
+        candidate = machinedce.eliminated(merged(candidate))
+        if candidate is before:
+            break
+    return preferred(baseline, threaded(candidate))
 
 
 def placed(body: lir.LirBody) -> lir.LirBody:
@@ -149,7 +167,7 @@ def merged(body: lir.LirBody) -> lir.LirBody:
 
 
 def _tail_key(block: lir.LirBlock) -> tuple | None:
-    """The complete physical form of a mergeable block."""
+    """The complete physical form of a fresh, mergeable block."""
     if block.phis:
         return None
     shaped = []
@@ -157,6 +175,7 @@ def _tail_key(block: lir.LirBlock) -> tuple | None:
         what = one.what
         if (
             what is None
+            or not one.inserted
             or what.op in {ir.Operation.BARRIER, ir.Operation.CALL, ir.Operation.DATA}
             or one.symbol is True
             or one.group is not None

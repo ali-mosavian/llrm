@@ -26,9 +26,46 @@ iteration updates this file in the same commit.
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, dying-base indexed-form unfolding, and local constant, frame, relocatable-address, and provenance-disjoint incoming-argument rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
 | Loop optimization | partial | exact pre/post-tested recurrences and symbolic sentinels, target-priced exact nested-recurrence rewind, complete nested-initializer LICM, dead-control countdowns with zero-trip guards, complete-affine spill/recompute pricing, precise-volatile-aware LICM, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling with exact-trip-amortized growth plus a pre-folding complete-sequence/pressure proof and bounded public defaults, post-specialization associative integer constant composition, and machine-neutral whole-range pressure forecasting exist; versioning, partial unrolling, constraint-complete candidate-set forecasting, and compile-time candidate memoization remain. |
 | Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs (including closed recursive SCCs in C and object paths), constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, post-inline constant folding through phi edges and linear corridors, private immutable numeric-data initializer facts, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
-| Post-allocation quality | partial | copy propagation, machine CSE/DCE, shared final block placement/threading/fall-through elision, tail sharing and byte-neutral source-unowned terminal-return duplication, dead-register frame-copy shuttles, dying-input commutative result transfer, synthetic high-word reload narrowing, target-priced 67h LEA selection including source-owned loaded scale/add tails and constant/register sums, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
+| Post-allocation quality | partial | copy propagation, machine CSE/DCE, shared final block placement/threading/fall-through elision and fresh-tail sharing, plus byte-neutral source-unowned terminal-return duplication, dead-register frame-copy shuttles, dying-input commutative result transfer, synthetic high-word reload narrowing, target-priced 67h LEA selection including source-owned loaded scale/add tails and constant/register sums, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware decoded-tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 124. Share fresh allocated tails in the common pipeline — 2026-09-19
+
+Identical-tail merging and its machine-DCE fixed point formerly ran in the C
+driver after the common allocated-LIR pipeline.  A fresh frontend consuming
+`flow.machine()` therefore retained independent copies of identical failure
+and result tails.  The allocated form and profitability question are not
+frontend-specific, so the existing fixed point now belongs to the common
+final-control-flow phase.  The later C-only copy was deleted.
+
+Only fresh instructions are eligible.  Decoded/source-owned instructions
+retain distinct byte, relocation and line anchors until source-map-aware tail
+sharing can reconcile those records.  One regression fails before the move by
+retaining two fresh zero-result tails; a second asserts that the same physical
+shape with source ownership remains two tails.
+
+Real VBDOS `/R` D_SURF, compiled through the uncommitted QB integration with
+the current main backend, changes as follows:
+
+| metric | iteration 123 | shared fresh tails | change |
+|---|---:|---:|---:|
+| code bytes | 15,802 | 15,734 | -68 (-0.4%) |
+| object bytes | 25,119 | 25,039 | -80 (-0.3%) |
+| emitted procedure instructions | 5,039 | 5,017 | -22 (-0.4%) |
+| gap to BC's 12,570 code bytes | 3,232 | 3,164 | -68 |
+
+The raw listing shows four independently reached failure/zero-result families
+redirected to one existing physical tail; no source operation was duplicated
+or discarded.  A small C structural probe likewise emits one shared zero
+return, matching GCC 16.2's shape; Clang 21 shares the final return after
+selecting a branchless value computation.  The probe reports the same nine
+estimated dynamic instructions for qbopt, GCC and Clang after ABI
+normalization.  Production C nbody is byte-for-byte unchanged at 1,083 bytes
+and 283 instructions, as are both reference listings.  Raw objects, stage
+dumps and references are under `build/quality/iter124-shared-tails-r`,
+`build/quality/iter124-shared-tails-only`, and
+`build/quality/iter124-shared-tails`.
 
 ### 123. Put final block placement in the shared machine pipeline — 2026-09-19
 
