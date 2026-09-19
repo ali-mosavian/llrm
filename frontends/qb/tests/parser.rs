@@ -72,6 +72,53 @@ fn default_typing_is_module_wide_and_yields_to_suffix_and_as() {
 }
 
 #[test]
+fn module_for_temporaries_live_in_module_data_not_a_procedure_frame() {
+    // qb-qrender MAIN reserved its complete 7.5 KiB BC_DATA extent again as
+    // a B$ENRA frame because FOR's hidden end/step cells were based on the
+    // module data cursor. That consumed nearly the complete linked stack and
+    // made B$DDIM's string allocation overwrite SYS_PARSE_ARGS' local `cl`.
+    let module = parse(
+        "dim shared padding(0 to 1023) as integer\n\
+         dim i as integer\n\
+         for i = 1 to 2\n\
+         next i\n",
+        Dialect::VbDos,
+    )
+    .unwrap();
+    let hir = compile(&module, "module_for", Dialect::VbDos, "vbdos").unwrap();
+    for name in ["$forEnd", "$forStep"] {
+        let start = hir
+            .find(&format!("\"name\":\"{name}"))
+            .expect("hidden FOR cell");
+        let place = &hir[start..hir[start..].find('}').expect("place end") + start];
+        assert!(place.contains("\"storage\":\"module\""), "{place}");
+        assert!(!place.contains("\"offset\":-"), "{place}");
+    }
+}
+
+#[test]
+fn control_not_inverts_the_branch_after_materializing_bitwise_not() {
+    // qb-qrender's camera walk reached node -1, then never left
+    // `while not (nodeIndex and &h8000)`: materializing NOT changed &h8000
+    // into the still-true &h7fff. VBDOS /O still materializes that value, but
+    // exchanges the successors of any control expression containing NOT.
+    let module = parse(
+        "dim nodeIndex as integer\n\
+         while not (nodeIndex and &h8000)\n\
+         nodeIndex = nodeIndex - 1\n\
+         wend\n",
+        Dialect::VbDos,
+    )
+    .unwrap();
+    let hir = compile(&module, "control_not", Dialect::VbDos, "vbdos").unwrap();
+    assert!(hir.contains("\"op\":\"and\""));
+    assert!(hir.contains("\"op\":\"not\""));
+    assert!(hir.contains(
+        "\"kind\":\"branch\",\"operands\":[{\"tag\":\"value\",\"value\":3}],\"targets\":[4,3]"
+    ));
+}
+
+#[test]
 fn procedure_default_types_are_scoped_to_local_declarations() {
     // A VBDOS executable with this shape reports a two-byte inherited A local
     // and an eight-byte procedure-local B local. The following procedure must
@@ -255,6 +302,21 @@ fn dynamic_array_redim_keeps_descriptor_identity() {
     let hir = compile(&module, "redim", Dialect::VbDos, "vbdos").unwrap();
     assert!(hir.contains("\"callee\":\"B$RDIM\""));
     assert!(hir.to_ascii_lowercase().contains("samples$descriptor"));
+}
+
+#[test]
+fn unspecified_rank_array_uses_the_bascom_eight_dimension_descriptor() {
+    // Fresh SYS reserved 254 bytes for each one-dimensional shared array and
+    // exceeded DGROUP at link time.  Raw VBDOS SYS.OBJ reserves 46 bytes:
+    // the 14-byte AD header plus BASCOM's eight four-byte DM records.
+    let module = parse(
+        "dim shared samples() as long\nredim samples(1 to 8) as long\n",
+        Dialect::VbDos,
+    )
+    .unwrap();
+    let hir = compile(&module, "redim", Dialect::VbDos, "vbdos").unwrap();
+    assert!(hir.contains("\"name\":\"SAMPLES$descriptor\",\"offset\":0,\"storage\":\"module\",\"symbol\":1,\"type\":"));
+    assert!(hir.contains("\"kind\":\"opaque\",\"name\":\"SAMPLES descriptor\",\"rank\":0,\"signed\":null,\"width\":46"));
 }
 
 #[test]
@@ -703,6 +765,20 @@ fn floating_literal_is_typed_readonly_data_before_mir() {
     assert!(hir.contains("\"bytes\":[205,204,204,61]"));
     assert!(hir.contains("\"name\":\"$float3\""));
     assert!(hir.contains("\"op\":\"load\""));
+}
+
+#[test]
+fn identical_floating_literals_share_the_module_constant_pool() {
+    // QGL's repeated coordinate constants inflated BC_CN by 3440 bytes and
+    // made the VBDOS runtime report Out of string space before MAIN began.
+    let module = parse(
+        "dim first as single\ndim second as single\nfirst = .5\nsecond = .5\n",
+        Dialect::VbDos,
+    )
+    .unwrap();
+    let hir = compile(&module, "pooled_float", Dialect::VbDos, "vbdos").unwrap();
+    assert!(hir.contains("\"name\":\"$float3\""));
+    assert!(!hir.contains("\"name\":\"$float4\""));
 }
 
 #[test]

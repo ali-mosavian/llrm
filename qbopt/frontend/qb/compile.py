@@ -542,14 +542,15 @@ def _runtime_frame(
     runtime: hir.RuntimeProfile,
     temporary_strings: int,
 ) -> tuple[lir.LirBody, dict[int, masm.Callee]]:
-    """Enter and leave a BASIC runtime frame inside the native shell.
+    """Enter and leave a BASIC runtime frame.
 
     B$FCMD and the managed-string runtime consult BASIC's current frame, so a
-    merely zeroed C-style frame is not sufficient. MASM's small native shell
-    saves BP (and any used SI/DI) before this body; account for those words in
-    incoming parameter addresses. B$ENRA then owns a runtime-specific header
-    immediately below BP, so every source local and spill must be rebased below
-    that header. B$EXSA returns to the shell, whose epilogue restores its saves.
+    merely zeroed C-style frame is not sufficient. B$ENRA itself pushes BP,
+    installs the BASIC frame chain, saves SI/DI, and allocates the local bytes;
+    B$EXSA reverses that work. The frontend therefore emits these procedures
+    without MASM's native shell and rebases only locals below the runtime
+    header. Raw QB/PDS/VBDOS listings all have MOV CX/MOV BX/CALL B$ENRA as the
+    first three instructions of a source procedure.
 
     BX is the maximum number of runtime-produced STRING temporaries an HIR
     instruction consumes and produces together. The runtime allocates that
@@ -558,6 +559,7 @@ def _runtime_frame(
     from resolved typed expressions, never from allocator spill slots.
     """
     size += size & 1
+    header = _RUNTIME_FRAME_HEADER[runtime]
     if size > 0x7FFE:
         raise EmissionError(f"{body.name}: {size} byte BASIC frame exceeds a 16-bit BP displacement")
     if not 0 <= temporary_strings <= 0xFFFF:
@@ -566,7 +568,13 @@ def _runtime_frame(
     cx = ir.Reg(Register.CX, 2)
     bx = ir.Reg(Register.BX, 2)
     enter = (
-        lir.Insn(serial, (serial, serial), ir.Semantics(ir.Operation.MOVE, "mov", (cx,), (ir.Imm(size, 2),)), (), ()),
+        lir.Insn(
+            serial,
+            (serial, serial),
+            ir.Semantics(ir.Operation.MOVE, "mov", (cx,), (ir.Imm(size, 2),)),
+            (),
+            (),
+        ),
         lir.Insn(
             serial + 1,
             (serial + 1, serial + 1),
@@ -617,21 +625,11 @@ def _runtime_frame(
         ),
     )
 
-    # masm's native shell precedes B$ENRA, so its saved words remain between
-    # the far return address and the source-level parameters.
-    saved = [low for whole, low in masm.SAVED.items() if whole in masm._roots(framed)]
-    adjustment = 2 + 2 * len(saved)  # pushed BP plus SI/DI actually used
-
-    header = _RUNTIME_FRAME_HEADER[runtime]
-
     def operand(where: ir.Loc) -> ir.Loc:
         if isinstance(where, (ir.Mem, ir.Address)) and where.addr is not None and where.addr.space is Space.FRAME:
-            # BASIC's BP frame has one stable geometric boundary even after
-            # allocation has discarded Mem.stack_argument: parameters are at
-            # positive displacements and locals are negative. The native shell
-            # moves only the former upward; B$ENRA's header moves only the
-            # latter downward.
-            moved = where.addr.disp + adjustment if where.addr.disp > 0 else where.addr.disp - header
+            # B$ENRA preserves the ordinary far-Pascal parameter offsets and
+            # inserts its own header below BP, between BP and source locals.
+            moved = where.addr.disp if where.addr.disp > 0 else where.addr.disp - header
             return replace(where, addr=replace(where.addr, disp=moved))
         return where
 
@@ -975,13 +973,18 @@ def _drop_machine_side_entry(
 
 
 _SEGMENT_SHAPE = {
+    "BR_DATA": (0x68, "BLANK"),
+    "BR_SKYS": (0x68, "BLANK"),
     "COMMON": (0x78, "BLANK"),
     "BC_DATA": (0x48, "BC_DATA"),
+    "NMALLOC": (0x58, "BC_VARS"),
+    "ENMALLOC": (0x58, "BC_VARS"),
     "BC_FT": (0x48, "BC_SEGS"),
     "BC_CN": (0x68, "BC_SEGS"),
     "BC_DS": (0x68, "BC_SEGS"),
     "BC_SAB": (0x48, "BC_SEGS"),
     "BC_SA": (0x48, "BC_SEGS"),
+    "FDATA": (0x60, "FAR_DATA"),
     "FSL_CONST": (0x60, "FAR_DATA"),
 }
 
@@ -991,7 +994,7 @@ def _basic_segment_classes(data: bytes, code: str) -> bytes:
     records = omf.parse(data)
     old_names = omf.names(records)
     names = list(old_names)
-    for name in ("BC_CODE", "BLANK", "BC_DATA", "BC_SEGS"):
+    for name in ("BC_CODE", "BLANK", "BC_DATA", "BC_VARS", "BC_SEGS"):
         if name not in names:
             names.append(name)
     name_index = {name: index for index, name in enumerate(names) if index}
@@ -1246,13 +1249,18 @@ def assembled(program: hir.Program) -> masm.Module:
     externs.update((name, "byte") for name in external_data)
     code = f"{_object_name(module.name)}_CODE"
     basic_data = (
+        ("BR_DATA", ()),
+        ("BR_SKYS", ()),
         ("COMMON", (masm.Label("$QB$COMMON"),)),
         ("BC_DATA", (masm.Label("$QB$DATA"), bytes(6), *data_by_segment["BC_DATA"])),
+        ("NMALLOC", ()),
+        ("ENMALLOC", ()),
         ("BC_FT", (masm.Label("$QB$FT"),)),
         ("BC_CN", (masm.Label("$QB$CN"), *data_by_segment["BC_CN"])),
         ("BC_DS", (masm.Label("$QB$DS"), *read_data, b"\xff\xff\x01")),
         ("BC_SAB", (masm.Label("$QB$SAB"),)),
         ("BC_SA", (masm.Label("$QB$SA"), masm.Pointer("$QB$HEADER", 0, True))),
+        ("FDATA", ()),
         ("FSL_CONST", data_by_segment["FSL_CONST"]),
     )
     return masm.Module(
@@ -1262,8 +1270,74 @@ def assembled(program: hir.Program) -> masm.Module:
         publics=tuple(procedure.name for procedure in procedures if procedure.public),
         data=basic_data,
         procedures=tuple(procedures),
-        private=frozenset({"FSL_CONST"}),
+        private=frozenset({"FDATA", "FSL_CONST"}),
     )
+
+
+def _basic_listing(procedure: masm.Procedure, number: int) -> list[masm.Item]:
+    """Remove the native shell when B$ENRA/B$EXSA own the whole frame.
+
+    The shared MASM model deliberately supplies a C-shaped BP shell whenever
+    a body addresses BP or calls anything. That is correct for its ordinary
+    users but not for a Microsoft BASIC source procedure: B$ENRA itself saves
+    BP, SI and DI, and B$EXSA restores them. Keep this source-ABI exception in
+    the frontend rather than teaching the shared backend about BASIC frames.
+    """
+    listing = masm.listing(procedure, number)
+    if not any(callee.name == "B$ENRA" for callee in procedure.callees.values()):
+        return listing
+    enter, leave = masm._frame_parts(procedure)
+    if listing[: len(enter)] != enter:
+        raise EmissionError(f"{procedure.name}: native frame prefix changed shape")
+    listing = listing[len(enter) :]
+    stripped: list[masm.Item] = []
+    at = 0
+    while at < len(listing):
+        after = at + len(leave)
+        if (
+            leave
+            and listing[at:after] == leave
+            and after < len(listing)
+            and isinstance(listing[after], ir.Semantics)
+            and listing[after].op is ir.Operation.RETURN
+        ):
+            at = after
+            continue
+        stripped.append(listing[at])
+        at += 1
+    return stripped
+
+
+def _basic_code(
+    segment: omfwrite.Segment,
+    module: masm.Module,
+    symbols: dict[str, tuple[int, int]],
+) -> None:
+    """Encode BASIC listings with their frontend-owned runtime frame shell."""
+    items: list[omfwrite.Encoded] = []
+    for number, procedure in enumerate(module.procedures):
+        items.append(masm.Label(procedure.name))
+        for item in _basic_listing(procedure, number):
+            try:
+                items += omfwrite._items(item, module.names, number)
+            except omfwrite.Unencodable as error:
+                raise omfwrite.Unencodable(f"{procedure.name}: {error}") from error
+    labels = omfwrite._relaxed(items)
+    at = 0
+    for item in items:
+        match item:
+            case masm.Label(name=name):
+                symbols[name] = (0, at)
+            case omfwrite.Piece(code=code, fixups=fixups):
+                segment.put(code, fixups)
+            case omfwrite.Jump(name=name, label=label, long=long):
+                segment.put(omfwrite._jump(name, labels[label], at, long).code)
+            case omfwrite.Near(name=name) if name in labels:
+                segment.put(bytes([0xE8]) + struct.pack("<h", labels[name] - (at + 3)))
+            case omfwrite.Near(name=name):
+                segment.put(bytes(3), (omfwrite.Fixup(1, omfwrite.OFFSET, name, relative=True),))
+                segment.image[at] = 0xE8
+        at = len(segment.image)
 
 
 def object_bytes(program: hir.Program, source: str | Path) -> bytes:
@@ -1274,7 +1348,12 @@ def object_bytes(program: hir.Program, source: str | Path) -> bytes:
     # serializer to write OMF. This stays frontend-owned and leaves the shared
     # assembly model and writer contract unchanged.
     segments = [omfwrite.Segment(module.code, "CODE", False)]
-    named = {"_DATA": omfwrite.Segment("_DATA", "DATA", True)}
+    # A BASIC object does not own C's `_DATA` segment.  Even a zero-length
+    # declaration is observable: when this is the first link object it makes
+    # LINK establish the DATA class before BC_DATA, unlike BC/PDS/VBDOS, and
+    # the BASIC runtime then initializes its local heap against the wrong
+    # DGROUP boundary.
+    named: dict[str, omfwrite.Segment] = {}
     for name, _items in module.data:
         if name not in named:
             private = name in module.private
@@ -1284,7 +1363,7 @@ def object_bytes(program: hir.Program, source: str | Path) -> bytes:
     for name, items in module.data:
         index = [one.name for one in segments].index(name)
         _object_data(segments[index], index, items, symbols)
-    omfwrite._code(segments[0], module, symbols)
+    _basic_code(segments[0], module, symbols)
 
     header = _header(program)
     code = segments[0]

@@ -19,6 +19,10 @@ const BOOLEAN: u32 = 5;
 const STRING: u32 = 6;
 const ANY: u32 = 7;
 const BYTE: u32 = 8;
+// BASCOM's declarative scanner reserves eight dimension records for an
+// array whose rank is not present in its declaration.  This is an ABI storage
+// rule, distinct from the language's 60-index parser ceiling.
+const UNSPECIFIED_ARRAY_RANK: usize = 8;
 const READ_DATA_OBJECT: &str = "$qb$readData";
 const STATEMENT_TABLE_OBJECT: &str = "$qb$statementTable";
 
@@ -223,6 +227,7 @@ struct Compiler {
     next_data: u32,
     def_segment_symbol: Option<u32>,
     far_string_segment_symbol: Option<u32>,
+    floating_literals: BTreeMap<(u32, Vec<u8>), u32>,
     default_types: [u32; 26],
     option_base: i64,
     statement_entries: Vec<(u32, u32, u16)>,
@@ -324,7 +329,7 @@ pub fn compile_with_options(
             let value_type = if is_array {
                 let descriptor = compiler.opaque_type(
                     format!("{} descriptor", parameter.declaration.name),
-                    14 + 4 * 60,
+                    14 + 4 * UNSPECIFIED_ARRAY_RANK,
                 );
                 compiler.pointer_type(descriptor)
             } else if parameter.segmented {
@@ -541,6 +546,7 @@ impl Compiler {
             next_data: 3,
             def_segment_symbol: None,
             far_string_segment_symbol: None,
+            floating_literals: BTreeMap::new(),
             default_types: [SINGLE; 26],
             option_base: 0,
             statement_entries: Vec::new(),
@@ -1158,8 +1164,10 @@ impl Compiler {
             return Ok(0);
         }
         if declaration.array && bounds.is_empty() {
-            let descriptor_type =
-                self.opaque_type(format!("{} descriptor", declaration.name), 14 + 4 * 60);
+            let descriptor_type = self.opaque_type(
+                format!("{} descriptor", declaration.name),
+                14 + 4 * UNSPECIFIED_ARRAY_RANK,
+            );
             let descriptor_place = self.next_place;
             self.next_place += 1;
             let descriptor_extent = self.width(descriptor_type);
@@ -2175,11 +2183,10 @@ impl Compiler {
         then_branch: &[Statement],
         else_branch: &[Statement],
     ) -> Result<(), SemanticError> {
-        let condition = self.truth(condition)?;
         let then_block = self.new_block();
         let else_block = self.new_block();
         let join_block = self.new_block();
-        self.terminate("branch", vec![condition], vec![then_block, else_block])?;
+        self.condition(condition, then_block, else_block, true)?;
 
         self.select_block(then_block);
         self.statement_list(then_branch)?;
@@ -2452,7 +2459,13 @@ impl Compiler {
         while_true: bool,
     ) -> Result<(), SemanticError> {
         let condition = self.truth(expression)?;
-        let targets = if while_true {
+        // VBDOS /O materializes integer NOT normally, then reverses the
+        // control transfer when NOT occurs anywhere in an IF/WHILE/DO
+        // expression.  This is observable for non-canonical values and is
+        // relied on by the conventional mask spelling
+        // `WHILE NOT (flags AND bit)`.
+        let branch_on_true = while_true ^ contains_not(expression);
+        let targets = if branch_on_true {
             vec![true_target, false_target]
         } else {
             vec![false_target, true_target]
@@ -4968,21 +4981,44 @@ impl Compiler {
 
     fn compiler_temporary(&mut self, prefix: &str, type_id: u32) -> Result<u32, SemanticError> {
         let extent = self.width(type_id);
-        if self.data_offset + extent > 65536 {
+        let storage = self.implicit_storage;
+        if storage != "static" && self.data_offset + extent > 65536 {
             return self.fail("temporary exceeds the 64 KiB frame budget");
         }
+        let (offset, symbol) = if storage == "static" {
+            let symbol = self.next_data;
+            self.next_data += 1;
+            self.data.push(DataObject {
+                id: symbol,
+                name: format!("{prefix}${}", self.next_place),
+                bytes: vec![0; extent],
+                readonly: false,
+                relocations: Vec::new(),
+                linkage: "internal",
+                address: "near",
+            });
+            (0, symbol)
+        } else {
+            (
+                self.place_offset(storage, extent),
+                if storage == "local" { 0 } else { 1 },
+            )
+        };
         let id = self.next_place;
         self.next_place += 1;
         self.places.push(Place {
             id,
             name: format!("{prefix}{id}"),
             type_id,
-            offset: -((self.data_offset + extent) as isize),
+            offset,
             extent,
-            storage: "local",
-            symbol: id,
+            storage,
+            symbol,
         });
-        self.data_offset += extent;
+        if storage != "static" {
+            self.data_offset += extent;
+            self.reserve_module_data(storage);
+        }
         Ok(id)
     }
 
@@ -5069,17 +5105,28 @@ impl Compiler {
                 })?,
             _ => return self.fail("floating literal has a non-floating type"),
         };
-        let symbol = self.next_data;
-        self.next_data += 1;
-        self.data.push(DataObject {
-            id: symbol,
-            name: format!("$float{symbol}"),
-            bytes,
-            readonly: true,
-            relocations: Vec::new(),
-            linkage: "internal",
-            address: "near",
-        });
+        // BC pools identical floating constants across a whole module. Apart
+        // from wasting BC_CN, keeping one object per occurrence can consume
+        // the near string heap before the first BASIC statement in a large
+        // program: QGL's 19 modules crossed that boundary by 3440 bytes.
+        let key = (type_id, bytes.clone());
+        let symbol = if let Some(symbol) = self.floating_literals.get(&key) {
+            *symbol
+        } else {
+            let symbol = self.next_data;
+            self.next_data += 1;
+            self.data.push(DataObject {
+                id: symbol,
+                name: format!("$float{symbol}"),
+                bytes,
+                readonly: true,
+                relocations: Vec::new(),
+                linkage: "internal",
+                address: "near",
+            });
+            self.floating_literals.insert(key, symbol);
+            symbol
+        };
         let place = self.next_place;
         self.next_place += 1;
         self.places.push(Place {
@@ -6033,6 +6080,19 @@ fn binary_name(op: Binary) -> &'static str {
         Binary::Multiply => "mul",
         Binary::Divide => "fdiv",
         Binary::Power => "call",
+    }
+}
+
+fn contains_not(expression: &Expr) -> bool {
+    match expression {
+        Expr::Unary { op, operand, .. } => *op == Unary::Not || contains_not(operand),
+        Expr::Binary { left, right, .. } => contains_not(left) || contains_not(right),
+        Expr::Apply { arguments, .. } => arguments.iter().any(contains_not),
+        Expr::Index { base, indices, .. } => {
+            contains_not(base) || indices.iter().any(contains_not)
+        }
+        Expr::Field { base, .. } => contains_not(base),
+        Expr::Literal(..) | Expr::Name(..) => false,
     }
 }
 

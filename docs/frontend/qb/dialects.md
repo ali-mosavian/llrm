@@ -44,6 +44,15 @@ the module defaults and then applies its own body-level directives to local
 declarations and implicit locals. The isolated `default-types.bas` fresh-object
 probe prints `2 2 2` followed by `4 4 8 0` under all three Microsoft runtimes.
 
+VBDOS `/O` has an observable control-context rule for `NOT`: the integer
+operation is still materialized, then the branch successors are exchanged if
+`NOT` occurs anywhere in the condition. Thus `NOT 5` prints `-6`, while `IF
+(NOT 5) THEN` takes the false arm; the exchange also survives an enclosing
+arithmetic expression. HIR keeps the ordinary bitwise `not` value and records
+the exchanged successor order on `IF`, `WHILE`, and `DO`. This is required by
+the common BASIC mask spelling `WHILE NOT (flags AND bit)` and keeps the fact
+out of MIR optimization and machine lowering.
+
 ## Evidence hierarchy
 
 The QBasic grammar at

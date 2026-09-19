@@ -208,3 +208,40 @@ bytes, confirming that generic huge-pointer normalizationâ€”not object framingâ€
 was its dominant measured inflation. A live `dm3ish.bsp` run still reaches the
 `colormap` marker and remains black before the first frame, so footprint and
 runtime status remain separate gates.
+
+## 2026-09-19: QGL poly-draw reaches its first frame
+
+This comparison is the QGL poly-draw branch after matching the canonical
+`dm3ish.bsp`, `assets.zip`, and staged raw assets. The qbopt executable reaches
+the visible `FIRE TO START` frame. The last startup hang was VBDOS's
+control-context `NOT` successor exchange in `R_MARK_LEAVES`; fixing it changed
+HIR control flow and did not add a MIR or backend special case.
+
+| Module | BC bytes | qbopt bytes | Delta |
+| --- | ---: | ---: | ---: |
+| COMMON | 2,542 | 2,823 | +281 |
+| D_MDL | 3,104 | 1,968 | -1,136 |
+| D_SURF | 12,498 | 10,434 | -2,064 |
+| D_TURB | 201 | 193 | -8 |
+| ENT | 19,814 | 36,641 | +16,827 |
+| H_BENCH | 11,076 | 14,118 | +3,042 |
+| H_FRAME | 10,692 | 12,860 | +2,168 |
+| IN_MAIN | 677 | 681 | +4 |
+| MAIN | 9,231 | 10,255 | +1,024 |
+| MODEL | 4,693 | 4,270 | -423 |
+| MOD_TEX | 3,931 | 5,379 | +1,448 |
+| PL_MOVE | 41,785 | 46,295 | +4,510 |
+| QGLSTUB | 239 | 218 | -21 |
+| R_BSP | 6,556 | 7,277 | +721 |
+| SCREEN | 16,444 | 22,984 | +6,540 |
+| SND | 1,546 | 631 | -915 |
+| SYS | 4,312 | 5,595 | +1,283 |
+| VID | 763 | 621 | -142 |
+| VIEW | 4,118 | 4,779 | +661 |
+| **BASIC-owned BC_CODE** | **154,222** | **188,022** | **+33,800** |
+| **Complete linked code** | **252,243** | **280,007** | **+27,764** |
+
+The BASIC-owned scope is **21.9% above BC**; complete linked code, which
+charges BC for the helpers behind its calls, is **11.0% above BC**. Three
+modules already beat BC materially (`D_MDL`, `D_SURF`, and `SND`). `ENT`,
+`SCREEN`, and `PL_MOVE` are the measured next code-quality targets.

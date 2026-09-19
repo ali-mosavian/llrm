@@ -156,7 +156,7 @@ def test_qb45_numeric_read_data_reaches_typed_hir_and_fresh_omf() -> None:
     }
 
     listing = masm.text(qb_compile.assembled(program))
-    assert "call far ptr B$ENRA" in listing
+    assert "B$ENRA" not in externals
     assert "call far ptr B$RDI2" in listing
     assert "call far ptr B$RDI4" in listing
     assert "call far ptr B$RDR4" in listing
@@ -583,6 +583,40 @@ def test_vbdos_module_header_records_the_measured_compiler_switches() -> None:
     assert int.from_bytes(code[46:48], "little") == 0x13C4
 
 
+def test_fresh_basic_object_does_not_predeclare_the_c_data_class() -> None:
+    """QGL stayed in the local heap scanner: empty `_DATA` moved BC_DATA behind the C runtime."""
+    source = qb_driver.parsed(ROOT / "frontends/qb/fixtures/emission.bas")
+    records = omf.parse(qb_compile.object_bytes(source, "emission.bas"))
+    names = [segment[0] for segment in omf.segments(records) if segment is not None]
+
+    # A BC module owns BASIC's BC_DATA/BC_SEGS classes.  Declaring an empty C
+    # DATA segment in the first link object makes LINK establish the opposite
+    # DGROUP class order from VBDOS BC and breaks the runtime heap boundary.
+    assert "_DATA" not in names
+    assert names == [
+        "EMISSION_CODE",
+        "BR_DATA",
+        "BR_SKYS",
+        "COMMON",
+        "BC_DATA",
+        "NMALLOC",
+        "ENMALLOC",
+        "BC_FT",
+        "BC_CN",
+        "BC_DS",
+        "BC_SAB",
+        "BC_SA",
+        "FDATA",
+        "FSL_CONST",
+    ]
+
+    # The two BC_VARS sentinels are not decorative. The runtime uses their
+    # offsets as its near-allocation range, so letting a later library member
+    # introduce them after BC_CN makes local-heap initialization scan data.
+    segments = omf.segments(records)
+    assert [segments[index][0] for index in omf.groups(records)["DGROUP"]] == names[1:-2]
+
+
 def test_pds_alternate_math_module_header_records_the_measured_switch() -> None:
     """PDFPA reached LINK, then BCL71ANR rejected the module during initialization."""
     source = qb_driver.parsed(
@@ -698,7 +732,7 @@ def test_qb_long_function_boundary_uses_the_legacy_dx_ax_pair() -> None:
 
 
 def test_qb_runtime_frame_establishes_and_zero_initializes_managed_locals() -> None:
-    """COMMAND$ was empty in a SUB because its local string had no current BASIC runtime frame."""
+    """SYS_PARSE_ARGS exhausted string space when a native shell preceded B$ENRA."""
     from qbopt.objectfile import omf
     from qbopt.objectfile import module as object_module
 
@@ -711,6 +745,11 @@ def test_qb_runtime_frame_establishes_and_zero_initializes_managed_locals() -> N
 
     assert calls[:3] == ["B$ENRA", "B$DDIM", "B$FCMD"]
     assert calls[-1] == "B$EXSA"
+    code_segment = omf.public_definitions(records)["SHOWCOMMAND"][0]
+    image = omf.segment_image(records, code_segment, omf.segments(records)[code_segment][1])
+    # B$ENRA owns PUSH BP/MOV BP, the BASIC frame link, SI/DI and local
+    # reservation. VBDOS starts the procedure with MOV CX/MOV BX/CALL.
+    assert image[start : start + 7] == bytes.fromhex("b91800bb01009a")
 
 
 def test_vbdos_managed_locals_begin_below_the_runtime_frame_header() -> None:
@@ -738,7 +777,9 @@ def test_runtime_frame_keeps_parameters_above_bp() -> None:
     listing = masm.text(qb_compile.assembled(source))
     procedure = listing.split("ADDONE proc far", 1)[1].split("ADDONE endp", 1)[0]
 
-    assert "dword ptr [bp+8]" in procedure
+    # B$ENRA owns the frame directly, so the first far-Pascal parameter stays
+    # at BP+6. The removed native BP shell used to shift this to BP+8.
+    assert "dword ptr [bp+6]" in procedure
     assert "dword ptr [bp-14]" not in procedure
 
 

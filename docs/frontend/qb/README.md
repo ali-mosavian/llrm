@@ -109,14 +109,17 @@ array and `B$RDIM` rejected it. Once its descriptor became runtime-owned, the
 frontend still treated the allocation as DGROUP data. Direct comparison with
 VBDOS `MOD_TEX.OBJ` showed the owned-array spelling: selector at descriptor
 `+2`, adjusted offset at `+0Ah`. The QB semantic layer now constructs a huge
-pointer from those fields. The all-fresh image completes map and texture
-loading through `colormap`; the remaining runtime boundary is in or before the
-first rendered frame, not texture loading. A coarse substitution with the
-eight frame-path modules from BC completes five frames. Listing comparison
-then found fresh `R_BSP` reading numeric array formals from descriptor `+0`,
-while VBDOS uses selector `+2` and adjusted offset `+0Ah`. The semantic fix is
-applied across all numeric/UDT dynamic descriptors and the corrected module
-set links; a new long emulator run remains the next functional confirmation.
+pointer from those fields. Listing comparison then found fresh `R_BSP` reading
+numeric array formals from descriptor `+0`, while VBDOS uses selector `+2` and
+adjusted offset `+0Ah`.
+
+The all-fresh QGL poly-draw image now loads `dm3ish.bsp` and reaches its visible
+`FIRE TO START` frame. After the descriptor correction, its first walk still
+did not terminate: `WHILE NOT (nodenr AND &H8000)` materialized `NOT &H8000`
+as the true value `&H7FFF`. VBDOS `/O` materializes the same integer result but
+reverses a control expression's successors when `NOT` occurs anywhere in it.
+HIR now records that successor order explicitly; no MIR or backend change was
+needed.
 [memory-model.md](memory-model.md) records the raw comparison.
 `tools/qbstages.py` writes input, HIR, semantic MIR, optimized MIR,
 physical MIR, LIR, every machine pass, and inline-x87 output adjacently under

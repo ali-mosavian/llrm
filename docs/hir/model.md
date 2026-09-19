@@ -102,6 +102,14 @@ transfer control temporarily. Non-local BASIC behavior must be expressed by
 the frontend using existing branches and calls; HIR does not introduce a
 second exception or coroutine system.
 
+Conditional successor order is semantic: target zero is taken when the HIR
+condition is true and target one when it is false. A frontend must encode any
+source-profile branch rule by choosing those successors before MIR. For
+example, VBDOS `/O` materializes integer `NOT` normally but exchanges a
+control expression's successors when it contains `NOT`; the QB frontend emits
+that exchanged HIR edge order. Optimizers and machine lowering therefore see
+ordinary explicit control flow and need no source-language exception.
+
 ## Instructions
 
 The initial instruction families are intentionally close to source semantics:

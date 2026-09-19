@@ -211,14 +211,27 @@ that the ABI does not guarantee. Optimization never treats the call instruction
 itself as cost-free; its semantic operation is expanded only when it is on the
 native allowlist.
 
-Fresh procedures use a frontend-owned BASIC runtime frame inside the shared
-backend's small native shell. `B$ENRA` establishes the runtime's current frame
-and zeroes the local extent; `B$EXSA` is emitted before every return. The
-shell's saved words are included when incoming parameter offsets are
-materialized. Source locals and spills are additionally rebased below the
+Fresh procedures use the frontend-owned BASIC runtime frame directly, without
+the shared backend's native BP shell. `B$ENRA` pushes BP, installs the BASIC
+frame chain, saves SI/DI, and zeroes the local extent; `B$EXSA` reverses that
+work before the far return. Source locals and spills are rebased below the
 runtime-owned header: 10 bytes for QB, 18 for PDS, and the measured 20 for
 VBDOS. Before that rebase, a local array descriptor occupied VBDOS's frame-link
 words and the reduced executable failed immediately after `B$EXSA`.
+
+Compiler-created cells follow their enclosing storage class. A module-level
+`FOR` end/step value is module data, a STATIC procedure's value is a private
+data object, and an automatic procedure's value is a frame cell. Using the
+module-data cursor as a negative BP displacement made qb-qrender's module entry
+reserve 7.5 KiB again on the stack; `B$DDIM` then allocated string storage over
+a live `SYS_PARSE_ARGS` local. The corrected module frame dropped from `1DA2h`
+bytes to allocator spill space, and the string corruption disappeared.
+
+An unspecified-rank dynamic array descriptor reserves BASCOM's eight-
+dimension envelope: a 14-byte header plus eight four-byte dimension records,
+46 bytes total. The language parser's larger subscript ceiling is not an ABI
+descriptor size. Identical floating literals are pooled per module, matching
+BC and avoiding needless pressure on VBDOS's near constant/string space.
 
 `BX` at `B$ENRA` counts frame-owned dynamic-STRING descriptors. Runtime call
 results such as `COMMAND$`, `LTRIM$`, `RTRIM$`, `LDFS`, and `SCAT` stay on the
