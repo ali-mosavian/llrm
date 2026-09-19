@@ -8,6 +8,8 @@ from pathlib import Path
 import pytest
 
 from qbopt import wholeseg
+from qbopt.model import ir
+from qbopt.model import lir
 from qbopt.backend import masm
 from qbopt.objectfile import omf
 from qbopt.backend import omfwrite
@@ -17,6 +19,38 @@ ROOT = Path(__file__).resolve().parents[1]
 JWASM = shutil.which("jwasm") or str(Path.home() / "work/other/d32x/toolchains/native/bin/jwasm")
 sys.path.insert(0, str(ROOT / "tools"))
 import objcmp  # noqa: E402
+
+
+def test_fresh_emission_omits_an_explicit_jump_to_the_next_block() -> None:
+    """Fresh QB D_SURF retained 83 jumps whose target label was physically next.
+
+    SC_INIT alone printed ``jmp L21_2`` immediately before ``L21_2``.  A
+    frontend is allowed to present explicit CFG edges; final emission owns the
+    physical block order and must not encode an unconditional edge that has
+    become fall-through.
+    """
+    jump = lir.Insn(1, (1, 1), ir.Semantics(ir.Operation.JUMP, "jmp", target=2), (), ())
+    anchor = lir.Insn(1, (1, 1), ir.Semantics(ir.Operation.NOTHING, ""), (), ())
+    returned = lir.Insn(2, (2, 2), ir.Semantics(ir.Operation.RETURN, "ret"), (), ())
+    body = lir.LirBody(
+        "next",
+        1,
+        (
+            lir.LirBlock(1, (jump, anchor), (2,)),
+            lir.LirBlock(2, (returned,), ()),
+        ),
+        {},
+        {},
+    )
+    procedure = masm.Procedure("_next", True, False, body, 0, {})
+
+    assert [line.strip() for line in masm._procedure(procedure, {}, 0)] == [
+        "_next proc near",
+        "L0_1:",
+        "L0_2:",
+        "ret",
+        "_next endp",
+    ]
 
 
 def test_the_bc_frontend_uses_the_fresh_object_writer() -> None:

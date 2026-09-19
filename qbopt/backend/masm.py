@@ -168,7 +168,11 @@ def listing(procedure: Procedure, number: int) -> list[Item]:
     blocks = procedure.body.blocks
     for index, block in enumerate(blocks):
         out.append(Label(label(number, block.at)))
+        following = blocks[index + 1].at if index + 1 < len(blocks) else None
+        fallthrough = _fallthrough_jump(block, following)
         for one in block.insns:
+            if one is fallthrough:
+                continue
             what = one.what
             if what is None:
                 raise Unprintable(f"{procedure.name} at {one.at}: an instruction with no semantics")
@@ -195,6 +199,30 @@ def listing(procedure: Procedure, number: int) -> list[Item]:
         if fall is not None and (index + 1 == len(blocks) or blocks[index + 1].at != fall):
             out.append(ir.Semantics(ir.Operation.JUMP, "jmp", target=fall))
     return out
+
+
+def _fallthrough_jump(block: lir.LirBlock, following: int | None) -> lir.Insn | None:
+    """The explicit edge that physical adjacency makes free, if there is one.
+
+    Frontends may keep every CFG edge explicit through allocation.  Listing is
+    where block order becomes physical, and therefore the first common layer
+    that can say an unconditional edge reaches the instruction already next.
+    NOTHING anchors after the edge own source locations but emit no bytes, so
+    the last instruction that actually prints is the one that matters.
+    """
+    if following is None or block.succ != (following,):
+        return None
+    last = next(
+        (
+            one
+            for one in reversed(block.insns)
+            if one.what is None or one.what.op is not ir.Operation.NOTHING or (one.what.name or "") not in ("", "nop")
+        ),
+        None,
+    )
+    if last is None or last.what is None or last.what.op is not ir.Operation.JUMP or last.what.target != following:
+        return None
+    return last
 
 
 def label(number: int, at: int) -> str:

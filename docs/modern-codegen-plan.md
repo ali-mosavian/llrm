@@ -26,9 +26,60 @@ iteration updates this file in the same commit.
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, dying-base indexed-form unfolding, and local constant, frame, relocatable-address, and provenance-disjoint incoming-argument rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
 | Loop optimization | partial | exact pre/post-tested recurrences and symbolic sentinels, target-priced exact nested-recurrence rewind, complete nested-initializer LICM, dead-control countdowns with zero-trip guards, complete-affine spill/recompute pricing, precise-volatile-aware LICM, costed 67h addressing before spill/recompute, specialization, rotation, peeling and exact unrolling with exact-trip-amortized growth plus a pre-folding complete-sequence/pressure proof and bounded public defaults, post-specialization associative integer constant composition, and machine-neutral whole-range pressure forecasting exist; versioning, partial unrolling, constraint-complete candidate-set forecasting, and compile-time candidate memoization remain. |
 | Whole-module optimization | partial | summaries, direct private readonly-effect and no-return proofs (including closed recursive SCCs in C and object paths), constant returns, a direct-call IPSCCP fixed point for source and MIR-derived actuals, including costed per-call cloning when other callers stay dynamic, post-inline constant folding through phi edges and linear corridors, private immutable numeric-data initializer facts, private procedure DCE, and conservative private-data DCE exist; recursive/full IPSCCP and broader global-elimination proofs remain. |
-| Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing and byte-neutral source-unowned terminal-return duplication, dead-register frame-copy shuttles, dying-input commutative result transfer, synthetic high-word reload narrowing, target-priced 67h LEA selection including source-owned loaded scale/add tails and constant/register sums, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
+| Post-allocation quality | partial | copy propagation, machine CSE/DCE, C-path tail sharing and byte-neutral source-unowned terminal-return duplication, final fresh-emitter fall-through elision, dead-register frame-copy shuttles, dying-input commutative result transfer, synthetic high-word reload narrowing, target-priced 67h LEA selection including source-owned loaded scale/add tails and constant/register sums, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware BC tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 122. Elide explicit edges made free by final block order — 2026-09-19
+
+The fresh QB frontend carried every CFG edge explicitly through allocation.
+The C driver already ran its separate block-placement cleanup, but the common
+fresh emitter printed an unconditional jump even when its target block was
+physically next.  Real D_SURF contained 83 instances, including three in
+`SC_INIT`; every one encoded as a two-byte short jump to the following label.
+
+Final listing is now symmetric about physical fall-through.  It already adds
+a jump when block placement separates an implicit CFG edge; it now omits the
+last emitting unconditional jump when the block has exactly one successor and
+that successor is the next physical block.  Trailing `NOTHING` source anchors
+remain, all non-adjacent and conditional edges remain explicit, and both MASM
+text and native OMF consume the same listing.  This is a general final-layout
+rule rather than a QB- or D_SURF-specific branch pattern.
+
+The focused regression failed first by printing `jmp L0_2` directly before
+`L0_2`.  It presents allocated LIR without calling the C driver's earlier
+threader, which is the frontend-independent contract that exposed the defect.
+After the change its listing has the two labels adjacent and no encoded jump.
+
+The current main backend was overlaid on the real uncommitted QB frontend and
+used to compile qrender's `D_SURF.BAS` with VBDOS `/R` array order.  The raw
+listing diff contains exactly 83 removed `jmp` lines and no other assembly
+change; the 166-byte code reduction therefore reconciles exactly with the 83
+two-byte encodings.
+
+| `D_SURF` metric | iteration 121 | final fall-through | change |
+|---|---:|---:|---:|
+| code bytes | 16,195 | 16,029 | -166 (-1.0%) |
+| object bytes | 25,523 | 25,346 | -177 (-0.7%) |
+| emitted procedure instructions | 5,265 | 5,182 | -83 (-1.6%) |
+| adjacent-target unconditional jumps | 83 | 0 | -83 |
+| `SC_INIT` bytes | 795 | 789 | -6 (-0.8%) |
+| `SC_INIT` instructions | 205 | 202 | -3 (-1.5%) |
+
+BC remains at 12,570 D_SURF code bytes and 547 bytes/161 instructions for
+`SC_INIT`, leaving respective gaps of 3,459 bytes (27.5%) and 242 bytes
+(44.2%).  Thus this cleanup is exact but not the dominant remaining issue:
+the 36 excess descriptor-field loads in `SC_INIT` still account for nearly
+all of its 41-instruction gap.
+
+A freestanding adjacent-label C probe was compiled with GCC 16.2 for i386 and
+Clang 21.  Both place the store immediately after entry and emit no branch,
+matching the rule.  The production C nbody path contained zero candidates
+because its earlier block placer had already done this work; disabling the
+new common rule produced byte-identical nbody assembly.  Its fresh 386 report
+is 1,083 bytes/283 instructions, with normalized static-instruction ratios of
+0.96x against Clang and 1.05x against GCC.  Raw D_SURF, probe, nbody and
+reference artifacts are under `build/quality/iter122-fallthroughs`.
 
 ### 121. Make omitted complete-peel tuning bounded — 2026-09-19
 
