@@ -821,6 +821,15 @@ VARIANTS[("B$ERAS", "vbdos")] = replace(
     direct_inputs=frozenset(),
 )
 
+# Fixed-length UDT/string assignment likewise receives source/destination far
+# pointers and both byte counts in its six stack words.  The implementation
+# evidence above retains unknown hidden/error transfers, but its ordinary
+# returning arm has no additional caller-register argument.
+VARIANTS[("B$ASSN", "vbdos")] = replace(
+    VARIANTS[("B$ASSN", "vbdos")],
+    direct_inputs=frozenset(),
+)
+
 # Emission-facing interfaces for QB45 routines newly reached by the demo
 # corpus. These deliberately do not turn into complete contracts: each call
 # keeps worst-case memory, clobber, control and error effects. The sole claim

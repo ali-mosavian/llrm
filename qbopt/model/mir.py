@@ -1139,11 +1139,21 @@ def _live_outs(body: _RaisedBody) -> dict[int, frozenset[Value]]:
                 outof[block.at] = here
                 changing = True
 
-    return {
-        block.at: frozenset(value for values in outof[block.at].values() for value in values)
-        for block in body.blocks
-        if not block.succ
-    }
+    result = {}
+    for block in body.blocks:
+        if block.succ:
+            continue
+        # A modelled return already names the ABI values its caller can
+        # observe.  Keeping every other register merely because the source
+        # instruction left bits there turns allocator provenance into public
+        # program semantics: an INTEGER procedure kept DX live as though it
+        # returned a LONG.  Unknown transfers retain the conservative full
+        # machine state assembled above.
+        if block.ops and block.ops[-1].kind is Kind.RETURN:
+            result[block.at] = frozenset(value for value in consumed(block.ops[-1]) if not value.flags)
+        else:
+            result[block.at] = frozenset(value for values in outof[block.at].values() for value in values)
+    return result
 
 
 def _with_live_outs(body: _RaisedBody) -> _RaisedBody:
@@ -2874,16 +2884,48 @@ def bodies(
     result = ir.decode_module(found)
     if isinstance(result, str):
         return RaisedBodies((), source, {})
-    nodes = {ir.span(node)[0]: node for body in result for node in body.nodes}
+    decoded_nodes = {ir.span(node)[0]: node for body in result for node in body.nodes}
     from qbopt.frontend import blocks as split
     from qbopt.frontend import raising_returns
 
     header = split.has_header(found)
-    nodes = {at: raising_returns.returned(node, header) for at, node in nodes.items()}
+    nodes = {at: raising_returns.returned(node, header) for at, node in decoded_nodes.items()}
+    return_registers = {}
+    if header:
+        # $$SYMBOLS cannot tell a SUB from an implicit-INTEGER FUNCTION, but
+        # its procedure signature does establish whether DX participates in
+        # the return representation.  Both ambiguous cases are AX-only, so
+        # the useful half of the fact remains exact.  Objects without debug
+        # types keep the conservative DX:AX default above.
+        from qbopt.objectfile import cvinfo
+
+        for procedure in cvinfo.parse(found.records).procedures:
+            if procedure.signature is None:
+                continue
+            returned_type = cvinfo.type_name(procedure.signature.return_type, procedure.types)
+            return_registers[procedure.offset] = (
+                (Register.AX, Register.DX) if returned_type == "LONG" else (Register.AX,)
+            )
     if contracts is None:
         # The module's own toolchain, which is where a per-family contract
         # is chosen and the only place a family is read at all.
         contracts = runtime.for_module(found)
+    # B$EXSA preserves the procedure's return registers across frame teardown.
+    # Its generic contract must cover a LONG result, but a typed procedure's
+    # syntactic continuation observes only the established subset.  Specialize
+    # the per-site direct edge; hidden/error paths retain Contract.inputs.
+    for body in result:
+        registers = return_registers.get(body.body.seed)
+        if registers is None:
+            continue
+        direct = frozenset(
+            register
+            for register, machine in ((runtime.Reg.AX, Register.AX), (runtime.Reg.DX, Register.DX))
+            if machine in registers
+        )
+        for at, name in found.calls.items():
+            if name == "B$EXSA" and any(lo <= at < hi for lo, hi in body.body.ranges):
+                contracts[at] = replace(contracts[at], direct_inputs=direct)
     from qbopt.frontend import raising_call_memory
 
     spared = raising_call_memory.spared(found, result, contracts)
@@ -2891,6 +2933,12 @@ def bodies(
     error_handlers: list[_RaisedBody] = []
     for body in result:
         mine = [one for one in blocks if any(lo <= one.at < hi for lo, hi in body.body.ranges)]
+        procedure_nodes = nodes
+        if body.body.seed in return_registers:
+            registers = return_registers[body.body.seed]
+            procedure_nodes = {
+                at: raising_returns.returned(node, header, registers) for at, node in decoded_nodes.items()
+            }
         from qbopt.frontend import raising_control
 
         mine = raising_control.terminal_edges(mine, contracts)
@@ -2903,7 +2951,7 @@ def bodies(
         contracts.update(raising_carried.carried(mine, nodes, found.calls, contracts))
         built = raise_body(
             mine,
-            nodes,
+            procedure_nodes,
             body.body.seed,
             found.calls,
             _sites(found, blocks),
@@ -2957,6 +3005,8 @@ def bodies(
             from qbopt.frontend import raising_addresses
 
             built = raising_addresses.loaded(built, contracts)
+            built = raising_call_memory.fixed_assignments(built, found)
+            built = raising_call_memory.indirect_results(built, found)
             from qbopt.frontend import raising_defseg
 
             built = raising_defseg.raised(built, found, contracts, source)
@@ -3002,6 +3052,14 @@ def bodies(
             out.append((f"{body.body.kind} {body.body.name or '(main)'}", built))
             if body.body.kind == "error-handler":
                 error_handlers.append(built)
+    if not basic_semantics:
+        result_only = raising_call_memory.result_only_functions(
+            [(name, body) for name, body in out if name.startswith("procedure ")], found
+        )
+        if result_only:
+            out = [
+                (name, raising_call_memory.complete_result_calls(body, found.calls, result_only)) for name, body in out
+            ]
     if error_handlers:
         summaries = [
             raising_call_memory.handler_effects(one, found.calls, contracts, unreached) for one in error_handlers

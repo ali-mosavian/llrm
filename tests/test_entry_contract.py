@@ -115,6 +115,18 @@ def test_vbdos_statement_exit_has_stack_neutral_interface():
     assert contract.raises_error
 
 
+def test_vbdos_fixed_udt_assignment_reads_only_its_stack_arguments() -> None:
+    """QBSP kept IMUL's dead DX result live into B$ASSN.
+
+    The routine's six explicit words are already represented by ARG
+    operations.  Conservative hidden/error paths still retain the all-GP
+    input set, but the ordinary returning edge observes none of those
+    registers as an additional source-program argument.
+    """
+    contract = runtime.per_call({0: "B$ASSN"}, "vbdos")[0]
+    assert contract.direct_inputs == frozenset()
+
+
 @pytest.mark.parametrize(
     "name,cleanup",
     [

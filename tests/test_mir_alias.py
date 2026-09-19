@@ -30,6 +30,34 @@ def test_unknown_far_segments_cannot_use_offset_disjointness() -> None:
     assert mir.overlapping(one, other, frozenset())
 
 
+def test_outgoing_argument_stack_does_not_kill_current_frame_values() -> None:
+    """qbsp kept reloading nodenr and emitted IMUL after pushing call args.
+
+    An ARG's implicit stack store is below the current SP and cannot overwrite
+    the active BP-relative frame.  The shared provenance pass must state that
+    ABI fact so every memory optimization and every frontend sees it.
+    """
+    stack = mir.MemRef(Addr(Space.STACK, -2), 2, space=Space.STACK)
+    op = mir.Op(
+        1,
+        ir.Operation.PUSH,
+        "push",
+        (),
+        (),
+        kind=mir.Kind.ARG,
+        args=(mir.Const(1, 2),),
+        results=(mir.Cell(stack),),
+        stores=(stack,),
+    )
+    body = mir.MirBody(1, (mir.MirBlock(1, (), (op,), ()),), sealed=True)
+
+    written = alias.annotated(body).blocks[0].ops[0].stores[0]
+    local = mir.MemRef(Addr(Space.FRAME, -22), 2, space=Space.FRAME)
+
+    assert mir.WHOLE_FRAME in written.excludes
+    assert not mir.overlapping(local, written, frozenset())
+
+
 def test_an_index_stays_inside_its_own_segment() -> None:
     """Axiom 4 in regions: two segments' indexed cells never meet."""
     base = mir.Value(1, 0)

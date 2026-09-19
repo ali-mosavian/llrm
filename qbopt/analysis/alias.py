@@ -693,7 +693,7 @@ def annotated(body: mir.MirBody) -> mir.MirBody:
     constants = ranges.constants(body)
     strides = congruences(body)
 
-    def tag(ref: mir.MemRef, at: int) -> mir.MemRef:
+    def tag(ref: mir.MemRef, at: int, *, outgoing: bool = False) -> mir.MemRef:
         got = facts.reference(ref)
         interval = bounded.get(at, {}).get(ref.base) or constants.get(ref.base)
         if (
@@ -726,7 +726,19 @@ def annotated(body: mir.MirBody) -> mir.MirBody:
             if got is not None and got.slices and all(one.object.kind is memory.Kind.FRAME for one in got.slices)
             else ref.space
         )
-        return replace(ref, provenance=got, space=space) if got != ref.provenance or space is not ref.space else ref
+        excludes = ref.excludes
+        if outgoing and ref.space is Space.STACK and mir.WHOLE_FRAME not in excludes:
+            # ARG and CALL implicit stack traffic is below the current stack
+            # pointer.  It cannot overwrite this activation's BP-relative
+            # frame without stack overflow, independently of SS == DS.  Keep
+            # arbitrary SP-relative references conservative; the operation's
+            # semantic role is the proof, not the address spelling.
+            excludes = (*excludes, mir.WHOLE_FRAME)
+        return (
+            replace(ref, provenance=got, space=space, excludes=excludes)
+            if got != ref.provenance or space is not ref.space or excludes != ref.excludes
+            else ref
+        )
 
     def operand(arg, at):
         return mir.Cell(tag(arg.ref, at)) if isinstance(arg, mir.Cell) else arg
@@ -737,8 +749,10 @@ def annotated(body: mir.MirBody) -> mir.MirBody:
             ops=tuple(
                 replace(
                     op,
-                    loads=tuple(tag(ref, block.at) for ref in op.loads),
-                    stores=tuple(tag(ref, block.at) for ref in op.stores),
+                    loads=tuple(tag(ref, block.at, outgoing=op.kind is mir.Kind.CALL) for ref in op.loads),
+                    stores=tuple(
+                        tag(ref, block.at, outgoing=op.kind in (mir.Kind.ARG, mir.Kind.CALL)) for ref in op.stores
+                    ),
                     args=tuple(operand(arg, block.at) for arg in op.args),
                     results=tuple(operand(arg, block.at) for arg in op.results),
                 )

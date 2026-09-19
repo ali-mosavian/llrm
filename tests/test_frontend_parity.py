@@ -305,10 +305,10 @@ def test_quake_move_constant_field_offsets_do_not_survive_the_memory_fold() -> N
 def test_quake_light_integer_kernel_converges_to_the_same_machine_work() -> None:
     """QLIGHT is a real qc-port clamp/scale kernel, not a synthetic identity.
 
-    The source-language ABIs differ only at the return: BASIC extracts DX:AX,
-    while C already owns the long in EAX.  Zeroing also has two equally cheap
-    spellings.  Apart from those facts, the complete selected opcode stream
-    must be frontend independent.
+    CodeView proves that this INTEGER function returns only AX, so no dead
+    DX:AX extraction is language scaffolding.  Zeroing has two equally cheap
+    spellings; apart from that, the complete selected opcode stream must be
+    frontend independent.
     """
     from tools.frontend_parity import pair
 
@@ -316,15 +316,28 @@ def test_quake_light_integer_kernel_converges_to_the_same_machine_work() -> None
         out = []
         for _at, line in lines:
             name = line.split()[0]
-            if name == "shld":
-                continue
             if line in {"xor eax, eax", "mov ax, 0"}:
                 name = "zero"
             out.append(name)
         return tuple(out)
 
     basic, c = pair("qlight")
+    assert not [line for _at, line in basic if line.startswith("shld ")]
     assert work(basic) == work(c)
+
+
+def test_quake_bsp_integer_index_does_not_preserve_a_dead_long_high_half() -> None:
+    """RPOINTLEAF's CodeView signature returns INTEGER, but generic BASIC
+    exit liveness exposed DX as though every procedure returned LONG.  Calls
+    also discarded their exact hidden-result/copy ranges, and outgoing ARG
+    traffic was allowed to alias the active frame.  Together those facts kept
+    ``nodenr * 6`` as a memory reload and two-result IMUL where the C frontend
+    strength-reduced the same array index.
+    """
+    from tools.frontend_parity import pair
+
+    basic, _c = pair("qbsp")
+    assert not [line for _at, line in basic if line.startswith("imul ")]
 
 
 def test_runtime_frame_is_established_before_allocator_spill_accesses() -> None:

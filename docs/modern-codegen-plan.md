@@ -4777,3 +4777,50 @@ frame layout.  Remaining non-scaffolding work is x87 value-form
 canonicalization and Phase 6 inlining/SROA for qbsp's far dynamic-array UDT
 path.  GCC/LLVM remain best-case structural references; BCC/Open Watcom remain
 the segmented ABI authority.
+
+### 79. Typed exits and caller-memory parity — 2026-09-19
+
+The realistic qlight and qbsp listings exposed one machine-residue defect and
+one general memory-region defect.  BASIC procedure exits had been raised as
+DX:AX for every body, and `_live_outs` then made every general-purpose value
+present at a terminal machine edge semantic.  A CodeView procedure signature
+cannot distinguish a SUB from an implicit-INTEGER FUNCTION, but both cases
+prove that DX is not part of the return representation.  Raising now selects
+AX for every known non-LONG procedure and DX:AX only for LONG; objects without
+debug types retain the conservative old answer.  Modeled RETURN edges consume
+only their explicit return operands, and each `B$EXSA` site receives the same
+typed direct-edge subset.  Qlight consequently loses its dead `shld` and its
+complete selected opcode sequence now matches C, modulo the equal-cost zero
+idiom and physical-register choice.
+
+QBSP then showed why frontend-independent MIR still needs accurate boundary
+facts.  Fixed-size `B$ASSN` copies now retain their exact source and destination
+ranges; typed SINGLE/DOUBLE calls bind their anonymous result write to the
+actual hidden-result cell.  The existing machine-neutral whole-module alias
+fixed point is also used to prove when such a function writes only that hidden
+result parameter before its call is marked memory-complete.  No optimizer pass
+names `B$ASSN`, a BASIC procedure, or a physical register: these are raise-time
+ABI facts presented as ordinary MIR memory effects.
+
+The adjacent GVN/promote dumps found the final loss in a fact common to both
+frontends.  Every outgoing ARG store was conservatively allowed to overlap the
+current BP-relative frame because SP and BP are different origins in one real
+mode stack segment.  Semantically, ARG and CALL implicit traffic is below the
+current SP and cannot overwrite the active frame without stack overflow.  The
+shared provenance pass now adds the existing whole-frame exclusion to those
+operations only; arbitrary SP-relative memory remains conservative.  A
+fail-first unit test states the rule directly, and the real qbsp regression
+requires both `nodenr * 6` sites to avoid IMUL.  The second site now becomes
+the same add/shift address arithmetic as the first instead of reloading the
+frame scalar into a two-result multiply.
+
+The raw qbsp listing still contains dynamic-array descriptor loads, two UDT
+copy calls, a hidden floating result cell, and preservation around those calls.
+Those are genuine BASIC language/ABI scaffolding relative to C's direct struct
+pointers; they are kept visible rather than normalized away.  This iteration
+advances Phase 2's machine-fact removal, Phase 3's object/range modeling, and
+Phase 6's call-graph mod/ref work.  General descriptor scalarization, selective
+inlining, and pressure-aware spill placement remain required before the qbsp
+listing can approach the flat C listing in size.  GCC/LLVM remain best-case
+structural references, while BCC/Open Watcom remain authoritative for the
+medium-model ABI and segmented address legality.

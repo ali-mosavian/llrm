@@ -1,3 +1,4 @@
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from qbopt.abi import runtime
@@ -19,6 +20,312 @@ type Reach = tuple[int, frozenset[tuple[int, int]]]
 # iteration, so nothing was promotable, so `induction.basics` saw no
 # counter, so the trip count was unknown and neither expansion would run.
 _BOUNDED_CONTROL = (runtime.Control.RETURNS, runtime.Control.NEVER, runtime.Control.INLINE_TABLE)
+
+
+def indirect_results(body: "mir.MirBody", found) -> "mir.MirBody":
+    """Bind a typed BASIC function's indirect result to its actual cell.
+
+    SINGLE and DOUBLE functions receive a final hidden near pointer where the
+    callee stores its answer.  The decoded call knew the result width but not
+    that pointer, so its anonymous write killed every caller-frame value.
+    CodeView establishes the non-INTEGER return class and the ordinary ARG
+    contract identifies the exact hidden argument.  Objects without both
+    facts retain the conservative call effect.
+    """
+    from qbopt.model import mir
+    from qbopt.objectfile import cvinfo
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
+
+    signatures = {
+        procedure.name.upper(): cvinfo.type_name(procedure.signature.return_type, procedure.types)
+        for procedure in cvinfo.parse(found.records).procedures
+        if procedure.signature is not None
+    }
+    definitions = {value: op for block in body.blocks for op in block.ops for value in op.defines}
+
+    def frame(arg) -> int | None:
+        seen = set()
+        while isinstance(arg, mir.Held) and arg.value not in seen:
+            seen.add(arg.value)
+            op = definitions.get(arg.value)
+            if op is None or op.loads or op.stores or op.barrier or len(op.args) != 1:
+                return None
+            if op.kind is mir.Kind.ADDRESS and isinstance(op.args[0], mir.FrameAddress):
+                return op.args[0].offset
+            if op.kind is not mir.Kind.COPY:
+                return None
+            arg = op.args[0]
+        return None
+
+    widths = {"SINGLE": 4, "DOUBLE": 8}
+    blocks = []
+    for block in body.blocks:
+        ops = list(block.ops)
+        for index, call in enumerate(ops):
+            name = found.calls.get(call.at)
+            width = widths.get(signatures.get(name.upper(), "")) if name is not None else None
+            if call.kind is not mir.Kind.CALL or width is None:
+                continue
+            argument = None
+            for prior in reversed(ops[:index]):
+                if prior.kind is mir.Kind.CALL:
+                    break
+                if prior.kind is mir.Kind.ARG and len(prior.args) == 1:
+                    argument = prior.args[0]
+                    break
+            destination = frame(argument)
+            unknown = tuple(
+                ref
+                for ref in call.stores
+                if ref.space is not Space.STACK and ref.addr is None and ref.provenance is None
+            )
+            if destination is None or len(unknown) != 1 or unknown[0].width != width:
+                continue
+            stores = tuple(
+                mir.MemRef(Addr(Space.FRAME, destination), width, space=Space.FRAME) if ref is unknown[0] else ref
+                for ref in call.stores
+            )
+            ops[index] = replace(call, stores=stores)
+        blocks.append(replace(block, ops=tuple(ops)))
+    return replace(body, blocks=tuple(blocks))
+
+
+def result_only_functions(bodies: list[tuple[str, "mir.MirBody"]], found) -> frozenset[str]:
+    """Prove BASIC functions whose only write is their hidden result.
+
+    CodeView supplies the BYREF parameter slots that the machine frontend
+    could not otherwise distinguish from integers.  Those slots become the
+    same PARAMETER objects used by the C frontend's whole-module mod/ref
+    analysis.  A floating function is result-only only when the fixed-point
+    summary contains no unknown write and every written slice belongs to its
+    final hidden-result parameter.
+    """
+    from qbopt.model import mir
+    from qbopt.model import memory
+    from qbopt.analysis import alias
+    from qbopt.objectfile import cvinfo
+    from qbopt.objectfile.module import Space
+
+    procedures = {procedure.offset: procedure for procedure in cvinfo.parse(found.records).procedures}
+    candidates: dict[str, tuple[alias.Procedure, int]] = {}
+    for _label, body in bodies:
+        procedure = procedures.get(body.entry)
+        if procedure is None or procedure.signature is None:
+            continue
+        returned = cvinfo.type_name(procedure.signature.return_type, procedure.types)
+        if returned not in {"SINGLE", "DOUBLE"}:
+            continue
+        params = sorted(procedure.params, key=lambda parameter: parameter.bp_offset, reverse=True)
+        hidden = len(params)
+        offsets = {parameter.bp_offset: index for index, parameter in enumerate(params)}
+        offsets[min(offsets, default=8) - 2] = hidden
+        seeds = dict(body.pointer_seeds)
+        for block in body.blocks:
+            for op in block.ops:
+                if (
+                    op.kind is mir.Kind.LOAD
+                    and len(op.results) == 1
+                    and isinstance(op.results[0], mir.Held)
+                    and len(op.loads) == 1
+                    and (ref := op.loads[0]).addr is not None
+                    and ref.addr.space is Space.FRAME
+                    and ref.base is None
+                    and ref.segment is None
+                    and ref.addr.disp in offsets
+                ):
+                    index = offsets[ref.addr.disp]
+                    seeds[op.results[0].value] = memory.Provenance.one(memory.Object(memory.Kind.PARAMETER, index))
+        seeded = alias.annotated(replace(body, pointer_seeds=seeds, pointer_values=body.pointer_values | seeds.keys()))
+        calls = {
+            op.at: found.calls[op.at]
+            for block in seeded.blocks
+            for op in block.ops
+            if op.kind is mir.Kind.CALL and op.at in found.calls
+        }
+        candidates[procedure.name.upper()] = (alias.Procedure(seeded, calls, {}), hidden)
+
+    # The BASIC frame helpers implement this body's activation and carry no
+    # source-language caller-memory effect on the ordinary edge.
+    empty = alias.Summary()
+    summaries = alias.summaries(
+        {name: procedure for name, (procedure, _hidden) in candidates.items()},
+        {"B$ENRA": empty, "B$EXSA": empty},
+    )
+    return frozenset(
+        name
+        for name, (_procedure, hidden) in candidates.items()
+        if not summaries[name].unknown_write
+        and summaries[name].writes
+        and all(
+            one.object.kind is memory.Kind.PARAMETER and one.object.identity == hidden for one in summaries[name].writes
+        )
+    )
+
+
+def complete_result_calls(body: "mir.MirBody", calls: dict[int, str], result_only: frozenset[str]) -> "mir.MirBody":
+    """Record the completed mod/ref proof on direct result-only calls."""
+    from qbopt.model import mir
+
+    blocks = tuple(
+        replace(
+            block,
+            ops=tuple(
+                replace(op, memory_complete=True)
+                if op.kind is mir.Kind.CALL and calls.get(op.at, "").upper() in result_only
+                else op
+                for op in block.ops
+            ),
+        )
+        for block in body.blocks
+    )
+    return replace(body, blocks=blocks)
+
+
+def fixed_assignments(body: "mir.MirBody", found) -> "mir.MirBody":
+    """Give fixed-length B$ASSN calls their actual caller-memory ranges.
+
+    B$ASSN is the runtime spelling of both string assignment and a fixed UDT
+    copy.  With nonzero equal source/destination lengths it reads exactly the
+    source byte range and writes exactly the destination byte range; the six
+    words carrying those facts are explicit ARG operations.  Keep the call
+    itself as language-runtime scaffolding, but do not let its conservative
+    error paths alias unrelated frame objects.
+
+    Only frame addresses and FAR dynamic-array operands are admitted.  A
+    descriptor string, unequal padding/truncation, unknown segment, or
+    unresolved size retains the original conservative effect.
+    """
+    from iced_x86 import Register
+
+    from qbopt.model import ir
+    from qbopt.model import mir
+    from qbopt.analysis import consts
+    from qbopt.objectfile import cvinfo
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
+
+    facts = consts.known(body)
+    definitions = {value: op for block in body.blocks for op in block.ops for value in op.defines}
+    procedure = next(
+        (procedure for procedure in cvinfo.parse(found.records).procedures if procedure.offset == body.entry),
+        None,
+    )
+    array_parameters = (
+        frozenset(
+            parameter.bp_offset
+            for parameter in procedure.params
+            if (parameter.type_name or "").startswith("BYREF ARRAY OF ")
+        )
+        if procedure is not None
+        else frozenset()
+    )
+
+    def number(arg) -> int | None:
+        if isinstance(arg, mir.Const):
+            return arg.n
+        if isinstance(arg, mir.Held) and (fact := facts.get(arg.value)) is not None:
+            return consts.masked(fact.n, arg.width)
+        return None
+
+    def frame(arg) -> int | None:
+        seen = set()
+        while isinstance(arg, mir.Held) and arg.value not in seen:
+            seen.add(arg.value)
+            op = definitions.get(arg.value)
+            if op is None or op.loads or op.stores or op.barrier or len(op.args) != 1:
+                return None
+            if op.kind is mir.Kind.ADDRESS and isinstance(op.args[0], mir.FrameAddress):
+                return op.args[0].offset
+            if op.kind is not mir.Kind.COPY:
+                return None
+            arg = op.args[0]
+        return None
+
+    def array_descriptor(value: mir.Value) -> bool:
+        op = definitions.get(value)
+        return bool(
+            op is not None
+            and op.kind is mir.Kind.LOAD
+            and len(op.loads) == 1
+            and (ref := op.loads[0]).addr is not None
+            and ref.addr.space is Space.FRAME
+            and ref.base is None
+            and ref.segment is None
+            and ref.addr.disp in array_parameters
+        )
+
+    def dynamic_array_pointer(arg) -> bool:
+        if not isinstance(arg, mir.Held):
+            return False
+        op = definitions.get(arg.value)
+        if op is None or op.kind not in (mir.Kind.ADD, mir.Kind.COPY):
+            return False
+        return any(
+            isinstance(source, mir.Cell)
+            and source.ref.addr is not None
+            and source.ref.addr.disp == 10
+            and source.ref.base is not None
+            and array_descriptor(source.ref.base)
+            for source in op.args
+        )
+
+    def reference(segment, pointer, width: int) -> mir.MemRef | None:
+        if not isinstance(segment, mir.Opaque) or not isinstance(segment.what, ir.Reg):
+            return None
+        if segment.what.register == Register.DS and (offset := frame(pointer)) is not None:
+            return mir.MemRef(Addr(Space.FRAME, offset), width, space=Space.FRAME)
+        if segment.what.register == Register.ES and isinstance(pointer, mir.Held):
+            # The selector and offset came from a dynamic-array descriptor.
+            # Its allocation predates the current activation and therefore
+            # cannot be one of this activation's frame objects.  FAR alone is
+            # not enough: an arbitrary far pointer may use SS.  State the
+            # object-lifetime proof explicitly, while not retaining the
+            # historical offset as a live call operand after ARG pushed it.
+            excludes = (mir.WHOLE_FRAME,) if dynamic_array_pointer(pointer) else ()
+            return mir.MemRef(
+                None,
+                width,
+                space=Space.FAR,
+                base_width=2,
+                excludes=excludes,
+            )
+        return None
+
+    blocks = []
+    for block in body.blocks:
+        ops = list(block.ops)
+        for index, call in enumerate(ops):
+            if call.kind is not mir.Kind.CALL or found.calls.get(call.at) != "B$ASSN":
+                continue
+            arguments = []
+            for prior in reversed(ops[:index]):
+                if prior.kind is mir.Kind.CALL:
+                    break
+                if prior.kind is mir.Kind.ARG and len(prior.args) == 1:
+                    arguments.append(prior.args[0])
+                    if len(arguments) == 6:
+                        break
+            arguments.reverse()
+            if len(arguments) != 6:
+                continue
+            source_segment, source_pointer, source_count, dest_segment, dest_pointer, dest_count = arguments
+            source_width, dest_width = number(source_count), number(dest_count)
+            if source_width is None or source_width <= 0 or source_width != dest_width:
+                continue
+            source = reference(source_segment, source_pointer, source_width)
+            destination = reference(dest_segment, dest_pointer, dest_width)
+            if source is None or destination is None:
+                continue
+            stack_writes = tuple(ref for ref in call.stores if ref.space is Space.STACK)
+            ops[index] = replace(
+                call,
+                loads=(source,),
+                stores=(*stack_writes, destination),
+                memory_complete=True,
+            )
+        blocks.append(replace(block, ops=tuple(ops)))
+    return replace(body, blocks=tuple(blocks))
 
 
 def reachable(
@@ -65,8 +372,8 @@ def handler_effects(
     handler's footprint.  Unknown user calls still refuse the summary.  This
     is a mod/ref summary, not an attempt to inline the handler's control flow.
     """
-    from qbopt.analysis import effects
     from qbopt.model import mir
+    from qbopt.analysis import effects
     from qbopt.objectfile.module import Space
 
     reads, writes = [], []
@@ -74,11 +381,15 @@ def handler_effects(
         for op in block.ops:
             if op.kind is mir.Kind.CALL and op.at in calls:
                 contract = contracts.get(op.at)
-                direct_reads = contract.direct_reads if contract and contract.direct_reads is not None else (
-                    contract.reads if contract else runtime.Memory.ANY
+                direct_reads = (
+                    contract.direct_reads
+                    if contract and contract.direct_reads is not None
+                    else (contract.reads if contract else runtime.Memory.ANY)
                 )
-                direct_writes = contract.direct_writes if contract and contract.direct_writes is not None else (
-                    contract.writes if contract else runtime.Memory.ANY
+                direct_writes = (
+                    contract.direct_writes
+                    if contract and contract.direct_writes is not None
+                    else (contract.writes if contract else runtime.Memory.ANY)
                 )
                 read_reach = _direct_reach(contract, direct_reads, escaped)
                 write_reach = _direct_reach(contract, direct_writes, escaped)
@@ -107,6 +418,7 @@ def with_handler_effects(
 ) -> "mir.MirBody":
     """Join a precise handler mod/ref summary into each error-capable call."""
     from dataclasses import replace
+
     from qbopt.model import mir
     from qbopt.objectfile.module import Space
 
