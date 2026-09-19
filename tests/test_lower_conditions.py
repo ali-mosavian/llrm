@@ -9,19 +9,34 @@ from qbopt.model import mir
 from qbopt.backend import lower
 
 
-@pytest.mark.parametrize("kind,mnemonic", [
-    (mir.Kind.SHL, "SHL"), (mir.Kind.SHR, "SHR"), (mir.Kind.SAR, "SAR"),
-])
+@pytest.mark.parametrize(
+    "kind,mnemonic",
+    [
+        (mir.Kind.SHL, "SHL"),
+        (mir.Kind.SHR, "SHR"),
+        (mir.Kind.SAR, "SAR"),
+    ],
+)
 @pytest.mark.parametrize("width", [2, 4])
 def test_unnamed_mir_shift_emits_machine_instruction(kind, mnemonic, width):
     """D_SURF refused 183a: hoisted cidx << 2 reached selection with an empty mnemonic."""
-    from iced_x86 import Decoder, Mnemonic, Register
+    from iced_x86 import Decoder
+    from iced_x86 import Mnemonic
+    from iced_x86 import Register
+
     from qbopt.backend import select
 
-    value = mir.Value(1, 0x183a)
-    op = mir.Op(0x183a, ir.Operation.BINARY, "", (value,), (value,),
-                kind=kind, args=(mir.Held(value, width), mir.Const(2, 1)),
-                results=(mir.Held(value, width),))
+    value = mir.Value(1, 0x183A)
+    op = mir.Op(
+        0x183A,
+        ir.Operation.BINARY,
+        "",
+        (value,),
+        (value,),
+        kind=kind,
+        args=(mir.Held(value, width), mir.Const(2, 1)),
+        results=(mir.Held(value, width),),
+    )
     what = lower.semantics(op, place=lower.as_a_value)
     register = Register.AX if width == 2 else Register.EAX
     emitted = select.emit(what, held={value.id: register})
@@ -33,19 +48,50 @@ def test_unnamed_mir_shift_emits_machine_instruction(kind, mnemonic, width):
     assert decoded[0].immediate(1) == 2
 
 
+def test_semantic_compare_gets_its_machine_name_at_lowering() -> None:
+    """The QB frontend already classified comparisons as COMPARE operations.
+
+    That semantic classification must not make lowering mistake the otherwise
+    unnamed MIR operation for a machine instruction.  Leaving its mnemonic
+    empty prevented common post-allocation compare folds from recognizing it.
+    """
+    value = mir.Value(1, 0)
+    flags = mir.Value(2, 0, flags=True)
+    compare = mir.Op(
+        0,
+        ir.Operation.COMPARE,
+        "",
+        (flags,),
+        (value,),
+        kind=mir.Kind.SUB,
+        args=(mir.Held(value, 4), mir.Const(0, 4)),
+    )
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (compare,), ()),))
+
+    (named,) = lower.named(body).blocks[0].ops
+
+    assert (named.op, named.name) == (ir.Operation.COMPARE, "cmp")
+
+
 @pytest.mark.parametrize("width", [2, 4])
 def test_dead_and_result_uses_test_without_a_destination(width):
     """IVWORD emitted mov cx,bx / and cx,bx although only the condition was consumed."""
     source, result = mir.Value(1, 0), mir.Value(2, 0)
     condition = mir.Value(3, 0, flags=True)
-    op = mir.Op(0, ir.Operation.BINARY, "and", (result, condition), (source,),
-                kind=mir.Kind.AND, args=(mir.Held(source, width),) * 2,
-                results=(mir.Held(result, width),))
+    op = mir.Op(
+        0,
+        ir.Operation.BINARY,
+        "and",
+        (result, condition),
+        (source,),
+        kind=mir.Kind.AND,
+        args=(mir.Held(source, width),) * 2,
+        results=(mir.Held(result, width),),
+    )
     built = mir.MirBody(0, (mir.MirBlock(0, (), (op,), ()),))
     emitted = lower.Lowering(built, {source.id, condition.id}, {}, (), {}).expand(op)
     assert len(emitted) == 1
-    assert emitted[0].what == ir.Semantics(ir.Operation.COMPARE, "test", (),
-                                         (ir.Held(source.id, width),) * 2)
+    assert emitted[0].what == ir.Semantics(ir.Operation.COMPARE, "test", (), (ir.Held(source.id, width),) * 2)
     assert emitted[0].defines == ()
 
 
@@ -53,10 +99,17 @@ def test_dead_and_result_uses_test_without_a_destination(width):
 def test_and_keeps_an_observed_or_partial_result(observation):
     source, result = mir.Value(1, 0), mir.Value(2, 0)
     condition = mir.Value(3, 0, flags=True)
-    op = mir.Op(0, ir.Operation.BINARY, "and", (result, condition), (source,),
-                kind=mir.Kind.AND, args=(mir.Held(source, 2),) * 2,
-                results=(mir.Held(result, 2),),
-                merges={source: result} if observation == "merge" else {})
+    op = mir.Op(
+        0,
+        ir.Operation.BINARY,
+        "and",
+        (result, condition),
+        (source,),
+        kind=mir.Kind.AND,
+        args=(mir.Held(source, 2),) * 2,
+        results=(mir.Held(result, 2),),
+        merges={source: result} if observation == "merge" else {},
+    )
     returned = mir.Op(
         1,
         ir.Operation.RETURN,
@@ -117,10 +170,13 @@ def test_dead_exit_condition_does_not_block_inserted_arithmetic(consumed):
     condition = compare.defines[0]
     merged = mir.Value(9, 10, flags=True)
     exit_ops = (replace(branch, at=10, uses=(merged,)),) if consumed else ()
-    built = replace(built, blocks=(
-        replace(built.blocks[0], ops=(compare, increment), succ=(10,)),
-        mir.MirBlock(10, (mir.Phi(merged, {0: condition}),), exit_ops, ()),
-    ))
+    built = replace(
+        built,
+        blocks=(
+            replace(built.blocks[0], ops=(compare, increment), succ=(10,)),
+            mir.MirBlock(10, (mir.Phi(merged, {0: condition}),), exit_ops, ()),
+        ),
+    )
     if consumed:
         with pytest.raises(lower.Unlowered, match="live condition"):
             lower.lowered("loop", built, {}, (), {})
@@ -148,14 +204,25 @@ def test_condition_scheduling_does_not_move_effects_or_other_results(reason: str
         lower.lowered("loop", built, {}, (), {})
 
 
-@pytest.mark.parametrize("test,name", [(mir.Kind.EQ, "je"), (mir.Kind.NE, "jne"),
-                                      (mir.Kind.LT, "jl"), (mir.Kind.LE, "jle"),
-                                      (mir.Kind.GT, "jg"), (mir.Kind.GE, "jge"),
-                                      (mir.Kind.BELOW, "jb"), (mir.Kind.BELOW_EQ, "jbe"),
-                                      (mir.Kind.ABOVE, "ja"), (mir.Kind.ABOVE_EQ, "jae")])
+@pytest.mark.parametrize(
+    "test,name",
+    [
+        (mir.Kind.EQ, "je"),
+        (mir.Kind.NE, "jne"),
+        (mir.Kind.LT, "jl"),
+        (mir.Kind.LE, "jle"),
+        (mir.Kind.GT, "jg"),
+        (mir.Kind.GE, "jge"),
+        (mir.Kind.BELOW, "jb"),
+        (mir.Kind.BELOW_EQ, "jbe"),
+        (mir.Kind.ABOVE, "ja"),
+        (mir.Kind.ABOVE_EQ, "jae"),
+    ],
+)
 def test_cloned_operandless_branch_selects_its_semantic_condition(test, name):
     """Peeled IVARM refused at 0x73: its cloned conditional jump was carried without semantics."""
-    branch = mir.Op(0x73, ir.Operation.BRANCH, "", (), (), kind=mir.Kind.BRANCH,
-                    test=test, target=0x3100000001, raised=None)
+    branch = mir.Op(
+        0x73, ir.Operation.BRANCH, "", (), (), kind=mir.Kind.BRANCH, test=test, target=0x3100000001, raised=None
+    )
     expected = ir.Semantics(ir.Operation.BRANCH, name, (), (), branch.target)
     assert lower.semantics(branch, place=lower.as_a_value) == expected

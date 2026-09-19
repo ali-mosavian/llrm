@@ -2,6 +2,7 @@
 
 import argparse
 from pathlib import Path
+from dataclasses import replace
 
 from qbopt import hir
 from qbopt import flow
@@ -111,6 +112,8 @@ def dumped(
         (output / f"{stem}-03-optimized-mir.txt").write_text(hir.mir_text(body))
         physical = physicalize(program, function, body)
         (output / f"{stem}-04-physical-mir.txt").write_text(hir.mir_text(physical.lowered))
+        physical = replace(physical, lowered=qb_compile.optimized_physical(program, function, physical.lowered))
+        (output / f"{stem}-05-optimized-physical-mir.txt").write_text(hir.mir_text(physical.lowered))
         ordinary_entry = physical.lowered.body.entry
         ordinary_block = physical.lowered.body.block(ordinary_entry)
         ordinary_fallback = (
@@ -146,11 +149,11 @@ def dumped(
             if temporary_root is not None
             else frozenset()
         )
-        (output / f"{stem}-05-lir.txt").write_text(_lir(machine))
+        (output / f"{stem}-06-lir.txt").write_text(_lir(machine))
         owned_frame = frame.of(machine, physical.calls, family=program.runtime.value)
         allocated = machine
         in_ssa = True
-        stage = 6
+        stage = 7
         for phase in flow.machine({}, owned_frame, physical.calls, basic_semantics=True):
             if isinstance(phase, prologue.Prologue):
                 continue

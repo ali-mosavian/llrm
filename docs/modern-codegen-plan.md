@@ -4840,3 +4840,57 @@ inlining, and pressure-aware spill placement remain required before the qbsp
 listing can approach the flat C listing in size.  GCC/LLVM remain best-case
 structural references, while BCC/Open Watcom remain authoritative for the
 medium-model ABI and segmented address legality.
+
+### 80. Native QB/C parity instrument and post-ABI fixed point — 2026-09-19
+
+The paired-source instrument was measuring the wrong BASIC path.  It compiled
+the BASIC source with Microsoft BC, read the resulting VBDOS object, and raised
+that machine code back into MIR before comparing it with the C source frontend.
+Those results remain useful for the legacy OMF raiser, but say nothing about
+the new QB source compiler.  `tools/frontend_parity.py` now invokes the Rust QB
+parser and `qbopt.frontend.qb.compile` directly, consumes its allocated LIR,
+and never reads a parity OBJ.  A regression spies on the parser and requires
+the named `.bas` source to be compiled, so the instrument cannot silently
+return to BC output.
+
+The corrected qlight comparison exposed three shared backend defects.  Two
+independent parameter loads between a load and its sole extension blocked the
+memory-source `movsx`; extension folding now crosses only instructions proven
+not to observe its newly written physical lanes.  Block placement followed an
+empty source fall-through before a conditional assignment arm, leaving two
+unconditional jumps; it now recognizes the arm-to-other-edge join and lays out
+the complete straight-line trace.  Finally, HIR had already classified a
+semantic comparison as `Operation.COMPARE`, so lowering mistook its empty name
+for an existing machine spelling; machine naming now remains lowering's job
+whenever the mnemonic is absent.  Independent unit regressions cover all three
+rules.  Native QB and C qlight now have the same thirteen-operation core.
+
+The stage diff then found the more general pipeline error.  QB ran the MIR
+fixed point and only afterwards physicalized parameters, returns, and calls,
+allowing fresh ABI loads, stores, extracts, and copies to bypass optimization.
+The physicalized body now runs through the ordinary MIR fixed point before
+lowering.  This alone changes native QB scalar from `mov eax,1789 / shld` to
+the same `mov ax,1789 / mov dx,0` as C; no constant-return special case was
+added.  The simple scalar, algebra, branch, memory, and loop pairs now contain
+no QB-only helper, spill, carry pair, or recomputation.  QB's loop is one move
+shorter than C's current result, which the gate records as no excess work
+rather than requiring the worse spelling.
+
+Running the fixed point at this second boundary also exercised physical
+`RESUME` for the first time.  Its source form ends in `B$RESA` plus an ESCAPE
+marker, while ABI physicalization correctly leaves only the terminal runtime
+call.  Treating the latter as an ordinary call hid the transfer back to the
+resumed statement and let DSE remove a store that statement reads.  The same
+machine-neutral temporary CFG edge now represents both forms during memory
+optimization; restoration removes the temporary edge and restores an ESCAPE
+only when the input actually had one.  The existing LOCERR answer-path test
+failed on the deleted store before this change and now covers the complete
+second fixed point.
+
+The corrected instrument also invalidates the earlier claim that qmove and
+qbsp were close apart from language scaffolding.  Native qmove still creates
+strict-FP parameter homes and several scalar temporary round trips; native
+qbsp still exposes the segmented dynamic-array descriptor and far-address
+construction around its otherwise strength-reduced index.  Those are the next
+real parity gaps.  They require general scalar-memory/FP representation facts
+and descriptor SROA, not more BC-call recognition or program-named peepholes.

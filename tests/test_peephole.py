@@ -1554,6 +1554,39 @@ def test_crc32_reads_a_byte_directly_into_its_dword_value() -> None:
     assert not verify.verify(result)
 
 
+def test_qlight_folds_batched_parameter_loads_into_their_extensions() -> None:
+    """The QB frontend loaded both parameters before widening either one.
+
+    That source ordering left two extra MOVs versus the C frontend even
+    though each loaded value had exactly one widening consumer.  Independent
+    materializations between a load and its extension must not prevent the
+    target memory form from being selected.
+    """
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
+
+    ax = ir.Reg(Register.AX, 2)
+    cx = ir.Reg(Register.CX, 2)
+    eax = ir.Reg(Register.EAX, 4)
+    ebx = ir.Reg(Register.EBX, 4)
+    left = ir.Mem(Addr(Space.FRAME, 6), 2, Register.BP)
+    right = ir.Mem(Addr(Space.FRAME, 8), 2, Register.BP)
+    insns = (
+        lir.Insn(0, (0, 0), ir.Semantics(ir.Operation.MOVE, "mov", (ax,), (left,)), (1,), ()),
+        lir.Insn(1, (1, 1), ir.Semantics(ir.Operation.MOVE, "mov", (cx,), (right,)), (2,), ()),
+        lir.Insn(2, (2, 2), ir.Semantics(ir.Operation.EXTEND, "movsx", (ebx,), (ax,)), (3,), (1,)),
+        lir.Insn(3, (3, 3), ir.Semantics(ir.Operation.EXTEND, "movsx", (eax,), (cx,)), (4,), (2,)),
+    )
+    body = lir.LirBody("qlight-parameters", 0, (lir.LirBlock(0, insns),), {}, {})
+
+    real = [one.what for one in peephole.extensions(body).insns if one.what.op is not ir.Operation.NOTHING]
+
+    assert real == [
+        ir.Semantics(ir.Operation.EXTEND, "movsx", (ebx,), (left,)),
+        ir.Semantics(ir.Operation.EXTEND, "movsx", (eax,), (right,)),
+    ]
+
+
 @pytest.mark.parametrize("guard", ["signedness", "register", "shared", "clobber"])
 def test_transitive_extension_preserves_nonlocal_machine_state(guard: str) -> None:
     cell = ir.Mem(None, 1, through=Register.BX)

@@ -288,18 +288,42 @@ def extensions(body: lir.LirBody) -> lir.LirBody:
     blocks = []
     for block in body.blocks:
         insns = list(block.insns)
-        for index in range(len(insns) - 1):
-            first, second = insns[index : index + 2]
-            made = _extension(first, second, users)
-            if made is None:
-                continue
-            insns[index] = made
-            # The first instruction now defines the final value.  The anchor
-            # keeps the second instruction's byte ownership without leaving a
-            # second virtual definition behind.
-            insns[index + 1] = replace(lir.anchor(second), defines=(), uses=())
+        for index, first in enumerate(insns[:-1]):
+            for following in range(index + 1, len(insns)):
+                second = insns[following]
+                made = _extension(first, second, users)
+                if made is not None and _extension_may_move_before(made, first, insns[index + 1 : following]):
+                    insns[index] = made
+                    # The first instruction now defines the final value.  The
+                    # anchor keeps the second instruction's byte ownership
+                    # without leaving a second virtual definition behind.
+                    insns[following] = replace(lir.anchor(second), defines=(), uses=())
+                    break
+                if first.defines and set(first.defines) & (set(second.uses) | set(second.defines)):
+                    break
         blocks.append(replace(block, insns=tuple(insns)))
     return replace(body, blocks=tuple(blocks))
+
+
+def _extension_may_move_before(made: lir.Insn, first: lir.Insn, crossed: list[lir.Insn]) -> bool:
+    """Whether widening the load at its original position crosses no register use.
+
+    Combining a load with a later extension keeps the memory read in place,
+    but writes the extension's wider destination earlier.  Independent
+    parameter loads may sit between the two, as source frontends commonly
+    batch their entry loads.  Refuse whenever those intervening instructions
+    observe or replace any newly-written physical lane.
+    """
+    original = _register_effects(first, flags=True)
+    combined = _register_effects(made, flags=True)
+    if original is None or combined is None:
+        return False
+    newly_written = combined[1] - original[1]
+    for one in crossed:
+        effects = _register_effects(one, flags=True)
+        if effects is None or newly_written & (effects[0] | effects[1]):
+            return False
+    return True
 
 
 def _extension(first: lir.Insn, second: lir.Insn, users: Counter[int]) -> "lir.Insn | None":

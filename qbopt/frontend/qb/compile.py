@@ -734,7 +734,7 @@ def _handler_at(function: hir.Function) -> int | None:
     return function.error_handler
 
 
-def _optimizer_resume_edges(body: mir.MirBody) -> tuple[mir.MirBody, dict[int, mir.Op]]:
+def _optimizer_resume_edges(body: mir.MirBody) -> tuple[mir.MirBody, dict[int, mir.Op | None]]:
     """Expose explicit RESUME transfers while MIR memory optimization runs.
 
     B$RESA never returns to the following instruction, but it does transfer to
@@ -746,14 +746,19 @@ def _optimizer_resume_edges(body: mir.MirBody) -> tuple[mir.MirBody, dict[int, m
     """
     labels = {block.at for block in body.blocks}
     serial = max((op.at for block in body.blocks for op in block.ops), default=0)
-    restored: dict[int, mir.Op] = {}
+    restored: dict[int, mir.Op | None] = {}
     blocks = []
     for block in body.blocks:
         resumes = [op for op in block.ops if op.kind is mir.Kind.CALL and op.name.startswith("$QB$RESA:")]
         if not resumes:
             blocks.append(block)
             continue
-        if len(resumes) != 1 or not block.ops or block.ops[-1].kind is not mir.Kind.ESCAPE:
+        if len(resumes) != 1 or not block.ops:
+            raise EmissionError(f"{body.entry}: malformed explicit RESUME transfer in block {block.at}")
+        resume = resumes[0]
+        source_form = block.ops[-1].kind is mir.Kind.ESCAPE and len(block.ops) >= 2 and block.ops[-2] is resume
+        physical_form = block.ops[-1] is resume and not block.succ
+        if not source_form and not physical_form:
             raise EmissionError(f"{body.entry}: malformed explicit RESUME transfer in block {block.at}")
         try:
             target = int(resumes[0].name.removeprefix("$QB$RESA:"))
@@ -772,12 +777,13 @@ def _optimizer_resume_edges(body: mir.MirBody) -> tuple[mir.MirBody, dict[int, m
             target=target,
             reads_complete=True,
         )
-        restored[serial] = block.ops[-1]
-        blocks.append(replace(block, ops=(*block.ops[:-1], jump), succ=(target,)))
+        restored[serial] = block.ops[-1] if source_form else None
+        prefix = block.ops[:-1] if source_form else block.ops
+        blocks.append(replace(block, ops=(*prefix, jump), succ=(target,)))
     return replace(body, blocks=tuple(blocks)), restored
 
 
-def _drop_optimizer_resume_edges(body: mir.MirBody, restored: dict[int, mir.Op]) -> mir.MirBody:
+def _drop_optimizer_resume_edges(body: mir.MirBody, restored: dict[int, mir.Op | None]) -> mir.MirBody:
     if not restored:
         return body
     missing = set(restored)
@@ -791,14 +797,16 @@ def _drop_optimizer_resume_edges(body: mir.MirBody, restored: dict[int, mir.Op])
             raise EmissionError(f"optimizer moved the temporary RESUME edge in block {block.at}")
         marker = markers[0]
         missing.remove(marker.at)
-        blocks.append(replace(block, ops=(*block.ops[:-1], restored[marker.at]), succ=()))
+        original = restored[marker.at]
+        suffix = () if original is None else (original,)
+        blocks.append(replace(block, ops=(*block.ops[:-1], *suffix), succ=()))
     if missing:
         raise EmissionError(f"optimizer deleted temporary RESUME edges {sorted(missing)}")
     return replace(body, blocks=tuple(blocks))
 
 
-def optimized(program: hir.Program, function: hir.Function, body: hir.Lowered) -> hir.Lowered:
-    """Run the production MIR optimizer while preserving QB ABI side entries."""
+def _optimized(program: hir.Program, function: hir.Function, body: hir.Lowered) -> hir.Lowered:
+    """Run the shared MIR fixed point at one QB compilation boundary."""
     module = next(
         (one for one in program.modules if function in one.functions),
         None,
@@ -866,6 +874,22 @@ def optimized(program: hir.Program, function: hir.Function, body: hir.Lowered) -
     if problems:
         raise EmissionError(f"optimized external-entry body is invalid: {problems[:3]}")
     return replace(body, body=transformed)
+
+
+def optimized(program: hir.Program, function: hir.Function, body: hir.Lowered) -> hir.Lowered:
+    """Optimize source MIR while preserving QB ABI side entries and RESUME semantics."""
+    return _optimized(program, function, body)
+
+
+def optimized_physical(program: hir.Program, function: hir.Function, body: hir.Lowered) -> hir.Lowered:
+    """Optimize MIR introduced by ABI physicalization.
+
+    Physicalization replaces RESUME's terminal ESCAPE marker with the concrete
+    non-returning runtime call. Its target edge remains semantically necessary
+    for memory optimization, so expose the physical form and then remove only
+    the temporary edge rather than restoring a source marker.
+    """
+    return _optimized(program, function, body)
 
 
 def lowering_target() -> targets.Profile:
@@ -1056,6 +1080,12 @@ def assembled(program: hir.Program) -> masm.Module:
         handler_at = _handler_at(function)
         body = optimized(program, function, body)
         physical = physicalize(program, function, body)
+        # ABI physicalization is still MIR production: it introduces concrete
+        # parameter loads, return extracts, call arguments, and frame copies.
+        # Feed those operations through the same fixed point as source MIR so
+        # code quality cannot depend on whether a frontend expressed work
+        # before or during ABI adaptation.
+        physical = replace(physical, lowered=optimized_physical(program, function, physical.lowered))
         ordinary_entry = physical.lowered.body.entry
         ordinary_block = physical.lowered.body.block(ordinary_entry)
         ordinary_fallback = (

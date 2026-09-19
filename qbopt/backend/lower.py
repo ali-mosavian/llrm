@@ -176,7 +176,7 @@ def named(body: "mir.MirBody") -> "mir.MirBody":
     def one(op: mir.Op) -> mir.Op:
         if op.kind is mir.Kind.BRANCH and op.test in _UNORDERED and compared.intersection(op.uses):
             op = replace(op, test=_UNORDERED[op.test])
-        if op.op is not ir.Operation.NOTHING or op.name or op.kind is mir.Kind.NOTHING:
+        if op.name or op.kind is mir.Kind.NOTHING:
             return op
         found = _instruction(op)
         if found is None:

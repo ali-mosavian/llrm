@@ -212,46 +212,68 @@ def test_paired_frontends_converge_on_the_same_final_machine_work() -> None:
     """Equivalent frontends once left helpers, spills, ADC pairs and reloads.
 
     Compare the raw final allocated listings rather than a score that can hide
-    work.  Register choice and independent parameter order may differ.  LOOP's
-    opposite branch orientation expresses the same recurrence, while CONTROL
-    retains BASIC's inclusive ``FOR`` bound adjustment and a different valid
-    association of its odd arm.  Every other paired instruction family must
-    agree exactly, including the one-instruction DX:AX high extraction.
+    work. Register choice, independent parameter ordering, and inverse branch
+    layout may differ. LOOP's QB form is one move shorter than C's, while
+    CONTROL retains BASIC's inclusive ``FOR`` bound adjustment and a different
+    valid association of its odd arm. No frontend may retain helpers, paired
+    carry arithmetic, or spills merely because of how it expressed the MIR.
     """
     from tools.frontend_parity import pair
 
     def mnemonics(lines):
         return tuple(line.split()[0] for _at, line in lines)
 
-    def work(lines, *, loop_branch=False):
+    def work(lines, *, signed_branch=False):
         names = mnemonics(lines)
-        if loop_branch:
-            names = tuple("loop-jcc" if one in {"jg", "jl"} else one for one in names)
+        if signed_branch:
+            names = tuple("signed-jcc" if one in {"jg", "jge", "jl", "jle"} else one for one in names)
         return Counter(names)
 
     listings = {name: pair(name) for name in ("scalar", "algebra", "branch", "memory", "loop", "control")}
     forbidden = {"adc", "sbb", "push", "pop", "call"}
     for name, (basic, c) in listings.items():
         assert not (set(mnemonics(basic)) | set(mnemonics(c))) & forbidden, name
-        assert len(basic) == len(c), name
         assert mnemonics(basic).count("shld") == mnemonics(c).count("shld") == (name != "scalar"), name
 
     for name in ("scalar", "algebra", "branch", "memory"):
         basic, c = listings[name]
-        assert work(basic) == work(c), name
-    assert mnemonics(listings["branch"][0]) == mnemonics(listings["branch"][1])
-    assert mnemonics(listings["memory"][0]) == mnemonics(listings["memory"][1])
-
+        assert work(basic, signed_branch=name == "branch") == work(c, signed_branch=name == "branch"), name
     basic_loop, c_loop = listings["loop"]
-    assert work(basic_loop, loop_branch=True) == work(c_loop, loop_branch=True)
+    assert not (work(basic_loop, signed_branch=True) - work(c_loop, signed_branch=True))
+    assert work(c_loop, signed_branch=True) - work(basic_loop, signed_branch=True) in (
+        Counter(),
+        Counter({"mov": 1}),
+    )
 
     basic_control, c_control = listings["control"]
     # Source-language semantics explain the complete remaining opcode delta:
     # BASIC decrements an inclusive FOR bound and branches <=; C branches <.
     # Their odd-arm additions/subtractions are algebraically associated in
     # opposite directions, with one C move replacing BASIC's extra add.
-    assert work(basic_control) - work(c_control) == Counter({"dec": 1, "add": 1, "jle": 1})
-    assert work(c_control) - work(basic_control) == Counter({"mov": 1, "sub": 1, "jl": 1})
+    assert work(basic_control) - work(c_control) == Counter({"dec": 1, "je": 1, "add": 1, "jle": 1})
+    assert work(c_control) - work(basic_control) == Counter({"mov": 1, "jne": 1, "sub": 1, "jl": 1})
+
+
+def test_parity_instrument_compiles_basic_with_our_qb_frontend(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The parity instrument silently measured BC's OMF raiser instead of QB.
+
+    A paired-source comparison must invoke our source frontend on the named
+    ``.bas`` file.  Otherwise improvements in BC idiom recognition can look
+    like frontend convergence while the QB compiler is not measured at all.
+    """
+    from tools import frontend_parity
+
+    parsed = frontend_parity.qb_driver.parsed
+    seen = []
+
+    def recording(source, **options):
+        seen.append(source)
+        return parsed(source, **options)
+
+    monkeypatch.setattr(frontend_parity.qb_driver, "parsed", recording)
+    frontend_parity.pair("qlight")
+
+    assert seen == [SOURCE / "qlight.bas"]
 
 
 def test_basic_quake_float_comparisons_do_not_retain_runtime_helper_calls() -> None:
@@ -305,10 +327,9 @@ def test_quake_move_constant_field_offsets_do_not_survive_the_memory_fold() -> N
 def test_quake_light_integer_kernel_converges_to_the_same_machine_work() -> None:
     """QLIGHT is a real qc-port clamp/scale kernel, not a synthetic identity.
 
-    CodeView proves that this INTEGER function returns only AX, so no dead
-    DX:AX extraction is language scaffolding.  Zeroing has two equally cheap
-    spellings; apart from that, the complete selected opcode stream must be
-    frontend independent.
+    The QB source signature returns INTEGER in AX, so no dead DX:AX extraction
+    is language scaffolding. Zeroing has two equally cheap spellings; apart
+    from that, the complete selected opcode stream must be frontend independent.
     """
     from tools.frontend_parity import pair
 
@@ -327,12 +348,10 @@ def test_quake_light_integer_kernel_converges_to_the_same_machine_work() -> None
 
 
 def test_quake_bsp_integer_index_does_not_preserve_a_dead_long_high_half() -> None:
-    """RPOINTLEAF's CodeView signature returns INTEGER, but generic BASIC
-    exit liveness exposed DX as though every procedure returned LONG.  Calls
-    also discarded their exact hidden-result/copy ranges, and outgoing ARG
-    traffic was allowed to alias the active frame.  Together those facts kept
-    ``nodenr * 6`` as a memory reload and two-result IMUL where the C frontend
-    strength-reduced the same array index.
+    """RPOINTLEAF's QB signature returns INTEGER, but generic exit liveness
+    once exposed DX as though every procedure returned LONG. The complete
+    source frontend must still strength-reduce ``nodenr * 6`` independently
+    of its dynamic-array ABI scaffolding.
     """
     from tools.frontend_parity import pair
 

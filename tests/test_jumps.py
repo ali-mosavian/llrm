@@ -81,6 +81,38 @@ def test_branch_then_jump_in_one_block_is_inverted():
     ) == ["L0_1:", "cmp ax, bx", "jne L0_9", "L0_4:", "mov ax, cx", "ret", "L0_9:", "mov ax, bx", "ret"]
 
 
+def test_conditional_assignment_arm_is_placed_before_its_join() -> None:
+    """QB qlight left a jump after each clamp assignment.
+
+    When one conditional edge performs straight-line work and then joins the
+    other edge, its complete trace belongs between the test and the join.
+    This is a CFG property independent of source branch orientation.
+    """
+    body = lir.LirBody(
+        "clamp",
+        1,
+        (
+            lir.LirBlock(1, (_compare(1), _branch(2, "jg", 4)), (4, 3)),
+            lir.LirBlock(3, (_inserted(_jump(3, 7)),), (7,)),
+            lir.LirBlock(4, (_move(4, CX), _jump(5, 7)), (7,)),
+            lir.LirBlock(7, (_return(7),), ()),
+        ),
+        {},
+        {},
+    )
+    procedure = masm.Procedure("_clamp", True, False, jumps.threaded(jumps.placed(body)), 0, {})
+
+    assert [line.strip() for line in masm._procedure(procedure, {}, 0)][1:-1] == [
+        "L0_1:",
+        "cmp ax, bx",
+        "jle L0_7",
+        "L0_4:",
+        "mov ax, cx",
+        "L0_7:",
+        "ret",
+    ]
+
+
 def test_shared_machine_pipeline_threads_the_final_branch_pair() -> None:
     """Fresh QB D_SURF retained 189 ``jcc body; jmp exit; body`` pairs.
 

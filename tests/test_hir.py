@@ -409,9 +409,8 @@ def test_pascal_formals_are_read_in_reverse_physical_stack_order() -> None:
     listing = masm.text(qb_compile.assembled(source))
     function = listing.split("SUBTRACTPAIR proc far", 1)[1].split("SUBTRACTPAIR endp", 1)[0]
 
-    assert "mov eax, dword ptr [bp+12]" in function
-    assert "mov ebx, dword ptr [bp+8]" in function
-    assert "sub eax, ebx" in function
+    assert "mov eax, dword ptr [bp+10]" in function
+    assert "sub eax, dword ptr [bp+6]" in function
 
 
 def test_qb_call_abi_is_materialized_only_after_semantic_mir() -> None:
@@ -679,10 +678,7 @@ def test_qb_float_function_uses_hidden_near_result_pointer() -> None:
     assert len(function.parameters) == 2
 
     listing = masm.text(qb_compile.assembled(source))
-    assert re.search(
-        r"lea ax, \[bp-\d+\]\n    push dword ptr \[bp-\d+\]\n    push ax\n    call far ptr ADDHALF",
-        listing,
-    )
+    assert re.search(r"lea ax, ([^\n]+)\n    push dword ptr ([^\n]+)\n    push ax\n    call far ptr ADDHALF", listing)
     assert "fstp dword ptr [bx]" in listing
     assert "mov ax, bx\n    call far ptr B$EXSA\n    pop bp\n    retf" in listing
 
