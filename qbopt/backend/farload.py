@@ -115,22 +115,17 @@ def _far_pointer_words(first: lir.Insn, second: lir.Insn) -> bool:
     """Whether the two loads are adjacent halves of one typed far pointer.
 
     Adjacent machine addresses alone prove nothing: two near parameters also
-    occupy consecutive words.  The C raise records a far pointer as two
-    ``pointer4`` slices of the same source object, so require that semantic
-    fact as well as the encoding-level address proof above.
+    occupy consecutive words.  The C raise records both words of a far pointer
+    with the ``pointer4`` access type, so require that semantic fact as well as
+    the exact encoding-level address proof above.  Allocation provenance is an
+    aliasing fact, not part of the value's type: a pointer field reached through
+    a dynamic far owner has no named allocation even though its two adjacent
+    words are still one typed value.
     """
-    refs = []
     for one in (first, second):
         loaded = () if one.op is None else one.op.loads
         if len(loaded) != 1 or loaded[0].width != 2 or loaded[0].volatile or not loaded[0].typed:
             return False
-        if loaded[0].typed[0] != "pointer4" or loaded[0].provenance is None or len(loaded[0].provenance.slices) != 1:
+        if loaded[0].typed[0] != "pointer4":
             return False
-        refs.append((loaded[0], next(iter(loaded[0].provenance.slices))))
-    (low, low_slice), (high, high_slice) = refs
-    return (
-        low_slice.object == high_slice.object
-        and low_slice.high + 1 == high_slice.low
-        and low_slice.stride == high_slice.stride
-        and low_slice.width == high_slice.width
-    )
+    return True

@@ -134,7 +134,7 @@ def classify(mnem, ops, raw=""):
         return "jcc"
     if mnem in ("cwd", "cdq", "cbw"):
         return "cdq"
-    if mnem == "les":
+    if mnem in ("les", "lfs", "lgs"):
         return "les"
     if mnem == "lea":
         return "lea"

@@ -20,7 +20,7 @@ iteration updates this file in the same commit.
 
 | Phase | State | Current boundary |
 |---|---|---|
-| Per-CPU measurement | in progress | CPU profiles distinguish native medium-model addressing from the complete costed secondary 67h form, explicitly price x87 stack exchange, and carry the complete-peel iteration budget; the C corpus, static and frequency-weighted structural metrics, static and CFG-frequency-weighted per-CPU cost rankings, reference listings, and exact-count preservation across recurrence rewinds, loop rotation, and zero-byte-header threading exist; audited targets and runtime profiles remain. |
+| Per-CPU measurement | in progress | CPU profiles distinguish native medium-model addressing from the complete costed secondary 67h form, explicitly price x87 stack exchange and every LES/LFS/LGS complete far-pointer load, and carry the complete-peel iteration budget; the C corpus, static and frequency-weighted structural metrics, static and CFG-frequency-weighted per-CPU cost rankings, reference listings, and exact-count preservation across recurrence rewinds, loop rotation, and zero-byte-header threading exist; audited targets and runtime profiles remain. |
 | MIR/LIR provenance and fresh OMF | complete in production | allocated LIR emits directly with external source maps/allocation hints; the remaining compatibility views are test-only and cannot route a compilation through record rewriting. |
 | SROA and scalar promotion | partial | precise SSA pointer identity now refines coarse frontend operand annotations before GVN, LICM, packed-pointer splitting, and SROA; packed 16:16 dereferences are normalized into independent offset/selector SSA values before SROA; fixed/disjoint and singleton-indexed leaves promote; direct and exact-near-pointer C aggregate copies expand into exact leaves, and structural candidates transact leaves made singleton by scalar convergence with finite-capacity pressure pricing; far aggregate copies, overlap, volatile, general indexed copies and broader aggregate decomposition remain. |
 | Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection, local/block/region splitting, dying-base indexed-form unfolding, and local constant, frame, relocatable-address, and provenance-disjoint incoming-argument rematerialization exist; x87 allocation composes complete target-priced reread and retained-home candidates independently at empty-stack regions after all shuffles are materialized; global integer splitting/rematerialization, CFG-frequency weighting within a nonempty x87 region, and broader global x87 allocation remain. |
@@ -29,6 +29,61 @@ iteration updates this file in the same commit.
 | Post-allocation quality | partial | copy propagation, machine CSE/DCE, shared final block placement/threading/fall-through elision and fresh-tail sharing, plus byte-neutral source-unowned terminal-return duplication, dead-register frame-copy shuttles, dying-input commutative result transfer, synthetic high-word reload narrowing, target-priced 67h LEA selection including source-owned loaded scale/add tails and constant/register sums, conservative later-core/P5 scheduling of register work and direct frame LEAs, and partial-register edge delays exist; source-map-aware decoded-tail sharing, x87/segment scheduling, memory pairing, and full issue modelling remain. |
 
 ## Iteration log
+
+### 128. Recompose typed far pointers before allocation — 2026-09-19
+
+Frontend verbosity must not survive merely because its address owner is
+dynamic.  `indexed.lru_use`, the C analogue of qc-port's cache-list update,
+entered shared MIR with each far-pointer field split into adjacent offset and
+selector word loads.  The first common fixed point removed sixty redundant
+logical loads, but lowering refused to recombine the surviving typed halves
+because the containing far struct had no named allocation provenance.
+Allocation then rematerialized the struct base independently for both words,
+spilled pointer offsets, and turned 47 pre-allocation instructions into 81.
+
+The fail-first unit regression records the actual semantic proof: both words
+carry the C `pointer4` access type and have the same exact effective address
+apart from the required two-byte displacement.  Allocation provenance answers
+alias questions; it is not necessary to prove that these two typed halves are
+one value.  Complete far-load selection now uses the type plus exact address
+identity, retains the volatile/address-dependency guards, and no longer asks
+the frontend to manufacture an allocation identity for a dynamic field.  An
+integration regression compiles the recorded `indexed` stream and requires
+complete LES/LFS/LGS field loads with no independent selector-half loads.
+
+The measurement exposed a second issue and received its own fail-first
+regression: LFS and LGS were reported as unknown even though they have the same
+complete far-pointer load cost class as LES.  All three selector spellings are
+now explicitly classified as that audited form; no emitted work is silently
+free or unpriced.
+
+On the stable 386 run, `_lru_use` falls from 239 to 178 bytes, 81 to 66
+instructions, 355 to 295 weighted units, 43 to 24 static loads, 19 to 10 spill
+reload markers, three to one spill stores, and fifteen to zero
+rematerializations.  Estimated executed work falls from 29.34375 to 26.21875
+instructions and from 13 to 7.40625 loads.  `lir-lower` is the first changed
+stage: the seven pointer pairs are already seven complete loads before
+allocation.  The raw reports and listings are under
+`build/quality/iter128-indexed-{before,after}`.
+
+Clang 21's advisory flat-i386 listing estimates 16.21875 executed
+instructions; GCC 16.2 estimates 19.5.  The medium-model result is therefore
+1.62x and 1.34x respectively, down from 1.81x and 1.50x, with selector traffic
+and restricted 16-bit addressing still accounting for part of the gap.  These
+references remain structural best cases, not ABI-equivalent hard targets.
+The remaining repeated owner reload/spill decision is allocator work; it is
+not delegated to either frontend, and 67h remains the costed secondary form
+before a genuine spill or recomputation when a native retained base is not the
+cheaper complete allocation.
+
+The four focused lowering/pricing cases pass in 0.12 seconds and the recorded
+C integration regression passes in 3.27 seconds.  That integration compile is
+Tier 2: while it was temporarily in the fast manifest, Tier 1 passed all 275
+collected tests but took 6.31 seconds, so it was moved back out rather than
+quietly breaking the 1--3 second development-tier contract.  The full linked C
+corpus gate was stopped without a result after 170 seconds of optimizer
+candidate construction to keep aggregate test execution within the explicit
+10% wall-clock cap; it reported no failure before interruption.
 
 ### 127. Compose x87 candidates at semantic region boundaries — 2026-09-19
 

@@ -858,6 +858,27 @@ def test_hot_loop_loads_far_fields_before_owner_address_splits():
     assert not any("[bp+6]" in line for line in loads), body
 
 
+def test_dynamic_far_struct_pointer_fields_are_complete_loads() -> None:
+    """indexed.lru_use split each far-pointer field into two allocated loads.
+
+    The dynamic struct owner has no named allocation provenance, but its exact
+    adjacent `pointer4` accesses still describe one value.  Shared lowering
+    must combine that frontend spelling before allocation can rematerialize the
+    owner separately for its offset and selector halves.
+    """
+    text = cfront.compiled((FIXTURES / "indexed.cgs").read_text(), "indexed", optimise=True)
+    body = _proc([line.strip() for line in text.splitlines()], "_lru_use")
+    loads = [line for line in body if line.startswith(("les ", "lfs ", "lgs "))]
+
+    assert len(loads) >= 6, body
+    assert not any(
+        line.startswith(("mov es,", "mov fs,", "mov gs,"))
+        and "word ptr" in line
+        and any(f"{segment}:[" in line for segment in ("es", "fs", "gs"))
+        for line in body
+    ), body
+
+
 def test_hot_loop_retains_invariant_far_field_owners_under_pressure():
     """r_walk loaded `world` and `rdr` from BP on every marked face.
 

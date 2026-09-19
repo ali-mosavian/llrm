@@ -86,6 +86,18 @@ def test_memory_pop_is_not_priced_as_a_register_pop() -> None:
     assert all(cpu.profile(name).prices("pop_m") for name in cpu.names())
 
 
+@pytest.mark.parametrize("mnemonic", ["les", "lfs", "lgs"])
+def test_complete_far_pointer_loads_share_one_priced_form(mnemonic: str) -> None:
+    """indexed.lru_use became unpriced when allocation selected LFS.
+
+    LES, LFS and LGS are the same complete far-pointer load shape with a
+    different selector destination.  The quality instrument must not report
+    the FS/GS spellings as free or unknown work.
+    """
+    assert cycles.classify(mnemonic, "bx,[bp+6]", "") == "les"
+    assert all(cpu.profile(name).prices("les") for name in cpu.names())
+
+
 def test_x87_exchange_is_explicitly_priced_for_every_cpu() -> None:
     """Retaining C nbody's dx made the report unpriced as soon as it emitted FXCH."""
     expected = {"386": 18, "486": 4, "P5": 1, "P6": 0, "K5": 2, "K6": 2, "K7": 2, "Core": 0}
