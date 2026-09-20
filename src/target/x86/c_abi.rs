@@ -451,21 +451,13 @@ pub fn expand_allocated_c_abi(
                 }
                 Some(X86Opcode::ReturnNear) => {
                     if plan.framed() {
-                        instructions.push(instruction(
-                            next_id(&mut fresh_ids),
-                            X86Opcode::Leave,
-                            Vec::new(),
-                        ));
+                        instructions.push(frame_exit(next_id(&mut fresh_ids), plan));
                     }
                     original.operands.clear();
                 }
                 Some(X86Opcode::ReturnFar) => {
                     if plan.framed() {
-                        instructions.push(instruction(
-                            next_id(&mut fresh_ids),
-                            X86Opcode::Leave,
-                            Vec::new(),
-                        ));
+                        instructions.push(frame_exit(next_id(&mut fresh_ids), plan));
                     }
                     original.operands = vec![immediate(0)];
                 }
@@ -659,6 +651,17 @@ fn instruction(
         flags: InstructionFlags::NONE,
     }
 }
+fn frame_exit(id: MachineInstructionId, plan: &CFramePlan) -> MachineInstruction {
+    if plan.local_bytes() == 0 {
+        instruction(
+            id,
+            X86Opcode::Pop,
+            vec![physical(X86Register::Bp, OperandRole::Def)],
+        )
+    } else {
+        instruction(id, X86Opcode::Leave, Vec::new())
+    }
+}
 fn physical(register: X86Register, role: OperandRole) -> MachineOperand {
     MachineOperand {
         kind: MachineOperandKind::Register(MachineRegister::Physical(register.physical())),
@@ -797,6 +800,38 @@ mod tests {
             Some(X86Opcode::ReturnNear)
         );
         assert!(expanded.blocks[0].instructions[0].operands.is_empty());
+    }
+
+    #[test]
+    fn restores_an_argument_only_frame_with_pop_bp() {
+        let input = function(
+            MachineCallingConvention::C,
+            vec![MachineValueType::Integer { bits: 16 }],
+            vec![incoming(0, 0)],
+            false,
+        );
+        let plan = plan_c_frame(&input).unwrap();
+        let expanded = expand_allocated_c_abi(&input, &plan).unwrap();
+
+        assert!(plan.framed());
+        assert_eq!(plan.local_bytes(), 0);
+        assert_eq!(
+            expanded.blocks[0]
+                .instructions
+                .iter()
+                .map(|instruction| X86Opcode::from_machine_opcode(instruction.opcode))
+                .collect::<Vec<_>>(),
+            vec![
+                Some(X86Opcode::Push),
+                Some(X86Opcode::Mov),
+                Some(X86Opcode::Pop),
+                Some(X86Opcode::ReturnNear),
+            ]
+        );
+        assert_eq!(
+            expanded.blocks[0].instructions[2].operands,
+            vec![physical(X86Register::Bp, OperandRole::Def)]
+        );
     }
 
     #[test]
