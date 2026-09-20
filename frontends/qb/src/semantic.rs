@@ -1892,7 +1892,7 @@ impl Compiler {
                 Statement::Label(name, _) => {
                     self.data_labels.insert(canonical(name).into(), *offset);
                 }
-                Statement::Data { values, .. } => {
+                Statement::Data { .. } => {
                     *offset += 1;
                 }
                 Statement::If {
