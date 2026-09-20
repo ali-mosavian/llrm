@@ -2,6 +2,7 @@
 
 mod allocation;
 mod encoding;
+mod frame;
 mod instructions;
 mod mc;
 mod registers;
@@ -10,6 +11,7 @@ mod verify;
 
 pub use allocation::{X86AllocationError, allocate_registers};
 pub use encoding::{EncodeError, encode, encoded_size};
+pub use frame::{BasicFramePlan, BasicFramePlanError, BasicRuntime, plan_basic_frame};
 pub use instructions::{ComparisonKind, ConditionCode, OperandSize, X86Opcode};
 pub use mc::{McLowerError, UnresolvedOperand, lower_instruction};
 pub use registers::{X86Register, X86RegisterClass};

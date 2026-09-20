@@ -349,6 +349,27 @@ word deliveries AX and DX and merged into one semantic i32; returns perform the
 inverse split and carry the exact two-byte callee cleanup. The target verifier
 checks those contracts independently of the generic Machine-IR verifier.
 
+The next target-owned slice ports the Python source backend's BASIC runtime
+frame calculation without changing Machine IR. An immutable frame plan keeps
+ordinary far-Pascal parameters above BP, lays the first of two LONG formals at
+BP+10 and the second at BP+6, places locals and spills below the measured
+QB45/PDS71/VBDOS runtime headers (10/18/20 bytes), rounds the `B$ENRA` local
+reservation to a word, and carries both the `retf` cleanup byte count and the
+source-derived temporary-STRING count. Unsupported conventions, far-pointer
+parameters, outgoing stack objects, incomplete incoming homes, and
+unrepresentable sizes fail explicitly.
+
+The related Python regressions were ported with the mechanism: the PDS
+`Twice&(n AS LONG)` parameter/local pair remains BP+6/BP-22, VBDOS's 4096-byte
+local reaches BP-4116, and the historical `SUBTRACTPAIR` argument-order bug is
+covered by the BP+10/BP+6 assertion. The real `procedure.bas` Rust vertical
+slice independently produces BP+6 for its BYREF parameter and BP-24 for its
+four-byte VBDOS local. Primary review checked the implementation against
+`qbopt/frontend/qb/compile.py::_runtime_frame`, the Pascal layout in
+`qbopt/frontend/qb/abi.py`, and the original regression assertions rather than
+accepting an agent summary; that review corrected an agent's erroneous
+BP+12/BP+8 interpretation before integration.
+
 This slice deliberately ends at verified `.qmir`. Frame layout must still add
 the runtime-specific `B$ENRA`/`B$EXSA` envelope, and allocation must model call
 clobbers before this procedure can be emitted as executable OMF. Relocatable
@@ -397,6 +418,14 @@ unchanged runtime-call selector checks concurrently in 0.04 s. No broad suite
 was run. Updating the adjacent incoming-argument selector regression used one
 0.04 s fail-first run, a 1.33 s correction run, and a 1.28 s accepted run; the
 seven-test selector module then passed from the warm build in 0.04 s.
+
+Frame-planning verification ran only the five adjacent x86 tests (5.64 s before
+the final representation tightening and 3.16 s after it) plus the real
+`procedure.bas` regression (0.08 s). Primary review then caught the Python
+word-rounding boundary with one 1.40 s fail-first regression and one 3.31 s
+accepted run. No broad suite or external runtime gate ran. The next frame work
+is ABI expansion for `B$ENRA`/`B$EXSA`, exact call clobbers, and frame-index
+lowering; the pure plan is not yet an emitted runtime shell.
 
 That regression was observed failing before the general declaration-liveness
 rule was implemented, then passed with a parseable `.qir` result. All focused

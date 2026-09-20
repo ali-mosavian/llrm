@@ -133,7 +133,7 @@ mod tests {
     };
     use crate::ir;
     use crate::object::omf::record::Record;
-    use crate::target::x86::{X86Opcode, X86Register};
+    use crate::target::x86::{BasicRuntime, X86Opcode, X86Register, plan_basic_frame};
 
     #[test]
     fn untouched_omf_survives_the_driver_boundary_byte_for_byte() {
@@ -228,6 +228,13 @@ mod tests {
                 }
             ]
         ));
+        let frame = plan_basic_frame(procedure, BasicRuntime::Vbdos, 0)
+            .expect("the measured VBDOS BASIC frame must be representable");
+        assert_eq!(frame.header_bytes(), 20);
+        assert_eq!(frame.local_bytes(), 4);
+        assert_eq!(frame.parameter_bytes(), 2);
+        assert_eq!(frame.offset(procedure.frame_objects[0].index), Some(6));
+        assert_eq!(frame.offset(procedure.frame_objects[1].index), Some(-24));
         assert!(
             procedure
                 .blocks
