@@ -1670,4 +1670,22 @@ mod tests {
             })
         );
     }
+
+    #[test]
+    fn refuses_integer_to_float_without_signed_cast_semantics() {
+        let mut module = scalar_module();
+        module.functions[0].blocks[2].instructions[0].operands =
+            vec![hir::Operand::Value(hir::ValueId::new(1))];
+
+        assert_eq!(
+            lower_module(&module),
+            Err(LowerError::UnsupportedInstruction {
+                function: hir::FunctionId::new(11),
+                block: hir::BlockId::new(6),
+                instruction: hir::InstructionId::new(13),
+                opcode: hir::Opcode::Convert,
+                feature: UnsupportedFeature::UnsupportedCast,
+            })
+        );
+    }
 }
