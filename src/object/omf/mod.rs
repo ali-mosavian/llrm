@@ -5,6 +5,7 @@ pub mod data;
 pub mod declarations;
 pub mod file;
 pub mod fixups;
+pub mod image;
 pub mod lines;
 pub mod module;
 pub mod read;
