@@ -178,6 +178,7 @@ fn run_pipeline(
     Ok(llrm::ir::write_text(&module))
 }
 
+#[cfg(test)]
 fn canonicalize(source: &str) -> Result<String, llrm::ir::TextError> {
     llrm::ir::parse_text(source).map(|module| llrm::ir::write_text(&module))
 }

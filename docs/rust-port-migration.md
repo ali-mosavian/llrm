@@ -657,3 +657,6 @@ IR verifier, `.qir` round-trip, and HIR relocation tests plus one all-target
 compile check consumed about nine seconds. The compile check reported one
 pre-existing test-only `llrm-opt` helper warning; no broad test suite or
 external runtime gate ran.
+
+The test-only canonicalization helper is now compiled only for tests, so the
+all-target check is warning-free; the confirming check took 0.07 seconds.
