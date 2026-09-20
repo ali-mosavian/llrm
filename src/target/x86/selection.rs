@@ -978,14 +978,32 @@ impl<'types> FunctionSelector<'types> {
         if !matches!(
             self.type_kind(result.type_id)?,
             TypeKind::Integer { bits: 1 }
-        ) || predicate != ComparePredicate::SignedLessThan
-        {
+        ) {
             return Err(SelectionError::UnsupportedCompare {
                 function: self.function.id,
                 block,
                 instruction: instruction.id,
             });
         }
+        let condition = match predicate {
+            ComparePredicate::Equal => ConditionCode::Equal,
+            ComparePredicate::NotEqual => ConditionCode::NotEqual,
+            ComparePredicate::SignedLessThan => ConditionCode::Less,
+            ComparePredicate::SignedLessEqual => ConditionCode::LessOrEqual,
+            ComparePredicate::SignedGreaterThan => ConditionCode::Greater,
+            ComparePredicate::SignedGreaterEqual => ConditionCode::GreaterOrEqual,
+            ComparePredicate::UnsignedLessThan => ConditionCode::Below,
+            ComparePredicate::UnsignedLessEqual => ConditionCode::BelowOrEqual,
+            ComparePredicate::UnsignedGreaterThan => ConditionCode::Above,
+            ComparePredicate::UnsignedGreaterEqual => ConditionCode::AboveOrEqual,
+            _ => {
+                return Err(SelectionError::UnsupportedCompare {
+                    function: self.function.id,
+                    block,
+                    instruction: instruction.id,
+                });
+            }
+        };
         let left_type = self.operand_type(block, instruction.id, left)?;
         let right_type = self.operand_type(block, instruction.id, right)?;
         if left_type != right_type || self.integer_bits(left_type)? != 16 {
@@ -1004,7 +1022,7 @@ impl<'types> FunctionSelector<'types> {
             PendingComparison {
                 left,
                 right,
-                condition: ConditionCode::Less,
+                condition,
             },
         );
         Ok(())
@@ -2522,6 +2540,324 @@ mod tests {
             block.instructions[4].operands,
             vec![block_operand(MachineBlockId::new(2))]
         );
+    }
+
+    #[test]
+    fn selects_i16_integer_branch_predicates_and_scalar_for_bounds() {
+        // qbopt.backend.lower._BRANCHES is the Python target oracle.  First
+        // check each integer predicate it names against x86's condition code.
+        for (predicate, condition) in [
+            (ComparePredicate::Equal, ConditionCode::Equal),
+            (ComparePredicate::NotEqual, ConditionCode::NotEqual),
+            (ComparePredicate::SignedLessThan, ConditionCode::Less),
+            (
+                ComparePredicate::SignedLessEqual,
+                ConditionCode::LessOrEqual,
+            ),
+            (ComparePredicate::SignedGreaterThan, ConditionCode::Greater),
+            (
+                ComparePredicate::SignedGreaterEqual,
+                ConditionCode::GreaterOrEqual,
+            ),
+            (ComparePredicate::UnsignedLessThan, ConditionCode::Below),
+            (
+                ComparePredicate::UnsignedLessEqual,
+                ConditionCode::BelowOrEqual,
+            ),
+            (ComparePredicate::UnsignedGreaterThan, ConditionCode::Above),
+            (
+                ComparePredicate::UnsignedGreaterEqual,
+                ConditionCode::AboveOrEqual,
+            ),
+        ] {
+            let left = Value {
+                id: ValueId::new(0),
+                type_id: I16,
+            };
+            let right = Value {
+                id: ValueId::new(1),
+                type_id: I16,
+            };
+            let compared = Value {
+                id: ValueId::new(2),
+                type_id: I1,
+            };
+            let function = function(
+                vec![
+                    Block {
+                        id: BlockId::new(0),
+                        instructions: vec![Instruction {
+                            id: crate::ir::InstructionId::new(0),
+                            results: vec![compared.clone()],
+                            kind: InstructionKind::Compare {
+                                predicate,
+                                left: Operand::Value(left.id),
+                                right: Operand::Value(right.id),
+                            },
+                        }],
+                        terminator: Terminator::Branch {
+                            condition: Operand::Value(compared.id),
+                            then_block: BlockId::new(1),
+                            else_block: BlockId::new(2),
+                        },
+                    },
+                    Block {
+                        id: BlockId::new(1),
+                        instructions: Vec::new(),
+                        terminator: Terminator::Return(None),
+                    },
+                    Block {
+                        id: BlockId::new(2),
+                        instructions: Vec::new(),
+                        terminator: Terminator::Return(None),
+                    },
+                ],
+                vec![left, right],
+            );
+
+            let selected = select_module(&module(basic_types(), vec![function])).unwrap();
+            selected.verify().unwrap();
+            let block = &selected.functions[0].blocks[0];
+            let left_register = block.instructions[0].operands[0].kind.clone();
+            let right_register = block.instructions[1].operands[0].kind.clone();
+            assert_eq!(
+                block.instructions[2]
+                    .operands
+                    .iter()
+                    .map(|operand| operand.kind.clone())
+                    .collect::<Vec<_>>(),
+                vec![left_register, right_register]
+            );
+            assert_eq!(
+                block.instructions[3].operands,
+                vec![
+                    immediate_operand(i64::from(condition as u8)),
+                    block_operand(MachineBlockId::new(1)),
+                ]
+            );
+        }
+
+        // bench/parity/scalar.bas has this scalar FOR dispatch: a nonnegative
+        // step takes the inclusive <= bound, and a negative step takes >=.
+        let counter = Value {
+            id: ValueId::new(0),
+            type_id: I16,
+        };
+        let limit = Value {
+            id: ValueId::new(1),
+            type_id: I16,
+        };
+        let step = Value {
+            id: ValueId::new(2),
+            type_id: I16,
+        };
+        let less_equal = Value {
+            id: ValueId::new(3),
+            type_id: I1,
+        };
+        let greater_equal = Value {
+            id: ValueId::new(4),
+            type_id: I1,
+        };
+        let step_nonnegative = Value {
+            id: ValueId::new(5),
+            type_id: I1,
+        };
+        let function = function(
+            vec![
+                Block {
+                    id: BlockId::new(0),
+                    instructions: vec![Instruction {
+                        id: crate::ir::InstructionId::new(0),
+                        results: vec![step_nonnegative.clone()],
+                        kind: InstructionKind::Compare {
+                            predicate: ComparePredicate::SignedGreaterEqual,
+                            left: Operand::Value(step.id),
+                            right: Operand::Constant(TypedConstant {
+                                type_id: I16,
+                                value: Constant::Integer(0),
+                            }),
+                        },
+                    }],
+                    terminator: Terminator::Branch {
+                        condition: Operand::Value(step_nonnegative.id),
+                        then_block: BlockId::new(1),
+                        else_block: BlockId::new(2),
+                    },
+                },
+                Block {
+                    id: BlockId::new(1),
+                    instructions: vec![Instruction {
+                        id: crate::ir::InstructionId::new(1),
+                        results: vec![less_equal.clone()],
+                        kind: InstructionKind::Compare {
+                            predicate: ComparePredicate::SignedLessEqual,
+                            left: Operand::Value(counter.id),
+                            right: Operand::Value(limit.id),
+                        },
+                    }],
+                    terminator: Terminator::Branch {
+                        condition: Operand::Value(less_equal.id),
+                        then_block: BlockId::new(3),
+                        else_block: BlockId::new(4),
+                    },
+                },
+                Block {
+                    id: BlockId::new(2),
+                    instructions: vec![Instruction {
+                        id: crate::ir::InstructionId::new(2),
+                        results: vec![greater_equal.clone()],
+                        kind: InstructionKind::Compare {
+                            predicate: ComparePredicate::SignedGreaterEqual,
+                            left: Operand::Value(counter.id),
+                            right: Operand::Value(limit.id),
+                        },
+                    }],
+                    terminator: Terminator::Branch {
+                        condition: Operand::Value(greater_equal.id),
+                        then_block: BlockId::new(3),
+                        else_block: BlockId::new(4),
+                    },
+                },
+                Block {
+                    id: BlockId::new(3),
+                    instructions: Vec::new(),
+                    terminator: Terminator::Return(None),
+                },
+                Block {
+                    id: BlockId::new(4),
+                    instructions: Vec::new(),
+                    terminator: Terminator::Return(None),
+                },
+            ],
+            vec![counter, limit, step],
+        );
+
+        let selected = select_module(&module(basic_types(), vec![function])).unwrap();
+        selected.verify().unwrap();
+        let step_select = &selected.functions[0].blocks[0];
+        let positive = &selected.functions[0].blocks[1];
+        let negative = &selected.functions[0].blocks[2];
+        let counter_register = step_select.instructions[0].operands[0].kind.clone();
+        let limit_register = step_select.instructions[1].operands[0].kind.clone();
+        let step_register = step_select.instructions[2].operands[0].kind.clone();
+        let zero_register = step_select.instructions[3].operands[0].kind.clone();
+        assert_eq!(
+            step_select.instructions[4]
+                .operands
+                .iter()
+                .map(|operand| operand.kind.clone())
+                .collect::<Vec<_>>(),
+            vec![step_register, zero_register]
+        );
+        assert_eq!(
+            step_select.instructions[5].operands,
+            vec![
+                immediate_operand(i64::from(ConditionCode::GreaterOrEqual as u8)),
+                block_operand(MachineBlockId::new(1)),
+            ]
+        );
+        assert_eq!(
+            step_select.instructions[6].operands,
+            vec![block_operand(MachineBlockId::new(2))]
+        );
+        for (block, compare_at, branch_at, jump_at, condition) in [
+            (positive, 0, 1, 2, ConditionCode::LessOrEqual),
+            (negative, 0, 1, 2, ConditionCode::GreaterOrEqual),
+        ] {
+            assert_eq!(
+                block.instructions[compare_at]
+                    .operands
+                    .iter()
+                    .map(|operand| operand.kind.clone())
+                    .collect::<Vec<_>>(),
+                vec![counter_register.clone(), limit_register.clone()]
+            );
+            assert_eq!(
+                block.instructions[branch_at].operands,
+                vec![
+                    immediate_operand(i64::from(condition as u8)),
+                    block_operand(MachineBlockId::new(3)),
+                ]
+            );
+            assert_eq!(
+                block.instructions[jump_at].operands,
+                vec![block_operand(MachineBlockId::new(4))]
+            );
+        }
+    }
+
+    #[test]
+    fn refuses_unsupported_compare_predicates_and_widths() {
+        let float = TypeId::new(3);
+        let ordered_result = Value {
+            id: ValueId::new(2),
+            type_id: I1,
+        };
+        let ordered_float = function(
+            vec![Block {
+                id: BlockId::new(0),
+                instructions: vec![Instruction {
+                    id: crate::ir::InstructionId::new(0),
+                    results: vec![ordered_result],
+                    kind: InstructionKind::Compare {
+                        predicate: ComparePredicate::OrderedLessThan,
+                        left: Operand::Constant(TypedConstant {
+                            type_id: float,
+                            value: Constant::Float("1.0".to_owned()),
+                        }),
+                        right: Operand::Constant(TypedConstant {
+                            type_id: float,
+                            value: Constant::Float("2.0".to_owned()),
+                        }),
+                    },
+                }],
+                terminator: Terminator::Return(None),
+            }],
+            Vec::new(),
+        );
+        let mut types = basic_types();
+        types.push(Type {
+            id: float,
+            kind: TypeKind::Float(FloatKind::Binary32),
+        });
+        assert!(matches!(
+            select_module(&module(types, vec![ordered_float])),
+            Err(SelectionError::UnsupportedCompare { .. })
+        ));
+
+        let dword_left = Value {
+            id: ValueId::new(0),
+            type_id: I32,
+        };
+        let dword_right = Value {
+            id: ValueId::new(1),
+            type_id: I32,
+        };
+        let dword_result = Value {
+            id: ValueId::new(2),
+            type_id: I1,
+        };
+        let unsupported_width = function(
+            vec![Block {
+                id: BlockId::new(0),
+                instructions: vec![Instruction {
+                    id: crate::ir::InstructionId::new(0),
+                    results: vec![dword_result],
+                    kind: InstructionKind::Compare {
+                        predicate: ComparePredicate::SignedLessEqual,
+                        left: Operand::Value(dword_left.id),
+                        right: Operand::Value(dword_right.id),
+                    },
+                }],
+                terminator: Terminator::Return(None),
+            }],
+            vec![dword_left, dword_right],
+        );
+        assert!(matches!(
+            select_module(&module(basic_types(), vec![unsupported_width])),
+            Err(SelectionError::UnsupportedCompare { .. })
+        ));
     }
 
     #[test]
