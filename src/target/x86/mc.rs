@@ -10,7 +10,7 @@ use std::fmt;
 use crate::codegen::machine::{
     MachineInstruction, MachineOperandKind, MachineRegister, OperandRole,
 };
-use crate::{codegen::machine, mc};
+use crate::mc;
 
 use super::{X86Opcode, X86Register};
 
@@ -153,7 +153,8 @@ fn unresolved(operand: usize, kind: UnresolvedOperand) -> Result<mc::MCOperand, 
 mod tests {
     use super::*;
     use crate::codegen::machine::{
-        InstructionFlags, MachineInstructionId, MachineOperand, PhysicalRegister, TargetOpcode,
+        self, InstructionFlags, MachineInstructionId, MachineOperand, PhysicalRegister,
+        TargetOpcode,
     };
 
     fn operand(kind: MachineOperandKind, role: OperandRole) -> MachineOperand {
