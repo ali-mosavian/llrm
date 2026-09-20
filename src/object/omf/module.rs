@@ -5,6 +5,7 @@ use std::fmt;
 use super::data::{self, DataBlock, DataError};
 use super::declarations::{self, DeclarationError, Declarations};
 use super::fixups::{self, Fixup, FixupError};
+use super::header::{self, HeaderError, ModuleHeader};
 use super::lines::{self, LineError, LineTable};
 use super::record::Record;
 use super::segments::{self, SegmentError, SegmentTable};
@@ -13,6 +14,7 @@ use super::symbols::{self, SymbolError, SymbolTables};
 /// The independently decoded tables and relocations of one object module.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DecodedModule<'a> {
+    pub header: Option<ModuleHeader>,
     pub symbols: SymbolTables,
     pub segments: SegmentTable,
     pub declarations: Declarations,
@@ -24,6 +26,7 @@ pub struct DecodedModule<'a> {
 impl<'a> DecodedModule<'a> {
     pub fn parse(records: &'a [Record]) -> Result<Self, ModuleError> {
         Ok(Self {
+            header: header::parse(records).map_err(ModuleError::Header)?,
             symbols: symbols::parse(records).map_err(ModuleError::Symbols)?,
             segments: segments::parse(records).map_err(ModuleError::Segments)?,
             declarations: declarations::parse(records).map_err(ModuleError::Declarations)?,
@@ -37,6 +40,7 @@ impl<'a> DecodedModule<'a> {
 /// A malformed record family in an OMF object module.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ModuleError {
+    Header(HeaderError),
     Symbols(SymbolError),
     Segments(SegmentError),
     Declarations(DeclarationError),
@@ -48,6 +52,7 @@ pub enum ModuleError {
 impl fmt::Display for ModuleError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Header(error) => error.fmt(formatter),
             Self::Symbols(error) => error.fmt(formatter),
             Self::Segments(error) => error.fmt(formatter),
             Self::Declarations(error) => error.fmt(formatter),
@@ -61,6 +66,7 @@ impl fmt::Display for ModuleError {
 impl std::error::Error for ModuleError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Header(error) => Some(error),
             Self::Symbols(error) => Some(error),
             Self::Segments(error) => Some(error),
             Self::Declarations(error) => Some(error),
