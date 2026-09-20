@@ -12,6 +12,7 @@ use crate::support::diagnostic::Diagnostic;
 use crate::{hir, ir};
 
 use super::calls::{CallPlan, CallPlanError, plan_runtime_calls};
+use super::globals::{GlobalPlan, GlobalPlanError, PlannedPlace, plan_globals};
 
 /// A HIR feature that the portable scalar lowering cannot represent exactly.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -50,6 +51,8 @@ pub enum InvalidProperty {
     SwitchSelector,
     ConstantType,
     MissingCallPlan,
+    MissingGlobalPlan,
+    ReadOnlyStore,
 }
 
 /// The kind of an unsupported HIR operand.
@@ -112,6 +115,18 @@ pub enum LowerError {
         instruction: Option<hir::InstructionId>,
         value: hir::ValueId,
     },
+    UnknownPlace {
+        function: hir::FunctionId,
+        block: hir::BlockId,
+        instruction: hir::InstructionId,
+        place: hir::PlaceId,
+    },
+    AmbiguousPlace {
+        function: hir::FunctionId,
+        block: hir::BlockId,
+        instruction: hir::InstructionId,
+        place: hir::PlaceId,
+    },
     InvalidBlock {
         function: hir::FunctionId,
         block: hir::BlockId,
@@ -129,6 +144,9 @@ pub enum LowerError {
     },
     CallPlan {
         error: CallPlanError,
+    },
+    GlobalPlan {
+        error: GlobalPlanError,
     },
 }
 
@@ -189,6 +207,24 @@ impl fmt::Display for LowerError {
                 formatter,
                 "function {function} block {block} {instruction:?} references unknown value {value}"
             ),
+            Self::UnknownPlace {
+                function,
+                block,
+                instruction,
+                place,
+            } => write!(
+                formatter,
+                "function {function} block {block} instruction {instruction} references unknown place {place}"
+            ),
+            Self::AmbiguousPlace {
+                function,
+                block,
+                instruction,
+                place,
+            } => write!(
+                formatter,
+                "function {function} block {block} instruction {instruction} references ambiguous place {place}"
+            ),
             Self::InvalidBlock {
                 function,
                 block,
@@ -213,6 +249,7 @@ impl fmt::Display for LowerError {
                 diagnostics.len()
             ),
             Self::CallPlan { error } => write!(formatter, "cannot plan runtime calls: {error}"),
+            Self::GlobalPlan { error } => write!(formatter, "cannot plan static data: {error}"),
         }
     }
 }
@@ -221,6 +258,7 @@ impl Error for LowerError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::CallPlan { error } => Some(error),
+            Self::GlobalPlan { error } => Some(error),
             _ => None,
         }
     }
@@ -233,45 +271,36 @@ impl Error for LowerError {
 /// rather than being erased or approximated.
 pub fn lower_module(module: &hir::Module) -> Result<ir::Module, LowerError> {
     let calls = plan_runtime_calls(module).map_err(|error| LowerError::CallPlan { error })?;
+    let globals = plan_globals(module).map_err(|error| LowerError::GlobalPlan { error })?;
     let lowerer = Lowerer {
         module,
         calls: &calls,
+        globals: &globals,
     };
     // The QB frontend carries a catalog of built-in types and callables in
     // every module. Declarations that no lowered function references have no
     // portable-IR semantics, so they must not make an otherwise scalar module
     // fail merely because their representation is not implemented yet.
-    let required_types = required_type_ids(module);
-    let types = module
+    let mut required_types = required_type_ids(module);
+    required_types.extend(globals.source_types.iter().copied());
+    let mut types = module
         .types
         .iter()
         .filter(|type_| required_types.contains(&type_.id))
         .map(|type_| lowerer.lower_type(type_))
         .collect::<Result<Vec<_>, _>>()?;
-
-    // Empty internal data objects are frontend scaffolding until a place or
-    // initializer gives them observable identity. Nonempty or externally
-    // visible data still requires real global lowering and is refused.
-    if module.data.iter().any(|data| {
-        !data.bytes.is_empty()
-            || !data.relocations.is_empty()
-            || data.linkage != hir::Linkage::Internal
-    }) {
-        return Err(LowerError::UnsupportedModule {
-            feature: UnsupportedFeature::DataObject,
-        });
-    }
     let mut functions = module
         .functions
         .iter()
         .map(|function| lowerer.lower_function(function))
         .collect::<Result<Vec<_>, _>>()?;
     drop(lowerer);
+    types.extend(globals.extra_types);
     functions.extend(calls.declarations);
     let lowered = ir::Module {
         name: module.name.clone(),
         types,
-        globals: Vec::new(),
+        globals: globals.globals,
         functions,
     };
     lowered
@@ -285,7 +314,6 @@ fn required_type_ids(module: &hir::Module) -> BTreeSet<hir::TypeId> {
     for function in &module.functions {
         required.insert(function.result_type);
         required.extend(function.values.iter().map(|value| value.type_id));
-        required.extend(function.places.iter().map(|place| place.type_id));
         for block in &function.blocks {
             for instruction in &block.instructions {
                 for operand in &instruction.operands {
@@ -336,6 +364,7 @@ fn collect_operand_types(operand: &hir::Operand, required: &mut BTreeSet<hir::Ty
 struct Lowerer<'module> {
     module: &'module hir::Module,
     calls: &'module CallPlan,
+    globals: &'module GlobalPlan,
 }
 
 impl<'module> Lowerer<'module> {
@@ -348,14 +377,7 @@ impl<'module> Lowerer<'module> {
             },
             hir::TypeKind::Float => ir::TypeKind::Float(self.float_kind(type_)?),
             hir::TypeKind::Pointer => ir::TypeKind::Pointer {
-                address_space: match type_.address {
-                    hir::AddressKind::None => ir::AddressSpace::Generic,
-                    hir::AddressKind::Near => ir::AddressSpace::NearData,
-                    hir::AddressKind::Far => ir::AddressSpace::FarData,
-                    hir::AddressKind::Huge => ir::AddressSpace::HugeData,
-                    hir::AddressKind::Code => ir::AddressSpace::Code,
-                    hir::AddressKind::Segment => ir::AddressSpace::Segment,
-                },
+                address_space: lower_address_kind(type_.address),
             },
             hir::TypeKind::Array => {
                 return Err(LowerError::UnsupportedType {
@@ -410,12 +432,6 @@ impl<'module> Lowerer<'module> {
     }
 
     fn lower_function(&self, function: &hir::Function) -> Result<ir::Function, LowerError> {
-        if !function.places.is_empty() {
-            return Err(LowerError::UnsupportedFunction {
-                function: function.id,
-                feature: UnsupportedFeature::Place,
-            });
-        }
         if function.error_handler.is_some() || function.error_handler_local {
             return Err(LowerError::UnsupportedFunction {
                 function: function.id,
@@ -602,14 +618,9 @@ impl<'module> Lowerer<'module> {
             Opcode::FloatExp2 => {
                 self.float_intrinsic(function, block, instruction, ir::Intrinsic::Exp2)?
             }
-            Opcode::Load | Opcode::Store | Opcode::Address => {
-                return self.unsupported_instruction(
-                    function,
-                    block,
-                    instruction,
-                    UnsupportedFeature::Memory,
-                );
-            }
+            Opcode::Load => self.lower_load(function, block, instruction)?,
+            Opcode::Store => self.lower_store(function, block, instruction)?,
+            Opcode::Address => self.lower_address(function, block, instruction)?,
             Opcode::OffsetPointer | Opcode::PointerOffset | Opcode::PointerSegment => {
                 return self.unsupported_instruction(
                     function,
@@ -649,21 +660,179 @@ impl<'module> Lowerer<'module> {
             }
             Opcode::Call => self.lower_call(function, block, instruction)?,
         };
-        let results = if instruction.opcode == Opcode::Call {
-            instruction
+        let results = match instruction.opcode {
+            Opcode::Call => instruction
                 .results
                 .iter()
                 .map(|result| self.lower_value(function, *result, block, Some(instruction.id)))
-                .collect::<Result<Vec<_>, _>>()?
-        } else {
-            self.one_result(function, block, instruction)
-                .map(|result| vec![result])?
+                .collect::<Result<Vec<_>, _>>()?,
+            Opcode::Store => {
+                if !instruction.results.is_empty() {
+                    return self.invalid_instruction(
+                        function,
+                        block,
+                        instruction,
+                        InvalidProperty::ResultArity,
+                    );
+                }
+                Vec::new()
+            }
+            _ => vec![self.one_result(function, block, instruction)?],
         };
         Ok(ir::Instruction {
             id: instruction_id(instruction.id),
             results,
             kind,
         })
+    }
+
+    fn lower_load(
+        &self,
+        function: &hir::Function,
+        block: hir::BlockId,
+        instruction: &hir::Instruction,
+    ) -> Result<ir::InstructionKind, LowerError> {
+        let result = self.one_result(function, block, instruction)?;
+        let (place, planned) = self.direct_place(function, block, instruction, 0, 1)?;
+        self.require_same_type(
+            function,
+            block,
+            instruction,
+            result.type_id,
+            place.type_id,
+            InvalidProperty::OperandTypes,
+        )?;
+        Ok(ir::InstructionKind::Load {
+            address: global_address(planned, planned.pointer_type),
+            alignment: 1,
+            volatile: false,
+        })
+    }
+
+    fn lower_store(
+        &self,
+        function: &hir::Function,
+        block: hir::BlockId,
+        instruction: &hir::Instruction,
+    ) -> Result<ir::InstructionKind, LowerError> {
+        let (place, planned) = self.direct_place(function, block, instruction, 0, 2)?;
+        if planned.readonly {
+            return self.invalid_instruction(
+                function,
+                block,
+                instruction,
+                InvalidProperty::ReadOnlyStore,
+            );
+        }
+        let value_type = self.operand_type(
+            function,
+            block,
+            Some(instruction.id),
+            1,
+            &instruction.operands[1],
+        )?;
+        if value_type != place.type_id {
+            return self.invalid_instruction(
+                function,
+                block,
+                instruction,
+                InvalidProperty::OperandTypes,
+            );
+        }
+        let value = self.lower_operand(
+            function,
+            block,
+            Some(instruction.id),
+            1,
+            &instruction.operands[1],
+        )?;
+        Ok(ir::InstructionKind::Store {
+            address: global_address(planned, planned.pointer_type),
+            value,
+            alignment: 1,
+            volatile: false,
+        })
+    }
+
+    fn lower_address(
+        &self,
+        function: &hir::Function,
+        block: hir::BlockId,
+        instruction: &hir::Instruction,
+    ) -> Result<ir::InstructionKind, LowerError> {
+        let result = self.one_result(function, block, instruction)?;
+        let (place, planned) = self.direct_place(function, block, instruction, 0, 1)?;
+        let result_type = self.type_by_id(hir::TypeId::new(result.type_id.get()))?;
+        if result_type.kind != hir::TypeKind::Pointer
+            || lower_address_kind(result_type.address) != lower_address_kind(place.address)
+        {
+            return self.invalid_instruction(
+                function,
+                block,
+                instruction,
+                InvalidProperty::OperandTypes,
+            );
+        }
+        Ok(ir::InstructionKind::Cast {
+            op: ir::CastOp::Bitcast,
+            operand: global_address(planned, planned.pointer_type),
+            to: result.type_id,
+        })
+    }
+
+    fn direct_place<'function>(
+        &self,
+        function: &'function hir::Function,
+        block: hir::BlockId,
+        instruction: &hir::Instruction,
+        index: usize,
+        arity: usize,
+    ) -> Result<(&'function hir::Place, PlannedPlace), LowerError> {
+        if instruction.operands.len() != arity {
+            return self.invalid_instruction(
+                function,
+                block,
+                instruction,
+                InvalidProperty::OperandArity,
+            );
+        }
+        let Some(hir::Operand::Place(place_id)) = instruction.operands.get(index) else {
+            return self.invalid_instruction(
+                function,
+                block,
+                instruction,
+                InvalidProperty::OperandTypes,
+            );
+        };
+        let mut matches = function.places.iter().filter(|place| place.id == *place_id);
+        let Some(place) = matches.next() else {
+            return Err(LowerError::UnknownPlace {
+                function: function.id,
+                block,
+                instruction: instruction.id,
+                place: *place_id,
+            });
+        };
+        if matches.next().is_some() {
+            return Err(LowerError::AmbiguousPlace {
+                function: function.id,
+                block,
+                instruction: instruction.id,
+                place: *place_id,
+            });
+        }
+        let planned = self
+            .globals
+            .places
+            .get(&(function.id, *place_id))
+            .copied()
+            .ok_or(LowerError::InvalidInstruction {
+                function: function.id,
+                block,
+                instruction: instruction.id,
+                property: InvalidProperty::MissingGlobalPlan,
+            })?;
+        Ok((place, planned))
     }
 
     fn lower_call(
@@ -1458,6 +1627,27 @@ impl<'module> Lowerer<'module> {
     }
 }
 
+fn global_address(place: PlannedPlace, pointer_type: ir::TypeId) -> ir::Operand {
+    ir::Operand::Constant(ir::TypedConstant {
+        type_id: pointer_type,
+        value: ir::Constant::GlobalAddress {
+            global: place.global,
+            addend: place.addend,
+        },
+    })
+}
+
+fn lower_address_kind(address: hir::AddressKind) -> ir::AddressSpace {
+    match address {
+        hir::AddressKind::None => ir::AddressSpace::Generic,
+        hir::AddressKind::Near => ir::AddressSpace::NearData,
+        hir::AddressKind::Far => ir::AddressSpace::FarData,
+        hir::AddressKind::Huge => ir::AddressSpace::HugeData,
+        hir::AddressKind::Code => ir::AddressSpace::Code,
+        hir::AddressKind::Segment => ir::AddressSpace::Segment,
+    }
+}
+
 fn type_id(id: hir::TypeId) -> ir::TypeId {
     ir::TypeId::new(id.get())
 }
@@ -1813,7 +2003,7 @@ mod tests {
     }
 
     #[test]
-    fn refuses_functions_with_places() {
+    fn refuses_local_places_until_stack_storage_is_represented() {
         let mut module = scalar_module();
         module.functions[0].places.push(hir::Place {
             id: hir::PlaceId::new(0),
@@ -1828,11 +2018,108 @@ mod tests {
 
         assert_eq!(
             lower_module(&module),
-            Err(LowerError::UnsupportedFunction {
-                function: hir::FunctionId::new(11),
-                feature: UnsupportedFeature::Place,
+            Err(LowerError::GlobalPlan {
+                error: GlobalPlanError::UnsupportedStorage {
+                    function: hir::FunctionId::new(11),
+                    place: hir::PlaceId::new(0),
+                    storage: hir::Storage::Local,
+                },
             })
         );
+    }
+
+    #[test]
+    fn lowers_static_place_load_store_and_address() {
+        let mut module = scalar_module();
+        module.data.push(hir::DataObject {
+            id: hir::DataId::new(77),
+            name: "slot-data".into(),
+            bytes: vec![0; 4],
+            readonly: false,
+            relocations: Vec::new(),
+            linkage: hir::Linkage::Internal,
+            address: hir::AddressKind::Near,
+        });
+        module.functions[0].places.push(hir::Place {
+            id: hir::PlaceId::new(0),
+            name: "slot".into(),
+            type_id: hir::TypeId::new(2),
+            storage: hir::Storage::Module,
+            offset: 0,
+            symbol: hir::DataId::new(77),
+            extent: 4,
+            address: hir::AddressKind::Near,
+        });
+        module.functions[0].values.extend([
+            hir::Value {
+                id: hir::ValueId::new(5),
+                type_id: hir::TypeId::new(2),
+            },
+            hir::Value {
+                id: hir::ValueId::new(6),
+                type_id: hir::TypeId::new(4),
+            },
+        ]);
+        module.functions[0].blocks[0].instructions.extend([
+            hir::Instruction {
+                id: hir::InstructionId::new(20),
+                opcode: hir::Opcode::Store,
+                results: Vec::new(),
+                operands: vec![
+                    hir::Operand::Place(hir::PlaceId::new(0)),
+                    hir::Operand::Constant {
+                        type_id: hir::TypeId::new(2),
+                        value: hir::ConstantValue::Integer(9),
+                    },
+                ],
+                callee: None,
+            },
+            hir::Instruction {
+                id: hir::InstructionId::new(21),
+                opcode: hir::Opcode::Load,
+                results: vec![hir::ValueId::new(5)],
+                operands: vec![hir::Operand::Place(hir::PlaceId::new(0))],
+                callee: None,
+            },
+            hir::Instruction {
+                id: hir::InstructionId::new(22),
+                opcode: hir::Opcode::Address,
+                results: vec![hir::ValueId::new(6)],
+                operands: vec![hir::Operand::Place(hir::PlaceId::new(0))],
+                callee: None,
+            },
+        ]);
+
+        let lowered = lower_module(&module).expect("direct static memory lowers exactly");
+
+        assert_eq!(lowered.globals.len(), 1);
+        assert_eq!(lowered.globals[0].id, ir::GlobalId::new(77));
+        let instructions = &lowered.functions[0].blocks[0].instructions;
+        assert!(matches!(
+            instructions[2].kind,
+            ir::InstructionKind::Store { .. }
+        ));
+        assert!(matches!(
+            instructions[3].kind,
+            ir::InstructionKind::Load { .. }
+        ));
+        assert!(matches!(
+            instructions[4].kind,
+            ir::InstructionKind::Cast {
+                op: ir::CastOp::Bitcast,
+                ..
+            }
+        ));
+        assert!(lowered.verify().is_ok());
+
+        module.data[0].readonly = true;
+        assert!(matches!(
+            lower_module(&module),
+            Err(LowerError::InvalidInstruction {
+                property: InvalidProperty::ReadOnlyStore,
+                ..
+            })
+        ));
     }
 
     #[test]

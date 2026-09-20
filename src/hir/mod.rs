@@ -5,6 +5,7 @@
 //! frontend parser state.
 
 mod calls;
+mod globals;
 mod lower;
 mod model;
 mod text;
@@ -18,3 +19,4 @@ pub use lower::{
     lower_module as lower_to_ir,
 };
 pub use calls::{AbiOrderError, CallOperandError, CallPlanError, CallSignature};
+pub use globals::GlobalPlanError;
