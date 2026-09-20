@@ -10,11 +10,12 @@ use crate::frontend::qb::{self, Dialect};
 use crate::hir::{LowerError, Program, RuntimeProfile, Storage};
 use crate::ir;
 use crate::object::omf::file::{File as OmfFile, FileError};
+use crate::object::omf::write::WriteError as OmfWriteError;
 use crate::support::diagnostic::Diagnostic;
 use crate::target::x86::{
     BasicAbiError, BasicAbiExpansionError, BasicFramePlan, BasicRuntime, CallClobberError,
     FrameIndexMaterializationError, SelectionError, X86AllocationError, X86JumpLayoutError,
-    X86McModuleLowerError,
+    X86McModuleLowerError, X86OmfError,
 };
 
 /// Configuration that affects QB source semantics.
@@ -95,6 +96,8 @@ pub enum Error {
     Machine(Vec<Diagnostic>),
     Mc(X86McModuleLowerError),
     McEncoding(X86JumpLayoutError),
+    X86Omf(X86OmfError),
+    OmfWrite(OmfWriteError),
     Omf(FileError),
 }
 
@@ -158,6 +161,8 @@ impl fmt::Display for Error {
             }
             Self::Mc(error) => write!(formatter, "cannot lower allocated x86 module: {error}"),
             Self::McEncoding(error) => write!(formatter, "cannot encode x86 MC module: {error}"),
+            Self::X86Omf(error) => write!(formatter, "cannot lower x86 MC to OMF: {error}"),
+            Self::OmfWrite(error) => write!(formatter, "cannot write OMF object: {error}"),
             Self::Omf(error) => error.fmt(formatter),
         }
     }
@@ -323,6 +328,15 @@ pub fn encode_x86_mc(module: &crate::mc::MCModule) -> Result<crate::mc::MCModule
     crate::target::x86::relax_and_encode_jumps(module).map_err(Error::McEncoding)
 }
 
+/// Writes an already encoded x86 MC module as a fresh, target-neutral OMF object.
+///
+/// Source-language envelopes are deliberately not inferred here. A frontend
+/// adapter must add any runtime-owned header or entry convention before MC.
+pub fn write_x86_omf(module_name: &[u8], module: &crate::mc::MCModule) -> Result<Vec<u8>, Error> {
+    let object = crate::target::x86::lower_to_omf(module_name, module).map_err(Error::X86Omf)?;
+    crate::object::omf::write::to_bytes(&object).map_err(Error::OmfWrite)
+}
+
 fn temporary_string_slots(
     function: &crate::hir::Function,
     string_types: &BTreeSet<crate::hir::TypeId>,
@@ -360,7 +374,7 @@ mod tests {
 
     use super::{
         Error, QbOptions, allocate_qb_machine, compile_qb, encode_x86_mc, lower_ir_to_machine,
-        lower_qb_machine_to_mc, lower_qb_to_ir, lower_qb_to_machine, parse_omf,
+        lower_qb_machine_to_mc, lower_qb_to_ir, lower_qb_to_machine, parse_omf, write_x86_omf,
     };
     use crate::codegen::machine::{
         FrameObjectKind, MachineAddressSpace, MachineCallingConvention, MachineOperandKind,
@@ -371,6 +385,8 @@ mod tests {
     };
     use crate::ir;
     use crate::mc::{MCFragment, MCOperand, SymbolDefinition};
+    use crate::object::omf::file::File as OmfFile;
+    use crate::object::omf::module::DecodedModule;
     use crate::object::omf::record::Record;
     use crate::target::x86::{X86FixupKind, X86Opcode, X86Register};
 
@@ -722,6 +738,34 @@ mod tests {
                 .flat_map(|data| &data.fixups)
                 .any(|fixup| fixup.kind == X86FixupKind::FarPointer1616.into())
         }));
+
+        let expected_fixups = encoded
+            .sections
+            .iter()
+            .flat_map(|section| &section.fragments)
+            .filter_map(|fragment| match fragment {
+                MCFragment::Data(data) => Some(&data.fixups),
+                _ => None,
+            })
+            .map(Vec::len)
+            .sum::<usize>();
+        let bytes = write_x86_omf(b"procedure.bas", &encoded)
+            .expect("encoded x86 MC reaches a fresh generic OMF object");
+        let OmfFile::Object(records) = parse_omf(&bytes).expect("fresh OMF parses") else {
+            panic!("fresh output must be one object module");
+        };
+        let decoded = DecodedModule::parse(&records).expect("fresh OMF semantics decode");
+        assert_eq!(decoded.fixups.len(), expected_fixups);
+        for runtime in [b"B$ENRA".as_slice(), b"B$EXSA".as_slice()] {
+            assert!(
+                decoded
+                    .symbols
+                    .externals
+                    .iter()
+                    .flatten()
+                    .any(|external| { external.name == runtime })
+            );
+        }
     }
 
     #[test]

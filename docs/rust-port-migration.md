@@ -606,3 +606,37 @@ all-data MC with retained far-call fixups in another 4.6 seconds. No broad
 suite or external gate ran. The final-address endpoint regression was then
 mutated back to the wrong short-form base, observed failing on the emitted near
 bytes, and restored to green in 2.7 seconds.
+
+Fresh OMF emission now has an explicit three-layer boundary. Generic MC still
+contains only opaque target fixup identities. The x86 adapter maps its
+`far pointer 16:16` and `absolute offset 16` fields to target-neutral OMF
+relocations and materializes expression addends exactly once. The OMF writer
+then owns names, one-based indices, SEGDEF/EXTDEF/PUBDEF declarations,
+LEDATA/FIXUPP construction, checksums, and MODEND without importing MC or x86.
+It emits explicit target-frame fixups and never depends on inherited THREAD
+state. BASIC module headers, runtime entry conventions, and DGROUP policy are
+not inferred by any of these layers and remain frontend/driver adapter work.
+
+The Python writer's relocation-boundary regression was ported with its
+1,000-byte LEDATA policy: a chunk boundary moves before a field rather than
+splitting it. Related tests cover semantic decode of every constructed record
+family, explicit non-THREAD fixups, deterministic output, overlapping and
+uninitialized relocation refusals, external far pointers, defined-symbol
+addends, zero-fill gaps, alignment fill, public/local symbol policy, and
+unsupported fixup/linkage cases. The real `procedure.bas` path now proceeds
+from encoded MC to a fresh OMF record stream whose relocations and runtime
+externals decode through the independent Rust reader. This is a structurally
+valid generic object, not yet the QB-specific module envelope.
+
+The first writer run failed because the mandatory empty LNAMES entry consumes
+index one while the new class name had initially also been assigned index one.
+The general one-based table rule was corrected before acceptance. Two focused
+implementation-agent turns were stopped when they did not produce files; the
+primary implemented and reviewed the frozen interface directly. A separate
+Terra audit confirmed that analyses, transforms, and MC contain no
+source-language branching and that the x86-adapter/object-writer split keeps
+the boundary intact. It also identified pre-existing target-width inference
+in portable IR relocation verification as the next architecture debt to
+remove rather than propagate. The failed and accepted writer checks, adapter
+checks, and real-procedure vertical check consumed about 15 seconds total. No
+broad suite, Python suite, qrender, DOSBox, or linker gate ran.

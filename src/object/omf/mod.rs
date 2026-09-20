@@ -14,3 +14,4 @@ pub mod read;
 pub mod record;
 pub mod segments;
 pub mod symbols;
+pub mod write;

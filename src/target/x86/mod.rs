@@ -13,6 +13,7 @@ mod jump_layout;
 mod mc;
 mod mc_encode;
 mod mc_module;
+mod omf;
 mod registers;
 mod selection;
 mod verify;
@@ -32,6 +33,7 @@ pub use mc_encode::{McEncodeVerificationStage, X86McEncodeError, encode_mc_modul
 pub use mc_module::{
     DefinedSymbolKind, McModuleIdKind, X86McModuleLowerError, lower_allocated_module,
 };
+pub use omf::{X86OmfError, lower_to_omf};
 pub use registers::{X86Register, X86RegisterClass};
 pub use selection::{FunctionProperty, SelectionError, select_module};
 pub use verify::verify_machine;
