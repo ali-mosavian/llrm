@@ -85,6 +85,7 @@ enum PassName {
     CommonSubexpressionElimination,
     ConstantFold,
     DeadCodeElimination,
+    DeadStoreElimination,
     SimplifyBranches,
     UnreachableBlockElimination,
 }
@@ -102,6 +103,7 @@ fn parse_passes(value: &str) -> Result<Vec<PassName>, String> {
             }
             "constant-fold" => Ok(PassName::ConstantFold),
             "dead-code-elimination" => Ok(PassName::DeadCodeElimination),
+            "dead-store-elimination" => Ok(PassName::DeadStoreElimination),
             "simplify-branches" => Ok(PassName::SimplifyBranches),
             "unreachable-block-elimination" => Ok(PassName::UnreachableBlockElimination),
             _ => Err(format!("unknown pass `{name}`")),
@@ -159,6 +161,9 @@ fn run_pipeline(
             PassName::DeadCodeElimination => {
                 manager.add_pass(llrm::transforms::DeadCodeElimination::new())
             }
+            PassName::DeadStoreElimination => {
+                manager.add_pass(llrm::transforms::DeadStoreElimination::new())
+            }
             PassName::SimplifyBranches => manager.add_pass(
                 llrm::transforms::SimplifyBranches::new(&module)
                     .map_err(PipelineError::BranchSimplify)?,
@@ -199,7 +204,8 @@ const fn usage() -> &'static str {
     concat!(
         "usage: llrm-opt [-o FILE] [--passes PIPELINE] [--verify-each] INPUT.qir\n\n",
         "passes: algebraic-simplify, common-subexpression-elimination, constant-fold, ",
-        "dead-code-elimination, simplify-branches, unreachable-block-elimination"
+        "dead-code-elimination, dead-store-elimination, simplify-branches, ",
+        "unreachable-block-elimination"
     )
 }
 
@@ -339,6 +345,34 @@ mod tests {
         assert_eq!(canonicalize(&output).as_deref(), Ok(output.as_str()));
         let repeated =
             run_pipeline(&output, &[PassName::UnreachableBlockElimination], true).unwrap();
+        assert_eq!(repeated, output);
+    }
+
+    #[test]
+    fn runs_dead_store_elimination_on_direct_global_stores() {
+        let source = concat!(
+            "qir 1\n",
+            "module \"m\"\n",
+            "type 0 void\n",
+            "type 1 integer 8\n",
+            "type 2 pointer neardata\n",
+            "global 0 \"g\" 1 internal false some integer 0\n",
+            "function 0 \"main\" linkage internal result 0 parameters [] variadic false cc basic attributes []\n",
+            "block 0\n",
+            "inst 0 results [] store 1 false const type 2 globaladdr 0 0 const type 1 integer 1\n",
+            "inst 1 results [] store 1 false const type 2 globaladdr 0 0 const type 1 integer 2\n",
+            "term return none\n",
+            "endblock\n",
+            "endfunction\n",
+            "end\n",
+        );
+
+        let output = run_pipeline(source, &[PassName::DeadStoreElimination], true).unwrap();
+
+        assert!(!output.contains("inst 0 results [] store"));
+        assert!(output.contains("inst 1 results [] store"));
+        assert_eq!(canonicalize(&output).as_deref(), Ok(output.as_str()));
+        let repeated = run_pipeline(&output, &[PassName::DeadStoreElimination], true).unwrap();
         assert_eq!(repeated, output);
     }
 }
