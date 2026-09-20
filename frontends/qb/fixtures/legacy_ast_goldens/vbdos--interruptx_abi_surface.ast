@@ -1,4 +1,4 @@
-# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# qbfront legacy-derived AST snapshot; schema migrations require projection proof.
 # case-id: vbdos/interruptx_abi_surface
 # dialect: VbDos
 # source: vbdos/intxabi.bas
@@ -259,6 +259,7 @@ Module {
             body: [],
             declaration: true,
             is_static: false,
+            exported: true,
             span: Span {
                 line: 16,
                 start: 8,

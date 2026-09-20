@@ -1,4 +1,4 @@
-# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# qbfront legacy-derived AST snapshot; schema migrations require projection proof.
 # case-id: vbdos/cdecl_alias_external
 # dialect: VbDos
 # source: vbdos/cdeclabi.bas
@@ -99,6 +99,7 @@ Module {
             then_branch: [
                 Print {
                     file: None,
+                    using: None,
                     items: [
                         PrintItem {
                             value: Literal(
@@ -139,6 +140,7 @@ Module {
         },
         Print {
             file: None,
+            using: None,
             items: [
                 PrintItem {
                     value: Literal(
@@ -197,6 +199,7 @@ Module {
             body: [],
             declaration: true,
             is_static: false,
+            exported: true,
             span: Span {
                 line: 3,
                 start: 8,

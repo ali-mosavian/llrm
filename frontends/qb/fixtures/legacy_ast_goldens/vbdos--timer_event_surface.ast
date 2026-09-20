@@ -1,4 +1,4 @@
-# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# qbfront legacy-derived AST snapshot; schema migrations require projection proof.
 # case-id: vbdos/timer_event_surface
 # dialect: VbDos
 # source: vbdos/timerevt.bas
@@ -58,6 +58,7 @@ Module {
             ],
             declaration: false,
             is_static: false,
+            exported: true,
             span: Span {
                 line: 3,
                 start: 0,

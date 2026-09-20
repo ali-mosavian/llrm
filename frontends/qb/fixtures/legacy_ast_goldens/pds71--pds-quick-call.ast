@@ -1,4 +1,4 @@
-# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# qbfront legacy-derived AST snapshot; schema migrations require projection proof.
 # case-id: pds71/pds-quick-call
 # dialect: Pds71
 # source: pds71/PDQCALL.BAS
@@ -348,6 +348,7 @@ Module {
             then_branch: [
                 Print {
                     file: None,
+                    using: None,
                     items: [
                         PrintItem {
                             value: Literal(
@@ -373,6 +374,7 @@ Module {
             else_branch: [
                 Print {
                     file: None,
+                    using: None,
                     items: [
                         PrintItem {
                             value: Literal(
@@ -485,6 +487,7 @@ Module {
             body: [],
             declaration: true,
             is_static: false,
+            exported: true,
             span: Span {
                 line: 1,
                 start: 8,
@@ -784,6 +787,7 @@ Module {
             ],
             declaration: false,
             is_static: false,
+            exported: true,
             span: Span {
                 line: 19,
                 start: 0,

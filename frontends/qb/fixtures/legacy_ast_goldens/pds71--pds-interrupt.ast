@@ -1,4 +1,4 @@
-# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# qbfront legacy-derived AST snapshot; schema migrations require projection proof.
 # case-id: pds71/pds-interrupt
 # dialect: Pds71
 # source: pds71/reference/PDINTR.BAS
@@ -500,6 +500,7 @@ Module {
         },
         Print {
             file: None,
+            using: None,
             items: [
                 PrintItem {
                     value: Literal(

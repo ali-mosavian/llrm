@@ -1,4 +1,4 @@
-# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# qbfront legacy-derived AST snapshot; schema migrations require projection proof.
 # case-id: vbdos/string_far_address
 # dialect: VbDos
 # source: vbdos/sseg.bas
@@ -416,6 +416,7 @@ Module {
             then_branch: [
                 Print {
                     file: None,
+                    using: None,
                     items: [
                         PrintItem {
                             value: Literal(
@@ -602,6 +603,7 @@ Module {
                 },
                 Print {
                     file: None,
+                    using: None,
                     items: [
                         PrintItem {
                             value: Literal(
@@ -689,6 +691,7 @@ Module {
             then_branch: [
                 Print {
                     file: None,
+                    using: None,
                     items: [
                         PrintItem {
                             value: Literal(
@@ -729,6 +732,7 @@ Module {
         },
         Print {
             file: None,
+            using: None,
             items: [
                 PrintItem {
                     value: Literal(

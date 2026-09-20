@@ -1,4 +1,4 @@
-# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# qbfront legacy-derived AST snapshot; schema migrations require projection proof.
 # case-id: vbdos/financial-functions
 # dialect: VbDos
 # source: vbdos/finabi.bas
@@ -1814,6 +1814,7 @@ Module {
                     then_branch: [
                         Print {
                             file: None,
+                            using: None,
                             items: [
                                 PrintItem {
                                     value: Literal(
@@ -2158,6 +2159,7 @@ Module {
             then_branch: [
                 Print {
                     file: None,
+                    using: None,
                     items: [
                         PrintItem {
                             value: Literal(
@@ -2463,6 +2465,7 @@ Module {
             then_branch: [
                 Print {
                     file: None,
+                    using: None,
                     items: [
                         PrintItem {
                             value: Literal(
@@ -2768,6 +2771,7 @@ Module {
             then_branch: [
                 Print {
                     file: None,
+                    using: None,
                     items: [
                         PrintItem {
                             value: Literal(
@@ -3073,6 +3077,7 @@ Module {
             then_branch: [
                 Print {
                     file: None,
+                    using: None,
                     items: [
                         PrintItem {
                             value: Literal(
@@ -3378,6 +3383,7 @@ Module {
             then_branch: [
                 Print {
                     file: None,
+                    using: None,
                     items: [
                         PrintItem {
                             value: Literal(
@@ -3683,6 +3689,7 @@ Module {
             then_branch: [
                 Print {
                     file: None,
+                    using: None,
                     items: [
                         PrintItem {
                             value: Literal(
@@ -3988,6 +3995,7 @@ Module {
             then_branch: [
                 Print {
                     file: None,
+                    using: None,
                     items: [
                         PrintItem {
                             value: Literal(
@@ -4293,6 +4301,7 @@ Module {
             then_branch: [
                 Print {
                     file: None,
+                    using: None,
                     items: [
                         PrintItem {
                             value: Literal(
@@ -4598,6 +4607,7 @@ Module {
             then_branch: [
                 Print {
                     file: None,
+                    using: None,
                     items: [
                         PrintItem {
                             value: Literal(
@@ -4903,6 +4913,7 @@ Module {
             then_branch: [
                 Print {
                     file: None,
+                    using: None,
                     items: [
                         PrintItem {
                             value: Literal(
@@ -5208,6 +5219,7 @@ Module {
             then_branch: [
                 Print {
                     file: None,
+                    using: None,
                     items: [
                         PrintItem {
                             value: Literal(
@@ -5513,6 +5525,7 @@ Module {
             then_branch: [
                 Print {
                     file: None,
+                    using: None,
                     items: [
                         PrintItem {
                             value: Literal(
@@ -5818,6 +5831,7 @@ Module {
             then_branch: [
                 Print {
                     file: None,
+                    using: None,
                     items: [
                         PrintItem {
                             value: Literal(
@@ -5858,6 +5872,7 @@ Module {
         },
         Print {
             file: None,
+            using: None,
             items: [
                 PrintItem {
                     value: Literal(
@@ -6003,6 +6018,7 @@ Module {
             body: [],
             declaration: true,
             is_static: false,
+            exported: true,
             span: Span {
                 line: 3,
                 start: 8,
@@ -6142,6 +6158,7 @@ Module {
             body: [],
             declaration: true,
             is_static: false,
+            exported: true,
             span: Span {
                 line: 4,
                 start: 8,
@@ -6301,6 +6318,7 @@ Module {
             body: [],
             declaration: true,
             is_static: false,
+            exported: true,
             span: Span {
                 line: 5,
                 start: 8,
@@ -6400,6 +6418,7 @@ Module {
             body: [],
             declaration: true,
             is_static: false,
+            exported: true,
             span: Span {
                 line: 6,
                 start: 8,
@@ -6519,6 +6538,7 @@ Module {
             body: [],
             declaration: true,
             is_static: false,
+            exported: true,
             span: Span {
                 line: 7,
                 start: 8,
@@ -6658,6 +6678,7 @@ Module {
             body: [],
             declaration: true,
             is_static: false,
+            exported: true,
             span: Span {
                 line: 8,
                 start: 8,
@@ -6757,6 +6778,7 @@ Module {
             body: [],
             declaration: true,
             is_static: false,
+            exported: true,
             span: Span {
                 line: 9,
                 start: 8,
@@ -6896,6 +6918,7 @@ Module {
             body: [],
             declaration: true,
             is_static: false,
+            exported: true,
             span: Span {
                 line: 10,
                 start: 8,
@@ -7055,6 +7078,7 @@ Module {
             body: [],
             declaration: true,
             is_static: false,
+            exported: true,
             span: Span {
                 line: 11,
                 start: 8,
@@ -7194,6 +7218,7 @@ Module {
             body: [],
             declaration: true,
             is_static: false,
+            exported: true,
             span: Span {
                 line: 12,
                 start: 8,
@@ -7353,6 +7378,7 @@ Module {
             body: [],
             declaration: true,
             is_static: false,
+            exported: true,
             span: Span {
                 line: 13,
                 start: 8,
@@ -7452,6 +7478,7 @@ Module {
             body: [],
             declaration: true,
             is_static: false,
+            exported: true,
             span: Span {
                 line: 14,
                 start: 8,
@@ -7571,6 +7598,7 @@ Module {
             body: [],
             declaration: true,
             is_static: false,
+            exported: true,
             span: Span {
                 line: 15,
                 start: 8,

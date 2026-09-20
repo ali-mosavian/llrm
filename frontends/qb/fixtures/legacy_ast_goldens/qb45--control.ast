@@ -1,4 +1,4 @@
-# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# qbfront legacy-derived AST snapshot; schema migrations require projection proof.
 # case-id: qb45/control
 # dialect: QuickBasic45
 # source: qb45/Q45C02.BAS
@@ -215,6 +215,7 @@ Module {
             then_branch: [
                 Print {
                     file: None,
+                    using: None,
                     items: [
                         PrintItem {
                             value: Literal(
@@ -394,6 +395,7 @@ Module {
             then_branch: [
                 Print {
                     file: None,
+                    using: None,
                     items: [
                         PrintItem {
                             value: Literal(
@@ -567,6 +569,7 @@ Module {
             then_branch: [
                 Print {
                     file: None,
+                    using: None,
                     items: [
                         PrintItem {
                             value: Literal(
@@ -771,16 +774,18 @@ Module {
             arms: [
                 (
                     [
-                        Literal(
-                            Integer(
-                                1,
-                                Integer,
+                        Value(
+                            Literal(
+                                Integer(
+                                    1,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 43,
+                                    start: 5,
+                                    end: 6,
+                                },
                             ),
-                            Span {
-                                line: 43,
-                                start: 5,
-                                end: 6,
-                            },
                         ),
                     ],
                     [
@@ -850,6 +855,7 @@ Module {
                             then_branch: [
                                 Print {
                                     file: None,
+                                    using: None,
                                     items: [
                                         PrintItem {
                                             value: Literal(
@@ -875,6 +881,7 @@ Module {
                             else_branch: [
                                 Print {
                                     file: None,
+                                    using: None,
                                     items: [
                                         PrintItem {
                                             value: Literal(
@@ -909,6 +916,7 @@ Module {
             otherwise: [
                 Print {
                     file: None,
+                    using: None,
                     items: [
                         PrintItem {
                             value: Literal(

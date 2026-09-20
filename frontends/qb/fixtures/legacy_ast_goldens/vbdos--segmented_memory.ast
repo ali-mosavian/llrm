@@ -1,4 +1,4 @@
-# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# qbfront legacy-derived AST snapshot; schema migrations require projection proof.
 # case-id: vbdos/segmented_memory
 # dialect: VbDos
 # source: vbdos/segmem.bas
@@ -363,6 +363,7 @@ Module {
             then_branch: [
                 Print {
                     file: None,
+                    using: None,
                     items: [
                         PrintItem {
                             value: Literal(
@@ -493,6 +494,7 @@ Module {
             then_branch: [
                 Print {
                     file: None,
+                    using: None,
                     items: [
                         PrintItem {
                             value: Literal(
@@ -533,6 +535,7 @@ Module {
         },
         Print {
             file: None,
+            using: None,
             items: [
                 PrintItem {
                     value: Literal(

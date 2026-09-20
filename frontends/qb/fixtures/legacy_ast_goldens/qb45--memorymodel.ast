@@ -1,4 +1,4 @@
-# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# qbfront legacy-derived AST snapshot; schema migrations require projection proof.
 # case-id: qb45/memorymodel
 # dialect: QuickBasic45
 # source: qb45/Q45M28.BAS
@@ -7,7 +7,7 @@ Module {
     statements: [
         Comment(
             Span {
-                line: 1,
+                line: 2,
                 start: 0,
                 end: 9,
             },
@@ -15,7 +15,7 @@ Module {
         Dim(
             [
                 Declaration {
-                    name: "LOCALVALUE",
+                    name: "FIRSTVALUE",
                     type_name: Some(
                         Integer,
                     ),
@@ -25,70 +25,148 @@ Module {
                     shared: false,
                     dynamic: false,
                     span: Span {
-                        line: 2,
+                        line: 4,
                         start: 4,
                         end: 25,
                     },
                 },
             ],
         ),
+        Dim(
+            [
+                Declaration {
+                    name: "SECONDVALUE",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 5,
+                        start: 4,
+                        end: 26,
+                    },
+                },
+            ],
+        ),
         Assign {
             target: Name(
-                "LOCALVALUE",
+                "FIRSTVALUE",
                 Span {
-                    line: 4,
+                    line: 7,
                     start: 0,
                     end: 10,
                 },
             ),
-            value: Literal(
-                Integer(
-                    99,
-                    Integer,
-                ),
-                Span {
-                    line: 4,
+            value: Apply {
+                name: "NEXTVALUE",
+                arguments: [],
+                span: Span {
+                    line: 7,
                     start: 13,
-                    end: 15,
+                    end: 24,
+                },
+            },
+            span: Span {
+                line: 7,
+                start: 0,
+                end: 24,
+            },
+        },
+        Assign {
+            target: Name(
+                "SECONDVALUE",
+                Span {
+                    line: 8,
+                    start: 0,
+                    end: 11,
                 },
             ),
+            value: Apply {
+                name: "NEXTVALUE",
+                arguments: [],
+                span: Span {
+                    line: 8,
+                    start: 14,
+                    end: 25,
+                },
+            },
             span: Span {
-                line: 4,
+                line: 8,
                 start: 0,
-                end: 15,
+                end: 25,
             },
         },
         If {
             condition: Binary {
-                op: Eq,
-                left: Name(
-                    "LOCALVALUE",
-                    Span {
-                        line: 5,
-                        start: 3,
-                        end: 13,
-                    },
-                ),
-                right: Literal(
-                    Integer(
-                        99,
-                        Integer,
+                op: And,
+                left: Binary {
+                    op: Eq,
+                    left: Name(
+                        "FIRSTVALUE",
+                        Span {
+                            line: 9,
+                            start: 3,
+                            end: 13,
+                        },
                     ),
-                    Span {
-                        line: 5,
-                        start: 16,
-                        end: 18,
+                    right: Literal(
+                        Integer(
+                            1,
+                            Integer,
+                        ),
+                        Span {
+                            line: 9,
+                            start: 16,
+                            end: 17,
+                        },
+                    ),
+                    span: Span {
+                        line: 9,
+                        start: 3,
+                        end: 17,
                     },
-                ),
+                },
+                right: Binary {
+                    op: Eq,
+                    left: Name(
+                        "SECONDVALUE",
+                        Span {
+                            line: 9,
+                            start: 22,
+                            end: 33,
+                        },
+                    ),
+                    right: Literal(
+                        Integer(
+                            2,
+                            Integer,
+                        ),
+                        Span {
+                            line: 9,
+                            start: 36,
+                            end: 37,
+                        },
+                    ),
+                    span: Span {
+                        line: 9,
+                        start: 22,
+                        end: 37,
+                    },
+                },
                 span: Span {
-                    line: 5,
+                    line: 9,
                     start: 3,
-                    end: 18,
+                    end: 37,
                 },
             },
             then_branch: [
                 Print {
                     file: None,
+                    using: None,
                     items: [
                         PrintItem {
                             value: Literal(
@@ -96,7 +174,7 @@ Module {
                                     "PASS memorymodel",
                                 ),
                                 Span {
-                                    line: 6,
+                                    line: 10,
                                     start: 10,
                                     end: 28,
                                 },
@@ -105,7 +183,7 @@ Module {
                         },
                     ],
                     span: Span {
-                        line: 6,
+                        line: 10,
                         start: 4,
                         end: 9,
                     },
@@ -114,30 +192,31 @@ Module {
             else_branch: [
                 Print {
                     file: None,
+                    using: None,
                     items: [
                         PrintItem {
                             value: Literal(
                                 String(
-                                    "FAIL memorymodel static",
+                                    "FAIL memorymodel lifetime",
                                 ),
                                 Span {
-                                    line: 8,
+                                    line: 12,
                                     start: 10,
-                                    end: 35,
+                                    end: 37,
                                 },
                             ),
                             separator: End,
                         },
                     ],
                     span: Span {
-                        line: 8,
+                        line: 12,
                         start: 4,
                         end: 9,
                     },
                 },
             ],
             span: Span {
-                line: 5,
+                line: 9,
                 start: 0,
                 end: 2,
             },
@@ -146,11 +225,202 @@ Module {
             name: "END",
             arguments: [],
             span: Span {
-                line: 10,
+                line: 14,
                 start: 0,
                 end: 3,
             },
         },
     ],
-    procedures: [],
+    procedures: [
+        Procedure {
+            name: "NEXTVALUE",
+            alias: None,
+            cdecl: false,
+            kind: Function,
+            parameters: [],
+            result: Some(
+                Integer,
+            ),
+            body: [],
+            declaration: true,
+            is_static: false,
+            exported: true,
+            span: Span {
+                line: 3,
+                start: 8,
+                end: 16,
+            },
+        },
+        Procedure {
+            name: "NEXTVALUE",
+            alias: None,
+            cdecl: false,
+            kind: Function,
+            parameters: [],
+            result: Some(
+                Integer,
+            ),
+            body: [
+                Dim(
+                    [
+                        Declaration {
+                            name: "COUNTS",
+                            type_name: Some(
+                                Integer,
+                            ),
+                            array: true,
+                            bounds: [
+                                Bound {
+                                    lower: Some(
+                                        Literal(
+                                            Integer(
+                                                0,
+                                                Integer,
+                                            ),
+                                            Span {
+                                                line: 17,
+                                                start: 15,
+                                                end: 16,
+                                            },
+                                        ),
+                                    ),
+                                    upper: Literal(
+                                        Integer(
+                                            0,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 17,
+                                            start: 20,
+                                            end: 21,
+                                        },
+                                    ),
+                                },
+                            ],
+                            fixed_length: None,
+                            shared: false,
+                            dynamic: false,
+                            span: Span {
+                                line: 17,
+                                start: 8,
+                                end: 33,
+                            },
+                        },
+                    ],
+                ),
+                Assign {
+                    target: Apply {
+                        name: "COUNTS",
+                        arguments: [
+                            Literal(
+                                Integer(
+                                    0,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 18,
+                                    start: 11,
+                                    end: 12,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 18,
+                            start: 4,
+                            end: 13,
+                        },
+                    },
+                    value: Binary {
+                        op: Add,
+                        left: Apply {
+                            name: "COUNTS",
+                            arguments: [
+                                Literal(
+                                    Integer(
+                                        0,
+                                        Integer,
+                                    ),
+                                    Span {
+                                        line: 18,
+                                        start: 23,
+                                        end: 24,
+                                    },
+                                ),
+                            ],
+                            span: Span {
+                                line: 18,
+                                start: 16,
+                                end: 25,
+                            },
+                        },
+                        right: Literal(
+                            Integer(
+                                1,
+                                Integer,
+                            ),
+                            Span {
+                                line: 18,
+                                start: 28,
+                                end: 29,
+                            },
+                        ),
+                        span: Span {
+                            line: 18,
+                            start: 16,
+                            end: 29,
+                        },
+                    },
+                    span: Span {
+                        line: 18,
+                        start: 4,
+                        end: 29,
+                    },
+                },
+                Assign {
+                    target: Name(
+                        "NEXTVALUE",
+                        Span {
+                            line: 19,
+                            start: 4,
+                            end: 13,
+                        },
+                    ),
+                    value: Apply {
+                        name: "COUNTS",
+                        arguments: [
+                            Literal(
+                                Integer(
+                                    0,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 19,
+                                    start: 23,
+                                    end: 24,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 19,
+                            start: 16,
+                            end: 25,
+                        },
+                    },
+                    span: Span {
+                        line: 19,
+                        start: 4,
+                        end: 25,
+                    },
+                },
+            ],
+            declaration: false,
+            is_static: true,
+            exported: true,
+            span: Span {
+                line: 16,
+                start: 0,
+                end: 8,
+            },
+        },
+    ],
 }

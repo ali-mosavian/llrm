@@ -1,4 +1,4 @@
-# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# qbfront legacy-derived AST snapshot; schema migrations require projection proof.
 # case-id: qb45/files
 # dialect: QuickBasic45
 # source: qb45/Q45F10.BAS
@@ -105,6 +105,7 @@ Module {
                     },
                 ),
             ),
+            using: None,
             items: [
                 PrintItem {
                     value: Literal(
@@ -170,14 +171,17 @@ Module {
             },
         },
         LineInput {
-            file: Name(
-                "FILENUMBER",
-                Span {
-                    line: 11,
-                    start: 12,
-                    end: 22,
-                },
+            file: Some(
+                Name(
+                    "FILENUMBER",
+                    Span {
+                        line: 11,
+                        start: 12,
+                        end: 22,
+                    },
+                ),
             ),
+            prompt: None,
             destination: Name(
                 "TEXT",
                 Span {
@@ -260,6 +264,7 @@ Module {
             then_branch: [
                 Print {
                     file: None,
+                    using: None,
                     items: [
                         PrintItem {
                             value: Literal(
@@ -285,6 +290,7 @@ Module {
             else_branch: [
                 Print {
                     file: None,
+                    using: None,
                     items: [
                         PrintItem {
                             value: Literal(

@@ -1,4 +1,4 @@
-# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# qbfront legacy-derived AST snapshot; schema migrations require projection proof.
 # case-id: vbdos/vga_framebuffer_bsave
 # dialect: VbDos
 # source: vbdos/vgabsave.bas
@@ -253,6 +253,7 @@ Module {
                     then_branch: [
                         Print {
                             file: None,
+                            using: None,
                             items: [
                                 PrintItem {
                                     value: Literal(
@@ -401,6 +402,7 @@ Module {
         },
         Print {
             file: None,
+            using: None,
             items: [
                 PrintItem {
                     value: Literal(

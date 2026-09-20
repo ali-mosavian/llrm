@@ -1,4 +1,4 @@
-# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# qbfront legacy-derived AST snapshot; schema migrations require projection proof.
 # case-id: pds71/pds-local-error
 # dialect: Pds71
 # source: pds71/PDLOCAL.BAS
@@ -66,6 +66,7 @@ Module {
             then_branch: [
                 Print {
                     file: None,
+                    using: None,
                     items: [
                         PrintItem {
                             value: Literal(
@@ -138,6 +139,7 @@ Module {
             body: [],
             declaration: true,
             is_static: false,
+            exported: true,
             span: Span {
                 line: 2,
                 start: 8,
@@ -175,6 +177,7 @@ Module {
             body: [],
             declaration: true,
             is_static: false,
+            exported: true,
             span: Span {
                 line: 3,
                 start: 8,
@@ -576,6 +579,7 @@ Module {
             ],
             declaration: false,
             is_static: false,
+            exported: true,
             span: Span {
                 line: 14,
                 start: 0,
@@ -613,6 +617,7 @@ Module {
             body: [
                 Print {
                     file: None,
+                    using: None,
                     items: [
                         PrintItem {
                             value: Literal(
@@ -648,6 +653,7 @@ Module {
             ],
             declaration: false,
             is_static: false,
+            exported: true,
             span: Span {
                 line: 43,
                 start: 0,

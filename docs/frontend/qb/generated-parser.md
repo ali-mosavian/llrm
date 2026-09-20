@@ -105,7 +105,20 @@ acceptance.
 2. The generated lexer scans all 2,160 mechanically ported qbasic-port source
    cases under every runtime profile while preserving token order and spans.
 3. All 79 compatibility identities accepted before the production switch
-   match checked-in, human-readable AST goldens exactly.
+   match checked-in, human-readable AST goldens exactly.  Those snapshots are
+   legacy-derived: when the syntax model gains a field, all cases must first
+   match the previous snapshots after projecting only that representation
+   change.  The snapshots then move to the new schema together, rather than
+   teaching the test to ignore the new field.
 4. Parse counts are reported separately from semantic HIR, optimized MIR, OBJ,
    LINK, DOS execution, verdict, and artifact counts.
 5. No case becomes runtime-green from parser acceptance alone.
+
+The 2026-09-20 snapshot-schema migration checked all 79 identities in one
+process.  After projecting only `Print.using`, `CaseItem::Value`, optional
+`LineInput.file` plus `prompt`, and `Procedure.exported`, 78 snapshots matched
+their legacy form exactly.  The remaining `qb45/memorymodel` source had been
+changed by `11c6d519` while its snapshot still described the previous program;
+its replacement was reviewed as a source-contract change.  The checked-in
+snapshots now use the complete syntax model and the test performs an exact
+comparison with no compatibility filter.

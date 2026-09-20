@@ -57,7 +57,7 @@ fn golden_path(case: &CompatCase) -> PathBuf {
 
 fn golden_text(case: &CompatCase, module: &Module) -> String {
     format!(
-        "# qbfront legacy AST snapshot; do not regenerate from the generated parser.\n# case-id: {}\n# dialect: {:?}\n# source: {}\n\n{module:#?}\n",
+        "# qbfront legacy-derived AST snapshot; schema migrations require projection proof.\n# case-id: {}\n# dialect: {:?}\n# source: {}\n\n{module:#?}\n",
         case.id, case.dialect, case.source_id
     )
 }
@@ -129,7 +129,7 @@ fn checked_in_legacy_ast_goldens_cover_the_accepted_compat_cases() {
         assert!(golden.is_file(), "missing AST golden {}", golden.display());
         let text = fs::read_to_string(&golden).unwrap();
         assert!(
-            text.starts_with(&format!("# qbfront legacy AST snapshot; do not regenerate from the generated parser.\n# case-id: {}\n# dialect: {:?}\n# source: {}\n\n", case.id, case.dialect, case.source_id)),
+            text.starts_with(&format!("# qbfront legacy-derived AST snapshot; schema migrations require projection proof.\n# case-id: {}\n# dialect: {:?}\n# source: {}\n\n", case.id, case.dialect, case.source_id)),
             "golden {} has stale metadata", golden.display()
         );
     }
