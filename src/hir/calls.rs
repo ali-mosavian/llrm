@@ -10,7 +10,7 @@ use std::fmt;
 
 use crate::{hir, ir};
 
-/// Runtime-call declarations and per-site lowering information.
+/// Call declarations and per-site lowering information.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct CallPlan {
     /// Declarations in deterministic callee-name order.
@@ -27,7 +27,7 @@ pub(super) struct PlannedCall {
     pub(super) argument_indices: Vec<usize>,
 }
 
-/// A type signature inferred from one runtime call site.
+/// A type signature inferred from one call site.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CallSignature {
     pub result: ir::TypeId,
@@ -42,7 +42,7 @@ pub enum AbiOrderError {
     Duplicate { index: usize },
 }
 
-/// An unsupported operand form at a runtime call site.
+/// An unsupported operand form at a call site.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CallOperandError {
     Place,
@@ -51,7 +51,14 @@ pub enum CallOperandError {
     Indirect,
 }
 
-/// A refusal raised while constructing a runtime-call plan.
+/// A callable parameter shape the portable ABI cannot represent exactly.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CallableParameterError {
+    Array,
+    Segmented,
+}
+
+/// A refusal raised while constructing a call plan.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CallPlanError {
     MissingCalleeName {
@@ -70,10 +77,57 @@ pub enum CallPlanError {
         function: hir::FunctionId,
         instruction: hir::InstructionId,
     },
-    UnsupportedCallable {
+    MissingCallable {
         function: hir::FunctionId,
         instruction: hir::InstructionId,
         callable: hir::CallableId,
+    },
+    AmbiguousCallable {
+        function: hir::FunctionId,
+        instruction: hir::InstructionId,
+        callable: hir::CallableId,
+    },
+    UndefinedCallable {
+        function: hir::FunctionId,
+        instruction: hir::InstructionId,
+        callable: hir::CallableId,
+    },
+    UnsupportedCallableParameter {
+        function: hir::FunctionId,
+        instruction: hir::InstructionId,
+        callable: hir::CallableId,
+        parameter: usize,
+        issue: CallableParameterError,
+    },
+    CallableResultMismatch {
+        function: hir::FunctionId,
+        instruction: hir::InstructionId,
+        callable: hir::CallableId,
+        expected: ir::TypeId,
+        actual: ir::TypeId,
+    },
+    CallableParameterCount {
+        function: hir::FunctionId,
+        instruction: hir::InstructionId,
+        callable: hir::CallableId,
+        expected: usize,
+        actual: usize,
+    },
+    CallableByValueParameterMismatch {
+        function: hir::FunctionId,
+        instruction: hir::InstructionId,
+        callable: hir::CallableId,
+        parameter: usize,
+        expected: ir::TypeId,
+        actual: ir::TypeId,
+    },
+    CallableByReferenceParameterMismatch {
+        function: hir::FunctionId,
+        instruction: hir::InstructionId,
+        callable: hir::CallableId,
+        parameter: usize,
+        expected: hir::TypeId,
+        actual: ir::TypeId,
     },
     UnsupportedDistance {
         function: hir::FunctionId,
@@ -117,6 +171,38 @@ pub enum CallPlanError {
         callee: String,
         existing: CallSignature,
         incoming: CallSignature,
+    },
+    MissingDefinedFunction {
+        function: hir::FunctionId,
+        instruction: hir::InstructionId,
+        callable: hir::CallableId,
+        name: String,
+    },
+    AmbiguousDefinedFunction {
+        function: hir::FunctionId,
+        instruction: hir::InstructionId,
+        callable: hir::CallableId,
+        name: String,
+    },
+    DefinedFunctionSignatureMismatch {
+        function: hir::FunctionId,
+        instruction: hir::InstructionId,
+        callable: hir::CallableId,
+        name: String,
+        expected: CallSignature,
+        actual: Vec<CallSignature>,
+    },
+    DefinedFunctionDistance {
+        function: hir::FunctionId,
+        instruction: hir::InstructionId,
+        target: hir::FunctionId,
+        distance: hir::CallDistance,
+    },
+    DefinedFunctionCleanup {
+        function: hir::FunctionId,
+        instruction: hir::InstructionId,
+        target: hir::FunctionId,
+        cleanup: hir::StackCleanup,
     },
     DuplicateSite {
         function: hir::FunctionId,
@@ -165,13 +251,81 @@ impl fmt::Display for CallPlanError {
                 formatter,
                 "function {function} ABI metadata refers to non-call instruction {instruction}"
             ),
-            Self::UnsupportedCallable {
+            Self::MissingCallable {
                 function,
                 instruction,
                 callable,
             } => write!(
                 formatter,
-                "function {function} call instruction {instruction} targets defined callable {callable}"
+                "function {function} call instruction {instruction} refers to unknown callable {callable}"
+            ),
+            Self::AmbiguousCallable {
+                function,
+                instruction,
+                callable,
+            } => write!(
+                formatter,
+                "function {function} call instruction {instruction} refers to duplicate callable {callable}"
+            ),
+            Self::UndefinedCallable {
+                function,
+                instruction,
+                callable,
+            } => write!(
+                formatter,
+                "function {function} call instruction {instruction} refers to undefined callable {callable}"
+            ),
+            Self::UnsupportedCallableParameter {
+                function,
+                instruction,
+                callable,
+                parameter,
+                issue,
+            } => write!(
+                formatter,
+                "function {function} call instruction {instruction} callable {callable} parameter {parameter} is unsupported: {issue:?}"
+            ),
+            Self::CallableResultMismatch {
+                function,
+                instruction,
+                callable,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "function {function} call instruction {instruction} callable {callable} returns type {expected}, not {actual}"
+            ),
+            Self::CallableParameterCount {
+                function,
+                instruction,
+                callable,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "function {function} call instruction {instruction} callable {callable} has {actual} ABI parameters, expected {expected}"
+            ),
+            Self::CallableByValueParameterMismatch {
+                function,
+                instruction,
+                callable,
+                parameter,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "function {function} call instruction {instruction} callable {callable} parameter {parameter} has type {expected}, not {actual}"
+            ),
+            Self::CallableByReferenceParameterMismatch {
+                function,
+                instruction,
+                callable,
+                parameter,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "function {function} call instruction {instruction} callable {callable} parameter {parameter} needs a pointer to type {expected}, not type {actual}"
             ),
             Self::UnsupportedDistance {
                 function,
@@ -242,6 +396,52 @@ impl fmt::Display for CallPlanError {
                 formatter,
                 "runtime callee {callee:?} has incompatible inferred signatures"
             ),
+            Self::MissingDefinedFunction {
+                function,
+                instruction,
+                callable,
+                name,
+            } => write!(
+                formatter,
+                "function {function} call instruction {instruction} callable {callable} has no defined target named {name:?}"
+            ),
+            Self::AmbiguousDefinedFunction {
+                function,
+                instruction,
+                callable,
+                name,
+            } => write!(
+                formatter,
+                "function {function} call instruction {instruction} callable {callable} has multiple matching targets named {name:?}"
+            ),
+            Self::DefinedFunctionSignatureMismatch {
+                function,
+                instruction,
+                callable,
+                name,
+                ..
+            } => write!(
+                formatter,
+                "function {function} call instruction {instruction} callable {callable} target {name:?} has an incompatible ABI signature"
+            ),
+            Self::DefinedFunctionDistance {
+                function,
+                instruction,
+                target,
+                distance,
+            } => write!(
+                formatter,
+                "function {function} call instruction {instruction} target {target} has unsupported {distance:?} distance"
+            ),
+            Self::DefinedFunctionCleanup {
+                function,
+                instruction,
+                target,
+                cleanup,
+            } => write!(
+                formatter,
+                "function {function} call instruction {instruction} target {target} has unsupported {cleanup:?} cleanup"
+            ),
             Self::DuplicateSite {
                 function,
                 instruction,
@@ -266,8 +466,8 @@ impl fmt::Display for CallPlanError {
 
 impl Error for CallPlanError {}
 
-/// Builds external runtime declarations and source-call lowering metadata.
-pub(super) fn plan_runtime_calls(module: &hir::Module) -> Result<CallPlan, CallPlanError> {
+/// Builds runtime declarations and direct-call lowering metadata.
+pub(super) fn plan_calls(module: &hir::Module) -> Result<CallPlan, CallPlanError> {
     let mut void_type = None;
     let mut signatures = BTreeMap::<String, CallSignature>::new();
     let mut pending = BTreeMap::new();
@@ -289,14 +489,6 @@ pub(super) fn plan_runtime_calls(module: &hir::Module) -> Result<CallPlan, CallP
                         instruction: instruction.id,
                     });
                 }
-                let callee =
-                    instruction
-                        .callee
-                        .as_ref()
-                        .ok_or(CallPlanError::MissingCalleeName {
-                            function: function.id,
-                            instruction: instruction.id,
-                        })?;
                 let abi = matching_abi(function, instruction.id)?;
                 validate_abi(function.id, instruction, abi)?;
                 let signature = infer_signature(
@@ -307,25 +499,42 @@ pub(super) fn plan_runtime_calls(module: &hir::Module) -> Result<CallPlan, CallP
                     abi,
                     &mut void_type,
                 )?;
-
-                if let Some(existing) = signatures.get(callee) {
-                    if existing != &signature {
-                        return Err(CallPlanError::SignatureConflict {
-                            callee: callee.clone(),
-                            existing: existing.clone(),
-                            incoming: signature,
-                        });
-                    }
-                } else {
-                    signatures.insert(callee.clone(), signature);
-                }
-                pending.insert(
-                    site,
-                    PendingCall {
-                        callee: callee.clone(),
+                let call = match abi.callee {
+                    Some(callable) => PendingCall::Defined {
+                        target: resolve_defined_target(
+                            module,
+                            function.id,
+                            instruction.id,
+                            callable,
+                            &signature,
+                        )?,
                         argument_indices: abi.order.clone(),
                     },
-                );
+                    None => {
+                        let callee = instruction.callee.as_ref().ok_or(
+                            CallPlanError::MissingCalleeName {
+                                function: function.id,
+                                instruction: instruction.id,
+                            },
+                        )?;
+                        if let Some(existing) = signatures.get(callee) {
+                            if existing != &signature {
+                                return Err(CallPlanError::SignatureConflict {
+                                    callee: callee.clone(),
+                                    existing: existing.clone(),
+                                    incoming: signature,
+                                });
+                            }
+                        } else {
+                            signatures.insert(callee.clone(), signature);
+                        }
+                        PendingCall::Runtime {
+                            callee: callee.clone(),
+                            argument_indices: abi.order.clone(),
+                        }
+                    }
+                };
+                pending.insert(site, call);
             }
         }
         if let Some(abi) = function
@@ -391,17 +600,26 @@ pub(super) fn plan_runtime_calls(module: &hir::Module) -> Result<CallPlan, CallP
 
     let mut sites = BTreeMap::new();
     for (site, pending) in pending {
-        let target =
-            ids.get(&pending.callee)
-                .copied()
-                .ok_or_else(|| CallPlanError::MissingDeclaration {
-                    callee: pending.callee.clone(),
-                })?;
+        let (target, argument_indices) = match pending {
+            PendingCall::Defined {
+                target,
+                argument_indices,
+            } => (target, argument_indices),
+            PendingCall::Runtime {
+                callee,
+                argument_indices,
+            } => (
+                ids.get(&callee)
+                    .copied()
+                    .ok_or(CallPlanError::MissingDeclaration { callee })?,
+                argument_indices,
+            ),
+        };
         sites.insert(
             site,
             PlannedCall {
                 target,
-                argument_indices: pending.argument_indices,
+                argument_indices,
             },
         );
     }
@@ -411,9 +629,15 @@ pub(super) fn plan_runtime_calls(module: &hir::Module) -> Result<CallPlan, CallP
     })
 }
 
-struct PendingCall {
-    callee: String,
-    argument_indices: Vec<usize>,
+enum PendingCall {
+    Runtime {
+        callee: String,
+        argument_indices: Vec<usize>,
+    },
+    Defined {
+        target: ir::FunctionId,
+        argument_indices: Vec<usize>,
+    },
 }
 
 fn unique_void_type(module: &hir::Module) -> Result<ir::TypeId, CallPlanError> {
@@ -459,13 +683,6 @@ fn validate_abi(
     instruction: &hir::Instruction,
     abi: &hir::CallAbi,
 ) -> Result<(), CallPlanError> {
-    if let Some(callable) = abi.callee {
-        return Err(CallPlanError::UnsupportedCallable {
-            function,
-            instruction: instruction.id,
-            callable,
-        });
-    }
     if abi.distance != hir::CallDistance::Far {
         return Err(CallPlanError::UnsupportedDistance {
             function,
@@ -513,6 +730,240 @@ fn validate_abi(
         }
     }
     Ok(())
+}
+
+fn resolve_defined_target(
+    module: &hir::Module,
+    function: hir::FunctionId,
+    instruction: hir::InstructionId,
+    callable_id: hir::CallableId,
+    signature: &CallSignature,
+) -> Result<ir::FunctionId, CallPlanError> {
+    let callable = unique_callable(module, function, instruction, callable_id)?;
+    if !callable.defined {
+        return Err(CallPlanError::UndefinedCallable {
+            function,
+            instruction,
+            callable: callable_id,
+        });
+    }
+    validate_callable_parameters(function, instruction, callable)?;
+    validate_callable_signature(module, function, instruction, callable, signature)?;
+
+    let name = normalized_name(&callable.name);
+    let named = module
+        .functions
+        .iter()
+        .filter(|candidate| normalized_name(&candidate.name) == name)
+        .collect::<Vec<_>>();
+    if named.is_empty() {
+        return Err(CallPlanError::MissingDefinedFunction {
+            function,
+            instruction,
+            callable: callable_id,
+            name,
+        });
+    }
+
+    let mut actual = Vec::with_capacity(named.len());
+    let mut matches = Vec::new();
+    for candidate in named {
+        let candidate_signature = function_signature(function, instruction, candidate)?;
+        if candidate_signature == *signature {
+            matches.push(candidate);
+        } else {
+            actual.push(candidate_signature);
+        }
+    }
+    if matches.is_empty() {
+        return Err(CallPlanError::DefinedFunctionSignatureMismatch {
+            function,
+            instruction,
+            callable: callable_id,
+            name,
+            expected: signature.clone(),
+            actual,
+        });
+    }
+    if matches.len() != 1 {
+        return Err(CallPlanError::AmbiguousDefinedFunction {
+            function,
+            instruction,
+            callable: callable_id,
+            name,
+        });
+    }
+    let target = matches[0];
+    if target.abi.distance != hir::CallDistance::Far {
+        return Err(CallPlanError::DefinedFunctionDistance {
+            function,
+            instruction,
+            target: target.id,
+            distance: target.abi.distance,
+        });
+    }
+    if target.abi.cleanup != hir::StackCleanup::Callee {
+        return Err(CallPlanError::DefinedFunctionCleanup {
+            function,
+            instruction,
+            target: target.id,
+            cleanup: target.abi.cleanup,
+        });
+    }
+    Ok(ir::FunctionId::new(target.id.get()))
+}
+
+fn unique_callable<'a>(
+    module: &'a hir::Module,
+    function: hir::FunctionId,
+    instruction: hir::InstructionId,
+    callable_id: hir::CallableId,
+) -> Result<&'a hir::Callable, CallPlanError> {
+    let mut matches = module
+        .callables
+        .iter()
+        .filter(|callable| callable.id == callable_id);
+    let Some(callable) = matches.next() else {
+        return Err(CallPlanError::MissingCallable {
+            function,
+            instruction,
+            callable: callable_id,
+        });
+    };
+    if matches.next().is_some() {
+        return Err(CallPlanError::AmbiguousCallable {
+            function,
+            instruction,
+            callable: callable_id,
+        });
+    }
+    Ok(callable)
+}
+
+fn validate_callable_parameters(
+    function: hir::FunctionId,
+    instruction: hir::InstructionId,
+    callable: &hir::Callable,
+) -> Result<(), CallPlanError> {
+    for (index, parameter) in callable.parameters.iter().enumerate() {
+        let issue = if parameter.array {
+            Some(CallableParameterError::Array)
+        } else if parameter.segmented {
+            Some(CallableParameterError::Segmented)
+        } else {
+            None
+        };
+        if let Some(issue) = issue {
+            return Err(CallPlanError::UnsupportedCallableParameter {
+                function,
+                instruction,
+                callable: callable.id,
+                parameter: index,
+                issue,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_callable_signature(
+    module: &hir::Module,
+    function: hir::FunctionId,
+    instruction: hir::InstructionId,
+    callable: &hir::Callable,
+    signature: &CallSignature,
+) -> Result<(), CallPlanError> {
+    let expected_result = callable
+        .result_type
+        .map(|type_id| ir::TypeId::new(type_id.get()))
+        .unwrap_or(unique_void_type(module)?);
+    if signature.result != expected_result {
+        return Err(CallPlanError::CallableResultMismatch {
+            function,
+            instruction,
+            callable: callable.id,
+            expected: expected_result,
+            actual: signature.result,
+        });
+    }
+    if callable.parameters.len() != signature.parameters.len() {
+        return Err(CallPlanError::CallableParameterCount {
+            function,
+            instruction,
+            callable: callable.id,
+            expected: callable.parameters.len(),
+            actual: signature.parameters.len(),
+        });
+    }
+    for (index, (parameter, actual)) in callable
+        .parameters
+        .iter()
+        .zip(&signature.parameters)
+        .enumerate()
+    {
+        if parameter.by_value {
+            let expected = ir::TypeId::new(parameter.type_id.get());
+            if *actual != expected {
+                return Err(CallPlanError::CallableByValueParameterMismatch {
+                    function,
+                    instruction,
+                    callable: callable.id,
+                    parameter: index,
+                    expected,
+                    actual: *actual,
+                });
+            }
+        } else if !is_pointer_to(module, *actual, parameter.type_id) {
+            return Err(CallPlanError::CallableByReferenceParameterMismatch {
+                function,
+                instruction,
+                callable: callable.id,
+                parameter: index,
+                expected: parameter.type_id,
+                actual: *actual,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn is_pointer_to(module: &hir::Module, actual: ir::TypeId, expected: hir::TypeId) -> bool {
+    let types = module
+        .types
+        .iter()
+        .filter(|type_| type_.id.get() == actual.get())
+        .collect::<Vec<_>>();
+    matches!(
+        types.as_slice(),
+        [type_] if type_.kind == hir::TypeKind::Pointer && type_.element == Some(expected)
+    )
+}
+
+fn function_signature(
+    source_function: hir::FunctionId,
+    instruction: hir::InstructionId,
+    function: &hir::Function,
+) -> Result<CallSignature, CallPlanError> {
+    let values = ValueTypes::new(function);
+    let parameters = function
+        .parameters
+        .iter()
+        .map(|value| {
+            values
+                .get(source_function, instruction, *value)
+                .map(|type_id| ir::TypeId::new(type_id.get()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(CallSignature {
+        result: ir::TypeId::new(function.result_type.get()),
+        parameters,
+    })
+}
+
+fn normalized_name(name: &str) -> String {
+    name.trim()
+        .trim_end_matches(['%', '&', '!', '#', '$'])
+        .to_ascii_uppercase()
 }
 
 fn infer_signature(
@@ -673,6 +1124,20 @@ mod tests {
         }
     }
 
+    fn pointer_type(id: hir::TypeId, element: hir::TypeId) -> hir::Type {
+        hir::Type {
+            id,
+            name: format!("near*{element}"),
+            kind: hir::TypeKind::Pointer,
+            width: 2,
+            signed: None,
+            evaluation: hir::FloatEvaluation::None,
+            element: Some(element),
+            bounds: Vec::new(),
+            address: hir::AddressKind::Near,
+        }
+    }
+
     fn call(
         id: u32,
         callee: &str,
@@ -695,6 +1160,85 @@ mod tests {
             cleanup: hir::StackCleanup::Callee,
             distance: hir::CallDistance::Far,
             callee: None,
+        }
+    }
+
+    fn direct_abi(id: u32, order: Vec<usize>, callable: u32) -> hir::CallAbi {
+        let mut abi = abi(id, order);
+        abi.callee = Some(hir::CallableId::new(callable));
+        abi
+    }
+
+    fn callable(
+        id: u32,
+        name: &str,
+        result_type: Option<hir::TypeId>,
+        parameters: Vec<hir::Parameter>,
+    ) -> hir::Callable {
+        hir::Callable {
+            id: hir::CallableId::new(id),
+            name: name.into(),
+            result_type,
+            parameters,
+            defined: true,
+        }
+    }
+
+    fn parameter(type_id: hir::TypeId) -> hir::Parameter {
+        hir::Parameter {
+            type_id,
+            by_value: true,
+            segmented: false,
+            array: false,
+        }
+    }
+
+    fn by_reference_parameter(type_id: hir::TypeId) -> hir::Parameter {
+        hir::Parameter {
+            by_value: false,
+            ..parameter(type_id)
+        }
+    }
+
+    fn defined_function(
+        id: u32,
+        name: &str,
+        result_type: hir::TypeId,
+        parameters: Vec<hir::TypeId>,
+    ) -> hir::Function {
+        let values = parameters
+            .iter()
+            .enumerate()
+            .map(|(index, type_id)| hir::Value {
+                id: hir::ValueId::new(u32::try_from(index).unwrap()),
+                type_id: *type_id,
+            })
+            .collect::<Vec<_>>();
+        hir::Function {
+            id: hir::FunctionId::new(id),
+            name: name.into(),
+            result_type,
+            values,
+            places: Vec::new(),
+            blocks: vec![hir::Block {
+                id: hir::BlockId::new(0),
+                instructions: Vec::new(),
+                terminator: hir::Terminator::Return(None),
+            }],
+            entry: hir::BlockId::new(0),
+            parameters: (0..parameters.len())
+                .map(|index| hir::ValueId::new(u32::try_from(index).unwrap()))
+                .collect(),
+            abi: hir::ProcedureAbi {
+                cleanup: hir::StackCleanup::Callee,
+                distance: hir::CallDistance::Far,
+                parameter_bytes: 0,
+            },
+            calls: Vec::new(),
+            error_handler: None,
+            error_handler_local: false,
+            external_entries: Vec::new(),
+            linkage: hir::Linkage::External,
         }
     }
 
@@ -755,7 +1299,7 @@ mod tests {
             vec![abi(0, Vec::new())],
         );
 
-        let plan = plan_runtime_calls(&module).unwrap();
+        let plan = plan_calls(&module).unwrap();
 
         assert_eq!(plan.declarations.len(), 1);
         assert_eq!(plan.declarations[0].id, ir::FunctionId::new(1));
@@ -785,7 +1329,7 @@ mod tests {
             vec![abi(0, vec![1, 0])],
         );
 
-        let plan = plan_runtime_calls(&module).unwrap();
+        let plan = plan_calls(&module).unwrap();
 
         assert_eq!(
             plan.declarations[0].signature.parameters,
@@ -832,7 +1376,7 @@ mod tests {
         );
 
         assert!(matches!(
-            plan_runtime_calls(&module),
+            plan_calls(&module),
             Err(CallPlanError::SignatureConflict { .. })
         ));
     }
@@ -854,7 +1398,7 @@ mod tests {
         );
 
         assert!(matches!(
-            plan_runtime_calls(&module),
+            plan_calls(&module),
             Err(CallPlanError::MalformedOrder {
                 issue: AbiOrderError::OutOfBounds { .. },
                 ..
@@ -873,7 +1417,7 @@ mod tests {
         );
 
         assert!(matches!(
-            plan_runtime_calls(&module),
+            plan_calls(&module),
             Err(CallPlanError::UnsupportedCleanup {
                 cleanup: hir::StackCleanup::Caller,
                 ..
@@ -882,18 +1426,284 @@ mod tests {
     }
 
     #[test]
-    fn rejects_a_defined_callable() {
-        let mut call_abi = abi(0, Vec::new());
-        call_abi.callee = Some(hir::CallableId::new(0));
+    fn resolves_a_defined_callable_without_a_declaration() {
+        let mut module = module(
+            vec![value(0, I16), value(1, I32)],
+            vec![call(
+                0,
+                "worker",
+                Vec::new(),
+                vec![
+                    hir::Operand::Value(hir::ValueId::new(0)),
+                    hir::Operand::Value(hir::ValueId::new(1)),
+                ],
+            )],
+            vec![direct_abi(0, vec![1, 0], 7)],
+        );
+        module.callables.push(callable(
+            7,
+            "Worker%",
+            None,
+            vec![parameter(I32), parameter(I16)],
+        ));
+        module
+            .functions
+            .push(defined_function(3, "WORKER", VOID, vec![I32, I16]));
+
+        let plan = plan_calls(&module).unwrap();
+
+        assert!(plan.declarations.is_empty());
+        assert_eq!(
+            plan.sites[&(hir::FunctionId::new(0), hir::InstructionId::new(0))],
+            PlannedCall {
+                target: ir::FunctionId::new(3),
+                argument_indices: vec![1, 0],
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_a_missing_direct_callable() {
         let module = module(
             Vec::new(),
-            vec![call(0, "B$RT", Vec::new(), Vec::new())],
-            vec![call_abi],
+            vec![call(0, "worker", Vec::new(), Vec::new())],
+            vec![direct_abi(0, Vec::new(), 7)],
         );
 
         assert!(matches!(
-            plan_runtime_calls(&module),
-            Err(CallPlanError::UnsupportedCallable { callable: _, .. })
+            plan_calls(&module),
+            Err(CallPlanError::MissingCallable { callable, .. }) if callable == hir::CallableId::new(7)
+        ));
+    }
+
+    #[test]
+    fn rejects_an_ambiguous_direct_callable() {
+        let mut module = module(
+            Vec::new(),
+            vec![call(0, "worker", Vec::new(), Vec::new())],
+            vec![direct_abi(0, Vec::new(), 7)],
+        );
+        module.callables = vec![
+            callable(7, "worker", None, Vec::new()),
+            callable(7, "worker", None, Vec::new()),
+        ];
+
+        assert!(matches!(
+            plan_calls(&module),
+            Err(CallPlanError::AmbiguousCallable { callable, .. }) if callable == hir::CallableId::new(7)
+        ));
+    }
+
+    #[test]
+    fn rejects_a_missing_defined_target() {
+        let mut module = module(
+            Vec::new(),
+            vec![call(0, "worker", Vec::new(), Vec::new())],
+            vec![direct_abi(0, Vec::new(), 7)],
+        );
+        module
+            .callables
+            .push(callable(7, "worker", None, Vec::new()));
+
+        assert!(matches!(
+            plan_calls(&module),
+            Err(CallPlanError::MissingDefinedFunction { callable, .. }) if callable == hir::CallableId::new(7)
+        ));
+    }
+
+    #[test]
+    fn rejects_an_ambiguous_defined_target() {
+        let mut module = module(
+            Vec::new(),
+            vec![call(0, "worker", Vec::new(), Vec::new())],
+            vec![direct_abi(0, Vec::new(), 7)],
+        );
+        module
+            .callables
+            .push(callable(7, "worker", None, Vec::new()));
+        module
+            .functions
+            .push(defined_function(1, "worker", VOID, Vec::new()));
+        module
+            .functions
+            .push(defined_function(2, "WORKER", VOID, Vec::new()));
+
+        assert!(matches!(
+            plan_calls(&module),
+            Err(CallPlanError::AmbiguousDefinedFunction { callable, .. }) if callable == hir::CallableId::new(7)
+        ));
+    }
+
+    #[test]
+    fn rejects_a_mismatched_defined_target_signature() {
+        let mut module = module(
+            vec![value(0, I16)],
+            vec![call(
+                0,
+                "worker",
+                Vec::new(),
+                vec![hir::Operand::Value(hir::ValueId::new(0))],
+            )],
+            vec![direct_abi(0, vec![0], 7)],
+        );
+        module
+            .callables
+            .push(callable(7, "worker", None, vec![parameter(I16)]));
+        module
+            .functions
+            .push(defined_function(1, "worker", VOID, vec![I32]));
+
+        assert!(matches!(
+            plan_calls(&module),
+            Err(CallPlanError::DefinedFunctionSignatureMismatch { callable, .. }) if callable == hir::CallableId::new(7)
+        ));
+    }
+
+    #[test]
+    fn rejects_an_array_callable_parameter() {
+        let mut module = module(
+            Vec::new(),
+            vec![call(0, "worker", Vec::new(), Vec::new())],
+            vec![direct_abi(0, Vec::new(), 7)],
+        );
+        let mut array = parameter(I16);
+        array.array = true;
+        module
+            .callables
+            .push(callable(7, "worker", None, vec![array]));
+
+        assert!(matches!(
+            plan_calls(&module),
+            Err(CallPlanError::UnsupportedCallableParameter {
+                issue: CallableParameterError::Array,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn accepts_a_qb_style_by_reference_parameter() {
+        let pointer = hir::TypeId::new(3);
+        let mut module = module(
+            vec![value(0, pointer)],
+            vec![call(
+                0,
+                "worker",
+                Vec::new(),
+                vec![hir::Operand::Value(hir::ValueId::new(0))],
+            )],
+            vec![direct_abi(0, vec![0], 7)],
+        );
+        module.types.push(pointer_type(pointer, I16));
+        module.callables.push(callable(
+            7,
+            "worker",
+            None,
+            vec![by_reference_parameter(I16)],
+        ));
+        module
+            .functions
+            .push(defined_function(1, "worker", VOID, vec![pointer]));
+
+        let plan = plan_calls(&module).unwrap();
+
+        assert!(plan.declarations.is_empty());
+        assert_eq!(
+            plan.sites[&(hir::FunctionId::new(0), hir::InstructionId::new(0))].target,
+            ir::FunctionId::new(1)
+        );
+    }
+
+    #[test]
+    fn rejects_a_callable_by_value_signature_mismatch() {
+        let mut module = module(
+            vec![value(0, I16)],
+            vec![call(
+                0,
+                "worker",
+                Vec::new(),
+                vec![hir::Operand::Value(hir::ValueId::new(0))],
+            )],
+            vec![direct_abi(0, vec![0], 7)],
+        );
+        module
+            .callables
+            .push(callable(7, "worker", None, vec![parameter(I32)]));
+
+        assert!(matches!(
+            plan_calls(&module),
+            Err(CallPlanError::CallableByValueParameterMismatch {
+                callable,
+                parameter: 0,
+                expected,
+                actual,
+                ..
+            }) if callable == hir::CallableId::new(7)
+                && expected == ir::TypeId::new(I32.get())
+                && actual == ir::TypeId::new(I16.get())
+        ));
+    }
+
+    #[test]
+    fn rejects_an_undefined_callable() {
+        let mut module = module(
+            Vec::new(),
+            vec![call(0, "worker", Vec::new(), Vec::new())],
+            vec![direct_abi(0, Vec::new(), 7)],
+        );
+        let mut callable = callable(7, "worker", None, Vec::new());
+        callable.defined = false;
+        module.callables.push(callable);
+
+        assert!(matches!(
+            plan_calls(&module),
+            Err(CallPlanError::UndefinedCallable { callable, .. }) if callable == hir::CallableId::new(7)
+        ));
+    }
+
+    #[test]
+    fn rejects_a_near_defined_target() {
+        let mut module = module(
+            Vec::new(),
+            vec![call(0, "worker", Vec::new(), Vec::new())],
+            vec![direct_abi(0, Vec::new(), 7)],
+        );
+        module
+            .callables
+            .push(callable(7, "worker", None, Vec::new()));
+        let mut target = defined_function(1, "worker", VOID, Vec::new());
+        target.abi.distance = hir::CallDistance::Near;
+        module.functions.push(target);
+
+        assert!(matches!(
+            plan_calls(&module),
+            Err(CallPlanError::DefinedFunctionDistance {
+                distance: hir::CallDistance::Near,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_a_caller_cleanup_defined_target() {
+        let mut module = module(
+            Vec::new(),
+            vec![call(0, "worker", Vec::new(), Vec::new())],
+            vec![direct_abi(0, Vec::new(), 7)],
+        );
+        module
+            .callables
+            .push(callable(7, "worker", None, Vec::new()));
+        let mut target = defined_function(1, "worker", VOID, Vec::new());
+        target.abi.cleanup = hir::StackCleanup::Caller;
+        module.functions.push(target);
+
+        assert!(matches!(
+            plan_calls(&module),
+            Err(CallPlanError::DefinedFunctionCleanup {
+                cleanup: hir::StackCleanup::Caller,
+                ..
+            })
         ));
     }
 
@@ -911,7 +1721,7 @@ mod tests {
             });
 
         assert_eq!(
-            plan_runtime_calls(&module),
+            plan_calls(&module),
             Err(CallPlanError::OrphanAbi {
                 function: hir::FunctionId::new(0),
                 instruction: hir::InstructionId::new(0),

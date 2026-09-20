@@ -11,12 +11,14 @@ mod model;
 mod text;
 mod verify;
 
-pub use model::*;
-pub use text::{TextError, parse as parse_text, write as write_text};
-pub use verify::verify;
+pub use calls::{
+    AbiOrderError, CallOperandError, CallPlanError, CallSignature, CallableParameterError,
+};
+pub use globals::GlobalPlanError;
 pub use lower::{
     InvalidProperty as LowerInvalidProperty, LowerError, UnsupportedFeature, UnsupportedOperand,
     lower_module as lower_to_ir,
 };
-pub use calls::{AbiOrderError, CallOperandError, CallPlanError, CallSignature};
-pub use globals::GlobalPlanError;
+pub use model::*;
+pub use text::{TextError, parse as parse_text, write as write_text};
+pub use verify::verify;
