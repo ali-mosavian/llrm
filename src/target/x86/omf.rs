@@ -16,7 +16,7 @@ use crate::object::omf::fixups::{FixupMode, Location};
 use crate::object::omf::segments::{Alignment, Combine};
 use crate::object::omf::write::{
     ExternalSymbol, InitializedSpan, ObjectModule, ObjectRelocation, ObjectSegment, PublicSymbol,
-    RelocationTarget,
+    RelocationFrame, RelocationTarget,
 };
 use crate::support::diagnostic::Diagnostic;
 
@@ -268,6 +268,7 @@ pub fn lower_to_omf(
         match (symbol.binding, symbol.visibility) {
             (SymbolBinding::Global, SymbolVisibility::Default) => publics.push(PublicSymbol {
                 name: symbol.name.as_bytes().to_vec(),
+                group_index: 0,
                 segment_index: section_indices[&section],
                 offset: offset as u32,
             }),
@@ -346,6 +347,7 @@ pub fn lower_to_omf(
     Ok(ObjectModule {
         name: module_name.as_ref().to_vec(),
         segments,
+        groups: Vec::new(),
         externals,
         publics,
     })
@@ -519,6 +521,7 @@ fn lower_fixup(
         offset: (fragment_offset + u64::from(fixup.offset)) as u32,
         location,
         mode: FixupMode::SegmentRelative,
+        frame: RelocationFrame::Target,
         target,
     })
 }
@@ -622,6 +625,7 @@ mod tests {
                 offset: 1,
                 location: Location::Pointer16_16,
                 mode: FixupMode::SegmentRelative,
+                frame: RelocationFrame::Target,
                 target: RelocationTarget::External(1),
             }
         );

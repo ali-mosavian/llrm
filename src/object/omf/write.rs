@@ -17,6 +17,7 @@ const EXTDEF: u8 = 0x8c;
 const PUBDEF: u8 = 0x90;
 const LNAMES: u8 = 0x96;
 const SEGDEF: u8 = 0x98;
+const GRPDEF: u8 = 0x9a;
 const FIXUPP: u8 = 0x9c;
 const LEDATA: u8 = 0xa0;
 
@@ -30,6 +31,7 @@ pub const DATA_CHUNK_SIZE: usize = 1_000;
 pub struct ObjectModule {
     pub name: Vec<u8>,
     pub segments: Vec<ObjectSegment>,
+    pub groups: Vec<ObjectGroup>,
     pub externals: Vec<ExternalSymbol>,
     pub publics: Vec<PublicSymbol>,
 }
@@ -57,8 +59,17 @@ pub struct ExternalSymbol {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ObjectGroup {
+    pub name: Vec<u8>,
+    /// One-based SEGDEF indices.
+    pub members: Vec<u16>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PublicSymbol {
     pub name: Vec<u8>,
+    /// One-based GRPDEF index, or zero when the symbol has no group.
+    pub group_index: u16,
     /// One-based SEGDEF index.
     pub segment_index: u16,
     pub offset: u32,
@@ -69,7 +80,20 @@ pub struct ObjectRelocation {
     pub offset: u32,
     pub location: Location,
     pub mode: FixupMode,
+    pub frame: RelocationFrame,
     pub target: RelocationTarget,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RelocationFrame {
+    /// Uses the relocation target as its frame.
+    Target,
+    /// One-based SEGDEF index.
+    Segment(u16),
+    /// One-based GRPDEF index.
+    Group(u16),
+    /// One-based EXTDEF index.
+    External(u16),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -91,6 +115,9 @@ pub enum WriteError {
         count: usize,
     },
     TooManyExternals {
+        count: usize,
+    },
+    TooManyGroups {
         count: usize,
     },
     UnsupportedAlignment {
@@ -139,6 +166,14 @@ pub enum WriteError {
         index: u16,
         count: usize,
     },
+    InvalidGroupIndex {
+        index: u16,
+        count: usize,
+    },
+    PublicSegmentNotInGroup {
+        group: u16,
+        segment: u16,
+    },
     PublicOutsideSegment {
         segment: u16,
         offset: u32,
@@ -171,6 +206,9 @@ impl fmt::Display for WriteError {
                     formatter,
                     "OMF module has {count} externals; maximum is 32767"
                 )
+            }
+            Self::TooManyGroups { count } => {
+                write!(formatter, "OMF module has {count} groups; maximum is 32767")
             }
             Self::UnsupportedAlignment { segment, alignment } => {
                 write!(
@@ -238,6 +276,14 @@ impl fmt::Display for WriteError {
                 formatter,
                 "OMF external index {index} is outside the one-based table of {count} externals"
             ),
+            Self::InvalidGroupIndex { index, count } => write!(
+                formatter,
+                "OMF group index {index} is outside the one-based table of {count} groups"
+            ),
+            Self::PublicSegmentNotInGroup { group, segment } => write!(
+                formatter,
+                "OMF public in segment {segment} names group {group}, which does not contain that segment"
+            ),
             Self::PublicOutsideSegment {
                 segment,
                 offset,
@@ -271,8 +317,9 @@ impl From<RecordError> for WriteError {
 
 /// Constructs a deterministic, fresh 16-bit OMF record stream.
 pub fn records(module: &ObjectModule) -> Result<Vec<Record>, WriteError> {
-    validate_count(module.segments.len(), true)?;
-    validate_count(module.externals.len(), false)?;
+    validate_count(module.segments.len(), CountKind::Segments)?;
+    validate_count(module.groups.len(), CountKind::Groups)?;
+    validate_count(module.externals.len(), CountKind::Externals)?;
     let mut out = vec![Record::new(THEADR, encoded_name("module", &module.name)?)?];
 
     let mut names = vec![Vec::new()];
@@ -281,6 +328,10 @@ pub fn records(module: &ObjectModule) -> Result<Vec<Record>, WriteError> {
         let class = push_name(&mut names, "class", &segment.class_name)?;
         let name = push_name(&mut names, "segment", &segment.name)?;
         segment_name_indices.push((name, class));
+    }
+    let mut group_name_indices = Vec::with_capacity(module.groups.len());
+    for group in &module.groups {
+        group_name_indices.push(push_name(&mut names, "group", &group.name)?);
     }
     let mut lnames = Vec::new();
     for name in &names {
@@ -309,6 +360,16 @@ pub fn records(module: &ObjectModule) -> Result<Vec<Record>, WriteError> {
         out.push(Record::new(SEGDEF, body)?);
     }
 
+    for (group, name_index) in module.groups.iter().zip(&group_name_indices) {
+        validate_group(module, group)?;
+        let mut body = encode_index(*name_index);
+        for member in &group.members {
+            body.push(0xff);
+            body.extend_from_slice(&encode_index(*member));
+        }
+        out.push(Record::new(GRPDEF, body)?);
+    }
+
     if !module.externals.is_empty() {
         let mut body = Vec::new();
         for external in &module.externals {
@@ -318,27 +379,27 @@ pub fn records(module: &ObjectModule) -> Result<Vec<Record>, WriteError> {
         out.push(Record::new(EXTDEF, body)?);
     }
 
-    for segment_index in 1..=module.segments.len() {
-        let mut body = Vec::new();
-        for public in module
-            .publics
-            .iter()
-            .filter(|public| usize::from(public.segment_index) == segment_index)
-        {
-            validate_public(module, public)?;
-            body.extend_from_slice(&encoded_name("public", &public.name)?);
-            body.extend_from_slice(&(public.offset as u16).to_le_bytes());
-            body.extend_from_slice(&encode_index(0));
-        }
-        if !body.is_empty() {
-            let mut header = encode_index(0);
-            header.extend_from_slice(&encode_index(segment_index as u16));
-            header.extend_from_slice(&body);
-            out.push(Record::new(PUBDEF, header)?);
-        }
-    }
     for public in &module.publics {
         validate_public(module, public)?;
+    }
+    for group_index in 0..=module.groups.len() {
+        for segment_index in 1..=module.segments.len() {
+            let mut body = Vec::new();
+            for public in module.publics.iter().filter(|public| {
+                usize::from(public.group_index) == group_index
+                    && usize::from(public.segment_index) == segment_index
+            }) {
+                body.extend_from_slice(&encoded_name("public", &public.name)?);
+                body.extend_from_slice(&(public.offset as u16).to_le_bytes());
+                body.extend_from_slice(&encode_index(0));
+            }
+            if !body.is_empty() {
+                let mut header = encode_index(group_index as u16);
+                header.extend_from_slice(&encode_index(segment_index as u16));
+                header.extend_from_slice(&body);
+                out.push(Record::new(PUBDEF, header)?);
+            }
+        }
     }
 
     for (position, segment) in module.segments.iter().enumerate() {
@@ -346,6 +407,7 @@ pub fn records(module: &ObjectModule) -> Result<Vec<Record>, WriteError> {
             position + 1,
             segment,
             module.segments.len(),
+            module.groups.len(),
             module.externals.len(),
         )?);
     }
@@ -358,13 +420,21 @@ pub fn to_bytes(module: &ObjectModule) -> Result<Vec<u8>, WriteError> {
     Ok(records.iter().flat_map(Record::to_bytes).collect())
 }
 
-fn validate_count(count: usize, segments: bool) -> Result<(), WriteError> {
+enum CountKind {
+    Segments,
+    Groups,
+    Externals,
+}
+
+fn validate_count(count: usize, kind: CountKind) -> Result<(), WriteError> {
     if count <= 0x7fff {
         Ok(())
-    } else if segments {
-        Err(WriteError::TooManySegments { count })
     } else {
-        Err(WriteError::TooManyExternals { count })
+        Err(match kind {
+            CountKind::Segments => WriteError::TooManySegments { count },
+            CountKind::Groups => WriteError::TooManyGroups { count },
+            CountKind::Externals => WriteError::TooManyExternals { count },
+        })
     }
 }
 
@@ -468,6 +538,7 @@ fn validate_segment(index: usize, segment: &ObjectSegment) -> Result<(), WriteEr
 }
 
 fn validate_public(module: &ObjectModule, public: &PublicSymbol) -> Result<(), WriteError> {
+    validate_group_index(module, public.group_index)?;
     let Some(segment) = public
         .segment_index
         .checked_sub(1)
@@ -485,13 +556,57 @@ fn validate_public(module: &ObjectModule, public: &PublicSymbol) -> Result<(), W
             length: segment.length,
         });
     }
+    if public.group_index != 0 {
+        let group = &module.groups[usize::from(public.group_index - 1)];
+        if !group.members.contains(&public.segment_index) {
+            return Err(WriteError::PublicSegmentNotInGroup {
+                group: public.group_index,
+                segment: public.segment_index,
+            });
+        }
+    }
     Ok(())
+}
+
+fn validate_group(module: &ObjectModule, group: &ObjectGroup) -> Result<(), WriteError> {
+    for &member in &group.members {
+        validate_segment_index(module.segments.len(), member)?;
+    }
+    Ok(())
+}
+
+fn validate_segment_index(count: usize, index: u16) -> Result<(), WriteError> {
+    if index == 0 || usize::from(index) > count {
+        Err(WriteError::InvalidSegmentIndex { index, count })
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_external_index(count: usize, index: u16) -> Result<(), WriteError> {
+    if index == 0 || usize::from(index) > count {
+        Err(WriteError::InvalidExternalIndex { index, count })
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_group_index(module: &ObjectModule, index: u16) -> Result<(), WriteError> {
+    if index != 0 && usize::from(index) > module.groups.len() {
+        Err(WriteError::InvalidGroupIndex {
+            index,
+            count: module.groups.len(),
+        })
+    } else {
+        Ok(())
+    }
 }
 
 fn data_records(
     segment_index: usize,
     segment: &ObjectSegment,
     segment_count: usize,
+    group_count: usize,
     external_count: usize,
 ) -> Result<Vec<Record>, WriteError> {
     let mut spans = segment.initialized.iter().collect::<Vec<_>>();
@@ -503,6 +618,7 @@ fn data_records(
         &spans,
         &relocations,
         segment_count,
+        group_count,
         external_count,
     )?;
 
@@ -552,20 +668,19 @@ fn data_records(
         }
     }
     if placed != relocations.len() {
-        let relocation = relocations
-            .iter()
-            .find(|relocation| {
-                !segment.initialized.iter().any(|span| {
-                    let end = span.offset + span.bytes.len() as u32;
-                    span.offset <= relocation.offset && relocation.offset < end
-                })
+        if let Some(relocation) = relocations.iter().find(|relocation| {
+            !segment.initialized.iter().any(|span| {
+                let end = span.offset + span.bytes.len() as u32;
+                span.offset <= relocation.offset && relocation.offset < end
             })
-            .unwrap_or(&relocations[placed]);
-        return Err(WriteError::RelocationOutsideData {
-            segment: segment_index,
-            offset: relocation.offset,
-            width: location_width(segment_index, relocation.location)?,
-        });
+        }) {
+            return Err(WriteError::RelocationOutsideData {
+                segment: segment_index,
+                offset: relocation.offset,
+                width: location_width(segment_index, relocation.location)?,
+            });
+        }
+        debug_assert_eq!(placed, relocations.len());
     }
     Ok(out)
 }
@@ -575,6 +690,7 @@ fn validate_relocations(
     spans: &[&InitializedSpan],
     relocations: &[ObjectRelocation],
     segment_count: usize,
+    group_count: usize,
     external_count: usize,
 ) -> Result<(), WriteError> {
     let mut previous_end = 0;
@@ -606,23 +722,20 @@ fn validate_relocations(
             });
         }
         match relocation.target {
-            RelocationTarget::Segment(index)
-                if index == 0 || usize::from(index) > segment_count =>
-            {
-                return Err(WriteError::InvalidSegmentIndex {
+            RelocationTarget::Segment(index) => validate_segment_index(segment_count, index)?,
+            RelocationTarget::External(index) => validate_external_index(external_count, index)?,
+        }
+        match relocation.frame {
+            RelocationFrame::Target => {}
+            RelocationFrame::Segment(index) => validate_segment_index(segment_count, index)?,
+            RelocationFrame::Group(index) if index == 0 || usize::from(index) > group_count => {
+                return Err(WriteError::InvalidGroupIndex {
                     index,
-                    count: segment_count,
+                    count: group_count,
                 });
             }
-            RelocationTarget::External(index)
-                if index == 0 || usize::from(index) > external_count =>
-            {
-                return Err(WriteError::InvalidExternalIndex {
-                    index,
-                    count: external_count,
-                });
-            }
-            RelocationTarget::Segment(_) | RelocationTarget::External(_) => {}
+            RelocationFrame::External(index) => validate_external_index(external_count, index)?,
+            RelocationFrame::Group(_) => {}
         }
     }
     Ok(())
@@ -673,11 +786,20 @@ fn encode_fixup(
         RelocationTarget::Segment(index) => (0, index),
         RelocationTarget::External(index) => (2, index),
     };
+    let (frame_method, frame_index) = match relocation.frame {
+        RelocationFrame::Target => (5, None),
+        RelocationFrame::Segment(index) => (0, Some(index)),
+        RelocationFrame::Group(index) => (1, Some(index)),
+        RelocationFrame::External(index) => (2, Some(index)),
+    };
     let mut bytes = vec![
         0x80 | mode | (location << 2) | ((data_offset >> 8) as u8),
         data_offset as u8,
-        0x50 | 0x04 | target_method,
+        (frame_method << 4) | 0x04 | target_method,
     ];
+    if let Some(index) = frame_index {
+        bytes.extend_from_slice(&encode_index(index));
+    }
     bytes.extend_from_slice(&encode_index(target_index));
     Ok(bytes)
 }
@@ -703,11 +825,13 @@ mod tests {
         ObjectModule {
             name: b"unit.c".to_vec(),
             segments: vec![segment],
+            groups: Vec::new(),
             externals: vec![ExternalSymbol {
                 name: b"callee".to_vec(),
             }],
             publics: vec![PublicSymbol {
                 name: b"entry".to_vec(),
+                group_index: 0,
                 segment_index: 1,
                 offset: 0,
             }],
@@ -720,6 +844,7 @@ mod tests {
             offset: 1,
             location: Location::Pointer16_16,
             mode: FixupMode::SegmentRelative,
+            frame: RelocationFrame::Target,
             target: RelocationTarget::External(1),
         };
         let records = records(&module(segment(vec![0x9a, 3, 0, 0, 0], vec![relocation])))
@@ -748,6 +873,96 @@ mod tests {
     }
 
     #[test]
+    fn groups_and_public_bases_decode_from_fresh_records() {
+        let mut object = module(segment(vec![0; 2], Vec::new()));
+        object.groups = vec![ObjectGroup {
+            name: b"shared".to_vec(),
+            members: vec![1],
+        }];
+        object.publics[0].group_index = 1;
+
+        let records = records(&object).expect("construct grouped object records");
+        let names = symbols::parse(&records).unwrap();
+        let decoded = declarations::parse(&records).unwrap();
+        assert_eq!(decoded.groups.len(), 1);
+        assert_eq!(
+            names.names[decoded.groups[0].name_index as usize],
+            b"shared"
+        );
+        assert_eq!(
+            decoded.groups[0].members,
+            [declarations::GroupMember::Segment { segment_index: 1 }]
+        );
+        assert_eq!(
+            decoded.publics[0].base,
+            declarations::PublicBase::GroupSegment {
+                group_index: 1,
+                segment_index: 1,
+            }
+        );
+        let group_record = records
+            .iter()
+            .position(|record| record.record_type() == GRPDEF)
+            .unwrap();
+        let external_record = records
+            .iter()
+            .position(|record| record.record_type() == EXTDEF)
+            .unwrap();
+        assert!(group_record < external_record);
+    }
+
+    #[test]
+    fn explicit_relocation_frames_decode_with_their_indices() {
+        let relocations = vec![
+            ObjectRelocation {
+                offset: 0,
+                location: Location::Offset16,
+                mode: FixupMode::SegmentRelative,
+                frame: RelocationFrame::Segment(1),
+                target: RelocationTarget::Segment(1),
+            },
+            ObjectRelocation {
+                offset: 2,
+                location: Location::Offset16,
+                mode: FixupMode::SegmentRelative,
+                frame: RelocationFrame::Group(1),
+                target: RelocationTarget::Segment(1),
+            },
+            ObjectRelocation {
+                offset: 4,
+                location: Location::Offset16,
+                mode: FixupMode::SegmentRelative,
+                frame: RelocationFrame::External(1),
+                target: RelocationTarget::External(1),
+            },
+        ];
+        let mut object = module(segment(vec![0; 6], relocations));
+        object.groups = vec![ObjectGroup {
+            name: b"shared".to_vec(),
+            members: vec![1],
+        }];
+
+        let decoded = fixups::parse(&records(&object).unwrap()).unwrap();
+        assert_eq!(
+            decoded.iter().map(|fixup| fixup.frame).collect::<Vec<_>>(),
+            [
+                fixups::Frame {
+                    method: fixups::FrameMethod::Segment,
+                    datum: Some(fixups::FrameDatum::Index(1)),
+                },
+                fixups::Frame {
+                    method: fixups::FrameMethod::Group,
+                    datum: Some(fixups::FrameDatum::Index(1)),
+                },
+                fixups::Frame {
+                    method: fixups::FrameMethod::External,
+                    datum: Some(fixups::FrameDatum::Index(1)),
+                },
+            ]
+        );
+    }
+
+    #[test]
     fn chunks_without_splitting_a_relocation_field() {
         let bytes = vec![0; DATA_CHUNK_SIZE * 3];
         let relocations = [DATA_CHUNK_SIZE - 1, DATA_CHUNK_SIZE * 2 - 2]
@@ -756,6 +971,7 @@ mod tests {
                 offset: offset as u32,
                 location: Location::Pointer16_16,
                 mode: FixupMode::SegmentRelative,
+                frame: RelocationFrame::Target,
                 target: RelocationTarget::Segment(1),
             })
             .collect();
@@ -768,11 +984,9 @@ mod tests {
         for start in [DATA_CHUNK_SIZE - 1, DATA_CHUNK_SIZE * 2 - 2] {
             assert!(!cuts.iter().any(|cut| start < *cut && *cut < start + 4));
         }
-        assert!(
-            blocks
-                .iter()
-                .all(|block| block.bytes.len() <= DATA_CHUNK_SIZE)
-        );
+        assert!(blocks
+            .iter()
+            .all(|block| block.bytes.len() <= DATA_CHUNK_SIZE));
     }
 
     #[test]
@@ -783,17 +997,16 @@ mod tests {
                 offset: 0,
                 location: Location::Offset16,
                 mode: FixupMode::SegmentRelative,
+                frame: RelocationFrame::Target,
                 target: RelocationTarget::Segment(1),
             }],
         ));
         assert_eq!(to_bytes(&object).unwrap(), to_bytes(&object).unwrap());
         let records = records(&object).unwrap();
-        assert!(
-            records
-                .iter()
-                .filter(|record| record.record_type() == FIXUPP)
-                .all(|record| record.body().first().is_some_and(|lead| lead & 0x80 != 0))
-        );
+        assert!(records
+            .iter()
+            .filter(|record| record.record_type() == FIXUPP)
+            .all(|record| record.body().first().is_some_and(|lead| lead & 0x80 != 0)));
     }
 
     #[test]
@@ -805,12 +1018,14 @@ mod tests {
                     offset: 0,
                     location: Location::Offset16,
                     mode: FixupMode::SegmentRelative,
+                    frame: RelocationFrame::Target,
                     target: RelocationTarget::Segment(1),
                 },
                 ObjectRelocation {
                     offset: 1,
                     location: Location::Offset16,
                     mode: FixupMode::SegmentRelative,
+                    frame: RelocationFrame::Target,
                     target: RelocationTarget::Segment(1),
                 },
             ],
@@ -826,6 +1041,7 @@ mod tests {
                 offset: 0,
                 location: Location::Offset16,
                 mode: FixupMode::SegmentRelative,
+                frame: RelocationFrame::Target,
                 target: RelocationTarget::Segment(1),
             }],
         ));
@@ -833,6 +1049,88 @@ mod tests {
         assert!(matches!(
             records(&outside),
             Err(WriteError::RelocationOutsideData { .. })
+        ));
+    }
+
+    #[test]
+    fn refuses_invalid_group_members_public_bases_and_frames() {
+        let mut invalid_member = module(segment(vec![0; 2], Vec::new()));
+        invalid_member.groups = vec![ObjectGroup {
+            name: b"shared".to_vec(),
+            members: vec![2],
+        }];
+        assert!(matches!(
+            records(&invalid_member),
+            Err(WriteError::InvalidSegmentIndex { index: 2, count: 1 })
+        ));
+
+        let mut invalid_public_group = module(segment(vec![0; 2], Vec::new()));
+        invalid_public_group.publics[0].group_index = 1;
+        assert!(matches!(
+            records(&invalid_public_group),
+            Err(WriteError::InvalidGroupIndex { index: 1, count: 0 })
+        ));
+
+        let mut incoherent_public_base = module(segment(vec![0; 2], Vec::new()));
+        incoherent_public_base
+            .segments
+            .push(segment(vec![0; 2], Vec::new()));
+        incoherent_public_base.groups = vec![ObjectGroup {
+            name: b"shared".to_vec(),
+            members: vec![2],
+        }];
+        incoherent_public_base.publics[0].group_index = 1;
+        assert!(matches!(
+            records(&incoherent_public_base),
+            Err(WriteError::PublicSegmentNotInGroup {
+                group: 1,
+                segment: 1
+            })
+        ));
+
+        let invalid_group_frame = module(segment(
+            vec![0; 2],
+            vec![ObjectRelocation {
+                offset: 0,
+                location: Location::Offset16,
+                mode: FixupMode::SegmentRelative,
+                frame: RelocationFrame::Group(1),
+                target: RelocationTarget::Segment(1),
+            }],
+        ));
+        assert!(matches!(
+            records(&invalid_group_frame),
+            Err(WriteError::InvalidGroupIndex { index: 1, count: 0 })
+        ));
+
+        let invalid_segment_frame = module(segment(
+            vec![0; 2],
+            vec![ObjectRelocation {
+                offset: 0,
+                location: Location::Offset16,
+                mode: FixupMode::SegmentRelative,
+                frame: RelocationFrame::Segment(2),
+                target: RelocationTarget::Segment(1),
+            }],
+        ));
+        assert!(matches!(
+            records(&invalid_segment_frame),
+            Err(WriteError::InvalidSegmentIndex { index: 2, count: 1 })
+        ));
+
+        let invalid_external_frame = module(segment(
+            vec![0; 2],
+            vec![ObjectRelocation {
+                offset: 0,
+                location: Location::Offset16,
+                mode: FixupMode::SegmentRelative,
+                frame: RelocationFrame::External(2),
+                target: RelocationTarget::Segment(1),
+            }],
+        ));
+        assert!(matches!(
+            records(&invalid_external_frame),
+            Err(WriteError::InvalidExternalIndex { index: 2, count: 1 })
         ));
     }
 }

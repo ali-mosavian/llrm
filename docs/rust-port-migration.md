@@ -660,3 +660,14 @@ external runtime gate ran.
 
 The test-only canonicalization helper is now compiled only for tests, so the
 all-target check is warning-free; the confirming check took 0.07 seconds.
+
+The fresh OMF model now represents GRPDEF membership, grouped PUBDEF bases,
+and explicit segment, group, external, or target-derived FIXUPP frames.  These
+are target-neutral object facts: neither the model nor the writer assigns
+DGROUP or any source-language segment policy.  The x86 adapter supplies empty
+groups, ungrouped publics, and target-derived frames until a frontend-owned
+object adapter states otherwise.  Decode-backed writer tests cover record
+ordering, all supported frame methods, namespace validation, and incoherent
+public bases.  The delegated focused run took 5.27 seconds including
+compilation; primary review repeated the seven writer tests from cache in
+0.04 seconds.  No broader gate ran.
