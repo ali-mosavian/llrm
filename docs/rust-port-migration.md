@@ -145,9 +145,16 @@ OMF library framing retains page padding and the opaque dictionary while
 exposing page-aligned modules with absolute record offsets. The common file
 entry point distinguishes standalone objects from libraries and round trips
 either form without changing bytes. `llrm -x omf` now exercises that path for
-an untouched rewrite, and `llrm-objdump` reports record framing and checksum
-state. FIXUPP threads, record editing, CodeView, and semantic object raising
-remain in progress.
+an untouched rewrite, and `llrm-objdump` reports record framing, checksum
+state, public and external symbols, and resolved relocations. FIXUPP and
+FIXUPP32 thread state is decoded across records. A decoded-module facade joins
+the symbol, segment, declaration, data, line, and relocation views, while the
+segment-image builder records overlap ownership instead of silently hiding
+backpatches. THEADR/LHEADR identity and MODEND/MODEND32 entry references are
+typed as well. MODEND review corrected two format details before acceptance:
+its displacement-suppression bit is forbidden, and an absolute physical start
+retains its 16:16 form even in MODEND32. Record editing and CodeView remain in
+progress.
 
 The record-framing tests ran in 2.09 seconds, primitive-reader tests in 1.67
 seconds, and symbol-table tests in 1.63 seconds.  Each selected only its own
@@ -174,14 +181,57 @@ CFG targets and phi predecessor sets, result arity, nested constants, and
 return shape without mutating IR. `.qir` has a deterministic versioned printer
 and strict parser covering every current model variant; parsing ends by running
 the verifier. `llrm-opt` provides the first standalone replay and verification
-path. HIR lowering and the focused interpreter are the next slices.
+path.
+
+The focused interpreter executes integer SSA, phi nodes, branches, switches,
+calls, and the supported exact casts with a deterministic step limit. The first
+HIR lowering slice handles scalar CFGs, integer and floating operations,
+comparisons, intrinsics, and exact-width casts. HIR booleans become IR `i1`;
+BASIC's 16-bit boolean mask remains a distinct value connected by an explicit
+extension. Integer/float conversion is refused until the IR records signed
+conversion semantics rather than guessing.
+
+Side-effect-free analyses now include deterministic def-use indexing, CFGs,
+dominators, and natural-loop membership with nesting, latches, and exits.
+Unreachable and irreducible cycles are excluded explicitly.
 
 The verifier and `.qir` commits include Rust-side valid and malformed-input
 tests. Primary review found and corrected three compile/API errors in the
 delegated verifier, a missing non-void return invariant, a stale no-verifier
 assumption in the delegated text parser, and an escape-column error before
-acceptance. Focused IR checks consumed under six seconds.
+acceptance. The scalar-lowering review corrected boolean width and ambiguous
+numeric-cast behavior before acceptance. Focused IR checks consumed under
+twelve seconds, including compilation; one exact nested-loop check consumed
+1.03 seconds after full diff review.
 
 Across the post-baseline work above, measured Rust compile checks and focused
 test commands remain far below 10% of elapsed implementation and review time.
 No broad suite or external runtime gate was run.
+
+## Iteration 8: analysis and pass infrastructure (started)
+
+The first function pass manager runs an ordered pipeline without printing or
+owning concrete analyses. Passes report changes and coarse preservation,
+instrumentation observes immutable before/after/failure states, and optional
+post-pass verification attributes diagnostics to the exact pass and function.
+A pass failure or rejected result restores the original function before the
+manager returns, so partial mutations do not escape.
+
+Primary review added that rollback after the delegated implementation left a
+failed candidate installed. One focused verifier-rejection check, including
+the rollback assertion, ran in 3.24 seconds. Constant folding is the next real
+pass; analysis caching remains deliberately deferred until more than one pass
+needs it.
+
+## Iteration 9: Machine IR foundation (started)
+
+The target-independent Machine IR model now has typed IDs, explicit virtual and
+physical registers, target-defined register classes and opcodes, operand
+use/def roles, fixed/class constraints, two-address ties, frame indices,
+symbols with addends, block successors, and instruction properties. It imports
+no x86 definitions and contains no SSA values.
+
+Review added explicit virtual-register declarations and rejected fake register
+roles on immediates, blocks, frames, and symbols. Load, store, and volatile
+properties are represented for later scheduling and verification. The focused
+two-address construction check ran in 2.06 seconds.
