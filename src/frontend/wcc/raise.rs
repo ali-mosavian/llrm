@@ -214,7 +214,7 @@ fn callable(
         .map_err(|_| error_default(RaiseErrorKind::IdOverflow { entity: "callable" }))?;
     Ok(hir::Callable {
         id: hir::CallableId::new(id),
-        name: symbol.name.clone(),
+        name: symbol.object_name(),
         result_type: optional_result_type(unit, &procedure.value_type, SourceLocation::default())?,
         parameters: procedure
             .parameters
@@ -298,7 +298,7 @@ fn raise_function(
 
     Ok(hir::Function {
         id: hir::FunctionId::new(id),
-        name: symbol.name.clone(),
+        name: symbol.object_name(),
         result_type: value_type(unit, &procedure.value_type, location)?,
         values: builder.values,
         places: Vec::new(),
@@ -684,7 +684,7 @@ impl<'a> FunctionRaiser<'a> {
             hir::Opcode::Call,
             results.clone(),
             operands,
-            Some(callee.name.clone()),
+            Some(callee.object_name()),
         )?;
         self.calls.push(hir::CallAbi {
             instruction,
@@ -956,7 +956,7 @@ mod tests {
 
         assert_eq!(module.types.len(), 2);
         assert_eq!(module.functions.len(), 2);
-        assert_eq!(module.functions[0].name, "twice");
+        assert_eq!(module.functions[0].name, "_twice");
         assert_eq!(module.functions[0].linkage, hir::Linkage::Internal);
         assert_eq!(module.functions[0].abi.cleanup, hir::StackCleanup::Caller);
         assert_eq!(module.functions[0].abi.distance, hir::CallDistance::Near);
@@ -973,11 +973,11 @@ mod tests {
         ));
 
         let answer = &module.functions[1];
-        assert_eq!(answer.name, "answer_from_argument");
+        assert_eq!(answer.name, "_answer_from_argument");
         assert_eq!(answer.linkage, hir::Linkage::External);
         assert_eq!(answer.abi.cleanup, hir::StackCleanup::Caller);
         assert_eq!(answer.abi.distance, hir::CallDistance::Far);
-        assert_eq!(module.callables[0].name, "twice");
+        assert_eq!(module.callables[0].name, "_twice");
         let call = &answer.blocks[0].instructions[0];
         assert!(matches!(
             call,
@@ -988,7 +988,7 @@ mod tests {
                 callee: Some(name),
                 ..
             } if results == &vec![hir::ValueId::new(0)]
-                && name == "twice"
+                && name == "_twice"
                 && matches!(operands.as_slice(), [hir::Operand::Constant { value: hir::ConstantValue::Integer(21), .. }])
         ));
         assert_eq!(answer.calls[0].instruction, call.id);

@@ -164,6 +164,8 @@ mod tests {
         let text = llrm::ir::write_text(&module);
 
         assert!(text.starts_with("qir 4\nmodule \"iparg\"\n"));
+        assert!(text.contains("function 0 \"_twice\""));
+        assert!(text.contains("function 1 \"_answer_from_argument\""));
         assert!(text.contains("cc c"));
         assert!(text.contains("cc far_cdecl"));
         assert!(llrm::ir::parse_text(&text).is_ok());
