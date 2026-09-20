@@ -81,6 +81,7 @@ impl Invocation {
 
 #[derive(Clone, Copy)]
 enum PassName {
+    AlgebraicSimplify,
     ConstantFold,
     DeadCodeElimination,
     SimplifyBranches,
@@ -93,6 +94,7 @@ fn parse_passes(value: &str) -> Result<Vec<PassName>, String> {
     value
         .split(',')
         .map(|name| match name {
+            "algebraic-simplify" => Ok(PassName::AlgebraicSimplify),
             "constant-fold" => Ok(PassName::ConstantFold),
             "dead-code-elimination" => Ok(PassName::DeadCodeElimination),
             "simplify-branches" => Ok(PassName::SimplifyBranches),
@@ -103,6 +105,7 @@ fn parse_passes(value: &str) -> Result<Vec<PassName>, String> {
 
 #[derive(Debug)]
 enum PipelineError {
+    Algebraic(llrm::transforms::AlgebraicError),
     Text(llrm::ir::TextError),
     BranchSimplify(llrm::transforms::BranchSimplifyError),
     Fold(llrm::transforms::FoldError),
@@ -113,6 +116,7 @@ enum PipelineError {
 impl fmt::Display for PipelineError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Algebraic(error) => error.fmt(formatter),
             Self::Text(error) => error.fmt(formatter),
             Self::BranchSimplify(error) => error.fmt(formatter),
             Self::Fold(error) => error.fmt(formatter),
@@ -136,6 +140,10 @@ fn run_pipeline(
     manager.set_verify_each(verify_each);
     for pass in passes {
         match pass {
+            PassName::AlgebraicSimplify => manager.add_pass(
+                llrm::transforms::AlgebraicSimplify::new(&module)
+                    .map_err(PipelineError::Algebraic)?,
+            ),
             PassName::ConstantFold => manager.add_pass(
                 llrm::transforms::ConstantFold::new(&module).map_err(PipelineError::Fold)?,
             ),
@@ -247,6 +255,7 @@ mod tests {
             source,
             &[
                 PassName::ConstantFold,
+                PassName::AlgebraicSimplify,
                 PassName::SimplifyBranches,
                 PassName::DeadCodeElimination,
             ],
