@@ -84,11 +84,13 @@ passes. `forward`, `segments`, `drop_loads`, `reuse`, and the old `cse` selector
 are behaviors consolidated into Python `gvn`; they must not reappear as
 separate machine-aware Rust transforms.
 
-## Current corrective action
+## Corrected mismatch
 
 The current Rust transforms are deliberately narrow foundations. None is
 recorded as a completed Python pass port. In particular, Rust CSE initially
 treated reversed integer addition as distinct, contradicting
-`test_cse_commutative.py`; the port must canonicalize commutative integer
-expressions without reordering execution, while retaining operand order for
-noncommutative and floating operations.
+`test_cse_commutative.py`. It now canonicalizes the Python pass's commutative
+integer expression set only in its comparison key, without reordering the
+retained instruction, and preserves operand order for noncommutative and
+floating operations. Dominance, alias-aware memory GVN/PRE, load forwarding,
+and divmod reuse remain explicitly outside this narrow foundation.
