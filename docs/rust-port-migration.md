@@ -50,3 +50,43 @@ the separately reviewed tiering commit was staged.  That accidental duplicate
 temporarily raised cumulative verification to roughly 328 seconds over 2,757
 seconds of wall time (11.9%).  No further broad verification runs are permitted
 until implementation and review time bring the cumulative ratio below 10%.
+
+## Iteration 1: freeze the source-frontend contract
+
+The portable Rust IR contract is fixed in `docs/rust-ir.md`.  It defines the
+HIR/IR/Machine IR boundaries, verifier and editor rules, object-frontend change
+map, and the one sanctioned post-allocation target peephole.  This is the
+semantic contract for the port; the Rust implementation will not translate the
+Python MIR data structures.
+
+Two provenance-complete external gates were added for later differential use:
+
+- `tools/qrender_gate.py` emits every QB module once, records all link inputs,
+  checks the benchmark and four existing qrender oracles, and refuses footprint
+  regressions.
+- `tools/gorillas_gate.py` derives a pinned deterministic graphics probe from
+  Microsoft's original source, compares BC45 and direct-frontend behavior, and
+  refuses BASIC-owned or complete linked-code footprint regressions.
+
+The user explicitly deferred qrender because its external project is not yet a
+working oracle.  No qrender compilation or runtime result is claimed.  A real
+Gorillas run was also stopped after 40.20 seconds during allocation when the
+verification-budget instruction was reiterated; its partial receipt is not a
+passing result and runtime execution remains deferred.
+
+Stage capture no longer recompiles a diagnostic reconstruction.  The optional
+QB compiler observer records HIR, both MIR boundaries, LIR, each machine phase,
+final allocated LIR, and the exact assembly model from the same invocation that
+emits the OMF object.  Its focused regression proves that observing the pipeline
+does not change the emitted object bytes.
+
+Focused verification for the new instruments, including delegated fail-first
+and primary-review runs, consumed about 52 seconds.  Together with Iteration 0,
+cumulative verification is roughly 380 seconds over 6,213 seconds of elapsed
+work (about 6.1%).  No broad suite or external runtime gate was completed in
+this iteration.
+
+The qrender runtime criterion is therefore a named deferred acceptance item,
+not evidence of correctness.  Per the user's direction, the port proceeds to
+the dedicated branch and keeps future checks scoped to the subsystem being
+implemented.
