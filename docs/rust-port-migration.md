@@ -701,3 +701,27 @@ to generic MC or OMF output, and no C path can invoke it.  Primary review
 removed four out-of-scope files changed by recursive formatting before
 acceptance.  The delegated five-test run took 1.17 seconds and the independent
 review run took 1.50 seconds.  No broader gate ran.
+
+The WCC frontend now also owns a typed, source-ordered capture unit above the
+lexical parser.  Distinct IDs preserve symbols, segments, backs, nodes, calls,
+temporaries, and source files; raw WCC names, attributes, calling conventions,
+segments, data directives, and inline-code fixups remain inside
+`frontend::wcc`.  `SETSEG 0`, interleaved procedure/data state, anonymous
+backs, reverse capture argument order, intrinsic object names, and alias-cycle
+termination follow the Python frontend.  One corpus test builds all 28
+committed `.cgs` captures without fixture-specific production logic.  The
+delegated implementation was stopped after it remained a fail-first stub; the
+primary implemented and reviewed the audited contract.  Focused compile/fix
+and accepted runs consumed about 10.7 seconds; no shared-HIR lowering or broad
+gate ran.
+
+## End-to-end frontend milestone
+
+No additional optimization pass will be ported until both `llrm-qb` and
+`llrm-c` compile real programs through the Rust frontend and shared
+optimization-disabled backend, emit OMF, link, and run successfully.  The gate
+uses the existing paired programs rather than one selected smoke test:
+`nbody`, `sieve`, and the BASIC/C parity programs under `bench/parity`, with
+their established expected results.  Failures are localized at adjacent stage
+boundaries; this gate does not authorize QB or WCC policy in shared HIR, MIR,
+LIR, MC, x86, or generic OMF code.

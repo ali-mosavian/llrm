@@ -1,5 +1,7 @@
 //! Open Watcom capture-stream frontend.
 
+pub mod capture;
+
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
