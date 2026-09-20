@@ -1,8 +1,10 @@
 //! Target-independent IR transformations.
 
+mod branches;
 mod fold;
 mod pass;
 
+pub use branches::{BranchSimplifyError, SimplifyBranches};
 pub use fold::{ConstantFold, FoldError};
 pub use pass::{
     AnalysisInvalidation, FunctionIdentity, FunctionPass, FunctionPassManager, FunctionPassReport,
