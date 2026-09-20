@@ -2,21 +2,15 @@
 
 import re
 import argparse
+from typing import cast
 from pathlib import Path
-from dataclasses import replace
 
 from qbopt import hir
-from qbopt import flow
 from qbopt.model import ir
+from qbopt.model import lir
 from qbopt.backend import masm
-from qbopt.backend import frame
-from qbopt.backend import lower
-from qbopt.backend import phielim
-from qbopt.backend import prologue
 from qbopt.frontend.qb import parsed
-from qbopt.frontend.qb import finalized
 from qbopt.frontend.qb import stage_text
-from qbopt.frontend.qb import physicalize
 from qbopt.objectfile.module import Space
 from qbopt.frontend.qb import compile as qb_compile
 
@@ -174,7 +168,7 @@ def _display_assembly(text: str) -> str:
     return "\n".join(out) + "\n"
 
 
-def _emitted_asm(program: hir.Program, *, pretty: bool = True) -> str:
+def _emitted_asm(program: hir.Program, module: masm.Module, *, pretty: bool = True) -> str:
     """Render the exact return cleanup carried by the emitted assembly model.
 
     The shared MASM diagnostic printer historically spells every far return as
@@ -182,7 +176,6 @@ def _emitted_asm(program: hir.Program, *, pretty: bool = True) -> str:
     writer correctly encodes. Keep this source-frontend showcase truthful
     without changing the shared backend.
     """
-    module = qb_compile.assembled(program)
     cleanup: dict[str, int] = {}
     for number, procedure in enumerate(module.procedures):
         for item in masm.listing(procedure, number):
@@ -267,85 +260,56 @@ def dumped(
         alternate_math=alternate_math,
         include_dirs=includes,
     )
-    semantic = hir.lower(program)
     functions = tuple(function for module in program.modules for function in module.functions)
     (output / "00-input.bas").write_text(_source_text(source))
-    (output / "01-hir.json").write_text(hir.encode(program))
-    for number, (function, body) in enumerate(zip(functions, semantic, strict=True), 1):
-        stem = f"{number:02}-{function.name}"
-        (output / f"{stem}-02-mir.txt").write_text(hir.mir_text(body))
-        body = qb_compile.optimized(program, function, body)
-        (output / f"{stem}-03-optimized-mir.txt").write_text(hir.mir_text(body))
-        physical = physicalize(program, function, body)
-        (output / f"{stem}-04-physical-mir.txt").write_text(hir.mir_text(physical.lowered))
-        physical = replace(physical, lowered=qb_compile.optimized_physical(program, function, physical.lowered))
-        (output / f"{stem}-05-optimized-physical-mir.txt").write_text(hir.mir_text(physical.lowered))
-        ordinary_entry = physical.lowered.body.entry
-        ordinary_block = physical.lowered.body.block(ordinary_entry)
-        ordinary_fallback = (
-            ordinary_block.succ[0] if ordinary_block is not None and len(ordinary_block.succ) == 1 else None
-        )
-        handler_at = qb_compile._handler_at(function)
-        external_entries = tuple(
-            dict.fromkeys(
-                (
-                    *function.external_entries,
-                    *(() if handler_at is None else (handler_at,)),
-                )
-            )
-        )
-        machine_body, temporary_root = qb_compile._machine_side_entry(
-            physical.lowered.body,
-            external_entries,
-        )
-        machine = lower.lowered(
-            body.name,
-            machine_body,
-            physical.calls,
-            set(),
-            physical.contracts,
-            cpu=qb_compile.lowering_target(),
-            occurrences={},
-            hints=physical.hints,
-            pointer_model=physical.pointer_model,
-        )
-        temporary_blocks = (
-            frozenset(block.at for block in machine.blocks)
-            - frozenset(block.at for block in physical.lowered.body.blocks)
-            if temporary_root is not None
-            else frozenset()
-        )
-        (output / f"{stem}-06-lir.txt").write_text(_lir(machine))
-        owned_frame = frame.of(machine, physical.calls, family=program.runtime.value)
-        allocated = machine
-        in_ssa = True
-        stage = 7
-        for phase in flow.machine({}, owned_frame, physical.calls, basic_semantics=True):
-            if isinstance(phase, prologue.Prologue):
-                continue
-            if isinstance(phase, phielim.PhiElimination):
-                in_ssa = False
-            allocated = flow.checked(allocated, phase, in_ssa=in_ssa)
-            (output / f"{stem}-{stage:02}-{phase.name}.txt").write_text(_lir(allocated))
-            stage += 1
-        allocated = qb_compile._drop_machine_side_entry(
-            allocated,
-            temporary_blocks,
-            ordinary_entry,
-            ordinary_fallback,
-        )
-        final = finalized(
-            allocated,
-            parameter_bytes=function.abi.parameter_bytes if function.abi is not None else 0,
-        )
-        final_body = qb_compile._address_values(qb_compile._source_instructions(final.body))
-        (output / f"{stem}-{stage:02}-inline-x87.txt").write_text(_lir(final_body, final.callees))
-    # The per-function LIR stages deliberately stop before the source ABI
-    # envelope. Finish with the exact assembly model handed to OMF emission so
-    # a showcase cannot hide runtime frame entry/exit, parameter cleanup,
-    # module initialization, or source-data layout.
-    (output / "99-emitted-asm.asm").write_text(_emitted_asm(program))
-    (output / "99-emitted-asm.raw.asm").write_text(_emitted_asm(program, pretty=False))
+    numbers = {id(function): number for number, function in enumerate(functions, 1)}
+    next_machine_stage = {id(function): 7 for function in functions}
+
+    def observe(event: qb_compile.Stage) -> None:
+        if event.name == "hir":
+            (output / "01-hir.json").write_text(hir.encode(cast(hir.Program, event.value)))
+            return
+        if event.name == "emitted-assembly":
+            # This is the assembly model object_bytes() is about to encode,
+            # not a fresh assembled(program) diagnostic reconstruction.
+            module = cast(masm.Module, event.value)
+            (output / "99-emitted-asm.asm").write_text(_emitted_asm(program, module))
+            (output / "99-emitted-asm.raw.asm").write_text(_emitted_asm(program, module, pretty=False))
+            return
+        if event.function is None:
+            raise ValueError(f"stage {event.name} has no source function")
+        number = numbers[id(event.function)]
+        stem = f"{number:02}-{event.function.name}"
+        match event.name:
+            case "source-mir":
+                path = output / f"{stem}-02-mir.txt"
+                text = hir.mir_text(cast(hir.Lowered, event.value))
+            case "optimized-mir":
+                path = output / f"{stem}-03-optimized-mir.txt"
+                text = hir.mir_text(cast(hir.Lowered, event.value))
+            case "physical-mir":
+                path = output / f"{stem}-04-physical-mir.txt"
+                text = hir.mir_text(cast(hir.Lowered, event.value))
+            case "optimized-physical-mir":
+                path = output / f"{stem}-05-optimized-physical-mir.txt"
+                text = hir.mir_text(cast(hir.Lowered, event.value))
+            case "initial-lir":
+                path = output / f"{stem}-06-lir.txt"
+                text = _lir(cast(lir.LirBody, event.value))
+            case name if name.startswith("machine:"):
+                stage = next_machine_stage[id(event.function)]
+                next_machine_stage[id(event.function)] = stage + 1
+                path = output / f"{stem}-{stage:02}-{name.removeprefix('machine:')}.txt"
+                text = _lir(cast(lir.LirBody, event.value))
+            case "final-lir":
+                stage = next_machine_stage[id(event.function)]
+                path = output / f"{stem}-{stage:02}-inline-x87.txt"
+                text = _lir(cast(lir.LirBody, event.value), event.callees)
+            case _:
+                raise ValueError(f"unknown QB compiler stage {event.name}")
+        path.write_text(text)
+
+    qb_compile.object_bytes(program, source.name, observer=observe)
     return output
 
 

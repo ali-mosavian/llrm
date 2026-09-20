@@ -11,6 +11,7 @@ import struct
 from pathlib import Path
 from dataclasses import replace
 from dataclasses import dataclass
+from collections.abc import Callable
 
 from iced_x86 import Register
 
@@ -36,6 +37,38 @@ from qbopt.frontend.qb.inline_x87 import finalized
 
 class EmissionError(ValueError):
     """HIR is valid but does not yet have a truthful BASIC object spelling."""
+
+
+@dataclass(frozen=True, slots=True)
+class Stage:
+    """One diagnostic view of the exact object-emission pipeline state.
+
+    ``value`` is deliberately the state the compiler will use next, not a
+    re-raised or re-lowered reconstruction. Observers must treat it as
+    read-only. ``callees`` accompanies the final LIR because inline x87
+    selection and the BASIC ABI are represented beside the body in the
+    assembly model.
+    """
+
+    name: str
+    function: hir.Function | None
+    value: object
+    callees: dict[int, masm.Callee] | None = None
+
+
+StageObserver = Callable[[Stage], None]
+
+
+def _observe(
+    observer: StageObserver | None,
+    name: str,
+    value: object,
+    function: hir.Function | None = None,
+    callees: dict[int, masm.Callee] | None = None,
+) -> None:
+    """Report a compiler-owned stage without changing its production path."""
+    if observer is not None:
+        observer(Stage(name, function, value, callees))
 
 
 _READ_DATA_OBJECT = "$qb$readData"
@@ -1264,9 +1297,10 @@ def _graphics_dependencies(module: hir.Module) -> frozenset[str]:
     return frozenset(required)
 
 
-def assembled(program: hir.Program) -> masm.Module:
+def assembled(program: hir.Program, *, observer: StageObserver | None = None) -> masm.Module:
     """Compile one QB HIR module to the shared assembly model."""
     hir.verify(program)
+    _observe(observer, "hir", program)
     if len(program.modules) != 1:
         raise EmissionError("one OMF object represents exactly one QB module")
     module = program.modules[0]
@@ -1288,14 +1322,18 @@ def assembled(program: hir.Program) -> masm.Module:
     referenced_calls: set[str] = set()
     for function, body in zip(functions, semantic, strict=True):
         handler_at = _handler_at(function)
+        _observe(observer, "source-mir", body, function)
         body = optimized(program, function, body)
+        _observe(observer, "optimized-mir", body, function)
         physical = physicalize(program, function, body)
+        _observe(observer, "physical-mir", physical.lowered, function)
         # ABI physicalization is still MIR production: it introduces concrete
         # parameter loads, return extracts, call arguments, and frame copies.
         # Feed those operations through the same fixed point as source MIR so
         # code quality cannot depend on whether a frontend expressed work
         # before or during ABI adaptation.
         physical = replace(physical, lowered=optimized_physical(program, function, physical.lowered))
+        _observe(observer, "optimized-physical-mir", physical.lowered, function)
         ordinary_entry = physical.lowered.body.entry
         ordinary_block = physical.lowered.body.block(ordinary_entry)
         ordinary_fallback = (
@@ -1328,6 +1366,7 @@ def assembled(program: hir.Program) -> masm.Module:
             "lower",
             in_ssa=True,
         )
+        _observe(observer, "initial-lir", low, function)
         temporary_blocks = (
             frozenset(block.at for block in low.blocks) - frozenset(block.at for block in physical.lowered.body.blocks)
             if temporary_root is not None
@@ -1344,6 +1383,7 @@ def assembled(program: hir.Program) -> masm.Module:
             if isinstance(phase, phielim.PhiElimination):
                 in_ssa = False
             low = flow.checked(low, phase, in_ssa=in_ssa)
+            _observe(observer, f"machine:{phase.name}", low, function)
         low = _drop_machine_side_entry(
             low,
             temporary_blocks,
@@ -1486,6 +1526,7 @@ def assembled(program: hir.Program) -> masm.Module:
             code_names,
             callees,
         )
+        _observe(observer, "final-lir", final_body, function, dict(callees))
         layout_order = {block.at: index for index, block in enumerate(final_body.blocks)}
         for _source_block, instruction, line in rows:
             at = statement_labels.get(instruction)
@@ -1550,7 +1591,7 @@ def assembled(program: hir.Program) -> masm.Module:
     if vbdos and graphics:
         basic_data.append(("QB_LINK", tuple(masm.Pointer(name, 0, False) for name in sorted(graphics))))
         private.add("QB_LINK")
-    return masm.Module(
+    emitted = masm.Module(
         code=code,
         names=names,
         externs=tuple(sorted(externs)),
@@ -1559,6 +1600,8 @@ def assembled(program: hir.Program) -> masm.Module:
         procedures=tuple(procedures),
         private=frozenset(private),
     )
+    _observe(observer, "emitted-assembly", emitted)
+    return emitted
 
 
 def _basic_listing(procedure: masm.Procedure, number: int) -> list[masm.Item]:
@@ -1630,9 +1673,9 @@ def _basic_code(
         at = len(segment.image)
 
 
-def object_bytes(program: hir.Program, source: str | Path) -> bytes:
+def object_bytes(program: hir.Program, source: str | Path, *, observer: StageObserver | None = None) -> bytes:
     """Emit a complete fresh BASIC-envelope OMF object."""
-    module = assembled(program)
+    module = assembled(program, observer=observer)
     # Build the same semantic segments as backend.omfwrite.written, then add
     # the BASIC-owned MODULE_CODE envelope before asking its canonical record
     # serializer to write OMF. This stays frontend-owned and leaves the shared
