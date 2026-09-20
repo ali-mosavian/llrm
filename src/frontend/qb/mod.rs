@@ -12,6 +12,7 @@ mod hir_json;
 pub mod intrinsics;
 pub mod mc;
 pub mod module_header;
+pub mod object;
 pub mod semantic;
 pub mod source;
 pub mod syntax;
