@@ -1,12 +1,14 @@
 //! Same-basic-block common subexpression elimination.
 //!
-//! This intentionally small pass uses exact portable IR equality.  It does
-//! not canonicalize operand order, reason about aliases, or move expressions
-//! across control-flow boundaries.
+//! This intentionally small pass canonicalizes only commutative integer
+//! operands. It does not reason about aliases or move expressions across
+//! control-flow boundaries.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::ir::{Function, Instruction, InstructionKind, Operand, TypeId, ValueId};
+use crate::ir::{
+    BinaryOp, ComparePredicate, Function, Instruction, InstructionKind, Operand, TypeId, ValueId,
+};
 
 use super::rewrite::replace_value_uses;
 use super::{FunctionPass, PassFailure, PassOutcome, PreservedAnalyses};
@@ -94,7 +96,66 @@ fn candidate(instruction: &Instruction) -> Option<(&crate::ir::Value, Instructio
     {
         return None;
     }
-    Some((result, instruction.kind.clone()))
+    Some((result, canonical_expression(instruction.kind.clone())))
+}
+
+/// Produces an equality key without changing the instruction that remains in
+/// the function. Integer arithmetic has no observable operand order in the
+/// portable IR, while ordered floating comparisons deliberately retain theirs.
+fn canonical_expression(mut expression: InstructionKind) -> InstructionKind {
+    match &mut expression {
+        InstructionKind::Binary { op, left, right } if binary_operands_commute(*op) => {
+            canonicalize_operands(left, right);
+        }
+        InstructionKind::Compare {
+            predicate: ComparePredicate::Equal | ComparePredicate::NotEqual,
+            left,
+            right,
+        } => canonicalize_operands(left, right),
+        _ => {}
+    }
+    expression
+}
+
+fn binary_operands_commute(op: BinaryOp) -> bool {
+    matches!(
+        op,
+        BinaryOp::Add | BinaryOp::Multiply | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor
+    )
+}
+
+fn canonicalize_operands(left: &mut Operand, right: &mut Operand) {
+    let (Some(left_key), Some(right_key)) = (
+        commutative_operand_key(left),
+        commutative_operand_key(right),
+    ) else {
+        return;
+    };
+    if right_key < left_key {
+        std::mem::swap(left, right);
+    }
+}
+
+/// An ordering only for operands valid in the integer expressions that this
+/// pass canonicalizes. Unhandled operand forms remain in their source order.
+#[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+enum CommutativeOperand {
+    Value(ValueId),
+    Integer { type_id: TypeId, value: i128 },
+}
+
+fn commutative_operand_key(operand: &Operand) -> Option<CommutativeOperand> {
+    match operand {
+        Operand::Value(value) => Some(CommutativeOperand::Value(*value)),
+        Operand::Constant(crate::ir::TypedConstant {
+            type_id,
+            value: crate::ir::Constant::Integer(value),
+        }) => Some(CommutativeOperand::Integer {
+            type_id: *type_id,
+            value: *value,
+        }),
+        Operand::Constant(_) => None,
+    }
 }
 
 fn reject_duplicate_values(function: &Function) -> Result<(), PassFailure> {
@@ -120,13 +181,15 @@ fn reject_duplicate_values(function: &Function) -> Result<(), PassFailure> {
 mod tests {
     use super::*;
     use crate::ir::{
-        BinaryOp, Block, BlockId, Callee, CallingConvention, Constant, Effects, Function,
-        FunctionId, InstructionId, Linkage, MemoryEffects, Signature, Terminator, Type, TypeKind,
-        TypedConstant, Value,
+        BinaryOp, Block, BlockId, Callee, CallingConvention, ComparePredicate, Constant, Effects,
+        Function, FunctionId, InstructionId, Linkage, MemoryEffects, Signature, Terminator, Type,
+        TypeKind, TypedConstant, Value,
     };
 
-    const I8: TypeId = TypeId::new(0);
-    const PTR: TypeId = TypeId::new(1);
+    const I1: TypeId = TypeId::new(0);
+    const I8: TypeId = TypeId::new(1);
+    const F32: TypeId = TypeId::new(2);
+    const PTR: TypeId = TypeId::new(3);
 
     fn value(id: u32, type_id: TypeId) -> Value {
         Value {
@@ -155,8 +218,16 @@ mod tests {
             name: "cse-test".into(),
             types: vec![
                 Type {
+                    id: I1,
+                    kind: TypeKind::Integer { bits: 1 },
+                },
+                Type {
                     id: I8,
                     kind: TypeKind::Integer { bits: 8 },
+                },
+                Type {
+                    id: F32,
+                    kind: TypeKind::Float(crate::ir::FloatKind::Binary32),
                 },
                 Type {
                     id: PTR,
@@ -229,41 +300,147 @@ mod tests {
         );
     }
 
+    #[derive(Clone, Copy)]
+    enum Expression {
+        Binary(BinaryOp),
+        Compare(ComparePredicate),
+    }
+
+    impl Expression {
+        fn instruction(self, id: u32, result: Value, left: Operand, right: Operand) -> Instruction {
+            match self {
+                Self::Binary(op) => binary(id, result, op, left, right),
+                Self::Compare(predicate) => Instruction {
+                    id: InstructionId::new(id),
+                    results: vec![result],
+                    kind: InstructionKind::Compare {
+                        predicate,
+                        left,
+                        right,
+                    },
+                },
+            }
+        }
+
+        fn result_type(self) -> TypeId {
+            match self {
+                Self::Binary(_) => I8,
+                Self::Compare(_) => I1,
+            }
+        }
+    }
+
     #[test]
-    fn keeps_reversed_operands_as_distinct_expressions() {
-        let left = value(10, I8);
-        let right = value(11, I8);
-        let mut module = module(
-            vec![Block {
-                id: BlockId::new(0),
-                instructions: vec![
-                    binary(
-                        0,
-                        value(0, I8),
-                        BinaryOp::Add,
-                        Operand::Value(left.id),
-                        Operand::Value(right.id),
-                    ),
-                    binary(
-                        1,
-                        value(1, I8),
-                        BinaryOp::Add,
-                        Operand::Value(right.id),
-                        Operand::Value(left.id),
-                    ),
-                ],
-                terminator: Terminator::Return(Some(integer(0))),
-            }],
-            vec![left, right],
-        );
+    fn removes_reversed_commutative_integer_expressions() {
+        let cases = [
+            ("add", Expression::Binary(BinaryOp::Add)),
+            ("multiply", Expression::Binary(BinaryOp::Multiply)),
+            ("and", Expression::Binary(BinaryOp::And)),
+            ("or", Expression::Binary(BinaryOp::Or)),
+            ("xor", Expression::Binary(BinaryOp::Xor)),
+            ("equal", Expression::Compare(ComparePredicate::Equal)),
+            ("not equal", Expression::Compare(ComparePredicate::NotEqual)),
+        ];
 
-        let outcome = CommonSubexpressionElimination::new()
-            .run(&mut module.functions[0])
-            .unwrap();
+        for (name, expression) in cases {
+            let left = value(10, I8);
+            let right = value(11, I8);
+            let first = value(0, expression.result_type());
+            let repeated = value(1, expression.result_type());
+            let mut module = module(
+                vec![Block {
+                    id: BlockId::new(0),
+                    instructions: vec![
+                        expression.instruction(
+                            0,
+                            first.clone(),
+                            Operand::Value(left.id),
+                            Operand::Value(right.id),
+                        ),
+                        expression.instruction(
+                            1,
+                            repeated.clone(),
+                            Operand::Value(right.id),
+                            Operand::Value(left.id),
+                        ),
+                    ],
+                    terminator: Terminator::Return(Some(Operand::Value(repeated.id))),
+                }],
+                vec![left, right],
+            );
 
-        assert!(!outcome.changed_ir());
-        assert_eq!(outcome.preserved_analyses(), PreservedAnalyses::All);
-        assert_eq!(module.functions[0].blocks[0].instructions.len(), 2);
+            let outcome = CommonSubexpressionElimination::new()
+                .run(&mut module.functions[0])
+                .unwrap();
+
+            assert!(outcome.changed_ir(), "{name}");
+            assert_eq!(
+                module.functions[0].blocks[0].instructions.len(),
+                1,
+                "{name}"
+            );
+            assert_eq!(
+                module.functions[0].blocks[0].terminator,
+                Terminator::Return(Some(Operand::Value(first.id))),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn preserves_reversed_noncommutative_and_strict_floating_expressions() {
+        let cases = [
+            ("subtract", Expression::Binary(BinaryOp::Subtract), I8),
+            ("divide", Expression::Binary(BinaryOp::SignedDivide), I8),
+            ("shift", Expression::Binary(BinaryOp::ShiftLeft), I8),
+            (
+                "integer comparison",
+                Expression::Compare(ComparePredicate::SignedLessThan),
+                I8,
+            ),
+            (
+                "ordered floating comparison",
+                Expression::Compare(ComparePredicate::OrderedLessThan),
+                F32,
+            ),
+        ];
+
+        for (name, expression, operand_type) in cases {
+            let left = value(10, operand_type);
+            let right = value(11, operand_type);
+            let mut module = module(
+                vec![Block {
+                    id: BlockId::new(0),
+                    instructions: vec![
+                        expression.instruction(
+                            0,
+                            value(0, expression.result_type()),
+                            Operand::Value(left.id),
+                            Operand::Value(right.id),
+                        ),
+                        expression.instruction(
+                            1,
+                            value(1, expression.result_type()),
+                            Operand::Value(right.id),
+                            Operand::Value(left.id),
+                        ),
+                    ],
+                    terminator: Terminator::Return(Some(integer(0))),
+                }],
+                vec![left, right],
+            );
+
+            let outcome = CommonSubexpressionElimination::new()
+                .run(&mut module.functions[0])
+                .unwrap();
+
+            assert!(!outcome.changed_ir(), "{name}");
+            assert_eq!(
+                module.functions[0].blocks[0].instructions.len(),
+                2,
+                "{name}"
+            );
+        }
     }
 
     #[test]
