@@ -199,11 +199,16 @@ impl X86Opcode {
         TargetOpcode::new(self as u32)
     }
 
-    /// Recovers an x86 opcode from its Machine IR identity.
-    pub fn from_machine_opcode(opcode: TargetOpcode) -> Option<Self> {
+    /// Recovers an x86 opcode from its stable numeric identity.
+    pub fn from_raw(raw: u32) -> Option<Self> {
         Self::ALL
             .into_iter()
-            .find(|candidate| candidate.machine_opcode() == opcode)
+            .find(|candidate| *candidate as u32 == raw)
+    }
+
+    /// Recovers an x86 opcode from its Machine IR identity.
+    pub fn from_machine_opcode(opcode: TargetOpcode) -> Option<Self> {
+        Self::from_raw(opcode.get())
     }
 }
 

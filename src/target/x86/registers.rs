@@ -332,11 +332,16 @@ impl X86Register {
         PhysicalRegister::new(self as u32)
     }
 
-    /// Recovers an x86 view from its Machine IR register identifier.
-    pub fn from_physical(register: PhysicalRegister) -> Option<Self> {
+    /// Recovers an architectural view from its stable numeric identity.
+    pub fn from_raw(raw: u32) -> Option<Self> {
         Self::ALL
             .into_iter()
-            .find(|candidate| candidate.physical() == register)
+            .find(|candidate| *candidate as u32 == raw)
+    }
+
+    /// Recovers an x86 view from its Machine IR register identifier.
+    pub fn from_physical(register: PhysicalRegister) -> Option<Self> {
+        Self::from_raw(register.get())
     }
 
     /// Architectural views which directly overlap this view, excluding self.
