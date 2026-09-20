@@ -3,6 +3,7 @@
 mod allocation;
 mod basic_abi;
 mod basic_abi_expand;
+mod c_abi;
 mod call_clobbers;
 mod encoding;
 mod fixup;
@@ -21,11 +22,17 @@ mod verify;
 pub use allocation::{X86AllocationError, allocate_registers};
 pub use basic_abi::{BasicAbiError, ExpandedBasicFunction, expand_basic_runtime};
 pub use basic_abi_expand::{BasicAbiExpansionError, expand_allocated_basic_abi};
+pub use c_abi::{
+    CAbiExpansionError, CFramePlan, CFramePlanError, expand_allocated_c_abi, plan_c_frame,
+};
 pub use call_clobbers::{CallClobberError, materialize_far_call_clobbers};
 pub use encoding::{EncodeError, EncodedInstruction, encode, encode_with_fixups, encoded_size};
 pub use fixup::X86FixupKind;
-pub use frame::{BasicFramePlan, BasicFramePlanError, BasicRuntime, plan_basic_frame};
-pub use frame_indices::{FrameIndexMaterializationError, materialize_frame_indices};
+pub use frame::{BasicFramePlan, BasicFramePlanError, BasicRuntime, X86FrameLayout, plan_basic_frame};
+pub use frame_indices::{
+    FrameIndexMaterializationError, materialize_frame_indices,
+    materialize_frame_indices_with_layout,
+};
 pub use instructions::{ComparisonKind, ConditionCode, OperandSize, X86Opcode};
 pub use jump_layout::{JumpLayoutVerificationStage, X86JumpLayoutError, relax_and_encode_jumps};
 pub use mc::{McLowerError, UnresolvedOperand, lower_instruction};

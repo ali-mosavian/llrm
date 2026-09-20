@@ -62,6 +62,12 @@ pub enum X86OmfError {
         binding: SymbolBinding,
         visibility: SymbolVisibility,
     },
+    CrossSectionPcRelative {
+        section: SectionId,
+        fragment: FragmentId,
+        symbol: SymbolId,
+        target_section: SectionId,
+    },
     UnknownFixupKind {
         section: SectionId,
         fragment: FragmentId,
@@ -148,6 +154,15 @@ impl fmt::Display for X86OmfError {
             } => write!(
                 formatter,
                 "defined symbol {symbol} has unsupported {binding:?}/{visibility:?} linkage for OMF"
+            ),
+            Self::CrossSectionPcRelative {
+                section,
+                fragment,
+                symbol,
+                target_section,
+            } => write!(
+                formatter,
+                "section {section} fragment {fragment} PC-relative fixup names symbol {symbol} in different section {target_section}"
             ),
             Self::UnknownFixupKind {
                 section,
@@ -306,7 +321,7 @@ pub fn lower_to_omf(
                     fixups.sort_by_key(|fixup| fixup.offset);
                     validate_fixup_ranges(section.id, data.id, bytes.len(), &fixups)?;
                     for fixup in fixups {
-                        let lowered = lower_fixup(
+                        if let Some(lowered) = lower_fixup(
                             section.id,
                             data.id,
                             location.offset,
@@ -316,8 +331,9 @@ pub fn lower_to_omf(
                             &layout.symbols,
                             &section_indices,
                             &external_indices,
-                        )?;
-                        relocations.push(lowered);
+                        )? {
+                            relocations.push(lowered);
+                        }
                     }
                     push_initialized(&mut initialized, location.offset as u32, bytes);
                 }
@@ -457,7 +473,7 @@ fn lower_fixup(
     layouts: &BTreeMap<SymbolId, SymbolLayout>,
     section_indices: &BTreeMap<SectionId, u16>,
     external_indices: &BTreeMap<SymbolId, u16>,
-) -> Result<ObjectRelocation, X86OmfError> {
+) -> Result<Option<ObjectRelocation>, X86OmfError> {
     let kind = decode_kind(section, fragment, fixup.kind.get())?;
     if fixup.pc_relative != kind.pc_relative() {
         return Err(X86OmfError::PcRelativeMismatch {
@@ -484,7 +500,7 @@ fn lower_fixup(
             fragment,
             symbol: symbol.id,
         })?;
-    let (target, symbol_offset) =
+    let (target, symbol_offset, defined_in_module) =
         match layout {
             SymbolLayout::Undefined => {
                 require_external(symbol)?;
@@ -495,18 +511,43 @@ fn lower_fixup(
                         symbol: symbol.id,
                     },
                 )?;
-                (RelocationTarget::External(index), 0)
+                (RelocationTarget::External(index), 0, false)
             }
             SymbolLayout::Defined {
                 section: target_section,
                 offset,
-            } => (
-                RelocationTarget::Segment(section_indices[&target_section]),
-                offset,
-            ),
+            } => {
+                if kind.pc_relative() && target_section != section {
+                    return Err(X86OmfError::CrossSectionPcRelative {
+                        section,
+                        fragment,
+                        symbol: symbol.id,
+                        target_section,
+                    });
+                }
+                (
+                    RelocationTarget::Segment(section_indices[&target_section]),
+                    offset,
+                    true,
+                )
+            }
         };
 
-    let value = (i128::from(symbol_offset) + i128::from(fixup.expression.addend)) & 0xffff;
+    let value = if kind.pc_relative() && defined_in_module {
+        // A local near-call displacement is invariant under segment placement.
+        // Resolve it now, exactly as the established Python writer resolves a
+        // `Near` target found in its own label map, and do not leave a needless
+        // relocation in the object.  E8 measures from the end of its rel16.
+        let next_instruction =
+            i128::from(fragment_offset) + i128::from(fixup.offset) + i128::from(kind.width());
+        (i128::from(symbol_offset) + i128::from(fixup.expression.addend) - next_instruction)
+            & 0xffff
+    } else {
+        // For undefined targets retain the zero/addend skeleton and a
+        // self-relative OFFSET fixup.  OMF applies the place adjustment when
+        // the linker resolves the EXTDEF.
+        (i128::from(symbol_offset) + i128::from(fixup.expression.addend)) & 0xffff
+    };
     let value = value as u16;
     let start = fixup.offset as usize;
     bytes[start..start + 2].copy_from_slice(&value.to_le_bytes());
@@ -515,15 +556,22 @@ fn lower_fixup(
             bytes[start + 2..start + 4].fill(0);
             Location::Pointer16_16
         }
-        X86FixupKind::Absolute16 => Location::Offset16,
+        X86FixupKind::Absolute16 | X86FixupKind::PcRelative16 => Location::Offset16,
     };
-    Ok(ObjectRelocation {
+    if kind.pc_relative() && defined_in_module {
+        return Ok(None);
+    }
+    Ok(Some(ObjectRelocation {
         offset: (fragment_offset + u64::from(fixup.offset)) as u32,
         location,
-        mode: FixupMode::SegmentRelative,
+        mode: if kind.pc_relative() {
+            FixupMode::SelfRelative
+        } else {
+            FixupMode::SegmentRelative
+        },
         frame: RelocationFrame::Target,
         target,
-    })
+    }))
 }
 
 fn decode_kind(
@@ -534,6 +582,7 @@ fn decode_kind(
     match raw {
         value if value == X86FixupKind::FarPointer1616 as u32 => Ok(X86FixupKind::FarPointer1616),
         value if value == X86FixupKind::Absolute16 as u32 => Ok(X86FixupKind::Absolute16),
+        value if value == X86FixupKind::PcRelative16 as u32 => Ok(X86FixupKind::PcRelative16),
         raw => Err(X86OmfError::UnknownFixupKind {
             section,
             fragment,
@@ -629,6 +678,146 @@ mod tests {
                 target: RelocationTarget::External(1),
             }
         );
+    }
+
+    #[test]
+    fn lowers_external_near_call_as_a_self_relative_offset_fixup() {
+        use crate::object::omf::{fixups, write};
+
+        let target = SymbolId::new(0);
+        let source = module(
+            vec![data(
+                0,
+                vec![0xe8, 0, 0],
+                vec![Fixup {
+                    offset: 1,
+                    kind: X86FixupKind::PcRelative16.into(),
+                    expression: MCExpression {
+                        symbol: target,
+                        addend: 0,
+                    },
+                    pc_relative: true,
+                }],
+            )],
+            vec![symbol(0, "callee", SymbolDefinition::Undefined)],
+        );
+
+        let object = lower_to_omf(b"unit.c", &source).unwrap();
+
+        assert_eq!(object.segments[0].initialized[0].bytes, [0xe8, 0, 0]);
+        assert_eq!(
+            object.segments[0].relocations[0],
+            ObjectRelocation {
+                offset: 1,
+                location: Location::Offset16,
+                mode: FixupMode::SelfRelative,
+                frame: RelocationFrame::Target,
+                target: RelocationTarget::External(1),
+            }
+        );
+
+        let records = write::records(&object).unwrap();
+        let decoded = fixups::parse(&records).unwrap();
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[0].patch_offset, 1);
+        assert_eq!(decoded[0].location, Location::Offset16);
+        assert_eq!(decoded[0].mode, FixupMode::SelfRelative);
+        assert_eq!(
+            decoded[0].frame.method,
+            crate::object::omf::fixups::FrameMethod::Target
+        );
+        assert_eq!(
+            decoded[0].target.method,
+            crate::object::omf::fixups::TargetMethod::External
+        );
+        assert_eq!(decoded[0].target.datum, 1);
+    }
+
+    #[test]
+    fn resolves_defined_near_call_displacement_without_a_relocation() {
+        let target = SymbolId::new(0);
+        let source = module(
+            vec![
+                data(
+                    0,
+                    vec![0xe8, 0, 0],
+                    vec![Fixup {
+                        offset: 1,
+                        kind: X86FixupKind::PcRelative16.into(),
+                        expression: MCExpression {
+                            symbol: target,
+                            addend: 4,
+                        },
+                        pc_relative: true,
+                    }],
+                ),
+                data(1, vec![0x90], Vec::new()),
+            ],
+            vec![symbol(
+                0,
+                "callee",
+                SymbolDefinition::Fragment {
+                    fragment: FragmentId::new(1),
+                    offset: 0,
+                },
+            )],
+        );
+
+        let object = lower_to_omf(b"unit.c", &source).unwrap();
+
+        // The target starts at offset 3.  E8's rel16 is measured from offset
+        // 3, so only the expression addend remains in the instruction.
+        assert_eq!(object.segments[0].initialized[0].bytes, [0xe8, 4, 0, 0x90]);
+        assert!(object.segments[0].relocations.is_empty());
+    }
+
+    #[test]
+    fn refuses_defined_near_call_into_a_different_section() {
+        let target = SymbolId::new(0);
+        let mut source = module(
+            vec![data(
+                0,
+                vec![0xe8, 0, 0],
+                vec![Fixup {
+                    offset: 1,
+                    kind: X86FixupKind::PcRelative16.into(),
+                    expression: MCExpression {
+                        symbol: target,
+                        addend: 0,
+                    },
+                    pc_relative: true,
+                }],
+            )],
+            vec![symbol(
+                0,
+                "other",
+                SymbolDefinition::Fragment {
+                    fragment: FragmentId::new(1),
+                    offset: 0,
+                },
+            )],
+        );
+        source.sections.push(MCSection {
+            id: SectionId::new(1),
+            name: "other".into(),
+            kind: SectionKind::ReadOnlyData,
+            flags: SectionFlags::ALLOC,
+            alignment: 1,
+            fragments: vec![data(1, vec![0], Vec::new())],
+        });
+
+        assert!(matches!(
+            lower_to_omf(b"unit", &source),
+            Err(X86OmfError::CrossSectionPcRelative {
+                section,
+                fragment,
+                symbol,
+                target_section,
+            }) if section == SectionId::new(0)
+                && fragment == FragmentId::new(0)
+                && symbol == target
+                && target_section == SectionId::new(1)
+        ));
     }
 
     #[test]

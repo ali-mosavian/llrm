@@ -14,7 +14,7 @@ use crate::codegen::machine::{
     TargetOpcode,
 };
 
-use super::{BasicFramePlan, X86Opcode, X86Register};
+use super::{BasicFramePlan, X86FrameLayout, X86Opcode, X86Register};
 
 /// A refusal while turning an abstract frame reference into x86 operands.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -130,7 +130,20 @@ pub fn materialize_frame_indices(
     function: &MachineFunction,
     plan: &BasicFramePlan,
 ) -> Result<MachineFunction, FrameIndexMaterializationError> {
-    validate(function, plan)?;
+    materialize_frame_indices_with_layout(function, plan.layout())
+}
+
+/// Materializes frame references from a source-neutral x86 layout.
+///
+/// ABI planners construct the layout; this routine only turns a selected
+/// `FrameIndex` operand into the x86 `BP + displacement` tuple.  Keeping this
+/// boundary singular prevents individual frontends from spelling the same
+/// stack slot differently.
+pub fn materialize_frame_indices_with_layout(
+    function: &MachineFunction,
+    layout: &X86FrameLayout,
+) -> Result<MachineFunction, FrameIndexMaterializationError> {
+    validate(function, layout)?;
 
     let mut materialized = function.clone();
     for block in &mut materialized.blocks {
@@ -143,7 +156,7 @@ pub fn materialize_frame_indices(
                 continue;
             };
             let displacement =
-                frame_displacement(plan, *index, block.id, instruction.id, position)?;
+                frame_displacement(layout, *index, block.id, instruction.id, position)?;
             instruction.operands[position] = bp_operand();
             instruction
                 .operands
@@ -155,12 +168,12 @@ pub fn materialize_frame_indices(
 
 fn validate(
     function: &MachineFunction,
-    plan: &BasicFramePlan,
+    layout: &X86FrameLayout,
 ) -> Result<(), FrameIndexMaterializationError> {
-    if plan.function() != function.id {
+    if layout.function() != function.id {
         return Err(FrameIndexMaterializationError::MismatchedFramePlan {
             function: function.id,
-            planned: plan.function(),
+            planned: layout.function(),
         });
     }
     for block in &function.blocks {
@@ -202,7 +215,7 @@ fn validate(
                         addend: *addend,
                     });
                 }
-                frame_displacement(plan, *index, block.id, instruction.id, position)?;
+                frame_displacement(layout, *index, block.id, instruction.id, position)?;
             }
         }
     }
@@ -243,13 +256,14 @@ fn is_materialized_frame_address(instruction: &MachineInstruction) -> bool {
 }
 
 fn frame_displacement(
-    plan: &BasicFramePlan,
+    layout: &X86FrameLayout,
     frame: FrameIndex,
     block: MachineBlockId,
     instruction: MachineInstructionId,
     operand: usize,
 ) -> Result<i64, FrameIndexMaterializationError> {
-    plan.offset(frame)
+    layout
+        .offset(frame)
         .map(i64::from)
         .ok_or(FrameIndexMaterializationError::UnknownFrameIndex {
             block,

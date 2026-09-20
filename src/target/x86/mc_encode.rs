@@ -189,13 +189,26 @@ mod tests {
             ),
             instruction(
                 2,
+                X86Opcode::Add,
+                vec![register(X86Register::Sp), MCOperand::Immediate(4)],
+            ),
+            instruction(
+                3,
+                X86Opcode::CallNear,
+                vec![MCOperand::Expression(MCExpression {
+                    symbol: SymbolId::new(0),
+                    addend: 0,
+                })],
+            ),
+            instruction(
+                4,
                 X86Opcode::CallFar,
                 vec![MCOperand::Expression(MCExpression {
                     symbol: SymbolId::new(0),
                     addend: 6,
                 })],
             ),
-            instruction(3, X86Opcode::ReturnFar, vec![MCOperand::Immediate(4)]),
+            instruction(5, X86Opcode::ReturnFar, vec![MCOperand::Immediate(4)]),
         ]);
         let before = source.clone();
 
@@ -211,10 +224,27 @@ mod tests {
         assert_eq!(moved.bytes, [0x89, 0xd8]);
         assert!(moved.fixups.is_empty());
 
-        let MCFragment::Data(call) = &first.sections[0].fragments[1] else {
+        let MCFragment::Data(cleanup) = &first.sections[0].fragments[1] else {
+            panic!("stack cleanup must become data");
+        };
+        assert_eq!(cleanup.id, FragmentId::new(2));
+        assert_eq!(cleanup.bytes, [0x83, 0xc4, 0x04]);
+        assert!(cleanup.fixups.is_empty());
+
+        let MCFragment::Data(near_call) = &first.sections[0].fragments[2] else {
+            panic!("near call must become data");
+        };
+        assert_eq!(near_call.id, FragmentId::new(3));
+        assert_eq!(near_call.bytes, [0xe8, 0, 0]);
+        assert_eq!(near_call.fixups.len(), 1);
+        assert_eq!(near_call.fixups[0].offset, 1);
+        assert_eq!(near_call.fixups[0].kind, X86FixupKind::PcRelative16.into());
+        assert!(near_call.fixups[0].pc_relative);
+
+        let MCFragment::Data(call) = &first.sections[0].fragments[3] else {
             panic!("far call must become data");
         };
-        assert_eq!(call.id, FragmentId::new(2));
+        assert_eq!(call.id, FragmentId::new(4));
         assert_eq!(call.bytes, [0x9a, 0, 0, 0, 0]);
         assert_eq!(call.fixups.len(), 1);
         assert_eq!(call.fixups[0].offset, 1);
@@ -222,7 +252,7 @@ mod tests {
         assert_eq!(call.fixups[0].expression.symbol, SymbolId::new(0));
         assert_eq!(call.fixups[0].expression.addend, 6);
 
-        let MCFragment::Data(returned) = &first.sections[0].fragments[2] else {
+        let MCFragment::Data(returned) = &first.sections[0].fragments[4] else {
             panic!("far return must become data");
         };
         assert_eq!(returned.bytes, [0xca, 0x04, 0x00]);

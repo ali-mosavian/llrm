@@ -18,6 +18,37 @@ use crate::codegen::machine::{
 const FAR_PASCAL_FIRST_ARGUMENT: u32 = 6;
 const MAX_LOCAL_BYTES: u32 = 0x7ffe;
 
+/// Immutable, target-owned placement of abstract frame objects.
+///
+/// This is deliberately smaller than an ABI plan: it only answers the one
+/// question the selected x86 memory forms need, namely the BP displacement of
+/// a [`FrameIndex`].  Calling convention policy, runtime headers, and frame
+/// entry/exit code remain in their respective ABI modules.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct X86FrameLayout {
+    function: MachineFunctionId,
+    offsets: BTreeMap<FrameIndex, i32>,
+}
+
+impl X86FrameLayout {
+    pub fn new(function: MachineFunctionId, offsets: BTreeMap<FrameIndex, i32>) -> Self {
+        Self { function, offsets }
+    }
+
+    pub const fn function(&self) -> MachineFunctionId {
+        self.function
+    }
+
+    /// Signed BP displacement for one abstract frame object.
+    pub fn offset(&self, index: FrameIndex) -> Option<i32> {
+        self.offsets.get(&index).copied()
+    }
+
+    pub fn offsets(&self) -> impl Iterator<Item = (FrameIndex, i32)> + '_ {
+        self.offsets.iter().map(|(index, offset)| (*index, *offset))
+    }
+}
+
 /// Microsoft BASIC runtime family whose frame entry owns BP and local storage.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BasicRuntime {
@@ -40,9 +71,8 @@ impl BasicRuntime {
 /// A complete, deterministic BP-relative plan for one BASIC procedure.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BasicFramePlan {
-    function: MachineFunctionId,
+    layout: X86FrameLayout,
     runtime: BasicRuntime,
-    offsets: BTreeMap<FrameIndex, i32>,
     local_bytes: u16,
     parameter_bytes: u16,
     temporary_strings: u16,
@@ -50,7 +80,12 @@ pub struct BasicFramePlan {
 
 impl BasicFramePlan {
     pub const fn function(&self) -> MachineFunctionId {
-        self.function
+        self.layout.function()
+    }
+
+    /// General x86 frame placement consumed by frame-index materialization.
+    pub const fn layout(&self) -> &X86FrameLayout {
+        &self.layout
     }
 
     pub const fn runtime(&self) -> BasicRuntime {
@@ -78,11 +113,11 @@ impl BasicFramePlan {
 
     /// Signed BP displacement for one abstract frame object.
     pub fn offset(&self, index: FrameIndex) -> Option<i32> {
-        self.offsets.get(&index).copied()
+        self.layout.offset(index)
     }
 
     pub fn offsets(&self) -> impl Iterator<Item = (FrameIndex, i32)> + '_ {
-        self.offsets.iter().map(|(index, offset)| (*index, *offset))
+        self.layout.offsets()
     }
 }
 
@@ -336,9 +371,8 @@ pub fn plan_basic_frame(
         .map_err(|_| BasicFramePlanError::LocalReservationTooLarge(local_bytes))?;
 
     Ok(BasicFramePlan {
-        function: function.id,
+        layout: X86FrameLayout::new(function.id, offsets),
         runtime,
-        offsets,
         local_bytes,
         parameter_bytes: parameter_bytes_u16,
         temporary_strings,

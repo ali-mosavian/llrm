@@ -14,6 +14,12 @@ pub enum X86FixupKind {
     FarPointer1616 = 1,
     /// A sixteen-bit absolute offset within the relocation target.
     Absolute16 = 2,
+    /// A sixteen-bit displacement measured from the end of its field.
+    ///
+    /// This is the operand following the `E8` near-call opcode.  Keeping it
+    /// separate from an absolute offset ensures object lowering cannot
+    /// accidentally emit a segment-relative FIXUPP for a PC-relative call.
+    PcRelative16 = 3,
 }
 
 impl X86FixupKind {
@@ -21,7 +27,7 @@ impl X86FixupKind {
     pub const fn width(self) -> u8 {
         match self {
             Self::FarPointer1616 => 4,
-            Self::Absolute16 => 2,
+            Self::Absolute16 | Self::PcRelative16 => 2,
         }
     }
 
@@ -29,6 +35,7 @@ impl X86FixupKind {
     pub const fn pc_relative(self) -> bool {
         match self {
             Self::FarPointer1616 | Self::Absolute16 => false,
+            Self::PcRelative16 => true,
         }
     }
 }
@@ -54,5 +61,10 @@ mod tests {
         assert_eq!(FixupKind::from(absolute).get(), 2);
         assert_eq!(absolute.width(), 2);
         assert!(!absolute.pc_relative());
+
+        let relative = X86FixupKind::PcRelative16;
+        assert_eq!(FixupKind::from(relative).get(), 3);
+        assert_eq!(relative.width(), 2);
+        assert!(relative.pc_relative());
     }
 }

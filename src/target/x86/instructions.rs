@@ -172,11 +172,13 @@ pub enum X86Opcode {
     LowWord = 30,
     /// Extract the high ABI word from one semantic dword value.
     HighWord = 31,
+    /// Restore SP and BP from a conventional frame in one instruction.
+    Leave = 32,
 }
 
 impl X86Opcode {
     /// Every opcode in stable numeric order.
-    pub const ALL: [Self; 31] = [
+    pub const ALL: [Self; 32] = [
         Self::Copy,
         Self::PhiCopy,
         Self::Mov,
@@ -208,6 +210,7 @@ impl X86Opcode {
         Self::MergeWords,
         Self::LowWord,
         Self::HighWord,
+        Self::Leave,
     ];
 
     /// The opaque target-independent Machine IR opcode identifier.

@@ -139,8 +139,8 @@ pub fn encode_with_fixups(instruction: &MCInstruction) -> Result<EncodedInstruct
         X86Opcode::Copy | X86Opcode::PhiCopy | X86Opcode::Mov => {
             encode_move(opcode, &instruction.operands)
         }
-        X86Opcode::Add => encode_register_operands(opcode, &instruction.operands, 0x00, 0x01),
-        X86Opcode::Sub => encode_register_operands(opcode, &instruction.operands, 0x28, 0x29),
+        X86Opcode::Add => encode_add_sub(opcode, &instruction.operands, 0, 0x00, 0x01),
+        X86Opcode::Sub => encode_add_sub(opcode, &instruction.operands, 5, 0x28, 0x29),
         X86Opcode::And => encode_register_operands(opcode, &instruction.operands, 0x20, 0x21),
         X86Opcode::Or => encode_register_operands(opcode, &instruction.operands, 0x08, 0x09),
         X86Opcode::Xor => encode_register_operands(opcode, &instruction.operands, 0x30, 0x31),
@@ -151,17 +151,18 @@ pub fn encode_with_fixups(instruction: &MCInstruction) -> Result<EncodedInstruct
         X86Opcode::Not => encode_unary(opcode, &instruction.operands, 2),
         X86Opcode::Push => encode_push_pop(opcode, &instruction.operands, 0x50),
         X86Opcode::Pop => encode_push_pop(opcode, &instruction.operands, 0x58),
+        X86Opcode::Leave => encode_return(opcode, &instruction.operands, 0xc9),
         X86Opcode::ReturnNear => encode_return(opcode, &instruction.operands, 0xc3),
         X86Opcode::ReturnFar => encode_far_return(opcode, &instruction.operands),
         X86Opcode::Lea => return encode_lea(opcode, &instruction.operands),
         X86Opcode::Load => encode_load(opcode, &instruction.operands),
         X86Opcode::Store => encode_store(opcode, &instruction.operands),
         X86Opcode::CallFar => return encode_far_call(opcode, &instruction.operands),
+        X86Opcode::CallNear => return encode_near_call(opcode, &instruction.operands),
         X86Opcode::Idiv
         | X86Opcode::ShiftLeft
         | X86Opcode::ShiftRightLogical
         | X86Opcode::ShiftRightArithmetic
-        | X86Opcode::CallNear
         | X86Opcode::Jump
         | X86Opcode::JumpConditional
         | X86Opcode::MergeWords
@@ -174,6 +175,30 @@ pub fn encode_with_fixups(instruction: &MCInstruction) -> Result<EncodedInstruct
     Ok(EncodedInstruction {
         bytes,
         fixups: Vec::new(),
+    })
+}
+
+fn encode_near_call(
+    opcode: X86Opcode,
+    operands: &[MCOperand],
+) -> Result<EncodedInstruction, EncodeError> {
+    expect_arity(opcode, operands, 1)?;
+    let MCOperand::Expression(expression) = &operands[0] else {
+        return Err(EncodeError::OperandKind {
+            opcode,
+            index: 0,
+            expected: "a symbolic near-call target",
+        });
+    };
+    let kind = X86FixupKind::PcRelative16;
+    Ok(EncodedInstruction {
+        bytes: vec![0xe8, 0, 0],
+        fixups: vec![Fixup {
+            offset: 1,
+            kind: kind.into(),
+            expression: *expression,
+            pc_relative: kind.pc_relative(),
+        }],
     })
 }
 
@@ -420,6 +445,57 @@ fn encode_register_operands(
     let destination = register_operand(opcode, operands, 0)?;
     let source = register_operand(opcode, operands, 1)?;
     encode_register_binary(opcode, destination, source, byte_opcode, wide_opcode)
+}
+
+fn encode_add_sub(
+    opcode: X86Opcode,
+    operands: &[MCOperand],
+    immediate_extension: u8,
+    byte_opcode: u8,
+    wide_opcode: u8,
+) -> Result<Vec<u8>, EncodeError> {
+    expect_arity(opcode, operands, 2)?;
+    if let MCOperand::Immediate(value) = &operands[1] {
+        return encode_word_group_one_immediate(opcode, operands, immediate_extension, *value);
+    }
+    encode_register_operands(opcode, operands, byte_opcode, wide_opcode)
+}
+
+fn encode_word_group_one_immediate(
+    opcode: X86Opcode,
+    operands: &[MCOperand],
+    extension: u8,
+    value: i64,
+) -> Result<Vec<u8>, EncodeError> {
+    let destination = register_operand(opcode, operands, 0)?;
+    if destination.size != OperandSize::Word {
+        return Err(EncodeError::UnsupportedForm {
+            opcode,
+            reason: "group-1 immediate form is implemented only for 16-bit registers",
+        });
+    }
+
+    // First validate the source spelling under the same signed-or-unsigned
+    // 16-bit convention as register moves.  Once narrowed, the low word is
+    // the operation's exact modulo-16-bit immediate.  `83 /n ib` is valid
+    // precisely when sign-extending that byte reproduces the word.
+    let word = encode_immediate(value, OperandSize::Word)?;
+    let immediate = u16::from_le_bytes([word[0], word[1]]);
+    let signed = immediate as i16;
+    if (-128..=127).contains(&signed) {
+        Ok(vec![
+            0x83,
+            modrm(extension, destination.code),
+            signed as i8 as u8,
+        ])
+    } else {
+        Ok(vec![
+            0x81,
+            modrm(extension, destination.code),
+            word[0],
+            word[1],
+        ])
+    }
 }
 
 fn encode_register_binary(
@@ -808,6 +884,44 @@ mod tests {
     }
 
     #[test]
+    fn encodes_word_group_one_stack_adjustments_with_the_shortest_immediate() {
+        assert_eq!(
+            encode(&instruction(
+                X86Opcode::Add,
+                vec![register(X86Register::Sp), MCOperand::Immediate(4)],
+            ))
+            .unwrap(),
+            vec![0x83, 0xc4, 0x04]
+        );
+        assert_eq!(
+            encode(&instruction(
+                X86Opcode::Sub,
+                vec![register(X86Register::Sp), MCOperand::Immediate(4)],
+            ))
+            .unwrap(),
+            vec![0x83, 0xec, 0x04]
+        );
+        assert_eq!(
+            encode(&instruction(
+                X86Opcode::Add,
+                vec![register(X86Register::Sp), MCOperand::Immediate(128)],
+            ))
+            .unwrap(),
+            vec![0x81, 0xc4, 0x80, 0x00]
+        );
+        assert!(matches!(
+            encode(&instruction(
+                X86Opcode::Add,
+                vec![register(X86Register::Esp), MCOperand::Immediate(4)],
+            )),
+            Err(EncodeError::UnsupportedForm {
+                opcode: X86Opcode::Add,
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn accepts_signed_or_unsigned_immediate_bit_patterns_and_rejects_overflow() {
         assert_eq!(
             encode(&instruction(
@@ -839,6 +953,10 @@ mod tests {
 
     #[test]
     fn encodes_prefix_unary_push_pop_and_returns() {
+        assert_eq!(
+            encode(&instruction(X86Opcode::Leave, Vec::new())).unwrap(),
+            vec![0xc9]
+        );
         assert_eq!(
             encode(&instruction(
                 X86Opcode::Neg,
@@ -1084,6 +1202,30 @@ mod tests {
                 count: 1,
             })
         );
+    }
+
+    #[test]
+    fn encodes_near_call_with_one_pc_relative_fixup() {
+        let expression = MCExpression {
+            symbol: SymbolId::new(7),
+            addend: -12,
+        };
+        let instruction = instruction(X86Opcode::CallNear, vec![MCOperand::Expression(expression)]);
+
+        let encoded = encode_with_fixups(&instruction).unwrap();
+
+        assert_eq!(encoded.bytes, vec![0xe8, 0, 0]);
+        assert_eq!(encoded.fixups.len(), 1);
+        assert_eq!(
+            encoded.fixups[0],
+            Fixup {
+                offset: 1,
+                kind: X86FixupKind::PcRelative16.into(),
+                expression,
+                pc_relative: true,
+            }
+        );
+        assert_eq!(encoded_size(&instruction), Ok(3));
     }
 
     #[test]
