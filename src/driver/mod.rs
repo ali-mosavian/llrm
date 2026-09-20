@@ -3,7 +3,8 @@
 use std::fmt;
 
 use crate::frontend::qb::{self, Dialect};
-use crate::hir::{Program, RuntimeProfile};
+use crate::hir::{LowerError, Program, RuntimeProfile};
+use crate::ir;
 use crate::object::omf::file::{File as OmfFile, FileError};
 
 /// Configuration that affects QB source semantics.
@@ -37,6 +38,8 @@ impl Default for QbOptions {
 pub enum Error {
     Parse(qb::ParseError),
     Semantic(qb::SemanticError),
+    ExpectedSingleModule { actual: usize },
+    Lower(LowerError),
     Omf(FileError),
 }
 
@@ -45,6 +48,11 @@ impl fmt::Display for Error {
         match self {
             Self::Parse(error) => error.message.fmt(formatter),
             Self::Semantic(error) => error.message.fmt(formatter),
+            Self::ExpectedSingleModule { actual } => write!(
+                formatter,
+                "portable IR emission requires exactly one HIR module, got {actual}"
+            ),
+            Self::Lower(error) => error.fmt(formatter),
             Self::Omf(error) => error.fmt(formatter),
         }
     }
@@ -74,6 +82,16 @@ pub fn compile_qb(source: &str, module_name: &str, options: QbOptions) -> Result
     .map_err(Error::Semantic)
 }
 
+/// Lower one verified QB HIR program into portable SSA IR.
+pub fn lower_qb_to_ir(program: &Program) -> Result<ir::Module, Error> {
+    let [module] = program.modules.as_slice() else {
+        return Err(Error::ExpectedSingleModule {
+            actual: program.modules.len(),
+        });
+    };
+    crate::hir::lower_to_ir(module).map_err(Error::Lower)
+}
+
 fn runtime_name(runtime: RuntimeProfile) -> &'static str {
     match runtime {
         RuntimeProfile::Qb45 => "qb45",
@@ -84,7 +102,10 @@ fn runtime_name(runtime: RuntimeProfile) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_omf;
+    use super::{Error, lower_qb_to_ir, parse_omf};
+    use crate::hir::{
+        ArrayOrder, Dialect, FORMAT_VERSION, FloatMode, Program, RuntimeProfile, TargetProfile,
+    };
     use crate::object::omf::record::Record;
 
     #[test]
@@ -95,5 +116,23 @@ mod tests {
         let file = parse_omf(&bytes).unwrap();
 
         assert_eq!(file.to_bytes(), bytes);
+    }
+
+    #[test]
+    fn portable_ir_lowering_refuses_a_program_without_one_module() {
+        let program = Program {
+            version: FORMAT_VERSION,
+            dialect: Dialect::Vbdos,
+            runtime: RuntimeProfile::Vbdos,
+            target: TargetProfile::I386RealMode,
+            array_order: ArrayOrder::ColumnMajor,
+            float_mode: FloatMode::Inline,
+            modules: Vec::new(),
+        };
+
+        assert!(matches!(
+            lower_qb_to_ir(&program),
+            Err(Error::ExpectedSingleModule { actual: 0 })
+        ));
     }
 }

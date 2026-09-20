@@ -159,21 +159,12 @@ impl Invocation {
         };
         let text = match self.output_kind {
             OutputKind::Hir => llrm::hir::write_text(&program),
-            OutputKind::Ir => {
-                let [module] = program.modules.as_slice() else {
-                    return failure(format!(
-                        "{}: portable IR emission requires exactly one HIR module, got {}",
-                        self.input.display(),
-                        program.modules.len()
-                    ));
-                };
-                match llrm::hir::lower_to_ir(module) {
-                    Ok(module) => llrm::ir::write_text(&module),
-                    Err(error) => {
-                        return failure(format!("{}: {error}", self.input.display()));
-                    }
+            OutputKind::Ir => match driver::lower_qb_to_ir(&program) {
+                Ok(module) => llrm::ir::write_text(&module),
+                Err(error) => {
+                    return failure(format!("{}: {error}", self.input.display()));
                 }
-            }
+            },
         };
         write_output(self.output.as_deref(), text.as_bytes())
     }
