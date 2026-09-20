@@ -88,46 +88,24 @@ impl Error for McLowerError {}
 pub fn lower_instruction(
     instruction: &MachineInstruction,
 ) -> Result<mc::MCInstruction, McLowerError> {
-    let opcode =
-        X86Opcode::from_machine_opcode(instruction.opcode).ok_or(McLowerError::UnknownOpcode {
-            raw: instruction.opcode.get(),
-        })?;
+    let opcode = validate_opcode(instruction)?;
     let operands = instruction
         .operands
         .iter()
         .enumerate()
         .map(|(index, operand)| {
-            if operand.constraint.is_some() {
-                return Err(McLowerError::ResidualConstraint { operand: index });
-            }
-            if operand.tied_to.is_some() {
-                return Err(McLowerError::ResidualTie { operand: index });
-            }
+            validate_allocated_operand(index, operand)?;
             match operand.kind {
-                MachineOperandKind::Register(MachineRegister::Physical(register)) => {
-                    if matches!(operand.role, OperandRole::None) {
-                        return Err(McLowerError::InvalidRole { operand: index });
-                    }
-                    X86Register::from_physical(register).ok_or(McLowerError::UnknownRegister {
-                        operand: index,
-                        raw: register.get(),
-                    })?;
-                    Ok(mc::MCOperand::Register(mc::PhysicalRegister::new(
-                        register.get(),
-                    )))
-                }
+                MachineOperandKind::Register(MachineRegister::Physical(register)) => Ok(
+                    mc::MCOperand::Register(mc::PhysicalRegister::new(register.get())),
+                ),
                 MachineOperandKind::Register(MachineRegister::Virtual(_)) => {
                     Err(McLowerError::UnresolvedOperand {
                         operand: index,
                         kind: UnresolvedOperand::VirtualRegister,
                     })
                 }
-                MachineOperandKind::Immediate(value) => {
-                    if !matches!(operand.role, OperandRole::None) {
-                        return Err(McLowerError::InvalidRole { operand: index });
-                    }
-                    Ok(mc::MCOperand::Immediate(value))
-                }
+                MachineOperandKind::Immediate(value) => Ok(mc::MCOperand::Immediate(value)),
                 MachineOperandKind::FrameIndex { .. } => {
                     unresolved(index, UnresolvedOperand::FrameIndex)
                 }
@@ -145,6 +123,64 @@ pub fn lower_instruction(
         opcode: mc::TargetOpcode::new(opcode.machine_opcode().get()),
         operands,
     })
+}
+
+/// Validates the target and allocation facts shared by all x86-to-MC lowering.
+///
+/// Symbol resolution intentionally stays with the caller: instruction-local
+/// lowering refuses symbols, whereas module lowering supplies their context.
+pub(crate) fn validate_opcode(instruction: &MachineInstruction) -> Result<X86Opcode, McLowerError> {
+    X86Opcode::from_machine_opcode(instruction.opcode).ok_or(McLowerError::UnknownOpcode {
+        raw: instruction.opcode.get(),
+    })
+}
+
+/// Validates one operand after allocation, except for symbol lookup.
+///
+/// Keeping unresolved symbolic operands valid here lets module lowering assign
+/// symbols without duplicating register, immediate, opcode, or allocation
+/// metadata checks.  The instruction-local entry point retains its historical
+/// unresolved-operand diagnostics by resolving them immediately afterwards.
+pub(crate) fn validate_allocated_operand(
+    index: usize,
+    operand: &crate::codegen::machine::MachineOperand,
+) -> Result<(), McLowerError> {
+    if operand.constraint.is_some() {
+        return Err(McLowerError::ResidualConstraint { operand: index });
+    }
+    if operand.tied_to.is_some() {
+        return Err(McLowerError::ResidualTie { operand: index });
+    }
+
+    match operand.kind {
+        MachineOperandKind::Register(MachineRegister::Physical(register)) => {
+            if matches!(operand.role, OperandRole::None) {
+                return Err(McLowerError::InvalidRole { operand: index });
+            }
+            X86Register::from_physical(register).ok_or(McLowerError::UnknownRegister {
+                operand: index,
+                raw: register.get(),
+            })?;
+        }
+        MachineOperandKind::Register(MachineRegister::Virtual(_)) => {
+            return Err(McLowerError::UnresolvedOperand {
+                operand: index,
+                kind: UnresolvedOperand::VirtualRegister,
+            });
+        }
+        MachineOperandKind::Immediate(_) => {
+            if !matches!(operand.role, OperandRole::None) {
+                return Err(McLowerError::InvalidRole { operand: index });
+            }
+        }
+        MachineOperandKind::FrameIndex { .. }
+        | MachineOperandKind::Block(_)
+        | MachineOperandKind::Function(_)
+        | MachineOperandKind::Global { .. }
+        | MachineOperandKind::ExternalSymbol { .. } => {}
+    }
+
+    Ok(())
 }
 
 fn unresolved(operand: usize, kind: UnresolvedOperand) -> Result<mc::MCOperand, McLowerError> {

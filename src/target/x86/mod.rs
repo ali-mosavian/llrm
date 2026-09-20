@@ -8,6 +8,7 @@ mod frame;
 mod frame_indices;
 mod instructions;
 mod mc;
+mod mc_module;
 mod registers;
 mod selection;
 mod verify;
@@ -20,6 +21,9 @@ pub use frame::{BasicFramePlan, BasicFramePlanError, BasicRuntime, plan_basic_fr
 pub use frame_indices::{FrameIndexMaterializationError, materialize_frame_indices};
 pub use instructions::{ComparisonKind, ConditionCode, OperandSize, X86Opcode};
 pub use mc::{McLowerError, UnresolvedOperand, lower_instruction};
+pub use mc_module::{
+    DefinedSymbolKind, McModuleIdKind, X86McModuleLowerError, lower_allocated_module,
+};
 pub use registers::{X86Register, X86RegisterClass};
 pub use selection::{FunctionProperty, SelectionError, select_module};
 pub use verify::verify_machine;

@@ -13,7 +13,7 @@ use crate::object::omf::file::{File as OmfFile, FileError};
 use crate::support::diagnostic::Diagnostic;
 use crate::target::x86::{
     BasicAbiError, BasicFramePlan, BasicRuntime, CallClobberError, FrameIndexMaterializationError,
-    SelectionError, X86AllocationError,
+    SelectionError, X86AllocationError, X86McModuleLowerError,
 };
 
 /// Configuration that affects QB source semantics.
@@ -88,6 +88,7 @@ pub enum Error {
         count: usize,
     },
     Machine(Vec<Diagnostic>),
+    Mc(X86McModuleLowerError),
     Omf(FileError),
 }
 
@@ -145,6 +146,7 @@ impl fmt::Display for Error {
                     write!(formatter, "invalid x86 Machine IR")
                 }
             }
+            Self::Mc(error) => write!(formatter, "cannot lower allocated x86 module: {error}"),
             Self::Omf(error) => error.fmt(formatter),
         }
     }
@@ -290,6 +292,12 @@ pub fn allocate_qb_machine(selected: &QbMachine) -> Result<QbMachine, Error> {
     Ok(allocated)
 }
 
+/// Allocates selected QB Machine IR and lowers its module-wide symbols to MC.
+pub fn lower_qb_machine_to_mc(selected: &QbMachine) -> Result<crate::mc::MCModule, Error> {
+    let allocated = allocate_qb_machine(selected)?;
+    crate::target::x86::lower_allocated_module(&allocated.module).map_err(Error::Mc)
+}
+
 fn temporary_string_slots(
     function: &crate::hir::Function,
     string_types: &BTreeSet<crate::hir::TypeId>,
@@ -326,8 +334,8 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::{
-        Error, QbOptions, allocate_qb_machine, compile_qb, lower_ir_to_machine, lower_qb_to_ir,
-        lower_qb_to_machine, parse_omf,
+        Error, QbOptions, allocate_qb_machine, compile_qb, lower_ir_to_machine,
+        lower_qb_machine_to_mc, lower_qb_to_ir, lower_qb_to_machine, parse_omf,
     };
     use crate::codegen::machine::{
         FrameObjectKind, MachineAddressSpace, MachineCallingConvention, MachineOperandKind,
@@ -337,6 +345,7 @@ mod tests {
         ArrayOrder, Dialect, FORMAT_VERSION, FloatMode, Program, RuntimeProfile, TargetProfile,
     };
     use crate::ir;
+    use crate::mc::SymbolDefinition;
     use crate::object::omf::record::Record;
     use crate::target::x86::{X86Opcode, X86Register};
 
@@ -593,6 +602,52 @@ mod tests {
             .collect::<BTreeSet<_>>();
         assert!(displacements.contains(&6));
         assert!(displacements.contains(&-24));
+    }
+
+    #[test]
+    fn qb_procedure_reaches_deterministic_symbolic_mc() {
+        let program = compile_qb(
+            include_str!("../../frontends/qb/fixtures/procedure.bas"),
+            "procedure",
+            QbOptions::default(),
+        )
+        .expect("procedure fixture compiles to HIR");
+        let selected = lower_qb_to_machine(&program).expect("procedure reaches selected qmir");
+        let before = selected.clone();
+
+        let first = lower_qb_machine_to_mc(&selected).expect("allocated procedure reaches MC");
+        let second = lower_qb_machine_to_mc(&selected).expect("MC lowering is repeatable");
+
+        assert_eq!(selected, before);
+        assert_eq!(first, second);
+        first.verify().expect("driver returns verified MC");
+        assert_eq!(
+            first
+                .sections
+                .iter()
+                .map(|section| section.name.as_str())
+                .collect::<Vec<_>>(),
+            vec![".text", ".rodata", ".data"]
+        );
+        for defined in ["__main", "TWICE&"] {
+            let symbol = first
+                .symbols
+                .iter()
+                .find(|symbol| symbol.name == defined)
+                .expect("defined QB function has an MC symbol");
+            assert!(matches!(
+                symbol.definition,
+                SymbolDefinition::Fragment { .. }
+            ));
+        }
+        for runtime in ["B$ENRA", "B$EXSA"] {
+            let symbol = first
+                .symbols
+                .iter()
+                .find(|symbol| symbol.name == runtime)
+                .expect("BASIC frame runtime call has an MC symbol");
+            assert_eq!(symbol.definition, SymbolDefinition::Undefined);
+        }
     }
 
     #[test]

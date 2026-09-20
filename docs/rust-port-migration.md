@@ -501,6 +501,26 @@ non-first-entry BASIC ABI and selection regressions in 0.13 seconds. The
 initial compile command selected zero tests because its exact name was stale;
 it is not claimed as behavioral evidence. No broad suite or external gate ran.
 
+Allocated x86 Machine modules now lower through a deterministic module-wide MC
+boundary. The target creates stable text, read-only-data, and data sections;
+defines data, function, and block symbols; anchors each function at its
+explicit Machine entry; preserves symbolic addends; and declares external
+symbols in first-use order. Every block receives a zero-byte anchor so empty
+and non-first entry blocks remain definable. Residual virtual registers, frame
+indices, allocation metadata, unknown references, duplicate defined names,
+and malformed roles fail with function/block/instruction/operand context.
+
+The driver now composes selection, allocation, frame-index materialization,
+and this symbolic MC lowering for the real `procedure.bas` fixture. This is not
+yet executable object emission: long pseudos, calls and returns, target fixups,
+branch relaxation, and the BASIC OMF envelope remain later explicit stages.
+Agent source checks consumed under 0.1 seconds. Primary registration exposed
+and corrected three issues before acceptance: one missing test lifetime, two
+borrowed-pattern errors, and a duplicate invalid-role error path. The two
+compile-fail review runs, the ten-test module run, the three inherited
+instruction-lowering tests, and the production driver witness consumed about
+14.8 seconds total. No broad suite or external gate ran.
+
 That regression was observed failing before the general declaration-liveness
 rule was implemented, then passed with a parseable `.qir` result. All focused
 verification in these implementation batches, including compile failures used
