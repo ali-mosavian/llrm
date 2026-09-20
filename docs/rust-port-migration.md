@@ -689,3 +689,15 @@ result handle.  Seven focused Rust tests now cover the protocol and parse the
 real 127-record `choose.cgs` fixture.  Agent and primary compile/fail/fix runs
 consumed about 11.4 seconds total; the accepted run took 1.33 seconds.  No
 broad suite or backend gate ran.
+
+## Iteration 11: QB object envelope (started)
+
+The QB frontend now owns the measured 48-byte `MODULE_CODE` header builder.
+It ports BC's exact object-name spelling, fixed fields, and runtime-consumed
+`U_FLAG` values for QB 4.5, PDS 7.1, VBDOS, row-major arrays, and PDS alternate
+math.  Unsupported profile combinations and non-ASCII module names are
+explicit refusals.  This code remains in `frontend::qb`; it is not yet attached
+to generic MC or OMF output, and no C path can invoke it.  Primary review
+removed four out-of-scope files changed by recursive formatting before
+acceptance.  The delegated five-test run took 1.17 seconds and the independent
+review run took 1.50 seconds.  No broader gate ran.
