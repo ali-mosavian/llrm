@@ -118,7 +118,10 @@ pub struct MachineSignature {
 /// A language-neutral calling convention retained for target lowering.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MachineCallingConvention {
+    /// Near call with right-to-left arguments and caller stack cleanup.
     C,
+    /// Far call with right-to-left arguments and caller stack cleanup.
+    FarCdecl,
     /// Far call, left-to-right arguments, and callee stack cleanup.
     FarPascal,
 }

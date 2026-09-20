@@ -1,8 +1,8 @@
 //! Initial exact portable-IR to x86 Machine IR selection.
 //!
 //! This selector intentionally handles only integer expressions,
-//! unconditional control flow, and direct void far-Pascal calls. Unsupported
-//! IR is refused at the boundary instead of being
+//! unconditional control flow, and direct scalar calls. Unsupported IR is
+//! refused at the boundary instead of being
 //! approximated or silently discarded.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -533,7 +533,10 @@ fn select_function(
             property: FunctionProperty::Variadic,
         });
     }
-    if function.signature.calling_convention != CallingConvention::FarPascal {
+    if !matches!(
+        function.signature.calling_convention,
+        CallingConvention::C | CallingConvention::FarCdecl | CallingConvention::FarPascal
+    ) {
         return Err(SelectionError::UnsupportedFunctionProperty {
             function: function.id,
             property: FunctionProperty::CallingConvention(function.signature.calling_convention),
@@ -1082,16 +1085,23 @@ impl<'types> FunctionSelector<'types> {
                 actual: arguments.len(),
             });
         }
-        for (argument, expected_type) in arguments.iter().zip(&target.signature.parameters) {
-            let argument =
-                self.select_operand(block, instruction.id, argument, *expected_type, output)?;
-            let argument = self.materialize_register(argument, output)?;
-            self.push_instruction(
-                X86Opcode::Push,
-                vec![virtual_operand(argument, OperandRole::Use)],
-                InstructionFlags::NONE,
-                output,
-            )?;
+        if matches!(
+            target.signature.calling_convention,
+            CallingConvention::C | CallingConvention::FarCdecl
+        ) {
+            for index in (0..arguments.len()).rev() {
+                self.push_call_argument(
+                    block,
+                    instruction.id,
+                    &arguments[index],
+                    target.signature.parameters[index],
+                    output,
+                )?;
+            }
+        } else {
+            for (argument, expected_type) in arguments.iter().zip(&target.signature.parameters) {
+                self.push_call_argument(block, instruction.id, argument, *expected_type, output)?;
+            }
         }
         match (
             target.blocks.is_empty(),
@@ -1125,6 +1135,14 @@ impl<'types> FunctionSelector<'types> {
                 effects,
                 output,
             ),
+            (false, _, CallingConvention::C | CallingConvention::FarCdecl) => self
+                .select_defined_caller_cleanup_call_result(
+                    block,
+                    instruction,
+                    target,
+                    effects,
+                    output,
+                ),
             _ => Err(SelectionError::UnsupportedCallTarget {
                 function: self.function.id,
                 block,
@@ -1132,6 +1150,24 @@ impl<'types> FunctionSelector<'types> {
                 callee: *callee,
             }),
         }
+    }
+
+    fn push_call_argument(
+        &mut self,
+        block: BlockId,
+        instruction: crate::ir::InstructionId,
+        argument: &Operand,
+        expected_type: TypeId,
+        output: &mut Vec<MachineInstruction>,
+    ) -> Result<(), SelectionError> {
+        let argument = self.select_operand(block, instruction, argument, expected_type, output)?;
+        let argument = self.materialize_register(argument, output)?;
+        self.push_instruction(
+            X86Opcode::Push,
+            vec![virtual_operand(argument, OperandRole::Use)],
+            InstructionFlags::NONE,
+            output,
+        )
     }
 
     fn select_defined_far_pascal_call_result(
@@ -1202,6 +1238,94 @@ impl<'types> FunctionSelector<'types> {
                 values: instruction.results.len(),
             }),
         }
+    }
+
+    fn select_defined_caller_cleanup_call_result(
+        &mut self,
+        block: BlockId,
+        instruction: &Instruction,
+        target: &Function,
+        effects: Effects,
+        output: &mut Vec<MachineInstruction>,
+    ) -> Result<(), SelectionError> {
+        let opcode = match target.signature.calling_convention {
+            CallingConvention::C => X86Opcode::CallNear,
+            CallingConvention::FarCdecl => X86Opcode::CallFar,
+            CallingConvention::FarPascal => {
+                return Err(SelectionError::UnsupportedCallTarget {
+                    function: self.function.id,
+                    block,
+                    instruction: instruction.id,
+                    callee: target.id,
+                });
+            }
+        };
+        let mut operands = vec![function_operand(MachineFunctionId::new(target.id.get()))];
+        match self.type_kind(target.signature.result)? {
+            TypeKind::Void => {
+                if !instruction.results.is_empty() {
+                    return Err(SelectionError::UnsupportedCallResult {
+                        function: self.function.id,
+                        block,
+                        instruction: instruction.id,
+                        callee: target.id,
+                        result: target.signature.result,
+                        values: instruction.results.len(),
+                    });
+                }
+            }
+            TypeKind::Integer { bits: 16 } => {
+                let result = self.result_definition(block, instruction)?;
+                if result.type_id != target.signature.result {
+                    return Err(SelectionError::OperandTypeMismatch {
+                        function: self.function.id,
+                        block,
+                        instruction: instruction.id,
+                        expected: target.signature.result,
+                        actual: result.type_id,
+                    });
+                }
+                let result = self.define_register_value(result)?;
+                operands.push(fixed_virtual_operand(
+                    result,
+                    OperandRole::Def,
+                    X86Register::Ax,
+                ));
+            }
+            _ => {
+                return Err(SelectionError::UnsupportedCallResult {
+                    function: self.function.id,
+                    block,
+                    instruction: instruction.id,
+                    callee: target.id,
+                    result: target.signature.result,
+                    values: instruction.results.len(),
+                });
+            }
+        }
+        self.push_instruction(opcode, operands, call_flags(effects), output)?;
+        self.select_caller_cleanup(target, output)
+    }
+
+    fn select_caller_cleanup(
+        &mut self,
+        target: &Function,
+        output: &mut Vec<MachineInstruction>,
+    ) -> Result<(), SelectionError> {
+        let cleanup = self.argument_bytes_for(&target.signature.parameters)?;
+        if cleanup == 0 {
+            return Ok(());
+        }
+        let stack_pointer = self.fresh_virtual_register(X86RegisterClass::Word.machine_class())?;
+        self.push_instruction(
+            X86Opcode::Add,
+            vec![
+                fixed_virtual_operand(stack_pointer, OperandRole::UseDef, X86Register::Sp),
+                immediate_operand(i64::from(cleanup)),
+            ],
+            InstructionFlags::NONE,
+            output,
+        )
     }
 
     fn result_definition<'instruction>(
@@ -1333,6 +1457,12 @@ impl<'types> FunctionSelector<'types> {
                 Ok((Some(instruction), vec![target]))
             }
             Terminator::Return(Some(value)) => {
+                if matches!(
+                    self.function.signature.calling_convention,
+                    CallingConvention::C | CallingConvention::FarCdecl
+                ) {
+                    return self.select_caller_cleanup_integer_return(block, value, output);
+                }
                 if !matches!(
                     self.type_kind(self.function.signature.result)?,
                     TypeKind::Integer { bits: 32 }
@@ -1406,18 +1536,30 @@ impl<'types> FunctionSelector<'types> {
                         result: self.function.signature.result,
                     });
                 }
-                let far = self.function.linkage == Linkage::External;
-                let operands = if far {
-                    vec![immediate_operand(i64::from(self.argument_bytes()?))]
-                } else {
-                    Vec::new()
+                let (opcode, operands) = match self.function.signature.calling_convention {
+                    CallingConvention::C => (X86Opcode::ReturnNear, Vec::new()),
+                    CallingConvention::FarCdecl => {
+                        (X86Opcode::ReturnFar, vec![immediate_operand(0)])
+                    }
+                    CallingConvention::FarPascal => {
+                        let far = self.function.linkage == Linkage::External;
+                        let operands = if far {
+                            vec![immediate_operand(i64::from(self.argument_bytes()?))]
+                        } else {
+                            Vec::new()
+                        };
+                        (
+                            if far {
+                                X86Opcode::ReturnFar
+                            } else {
+                                X86Opcode::ReturnNear
+                            },
+                            operands,
+                        )
+                    }
                 };
                 let instruction = self.machine_instruction(
-                    if far {
-                        X86Opcode::ReturnFar
-                    } else {
-                        X86Opcode::ReturnNear
-                    },
+                    opcode,
                     operands,
                     InstructionFlags {
                         terminator: true,
@@ -1434,6 +1576,74 @@ impl<'types> FunctionSelector<'types> {
                 })
             }
         }
+    }
+
+    fn select_caller_cleanup_integer_return(
+        &mut self,
+        block: &Block,
+        value: &Operand,
+        output: &mut Vec<MachineInstruction>,
+    ) -> Result<(Option<MachineInstruction>, Vec<MachineBlockId>), SelectionError> {
+        if !matches!(
+            self.type_kind(self.function.signature.result)?,
+            TypeKind::Integer { bits: 16 }
+        ) {
+            return Err(SelectionError::UnsupportedReturnValue {
+                function: self.function.id,
+                block: block.id,
+            });
+        }
+        let Operand::Value(value) = value else {
+            return Err(SelectionError::UnsupportedReturnValue {
+                function: self.function.id,
+                block: block.id,
+            });
+        };
+        let Some(selected) = self.values.get(value).cloned() else {
+            return Err(SelectionError::UnsupportedReturnValue {
+                function: self.function.id,
+                block: block.id,
+            });
+        };
+        if selected.type_id != self.function.signature.result {
+            return Err(SelectionError::UnsupportedReturnValue {
+                function: self.function.id,
+                block: block.id,
+            });
+        }
+        let value = self.materialize_register(selected, output)?;
+        let (opcode, operands) = match self.function.signature.calling_convention {
+            CallingConvention::C => (
+                X86Opcode::ReturnNear,
+                vec![fixed_virtual_operand(
+                    value,
+                    OperandRole::Use,
+                    X86Register::Ax,
+                )],
+            ),
+            CallingConvention::FarCdecl => (
+                X86Opcode::ReturnFar,
+                vec![
+                    fixed_virtual_operand(value, OperandRole::Use, X86Register::Ax),
+                    immediate_operand(0),
+                ],
+            ),
+            CallingConvention::FarPascal => {
+                return Err(SelectionError::UnsupportedReturnValue {
+                    function: self.function.id,
+                    block: block.id,
+                });
+            }
+        };
+        let instruction = self.machine_instruction(
+            opcode,
+            operands,
+            InstructionFlags {
+                terminator: true,
+                ..InstructionFlags::NONE
+            },
+        )?;
+        Ok((Some(instruction), Vec::new()))
     }
 
     fn copy(
@@ -1643,16 +1853,16 @@ impl<'types> FunctionSelector<'types> {
     }
 
     fn argument_bytes(&self) -> Result<u32, SelectionError> {
-        self.function
-            .signature
-            .parameters
-            .iter()
-            .try_fold(0_u32, |total, type_id| {
-                let (size, _) = self.abi_size(*type_id)?;
-                total.checked_add(size).ok_or(SelectionError::IdExhausted {
-                    function: self.function.id,
-                })
+        self.argument_bytes_for(&self.function.signature.parameters)
+    }
+
+    fn argument_bytes_for(&self, parameters: &[TypeId]) -> Result<u32, SelectionError> {
+        parameters.iter().try_fold(0_u32, |total, type_id| {
+            let (size, _) = self.abi_size(*type_id)?;
+            total.checked_add(size).ok_or(SelectionError::IdExhausted {
+                function: self.function.id,
             })
+        })
     }
 
     fn fresh_virtual_register(
@@ -1884,14 +2094,7 @@ fn machine_signature(
         variadic: function.signature.variadic,
         calling_convention: match function.signature.calling_convention {
             CallingConvention::C => MachineCallingConvention::C,
-            CallingConvention::FarCdecl => {
-                return Err(SelectionError::UnsupportedFunctionProperty {
-                    function: function.id,
-                    property: FunctionProperty::CallingConvention(
-                        function.signature.calling_convention,
-                    ),
-                });
-            }
+            CallingConvention::FarCdecl => MachineCallingConvention::FarCdecl,
             CallingConvention::FarPascal => MachineCallingConvention::FarPascal,
         },
     })
@@ -2360,5 +2563,229 @@ mod tests {
                 ..
             }) if callee == FunctionId::new(5) && result == VOID
         ));
+    }
+
+    #[test]
+    fn selects_far_cdecl_i16_call_return_and_caller_cleanup() {
+        let callee = Function {
+            id: FunctionId::new(5),
+            name: "sum".into(),
+            signature: Signature {
+                result: I16,
+                parameters: vec![I16, I16],
+                variadic: false,
+                calling_convention: CallingConvention::FarCdecl,
+            },
+            linkage: Linkage::Internal,
+            attributes: Vec::new(),
+            parameters: vec![
+                Value {
+                    id: ValueId::new(0),
+                    type_id: I16,
+                },
+                Value {
+                    id: ValueId::new(1),
+                    type_id: I16,
+                },
+            ],
+            blocks: vec![Block {
+                id: BlockId::new(0),
+                instructions: Vec::new(),
+                terminator: Terminator::Return(Some(Operand::Value(ValueId::new(0)))),
+            }],
+        };
+        let caller = Function {
+            id: FunctionId::new(4),
+            name: "main".into(),
+            signature: Signature {
+                result: I16,
+                parameters: Vec::new(),
+                variadic: false,
+                calling_convention: CallingConvention::FarCdecl,
+            },
+            linkage: Linkage::Internal,
+            attributes: Vec::new(),
+            parameters: Vec::new(),
+            blocks: vec![Block {
+                id: BlockId::new(0),
+                instructions: vec![Instruction {
+                    id: crate::ir::InstructionId::new(0),
+                    results: vec![Value {
+                        id: ValueId::new(0),
+                        type_id: I16,
+                    }],
+                    kind: InstructionKind::Call {
+                        callee: Callee::Direct(callee.id),
+                        arguments: vec![
+                            Operand::Constant(TypedConstant {
+                                type_id: I16,
+                                value: Constant::Integer(11),
+                            }),
+                            Operand::Constant(TypedConstant {
+                                type_id: I16,
+                                value: Constant::Integer(22),
+                            }),
+                        ],
+                        effects: Effects::NONE,
+                    },
+                }],
+                terminator: Terminator::Return(Some(Operand::Value(ValueId::new(0)))),
+            }],
+        };
+
+        let selected = select_module(&module(basic_types(), vec![caller, callee]))
+            .expect("far caller-cleanup i16 pair selects");
+        selected.verify().expect("selected Machine IR verifies");
+
+        let caller = &selected.functions[0].blocks[0].instructions;
+        assert_eq!(
+            caller
+                .iter()
+                .map(|instruction| instruction.opcode)
+                .collect::<Vec<_>>(),
+            vec![
+                X86Opcode::Mov.machine_opcode(),
+                X86Opcode::Push.machine_opcode(),
+                X86Opcode::Mov.machine_opcode(),
+                X86Opcode::Push.machine_opcode(),
+                X86Opcode::CallFar.machine_opcode(),
+                X86Opcode::Add.machine_opcode(),
+                X86Opcode::ReturnFar.machine_opcode(),
+            ]
+        );
+        assert_eq!(caller[0].operands[1], immediate_operand(22));
+        assert_eq!(caller[2].operands[1], immediate_operand(11));
+        assert!(matches!(
+            caller[4].operands.as_slice(),
+            [MachineOperand {
+                kind: MachineOperandKind::Function(target),
+                ..
+            }, MachineOperand {
+                role: OperandRole::Def,
+                constraint: Some(RegisterConstraint::Fixed(register)),
+                ..
+            }] if *target == MachineFunctionId::new(5) && *register == X86Register::Ax.physical()
+        ));
+        assert!(matches!(
+            caller[5].operands.as_slice(),
+            [MachineOperand {
+                role: OperandRole::UseDef,
+                constraint: Some(RegisterConstraint::Fixed(register)),
+                ..
+            }, MachineOperand {
+                kind: MachineOperandKind::Immediate(4),
+                ..
+            }] if *register == X86Register::Sp.physical()
+        ));
+        assert!(matches!(
+            caller[6].operands.as_slice(),
+            [MachineOperand {
+                role: OperandRole::Use,
+                constraint: Some(RegisterConstraint::Fixed(register)),
+                ..
+            }, MachineOperand {
+                kind: MachineOperandKind::Immediate(0),
+                ..
+            }] if *register == X86Register::Ax.physical()
+        ));
+
+        let callee = &selected.functions[1].blocks[0].instructions;
+        assert_eq!(
+            callee.last().expect("callee has return").opcode,
+            X86Opcode::ReturnFar.machine_opcode()
+        );
+        assert!(matches!(
+            callee.last().expect("callee has return").operands.as_slice(),
+            [MachineOperand {
+                role: OperandRole::Use,
+                constraint: Some(RegisterConstraint::Fixed(register)),
+                ..
+            }, MachineOperand {
+                kind: MachineOperandKind::Immediate(0),
+                ..
+            }] if *register == X86Register::Ax.physical()
+        ));
+    }
+
+    #[test]
+    fn selects_near_c_i16_call_and_return() {
+        let callee = Function {
+            id: FunctionId::new(5),
+            name: "id".into(),
+            signature: Signature {
+                result: I16,
+                parameters: vec![I16],
+                variadic: false,
+                calling_convention: CallingConvention::C,
+            },
+            linkage: Linkage::Internal,
+            attributes: Vec::new(),
+            parameters: vec![Value {
+                id: ValueId::new(0),
+                type_id: I16,
+            }],
+            blocks: vec![Block {
+                id: BlockId::new(0),
+                instructions: Vec::new(),
+                terminator: Terminator::Return(Some(Operand::Value(ValueId::new(0)))),
+            }],
+        };
+        let caller = Function {
+            id: FunctionId::new(4),
+            name: "main".into(),
+            signature: Signature {
+                result: I16,
+                parameters: Vec::new(),
+                variadic: false,
+                calling_convention: CallingConvention::C,
+            },
+            linkage: Linkage::Internal,
+            attributes: Vec::new(),
+            parameters: Vec::new(),
+            blocks: vec![Block {
+                id: BlockId::new(0),
+                instructions: vec![Instruction {
+                    id: crate::ir::InstructionId::new(0),
+                    results: vec![Value {
+                        id: ValueId::new(0),
+                        type_id: I16,
+                    }],
+                    kind: InstructionKind::Call {
+                        callee: Callee::Direct(callee.id),
+                        arguments: vec![Operand::Constant(TypedConstant {
+                            type_id: I16,
+                            value: Constant::Integer(7),
+                        })],
+                        effects: Effects::NONE,
+                    },
+                }],
+                terminator: Terminator::Return(Some(Operand::Value(ValueId::new(0)))),
+            }],
+        };
+
+        let selected = select_module(&module(basic_types(), vec![caller, callee]))
+            .expect("near caller-cleanup i16 pair selects");
+        selected.verify().expect("selected Machine IR verifies");
+
+        let caller = &selected.functions[0].blocks[0].instructions;
+        assert_eq!(caller[2].opcode, X86Opcode::CallNear.machine_opcode());
+        assert_eq!(caller[3].opcode, X86Opcode::Add.machine_opcode());
+        assert_eq!(caller[4].opcode, X86Opcode::ReturnNear.machine_opcode());
+        assert!(matches!(
+            caller[4].operands.as_slice(),
+            [MachineOperand {
+                role: OperandRole::Use,
+                constraint: Some(RegisterConstraint::Fixed(register)),
+                ..
+            }] if *register == X86Register::Ax.physical()
+        ));
+        assert_eq!(
+            selected.functions[1].blocks[0]
+                .instructions
+                .last()
+                .expect("callee has return")
+                .opcode,
+            X86Opcode::ReturnNear.machine_opcode()
+        );
     }
 }

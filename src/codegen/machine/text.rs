@@ -17,7 +17,7 @@ use super::{
 };
 
 /// Version of the `.qmir` textual format.
-pub const FORMAT_VERSION: u32 = 4;
+pub const FORMAT_VERSION: u32 = 5;
 
 /// A syntax or value error in `.qmir` text.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -269,6 +269,7 @@ fn linkage_name(linkage: MachineLinkage) -> &'static str {
 fn calling_convention_name(calling_convention: MachineCallingConvention) -> &'static str {
     match calling_convention {
         MachineCallingConvention::C => "c",
+        MachineCallingConvention::FarCdecl => "far_cdecl",
         MachineCallingConvention::FarPascal => "far_pascal",
     }
 }
@@ -654,6 +655,7 @@ fn parse_linkage(token: Token<'_>) -> Result<MachineLinkage, TextError> {
 fn parse_calling_convention(token: Token<'_>) -> Result<MachineCallingConvention, TextError> {
     match token.value {
         "c" => Ok(MachineCallingConvention::C),
+        "far_cdecl" => Ok(MachineCallingConvention::FarCdecl),
         "far_pascal" => Ok(MachineCallingConvention::FarPascal),
         _ => Err(unexpected(&token, "a calling convention")),
     }
@@ -1127,7 +1129,7 @@ mod tests {
     #[test]
     fn reports_the_malformed_operand_location() {
         let error =
-            parse_text("qmir 4\nfunction 0 0 66 internal c - 0 0\nblock 0 0\ninst 0 0 0 1\noperand use - - wat\n")
+            parse_text("qmir 5\nfunction 0 0 66 internal c - 0 0\nblock 0 0\ninst 0 0 0 1\noperand use - - wat\n")
                 .expect_err("unknown operand kind must be rejected");
         assert_eq!(error.line, 5);
         assert_eq!(error.column, 17);
@@ -1135,16 +1137,47 @@ mod tests {
     }
 
     #[test]
-    fn accepts_only_the_version_four_schema() {
-        let error = parse_text("qmir 3\n").expect_err("qmir version three is not accepted");
+    fn accepts_only_the_version_five_schema() {
+        let error = parse_text("qmir 4\n").expect_err("qmir version four is not accepted");
         assert_eq!(error.line, 1);
         assert!(error.message.contains("invalid qmir format header"));
 
         for obsolete in ["basic", "runtime"] {
-            let source = format!("qmir 4\nfunction 0 0 66 internal {obsolete} - 0 0\n");
+            let source = format!("qmir 5\nfunction 0 0 66 internal {obsolete} - 0 0\n");
             let error = parse_text(&source)
                 .expect_err("source-language ABI labels must not enter Machine IR");
             assert!(error.message.contains("calling convention"));
         }
+    }
+
+    #[test]
+    fn far_cdecl_round_trips_with_its_canonical_name() {
+        let module = MachineModule {
+            data_objects: Vec::new(),
+            functions: vec![MachineFunction {
+                id: MachineFunctionId::new(0),
+                name: "callee".into(),
+                linkage: MachineLinkage::External,
+                signature: MachineSignature {
+                    result: Some(MachineValueType::Integer { bits: 16 }),
+                    parameters: vec![MachineValueType::Integer { bits: 16 }],
+                    variadic: false,
+                    calling_convention: MachineCallingConvention::FarCdecl,
+                },
+                entry: MachineBlockId::new(0),
+                virtual_registers: Vec::new(),
+                blocks: vec![MachineBlock {
+                    id: MachineBlockId::new(0),
+                    instructions: Vec::new(),
+                    successors: Vec::new(),
+                }],
+                frame_objects: Vec::new(),
+            }],
+        };
+
+        let text = write_text(&module);
+
+        assert!(text.contains(" far_cdecl "));
+        assert_eq!(parse_text(&text), Ok(module));
     }
 }
