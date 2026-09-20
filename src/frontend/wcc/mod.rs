@@ -1,6 +1,9 @@
 //! Open Watcom capture-stream frontend.
 
 pub mod capture;
+pub mod raise;
+
+pub use raise::{RaiseError, RaiseErrorKind, raise_module};
 
 use std::collections::BTreeMap;
 use std::error::Error;
