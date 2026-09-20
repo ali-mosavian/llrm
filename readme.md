@@ -1,14 +1,35 @@
-# qbopt
+# llrm
 
-`qbopt` rewrites the OMF `.OBJ` that QuickBASIC, PDS, or VBDOS produces before
-it is linked. It raises BC's 8086 code into SSA-based MIR, optimizes whole
-functions, then lowers and allocates it for a 386-or-later target.
+`llrm` is the LLVM-organized Rust compiler and OMF rewriter being built in this
+repository. It is designed to accept QuickBASIC-family source, existing WCC
+capture streams, and BC-produced OMF objects, then share a typed IR, optimizer,
+x86 backend, and object writer across those frontends.
+
+The legacy Python package is still named `qbopt` while the Rust port reaches
+cutover. It rewrites the OMF `.OBJ` that QuickBASIC, PDS, or VBDOS produces
+before it is linked. New production Rust paths, binaries, formats, and
+documentation use the `llrm` name.
 
 The goal is output within 1.5× a hand-derived modern-compiler listing for
 every suite program. See [targets](docs/targets.md) for the evidence and
 current gaps.
 
-## Use
+## Rust port
+
+The current vertical slice emits typed HIR or portable SSA IR and can run the
+implemented IR pass pipeline:
+
+```sh
+cargo run --bin llrm -- --emit qhir PROGRAM.BAS -o PROGRAM.qhir
+cargo run --bin llrm -- --emit qir PROGRAM.BAS -o PROGRAM.qir
+cargo run --bin llrm-opt -- --passes constant-fold,simplify-branches,dead-code-elimination PROGRAM.qir
+```
+
+Unsupported lowering is an explicit error; there is no hidden Python fallback.
+See [the migration ledger](docs/rust-port-migration.md) for implemented
+subsystems and measured focused verification.
+
+## Legacy Python use
 
 Python 3.13+ and [uv](https://docs.astral.sh/uv/) are required.
 
