@@ -4,6 +4,7 @@ mod branches;
 mod dead;
 mod fold;
 mod pass;
+mod rewrite;
 
 pub use branches::{BranchSimplifyError, SimplifyBranches};
 pub use dead::DeadCodeElimination;

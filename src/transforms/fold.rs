@@ -8,10 +8,11 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::ir::{
-    BinaryOp, Callee, CastOp, ComparePredicate, Constant, Function, Instruction, InstructionKind,
-    Module, Operand, Terminator, TypeId, TypeKind, TypedConstant, UnaryOp, ValueId,
+    BinaryOp, CastOp, ComparePredicate, Constant, Function, Instruction, InstructionKind, Module,
+    Operand, TypeId, TypeKind, TypedConstant, UnaryOp, ValueId,
 };
 
+use super::rewrite::replace_value_uses;
 use super::{FunctionPass, PassFailure, PassOutcome, PreservedAnalyses};
 
 /// A construction error for [`ConstantFold`].
@@ -302,7 +303,7 @@ impl FunctionPass for ConstantFold {
         let mut changed = false;
 
         loop {
-            let rewrote_uses = rewrite_function_operands(function, &replacements);
+            let rewrote_uses = replace_value_uses(function, &replacements);
             let mut folded_instruction = false;
 
             for block in &mut function.blocks {
@@ -310,7 +311,7 @@ impl FunctionPass for ConstantFold {
                 let mut retained = Vec::with_capacity(instructions.len());
                 for instruction in instructions {
                     if let Some((value, constant)) = self.fold_instruction(&instruction) {
-                        replacements.insert(value, constant);
+                        replacements.insert(value, Operand::Constant(constant));
                         folded_instruction = true;
                     } else {
                         retained.push(instruction);
@@ -380,110 +381,12 @@ fn integer_constant_value(type_id: TypeId, bits: u16, raw: u128) -> TypedConstan
     }
 }
 
-fn rewrite_function_operands(
-    function: &mut Function,
-    replacements: &BTreeMap<ValueId, TypedConstant>,
-) -> bool {
-    let mut changed = false;
-    for block in &mut function.blocks {
-        for instruction in &mut block.instructions {
-            changed |= rewrite_instruction_operands(instruction, replacements);
-        }
-        changed |= rewrite_terminator_operands(&mut block.terminator, replacements);
-    }
-    changed
-}
-
-fn rewrite_instruction_operands(
-    instruction: &mut Instruction,
-    replacements: &BTreeMap<ValueId, TypedConstant>,
-) -> bool {
-    let mut changed = false;
-    match &mut instruction.kind {
-        InstructionKind::Phi { incoming } => {
-            for incoming in incoming {
-                changed |= rewrite_operand(&mut incoming.value, replacements);
-            }
-        }
-        InstructionKind::Unary { operand, .. } | InstructionKind::Cast { operand, .. } => {
-            changed |= rewrite_operand(operand, replacements);
-        }
-        InstructionKind::Binary { left, right, .. }
-        | InstructionKind::Compare { left, right, .. } => {
-            changed |= rewrite_operand(left, replacements);
-            changed |= rewrite_operand(right, replacements);
-        }
-        InstructionKind::Load { address, .. } => {
-            changed |= rewrite_operand(address, replacements);
-        }
-        InstructionKind::Store { address, value, .. } => {
-            changed |= rewrite_operand(address, replacements);
-            changed |= rewrite_operand(value, replacements);
-        }
-        InstructionKind::GetElementPointer { base, indices } => {
-            changed |= rewrite_operand(base, replacements);
-            for index in indices {
-                changed |= rewrite_operand(index, replacements);
-            }
-        }
-        InstructionKind::Select {
-            condition,
-            then_value,
-            else_value,
-        } => {
-            changed |= rewrite_operand(condition, replacements);
-            changed |= rewrite_operand(then_value, replacements);
-            changed |= rewrite_operand(else_value, replacements);
-        }
-        InstructionKind::Call {
-            callee, arguments, ..
-        } => {
-            if let Callee::Indirect(operand) = callee {
-                changed |= rewrite_operand(operand, replacements);
-            }
-            for argument in arguments {
-                changed |= rewrite_operand(argument, replacements);
-            }
-        }
-        InstructionKind::Intrinsic { arguments, .. } => {
-            for argument in arguments {
-                changed |= rewrite_operand(argument, replacements);
-            }
-        }
-    }
-    changed
-}
-
-fn rewrite_terminator_operands(
-    terminator: &mut Terminator,
-    replacements: &BTreeMap<ValueId, TypedConstant>,
-) -> bool {
-    match terminator {
-        Terminator::Jump(_) | Terminator::Unreachable => false,
-        Terminator::Branch { condition, .. } => rewrite_operand(condition, replacements),
-        Terminator::Switch { selector, .. } => rewrite_operand(selector, replacements),
-        Terminator::Return(value) => value
-            .as_mut()
-            .is_some_and(|operand| rewrite_operand(operand, replacements)),
-    }
-}
-
-fn rewrite_operand(operand: &mut Operand, replacements: &BTreeMap<ValueId, TypedConstant>) -> bool {
-    let Operand::Value(value) = operand else {
-        return false;
-    };
-    let Some(constant) = replacements.get(value) else {
-        return false;
-    };
-    *operand = Operand::Constant(constant.clone());
-    true
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ir::{
-        Block, BlockId, CallingConvention, Function, FunctionId, Linkage, Signature, Type, Value,
+        Block, BlockId, CallingConvention, Function, FunctionId, Linkage, Signature, Terminator,
+        Type, Value,
     };
 
     const VOID: TypeId = TypeId::new(0);
