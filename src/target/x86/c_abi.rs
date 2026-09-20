@@ -28,6 +28,7 @@ const MAX_LOCAL_BYTES: u32 = 0x7ffe;
 pub struct CFramePlan {
     layout: X86FrameLayout,
     calling_convention: MachineCallingConvention,
+    framed: bool,
     local_bytes: u16,
 }
 
@@ -42,6 +43,10 @@ impl CFramePlan {
 
     pub const fn calling_convention(&self) -> MachineCallingConvention {
         self.calling_convention
+    }
+
+    pub const fn framed(&self) -> bool {
+        self.framed
     }
 
     /// Word-aligned stack reservation below BP.
@@ -290,9 +295,11 @@ pub fn plan_c_frame(function: &MachineFunction) -> Result<CFramePlan, CFramePlan
 
     let local_bytes = u16::try_from(local_depth)
         .map_err(|_| CFramePlanError::LocalReservationTooLarge(local_depth))?;
+    let framed = !offsets.is_empty();
     Ok(CFramePlan {
         layout: X86FrameLayout::new(function.id, offsets),
         calling_convention,
+        framed,
         local_bytes,
     })
 }
@@ -344,6 +351,10 @@ pub enum CAbiExpansionError {
         instruction: MachineInstructionId,
         reason: &'static str,
     },
+    MalformedCall {
+        block: MachineBlockId,
+        instruction: MachineInstructionId,
+    },
     InstructionIdExhausted,
 }
 
@@ -360,6 +371,7 @@ impl fmt::Display for CAbiExpansionError {
             Self::AlreadyExpanded { block } => write!(formatter, "C ABI frame is already expanded in entry block {block}"),
             Self::WrongReturn { block, instruction, expected, actual } => write!(formatter, "block {block} instruction {instruction} has {actual:?} return, expected {expected:?}"),
             Self::MalformedReturn { block, instruction, reason } => write!(formatter, "block {block} instruction {instruction} has malformed C return: {reason}"),
+            Self::MalformedCall { block, instruction } => write!(formatter, "block {block} instruction {instruction} has no direct C call target"),
             Self::InstructionIdExhausted => write!(formatter, "C ABI frame exhausted instruction IDs"),
         }
     }
@@ -389,15 +401,21 @@ pub fn expand_allocated_c_abi(
         .flat_map(|block| &block.instructions)
         .filter(|instruction| is_return(instruction))
         .count();
-    let added = 2_usize
-        .checked_add(usize::from(plan.local_bytes() != 0))
-        .ok_or(CAbiExpansionError::InstructionIdExhausted)?
-        .checked_add(return_count)
+    let entry_instructions = if plan.framed() {
+        2 + usize::from(plan.local_bytes() != 0)
+    } else {
+        0
+    };
+    let return_instructions = return_count
+        .checked_mul(usize::from(plan.framed()))
+        .ok_or(CAbiExpansionError::InstructionIdExhausted)?;
+    let added = entry_instructions
+        .checked_add(return_instructions)
         .ok_or(CAbiExpansionError::InstructionIdExhausted)?;
     let mut fresh_ids = reserve_ids(function, added)?.into_iter();
     let mut expanded = function.clone();
     for block in &mut expanded.blocks {
-        if block.id == function.entry {
+        if plan.framed() && block.id == function.entry {
             let mut prefix = vec![
                 instruction(
                     next_id(&mut fresh_ids),
@@ -426,13 +444,32 @@ pub fn expand_allocated_c_abi(
             block.instructions.splice(0..0, prefix);
         }
         let mut instructions = Vec::with_capacity(block.instructions.len() + 1);
-        for original in std::mem::take(&mut block.instructions) {
-            if is_return(&original) {
-                instructions.push(instruction(
-                    next_id(&mut fresh_ids),
-                    X86Opcode::Leave,
-                    Vec::new(),
-                ));
+        for mut original in std::mem::take(&mut block.instructions) {
+            match X86Opcode::from_machine_opcode(original.opcode) {
+                Some(X86Opcode::CallNear | X86Opcode::CallFar) => {
+                    original.operands.truncate(1);
+                }
+                Some(X86Opcode::ReturnNear) => {
+                    if plan.framed() {
+                        instructions.push(instruction(
+                            next_id(&mut fresh_ids),
+                            X86Opcode::Leave,
+                            Vec::new(),
+                        ));
+                    }
+                    original.operands.clear();
+                }
+                Some(X86Opcode::ReturnFar) => {
+                    if plan.framed() {
+                        instructions.push(instruction(
+                            next_id(&mut fresh_ids),
+                            X86Opcode::Leave,
+                            Vec::new(),
+                        ));
+                    }
+                    original.operands = vec![immediate(0)];
+                }
+                _ => {}
             }
             instructions.push(original);
         }
@@ -496,6 +533,18 @@ fn preflight(function: &MachineFunction, plan: &CFramePlan) -> Result<(), CAbiEx
                     function.signature.result.is_some(),
                 )?;
             }
+            if is_call(instruction)
+                && !matches!(
+                    instruction.operands.first().map(|operand| &operand.kind),
+                    Some(MachineOperandKind::Function(_)
+                        | MachineOperandKind::ExternalSymbol { .. })
+                )
+            {
+                return Err(CAbiExpansionError::MalformedCall {
+                    block: block.id,
+                    instruction: instruction.id,
+                });
+            }
         }
     }
     Ok(())
@@ -558,10 +607,20 @@ fn is_return(instruction: &MachineInstruction) -> bool {
     )
 }
 
+fn is_call(instruction: &MachineInstruction) -> bool {
+    matches!(
+        X86Opcode::from_machine_opcode(instruction.opcode),
+        Some(X86Opcode::CallNear | X86Opcode::CallFar)
+    )
+}
+
 fn reserve_ids(
     function: &MachineFunction,
     count: usize,
 ) -> Result<Vec<MachineInstructionId>, CAbiExpansionError> {
+    if count == 0 {
+        return Ok(Vec::new());
+    }
     let first = function
         .blocks
         .iter()
@@ -691,6 +750,15 @@ mod tests {
         }
     }
 
+    fn function_operand(function: u32) -> MachineOperand {
+        MachineOperand {
+            kind: MachineOperandKind::Function(MachineFunctionId::new(function)),
+            role: OperandRole::None,
+            constraint: None,
+            tied_to: None,
+        }
+    }
+
     #[test]
     fn plans_near_and_far_cdecl_parameters_in_c_stack_order() {
         // C pushes source arguments right-to-left, so the first formal is
@@ -717,12 +785,42 @@ mod tests {
     }
 
     #[test]
-    fn inserts_bp_shell_without_changing_ax_return_or_far_cleanup() {
-        let input = function(
+    fn leaves_a_c_function_without_frame_objects_frameless() {
+        let input = function(MachineCallingConvention::C, vec![], vec![], false);
+        let plan = plan_c_frame(&input).unwrap();
+        let expanded = expand_allocated_c_abi(&input, &plan).unwrap();
+
+        assert!(!plan.framed());
+        assert_eq!(expanded.blocks[0].instructions.len(), 1);
+        assert_eq!(
+            X86Opcode::from_machine_opcode(expanded.blocks[0].instructions[0].opcode),
+            Some(X86Opcode::ReturnNear)
+        );
+        assert!(expanded.blocks[0].instructions[0].operands.is_empty());
+    }
+
+    #[test]
+    fn inserts_bp_shell_and_consumes_allocated_c_abi_operands() {
+        let mut input = function(
             MachineCallingConvention::FarCdecl,
             vec![],
             vec![local(9, 3)],
             true,
+        );
+        input.blocks[0].instructions.insert(
+            0,
+            MachineInstruction {
+                id: MachineInstructionId::new(7),
+                opcode: X86Opcode::CallFar.machine_opcode(),
+                operands: vec![
+                    function_operand(9),
+                    physical(X86Register::Ax, OperandRole::Def),
+                ],
+                flags: InstructionFlags {
+                    call: true,
+                    ..InstructionFlags::NONE
+                },
+            },
         );
         let plan = plan_c_frame(&input).unwrap();
         let expanded = expand_allocated_c_abi(&input, &plan).unwrap();
@@ -737,13 +835,15 @@ mod tests {
                 Some(X86Opcode::Push),
                 Some(X86Opcode::Mov),
                 Some(X86Opcode::Sub),
+                Some(X86Opcode::CallFar),
                 Some(X86Opcode::Leave),
                 Some(X86Opcode::ReturnFar)
             ]
         );
+        assert_eq!(instructions[3].operands, vec![function_operand(9)]);
         assert_eq!(
             instructions.last().unwrap().operands,
-            vec![physical(X86Register::Ax, OperandRole::Use), immediate(0)]
+            vec![immediate(0)]
         );
         assert_eq!(
             instructions[2].operands,

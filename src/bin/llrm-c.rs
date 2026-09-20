@@ -26,6 +26,7 @@ struct Invocation {
 enum OutputKind {
     Ir,
     Machine,
+    Object,
 }
 
 impl Invocation {
@@ -42,6 +43,7 @@ impl Invocation {
                     let kind = match value.as_str() {
                         "qir" => OutputKind::Ir,
                         "qmir" => OutputKind::Machine,
+                        "obj" => OutputKind::Object,
                         _ => return Err(format!("unknown output kind {value:?}")),
                     };
                     if output_kind.replace(kind).is_some() {
@@ -84,18 +86,32 @@ impl Invocation {
             .file_stem()
             .and_then(|name| name.to_str())
             .unwrap_or("module");
-        let module = match driver::compile_wcc_capture(&source, module_name) {
-            Ok(module) => module,
+        let bytes = match compile_output(&source, module_name, self.output_kind) {
+            Ok(bytes) => bytes,
             Err(error) => return failure(format!("{}: {error}", self.input.display())),
         };
-        let text = match self.output_kind {
-            OutputKind::Ir => llrm::ir::write_text(&module),
-            OutputKind::Machine => match driver::lower_ir_to_machine(&module) {
-                Ok(machine) => llrm::codegen::machine::write_text(&machine),
-                Err(error) => return failure(format!("{}: {error}", self.input.display())),
-            },
-        };
-        write_output(self.output.as_deref(), text.as_bytes())
+        write_output(self.output.as_deref(), &bytes)
+    }
+}
+
+fn compile_output(
+    source: &str,
+    module_name: &str,
+    output_kind: OutputKind,
+) -> Result<Vec<u8>, driver::Error> {
+    let module = driver::compile_wcc_capture(source, module_name)?;
+    match output_kind {
+        OutputKind::Ir => Ok(llrm::ir::write_text(&module).into_bytes()),
+        OutputKind::Machine => {
+            let machine = driver::lower_ir_to_machine(&module)?;
+            Ok(llrm::codegen::machine::write_text(&machine).into_bytes())
+        }
+        OutputKind::Object => {
+            let machine = driver::lower_c_to_machine(&module)?;
+            let mc = driver::lower_c_machine_to_mc(&machine)?;
+            let encoded = driver::encode_x86_mc(&mc)?;
+            driver::write_x86_omf(module_name.as_bytes(), &encoded)
+        }
     }
 }
 
@@ -124,16 +140,16 @@ fn failure(message: String) -> ExitCode {
 }
 
 fn usage() -> &'static str {
-    "usage: llrm-c [--emit qir|qmir] [-o FILE] INPUT.cgs"
+    "usage: llrm-c [--emit qir|qmir|obj] [-o FILE] INPUT.cgs"
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Invocation, OutputKind};
+    use super::{Invocation, OutputKind, compile_output};
     use llrm::driver;
 
     #[test]
-    fn accepts_only_wcc_capture_input_and_qir_output() {
+    fn accepts_only_wcc_capture_input_and_supported_outputs() {
         assert!(Invocation::parse(["program.cgs".to_owned()].into_iter()).is_ok());
         assert!(Invocation::parse(["program.bas".to_owned()].into_iter()).is_err());
         assert_eq!(
@@ -145,6 +161,16 @@ mod tests {
             .unwrap()
             .output_kind,
             OutputKind::Machine
+        );
+        assert_eq!(
+            Invocation::parse(
+                ["--emit", "obj", "program.cgs"]
+                    .into_iter()
+                    .map(str::to_owned)
+            )
+            .unwrap()
+            .output_kind,
+            OutputKind::Object
         );
         assert!(
             Invocation::parse(
@@ -183,5 +209,18 @@ mod tests {
         assert!(text.contains(" far_cdecl "));
         assert!(text.contains(" c "));
         assert!(llrm::codegen::machine::parse_text(&text).is_ok());
+    }
+
+    #[test]
+    fn emits_real_iparg_capture_as_omf() {
+        let bytes = compile_output(
+            include_str!("../../fixtures/c/iparg.cgs"),
+            "iparg",
+            OutputKind::Object,
+        )
+        .unwrap();
+        let object = driver::parse_omf(&bytes).unwrap();
+
+        assert_eq!(object.to_bytes(), bytes);
     }
 }

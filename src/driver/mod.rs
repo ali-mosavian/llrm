@@ -14,9 +14,9 @@ use crate::object::omf::file::{File as OmfFile, FileError};
 use crate::object::omf::write::WriteError as OmfWriteError;
 use crate::support::diagnostic::Diagnostic;
 use crate::target::x86::{
-    BasicAbiError, BasicAbiExpansionError, BasicFramePlan, BasicRuntime, CallClobberError,
-    FrameIndexMaterializationError, SelectionError, X86AllocationError, X86JumpLayoutError,
-    X86McModuleLowerError, X86OmfError,
+    BasicAbiError, BasicAbiExpansionError, BasicFramePlan, BasicRuntime, CAbiExpansionError,
+    CFramePlan, CFramePlanError, CallClobberError, FrameIndexMaterializationError, SelectionError,
+    X86AllocationError, X86JumpLayoutError, X86McModuleLowerError, X86OmfError,
 };
 
 /// Configuration that affects QB source semantics.
@@ -36,6 +36,16 @@ pub struct QbOptions {
 pub struct QbMachine {
     pub module: MachineModule,
     pub frames: BTreeMap<MachineFunctionId, BasicFramePlan>,
+}
+
+/// Verified C-family Machine IR together with its target frame plans.
+///
+/// This is deliberately frontend-neutral: WCC capture happens before portable
+/// IR, and the driver only assembles that IR with the x86 C ABI.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CMachine {
+    pub module: MachineModule,
+    pub frames: BTreeMap<MachineFunctionId, CFramePlan>,
 }
 
 impl Default for QbOptions {
@@ -90,7 +100,18 @@ pub enum Error {
         function: String,
         error: BasicAbiExpansionError,
     },
+    CFrame {
+        function: String,
+        error: CFramePlanError,
+    },
+    CAbiExpansion {
+        function: String,
+        error: CAbiExpansionError,
+    },
     MissingFramePlan {
+        function: String,
+    },
+    MissingCFramePlan {
         function: String,
     },
     MissingSourceFunction(MachineFunctionId),
@@ -154,9 +175,23 @@ impl fmt::Display for Error {
                 formatter,
                 "cannot finalize the allocated BASIC x86 ABI for {function}: {error}"
             ),
+            Self::CFrame { function, error } => {
+                write!(
+                    formatter,
+                    "cannot plan the C x86 frame for {function}: {error}"
+                )
+            }
+            Self::CAbiExpansion { function, error } => write!(
+                formatter,
+                "cannot finalize the allocated C x86 ABI for {function}: {error}"
+            ),
             Self::MissingFramePlan { function } => write!(
                 formatter,
                 "machine function {function} uses frame indices without a BASIC frame plan"
+            ),
+            Self::MissingCFramePlan { function } => write!(
+                formatter,
+                "machine function {function} uses frame indices without a C frame plan"
             ),
             Self::MissingSourceFunction(function) => write!(
                 formatter,
@@ -347,6 +382,89 @@ pub fn lower_qb_machine_to_mc(selected: &QbMachine) -> Result<crate::mc::MCModul
     crate::target::x86::lower_allocated_module(&allocated.module).map_err(Error::Mc)
 }
 
+/// Select portable IR into x86 Machine IR and plan its C-family stack frames.
+///
+/// WCC capture is one producer of this input, but C ABI selection intentionally
+/// depends only on generic IR calling conventions and Machine IR facts.
+pub fn lower_c_to_machine(module: &ir::Module) -> Result<CMachine, Error> {
+    let machine = lower_ir_to_machine(module)?;
+    let mut frames = BTreeMap::new();
+    for function in &machine.functions {
+        let plan = crate::target::x86::plan_c_frame(function).map_err(|error| Error::CFrame {
+            function: function.name.clone(),
+            error,
+        })?;
+        frames.insert(function.id, plan);
+    }
+    Ok(CMachine {
+        module: machine,
+        frames,
+    })
+}
+
+/// Allocate C-family Machine IR and resolve its target-planned frame indices.
+pub fn allocate_c_machine(selected: &CMachine) -> Result<CMachine, Error> {
+    let mut allocated = selected.clone();
+    for function in &mut allocated.module.functions {
+        let assignment = crate::target::x86::allocate_registers(function).map_err(|error| {
+            Error::Allocation {
+                function: function.name.clone(),
+                error,
+            }
+        })?;
+        *function =
+            apply_assignment(function, &assignment).map_err(|error| Error::AllocationRewrite {
+                function: function.name.clone(),
+                error,
+            })?;
+
+        if let Some(frame) = allocated.frames.get(&function.id) {
+            *function =
+                crate::target::x86::materialize_frame_indices_with_layout(function, frame.layout())
+                    .map_err(|error| Error::FrameIndices {
+                        function: function.name.clone(),
+                        error,
+                    })?;
+        } else if function.blocks.iter().any(|block| {
+            block.instructions.iter().any(|instruction| {
+                instruction
+                    .operands
+                    .iter()
+                    .any(|operand| matches!(operand.kind, MachineOperandKind::FrameIndex { .. }))
+            })
+        }) {
+            return Err(Error::MissingCFramePlan {
+                function: function.name.clone(),
+            });
+        }
+    }
+    crate::target::x86::verify_machine(&allocated.module).map_err(Error::Machine)?;
+    Ok(allocated)
+}
+
+/// Allocate selected C-family Machine IR, finalize its x86 ABI, and lower it
+/// to target-neutral MC.
+pub fn lower_c_machine_to_mc(selected: &CMachine) -> Result<crate::mc::MCModule, Error> {
+    let mut allocated = allocate_c_machine(selected)?;
+    for function in &mut allocated.module.functions {
+        let frame = allocated
+            .frames
+            .get(&function.id)
+            .ok_or_else(|| Error::MissingCFramePlan {
+                function: function.name.clone(),
+            })?;
+        *function =
+            crate::target::x86::expand_allocated_c_abi(function, frame).map_err(|error| {
+                Error::CAbiExpansion {
+                    function: function.name.clone(),
+                    error,
+                }
+            })?;
+    }
+    crate::target::x86::verify_machine(&allocated.module).map_err(Error::Machine)?;
+    crate::target::x86::lower_allocated_module(&allocated.module).map_err(Error::Mc)
+}
+
 /// Encodes and relaxes a symbolic physical x86 MC module without object policy.
 pub fn encode_x86_mc(module: &crate::mc::MCModule) -> Result<crate::mc::MCModule, Error> {
     crate::target::x86::relax_and_encode_jumps(module).map_err(Error::McEncoding)
@@ -397,8 +515,9 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::{
-        Error, QbOptions, allocate_qb_machine, compile_qb, encode_x86_mc, lower_ir_to_machine,
-        lower_qb_machine_to_mc, lower_qb_to_ir, lower_qb_to_machine, parse_omf, write_x86_omf,
+        Error, QbOptions, allocate_qb_machine, compile_qb, compile_wcc_capture, encode_x86_mc,
+        lower_c_machine_to_mc, lower_c_to_machine, lower_ir_to_machine, lower_qb_machine_to_mc,
+        lower_qb_to_ir, lower_qb_to_machine, parse_omf, write_x86_omf,
     };
     use crate::codegen::machine::{
         FrameObjectKind, MachineAddressSpace, MachineCallingConvention, MachineOperandKind,
@@ -422,6 +541,35 @@ mod tests {
         let file = parse_omf(&bytes).unwrap();
 
         assert_eq!(file.to_bytes(), bytes);
+    }
+
+    #[test]
+    fn c_iparg_capture_reaches_mc_through_the_c_abi() {
+        // iparg.cgs is the captured counterpart of C's simple scalar call
+        // path: a near helper returns an i16 in AX and a far entry leaves its
+        // pushed argument to the caller. This keeps the WCC-to-Machine-IR
+        // boundary exercised without teaching the driver WCC details.
+        let ir = compile_wcc_capture(include_str!("../../fixtures/c/iparg.cgs"), "iparg")
+            .expect("real WCC capture lowers to portable IR");
+        let selected = lower_c_to_machine(&ir).expect("portable C IR selects and plans frames");
+        assert_eq!(selected.module.functions.len(), 2);
+        assert!(
+            selected
+                .module
+                .functions
+                .iter()
+                .all(|function| selected.frames.contains_key(&function.id))
+        );
+        assert_eq!(selected.module.functions[0].name, "_twice");
+        assert_eq!(selected.module.functions[1].name, "_answer_from_argument");
+        let mc = lower_c_machine_to_mc(&selected).expect("allocated C functions lower to MC");
+        mc.verify().expect("C MC verifies");
+        assert!(mc.symbols.iter().any(|symbol| symbol.name == "_twice"));
+        assert!(
+            mc.symbols
+                .iter()
+                .any(|symbol| symbol.name == "_answer_from_argument")
+        );
     }
 
     #[test]
