@@ -671,3 +671,21 @@ ordering, all supported frame methods, namespace validation, and incoherent
 public bases.  The delegated focused run took 5.27 seconds including
 compilation; primary review repeated the seven writer tests from cache in
 0.04 seconds.  No broader gate ran.
+
+## Iteration 15: WCC capture frontend (started)
+
+The Rust C path now owns the lexical `.cgs` capture-stream parser.  It ports
+the existing Python protocol rather than adding a C parser: result handles,
+no-result markers, calls, positional arguments, named fields, quoted values,
+and the shim's lowercase `\\xNN` escaping retain their established meaning.
+Diagnostics report typed malformed-stream reasons with source line and column,
+and record fields use deterministic ordering.
+
+Primary review rejected two stricter behaviors that were not faithful to the
+Python frontend: unknown call spellings and unrecognized escapes remain data
+instead of becoming new refusals.  Review also caught a delegated regression
+that incorrectly treated `f1` as a positional argument rather than the call's
+result handle.  Seven focused Rust tests now cover the protocol and parse the
+real 127-record `choose.cgs` fixture.  Agent and primary compile/fail/fix runs
+consumed about 11.4 seconds total; the accepted run took 1.33 seconds.  No
+broad suite or backend gate ran.
