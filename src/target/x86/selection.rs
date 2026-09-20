@@ -20,8 +20,8 @@ use crate::codegen::machine::{
 use crate::ir::{
     AddressSpace, BinaryOp, Block, BlockId, Callee, CallingConvention, CastOp, ComparePredicate,
     Constant, Effects, Function, FunctionId, Global, GlobalId, Instruction, InstructionKind,
-    Linkage, MemoryEffects, Module, Operand, Terminator, TypeId, TypeKind, TypedConstant,
-    UnaryOp, Value, ValueId,
+    Linkage, MemoryEffects, Module, Operand, Terminator, TypeId, TypeKind, TypedConstant, UnaryOp,
+    Value, ValueId,
 };
 
 use super::{ConditionCode, X86Opcode, X86Register, X86RegisterClass};
@@ -975,8 +975,10 @@ impl<'types> FunctionSelector<'types> {
         output: &mut Vec<MachineInstruction>,
     ) -> Result<(), SelectionError> {
         let result = self.result_definition(block, instruction)?;
-        if !matches!(self.type_kind(result.type_id)?, TypeKind::Integer { bits: 1 })
-            || predicate != ComparePredicate::SignedLessThan
+        if !matches!(
+            self.type_kind(result.type_id)?,
+            TypeKind::Integer { bits: 1 }
+        ) || predicate != ComparePredicate::SignedLessThan
         {
             return Err(SelectionError::UnsupportedCompare {
                 function: self.function.id,
@@ -1038,7 +1040,7 @@ impl<'types> FunctionSelector<'types> {
         output: &mut Vec<MachineInstruction>,
     ) -> Result<(), SelectionError> {
         let result = self.result_definition(block, instruction)?;
-        if op != CastOp::Bitcast || result.type_id != to {
+        if result.type_id != to {
             return Err(SelectionError::UnsupportedCast {
                 function: self.function.id,
                 block,
@@ -1046,6 +1048,23 @@ impl<'types> FunctionSelector<'types> {
             });
         }
         let operand_type = self.operand_type(block, instruction.id, operand)?;
+        if op == CastOp::SignExtend {
+            return self.select_sign_extend_word_to_dword(
+                block,
+                instruction,
+                operand,
+                operand_type,
+                to,
+                output,
+            );
+        }
+        if op != CastOp::Bitcast {
+            return Err(SelectionError::UnsupportedCast {
+                function: self.function.id,
+                block,
+                instruction: instruction.id,
+            });
+        }
         let (
             TypeKind::Pointer {
                 address_space: from,
@@ -1070,6 +1089,37 @@ impl<'types> FunctionSelector<'types> {
         }
         let selected = self.select_operand(block, instruction.id, operand, operand_type, output)?;
         self.insert_value(result, selected.location)
+    }
+
+    fn select_sign_extend_word_to_dword(
+        &mut self,
+        block: BlockId,
+        instruction: &Instruction,
+        operand: &Operand,
+        source_type: TypeId,
+        destination_type: TypeId,
+        output: &mut Vec<MachineInstruction>,
+    ) -> Result<(), SelectionError> {
+        if self.integer_bits(source_type)? != 16 || self.integer_bits(destination_type)? != 32 {
+            return Err(SelectionError::UnsupportedCast {
+                function: self.function.id,
+                block,
+                instruction: instruction.id,
+            });
+        }
+        let source = self.select_operand(block, instruction.id, operand, source_type, output)?;
+        let source = self.materialize_register(source, output)?;
+        let destination =
+            self.define_register_value(self.result_definition(block, instruction)?)?;
+        self.push_instruction(
+            X86Opcode::SignExtendWordToDword,
+            vec![
+                virtual_operand(destination, OperandRole::Def),
+                virtual_operand(source, OperandRole::Use),
+            ],
+            InstructionFlags::NONE,
+            output,
+        )
     }
 
     fn select_load(
@@ -2443,7 +2493,10 @@ mod tests {
         let selected = select_module(&module(basic_types(), vec![function])).unwrap();
         selected.verify().unwrap();
         let block = &selected.functions[0].blocks[0];
-        assert_eq!(block.successors, [MachineBlockId::new(1), MachineBlockId::new(2)]);
+        assert_eq!(
+            block.successors,
+            [MachineBlockId::new(1), MachineBlockId::new(2)]
+        );
         assert_eq!(
             block
                 .instructions
@@ -2469,6 +2522,62 @@ mod tests {
             block.instructions[4].operands,
             vec![block_operand(MachineBlockId::new(2))]
         );
+    }
+
+    #[test]
+    fn selects_sign_extend_i16_to_i32_cast_as_movsx() {
+        // Python cfront.raise_hir._Raise.convert creates a signed widening;
+        // backend.lower names it movsx once the destination is wider.
+        let source = Value {
+            id: ValueId::new(0),
+            type_id: I16,
+        };
+        let widened = Value {
+            id: ValueId::new(1),
+            type_id: I32,
+        };
+        let function = function(
+            vec![Block {
+                id: BlockId::new(0),
+                instructions: vec![Instruction {
+                    id: crate::ir::InstructionId::new(0),
+                    results: vec![widened],
+                    kind: InstructionKind::Cast {
+                        op: CastOp::SignExtend,
+                        operand: Operand::Value(source.id),
+                        to: I32,
+                    },
+                }],
+                terminator: Terminator::Return(None),
+            }],
+            vec![source],
+        );
+
+        let selected = select_module(&module(basic_types(), vec![function])).unwrap();
+        selected.verify().unwrap();
+        let instructions = &selected.functions[0].blocks[0].instructions;
+        assert_eq!(
+            instructions[1].opcode,
+            X86Opcode::SignExtendWordToDword.machine_opcode()
+        );
+        assert!(matches!(
+            instructions[1].operands.as_slice(),
+            [
+                MachineOperand {
+                    kind: MachineOperandKind::Register(MachineRegister::Virtual(destination)),
+                    role: OperandRole::Def,
+                    constraint: None,
+                    tied_to: None,
+                },
+                MachineOperand {
+                    kind: MachineOperandKind::Register(MachineRegister::Virtual(source)),
+                    role: OperandRole::Use,
+                    constraint: None,
+                    tied_to: None,
+                },
+            ] if selected.functions[0].virtual_registers.iter().any(|register| register.id == *destination && register.class == X86RegisterClass::Dword.machine_class())
+                && selected.functions[0].virtual_registers.iter().any(|register| register.id == *source && register.class == X86RegisterClass::Word.machine_class())
+        ));
     }
 
     #[test]

@@ -96,6 +96,9 @@ impl Verifier {
             X86Opcode::LowWord | X86Opcode::HighWord => {
                 self.verify_word_extract(function, block, instruction, classes)
             }
+            X86Opcode::SignExtendWordToDword => {
+                self.verify_sign_extend_word_to_dword(function, block, instruction, classes)
+            }
             X86Opcode::CallFar => self.verify_far_call(function, block, instruction, classes),
             X86Opcode::ReturnFar => self.verify_far_return(function, block, instruction, classes),
             X86Opcode::Push => self.verify_push(function, block, instruction),
@@ -494,6 +497,52 @@ impl Verifier {
             X86RegisterClass::Dword,
             classes,
         );
+    }
+
+    fn verify_sign_extend_word_to_dword(
+        &mut self,
+        function: &MachineFunction,
+        block: &MachineBlock,
+        instruction: &MachineInstruction,
+        classes: &BTreeMap<VirtualRegisterId, RegisterClass>,
+    ) {
+        let [destination, source] = instruction.operands.as_slice() else {
+            self.instruction_error(
+                function,
+                block,
+                instruction,
+                "sign extension requires [dword register def, word register use]",
+            );
+            return;
+        };
+        self.require_register_class(
+            function,
+            block,
+            instruction,
+            0,
+            destination,
+            OperandRole::Def,
+            X86RegisterClass::Dword,
+            classes,
+        );
+        self.require_register_class(
+            function,
+            block,
+            instruction,
+            1,
+            source,
+            OperandRole::Use,
+            X86RegisterClass::Word,
+            classes,
+        );
+        if instruction.flags != InstructionFlags::NONE {
+            self.instruction_error(
+                function,
+                block,
+                instruction,
+                "sign extension must have no flags",
+            );
+        }
     }
 
     fn verify_far_call(

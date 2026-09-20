@@ -174,11 +174,13 @@ pub enum X86Opcode {
     HighWord = 31,
     /// Restore SP and BP from a conventional frame in one instruction.
     Leave = 32,
+    /// Sign-extend a 16-bit integer register into a 32-bit integer register.
+    SignExtendWordToDword = 33,
 }
 
 impl X86Opcode {
     /// Every opcode in stable numeric order.
-    pub const ALL: [Self; 32] = [
+    pub const ALL: [Self; 33] = [
         Self::Copy,
         Self::PhiCopy,
         Self::Mov,
@@ -211,6 +213,7 @@ impl X86Opcode {
         Self::LowWord,
         Self::HighWord,
         Self::Leave,
+        Self::SignExtendWordToDword,
     ];
 
     /// The opaque target-independent Machine IR opcode identifier.

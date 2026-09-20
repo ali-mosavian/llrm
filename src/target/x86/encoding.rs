@@ -147,6 +147,9 @@ pub fn encode_with_fixups(instruction: &MCInstruction) -> Result<EncodedInstruct
         X86Opcode::Cmp => encode_register_operands(opcode, &instruction.operands, 0x38, 0x39),
         X86Opcode::Test => encode_register_operands(opcode, &instruction.operands, 0x84, 0x85),
         X86Opcode::Imul => encode_imul(opcode, &instruction.operands),
+        X86Opcode::SignExtendWordToDword => {
+            encode_sign_extend_word_to_dword(opcode, &instruction.operands)
+        }
         X86Opcode::Neg => encode_unary(opcode, &instruction.operands, 3),
         X86Opcode::Not => encode_unary(opcode, &instruction.operands, 2),
         X86Opcode::Push => encode_push_pop(opcode, &instruction.operands, 0x50),
@@ -544,6 +547,22 @@ fn encode_imul(opcode: X86Opcode, operands: &[MCOperand]) -> Result<Vec<u8>, Enc
     Ok(bytes)
 }
 
+fn encode_sign_extend_word_to_dword(
+    opcode: X86Opcode,
+    operands: &[MCOperand],
+) -> Result<Vec<u8>, EncodeError> {
+    expect_arity(opcode, operands, 2)?;
+    let destination = register_operand(opcode, operands, 0)?;
+    let source = register_operand(opcode, operands, 1)?;
+    if destination.size != OperandSize::Dword || source.size != OperandSize::Word {
+        return Err(EncodeError::UnsupportedForm {
+            opcode,
+            reason: "movsx r32, r16 requires a dword destination and word source",
+        });
+    }
+    Ok(vec![0x66, 0x0f, 0xbf, modrm(destination.code, source.code)])
+}
+
 fn encode_unary(
     opcode: X86Opcode,
     operands: &[MCOperand],
@@ -881,6 +900,28 @@ mod tests {
             .unwrap(),
             vec![0x0f, 0xaf, 0xc3]
         );
+    }
+
+    #[test]
+    fn encodes_sign_extend_word_to_dword_movsx_and_refuses_other_widths() {
+        assert_eq!(
+            encode(&instruction(
+                X86Opcode::SignExtendWordToDword,
+                vec![register(X86Register::Eax), register(X86Register::Cx)],
+            ))
+            .unwrap(),
+            vec![0x66, 0x0f, 0xbf, 0xc1]
+        );
+        assert!(matches!(
+            encode(&instruction(
+                X86Opcode::SignExtendWordToDword,
+                vec![register(X86Register::Ax), register(X86Register::Cx)],
+            )),
+            Err(EncodeError::UnsupportedForm {
+                opcode: X86Opcode::SignExtendWordToDword,
+                ..
+            })
+        ));
     }
 
     #[test]
