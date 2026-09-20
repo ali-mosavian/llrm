@@ -16,6 +16,9 @@ use super::{
 /// A failure while applying a virtual-register assignment to Machine IR.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AllocationRewriteError {
+    MissingDeclaredAssignment {
+        register: VirtualRegisterId,
+    },
     MissingAssignment {
         block: MachineBlockId,
         instruction: MachineInstructionId,
@@ -43,6 +46,12 @@ pub enum AllocationRewriteError {
 impl fmt::Display for AllocationRewriteError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::MissingDeclaredAssignment { register } => {
+                write!(
+                    formatter,
+                    "assignment omits declared virtual register {register}"
+                )
+            }
             Self::MissingAssignment {
                 block,
                 instruction,
@@ -137,6 +146,11 @@ fn validate_assignment_entries(
     for (register, _) in assignment.iter() {
         if !declared.contains(&register) {
             return Err(AllocationRewriteError::UndeclaredAssignment { register });
+        }
+    }
+    for register in declared {
+        if assignment.get(register).is_none() {
+            return Err(AllocationRewriteError::MissingDeclaredAssignment { register });
         }
     }
 
@@ -375,6 +389,28 @@ mod tests {
             AllocationRewriteError::UndeclaredAssignment { register }
                 if register == VirtualRegisterId::new(3)
         ));
+    }
+
+    #[test]
+    fn rejects_assignment_that_omits_an_unused_declared_register() {
+        let assignment = allocated(&empty_function());
+        let function = function(
+            vec![MachineBlock {
+                id: MachineBlockId::new(0),
+                instructions: Vec::new(),
+                successors: Vec::new(),
+            }],
+            &[4],
+        );
+
+        let error = apply_assignment(&function, &assignment)
+            .expect_err("a completed assignment must cover every declaration");
+        assert_eq!(
+            error,
+            AllocationRewriteError::MissingDeclaredAssignment {
+                register: VirtualRegisterId::new(4),
+            }
+        );
     }
 
     #[test]
