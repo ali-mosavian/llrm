@@ -36,13 +36,13 @@ pub struct SemanticError {
 struct Type {
     id: u32,
     name: String,
-    kind: &'static str,
+    kind: hir::TypeKind,
     width: usize,
     signed: Option<bool>,
-    evaluation: &'static str,
+    evaluation: hir::FloatEvaluation,
     element: Option<u32>,
     bounds: Vec<(i64, i64)>,
-    address: &'static str,
+    address: hir::AddressKind,
 }
 
 #[derive(Clone)]
@@ -173,7 +173,7 @@ struct Place {
     type_id: u32,
     offset: isize,
     extent: usize,
-    storage: &'static str,
+    storage: hir::Storage,
     symbol: u32,
 }
 
@@ -181,7 +181,7 @@ struct DataRelocation {
     at: usize,
     target: u32,
     addend: isize,
-    address: &'static str,
+    address: hir::AddressKind,
 }
 
 struct DataObject {
@@ -190,8 +190,8 @@ struct DataObject {
     bytes: Vec<u8>,
     readonly: bool,
     relocations: Vec<DataRelocation>,
-    linkage: &'static str,
-    address: &'static str,
+    linkage: hir::Linkage,
+    address: hir::AddressKind,
 }
 
 struct Function {
@@ -208,7 +208,7 @@ struct Function {
     error_handler: Option<u32>,
     error_handler_local: bool,
     external_entries: Vec<u32>,
-    linkage: &'static str,
+    linkage: hir::Linkage,
 }
 
 struct Compiler {
@@ -226,7 +226,7 @@ struct Compiler {
     signatures: BTreeMap<String, Signature>,
     callables: Vec<Callable>,
     udts: BTreeMap<String, Udt>,
-    pointer_types: BTreeMap<(u32, &'static str), u32>,
+    pointer_types: BTreeMap<(u32, hir::AddressKind), u32>,
     functions: Vec<Function>,
     data: Vec<DataObject>,
     values: Vec<(u32, u32)>,
@@ -251,7 +251,7 @@ struct Compiler {
     next_instruction: u32,
     next_block: u32,
     data_offset: usize,
-    implicit_storage: &'static str,
+    implicit_storage: hir::Storage,
     next_data: u32,
     next_module_data: u32,
     def_segment_symbol: Option<u32>,
@@ -421,7 +421,15 @@ fn build_with_options(
     compiler.reserve_labels(&module.statements)?;
     compiler.statements(module)?;
     compiler.finish();
-    compiler.save_function(1, "__main", VOID, Vec::new(), false, 0, "internal");
+    compiler.save_function(
+        1,
+        "__main",
+        VOID,
+        Vec::new(),
+        false,
+        0,
+        hir::Linkage::Internal,
+    );
 
     let module_default_types = compiler.default_types;
     let module_variables = compiler.variables.clone();
@@ -439,9 +447,9 @@ fn build_with_options(
             module_places.clone(),
         );
         compiler.implicit_storage = if procedure.is_static {
-            "static"
+            hir::Storage::Static
         } else {
-            "local"
+            hir::Storage::Local
         };
         compiler.default_types = module_default_types;
         let mut parameters = Vec::new();
@@ -500,7 +508,7 @@ fn build_with_options(
                     },
                 );
             } else if parameter.by_value {
-                let place = compiler.declare_as(&parameter.declaration, "local")?;
+                let place = compiler.declare_as(&parameter.declaration, hir::Storage::Local)?;
                 compiler.emit(
                     hir::Opcode::Store,
                     Vec::new(),
@@ -551,7 +559,7 @@ fn build_with_options(
                 dynamic: false,
                 span: procedure.span,
             };
-            let place = compiler.declare_as(&declaration, "local")?;
+            let place = compiler.declare_as(&declaration, hir::Storage::Local)?;
             compiler.result_place = Some((place, result_type));
         }
         // A procedure is its own DEF-type scope in Microsoft BASIC. Its
@@ -586,9 +594,9 @@ fn build_with_options(
             procedure.cdecl,
             parameter_bytes,
             if procedure.exported {
-                "external"
+                hir::Linkage::External
             } else {
-                "internal"
+                hir::Linkage::Internal
             },
         );
     }
@@ -922,15 +930,78 @@ impl Compiler {
         alternate_math: bool,
     ) -> Self {
         let types = vec![
-            scalar(VOID, "void", "void", 0, None, "none"),
-            scalar(INTEGER, "integer", "integer", 2, Some(true), "none"),
-            scalar(LONG, "long", "integer", 4, Some(true), "none"),
-            scalar(SINGLE, "single", "float", 4, None, "extended80"),
-            scalar(DOUBLE, "double", "float", 8, None, "extended80"),
-            scalar(BOOLEAN, "boolean", "boolean", 2, Some(true), "none"),
-            scalar(STRING, "string", "opaque", 4, None, "none"),
-            scalar(ANY, "any", "opaque", 0, None, "none"),
-            scalar(BYTE, "$byte", "integer", 1, Some(false), "none"),
+            scalar(
+                VOID,
+                "void",
+                hir::TypeKind::Void,
+                0,
+                None,
+                hir::FloatEvaluation::None,
+            ),
+            scalar(
+                INTEGER,
+                "integer",
+                hir::TypeKind::Integer,
+                2,
+                Some(true),
+                hir::FloatEvaluation::None,
+            ),
+            scalar(
+                LONG,
+                "long",
+                hir::TypeKind::Integer,
+                4,
+                Some(true),
+                hir::FloatEvaluation::None,
+            ),
+            scalar(
+                SINGLE,
+                "single",
+                hir::TypeKind::Float,
+                4,
+                None,
+                hir::FloatEvaluation::Extended80,
+            ),
+            scalar(
+                DOUBLE,
+                "double",
+                hir::TypeKind::Float,
+                8,
+                None,
+                hir::FloatEvaluation::Extended80,
+            ),
+            scalar(
+                BOOLEAN,
+                "boolean",
+                hir::TypeKind::Boolean,
+                2,
+                Some(true),
+                hir::FloatEvaluation::None,
+            ),
+            scalar(
+                STRING,
+                "string",
+                hir::TypeKind::Opaque,
+                4,
+                None,
+                hir::FloatEvaluation::None,
+            ),
+            scalar(
+                ANY,
+                "any",
+                hir::TypeKind::Opaque,
+                0,
+                None,
+                hir::FloatEvaluation::None,
+            ),
+            scalar(
+                BYTE,
+                "$byte",
+                hir::TypeKind::Integer,
+                1,
+                Some(false),
+                hir::FloatEvaluation::None,
+            ),
         ];
         Self {
             dialect,
@@ -956,8 +1027,8 @@ impl Compiler {
                     bytes: Vec::new(),
                     readonly: false,
                     relocations: Vec::new(),
-                    linkage: "internal",
-                    address: "near",
+                    linkage: hir::Linkage::Internal,
+                    address: hir::AddressKind::Near,
                 },
                 DataObject {
                     id: 2,
@@ -965,8 +1036,8 @@ impl Compiler {
                     bytes: Vec::new(),
                     readonly: true,
                     relocations: Vec::new(),
-                    linkage: "internal",
-                    address: "near",
+                    linkage: hir::Linkage::Internal,
+                    address: hir::AddressKind::Near,
                 },
             ],
             values: Vec::new(),
@@ -995,7 +1066,7 @@ impl Compiler {
             next_instruction: 1,
             next_block: 2,
             data_offset: 0,
-            implicit_storage: "module",
+            implicit_storage: hir::Storage::Module,
             next_data: 3,
             // Source globals need their own stable data identity so their
             // names survive to the OMF listing. Keep them outside the
@@ -1049,7 +1120,7 @@ impl Compiler {
         self.next_instruction = 1;
         self.next_block = 2;
         self.data_offset = 0;
-        self.implicit_storage = "local";
+        self.implicit_storage = hir::Storage::Local;
     }
 
     fn save_function(
@@ -1060,7 +1131,7 @@ impl Compiler {
         parameters: Vec<u32>,
         caller_cleanup: bool,
         parameter_bytes: usize,
-        linkage: &'static str,
+        linkage: hir::Linkage,
     ) {
         self.prune_unreachable(&parameters);
         let retained: BTreeSet<u32> = self.blocks.iter().map(|block| block.id).collect();
@@ -1160,7 +1231,7 @@ impl Compiler {
     }
 
     fn declarations(&mut self, module: &Module) -> Result<(), SemanticError> {
-        self.declarations_in(&module.statements, "module")
+        self.declarations_in(&module.statements, hir::Storage::Module)
     }
 
     fn apply_option_base(&mut self, statements: &[Statement]) -> Result<(), SemanticError> {
@@ -1271,48 +1342,54 @@ impl Compiler {
         self.types.push(Type {
             id,
             name,
-            kind: "opaque",
+            kind: hir::TypeKind::Opaque,
             width,
             signed: None,
-            evaluation: "none",
+            evaluation: hir::FloatEvaluation::None,
             element: None,
             bounds: Vec::new(),
-            address: "none",
+            address: hir::AddressKind::None,
         });
         id
     }
 
     fn pointer_type(&mut self, element: u32) -> u32 {
-        self.addressed_pointer_type(element, "near", 2)
+        self.addressed_pointer_type(element, hir::AddressKind::Near, 2)
     }
 
     fn whole_pointer_type(&mut self, element: u32) -> u32 {
-        self.addressed_pointer_type(element, "huge", 4)
+        self.addressed_pointer_type(element, hir::AddressKind::Huge, 4)
     }
 
     fn far_pointer_type(&mut self, element: u32) -> u32 {
-        self.addressed_pointer_type(element, "far", 4)
+        self.addressed_pointer_type(element, hir::AddressKind::Far, 4)
     }
 
-    fn addressed_pointer_type(&mut self, element: u32, address: &'static str, width: usize) -> u32 {
-        if let Some(type_id) = self.pointer_types.get(&(element, address)) {
+    fn addressed_pointer_type(
+        &mut self,
+        element: u32,
+        address: hir::AddressKind,
+        width: usize,
+    ) -> u32 {
+        let key = (element, address);
+        if let Some(type_id) = self.pointer_types.get(&key) {
             return *type_id;
         }
         let id = self.next_type;
         self.next_type += 1;
-        let name = format!("{address}*{}", self.name(element));
+        let name = format!("{}*{}", address.as_str(), self.name(element));
         self.types.push(Type {
             id,
             name,
-            kind: "pointer",
+            kind: hir::TypeKind::Pointer,
             width,
             signed: None,
-            evaluation: "none",
+            evaluation: hir::FloatEvaluation::None,
             element: Some(element),
             bounds: Vec::new(),
             address,
         });
-        self.pointer_types.insert((element, address), id);
+        self.pointer_types.insert(key, id);
         id
     }
 
@@ -1328,13 +1405,13 @@ impl Compiler {
         self.types.push(Type {
             id,
             name,
-            kind: "array",
+            kind: hir::TypeKind::Array,
             width,
             signed: None,
-            evaluation: "none",
+            evaluation: hir::FloatEvaluation::None,
             element: Some(element),
             bounds,
-            address: "near",
+            address: hir::AddressKind::Near,
         });
         id
     }
@@ -1452,13 +1529,13 @@ impl Compiler {
     fn declarations_in(
         &mut self,
         statements: &[Statement],
-        storage: &'static str,
+        storage: hir::Storage,
     ) -> Result<(), SemanticError> {
         for statement in statements {
             match statement {
                 Statement::Dim(items) => {
                     for item in items {
-                        if storage == "local" && !item.shared {
+                        if storage == hir::Storage::Local && !item.shared {
                             // An explicit procedure DIM shadows an implicit
                             // module variable of the same name. Gorillas'
                             // module GOSUB creates INTEGER i, while
@@ -1466,7 +1543,7 @@ impl Compiler {
                             // SINGLE i.
                             self.variables.remove(variable_key(&item.name));
                         }
-                        if storage == "local" && item.array {
+                        if storage == hir::Storage::Local && item.array {
                             // Microsoft documents every explicitly DIMmed
                             // array in a non-STATIC procedure as dynamic,
                             // regardless of the module's $STATIC default.
@@ -1481,7 +1558,7 @@ impl Compiler {
                 Statement::Static(items) => {
                     for item in items {
                         self.variables.remove(variable_key(&item.name));
-                        self.declare_as(item, "static")?;
+                        self.declare_as(item, hir::Storage::Static)?;
                     }
                 }
                 Statement::DefType { .. }
@@ -1521,7 +1598,7 @@ impl Compiler {
     fn declare_as(
         &mut self,
         declaration: &Declaration,
-        storage: &'static str,
+        storage: hir::Storage,
     ) -> Result<u32, SemanticError> {
         if self.variables.contains_key(variable_key(&declaration.name))
             || self.constants.contains_key(canonical(&declaration.name))
@@ -1546,7 +1623,7 @@ impl Compiler {
         let module_symbol = self.basic_global_name(&declaration.name, selected, element);
         let runtime_bounds = declaration.array
             && !declaration.bounds.is_empty()
-            && storage != "static"
+            && storage != hir::Storage::Static
             && (element == STRING || declaration.dynamic);
         let bounds = if runtime_bounds {
             Vec::new()
@@ -1579,7 +1656,7 @@ impl Compiler {
                 14 + 4 * declaration.bounds.len(),
             );
             let descriptor_extent = self.width(descriptor_type);
-            let (descriptor_offset, descriptor_symbol) = if storage == "module" {
+            let (descriptor_offset, descriptor_symbol) = if storage == hir::Storage::Module {
                 (
                     0,
                     self.module_data(module_symbol.clone(), descriptor_extent),
@@ -1587,7 +1664,7 @@ impl Compiler {
             } else {
                 (
                     self.place_offset(storage, descriptor_extent),
-                    if matches!(storage, "local" | "parameter") {
+                    if matches!(storage, hir::Storage::Local | hir::Storage::Parameter) {
                         0
                     } else {
                         1
@@ -1605,7 +1682,7 @@ impl Compiler {
                 storage,
                 symbol: descriptor_symbol,
             });
-            if matches!(storage, "local" | "parameter") {
+            if matches!(storage, hir::Storage::Local | hir::Storage::Parameter) {
                 self.data_offset += descriptor_extent;
             }
             let pointer_type = self.pointer_type(descriptor_type);
@@ -1683,7 +1760,7 @@ impl Compiler {
                 14 + 4 * UNSPECIFIED_ARRAY_RANK,
             );
             let descriptor_extent = self.width(descriptor_type);
-            let (descriptor_offset, descriptor_symbol) = if storage == "module" {
+            let (descriptor_offset, descriptor_symbol) = if storage == hir::Storage::Module {
                 (
                     0,
                     self.module_data(module_symbol.clone(), descriptor_extent),
@@ -1691,7 +1768,7 @@ impl Compiler {
             } else {
                 (
                     self.place_offset(storage, descriptor_extent),
-                    if matches!(storage, "local" | "parameter") {
+                    if matches!(storage, hir::Storage::Local | hir::Storage::Parameter) {
                         0
                     } else {
                         1
@@ -1709,10 +1786,12 @@ impl Compiler {
                 storage,
                 symbol: descriptor_symbol,
             });
-            if matches!(storage, "local" | "parameter") {
+            if matches!(storage, hir::Storage::Local | hir::Storage::Parameter) {
                 self.data_offset += descriptor_extent;
             }
-            if matches!(storage, "local" | "parameter") && self.data_offset > 65536 {
+            if matches!(storage, hir::Storage::Local | hir::Storage::Parameter)
+                && self.data_offset > 65536
+            {
                 return self.fail(format!(
                     "{} descriptor exceeds the 64 KiB near-data budget",
                     declaration.name
@@ -1762,15 +1841,15 @@ impl Compiler {
             );
             (id, extent, Some(element))
         };
-        if storage == "static" && extent > 65536
-            || storage != "static" && self.data_offset + extent > 65536
+        if storage == hir::Storage::Static && extent > 65536
+            || storage != hir::Storage::Static && self.data_offset + extent > 65536
         {
             return self.fail(format!(
                 "{} exceeds the 64 KiB near-data budget",
                 declaration.name
             ));
         }
-        let (place_offset, place_symbol) = if storage == "static" {
+        let (place_offset, place_symbol) = if storage == hir::Storage::Static {
             let symbol = self.next_data;
             self.next_data += 1;
             self.data.push(DataObject {
@@ -1779,16 +1858,16 @@ impl Compiler {
                 bytes: vec![0; extent],
                 readonly: false,
                 relocations: Vec::new(),
-                linkage: "internal",
-                address: "near",
+                linkage: hir::Linkage::Internal,
+                address: hir::AddressKind::Near,
             });
             (0, symbol)
-        } else if storage == "module" {
+        } else if storage == hir::Storage::Module {
             (0, self.module_data(module_symbol, extent))
         } else {
             (
                 self.place_offset(storage, extent),
-                if matches!(storage, "local" | "parameter") {
+                if matches!(storage, hir::Storage::Local | hir::Storage::Parameter) {
                     0
                 } else {
                     1
@@ -1806,7 +1885,7 @@ impl Compiler {
             storage,
             symbol: place_symbol,
         });
-        if matches!(storage, "local" | "parameter") {
+        if matches!(storage, hir::Storage::Local | hir::Storage::Parameter) {
             self.data_offset += extent;
         }
         let descriptor_place = if array_element.is_some() {
@@ -1815,7 +1894,7 @@ impl Compiler {
                 14 + 4 * bounds.len(),
             );
             let descriptor_extent = self.width(descriptor_type);
-            let local_descriptor = matches!(storage, "local" | "parameter");
+            let local_descriptor = matches!(storage, hir::Storage::Local | hir::Storage::Parameter);
             let (descriptor_offset, descriptor_storage, descriptor_symbol) = if local_descriptor {
                 (self.place_offset(storage, descriptor_extent), storage, 0)
             } else {
@@ -1826,7 +1905,7 @@ impl Compiler {
                     self.width(element),
                     &bounds,
                 );
-                (0, "static", symbol)
+                (0, hir::Storage::Static, symbol)
             };
             let descriptor = self.next_place;
             self.next_place += 1;
@@ -1868,8 +1947,8 @@ impl Compiler {
         Ok(place)
     }
 
-    fn reserve_module_data(&mut self, storage: &str) {
-        if !matches!(storage, "local" | "parameter") {
+    fn reserve_module_data(&mut self, storage: hir::Storage) {
+        if !matches!(storage, hir::Storage::Local | hir::Storage::Parameter) {
             self.data[0].bytes.resize(self.data_offset, 0);
         }
     }
@@ -1883,8 +1962,8 @@ impl Compiler {
             bytes: vec![0; extent],
             readonly: false,
             relocations: Vec::new(),
-            linkage: "internal",
-            address: "near",
+            linkage: hir::Linkage::Internal,
+            address: hir::AddressKind::Near,
         });
         symbol
     }
@@ -1968,7 +2047,7 @@ impl Compiler {
                     at: 0,
                     target: data_symbol,
                     addend: data_offset as isize,
-                    address: "far",
+                    address: hir::AddressKind::Far,
                 },
                 // AD_oAdjusted is biased so generic array code can add source
                 // subscripts directly. QB's one-based six-byte DYNARR record
@@ -1977,17 +2056,17 @@ impl Compiler {
                     at: 10,
                     target: data_symbol,
                     addend: adjusted_offset as isize,
-                    address: "near",
+                    address: hir::AddressKind::Near,
                 },
             ],
-            linkage: "internal",
-            address: "near",
+            linkage: hir::Linkage::Internal,
+            address: hir::AddressKind::Near,
         });
         symbol
     }
 
-    fn place_offset(&self, storage: &str, extent: usize) -> isize {
-        if matches!(storage, "local" | "parameter") {
+    fn place_offset(&self, storage: hir::Storage, extent: usize) -> isize {
+        if matches!(storage, hir::Storage::Local | hir::Storage::Parameter) {
             -((self.data_offset + extent) as isize)
         } else {
             self.data_offset as isize
@@ -2541,15 +2620,15 @@ impl Compiler {
                             bytes: table,
                             readonly: true,
                             relocations: Vec::new(),
-                            linkage: "internal",
+                            linkage: hir::Linkage::Internal,
                             // Only VBDOS places INPUT metadata in a far
                             // constant segment. QB/PDS put the block in
                             // DGROUP and pass DS:offset, as documented by
                             // QB45 runtime/rt/inptty.asm's pBlock contract.
                             address: if self.runtime == "vbdos" {
-                                "far"
+                                hir::AddressKind::Far
                             } else {
-                                "near"
+                                hir::AddressKind::Near
                             },
                         });
                         let place = self.next_place;
@@ -2560,7 +2639,7 @@ impl Compiler {
                             type_id: BYTE,
                             offset: 0,
                             extent: destinations.len() + 3,
-                            storage: "static",
+                            storage: hir::Storage::Static,
                             symbol,
                         });
                         let table = self.far_address(Operand::Place(place), BYTE);
@@ -3108,8 +3187,8 @@ impl Compiler {
                 bytes: Vec::new(),
                 readonly: true,
                 relocations: Vec::new(),
-                linkage: "internal",
-                address: "near",
+                linkage: hir::Linkage::Internal,
+                address: hir::AddressKind::Near,
             });
             self.data.len() - 1
         };
@@ -4162,8 +4241,9 @@ impl Compiler {
 
     fn string_width(&self, type_id: u32) -> Option<usize> {
         let type_ = self.types.iter().find(|one| one.id == type_id)?;
-        (type_id == STRING || (type_.kind == "opaque" && type_.name.starts_with("string*")))
-            .then_some(if type_id == STRING { 0 } else { type_.width })
+        (type_id == STRING
+            || (type_.kind == hir::TypeKind::Opaque && type_.name.starts_with("string*")))
+        .then_some(if type_id == STRING { 0 } else { type_.width })
     }
 
     fn far_address(&mut self, place: Operand, type_id: u32) -> u32 {
@@ -4171,9 +4251,11 @@ impl Compiler {
             let far_static = self
                 .places
                 .iter()
-                .find(|one| one.id == *place_id && one.storage == "static")
+                .find(|one| one.id == *place_id && one.storage == hir::Storage::Static)
                 .and_then(|one| self.data.iter().find(|data| data.id == one.symbol))
-                .is_some_and(|data| matches!(data.address, "far" | "huge"));
+                .is_some_and(|data| {
+                    matches!(data.address, hir::AddressKind::Far | hir::AddressKind::Huge)
+                });
             if far_static {
                 // A far object's offset and selector are independent HIR
                 // values. VBDOS records the shared FSL_CONST selector in a
@@ -4242,7 +4324,7 @@ impl Compiler {
         if let Some(place) = self
             .places
             .iter()
-            .find(|place| place.storage == "static" && place.symbol == symbol)
+            .find(|place| place.storage == hir::Storage::Static && place.symbol == symbol)
         {
             return place.id;
         }
@@ -4254,7 +4336,7 @@ impl Compiler {
             type_id: INTEGER,
             offset: 0,
             extent: 2,
-            storage: "static",
+            storage: hir::Storage::Static,
             symbol,
         });
         place
@@ -4427,8 +4509,8 @@ impl Compiler {
             bytes: vec![0, 0],
             readonly: true,
             relocations: Vec::new(),
-            linkage: "internal",
-            address: "near",
+            linkage: hir::Linkage::Internal,
+            address: hir::AddressKind::Near,
         });
         let place = self.next_place;
         self.next_place += 1;
@@ -4438,7 +4520,7 @@ impl Compiler {
             type_id: INTEGER,
             offset: 0,
             extent: 2,
-            storage: "static",
+            storage: hir::Storage::Static,
             symbol,
         });
         let anchor_type = self.far_pointer_type(INTEGER);
@@ -6598,10 +6680,10 @@ impl Compiler {
     fn compiler_temporary(&mut self, prefix: &str, type_id: u32) -> Result<u32, SemanticError> {
         let extent = self.width(type_id);
         let storage = self.implicit_storage;
-        if storage != "static" && self.data_offset + extent > 65536 {
+        if storage != hir::Storage::Static && self.data_offset + extent > 65536 {
             return self.fail("temporary exceeds the 64 KiB frame budget");
         }
-        let (offset, symbol) = if storage == "static" {
+        let (offset, symbol) = if storage == hir::Storage::Static {
             let symbol = self.next_data;
             self.next_data += 1;
             self.data.push(DataObject {
@@ -6610,14 +6692,14 @@ impl Compiler {
                 bytes: vec![0; extent],
                 readonly: false,
                 relocations: Vec::new(),
-                linkage: "internal",
-                address: "near",
+                linkage: hir::Linkage::Internal,
+                address: hir::AddressKind::Near,
             });
             (0, symbol)
         } else {
             (
                 self.place_offset(storage, extent),
-                if storage == "local" { 0 } else { 1 },
+                if storage == hir::Storage::Local { 0 } else { 1 },
             )
         };
         let id = self.next_place;
@@ -6631,7 +6713,7 @@ impl Compiler {
             storage,
             symbol,
         });
-        if storage != "static" {
+        if storage != hir::Storage::Static {
             self.data_offset += extent;
             self.reserve_module_data(storage);
         }
@@ -6653,7 +6735,7 @@ impl Compiler {
             offset: self.place_offset(storage, extent),
             extent,
             storage,
-            symbol: if storage == "local" { 0 } else { 1 },
+            symbol: if storage == hir::Storage::Local { 0 } else { 1 },
         });
         self.data_offset += extent;
         self.reserve_module_data(storage);
@@ -6672,8 +6754,8 @@ impl Compiler {
                 bytes: Vec::new(),
                 readonly: false,
                 relocations: Vec::new(),
-                linkage: "external",
-                address: "near",
+                linkage: hir::Linkage::External,
+                address: hir::AddressKind::Near,
             });
             self.def_segment_symbol = Some(symbol);
             symbol
@@ -6681,7 +6763,7 @@ impl Compiler {
         if let Some(place) = self
             .places
             .iter()
-            .find(|place| place.storage == "external" && place.symbol == symbol)
+            .find(|place| place.storage == hir::Storage::External && place.symbol == symbol)
         {
             return place.id;
         }
@@ -6693,7 +6775,7 @@ impl Compiler {
             type_id: INTEGER,
             offset: 0,
             extent: 2,
-            storage: "external",
+            storage: hir::Storage::External,
             symbol,
         });
         place
@@ -6737,8 +6819,8 @@ impl Compiler {
                 bytes,
                 readonly: true,
                 relocations: Vec::new(),
-                linkage: "internal",
-                address: "near",
+                linkage: hir::Linkage::Internal,
+                address: hir::AddressKind::Near,
             });
             self.floating_literals.insert(key, symbol);
             symbol
@@ -6751,7 +6833,7 @@ impl Compiler {
             type_id,
             offset: 0,
             extent: self.width(type_id),
-            storage: "static",
+            storage: hir::Storage::Static,
             symbol,
         });
         let value = self.value(type_id);
@@ -6789,10 +6871,10 @@ impl Compiler {
                         at: 0,
                         target: payload_symbol,
                         addend: 0,
-                        address: "segment",
+                        address: hir::AddressKind::Segment,
                     }],
-                    linkage: "internal",
-                    address: "near",
+                    linkage: hir::Linkage::Internal,
+                    address: hir::AddressKind::Near,
                 });
                 self.far_string_segment_symbol = Some(symbol);
                 symbol
@@ -6813,10 +6895,10 @@ impl Compiler {
                     at: 2,
                     target: payload_symbol,
                     addend: 4,
-                    address: "near",
+                    address: hir::AddressKind::Near,
                 }],
-                linkage: "internal",
-                address: "far",
+                linkage: hir::Linkage::Internal,
+                address: hir::AddressKind::Far,
             });
 
             let descriptor_symbol = self.next_data;
@@ -6831,17 +6913,17 @@ impl Compiler {
                         at: 0,
                         target: payload_symbol,
                         addend: 2,
-                        address: "near",
+                        address: hir::AddressKind::Near,
                     },
                     DataRelocation {
                         at: 2,
                         target: segment_symbol,
                         addend: 0,
-                        address: "near",
+                        address: hir::AddressKind::Near,
                     },
                 ],
-                linkage: "internal",
-                address: "near",
+                linkage: hir::Linkage::Internal,
+                address: hir::AddressKind::Near,
             });
             (descriptor_symbol, 6)
         } else {
@@ -6860,10 +6942,10 @@ impl Compiler {
                     at: 2,
                     target: payload_symbol,
                     addend: 4,
-                    address: "near",
+                    address: hir::AddressKind::Near,
                 }],
-                linkage: "internal",
-                address: "near",
+                linkage: hir::Linkage::Internal,
+                address: hir::AddressKind::Near,
             });
             (payload_symbol, 4)
         };
@@ -6875,7 +6957,7 @@ impl Compiler {
             type_id: STRING,
             offset: 0,
             extent: 4,
-            storage: "static",
+            storage: hir::Storage::Static,
             symbol: descriptor_symbol,
         });
         let payload_type = self.opaque_type(format!("string*{}", encoded.len()), encoded.len());
@@ -6887,7 +6969,7 @@ impl Compiler {
             type_id: payload_type,
             offset: payload_offset,
             extent: encoded.len(),
-            storage: "static",
+            storage: hir::Storage::Static,
             symbol: payload_symbol,
         });
         Ok((place, payload, payload_type))
@@ -7069,7 +7151,7 @@ impl Compiler {
             .filter_map(|(place, element)| {
                 self.places
                     .iter()
-                    .find(|one| one.id == place && one.storage == "local")
+                    .find(|one| one.id == place && one.storage == hir::Storage::Local)
                     .map(|one| {
                         (
                             place,
@@ -7120,7 +7202,9 @@ impl Compiler {
             .places
             .iter()
             .filter(|place| {
-                place.storage == "local" && place.type_id == STRING && Some(place.id) != result
+                place.storage == hir::Storage::Local
+                    && place.type_id == STRING
+                    && Some(place.id) != result
             })
             .map(|place| place.id)
             .collect();
@@ -7174,13 +7258,13 @@ impl Compiler {
                 Ok(hir::Type {
                     id: hir::TypeId::new(type_.id),
                     name: type_.name.clone(),
-                    kind: hir_type_kind(type_.kind)?,
+                    kind: type_.kind,
                     width: type_.width,
                     signed: type_.signed,
-                    evaluation: hir_float_evaluation(type_.evaluation)?,
+                    evaluation: type_.evaluation,
                     element: type_.element.map(hir::TypeId::new),
                     bounds: type_.bounds.clone(),
-                    address: hir_address_kind(type_.address)?,
+                    address: type_.address,
                 })
             })
             .collect::<Result<Vec<_>, SemanticError>>()?;
@@ -7234,25 +7318,25 @@ impl Compiler {
                     .places
                     .iter()
                     .map(|place| {
-                        let address = if place.storage == "static" {
+                        let address = if place.storage == hir::Storage::Static {
                             self.data
                                 .iter()
                                 .find_map(|object| {
                                     (object.id == place.symbol).then_some(object.address)
                                 })
-                                .unwrap_or("near")
+                                .unwrap_or(hir::AddressKind::Near)
                         } else {
-                            "near"
+                            hir::AddressKind::Near
                         };
                         Ok(hir::Place {
                             id: hir::PlaceId::new(place.id),
                             name: place.name.clone(),
                             type_id: hir::TypeId::new(place.type_id),
-                            storage: hir_storage(place.storage)?,
+                            storage: place.storage,
                             offset: place.offset,
                             symbol: hir::DataId::new(place.symbol),
                             extent: place.extent,
-                            address: hir_address_kind(address)?,
+                            address,
                         })
                     })
                     .collect::<Result<Vec<_>, SemanticError>>()?;
@@ -7310,7 +7394,7 @@ impl Compiler {
                         .copied()
                         .map(hir::BlockId::new)
                         .collect(),
-                    linkage: hir_linkage(function.linkage)?,
+                    linkage: function.linkage,
                 })
             })
             .collect::<Result<Vec<_>, SemanticError>>()?;
@@ -7353,12 +7437,12 @@ impl Compiler {
                                 at: relocation.at,
                                 target: hir::DataId::new(relocation.target),
                                 addend: relocation.addend,
-                                address: hir_address_kind(relocation.address)?,
+                                address: relocation.address,
                             })
                         })
                         .collect::<Result<Vec<_>, SemanticError>>()?,
-                    linkage: hir_linkage(object.linkage)?,
-                    address: hir_address_kind(object.address)?,
+                    linkage: object.linkage,
+                    address: object.address,
                 })
             })
             .collect::<Result<Vec<_>, SemanticError>>()?;
@@ -7530,7 +7614,7 @@ impl Compiler {
             numbers(&mut out, &function.external_entries);
             write!(out, "],\"id\":{},\"name\":", function.id).unwrap();
             string(&mut out, &function.name);
-            write!(out, ",\"linkage\":\"{}\"", function.linkage).unwrap();
+            write!(out, ",\"linkage\":\"{}\"", function.linkage.as_str()).unwrap();
             out.push_str(",\"parameters\":[");
             numbers(&mut out, &function.parameters);
             out.push_str("],\"places\":[");
@@ -7538,25 +7622,30 @@ impl Compiler {
                 if index != 0 {
                     out.push(',');
                 }
-                let address = if place.storage == "static" {
+                let address = if place.storage == hir::Storage::Static {
                     self.data
                         .iter()
                         .find_map(|object| (object.id == place.symbol).then_some(object.address))
-                        .unwrap_or("near")
+                        .unwrap_or(hir::AddressKind::Near)
                 } else {
-                    "near"
+                    hir::AddressKind::Near
                 };
                 write!(
                     out,
                     "{{\"address\":\"{}\",\"extent\":{},\"id\":{},\"name\":",
-                    address, place.extent, place.id
+                    address.as_str(),
+                    place.extent,
+                    place.id
                 )
                 .unwrap();
                 string(&mut out, &place.name);
                 write!(
                     out,
                     ",\"offset\":{},\"storage\":\"{}\",\"symbol\":{},\"type\":{}}}",
-                    place.offset, place.storage, place.symbol, place.type_id
+                    place.offset,
+                    place.storage.as_str(),
+                    place.symbol,
+                    place.type_id
                 )
                 .unwrap();
             }
@@ -7636,7 +7725,9 @@ impl Compiler {
             write!(
                 out,
                 "],\"address\":\"{}\",\"id\":{},\"linkage\":\"{}\",\"name\":",
-                object.address, object.id, object.linkage
+                object.address.as_str(),
+                object.id,
+                object.linkage.as_str()
             )
             .unwrap();
             string(&mut out, &object.name);
@@ -7648,7 +7739,10 @@ impl Compiler {
                 write!(
                     out,
                     "{{\"addend\":{},\"address\":\"{}\",\"at\":{},\"target\":{}}}",
-                    relocation.addend, relocation.address, relocation.at, relocation.target
+                    relocation.addend,
+                    relocation.address.as_str(),
+                    relocation.at,
+                    relocation.target
                 )
                 .unwrap();
             }
@@ -7687,61 +7781,6 @@ impl Compiler {
                 format!("line {}: {message}", self.current_source_line)
             },
         })
-    }
-}
-
-fn hir_type_kind(kind: &str) -> Result<hir::TypeKind, SemanticError> {
-    match kind {
-        "void" => Ok(hir::TypeKind::Void),
-        "boolean" => Ok(hir::TypeKind::Boolean),
-        "integer" => Ok(hir::TypeKind::Integer),
-        "float" => Ok(hir::TypeKind::Float),
-        "array" => Ok(hir::TypeKind::Array),
-        "pointer" => Ok(hir::TypeKind::Pointer),
-        "opaque" => Ok(hir::TypeKind::Opaque),
-        _ => Err(hir_conversion_error("type kind", kind)),
-    }
-}
-
-fn hir_address_kind(address: &str) -> Result<hir::AddressKind, SemanticError> {
-    match address {
-        "none" => Ok(hir::AddressKind::None),
-        "near" => Ok(hir::AddressKind::Near),
-        "far" => Ok(hir::AddressKind::Far),
-        "huge" => Ok(hir::AddressKind::Huge),
-        "code" => Ok(hir::AddressKind::Code),
-        "segment" => Ok(hir::AddressKind::Segment),
-        _ => Err(hir_conversion_error("address kind", address)),
-    }
-}
-
-fn hir_float_evaluation(evaluation: &str) -> Result<hir::FloatEvaluation, SemanticError> {
-    match evaluation {
-        "none" => Ok(hir::FloatEvaluation::None),
-        "binary32" => Ok(hir::FloatEvaluation::Binary32),
-        "binary64" => Ok(hir::FloatEvaluation::Binary64),
-        "extended80" => Ok(hir::FloatEvaluation::Extended80),
-        _ => Err(hir_conversion_error("floating evaluation", evaluation)),
-    }
-}
-
-fn hir_storage(storage: &str) -> Result<hir::Storage, SemanticError> {
-    match storage {
-        "local" => Ok(hir::Storage::Local),
-        "parameter" => Ok(hir::Storage::Parameter),
-        "static" => Ok(hir::Storage::Static),
-        "module" => Ok(hir::Storage::Module),
-        "common" => Ok(hir::Storage::Common),
-        "external" => Ok(hir::Storage::External),
-        _ => Err(hir_conversion_error("storage class", storage)),
-    }
-}
-
-fn hir_linkage(linkage: &str) -> Result<hir::Linkage, SemanticError> {
-    match linkage {
-        "internal" => Ok(hir::Linkage::Internal),
-        "external" => Ok(hir::Linkage::External),
-        _ => Err(hir_conversion_error("linkage", linkage)),
     }
 }
 
@@ -7810,19 +7849,13 @@ fn hir_terminator(terminator: &Terminator) -> Result<hir::Terminator, SemanticEr
     }
 }
 
-fn hir_conversion_error(category: &str, value: &str) -> SemanticError {
-    SemanticError {
-        message: format!("unknown HIR {category} {value}"),
-    }
-}
-
 fn scalar(
     id: u32,
     name: &str,
-    kind: &'static str,
+    kind: hir::TypeKind,
     width: usize,
     signed: Option<bool>,
-    evaluation: &'static str,
+    evaluation: hir::FloatEvaluation,
 ) -> Type {
     Type {
         id,
@@ -7833,7 +7866,7 @@ fn scalar(
         evaluation,
         element: None,
         bounds: Vec::new(),
-        address: "none",
+        address: hir::AddressKind::None,
     }
 }
 
@@ -8187,7 +8220,12 @@ fn operand_json(out: &mut String, operand: &Operand) {
 }
 
 fn type_json(out: &mut String, type_: &Type) {
-    write!(out, "{{\"address\":\"{}\",\"bounds\":[", type_.address).unwrap();
+    write!(
+        out,
+        "{{\"address\":\"{}\",\"bounds\":[",
+        type_.address.as_str()
+    )
+    .unwrap();
     for (index, (lower, upper)) in type_.bounds.iter().enumerate() {
         if index != 0 {
             out.push(',');
@@ -8202,7 +8240,9 @@ fn type_json(out: &mut String, type_: &Type) {
     write!(
         out,
         ",\"evaluation\":\"{}\",\"id\":{},\"kind\":\"{}\",\"name\":",
-        type_.evaluation, type_.id, type_.kind
+        type_.evaluation.as_str(),
+        type_.id,
+        type_.kind.as_str()
     )
     .unwrap();
     string(out, &type_.name);
