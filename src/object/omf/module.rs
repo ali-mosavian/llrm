@@ -7,6 +7,7 @@ use super::declarations::{self, DeclarationError, Declarations};
 use super::fixups::{self, Fixup, FixupError};
 use super::header::{self, HeaderError, ModuleHeader};
 use super::lines::{self, LineError, LineTable};
+use super::modend::{self, ModendError, ModuleEnd};
 use super::record::Record;
 use super::segments::{self, SegmentError, SegmentTable};
 use super::symbols::{self, SymbolError, SymbolTables};
@@ -21,6 +22,7 @@ pub struct DecodedModule<'a> {
     pub data: Vec<DataBlock<'a>>,
     pub lines: Vec<LineTable>,
     pub fixups: Vec<Fixup>,
+    pub module_ends: Vec<ModuleEnd>,
 }
 
 impl<'a> DecodedModule<'a> {
@@ -33,6 +35,7 @@ impl<'a> DecodedModule<'a> {
             data: data::parse(records).map_err(ModuleError::Data)?,
             lines: lines::parse(records).map_err(ModuleError::Lines)?,
             fixups: fixups::parse(records).map_err(ModuleError::Fixups)?,
+            module_ends: modend::parse(records).map_err(ModuleError::ModuleEnd)?,
         })
     }
 }
@@ -47,6 +50,7 @@ pub enum ModuleError {
     Data(DataError),
     Lines(LineError),
     Fixups(FixupError),
+    ModuleEnd(ModendError),
 }
 
 impl fmt::Display for ModuleError {
@@ -59,6 +63,7 @@ impl fmt::Display for ModuleError {
             Self::Data(error) => error.fmt(formatter),
             Self::Lines(error) => error.fmt(formatter),
             Self::Fixups(error) => error.fmt(formatter),
+            Self::ModuleEnd(error) => error.fmt(formatter),
         }
     }
 }
@@ -73,6 +78,7 @@ impl std::error::Error for ModuleError {
             Self::Data(error) => Some(error),
             Self::Lines(error) => Some(error),
             Self::Fixups(error) => Some(error),
+            Self::ModuleEnd(error) => Some(error),
         }
     }
 }

@@ -8,6 +8,7 @@ pub mod fixups;
 pub mod header;
 pub mod image;
 pub mod lines;
+pub mod modend;
 pub mod module;
 pub mod read;
 pub mod record;
