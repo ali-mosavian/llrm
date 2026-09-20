@@ -68,6 +68,21 @@ pub enum Error {
     Parse(qb::ParseError),
     Semantic(qb::SemanticError),
     QbStatementMetadata(qb::statement_table::MetadataError),
+    QbModuleHeader(qb::module_header::ModuleHeaderError),
+    QbMc(qb::mc::ModuleMcError),
+    QbStatementMc(qb::statement_mc::StatementMcError),
+    QbObject(qb::object::ObjectEnvelopeError),
+    QbStatementRowsUnsupported {
+        count: usize,
+    },
+    QbTextSectionCount {
+        count: usize,
+    },
+    QbStatementTableLayout(crate::mc::LayoutError),
+    MissingQbStatementTableSymbol,
+    QbStatementTableOffsetOverflow {
+        offset: u64,
+    },
     WccParse(wcc::ParseError),
     WccCapture(wcc::capture::BuildError),
     WccRaise(wcc::RaiseError),
@@ -134,6 +149,26 @@ impl fmt::Display for Error {
             Self::Parse(error) => error.message.fmt(formatter),
             Self::Semantic(error) => error.message.fmt(formatter),
             Self::QbStatementMetadata(error) => error.fmt(formatter),
+            Self::QbModuleHeader(error) => error.fmt(formatter),
+            Self::QbMc(error) => error.fmt(formatter),
+            Self::QbStatementMc(error) => error.fmt(formatter),
+            Self::QbObject(error) => error.fmt(formatter),
+            Self::QbStatementRowsUnsupported { count } => write!(
+                formatter,
+                "initial QB object emission cannot yet place {count} runtime statement row(s)"
+            ),
+            Self::QbTextSectionCount { count } => write!(
+                formatter,
+                "QB object emission requires exactly one MC text section, found {count}"
+            ),
+            Self::QbStatementTableLayout(error) => error.fmt(formatter),
+            Self::MissingQbStatementTableSymbol => {
+                formatter.write_str("QB statement-table symbol has no final definition")
+            }
+            Self::QbStatementTableOffsetOverflow { offset } => write!(
+                formatter,
+                "QB statement-table offset {offset:#x} cannot be represented in OMF"
+            ),
             Self::WccParse(error) => error.fmt(formatter),
             Self::WccCapture(error) => error.fmt(formatter),
             Self::WccRaise(error) => error.fmt(formatter),
@@ -482,6 +517,65 @@ pub fn write_x86_omf(module_name: &[u8], module: &crate::mc::MCModule) -> Result
     crate::object::omf::write::to_bytes(&object).map_err(Error::OmfWrite)
 }
 
+/// Compile the current data-free QB slice into its measured BASIC OMF envelope.
+///
+/// Nonempty runtime statement tables and source data are explicitly refused
+/// until their exact source-to-fragment and segment mappings are available.
+pub fn write_qb_omf(program: &Program, module_name: &[u8]) -> Result<Vec<u8>, Error> {
+    let [source] = program.modules.as_slice() else {
+        return Err(Error::ExpectedSingleModule {
+            actual: program.modules.len(),
+        });
+    };
+    let metadata = qb::statement_table::extract(source).map_err(Error::QbStatementMetadata)?;
+    if !metadata.rows.is_empty() {
+        return Err(Error::QbStatementRowsUnsupported {
+            count: metadata.rows.len(),
+        });
+    }
+
+    let selected = lower_qb_to_machine(program)?;
+    let lowered = lower_qb_machine_to_mc(&selected)?;
+    let text_sections = lowered
+        .sections
+        .iter()
+        .filter(|section| section.kind == crate::mc::SectionKind::Text)
+        .map(|section| section.id)
+        .collect::<Vec<_>>();
+    let [text_section] = text_sections.as_slice() else {
+        return Err(Error::QbTextSectionCount {
+            count: text_sections.len(),
+        });
+    };
+    let scalar = qb::mc::scalar_text_only(&lowered, *text_section).map_err(Error::QbMc)?;
+    let table = qb::statement_mc::append_statement_table(
+        &scalar,
+        *text_section,
+        &[],
+        crate::target::x86::X86FixupKind::Absolute16.into(),
+    )
+    .map_err(Error::QbStatementMc)?;
+    let header = qb::module_header::module_header(program).map_err(Error::QbModuleHeader)?;
+    let prefixed =
+        qb::mc::prepend_module_header(&table.module, *text_section, header).map_err(Error::QbMc)?;
+    let encoded = encode_x86_mc(&prefixed)?;
+    let layout = crate::mc::layout(&encoded, |_| None).map_err(Error::QbStatementTableLayout)?;
+    let crate::mc::SymbolLayout::Defined { offset, .. } = layout
+        .symbols
+        .get(&table.table_symbol)
+        .copied()
+        .ok_or(Error::MissingQbStatementTableSymbol)?
+    else {
+        return Err(Error::MissingQbStatementTableSymbol);
+    };
+    let statement_table_offset =
+        u32::try_from(offset).map_err(|_| Error::QbStatementTableOffsetOverflow { offset })?;
+    let generic = crate::target::x86::lower_to_omf(module_name, &encoded).map_err(Error::X86Omf)?;
+    let object = qb::object::add_object_envelope(&generic, program, statement_table_offset)
+        .map_err(Error::QbObject)?;
+    crate::object::omf::write::to_bytes(&object).map_err(Error::OmfWrite)
+}
+
 fn temporary_string_slots(
     function: &crate::hir::Function,
     string_types: &BTreeSet<crate::hir::TypeId>,
@@ -520,7 +614,7 @@ mod tests {
     use super::{
         Error, QbOptions, allocate_qb_machine, compile_qb, compile_wcc_capture, encode_x86_mc,
         lower_c_machine_to_mc, lower_c_to_machine, lower_ir_to_machine, lower_qb_machine_to_mc,
-        lower_qb_to_ir, lower_qb_to_machine, parse_omf, write_x86_omf,
+        lower_qb_to_ir, lower_qb_to_machine, parse_omf, write_qb_omf, write_x86_omf,
     };
     use crate::codegen::machine::{
         FrameObjectKind, MachineAddressSpace, MachineCallingConvention, MachineOperandKind,
@@ -963,6 +1057,95 @@ mod tests {
                     .any(|external| { external.name == runtime })
             );
         }
+    }
+
+    #[test]
+    fn qb_emission_fixture_reaches_its_measured_object_envelope() {
+        let options = QbOptions {
+            dialect: crate::frontend::qb::Dialect::QuickBasic45,
+            runtime: RuntimeProfile::Qb45,
+            ..QbOptions::default()
+        };
+        let program = compile_qb(
+            include_str!("../../frontends/qb/fixtures/emission.bas"),
+            "emission",
+            options,
+        )
+        .expect("established emission fixture compiles to HIR");
+        let bytes = write_qb_omf(&program, b"emission.bas")
+            .expect("data-free QB fixture reaches its BASIC object envelope");
+        let OmfFile::Object(records) = parse_omf(&bytes).expect("fresh QB OMF parses") else {
+            panic!("fresh QB output must be one object module");
+        };
+        let decoded = DecodedModule::parse(&records).expect("fresh QB OMF semantics decode");
+        let segment_names = decoded
+            .segments
+            .segments
+            .iter()
+            .skip(1)
+            .map(|segment| {
+                let segment = segment.as_ref().unwrap();
+                decoded.symbols.names[usize::from(segment.name_index)].clone()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            segment_names,
+            [
+                b"EMISSION_CODE".as_slice(),
+                b"BR_DATA",
+                b"BR_SKYS",
+                b"COMMON",
+                b"BC_DATA",
+                b"NMALLOC",
+                b"ENMALLOC",
+                b"BC_FT",
+                b"BC_CN",
+                b"BC_DS",
+                b"BC_SAB",
+                b"BC_SA",
+            ]
+        );
+        assert_eq!(
+            decoded.declarations.groups[0]
+                .members
+                .iter()
+                .map(|member| match member {
+                    crate::object::omf::declarations::GroupMember::Segment { segment_index } => {
+                        *segment_index
+                    }
+                })
+                .collect::<Vec<_>>(),
+            (2..=12).collect::<Vec<_>>()
+        );
+        assert!(decoded.declarations.publics.iter().any(|public| {
+            public.name == b"ADDONE"
+                && public.offset >= crate::frontend::qb::module_header::MODULE_HEADER_SIZE as u32
+        }));
+
+        let code_length = decoded.segments.segments[1].as_ref().unwrap().length as usize;
+        let mut code = vec![0; code_length];
+        for block in decoded.data.iter().filter(|block| block.segment_index == 1) {
+            let start = block.offset as usize;
+            code[start..start + block.bytes.len()].copy_from_slice(block.bytes);
+        }
+        assert_eq!(&code[..10], b"blEMISSION");
+        let statement_at = usize::from(u16::from_le_bytes(code[10..12].try_into().unwrap()));
+        assert_eq!(
+            &code[statement_at - 3..statement_at + 2],
+            &[0x55, 0x8b, 0xec, 0, 0]
+        );
+        assert!(decoded.fixups.iter().any(|fixup| {
+            fixup.segment_index == 1
+                && fixup.patch_offset == 10
+                && fixup.location == crate::object::omf::fixups::Location::Offset16
+                && fixup.frame.method == crate::object::omf::fixups::FrameMethod::Target
+                && fixup.target.method == crate::object::omf::fixups::TargetMethod::Segment
+                && fixup.target.datum == 1
+        }));
+        assert!(decoded.fixups.iter().any(|fixup| {
+            fixup.segment_index == 12
+                && fixup.location == crate::object::omf::fixups::Location::Pointer16_16
+        }));
     }
 
     #[test]

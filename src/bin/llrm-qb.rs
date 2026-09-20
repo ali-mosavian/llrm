@@ -31,6 +31,7 @@ enum OutputKind {
     Hir,
     Ir,
     Machine,
+    Object,
 }
 
 impl Invocation {
@@ -50,6 +51,7 @@ impl Invocation {
                         "qhir" => OutputKind::Hir,
                         "qir" => OutputKind::Ir,
                         "qmir" => OutputKind::Machine,
+                        "obj" => OutputKind::Object,
                         value => return Err(format!("unknown output kind {value:?}")),
                     };
                     if output_kind.replace(kind).is_some() {
@@ -141,18 +143,22 @@ impl Invocation {
             }
             Err(error) => return failure(format!("{}: {error}", self.input.display())),
         };
-        let text = match self.output_kind {
-            OutputKind::Hir => llrm::hir::write_text(&program),
+        let bytes = match self.output_kind {
+            OutputKind::Hir => llrm::hir::write_text(&program).into_bytes(),
             OutputKind::Ir => match driver::lower_qb_to_ir(&program) {
-                Ok(module) => llrm::ir::write_text(&module),
+                Ok(module) => llrm::ir::write_text(&module).into_bytes(),
                 Err(error) => return failure(format!("{}: {error}", self.input.display())),
             },
             OutputKind::Machine => match driver::lower_qb_to_machine(&program) {
-                Ok(machine) => llrm::codegen::machine::write_text(&machine.module),
+                Ok(machine) => llrm::codegen::machine::write_text(&machine.module).into_bytes(),
+                Err(error) => return failure(format!("{}: {error}", self.input.display())),
+            },
+            OutputKind::Object => match driver::write_qb_omf(&program, module_name.as_bytes()) {
+                Ok(object) => object,
                 Err(error) => return failure(format!("{}: {error}", self.input.display())),
             },
         };
-        write_output(self.output.as_deref(), text.as_bytes())
+        write_output(self.output.as_deref(), &bytes)
     }
 }
 
@@ -181,7 +187,7 @@ fn failure(message: String) -> ExitCode {
 }
 
 fn usage() -> &'static str {
-    "usage: llrm-qb [--emit qhir|qir|qmir] [-o FILE] [QB OPTIONS] INPUT.bas"
+    "usage: llrm-qb [--emit qhir|qir|qmir|obj] [-o FILE] [QB OPTIONS] INPUT.bas"
 }
 
 #[cfg(test)]
@@ -202,6 +208,18 @@ mod tests {
         .unwrap();
 
         assert_eq!(invocation.output_kind, OutputKind::Ir);
+    }
+
+    #[test]
+    fn selects_object_output_for_qb_source() {
+        let invocation = Invocation::parse(
+            ["--emit", "obj", "program.bas"]
+                .into_iter()
+                .map(str::to_owned),
+        )
+        .unwrap();
+
+        assert_eq!(invocation.output_kind, OutputKind::Object);
     }
 
     #[test]

@@ -32,6 +32,10 @@ pub enum ModuleMcError {
         section: SectionId,
         flags: SectionFlags,
     },
+    NonEmptySection {
+        section: SectionId,
+        kind: SectionKind,
+    },
     ReservedSymbol {
         name: String,
     },
@@ -70,6 +74,10 @@ impl fmt::Display for ModuleMcError {
                 "QB header text section {section} lacks allocation or executable flags ({:#x})",
                 flags.bits()
             ),
+            Self::NonEmptySection { section, kind } => write!(
+                formatter,
+                "initial QB object emission cannot represent nonempty {kind:?} section {section}"
+            ),
             Self::ReservedSymbol { name } => {
                 write!(
                     formatter,
@@ -83,6 +91,44 @@ impl fmt::Display for ModuleMcError {
 }
 
 impl Error for ModuleMcError {}
+
+/// Retain the sole text section for the initial data-free QB object slice.
+///
+/// Generic x86 MC deliberately declares empty data sections. Microsoft BASIC
+/// objects must not contain even an empty C `_DATA` contribution because it
+/// changes DGROUP layout and runtime heap initialization. Nonempty sections
+/// are refused until the QB data adapter can spell their measured segments.
+pub fn scalar_text_only(
+    module: &MCModule,
+    text_section: SectionId,
+) -> Result<MCModule, ModuleMcError> {
+    module.verify().map_err(ModuleMcError::InputVerification)?;
+    let text = module
+        .sections
+        .iter()
+        .find(|section| section.id == text_section)
+        .ok_or(ModuleMcError::MissingTextSection {
+            section: text_section,
+        })?;
+    if text.kind != SectionKind::Text {
+        return Err(ModuleMcError::NonTextSection {
+            section: text_section,
+            kind: text.kind,
+        });
+    }
+    for section in &module.sections {
+        if section.id != text_section && !section.fragments.is_empty() {
+            return Err(ModuleMcError::NonEmptySection {
+                section: section.id,
+                kind: section.kind,
+            });
+        }
+    }
+    let mut output = module.clone();
+    output.sections.retain(|section| section.id == text_section);
+    output.verify().map_err(ModuleMcError::OutputVerification)?;
+    Ok(output)
+}
 
 /// Return an MC module with the QB module header as its first text fragment.
 pub fn prepend_module_header(
@@ -331,6 +377,37 @@ mod tests {
             qb.segments[0].initialized[0].bytes[MODULE_HEADER_SIZE..],
             [9, 0]
         );
+    }
+
+    #[test]
+    fn removes_empty_generic_data_sections_but_refuses_program_data() {
+        let mut source = module();
+        source.sections.push(MCSection {
+            id: SectionId::new(5),
+            name: ".data".to_owned(),
+            kind: SectionKind::Data,
+            flags: SectionFlags::ALLOC.union(SectionFlags::WRITABLE),
+            alignment: 1,
+            fragments: Vec::new(),
+        });
+        let scalar = scalar_text_only(&source, TEXT).unwrap();
+        assert_eq!(scalar.sections.len(), 1);
+        assert_eq!(scalar.sections[0].id, TEXT);
+
+        source.sections[1]
+            .fragments
+            .push(MCFragment::Data(DataFragment {
+                id: FragmentId::new(9),
+                bytes: vec![1],
+                fixups: Vec::new(),
+            }));
+        assert!(matches!(
+            scalar_text_only(&source, TEXT),
+            Err(ModuleMcError::NonEmptySection {
+                section,
+                kind: SectionKind::Data,
+            }) if section == SectionId::new(5)
+        ));
     }
 
     #[test]
