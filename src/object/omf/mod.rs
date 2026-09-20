@@ -2,3 +2,4 @@
 
 pub mod read;
 pub mod record;
+pub mod symbols;
