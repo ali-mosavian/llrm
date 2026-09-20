@@ -4,6 +4,7 @@ pub mod archive;
 pub mod data;
 pub mod declarations;
 pub mod file;
+pub mod fixups;
 pub mod lines;
 pub mod read;
 pub mod record;
