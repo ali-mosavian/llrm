@@ -16,7 +16,9 @@ use crate::mc::{
 };
 use crate::support::diagnostic::Diagnostic;
 
-use super::{EncodeError, X86McEncodeError, X86Opcode, encode_mc_module, encoded_size};
+use super::{
+    encode_mc_module, encoded_size, ConditionCode, EncodeError, X86McEncodeError, X86Opcode,
+};
 
 /// Which immutable boundary failed MC verification.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -49,6 +51,21 @@ pub enum X86JumpLayoutError {
     InvalidJumpOperand {
         section: SectionId,
         fragment: FragmentId,
+    },
+    InvalidConditionalJumpArity {
+        section: SectionId,
+        fragment: FragmentId,
+        actual: usize,
+    },
+    InvalidConditionalJumpOperand {
+        section: SectionId,
+        fragment: FragmentId,
+        index: usize,
+    },
+    InvalidConditionCode {
+        section: SectionId,
+        fragment: FragmentId,
+        value: i64,
     },
     JumpTargetAddend {
         section: SectionId,
@@ -113,6 +130,30 @@ impl fmt::Display for X86JumpLayoutError {
                 formatter,
                 "section {section} jump fragment {fragment} target must be a symbolic expression"
             ),
+            Self::InvalidConditionalJumpArity {
+                section,
+                fragment,
+                actual,
+            } => write!(
+                formatter,
+                "section {section} conditional jump fragment {fragment} expects condition and target operands, found {actual}"
+            ),
+            Self::InvalidConditionalJumpOperand {
+                section,
+                fragment,
+                index,
+            } => write!(
+                formatter,
+                "section {section} conditional jump fragment {fragment} has an invalid operand at index {index}"
+            ),
+            Self::InvalidConditionCode {
+                section,
+                fragment,
+                value,
+            } => write!(
+                formatter,
+                "section {section} conditional jump fragment {fragment} has invalid condition discriminant {value}"
+            ),
             Self::JumpTargetAddend {
                 section,
                 fragment,
@@ -162,6 +203,9 @@ impl Error for X86JumpLayoutError {
             | Self::Instruction { .. }
             | Self::InvalidJumpArity { .. }
             | Self::InvalidJumpOperand { .. }
+            | Self::InvalidConditionalJumpArity { .. }
+            | Self::InvalidConditionalJumpOperand { .. }
+            | Self::InvalidConditionCode { .. }
             | Self::JumpTargetAddend { .. }
             | Self::UndefinedTarget { .. }
             | Self::CrossSectionTarget { .. }
@@ -178,10 +222,11 @@ enum JumpForm {
 }
 
 impl JumpForm {
-    const fn size(self) -> u64 {
+    const fn size(self, conditional: bool) -> u64 {
         match self {
             Self::Dropped => 0,
             Self::Short => 2,
+            Self::Near if conditional => 4,
             Self::Near => 3,
         }
     }
@@ -192,6 +237,7 @@ struct DirectJump {
     section: SectionId,
     fragment: FragmentId,
     expression: MCExpression,
+    condition: Option<ConditionCode>,
     target_fragment: Option<FragmentId>,
 }
 
@@ -227,7 +273,7 @@ pub fn relax_and_encode_jumps(module: &MCModule) -> Result<MCModule, X86JumpLayo
     loop {
         let mut changed = false;
         for jump in &jumps {
-            if forms[&jump.fragment] != JumpForm::Short {
+            if jump.condition.is_some() || forms[&jump.fragment] != JumpForm::Short {
                 continue;
             }
             if is_structural_fallthrough(module, jump, &forms) {
@@ -244,7 +290,7 @@ pub fn relax_and_encode_jumps(module: &MCModule) -> Result<MCModule, X86JumpLayo
     // compares every short jump against one complete, pre-growth layout; a
     // change can only increase a fragment's size, so termination is bounded.
     loop {
-        let layout = layout_for(module, &forms)?;
+        let layout = layout_for(module, &forms, &jumps)?;
         let mut changed = false;
         for jump in &jumps {
             if forms[&jump.fragment] != JumpForm::Short {
@@ -252,7 +298,11 @@ pub fn relax_and_encode_jumps(module: &MCModule) -> Result<MCModule, X86JumpLayo
             }
             let location = layout.fragments[&jump.fragment];
             let target = same_section_target(jump, &layout)?;
-            let displacement = relative_displacement(target, location.offset, JumpForm::Short);
+            let displacement = relative_displacement(
+                target,
+                location.offset,
+                JumpForm::Short.size(jump.condition.is_some()),
+            );
             if !fits_i8(displacement) {
                 forms.insert(jump.fragment, JumpForm::Near);
                 changed = true;
@@ -263,7 +313,7 @@ pub fn relax_and_encode_jumps(module: &MCModule) -> Result<MCModule, X86JumpLayo
         }
     }
 
-    let layout = layout_for(module, &forms)?;
+    let layout = layout_for(module, &forms, &jumps)?;
     let mut relaxed = module.clone();
     for section in &mut relaxed.sections {
         for fragment in &mut section.fragments {
@@ -279,10 +329,16 @@ pub fn relax_and_encode_jumps(module: &MCModule) -> Result<MCModule, X86JumpLayo
                 .expect("a form exists only for a collected jump");
             let location = layout.fragments[&jump.fragment];
             let target = same_section_target(jump, &layout)?;
-            let displacement = relative_displacement(target, location.offset, form);
+            let displacement =
+                relative_displacement(target, location.offset, form.size(jump.condition.is_some()));
             let bytes = match form {
                 JumpForm::Dropped => Vec::new(),
-                JumpForm::Short => vec![0xeb, displacement as i8 as u8],
+                JumpForm::Short => match jump.condition {
+                    Some(condition) => {
+                        vec![short_condition_opcode(condition), displacement as i8 as u8]
+                    }
+                    None => vec![0xeb, displacement as i8 as u8],
+                },
                 JumpForm::Near => {
                     let value = i16::try_from(displacement).map_err(|_| {
                         X86JumpLayoutError::DisplacementOutOfRange {
@@ -291,7 +347,10 @@ pub fn relax_and_encode_jumps(module: &MCModule) -> Result<MCModule, X86JumpLayo
                             displacement,
                         }
                     })?;
-                    let mut bytes = vec![0xe9];
+                    let mut bytes = match jump.condition {
+                        Some(condition) => vec![0x0f, near_condition_opcode(condition)],
+                        None => vec![0xe9],
+                    };
                     bytes.extend_from_slice(&value.to_le_bytes());
                     bytes
                 }
@@ -322,7 +381,8 @@ fn collect_jumps(module: &MCModule) -> Result<Vec<DirectJump>, X86JumpLayoutErro
                     count: instruction.fixups.len(),
                 });
             }
-            if instruction.instruction.opcode.get() != X86Opcode::Jump as u32 {
+            let opcode = instruction.instruction.opcode.get();
+            if opcode != X86Opcode::Jump as u32 && opcode != X86Opcode::JumpConditional as u32 {
                 encoded_size(&instruction.instruction).map_err(|error| {
                     X86JumpLayoutError::Instruction {
                         section: section.id,
@@ -332,7 +392,14 @@ fn collect_jumps(module: &MCModule) -> Result<Vec<DirectJump>, X86JumpLayoutErro
                 })?;
                 continue;
             }
-            let expression = jump_expression(section.id, instruction.id, &instruction.instruction)?;
+            let (expression, condition) = if opcode == X86Opcode::JumpConditional as u32 {
+                conditional_jump_expression(section.id, instruction.id, &instruction.instruction)?
+            } else {
+                (
+                    jump_expression(section.id, instruction.id, &instruction.instruction)?,
+                    None,
+                )
+            };
             if expression.addend != 0 {
                 return Err(X86JumpLayoutError::JumpTargetAddend {
                     section: section.id,
@@ -357,6 +424,7 @@ fn collect_jumps(module: &MCModule) -> Result<Vec<DirectJump>, X86JumpLayoutErro
                 section: section.id,
                 fragment: instruction.id,
                 expression,
+                condition,
                 target_fragment,
             });
         }
@@ -431,9 +499,49 @@ fn jump_expression(
     Ok(*expression)
 }
 
+fn conditional_jump_expression(
+    section: SectionId,
+    fragment: FragmentId,
+    instruction: &MCInstruction,
+) -> Result<(MCExpression, Option<ConditionCode>), X86JumpLayoutError> {
+    if instruction.operands.len() != 2 {
+        return Err(X86JumpLayoutError::InvalidConditionalJumpArity {
+            section,
+            fragment,
+            actual: instruction.operands.len(),
+        });
+    }
+    let Some(MCOperand::Immediate(value)) = instruction.operands.first() else {
+        return Err(X86JumpLayoutError::InvalidConditionalJumpOperand {
+            section,
+            fragment,
+            index: 0,
+        });
+    };
+    let Some(condition) = ConditionCode::ALL
+        .into_iter()
+        .find(|candidate| *candidate as i64 == *value)
+    else {
+        return Err(X86JumpLayoutError::InvalidConditionCode {
+            section,
+            fragment,
+            value: *value,
+        });
+    };
+    let Some(MCOperand::Expression(expression)) = instruction.operands.get(1) else {
+        return Err(X86JumpLayoutError::InvalidConditionalJumpOperand {
+            section,
+            fragment,
+            index: 1,
+        });
+    };
+    Ok((*expression, Some(condition)))
+}
+
 fn layout_for(
     module: &MCModule,
     forms: &BTreeMap<FragmentId, JumpForm>,
+    jumps: &[DirectJump],
 ) -> Result<mc::MCLayout, X86JumpLayoutError> {
     let mut shadow = module.clone();
     for section in &mut shadow.sections {
@@ -441,10 +549,14 @@ fn layout_for(
             let Some(form) = forms.get(&fragment.id()).copied() else {
                 continue;
             };
+            let conditional = jumps
+                .iter()
+                .find(|jump| jump.fragment == fragment.id())
+                .is_some_and(|jump| jump.condition.is_some());
             let id = fragment.id();
             *fragment = MCFragment::Data(DataFragment {
                 id,
-                bytes: vec![0; form.size() as usize],
+                bytes: vec![0; form.size(conditional) as usize],
                 fixups: Vec::new(),
             });
         }
@@ -475,16 +587,45 @@ fn same_section_target(
     }
 }
 
-fn relative_displacement(target: u64, start: u64, form: JumpForm) -> i128 {
-    // `layout_for` has already advanced this exact fragment by `form.size()`;
+fn relative_displacement(target: u64, start: u64, size: u64) -> i128 {
+    // `layout_for` has already advanced this exact fragment by `size`;
     // a wrapping end address would therefore have been refused by generic MC
     // layout before this target-specific calculation.
-    let end = start + form.size();
+    let end = start + size;
     i128::from(target) - i128::from(end)
 }
 
 fn fits_i8(value: i128) -> bool {
     value >= i128::from(i8::MIN) && value <= i128::from(i8::MAX)
+}
+
+const fn condition_opcode_offset(condition: ConditionCode) -> u8 {
+    match condition {
+        ConditionCode::Overflow => 0x0,
+        ConditionCode::NotOverflow => 0x1,
+        ConditionCode::Below => 0x2,
+        ConditionCode::AboveOrEqual => 0x3,
+        ConditionCode::Equal => 0x4,
+        ConditionCode::NotEqual => 0x5,
+        ConditionCode::BelowOrEqual => 0x6,
+        ConditionCode::Above => 0x7,
+        ConditionCode::Sign => 0x8,
+        ConditionCode::NotSign => 0x9,
+        ConditionCode::Parity => 0xa,
+        ConditionCode::NotParity => 0xb,
+        ConditionCode::Less => 0xc,
+        ConditionCode::GreaterOrEqual => 0xd,
+        ConditionCode::LessOrEqual => 0xe,
+        ConditionCode::Greater => 0xf,
+    }
+}
+
+const fn short_condition_opcode(condition: ConditionCode) -> u8 {
+    0x70 + condition_opcode_offset(condition)
+}
+
+const fn near_condition_opcode(condition: ConditionCode) -> u8 {
+    0x80 + condition_opcode_offset(condition)
 }
 
 #[cfg(test)]
@@ -494,7 +635,7 @@ mod tests {
         AlignFragment, Fixup, FixupKind, InstructionFragment, MCSection, MCSymbol, SectionFlags,
         SectionKind, SymbolBinding, SymbolDefinition, SymbolVisibility, ZeroFillFragment,
     };
-    use crate::target::x86::{X86FixupKind, X86Opcode, X86Register};
+    use crate::target::x86::{ConditionCode, X86FixupKind, X86Opcode, X86Register};
 
     fn text(fragments: Vec<MCFragment>) -> MCSection {
         MCSection {
@@ -524,6 +665,23 @@ mod tests {
                     symbol: SymbolId::new(symbol),
                     addend: 0,
                 })],
+            },
+            fixups: Vec::new(),
+        })
+    }
+
+    fn conditional_jump(id: u32, condition: ConditionCode, symbol: u32) -> MCFragment {
+        MCFragment::Instruction(InstructionFragment {
+            id: FragmentId::new(id),
+            instruction: MCInstruction {
+                opcode: crate::mc::TargetOpcode::new(X86Opcode::JumpConditional as u32),
+                operands: vec![
+                    MCOperand::Immediate(condition as i64),
+                    MCOperand::Expression(MCExpression {
+                        symbol: SymbolId::new(symbol),
+                        addend: 0,
+                    }),
+                ],
             },
             fixups: Vec::new(),
         })
@@ -603,6 +761,113 @@ mod tests {
             fragment_bytes(&relax_and_encode_jumps(&backward).unwrap(), 3),
             [0xeb, 0xfb]
         );
+    }
+
+    #[test]
+    fn encodes_a_signed_less_conditional_jump() {
+        let source = module(
+            vec![
+                conditional_jump(1, ConditionCode::Less, 0),
+                data(2, [0; 3]),
+                data(3, []),
+            ],
+            vec![symbol(
+                0,
+                SymbolDefinition::Fragment {
+                    fragment: FragmentId::new(3),
+                    offset: 0,
+                },
+            )],
+        );
+
+        assert_eq!(
+            fragment_bytes(&relax_and_encode_jumps(&source).unwrap(), 1),
+            [0x7c, 3]
+        );
+    }
+
+    #[test]
+    fn grows_conditional_jumps_at_the_short_range_boundary() {
+        for (length, bytes) in [(127usize, vec![0x7c, 127]), (128, vec![0x0f, 0x8c, 128, 0])] {
+            let source = module(
+                vec![
+                    conditional_jump(1, ConditionCode::Less, 0),
+                    data(2, vec![0; length]),
+                    data(3, []),
+                ],
+                vec![symbol(
+                    0,
+                    SymbolDefinition::Fragment {
+                        fragment: FragmentId::new(3),
+                        offset: 0,
+                    },
+                )],
+            );
+            assert_eq!(
+                fragment_bytes(&relax_and_encode_jumps(&source).unwrap(), 1),
+                bytes
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_malformed_conditional_branch_operands() {
+        let invalid_condition = module(
+            vec![MCFragment::Instruction(InstructionFragment {
+                id: FragmentId::new(1),
+                instruction: MCInstruction {
+                    opcode: crate::mc::TargetOpcode::new(X86Opcode::JumpConditional as u32),
+                    operands: vec![
+                        MCOperand::Immediate(0),
+                        MCOperand::Expression(MCExpression {
+                            symbol: SymbolId::new(0),
+                            addend: 0,
+                        }),
+                    ],
+                },
+                fixups: Vec::new(),
+            })],
+            vec![symbol(0, SymbolDefinition::Undefined)],
+        );
+        assert!(matches!(
+            relax_and_encode_jumps(&invalid_condition),
+            Err(X86JumpLayoutError::InvalidConditionCode { value: 0, .. })
+        ));
+
+        let wrong_arity = module(
+            vec![MCFragment::Instruction(InstructionFragment {
+                id: FragmentId::new(1),
+                instruction: MCInstruction {
+                    opcode: crate::mc::TargetOpcode::new(X86Opcode::JumpConditional as u32),
+                    operands: vec![MCOperand::Immediate(ConditionCode::Less as i64)],
+                },
+                fixups: Vec::new(),
+            })],
+            Vec::new(),
+        );
+        assert!(matches!(
+            relax_and_encode_jumps(&wrong_arity),
+            Err(X86JumpLayoutError::InvalidConditionalJumpArity { actual: 1, .. })
+        ));
+
+        let wrong_target = module(
+            vec![MCFragment::Instruction(InstructionFragment {
+                id: FragmentId::new(1),
+                instruction: MCInstruction {
+                    opcode: crate::mc::TargetOpcode::new(X86Opcode::JumpConditional as u32),
+                    operands: vec![
+                        MCOperand::Immediate(ConditionCode::Less as i64),
+                        MCOperand::Immediate(0),
+                    ],
+                },
+                fixups: Vec::new(),
+            })],
+            Vec::new(),
+        );
+        assert!(matches!(
+            relax_and_encode_jumps(&wrong_target),
+            Err(X86JumpLayoutError::InvalidConditionalJumpOperand { index: 1, .. })
+        ));
     }
 
     #[test]
