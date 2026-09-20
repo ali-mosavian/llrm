@@ -763,13 +763,38 @@ regressions.  Delegated focused runs took 5.45 and 4.25 seconds; the reviewed
 four-test run, including HIR verification and HIR-to-IR lowering, took 2.59
 seconds.  No x86 C ABI, optimizer, broad, or external gate ran.
 
+The generic backend now carries near caller-cleanup and far caller-cleanup as
+distinct Machine IR conventions.  Target selection preserves source operand
+order in IR, pushes C arguments right-to-left, constrains 16-bit results to
+AX, emits near or far calls and returns from the convention, and performs the
+exact caller stack adjustment.  Existing far-Pascal selection is unchanged;
+WCC names and attributes do not cross the frontend boundary.  The public
+`.qmir` schema is version 5.  The delegated focused selection run took 3.90
+seconds; primary review inspected the complete three-file diff, corrected the
+remaining QB CLI schema expectation, and repeated the selection in 1.68
+seconds.
+
+`llrm-c` now drives a real `.cgs` capture through parsing, typed capture
+construction, source-neutral HIR verification, portable IR, and x86 Machine
+IR.  It emits deterministic `.qir` or `.qmir` text and explicitly refuses
+unsupported output kinds.  The real `iparg.cgs` regression verifies both text
+round trips and the mixed far-cdecl/near-cdecl call path.  Focused CLI checks
+took 6.21 seconds for the IR slice and 0.55 seconds for the added Machine IR
+slice.  No allocation, MC, OMF, linker, runtime, broad, or optimization gate
+ran.
+
 ## End-to-end frontend milestone
 
 No additional optimization pass will be ported until both `llrm-qb` and
 `llrm-c` compile real programs through the Rust frontend and shared
-optimization-disabled backend, emit OMF, link, and run successfully.  The gate
-uses the existing paired programs rather than one selected smoke test:
-`nbody`, `sieve`, and the BASIC/C parity programs under `bench/parity`, with
-their established expected results.  Failures are localized at adjacent stage
+optimization-disabled backend, emit OMF, link, and run successfully.  The
+gate expands by semantic family across the ten checked-in BASIC/C pairs under
+`bench/parity`: `algebra`, `branch`, `control`, `loop`, `memory`, `parity`,
+`qbsp`, `qlight`, `qmove`, and `scalar`.  It then covers
+`bench/nbody.bas` against `bench/c/nbody.c`.  The C-only `sieve`, `crc`,
+`floats`, `lru`, `mandel`, `matmul`, and `shellsort` programs extend C
+coverage without being mislabeled as language pairs.  Each rung uses its
+established expected result and ports the corresponding focused and regression
+tests with the implementation.  Failures are localized at adjacent stage
 boundaries; this gate does not authorize QB or WCC policy in shared HIR, MIR,
 LIR, MC, x86, or generic OMF code.
