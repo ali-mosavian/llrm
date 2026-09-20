@@ -7,6 +7,7 @@ use std::process::ExitCode;
 
 use llrm::object::omf::archive::Module;
 use llrm::object::omf::file::File;
+use llrm::object::omf::modend::StartAddress;
 use llrm::object::omf::module::{DecodedModule, ModuleError};
 use llrm::object::omf::record::Record;
 
@@ -111,6 +112,11 @@ fn write_bytes(bytes: &[u8], writer: &mut impl Write) -> io::Result<()> {
 
 fn dump_decoded(records: &[Record], writer: &mut impl Write) -> Result<(), DumpError> {
     let module = DecodedModule::parse(records)?;
+    if let Some(header) = &module.header {
+        write!(writer, "module-name ")?;
+        write_bytes(&header.name, writer)?;
+        writeln!(writer, " kind={:?}", header.kind)?;
+    }
     for (index, external) in module.symbols.externals.iter().enumerate().skip(1) {
         let Some(external) = external else {
             continue;
@@ -140,6 +146,26 @@ fn dump_decoded(records: &[Record], writer: &mut impl Write) -> Result<(), DumpE
             fixup.target.datum,
             fixup.displacement
         )?;
+    }
+    for end in &module.module_ends {
+        write!(writer, "module-end main={} start=", end.is_main_module)?;
+        match &end.start {
+            None => writeln!(writer, "none")?,
+            Some(StartAddress::Physical(start)) => writeln!(
+                writer,
+                "physical frame={:#x} offset={:#x}",
+                start.frame, start.offset
+            )?,
+            Some(StartAddress::Logical(start)) => writeln!(
+                writer,
+                "logical frame={:?}:{:?} target={:?}:{} displacement={:#x}",
+                start.frame.method,
+                start.frame.datum,
+                start.target.method,
+                start.target.datum,
+                start.target.displacement
+            )?,
+        }
     }
     Ok(())
 }
@@ -190,7 +216,10 @@ mod tests {
 
         assert_eq!(
             String::from_utf8(output).unwrap(),
-            "00000000 type=80 body=2 checksum=invalid\n"
+            concat!(
+                "00000000 type=80 body=2 checksum=invalid\n",
+                "module-name m kind=Translator\n",
+            )
         );
     }
 
