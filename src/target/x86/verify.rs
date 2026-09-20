@@ -273,12 +273,30 @@ impl Verifier {
                     );
                 }
             }
+            MachineOperandKind::Register(MachineRegister::Physical(register))
+                if matches!(address.role, OperandRole::Use)
+                    && address.constraint.is_none()
+                    && address.tied_to.is_none() =>
+            {
+                let valid = X86Register::from_physical(*register).is_some_and(|register| {
+                    X86RegisterClass::Address16.members().contains(&register)
+                });
+                if !valid {
+                    self.operand_error(
+                        function,
+                        block,
+                        instruction,
+                        position,
+                        "must use a physical address16 x86 register",
+                    );
+                }
+            }
             _ => self.operand_error(
                 function,
                 block,
                 instruction,
                 position,
-                "must be a frame index or address16 virtual register use",
+                "must be a frame index or address16 register use",
             ),
         }
     }
@@ -400,7 +418,7 @@ impl Verifier {
             );
             return;
         };
-        self.require_virtual_class(
+        self.require_register_class(
             function,
             block,
             instruction,
@@ -411,7 +429,7 @@ impl Verifier {
             classes,
         );
         for (position, operand) in [(1, low), (2, high)] {
-            self.require_virtual_class(
+            self.require_register_class(
                 function,
                 block,
                 instruction,
@@ -448,7 +466,7 @@ impl Verifier {
             );
             return;
         };
-        self.require_virtual_class(
+        self.require_register_class(
             function,
             block,
             instruction,
@@ -466,7 +484,7 @@ impl Verifier {
                 "word extraction must have no flags",
             );
         }
-        self.require_virtual_class(
+        self.require_register_class(
             function,
             block,
             instruction,
@@ -522,7 +540,7 @@ impl Verifier {
                             "fixed call uses must precede definitions",
                         );
                     }
-                    self.require_fixed_virtual(
+                    self.require_abi_register(
                         function,
                         block,
                         instruction,
@@ -534,7 +552,7 @@ impl Verifier {
                 }
                 OperandRole::Def => {
                     saw_definition = true;
-                    if let Some(physical) = self.require_fixed_virtual(
+                    if let Some(physical) = self.require_abi_register(
                         function,
                         block,
                         instruction,
@@ -563,7 +581,7 @@ impl Verifier {
                     block,
                     instruction,
                     position,
-                    "must be a fixed virtual register use or definition",
+                    "must be an ABI register use or definition",
                 ),
             }
         }
@@ -593,7 +611,7 @@ impl Verifier {
             _ => (operands, None),
         };
         for (index, value) in values.iter().enumerate() {
-            self.require_fixed_virtual(
+            self.require_abi_register(
                 function,
                 block,
                 instruction,
@@ -694,7 +712,7 @@ impl Verifier {
         width
     }
 
-    fn require_virtual_class(
+    fn require_register_class(
         &mut self,
         function: &MachineFunction,
         block: &MachineBlock,
@@ -705,16 +723,6 @@ impl Verifier {
         expected: X86RegisterClass,
         classes: &BTreeMap<VirtualRegisterId, RegisterClass>,
     ) {
-        let MachineOperandKind::Register(MachineRegister::Virtual(id)) = operand.kind else {
-            self.operand_error(
-                function,
-                block,
-                instruction,
-                position,
-                "must be a virtual register",
-            );
-            return;
-        };
         if operand.role != role {
             self.operand_error(
                 function,
@@ -724,13 +732,25 @@ impl Verifier {
                 format!("must have {:?} role", role),
             );
         }
-        if classes.get(&id).copied() != Some(expected.machine_class()) {
+        let valid = match operand.kind {
+            MachineOperandKind::Register(MachineRegister::Virtual(id)) => {
+                classes.get(&id).copied() == Some(expected.machine_class())
+            }
+            MachineOperandKind::Register(MachineRegister::Physical(register))
+                if operand.constraint.is_none() && operand.tied_to.is_none() =>
+            {
+                X86Register::from_physical(register)
+                    .is_some_and(|register| expected.members().contains(&register))
+            }
+            _ => false,
+        };
+        if !valid {
             self.operand_error(
                 function,
                 block,
                 instruction,
                 position,
-                format!("must have {} x86 register class", class_name(expected)),
+                format!("must be a {} x86 register", class_name(expected)),
             );
         }
     }
@@ -776,7 +796,7 @@ impl Verifier {
         }
     }
 
-    fn require_fixed_virtual(
+    fn require_abi_register(
         &mut self,
         function: &MachineFunction,
         block: &MachineBlock,
@@ -786,16 +806,6 @@ impl Verifier {
         role: OperandRole,
         classes: &BTreeMap<VirtualRegisterId, RegisterClass>,
     ) -> Option<X86Register> {
-        let MachineOperandKind::Register(MachineRegister::Virtual(id)) = operand.kind else {
-            self.operand_error(
-                function,
-                block,
-                instruction,
-                position,
-                "must be a virtual register",
-            );
-            return None;
-        };
         if operand.role != role {
             self.operand_error(
                 function,
@@ -805,43 +815,79 @@ impl Verifier {
                 format!("must have {:?} role", role),
             );
         }
-        let Some(RegisterConstraint::Fixed(physical)) = operand.constraint else {
-            self.operand_error(
-                function,
-                block,
-                instruction,
-                position,
-                "must have a fixed ABI register constraint",
-            );
-            return None;
-        };
-        let Some(class) = classes
-            .get(&id)
-            .and_then(|class| X86RegisterClass::from_machine_class(*class))
-        else {
-            return None;
-        };
-        let Some(physical) = X86Register::from_physical(physical) else {
-            self.operand_error(
-                function,
-                block,
-                instruction,
-                position,
-                "must constrain a known x86 physical register",
-            );
-            return None;
-        };
-        if !class.members().contains(&physical) {
-            self.operand_error(
-                function,
-                block,
-                instruction,
-                position,
-                "fixed ABI register is incompatible with the virtual register class",
-            );
-            return None;
+        match operand.kind {
+            MachineOperandKind::Register(MachineRegister::Virtual(id)) => {
+                let Some(RegisterConstraint::Fixed(physical)) = operand.constraint else {
+                    self.operand_error(
+                        function,
+                        block,
+                        instruction,
+                        position,
+                        "must have a fixed ABI register constraint",
+                    );
+                    return None;
+                };
+                let Some(class) = classes
+                    .get(&id)
+                    .and_then(|class| X86RegisterClass::from_machine_class(*class))
+                else {
+                    return None;
+                };
+                let Some(physical) = X86Register::from_physical(physical) else {
+                    self.operand_error(
+                        function,
+                        block,
+                        instruction,
+                        position,
+                        "must constrain a known x86 physical register",
+                    );
+                    return None;
+                };
+                if !class.members().contains(&physical) {
+                    self.operand_error(
+                        function,
+                        block,
+                        instruction,
+                        position,
+                        "fixed ABI register is incompatible with the virtual register class",
+                    );
+                    return None;
+                }
+                Some(physical)
+            }
+            MachineOperandKind::Register(MachineRegister::Physical(physical)) => {
+                if operand.constraint.is_some() || operand.tied_to.is_some() {
+                    self.operand_error(
+                        function,
+                        block,
+                        instruction,
+                        position,
+                        "allocated ABI register must not retain a constraint or tie",
+                    );
+                    return None;
+                }
+                X86Register::from_physical(physical).or_else(|| {
+                    self.operand_error(
+                        function,
+                        block,
+                        instruction,
+                        position,
+                        "must name a known x86 physical ABI register",
+                    );
+                    None
+                })
+            }
+            _ => {
+                self.operand_error(
+                    function,
+                    block,
+                    instruction,
+                    position,
+                    "must be a virtual or physical ABI register",
+                );
+                None
+            }
         }
-        Some(physical)
     }
 
     fn require_register_role(

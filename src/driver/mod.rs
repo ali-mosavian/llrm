@@ -3,14 +3,18 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use crate::codegen::machine::{MachineBlockId, MachineFunctionId, MachineModule};
+use crate::codegen::machine::{
+    AllocationRewriteError, MachineBlockId, MachineFunctionId, MachineModule, MachineOperandKind,
+    apply_assignment,
+};
 use crate::frontend::qb::{self, Dialect};
 use crate::hir::{LowerError, Program, RuntimeProfile, Storage};
 use crate::ir;
 use crate::object::omf::file::{File as OmfFile, FileError};
 use crate::support::diagnostic::Diagnostic;
 use crate::target::x86::{
-    BasicAbiError, BasicFramePlan, BasicRuntime, CallClobberError, SelectionError,
+    BasicAbiError, BasicFramePlan, BasicRuntime, CallClobberError, FrameIndexMaterializationError,
+    SelectionError, X86AllocationError,
 };
 
 /// Configuration that affects QB source semantics.
@@ -64,6 +68,21 @@ pub enum Error {
         function: String,
         error: CallClobberError,
     },
+    Allocation {
+        function: String,
+        error: X86AllocationError,
+    },
+    AllocationRewrite {
+        function: String,
+        error: AllocationRewriteError,
+    },
+    FrameIndices {
+        function: String,
+        error: FrameIndexMaterializationError,
+    },
+    MissingFramePlan {
+        function: String,
+    },
     MissingSourceFunction(MachineFunctionId),
     TemporaryStringCountTooLarge {
         function: String,
@@ -93,6 +112,24 @@ impl fmt::Display for Error {
                     "cannot materialize call clobbers for {function}: {error}"
                 )
             }
+            Self::Allocation { function, error } => {
+                write!(
+                    formatter,
+                    "cannot allocate x86 registers for {function}: {error}"
+                )
+            }
+            Self::AllocationRewrite { function, error } => write!(
+                formatter,
+                "cannot apply x86 register allocation for {function}: {error}"
+            ),
+            Self::FrameIndices { function, error } => write!(
+                formatter,
+                "cannot materialize x86 frame indices for {function}: {error}"
+            ),
+            Self::MissingFramePlan { function } => write!(
+                formatter,
+                "machine function {function} uses frame indices without a BASIC frame plan"
+            ),
             Self::MissingSourceFunction(function) => write!(
                 formatter,
                 "selected machine function {function} has no QB source function"
@@ -215,6 +252,46 @@ pub fn lower_qb_to_machine(program: &Program) -> Result<QbMachine, Error> {
     })
 }
 
+/// Allocates one selected QB module and resolves its planned frame operands.
+pub fn allocate_qb_machine(selected: &QbMachine) -> Result<QbMachine, Error> {
+    let mut allocated = selected.clone();
+    for function in &mut allocated.module.functions {
+        let assignment = crate::target::x86::allocate_registers(function).map_err(|error| {
+            Error::Allocation {
+                function: function.name.clone(),
+                error,
+            }
+        })?;
+        *function =
+            apply_assignment(function, &assignment).map_err(|error| Error::AllocationRewrite {
+                function: function.name.clone(),
+                error,
+            })?;
+
+        if let Some(frame) = allocated.frames.get(&function.id) {
+            *function = crate::target::x86::materialize_frame_indices(function, frame).map_err(
+                |error| Error::FrameIndices {
+                    function: function.name.clone(),
+                    error,
+                },
+            )?;
+        } else if function.blocks.iter().any(|block| {
+            block.instructions.iter().any(|instruction| {
+                instruction
+                    .operands
+                    .iter()
+                    .any(|operand| matches!(operand.kind, MachineOperandKind::FrameIndex { .. }))
+            })
+        }) {
+            return Err(Error::MissingFramePlan {
+                function: function.name.clone(),
+            });
+        }
+    }
+    crate::target::x86::verify_machine(&allocated.module).map_err(Error::Machine)?;
+    Ok(allocated)
+}
+
 fn temporary_string_slots(
     function: &crate::hir::Function,
     string_types: &BTreeSet<crate::hir::TypeId>,
@@ -251,8 +328,8 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::{
-        Error, QbOptions, compile_qb, lower_ir_to_machine, lower_qb_to_ir, lower_qb_to_machine,
-        parse_omf,
+        Error, QbOptions, allocate_qb_machine, compile_qb, lower_ir_to_machine, lower_qb_to_ir,
+        lower_qb_to_machine, parse_omf,
     };
     use crate::codegen::machine::{
         FrameObjectKind, MachineAddressSpace, MachineCallingConvention, MachineOperandKind,
@@ -459,6 +536,65 @@ mod tests {
             returned.operands[2].kind,
             MachineOperandKind::Immediate(2)
         ));
+    }
+
+    #[test]
+    fn qb_procedure_allocation_materializes_its_basic_frame_indices() {
+        let program = compile_qb(
+            include_str!("../../frontends/qb/fixtures/procedure.bas"),
+            "procedure",
+            QbOptions::default(),
+        )
+        .expect("procedure fixture compiles to HIR");
+        let selected = lower_qb_to_machine(&program).expect("procedure reaches selected qmir");
+        let allocated = allocate_qb_machine(&selected).expect("procedure qmir allocates");
+        assert!(selected.module.functions.iter().any(|function| {
+            !function.virtual_registers.is_empty()
+                && function.blocks.iter().any(|block| {
+                    block.instructions.iter().any(|instruction| {
+                        instruction.operands.iter().any(|operand| {
+                            matches!(operand.kind, MachineOperandKind::FrameIndex { .. })
+                        })
+                    })
+                })
+        }));
+        let procedure = allocated
+            .module
+            .functions
+            .iter()
+            .find(|function| function.name == "TWICE&")
+            .expect("defined procedure remains present");
+
+        assert!(procedure.virtual_registers.is_empty());
+        assert!(procedure.blocks.iter().all(|block| {
+            block.instructions.iter().all(|instruction| {
+                instruction.operands.iter().all(|operand| {
+                    !matches!(
+                        operand.kind,
+                        MachineOperandKind::FrameIndex { .. }
+                            | MachineOperandKind::Register(MachineRegister::Virtual(_))
+                    )
+                })
+            })
+        }));
+        let displacements = procedure
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .filter(|instruction| {
+                matches!(
+                    X86Opcode::from_machine_opcode(instruction.opcode),
+                    Some(X86Opcode::Load | X86Opcode::Store | X86Opcode::Lea)
+                )
+            })
+            .flat_map(|instruction| &instruction.operands)
+            .filter_map(|operand| match operand.kind {
+                MachineOperandKind::Immediate(value) => Some(value),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        assert!(displacements.contains(&6));
+        assert!(displacements.contains(&-24));
     }
 
     #[test]

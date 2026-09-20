@@ -467,6 +467,22 @@ displacement, literal Machine-to-MC bytes, and explicit malformed/repeated
 refusals. Focused compilation and test execution consumed under eight seconds;
 no broad or external gate ran.
 
+The driver now composes deterministic x86 allocation, immutable assignment
+application, and BASIC frame-index materialization for the real
+`procedure.bas` source path. The resulting functions contain no virtual
+registers or abstract frame operands, retain `BP+6` and `BP-24`, and pass the
+x86 verifier in their allocated form. The verifier accepts the same semantic
+contracts on constrained virtual operands before allocation and on exact
+physical operands afterward; it does not weaken call ordering, alias checks,
+register widths, or BP-address legality.
+
+The production regression was first run against target verification and
+failed at the first adjacent boundary: physical address registers, ABI
+operands, and word pseudos were still being judged by pre-allocation-only
+rules. General phase-independent register checks fixed that boundary. One
+fail-first run, two accepted runs, and two focused inherited verifier checks
+consumed about eight seconds. No broad or external gate ran.
+
 That regression was observed failing before the general declaration-liveness
 rule was implemented, then passed with a parseable `.qir` result. All focused
 verification in these implementation batches, including compile failures used
