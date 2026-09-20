@@ -77,7 +77,7 @@ production pipeline. `strength` and `unswitch` remain off by default.
 | `provenance`, `split_pointers` | absent | `test_mir_alias.py`, `test_pointer_memory.py`, `test_pointer_offset.py`, pointer cases in `test_promote.py` |
 | `promote.Sroa` | absent | all SROA cases in `test_promote.py`, `test_unary_promotion.py`, and `test_transform.py` |
 | `Fold` | partial local integer foundation; not parity | `test_consts.py`, `test_constant_arguments.py`, `test_constant_call_memory.py`, `test_constant_carry.py`, `test_constant_cells.py`, `test_constant_conditions.py`, `test_constant_cycles.py`, `test_constant_division.py`, `test_constant_index.py`, `test_constant_stores.py`, `test_folded_relocations.py`, `test_high_product.py`, `test_pointer_constants.py`, `test_sccp.py`, adjacent `test_floatfold.py`/`test_float_recurrences.py`/`test_scalar_division.py`, and divisor-order/pipeline regressions in `test_transform.py` |
-| `Decide` | partial literal branch foundation; not parity | SCCP edge cases plus branch, ownership, phi-copy, and unreachable regressions in `test_transform.py` |
+| `Decide` | partial literal branch foundation; not parity | branch, ownership, phi-copy, unreachable, and fixed-point cases in `test_transform.py`; `test_sccp.py`, `test_cfg_empty.py`, `test_cfg_merge.py`, and semantic switch cases in `test_lower_switches.py`; adjacent prerequisites in `test_constant_cycles.py`, `test_constant_conditions.py`, `test_ranges.py`, pointer/alias tests, LCSSA tests, and `test_dead_ownership.py` |
 | `LoopSimplify`, `LoopClosedSSA` | absent | `test_loopsimplify.py`, `test_lcssa.py`, `test_lcssa_merges.py`, adjacent `test_indvars.py` and `test_layout.py` cases |
 | `FloatLoop` | absent | `test_float_loop_exit.py`, `test_floatfold.py`, `test_float_values.py`, `test_native_float_licm.py`, `test_native_checkpoints.py` |
 | `Hoist` and sunk stores | absent | hoist regressions in `test_transform.py`, all `test_loopmotion.py`, and adjacent induction/last-store/float-loop tests |
@@ -137,3 +137,32 @@ no-wrap, and call-effect proofs. Carry, divmod, extraction/concatenation, and
 high-product behavior wait for explicit multi-result representation. Each
 slice ports its corresponding Python cases from the table above in the same
 commit.
+
+## Decide audit
+
+Python `Decide` is not only a literal-terminator rewrite. It composes semantic
+comparison proofs, width-aware constant and memory facts, executable-edge SCCP,
+pointer non-null and range proofs, guarded empty-block threading, switch
+resolution, ownership-preserving unreachable inerting, trivial-phi
+substitution, and safe CFG merging. It follows `fold` in the production
+fixed-point order, and several regressions depend on completing a downstream
+decision in the same invocation that discovers a phi fact.
+
+The present Rust `SimplifyBranches` is a deterministic literal foundation. It
+rewrites literal `i1` branches and integer switches and repairs removed phi
+edges, but it has none of the analyses or ownership behavior above. Its switch
+semantics also differ today: Rust accepts duplicate normalized case values and
+takes the first match, while Python refuses the ambiguous switch; Rust accepts
+integer widths beyond Python's 8-, 16-, and 32-bit semantic switches. The
+separate Rust unreachable pass deletes blocks, whereas Python retains nonempty
+detached blocks as fully inert source-byte owners.
+
+The safe port order is therefore: align the literal switch refusal contract;
+add deterministic portable executable-edge SCCP with explicit pending and
+overdefined states; compose branch decision, trivial-phi substitution,
+unreachable cleanup, and dead-code removal at a fixed point; then add memory,
+pointer, range, and ownership proofs only when their representations exist.
+Until Rust has an explicit source-ownership representation, object-rewrite
+regressions that require every original byte to remain owned are deferred by
+an explicit frontend/object-path refusal rather than approximated by deleting
+their blocks.
