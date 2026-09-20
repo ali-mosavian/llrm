@@ -583,3 +583,26 @@ tests, the two new IR ABI-schema tests, HIR runtime-call lowering, and x86
 far-call selection then passed in about 5.1 seconds. The deliberately broader
 text filter also exposed an unrelated pre-existing invalid aggregate fixture;
 it was not pursued in this slice. No broad suite or external gate ran.
+
+Unconditional local x86 branches now pass through a target-owned immutable
+layout and relaxation boundary. It ports the Python writer's short-first,
+grow-only fixed point: `eb rel8` at the inclusive signed-byte endpoints and
+`e9 rel16` only after a complete-layout range check. Displacements are derived
+from the final instruction address, local branches carry no relocation, and
+undefined, cross-section, addended, malformed, or out-of-range targets fail
+explicitly. Direct fallthrough uses fragment occurrence identity; self loops,
+intervening bytes, and alignment padding are retained.
+
+Primary review rejected the delegated draft's end-of-instruction “self” test,
+incorrect backward-near displacement, unsafe alignment-sensitive fallthrough
+test, and Machine/MC opcode-ID mismatch before acceptance. The ported tests
+cover the historical growth-before-backward-target regression, exact range
+boundaries, `eb fe` self loops, chained fallthrough, alignment, immutable
+input, other-instruction fixups, malformed inputs, and signed-16 refusal.
+One compile-fail review run and the accepted twelve-test target module run
+consumed about 13.5 seconds. The driver now exposes the same target stage
+without adding object policy; the real `procedure.bas` path reached verified,
+all-data MC with retained far-call fixups in another 4.6 seconds. No broad
+suite or external gate ran. The final-address endpoint regression was then
+mutated back to the wrong short-form base, observed failing on the emitted near
+bytes, and restored to green in 2.7 seconds.

@@ -9,6 +9,7 @@ mod fixup;
 mod frame;
 mod frame_indices;
 mod instructions;
+mod jump_layout;
 mod mc;
 mod mc_encode;
 mod mc_module;
@@ -25,6 +26,7 @@ pub use fixup::X86FixupKind;
 pub use frame::{BasicFramePlan, BasicFramePlanError, BasicRuntime, plan_basic_frame};
 pub use frame_indices::{FrameIndexMaterializationError, materialize_frame_indices};
 pub use instructions::{ComparisonKind, ConditionCode, OperandSize, X86Opcode};
+pub use jump_layout::{JumpLayoutVerificationStage, X86JumpLayoutError, relax_and_encode_jumps};
 pub use mc::{McLowerError, UnresolvedOperand, lower_instruction};
 pub use mc_encode::{McEncodeVerificationStage, X86McEncodeError, encode_mc_module};
 pub use mc_module::{

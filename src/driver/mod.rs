@@ -13,7 +13,8 @@ use crate::object::omf::file::{File as OmfFile, FileError};
 use crate::support::diagnostic::Diagnostic;
 use crate::target::x86::{
     BasicAbiError, BasicAbiExpansionError, BasicFramePlan, BasicRuntime, CallClobberError,
-    FrameIndexMaterializationError, SelectionError, X86AllocationError, X86McModuleLowerError,
+    FrameIndexMaterializationError, SelectionError, X86AllocationError, X86JumpLayoutError,
+    X86McModuleLowerError,
 };
 
 /// Configuration that affects QB source semantics.
@@ -93,6 +94,7 @@ pub enum Error {
     },
     Machine(Vec<Diagnostic>),
     Mc(X86McModuleLowerError),
+    McEncoding(X86JumpLayoutError),
     Omf(FileError),
 }
 
@@ -155,6 +157,7 @@ impl fmt::Display for Error {
                 }
             }
             Self::Mc(error) => write!(formatter, "cannot lower allocated x86 module: {error}"),
+            Self::McEncoding(error) => write!(formatter, "cannot encode x86 MC module: {error}"),
             Self::Omf(error) => error.fmt(formatter),
         }
     }
@@ -315,6 +318,11 @@ pub fn lower_qb_machine_to_mc(selected: &QbMachine) -> Result<crate::mc::MCModul
     crate::target::x86::lower_allocated_module(&allocated.module).map_err(Error::Mc)
 }
 
+/// Encodes and relaxes a symbolic physical x86 MC module without object policy.
+pub fn encode_x86_mc(module: &crate::mc::MCModule) -> Result<crate::mc::MCModule, Error> {
+    crate::target::x86::relax_and_encode_jumps(module).map_err(Error::McEncoding)
+}
+
 fn temporary_string_slots(
     function: &crate::hir::Function,
     string_types: &BTreeSet<crate::hir::TypeId>,
@@ -351,7 +359,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::{
-        Error, QbOptions, allocate_qb_machine, compile_qb, lower_ir_to_machine,
+        Error, QbOptions, allocate_qb_machine, compile_qb, encode_x86_mc, lower_ir_to_machine,
         lower_qb_machine_to_mc, lower_qb_to_ir, lower_qb_to_machine, parse_omf,
     };
     use crate::codegen::machine::{
@@ -364,7 +372,7 @@ mod tests {
     use crate::ir;
     use crate::mc::{MCFragment, MCOperand, SymbolDefinition};
     use crate::object::omf::record::Record;
-    use crate::target::x86::{X86Opcode, X86Register};
+    use crate::target::x86::{X86FixupKind, X86Opcode, X86Register};
 
     #[test]
     fn untouched_omf_survives_the_driver_boundary_byte_for_byte() {
@@ -690,6 +698,29 @@ mod tests {
         assert!(instructions.iter().any(|instruction| {
             X86Opcode::from_raw(instruction.opcode.get()) == Some(X86Opcode::ReturnFar)
                 && instruction.operands == [MCOperand::Immediate(2)]
+        }));
+        assert!(instructions.iter().any(|instruction| {
+            X86Opcode::from_raw(instruction.opcode.get()) == Some(X86Opcode::Jump)
+        }));
+
+        let encoded = encode_x86_mc(&first).expect("symbolic MC reaches encoded fragments");
+        encoded.verify().expect("encoded MC remains verified");
+        assert!(encoded.sections.iter().all(|section| {
+            section
+                .fragments
+                .iter()
+                .all(|fragment| !matches!(fragment, MCFragment::Instruction(_)))
+        }));
+        assert!(encoded.sections.iter().any(|section| {
+            section
+                .fragments
+                .iter()
+                .filter_map(|fragment| match fragment {
+                    MCFragment::Data(data) => Some(data),
+                    _ => None,
+                })
+                .flat_map(|data| &data.fixups)
+                .any(|fixup| fixup.kind == X86FixupKind::FarPointer1616.into())
         }));
     }
 
