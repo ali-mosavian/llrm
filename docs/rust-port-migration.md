@@ -297,6 +297,10 @@ an allocated move through MC into the expected instruction bytes.
 
 ## Current source-to-IR vertical slice
 
+Pass completion is governed by the [pass fidelity ledger](pass-port-fidelity.md).
+The current Rust transforms are narrow foundations and are not yet recorded as
+faithful ports of the substantially richer Python passes with similar names.
+
 `llrm-qb --emit qir` now composes QB parsing, typed HIR construction, HIR-to-IR
 lowering, IR verification, and deterministic `.qir` printing through the
 driver. The first end-to-end minimal-source regression exposed that the QB
@@ -321,8 +325,19 @@ relocatable byte initializer; its text format round trips patch order and its
 verifier rejects missing targets, overlapping patches, generic address spaces,
 and out-of-range writes. The focused vertical regression compiles the real
 `readonly-data.bas` fixture and retains VBDOS's segment selector, far string
-payload, and near descriptor patches in verified `.qir`. Local and parameter
-storage remain explicit refusals until stack allocation is represented.
+payload, and near descriptor patches in verified `.qir`.
+
+Defined QB procedure calls now resolve through callable identity, normalized QB
+names, exact result and ABI-ordered parameter types, and the established
+far/callee-cleanup ABI. QB-style by-reference parameters require an exact
+pointer-to-element type; unsupported array and segmented shapes refuse
+explicitly. Local places lower to distinct stack allocations, and zero-offset
+indirect parameter accesses retain their conservative volatile semantics.
+Nonzero indirect byte offsets and parameter places remain explicit refusals
+until pointer arithmetic and parameter-home semantics are represented. The
+real `procedure.bas` fixture now reaches verified `.qir` with its call bound to
+the existing function, its by-reference input, and its local function-result
+slot intact.
 
 The pass pipeline also contains exact integer algebraic simplification beside
 constant folding, branch simplification, and dead-code elimination. Shared
