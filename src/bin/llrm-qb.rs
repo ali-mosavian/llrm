@@ -143,22 +143,14 @@ impl Invocation {
         };
         let text = match self.output_kind {
             OutputKind::Hir => llrm::hir::write_text(&program),
-            OutputKind::Ir | OutputKind::Machine => {
-                let module = match driver::lower_qb_to_ir(&program) {
-                    Ok(module) => module,
-                    Err(error) => return failure(format!("{}: {error}", self.input.display())),
-                };
-                match self.output_kind {
-                    OutputKind::Ir => llrm::ir::write_text(&module),
-                    OutputKind::Machine => match driver::lower_ir_to_machine(&module) {
-                        Ok(machine) => llrm::codegen::machine::write_text(&machine),
-                        Err(error) => {
-                            return failure(format!("{}: {error}", self.input.display()));
-                        }
-                    },
-                    OutputKind::Hir => unreachable!("HIR output does not lower through IR"),
-                }
-            }
+            OutputKind::Ir => match driver::lower_qb_to_ir(&program) {
+                Ok(module) => llrm::ir::write_text(&module),
+                Err(error) => return failure(format!("{}: {error}", self.input.display())),
+            },
+            OutputKind::Machine => match driver::lower_qb_to_machine(&program) {
+                Ok(machine) => llrm::codegen::machine::write_text(&machine.module),
+                Err(error) => return failure(format!("{}: {error}", self.input.display())),
+            },
         };
         write_output(self.output.as_deref(), text.as_bytes())
     }

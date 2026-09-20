@@ -421,16 +421,65 @@ impl Verifier {
                 "must be a function or external symbol with role none",
             );
         }
-        for (index, output) in outputs.iter().enumerate() {
-            self.require_fixed_virtual(
-                function,
-                block,
-                instruction,
-                index + 1,
-                output,
-                OperandRole::Def,
-                classes,
-            );
+        let mut saw_definition = false;
+        let mut fixed_definitions = Vec::new();
+        for (index, operand) in outputs.iter().enumerate() {
+            let position = index + 1;
+            match operand.role {
+                OperandRole::Use => {
+                    if saw_definition {
+                        self.operand_error(
+                            function,
+                            block,
+                            instruction,
+                            position,
+                            "fixed call uses must precede definitions",
+                        );
+                    }
+                    self.require_fixed_virtual(
+                        function,
+                        block,
+                        instruction,
+                        position,
+                        operand,
+                        OperandRole::Use,
+                        classes,
+                    );
+                }
+                OperandRole::Def => {
+                    saw_definition = true;
+                    if let Some(physical) = self.require_fixed_virtual(
+                        function,
+                        block,
+                        instruction,
+                        position,
+                        operand,
+                        OperandRole::Def,
+                        classes,
+                    ) {
+                        if fixed_definitions
+                            .iter()
+                            .any(|previous: &X86Register| previous.overlaps(physical))
+                        {
+                            self.operand_error(
+                                function,
+                                block,
+                                instruction,
+                                position,
+                                "fixed call definition aliases an earlier definition",
+                            );
+                        }
+                        fixed_definitions.push(physical);
+                    }
+                }
+                OperandRole::None | OperandRole::UseDef => self.operand_error(
+                    function,
+                    block,
+                    instruction,
+                    position,
+                    "must be a fixed virtual register use or definition",
+                ),
+            }
         }
         if !is_call_flags(instruction.flags) {
             self.instruction_error(
@@ -609,7 +658,7 @@ impl Verifier {
         operand: &MachineOperand,
         role: OperandRole,
         classes: &BTreeMap<VirtualRegisterId, RegisterClass>,
-    ) {
+    ) -> Option<X86Register> {
         let MachineOperandKind::Register(MachineRegister::Virtual(id)) = operand.kind else {
             self.operand_error(
                 function,
@@ -618,7 +667,7 @@ impl Verifier {
                 position,
                 "must be a virtual register",
             );
-            return;
+            return None;
         };
         if operand.role != role {
             self.operand_error(
@@ -637,13 +686,13 @@ impl Verifier {
                 position,
                 "must have a fixed ABI register constraint",
             );
-            return;
+            return None;
         };
         let Some(class) = classes
             .get(&id)
             .and_then(|class| X86RegisterClass::from_machine_class(*class))
         else {
-            return;
+            return None;
         };
         let Some(physical) = X86Register::from_physical(physical) else {
             self.operand_error(
@@ -653,7 +702,7 @@ impl Verifier {
                 position,
                 "must constrain a known x86 physical register",
             );
-            return;
+            return None;
         };
         if !class.members().contains(&physical) {
             self.operand_error(
@@ -663,7 +712,9 @@ impl Verifier {
                 position,
                 "fixed ABI register is incompatible with the virtual register class",
             );
+            return None;
         }
+        Some(physical)
     }
 
     fn require_register_role(
@@ -840,6 +891,17 @@ mod tests {
         }
     }
 
+    fn fixed_virtual(id: u32, role: OperandRole, register: X86Register) -> MachineOperand {
+        MachineOperand {
+            kind: MachineOperandKind::Register(MachineRegister::Virtual(VirtualRegisterId::new(
+                id,
+            ))),
+            role,
+            constraint: Some(RegisterConstraint::Fixed(register.physical())),
+            tied_to: None,
+        }
+    }
+
     fn frame(index: u32) -> MachineOperand {
         MachineOperand {
             kind: MachineOperandKind::FrameIndex {
@@ -1009,6 +1071,75 @@ mod tests {
     }
 
     #[test]
+    fn accepts_fixed_call_uses_before_definitions_and_rejects_ambiguous_order() {
+        let callee = || MachineOperand {
+            kind: MachineOperandKind::ExternalSymbol {
+                name: "runtime".to_owned(),
+                addend: 0,
+            },
+            role: OperandRole::None,
+            constraint: None,
+            tied_to: None,
+        };
+        let call_flags = InstructionFlags {
+            call: true,
+            side_effects: true,
+            ..InstructionFlags::NONE
+        };
+        let accepted = module(vec![instruction(
+            0,
+            X86Opcode::CallFar,
+            vec![
+                callee(),
+                fixed_virtual(1, OperandRole::Use, X86Register::Ax),
+                fixed_virtual(2, OperandRole::Def, X86Register::Eax),
+            ],
+            call_flags,
+        )]);
+        assert_eq!(verify_machine(&accepted), Ok(()));
+
+        let interleaved = module(vec![instruction(
+            0,
+            X86Opcode::CallFar,
+            vec![
+                callee(),
+                fixed_virtual(2, OperandRole::Def, X86Register::Eax),
+                fixed_virtual(1, OperandRole::Use, X86Register::Ax),
+            ],
+            call_flags,
+        )]);
+        let messages = verify_machine(&interleaved)
+            .unwrap_err()
+            .into_iter()
+            .map(|diagnostic| diagnostic.message)
+            .collect::<Vec<_>>();
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("fixed call uses must precede definitions"))
+        );
+
+        let aliasing_definitions = module(vec![instruction(
+            0,
+            X86Opcode::CallFar,
+            vec![
+                callee(),
+                fixed_virtual(1, OperandRole::Def, X86Register::Ax),
+                fixed_virtual(1, OperandRole::Def, X86Register::Ax),
+            ],
+            call_flags,
+        )]);
+        let messages = verify_machine(&aliasing_definitions)
+            .unwrap_err()
+            .into_iter()
+            .map(|diagnostic| diagnostic.message)
+            .collect::<Vec<_>>();
+        assert!(messages.iter().any(|message| {
+            message.contains("fixed call definition aliases an earlier definition")
+        }));
+    }
+
+    #[test]
     fn rejects_invalid_pseudo_contracts_and_oversized_frame_access() {
         let mut bad_call_output = virtual_register(2, OperandRole::Use);
         bad_call_output.constraint = Some(RegisterConstraint::Fixed(PhysicalRegister::new(99)));
@@ -1091,11 +1222,6 @@ mod tests {
             messages
                 .iter()
                 .any(|message| message.contains("access width 4 exceeds frame index 0 size 2"))
-        );
-        assert!(
-            messages
-                .iter()
-                .any(|message| message.contains("operand 1 must have Def role"))
         );
         assert!(
             messages

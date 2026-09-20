@@ -1,13 +1,17 @@
 //! Whole-pipeline orchestration and diagnostics.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use crate::codegen::machine::{MachineBlockId, MachineFunctionId, MachineModule};
 use crate::frontend::qb::{self, Dialect};
-use crate::hir::{LowerError, Program, RuntimeProfile};
+use crate::hir::{LowerError, Program, RuntimeProfile, Storage};
 use crate::ir;
 use crate::object::omf::file::{File as OmfFile, FileError};
 use crate::support::diagnostic::Diagnostic;
-use crate::target::x86::SelectionError;
+use crate::target::x86::{
+    BasicAbiError, BasicFramePlan, BasicRuntime, CallClobberError, SelectionError,
+};
 
 /// Configuration that affects QB source semantics.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -19,6 +23,13 @@ pub struct QbOptions {
     pub checked_arrays: bool,
     pub mbf: bool,
     pub alternate_math: bool,
+}
+
+/// Verified QB-specific Machine IR together with its target frame plans.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct QbMachine {
+    pub module: MachineModule,
+    pub frames: BTreeMap<MachineFunctionId, BasicFramePlan>,
 }
 
 impl Default for QbOptions {
@@ -40,9 +51,24 @@ impl Default for QbOptions {
 pub enum Error {
     Parse(qb::ParseError),
     Semantic(qb::SemanticError),
-    ExpectedSingleModule { actual: usize },
+    ExpectedSingleModule {
+        actual: usize,
+    },
     Lower(LowerError),
     Selection(SelectionError),
+    BasicAbi {
+        function: String,
+        error: BasicAbiError,
+    },
+    CallClobber {
+        function: String,
+        error: CallClobberError,
+    },
+    MissingSourceFunction(MachineFunctionId),
+    TemporaryStringCountTooLarge {
+        function: String,
+        count: usize,
+    },
     Machine(Vec<Diagnostic>),
     Omf(FileError),
 }
@@ -58,6 +84,24 @@ impl fmt::Display for Error {
             ),
             Self::Lower(error) => error.fmt(formatter),
             Self::Selection(error) => error.fmt(formatter),
+            Self::BasicAbi { function, error } => {
+                write!(formatter, "cannot expand BASIC ABI for {function}: {error}")
+            }
+            Self::CallClobber { function, error } => {
+                write!(
+                    formatter,
+                    "cannot materialize call clobbers for {function}: {error}"
+                )
+            }
+            Self::MissingSourceFunction(function) => write!(
+                formatter,
+                "selected machine function {function} has no QB source function"
+            ),
+            Self::TemporaryStringCountTooLarge { function, count } => write!(
+                formatter,
+                "QB function {function} owns {count} local STRING descriptors; maximum is {}",
+                u16::MAX
+            ),
             Self::Machine(diagnostics) => {
                 if let Some(diagnostic) = diagnostics.first() {
                     write!(formatter, "invalid x86 Machine IR: {}", diagnostic.message)
@@ -113,6 +157,79 @@ pub fn lower_ir_to_machine(
     Ok(machine)
 }
 
+/// Lower verified QB HIR through the target-owned runtime ABI boundary.
+pub fn lower_qb_to_machine(program: &Program) -> Result<QbMachine, Error> {
+    let [source] = program.modules.as_slice() else {
+        return Err(Error::ExpectedSingleModule {
+            actual: program.modules.len(),
+        });
+    };
+    let ir = lower_qb_to_ir(program)?;
+    let mut machine = lower_ir_to_machine(&ir)?;
+    let source_functions = source
+        .functions
+        .iter()
+        .map(|function| (function.id.get(), function))
+        .collect::<BTreeMap<_, _>>();
+    let string_types = source
+        .types
+        .iter()
+        .filter(|type_| type_.name == "string")
+        .map(|type_| type_.id)
+        .collect::<BTreeSet<_>>();
+    let runtime = basic_runtime(program.runtime);
+    let mut frames = BTreeMap::new();
+
+    for function in &mut machine.functions {
+        let source_function = source_functions
+            .get(&function.id.get())
+            .copied()
+            .ok_or(Error::MissingSourceFunction(function.id))?;
+        if source_function.name != "__main" {
+            let temporary_strings = temporary_string_slots(source_function, &string_types)?;
+            let expanded = crate::target::x86::expand_basic_runtime(
+                function,
+                MachineBlockId::new(source_function.entry.get()),
+                runtime,
+                u32::from(temporary_strings),
+            )
+            .map_err(|error| Error::BasicAbi {
+                function: source_function.name.clone(),
+                error,
+            })?;
+            frames.insert(function.id, expanded.frame);
+            *function = expanded.function;
+        }
+        *function =
+            crate::target::x86::materialize_far_call_clobbers(function).map_err(|error| {
+                Error::CallClobber {
+                    function: source_function.name.clone(),
+                    error,
+                }
+            })?;
+    }
+    crate::target::x86::verify_machine(&machine).map_err(Error::Machine)?;
+    Ok(QbMachine {
+        module: machine,
+        frames,
+    })
+}
+
+fn temporary_string_slots(
+    function: &crate::hir::Function,
+    string_types: &BTreeSet<crate::hir::TypeId>,
+) -> Result<u16, Error> {
+    let count = function
+        .places
+        .iter()
+        .filter(|place| place.storage == Storage::Local && string_types.contains(&place.type_id))
+        .count();
+    u16::try_from(count).map_err(|_| Error::TemporaryStringCountTooLarge {
+        function: function.name.clone(),
+        count,
+    })
+}
+
 fn runtime_name(runtime: RuntimeProfile) -> &'static str {
     match runtime {
         RuntimeProfile::Qb45 => "qb45",
@@ -121,9 +238,22 @@ fn runtime_name(runtime: RuntimeProfile) -> &'static str {
     }
 }
 
+fn basic_runtime(runtime: RuntimeProfile) -> BasicRuntime {
+    match runtime {
+        RuntimeProfile::Qb45 => BasicRuntime::Qb45,
+        RuntimeProfile::Pds71 => BasicRuntime::Pds71,
+        RuntimeProfile::Vbdos => BasicRuntime::Vbdos,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Error, QbOptions, compile_qb, lower_ir_to_machine, lower_qb_to_ir, parse_omf};
+    use std::collections::BTreeSet;
+
+    use super::{
+        Error, QbOptions, compile_qb, lower_ir_to_machine, lower_qb_to_ir, lower_qb_to_machine,
+        parse_omf,
+    };
     use crate::codegen::machine::{
         FrameObjectKind, MachineAddressSpace, MachineCallingConvention, MachineOperandKind,
         MachineRegister, MachineValueType, RegisterConstraint,
@@ -133,7 +263,7 @@ mod tests {
     };
     use crate::ir;
     use crate::object::omf::record::Record;
-    use crate::target::x86::{BasicRuntime, X86Opcode, X86Register, plan_basic_frame};
+    use crate::target::x86::{X86Opcode, X86Register};
 
     #[test]
     fn untouched_omf_survives_the_driver_boundary_byte_for_byte() {
@@ -176,8 +306,9 @@ mod tests {
             QbOptions::default(),
         )
         .expect("procedure fixture compiles to HIR");
-        let ir = lower_qb_to_ir(&program).expect("procedure fixture lowers to portable IR");
-        let machine = lower_ir_to_machine(&ir).expect("procedure fixture selects to x86 qmir");
+        let lowered =
+            lower_qb_to_machine(&program).expect("procedure fixture expands the BASIC x86 ABI");
+        let machine = &lowered.module;
 
         assert_eq!(
             machine
@@ -197,6 +328,11 @@ mod tests {
             .iter()
             .find(|function| function.name == "TWICE&")
             .expect("defined BASIC function exists");
+        let source_procedure = program.modules[0]
+            .functions
+            .iter()
+            .find(|function| function.name == "TWICE&")
+            .expect("source BASIC function exists");
 
         assert_eq!(
             procedure.signature.calling_convention,
@@ -228,13 +364,35 @@ mod tests {
                 }
             ]
         ));
-        let frame = plan_basic_frame(procedure, BasicRuntime::Vbdos, 0)
-            .expect("the measured VBDOS BASIC frame must be representable");
+        let frame = lowered
+            .frames
+            .get(&procedure.id)
+            .expect("the BASIC procedure retains its frame plan");
         assert_eq!(frame.header_bytes(), 20);
         assert_eq!(frame.local_bytes(), 4);
         assert_eq!(frame.parameter_bytes(), 2);
         assert_eq!(frame.offset(procedure.frame_objects[0].index), Some(6));
         assert_eq!(frame.offset(procedure.frame_objects[1].index), Some(-24));
+        let entry = procedure
+            .blocks
+            .iter()
+            .find(|block| block.id.get() == source_procedure.entry.get())
+            .expect("procedure entry block survives selection");
+        assert_eq!(
+            entry.instructions[..3]
+                .iter()
+                .map(|instruction| instruction.opcode)
+                .collect::<Vec<_>>(),
+            [
+                X86Opcode::Mov.machine_opcode(),
+                X86Opcode::Mov.machine_opcode(),
+                X86Opcode::CallFar.machine_opcode(),
+            ]
+        );
+        assert!(matches!(
+            &entry.instructions[2].operands[0].kind,
+            MachineOperandKind::ExternalSymbol { name, .. } if name == "B$ENRA"
+        ));
         assert!(
             procedure
                 .blocks
@@ -274,6 +432,21 @@ mod tests {
             .flat_map(|block| &block.instructions)
             .find(|instruction| instruction.opcode == X86Opcode::ReturnFar.machine_opcode())
             .expect("callee contains a far return");
+        let (return_block, return_position) = procedure
+            .blocks
+            .iter()
+            .find_map(|block| {
+                block
+                    .instructions
+                    .iter()
+                    .position(|instruction| instruction.id == returned.id)
+                    .map(|position| (block, position))
+            })
+            .expect("the far return remains in its selected block");
+        assert!(matches!(
+            &return_block.instructions[return_position - 1].operands[0].kind,
+            MachineOperandKind::ExternalSymbol { name, .. } if name == "B$EXSA"
+        ));
         assert_eq!(
             returned.operands[0].constraint,
             Some(RegisterConstraint::Fixed(X86Register::Ax.physical()))
@@ -286,6 +459,35 @@ mod tests {
             returned.operands[2].kind,
             MachineOperandKind::Immediate(2)
         ));
+    }
+
+    #[test]
+    fn qb_runtime_frame_counts_owned_string_places_not_expression_temporaries() {
+        // Nested LTRIM$/RTRIM$ was once counted as two frame handles even
+        // though raw VBDOS emits BX=1 for SHOWCOMMAND's one local STRING.
+        let program = compile_qb(
+            include_str!("../../frontends/qb/fixtures/managed-temporaries.bas"),
+            "managed-temporaries",
+            QbOptions::default(),
+        )
+        .expect("managed temporary fixture compiles to HIR");
+        let module = &program.modules[0];
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name == "SHOWCOMMAND")
+            .expect("fixture defines SHOWCOMMAND");
+        let string_types = module
+            .types
+            .iter()
+            .filter(|type_| type_.name == "string")
+            .map(|type_| type_.id)
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(
+            super::temporary_string_slots(function, &string_types).unwrap(),
+            1
+        );
     }
 
     #[test]

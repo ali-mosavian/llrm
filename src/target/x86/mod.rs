@@ -1,6 +1,8 @@
 //! x86 legality, registers, ABI, selection, timing, and encoding hooks.
 
 mod allocation;
+mod basic_abi;
+mod call_clobbers;
 mod encoding;
 mod frame;
 mod instructions;
@@ -10,6 +12,8 @@ mod selection;
 mod verify;
 
 pub use allocation::{X86AllocationError, allocate_registers};
+pub use basic_abi::{BasicAbiError, ExpandedBasicFunction, expand_basic_runtime};
+pub use call_clobbers::{CallClobberError, materialize_far_call_clobbers};
 pub use encoding::{EncodeError, encode, encoded_size};
 pub use frame::{BasicFramePlan, BasicFramePlanError, BasicRuntime, plan_basic_frame};
 pub use instructions::{ComparisonKind, ConditionCode, OperandSize, X86Opcode};

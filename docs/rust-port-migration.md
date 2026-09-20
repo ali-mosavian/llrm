@@ -427,6 +427,27 @@ accepted run. No broad suite or external runtime gate ran. The next frame work
 is ABI expansion for `B$ENRA`/`B$EXSA`, exact call clobbers, and frame-index
 lowering; the pure plan is not yet an emitted runtime shell.
 
+The source pipeline now expands that plan into the measured BASIC runtime
+shell. At the HIR-selected entry block it loads the word-rounded local size
+into CX, loads the exact number of owned local `STRING` descriptors into BX,
+and calls `B$ENRA`. Every far return is preceded by `B$EXSA`, with AX:DX kept
+live across teardown for a LONG result and the independent `retf` cleanup left
+unchanged. Ordinary far calls receive deterministic AX, CX, DX, BX, SI, and DI
+clobber definitions before allocation; `B$EXSA` retains the Python backend's
+measured AX:DX preservation. BP and EBP are unavailable to BASIC allocation,
+so the current no-spill allocator refuses pressure instead of corrupting the
+runtime frame chain.
+
+The tests were ported with the behavior. The real `procedure.bas` path checks
+the entry and every return in production `.qmir`, while the historical
+`managed-temporaries.bas` regression proves nested expression temporaries do
+not inflate BX beyond the one owned local descriptor. Focused ABI, clobber,
+verifier, allocation, driver, and CLI checks consumed about 24 seconds,
+including two fail-first corrections of incorrect test block assumptions and
+one compile-time assertion correction. Primary review also corrected delegated
+entry inference, ID reservation, malformed fixtures, and BP ownership. No
+broad suite, Python suite, qrender, DOSBox, or external runtime gate ran.
+
 That regression was observed failing before the general declaration-liveness
 rule was implemented, then passed with a parseable `.qir` result. All focused
 verification in these implementation batches, including compile failures used
