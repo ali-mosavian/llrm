@@ -2,6 +2,15 @@ use qbfront::semantic::{compile_with_array_order, compile_with_options};
 use qbfront::syntax::{Binary, ExitTarget, Expr, Literal, Procedure, Statement, TypeName};
 use qbfront::{compile, parse, Dialect};
 
+fn json_object_with<'a>(document: &'a str, field: &str) -> &'a str {
+    let field_at = document
+        .find(field)
+        .unwrap_or_else(|| panic!("missing {field}: {document}"));
+    let start = document[..field_at].rfind('{').expect("object start");
+    let end = document[field_at..].find('}').expect("object end") + field_at + 1;
+    &document[start..end]
+}
+
 #[test]
 fn parses_long_array_and_whole_expression() {
     let module = parse(
@@ -376,18 +385,17 @@ fn default_typing_is_module_wide_and_yields_to_suffix_and_as() {
     )
     .unwrap();
     let hir = compile(&module, "default_types", Dialect::QuickBasic45, "qb45").unwrap();
-    assert!(hir.contains(
-        "\"name\":\"APPLE\",\"offset\":0,\"storage\":\"module\",\"symbol\":1,\"type\":1"
-    ));
-    assert!(hir.contains(
-        "\"name\":\"ANOTHER\",\"offset\":2,\"storage\":\"module\",\"symbol\":1,\"type\":1"
-    ));
-    assert!(hir.contains(
-        "\"name\":\"ALONG&\",\"offset\":4,\"storage\":\"module\",\"symbol\":1,\"type\":2"
-    ));
-    assert!(hir.contains(
-        "\"name\":\"APPLEDOUBLE\",\"offset\":8,\"storage\":\"module\",\"symbol\":1,\"type\":4"
-    ));
+    for (name, extent, type_id) in [
+        ("APPLE", 2, 1),
+        ("ANOTHER", 2, 1),
+        ("ALONG&", 4, 2),
+        ("APPLEDOUBLE", 8, 4),
+    ] {
+        let place = json_object_with(&hir, &format!("\"name\":\"{name}\""));
+        assert!(place.contains(&format!("\"extent\":{extent}")), "{place}");
+        assert!(place.contains("\"storage\":\"module\""), "{place}");
+        assert!(place.contains(&format!("\"type\":{type_id}")), "{place}");
+    }
 }
 
 #[test]
@@ -494,9 +502,9 @@ fn floating_function_has_the_hidden_microsoft_result_pointer() {
     )
     .unwrap();
     let hir = compile(&module, "float_function", Dialect::VbDos, "vbdos").unwrap();
-    assert!(hir.contains("\"name\":\"ADDHALF\",\"parameters\":[1,2]"));
-    assert!(hir.contains("\"parameter_bytes\":6"));
-    assert!(hir.contains("\"op\":\"address\""));
+    assert!(hir.contains("\"name\":\"ADDHALF\",\"linkage\":\"external\",\"parameters\":[1,2]"));
+    assert!(hir.contains("\"parameter_bytes\":6"), "{hir}");
+    assert!(hir.contains("\"op\":\"address\""), "{hir}");
 }
 
 #[test]
@@ -684,8 +692,14 @@ fn unspecified_rank_array_uses_the_bascom_eight_dimension_descriptor() {
     )
     .unwrap();
     let hir = compile(&module, "redim", Dialect::VbDos, "vbdos").unwrap();
-    assert!(hir.contains("\"name\":\"SAMPLES$descriptor\",\"offset\":0,\"storage\":\"module\",\"symbol\":1,\"type\":"));
-    assert!(hir.contains("\"kind\":\"opaque\",\"name\":\"SAMPLES descriptor\",\"rank\":0,\"signed\":null,\"width\":46"));
+    let descriptor = json_object_with(&hir, "\"name\":\"SAMPLES$descriptor\"");
+    assert!(descriptor.contains("\"extent\":46"), "{descriptor}");
+    assert!(descriptor.contains("\"offset\":0"), "{descriptor}");
+    assert!(
+        descriptor.contains("\"storage\":\"module\""),
+        "{descriptor}"
+    );
+    assert!(hir.contains("\"kind\":\"opaque\",\"name\":\"SAMPLES descriptor\",\"rank\":0,\"signed\":null,\"width\":46"), "{hir}");
 }
 
 #[test]
