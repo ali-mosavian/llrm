@@ -10,18 +10,20 @@ use std::error::Error;
 use std::fmt;
 
 use crate::codegen::machine::{
-    InstructionFlags, MachineBlock, MachineBlockId, MachineFunction, MachineFunctionId,
-    MachineInstruction, MachineInstructionError, MachineInstructionId, MachineModule,
-    MachineOperand, MachineOperandKind, MachineRegister, OperandRole, RegisterClass,
+    FrameIndex, FrameObject, FrameObjectKind, InstructionFlags, MachineAddressSpace, MachineBlock,
+    MachineBlockId, MachineCallingConvention, MachineDataObject, MachineFunction,
+    MachineFunctionId, MachineInstruction, MachineInstructionError, MachineInstructionId,
+    MachineLinkage, MachineModule, MachineOperand, MachineOperandKind, MachineRegister,
+    MachineSignature, MachineValueType, OperandRole, RegisterClass, RegisterConstraint,
     VirtualRegister, VirtualRegisterId,
 };
 use crate::ir::{
-    BinaryOp, Block, BlockId, Callee, CallingConvention, Constant, Effects, Function, FunctionId,
-    GlobalId, Instruction, InstructionKind, Linkage, MemoryEffects, Module, Operand, Terminator,
-    TypeId, TypeKind, TypedConstant, UnaryOp, Value, ValueId,
+    AddressSpace, BinaryOp, Block, BlockId, Callee, CallingConvention, CastOp, Constant, Effects,
+    Function, FunctionId, Global, GlobalId, Instruction, InstructionKind, Linkage, MemoryEffects,
+    Module, Operand, Terminator, TypeId, TypeKind, TypedConstant, UnaryOp, Value, ValueId,
 };
 
-use super::{X86Opcode, X86RegisterClass};
+use super::{X86Opcode, X86Register, X86RegisterClass};
 
 /// A refusal while selecting portable IR into the currently supported x86 subset.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -41,6 +43,19 @@ pub enum SelectionError {
     },
     UnsupportedGlobal {
         global: GlobalId,
+    },
+    UnsupportedGlobalInitializer {
+        global: GlobalId,
+    },
+    UnknownGlobal {
+        function: FunctionId,
+        block: BlockId,
+        instruction: crate::ir::InstructionId,
+        global: GlobalId,
+    },
+    UnsupportedAddressSpace {
+        type_id: TypeId,
+        address_space: AddressSpace,
     },
     DuplicateFunction {
         function: FunctionId,
@@ -147,6 +162,11 @@ pub enum SelectionError {
         block: BlockId,
         instruction: crate::ir::InstructionId,
     },
+    UnsupportedCast {
+        function: FunctionId,
+        block: BlockId,
+        instruction: crate::ir::InstructionId,
+    },
     UnsupportedInstruction {
         function: FunctionId,
         block: BlockId,
@@ -196,6 +216,25 @@ impl fmt::Display for SelectionError {
                 )
             }
             Self::UnsupportedGlobal { global } => write!(formatter, "unsupported global {global}"),
+            Self::UnsupportedGlobalInitializer { global } => {
+                write!(formatter, "global {global} has an unsupported initializer")
+            }
+            Self::UnknownGlobal {
+                function,
+                block,
+                instruction,
+                global,
+            } => write!(
+                formatter,
+                "function {function} block {block} instruction {instruction} references unknown global {global}"
+            ),
+            Self::UnsupportedAddressSpace {
+                type_id,
+                address_space,
+            } => write!(
+                formatter,
+                "type {type_id} uses unsupported address space {address_space:?}"
+            ),
             Self::DuplicateFunction { function } => {
                 write!(formatter, "duplicate IR function {function}")
             }
@@ -344,6 +383,14 @@ impl fmt::Display for SelectionError {
                 formatter,
                 "function {function} block {block} instruction {instruction} has an unsupported binary operation"
             ),
+            Self::UnsupportedCast {
+                function,
+                block,
+                instruction,
+            } => write!(
+                formatter,
+                "function {function} block {block} instruction {instruction} has an unsupported cast"
+            ),
             Self::UnsupportedInstruction {
                 function,
                 block,
@@ -387,11 +434,13 @@ impl Error for SelectionError {}
 
 /// Selects the initial integer/control-flow x86 Machine IR subset.
 pub fn select_module(module: &Module) -> Result<MachineModule, SelectionError> {
-    if let Some(global) = module.globals.first() {
-        return Err(SelectionError::UnsupportedGlobal { global: global.id });
-    }
-
     let types = collect_types(module)?;
+    let globals = collect_globals(module)?;
+    let data_objects = module
+        .globals
+        .iter()
+        .map(|global| select_data_object(global, &types))
+        .collect::<Result<Vec<_>, _>>()?;
     let functions_by_id = collect_functions(module)?;
     for function in &module.functions {
         if function.blocks.is_empty() {
@@ -401,11 +450,53 @@ pub fn select_module(module: &Module) -> Result<MachineModule, SelectionError> {
     let mut functions = Vec::with_capacity(module.functions.len());
     for function in &module.functions {
         if !function.blocks.is_empty() {
-            functions.push(select_function(function, &types, &functions_by_id)?);
+            functions.push(select_function(
+                function,
+                &types,
+                &globals,
+                &functions_by_id,
+            )?);
         }
     }
 
-    Ok(MachineModule { functions })
+    Ok(MachineModule {
+        data_objects,
+        functions,
+    })
+}
+
+fn collect_globals(module: &Module) -> Result<BTreeMap<GlobalId, &Global>, SelectionError> {
+    let mut globals = BTreeMap::new();
+    for global in &module.globals {
+        if globals.insert(global.id, global).is_some() {
+            return Err(SelectionError::UnsupportedGlobal { global: global.id });
+        }
+    }
+    Ok(globals)
+}
+
+fn select_data_object(
+    global: &Global,
+    types: &BTreeMap<TypeId, &TypeKind>,
+) -> Result<MachineDataObject, SelectionError> {
+    let Some(Constant::Bytes(bytes)) = &global.initializer else {
+        return Err(SelectionError::UnsupportedGlobalInitializer { global: global.id });
+    };
+    let TypeKind::Array { element, length } = type_kind(types, global.type_id)? else {
+        return Err(SelectionError::UnsupportedGlobal { global: global.id });
+    };
+    if !matches!(type_kind(types, *element)?, TypeKind::Integer { bits: 8 })
+        || usize::try_from(*length).ok() != Some(bytes.len())
+    {
+        return Err(SelectionError::UnsupportedGlobal { global: global.id });
+    }
+    Ok(MachineDataObject {
+        name: global.name.clone(),
+        bytes: bytes.clone(),
+        alignment: 1,
+        constant: global.constant,
+        linkage: machine_linkage(global.linkage),
+    })
 }
 
 fn collect_functions(module: &Module) -> Result<BTreeMap<FunctionId, &Function>, SelectionError> {
@@ -433,6 +524,7 @@ fn collect_types(module: &Module) -> Result<BTreeMap<TypeId, &TypeKind>, Selecti
 fn select_function(
     function: &Function,
     types: &BTreeMap<TypeId, &TypeKind>,
+    globals: &BTreeMap<GlobalId, &Global>,
     functions_by_id: &BTreeMap<FunctionId, &Function>,
 ) -> Result<MachineFunction, SelectionError> {
     if function.signature.variadic {
@@ -445,12 +537,6 @@ fn select_function(
         return Err(SelectionError::UnsupportedFunctionProperty {
             function: function.id,
             property: FunctionProperty::CallingConvention(function.signature.calling_convention),
-        });
-    }
-    if function.linkage != Linkage::Internal {
-        return Err(SelectionError::UnsupportedFunctionProperty {
-            function: function.id,
-            property: FunctionProperty::Linkage(function.linkage),
         });
     }
     if !function.attributes.is_empty() {
@@ -469,12 +555,12 @@ fn select_function(
 
     let block_ids = collect_blocks(function)?;
     validate_value_ids(function)?;
-    let mut selector = FunctionSelector::new(function, types, functions_by_id, block_ids);
+    let mut selector = FunctionSelector::new(function, types, globals, functions_by_id, block_ids)?;
     selector.select_parameters()?;
     for block in &function.blocks {
         selector.select_block(block)?;
     }
-    Ok(selector.finish())
+    selector.finish()
 }
 
 fn validate_runtime_declaration(
@@ -598,21 +684,32 @@ fn collect_blocks(function: &Function) -> Result<BTreeSet<BlockId>, SelectionErr
     Ok(block_ids)
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Debug)]
+enum SelectedLocation {
+    Register(VirtualRegisterId),
+    Frame(FrameIndex),
+    Global { name: String, addend: i64 },
+}
+
+#[derive(Clone, Debug)]
 struct SelectedValue {
-    register: VirtualRegisterId,
+    location: SelectedLocation,
     type_id: TypeId,
 }
 
 struct FunctionSelector<'types> {
     function: &'types Function,
     types: &'types BTreeMap<TypeId, &'types TypeKind>,
+    globals: &'types BTreeMap<GlobalId, &'types Global>,
     functions_by_id: &'types BTreeMap<FunctionId, &'types Function>,
     block_ids: BTreeSet<BlockId>,
     values: BTreeMap<ValueId, SelectedValue>,
     virtual_registers: Vec<VirtualRegister>,
+    frame_objects: Vec<FrameObject>,
+    entry_prefix: Vec<MachineInstruction>,
     blocks: Vec<MachineBlock>,
     next_virtual_register: u32,
+    next_frame_index: u32,
     next_instruction: u32,
 }
 
@@ -620,20 +717,27 @@ impl<'types> FunctionSelector<'types> {
     fn new(
         function: &'types Function,
         types: &'types BTreeMap<TypeId, &'types TypeKind>,
+        globals: &'types BTreeMap<GlobalId, &'types Global>,
         functions_by_id: &'types BTreeMap<FunctionId, &'types Function>,
         block_ids: BTreeSet<BlockId>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, SelectionError> {
+        let mut selector = Self {
             function,
             types,
+            globals,
             functions_by_id,
             block_ids,
             values: BTreeMap::new(),
             virtual_registers: Vec::new(),
+            frame_objects: Vec::new(),
+            entry_prefix: Vec::new(),
             blocks: Vec::with_capacity(function.blocks.len()),
             next_virtual_register: 0,
+            next_frame_index: 0,
             next_instruction: 0,
-        }
+        };
+        selector.entry_prefix = Vec::with_capacity(function.parameters.len());
+        Ok(selector)
     }
 
     fn select_parameters(&mut self) -> Result<(), SelectionError> {
@@ -647,17 +751,45 @@ impl<'types> FunctionSelector<'types> {
                     value: parameter.type_id,
                 });
             }
-            self.define_value(parameter)?;
+            let (size, alignment) = self.abi_size(parameter.type_id)?;
+            let frame = self.fresh_frame_object(
+                size,
+                alignment,
+                FrameObjectKind::IncomingArgument {
+                    parameter: index as u32,
+                },
+            )?;
+            let register = self.fresh_virtual_register(self.value_class(parameter.type_id)?)?;
+            self.values.insert(
+                parameter.id,
+                SelectedValue {
+                    location: SelectedLocation::Register(register),
+                    type_id: parameter.type_id,
+                },
+            );
+            let load = self.machine_instruction(
+                X86Opcode::Load,
+                vec![
+                    virtual_operand(register, OperandRole::Def),
+                    frame_operand(frame),
+                ],
+                load_flags(false),
+            )?;
+            self.entry_prefix.push(load);
         }
         Ok(())
     }
 
     fn select_block(&mut self, block: &Block) -> Result<(), SelectionError> {
-        let mut instructions = Vec::new();
+        let mut instructions = if self.blocks.is_empty() {
+            std::mem::take(&mut self.entry_prefix)
+        } else {
+            Vec::new()
+        };
         for instruction in &block.instructions {
             self.select_instruction(block.id, instruction, &mut instructions)?;
         }
-        let (terminator, successors) = self.select_terminator(block)?;
+        let (terminator, successors) = self.select_terminator(block, &mut instructions)?;
         if let Some(terminator) = terminator {
             instructions.push(terminator);
         }
@@ -691,11 +823,12 @@ impl<'types> FunctionSelector<'types> {
                 let result = self.result_definition(block, instruction)?;
                 let source =
                     self.select_operand(block, instruction.id, operand, result.type_id, output)?;
-                let result = self.define_value(result)?;
-                self.copy(result.register, source.register, output)?;
+                let source = self.materialize_register(source, output)?;
+                let result = self.define_register_value(result)?;
+                self.copy(result, source, output)?;
                 self.push_instruction(
                     opcode,
-                    vec![virtual_operand(result.register, OperandRole::UseDef)],
+                    vec![virtual_operand(result, OperandRole::UseDef)],
                     InstructionFlags::NONE,
                     output,
                 )?;
@@ -731,24 +864,41 @@ impl<'types> FunctionSelector<'types> {
                     self.select_operand(block, instruction.id, left, result.type_id, output)?;
                 let right =
                     self.select_operand(block, instruction.id, right, result.type_id, output)?;
-                let result = self.define_value(result)?;
-                self.copy(result.register, left.register, output)?;
+                let left = self.materialize_register(left, output)?;
+                let right = self.materialize_register(right, output)?;
+                let result = self.define_register_value(result)?;
+                self.copy(result, left, output)?;
                 self.push_instruction(
                     opcode,
                     vec![
-                        virtual_operand(result.register, OperandRole::UseDef),
-                        virtual_operand(right.register, OperandRole::Use),
+                        virtual_operand(result, OperandRole::UseDef),
+                        virtual_operand(right, OperandRole::Use),
                     ],
                     InstructionFlags::NONE,
                     output,
                 )?;
             }
+            InstructionKind::StackAlloc {
+                size,
+                alignment,
+                address_space,
+            } => self.select_stack_alloc(block, instruction, *size, *alignment, *address_space)?,
+            InstructionKind::Cast { op, operand, to } => {
+                self.select_cast(block, instruction, *op, operand, *to, output)?
+            }
+            InstructionKind::Load {
+                address,
+                alignment: _,
+                volatile,
+            } => self.select_load(block, instruction, address, *volatile, output)?,
+            InstructionKind::Store {
+                address,
+                value,
+                alignment: _,
+                volatile,
+            } => self.select_store(block, instruction, address, value, *volatile, output)?,
             InstructionKind::Phi { .. }
-            | InstructionKind::StackAlloc { .. }
             | InstructionKind::Compare { .. }
-            | InstructionKind::Cast { .. }
-            | InstructionKind::Load { .. }
-            | InstructionKind::Store { .. }
             | InstructionKind::GetElementPointer { .. }
             | InstructionKind::Select { .. }
             | InstructionKind::Intrinsic { .. } => {
@@ -762,14 +912,130 @@ impl<'types> FunctionSelector<'types> {
                 callee,
                 arguments,
                 effects,
-            } => {
-                self.select_runtime_call(block, instruction, callee, arguments, *effects, output)?
-            }
+            } => self.select_call(block, instruction, callee, arguments, *effects, output)?,
         }
         Ok(())
     }
 
-    fn select_runtime_call(
+    fn select_stack_alloc(
+        &mut self,
+        block: BlockId,
+        instruction: &Instruction,
+        size: u32,
+        alignment: u32,
+        address_space: AddressSpace,
+    ) -> Result<(), SelectionError> {
+        let result = self.result_definition(block, instruction)?;
+        self.require_pointer_type(result.type_id, address_space)?;
+        if address_space != AddressSpace::NearData {
+            return Err(SelectionError::UnsupportedAddressSpace {
+                type_id: result.type_id,
+                address_space,
+            });
+        }
+        let frame = self.fresh_frame_object(size, alignment, FrameObjectKind::Local)?;
+        self.insert_value(result, SelectedLocation::Frame(frame))
+    }
+
+    fn select_cast(
+        &mut self,
+        block: BlockId,
+        instruction: &Instruction,
+        op: CastOp,
+        operand: &Operand,
+        to: TypeId,
+        output: &mut Vec<MachineInstruction>,
+    ) -> Result<(), SelectionError> {
+        let result = self.result_definition(block, instruction)?;
+        if op != CastOp::Bitcast || result.type_id != to {
+            return Err(SelectionError::UnsupportedCast {
+                function: self.function.id,
+                block,
+                instruction: instruction.id,
+            });
+        }
+        let operand_type = self.operand_type(block, instruction.id, operand)?;
+        let (
+            TypeKind::Pointer {
+                address_space: from,
+            },
+            TypeKind::Pointer {
+                address_space: into,
+            },
+        ) = (self.type_kind(operand_type)?, self.type_kind(to)?)
+        else {
+            return Err(SelectionError::UnsupportedCast {
+                function: self.function.id,
+                block,
+                instruction: instruction.id,
+            });
+        };
+        if from != into || *into != AddressSpace::NearData {
+            return Err(SelectionError::UnsupportedCast {
+                function: self.function.id,
+                block,
+                instruction: instruction.id,
+            });
+        }
+        let selected = self.select_operand(block, instruction.id, operand, operand_type, output)?;
+        self.insert_value(result, selected.location)
+    }
+
+    fn select_load(
+        &mut self,
+        block: BlockId,
+        instruction: &Instruction,
+        address: &Operand,
+        volatile: bool,
+        output: &mut Vec<MachineInstruction>,
+    ) -> Result<(), SelectionError> {
+        let result = self.result_definition(block, instruction)?;
+        let address_type = self.operand_type(block, instruction.id, address)?;
+        self.require_near_pointer(address_type)?;
+        let selected = self.select_operand(block, instruction.id, address, address_type, output)?;
+        let destination = self.define_register_value(result)?;
+        let address = self.memory_address_operand(selected, output)?;
+        self.push_instruction(
+            X86Opcode::Load,
+            vec![virtual_operand(destination, OperandRole::Def), address],
+            load_flags(volatile),
+            output,
+        )
+    }
+
+    fn select_store(
+        &mut self,
+        block: BlockId,
+        instruction: &Instruction,
+        address: &Operand,
+        value: &Operand,
+        volatile: bool,
+        output: &mut Vec<MachineInstruction>,
+    ) -> Result<(), SelectionError> {
+        if !instruction.results.is_empty() {
+            return Err(SelectionError::InvalidResultCount {
+                function: self.function.id,
+                block,
+                instruction: instruction.id,
+                count: instruction.results.len(),
+            });
+        }
+        let address_type = self.operand_type(block, instruction.id, address)?;
+        self.require_near_pointer(address_type)?;
+        let value_type = self.operand_type(block, instruction.id, value)?;
+        let address = self.select_operand(block, instruction.id, address, address_type, output)?;
+        let value = self.select_operand(block, instruction.id, value, value_type, output)?;
+        let value = self.materialize_register(value, output)?;
+        let address = self.memory_address_operand(address, output)?;
+        self.push_instruction(
+            X86Opcode::Store,
+            vec![address, virtual_operand(value, OperandRole::Use)],
+            store_flags(volatile),
+            output,
+        )
+    }
+
+    fn select_call(
         &mut self,
         block: BlockId,
         instruction: &Instruction,
@@ -793,29 +1059,6 @@ impl<'types> FunctionSelector<'types> {
                 callee: *callee,
             });
         };
-        if !target.blocks.is_empty()
-            || target.linkage != Linkage::External
-            || target.signature.calling_convention != CallingConvention::Runtime
-        {
-            return Err(SelectionError::UnsupportedCallTarget {
-                function: self.function.id,
-                block,
-                instruction: instruction.id,
-                callee: *callee,
-            });
-        }
-        if !matches!(self.type_kind(target.signature.result)?, TypeKind::Void)
-            || !instruction.results.is_empty()
-        {
-            return Err(SelectionError::UnsupportedCallResult {
-                function: self.function.id,
-                block,
-                instruction: instruction.id,
-                callee: *callee,
-                result: target.signature.result,
-                values: instruction.results.len(),
-            });
-        }
         if arguments.len() != target.signature.parameters.len() {
             return Err(SelectionError::CallArgumentCount {
                 function: self.function.id,
@@ -829,19 +1072,119 @@ impl<'types> FunctionSelector<'types> {
         for (argument, expected_type) in arguments.iter().zip(&target.signature.parameters) {
             let argument =
                 self.select_operand(block, instruction.id, argument, *expected_type, output)?;
+            let argument = self.materialize_register(argument, output)?;
             self.push_instruction(
                 X86Opcode::Push,
-                vec![virtual_operand(argument.register, OperandRole::Use)],
+                vec![virtual_operand(argument, OperandRole::Use)],
                 InstructionFlags::NONE,
                 output,
             )?;
         }
-        self.push_instruction(
-            X86Opcode::CallFar,
-            vec![external_symbol_operand(target.name.clone())],
-            call_flags(effects),
-            output,
-        )
+        match (
+            target.blocks.is_empty(),
+            target.linkage,
+            target.signature.calling_convention,
+        ) {
+            (true, Linkage::External, CallingConvention::Runtime) => {
+                if !matches!(self.type_kind(target.signature.result)?, TypeKind::Void)
+                    || !instruction.results.is_empty()
+                {
+                    return Err(SelectionError::UnsupportedCallResult {
+                        function: self.function.id,
+                        block,
+                        instruction: instruction.id,
+                        callee: *callee,
+                        result: target.signature.result,
+                        values: instruction.results.len(),
+                    });
+                }
+                self.push_instruction(
+                    X86Opcode::CallFar,
+                    vec![external_symbol_operand(target.name.clone())],
+                    call_flags(effects),
+                    output,
+                )
+            }
+            (false, _, CallingConvention::Basic) => {
+                self.select_basic_call_result(block, instruction, target, effects, output)
+            }
+            _ => Err(SelectionError::UnsupportedCallTarget {
+                function: self.function.id,
+                block,
+                instruction: instruction.id,
+                callee: *callee,
+            }),
+        }
+    }
+
+    fn select_basic_call_result(
+        &mut self,
+        block: BlockId,
+        instruction: &Instruction,
+        target: &Function,
+        effects: Effects,
+        output: &mut Vec<MachineInstruction>,
+    ) -> Result<(), SelectionError> {
+        let mut operands = vec![function_operand(MachineFunctionId::new(target.id.get()))];
+        match self.type_kind(target.signature.result)? {
+            TypeKind::Void => {
+                if !instruction.results.is_empty() {
+                    return Err(SelectionError::UnsupportedCallResult {
+                        function: self.function.id,
+                        block,
+                        instruction: instruction.id,
+                        callee: target.id,
+                        result: target.signature.result,
+                        values: instruction.results.len(),
+                    });
+                }
+                self.push_instruction(X86Opcode::CallFar, operands, call_flags(effects), output)
+            }
+            TypeKind::Integer { bits: 32 } => {
+                let result = self.result_definition(block, instruction)?;
+                if result.type_id != target.signature.result {
+                    return Err(SelectionError::OperandTypeMismatch {
+                        function: self.function.id,
+                        block,
+                        instruction: instruction.id,
+                        expected: target.signature.result,
+                        actual: result.type_id,
+                    });
+                }
+                let low = self.fresh_virtual_register(X86RegisterClass::Word.machine_class())?;
+                let high = self.fresh_virtual_register(X86RegisterClass::Word.machine_class())?;
+                operands.push(fixed_virtual_operand(
+                    low,
+                    OperandRole::Def,
+                    X86Register::Ax,
+                ));
+                operands.push(fixed_virtual_operand(
+                    high,
+                    OperandRole::Def,
+                    X86Register::Dx,
+                ));
+                self.push_instruction(X86Opcode::CallFar, operands, call_flags(effects), output)?;
+                let joined = self.define_register_value(result)?;
+                self.push_instruction(
+                    X86Opcode::MergeWords,
+                    vec![
+                        virtual_operand(joined, OperandRole::Def),
+                        virtual_operand(low, OperandRole::Use),
+                        virtual_operand(high, OperandRole::Use),
+                    ],
+                    InstructionFlags::NONE,
+                    output,
+                )
+            }
+            _ => Err(SelectionError::UnsupportedCallResult {
+                function: self.function.id,
+                block,
+                instruction: instruction.id,
+                callee: target.id,
+                result: target.signature.result,
+                values: instruction.results.len(),
+            }),
+        }
     }
 
     fn result_definition<'instruction>(
@@ -870,7 +1213,7 @@ impl<'types> FunctionSelector<'types> {
     ) -> Result<SelectedValue, SelectionError> {
         match operand {
             Operand::Value(value) => {
-                let Some(selected) = self.values.get(value).copied() else {
+                let Some(selected) = self.values.get(value).cloned() else {
                     return Err(SelectionError::UnknownValue {
                         function: self.function.id,
                         block,
@@ -883,7 +1226,34 @@ impl<'types> FunctionSelector<'types> {
             }
             Operand::Constant(constant) => {
                 self.require_operand_type(block, instruction, expected_type, constant.type_id)?;
-                self.materialize_integer(block, instruction, constant, output)
+                match &constant.value {
+                    Constant::Integer(_) => {
+                        self.materialize_integer(block, instruction, constant, output)
+                    }
+                    Constant::GlobalAddress { global, addend } => {
+                        self.require_near_pointer(constant.type_id)?;
+                        let Some(global) = self.globals.get(global) else {
+                            return Err(SelectionError::UnknownGlobal {
+                                function: self.function.id,
+                                block,
+                                instruction,
+                                global: *global,
+                            });
+                        };
+                        Ok(SelectedValue {
+                            location: SelectedLocation::Global {
+                                name: global.name.clone(),
+                                addend: *addend,
+                            },
+                            type_id: constant.type_id,
+                        })
+                    }
+                    _ => Err(SelectionError::UnsupportedConstant {
+                        function: self.function.id,
+                        block,
+                        instruction,
+                    }),
+                }
             }
         }
     }
@@ -915,7 +1285,7 @@ impl<'types> FunctionSelector<'types> {
             output,
         )?;
         Ok(SelectedValue {
-            register,
+            location: SelectedLocation::Register(register),
             type_id: constant.type_id,
         })
     }
@@ -923,6 +1293,7 @@ impl<'types> FunctionSelector<'types> {
     fn select_terminator(
         &mut self,
         block: &Block,
+        output: &mut Vec<MachineInstruction>,
     ) -> Result<(Option<MachineInstruction>, Vec<MachineBlockId>), SelectionError> {
         match &block.terminator {
             Terminator::Jump(target) => {
@@ -944,10 +1315,69 @@ impl<'types> FunctionSelector<'types> {
                 )?;
                 Ok((Some(instruction), vec![target]))
             }
-            Terminator::Return(Some(_)) => Err(SelectionError::UnsupportedReturnValue {
-                function: self.function.id,
-                block: block.id,
-            }),
+            Terminator::Return(Some(value)) => {
+                if !matches!(
+                    self.type_kind(self.function.signature.result)?,
+                    TypeKind::Integer { bits: 32 }
+                ) {
+                    return Err(SelectionError::UnsupportedReturnValue {
+                        function: self.function.id,
+                        block: block.id,
+                    });
+                }
+                let Operand::Value(value) = value else {
+                    return Err(SelectionError::UnsupportedReturnValue {
+                        function: self.function.id,
+                        block: block.id,
+                    });
+                };
+                let Some(selected) = self.values.get(value).cloned() else {
+                    return Err(SelectionError::UnsupportedReturnValue {
+                        function: self.function.id,
+                        block: block.id,
+                    });
+                };
+                if selected.type_id != self.function.signature.result {
+                    return Err(SelectionError::UnsupportedReturnValue {
+                        function: self.function.id,
+                        block: block.id,
+                    });
+                }
+                let value = self.materialize_register(selected, output)?;
+                let low = self.fresh_virtual_register(X86RegisterClass::Word.machine_class())?;
+                let high = self.fresh_virtual_register(X86RegisterClass::Word.machine_class())?;
+                self.push_instruction(
+                    X86Opcode::LowWord,
+                    vec![
+                        virtual_operand(low, OperandRole::Def),
+                        virtual_operand(value, OperandRole::Use),
+                    ],
+                    InstructionFlags::NONE,
+                    output,
+                )?;
+                self.push_instruction(
+                    X86Opcode::HighWord,
+                    vec![
+                        virtual_operand(high, OperandRole::Def),
+                        virtual_operand(value, OperandRole::Use),
+                    ],
+                    InstructionFlags::NONE,
+                    output,
+                )?;
+                let return_far = self.machine_instruction(
+                    X86Opcode::ReturnFar,
+                    vec![
+                        fixed_virtual_operand(low, OperandRole::Use, X86Register::Ax),
+                        fixed_virtual_operand(high, OperandRole::Use, X86Register::Dx),
+                        immediate_operand(i64::from(self.argument_bytes()?)),
+                    ],
+                    InstructionFlags {
+                        terminator: true,
+                        ..InstructionFlags::NONE
+                    },
+                )?;
+                Ok((Some(return_far), Vec::new()))
+            }
             Terminator::Return(None) => {
                 if !matches!(
                     self.type_kind(self.function.signature.result)?,
@@ -959,9 +1389,19 @@ impl<'types> FunctionSelector<'types> {
                         result: self.function.signature.result,
                     });
                 }
+                let far = self.function.linkage == Linkage::External;
+                let operands = if far {
+                    vec![immediate_operand(i64::from(self.argument_bytes()?))]
+                } else {
+                    Vec::new()
+                };
                 let instruction = self.machine_instruction(
-                    X86Opcode::ReturnNear,
-                    Vec::new(),
+                    if far {
+                        X86Opcode::ReturnFar
+                    } else {
+                        X86Opcode::ReturnNear
+                    },
+                    operands,
                     InstructionFlags {
                         terminator: true,
                         ..InstructionFlags::NONE
@@ -1028,20 +1468,174 @@ impl<'types> FunctionSelector<'types> {
         })
     }
 
-    fn define_value(&mut self, value: &Value) -> Result<SelectedValue, SelectionError> {
+    fn insert_value(
+        &mut self,
+        value: &Value,
+        location: SelectedLocation,
+    ) -> Result<(), SelectionError> {
         if self.values.contains_key(&value.id) {
             return Err(SelectionError::DuplicateValue {
                 function: self.function.id,
                 value: value.id,
             });
         }
-        let class = self.integer_class(value.type_id)?;
-        let selected = SelectedValue {
-            register: self.fresh_virtual_register(class)?,
-            type_id: value.type_id,
-        };
-        self.values.insert(value.id, selected);
-        Ok(selected)
+        self.values.insert(
+            value.id,
+            SelectedValue {
+                location,
+                type_id: value.type_id,
+            },
+        );
+        Ok(())
+    }
+
+    fn define_register_value(
+        &mut self,
+        value: &Value,
+    ) -> Result<VirtualRegisterId, SelectionError> {
+        let register = self.fresh_virtual_register(self.value_class(value.type_id)?)?;
+        self.insert_value(value, SelectedLocation::Register(register))?;
+        Ok(register)
+    }
+
+    fn materialize_register(
+        &mut self,
+        value: SelectedValue,
+        output: &mut Vec<MachineInstruction>,
+    ) -> Result<VirtualRegisterId, SelectionError> {
+        match value.location {
+            SelectedLocation::Register(register) => Ok(register),
+            location @ (SelectedLocation::Frame(_) | SelectedLocation::Global { .. }) => {
+                self.require_near_pointer(value.type_id)?;
+                let register =
+                    self.fresh_virtual_register(X86RegisterClass::Address16.machine_class())?;
+                self.push_instruction(
+                    X86Opcode::Lea,
+                    vec![
+                        virtual_operand(register, OperandRole::Def),
+                        selected_address_operand(location),
+                    ],
+                    InstructionFlags::NONE,
+                    output,
+                )?;
+                Ok(register)
+            }
+        }
+    }
+
+    fn memory_address_operand(
+        &mut self,
+        value: SelectedValue,
+        output: &mut Vec<MachineInstruction>,
+    ) -> Result<MachineOperand, SelectionError> {
+        match value.location {
+            SelectedLocation::Global { .. } => {
+                let register = self.materialize_register(value, output)?;
+                Ok(virtual_operand(register, OperandRole::Use))
+            }
+            location => Ok(selected_address_operand(location)),
+        }
+    }
+
+    fn fresh_frame_object(
+        &mut self,
+        size: u32,
+        alignment: u32,
+        kind: FrameObjectKind,
+    ) -> Result<FrameIndex, SelectionError> {
+        let index = FrameIndex::new(Self::fresh_id(
+            self.function.id,
+            &mut self.next_frame_index,
+        )?);
+        self.frame_objects.push(FrameObject {
+            index,
+            size,
+            alignment,
+            kind,
+        });
+        Ok(index)
+    }
+
+    fn operand_type(
+        &self,
+        block: BlockId,
+        instruction: crate::ir::InstructionId,
+        operand: &Operand,
+    ) -> Result<TypeId, SelectionError> {
+        match operand {
+            Operand::Value(value) => {
+                self.values
+                    .get(value)
+                    .map(|one| one.type_id)
+                    .ok_or(SelectionError::UnknownValue {
+                        function: self.function.id,
+                        block,
+                        instruction,
+                        value: *value,
+                    })
+            }
+            Operand::Constant(constant) => Ok(constant.type_id),
+        }
+    }
+
+    fn require_pointer_type(
+        &self,
+        type_id: TypeId,
+        expected: AddressSpace,
+    ) -> Result<(), SelectionError> {
+        match self.type_kind(type_id)? {
+            TypeKind::Pointer { address_space } if *address_space == expected => Ok(()),
+            _ => Err(SelectionError::UnsupportedType { type_id }),
+        }
+    }
+
+    fn require_near_pointer(&self, type_id: TypeId) -> Result<(), SelectionError> {
+        self.require_pointer_type(type_id, AddressSpace::NearData)
+    }
+
+    fn value_class(&self, type_id: TypeId) -> Result<RegisterClass, SelectionError> {
+        match self.type_kind(type_id)? {
+            TypeKind::Pointer {
+                address_space: AddressSpace::NearData,
+            } => Ok(X86RegisterClass::Address16.machine_class()),
+            TypeKind::Pointer { address_space } => Err(SelectionError::UnsupportedAddressSpace {
+                type_id,
+                address_space: *address_space,
+            }),
+            _ => self.integer_class(type_id),
+        }
+    }
+
+    fn abi_size(&self, type_id: TypeId) -> Result<(u32, u32), SelectionError> {
+        match self.type_kind(type_id)? {
+            TypeKind::Integer { bits: 8 | 16 } => Ok((2, 2)),
+            TypeKind::Integer { bits: 32 } => Ok((4, 2)),
+            TypeKind::Pointer {
+                address_space: AddressSpace::NearData,
+            } => Ok((2, 2)),
+            TypeKind::Integer { bits } => Err(SelectionError::UnsupportedIntegerWidth {
+                type_id,
+                bits: *bits,
+            }),
+            TypeKind::Pointer { address_space } => Err(SelectionError::UnsupportedAddressSpace {
+                type_id,
+                address_space: *address_space,
+            }),
+            _ => Err(SelectionError::UnsupportedType { type_id }),
+        }
+    }
+
+    fn argument_bytes(&self) -> Result<u32, SelectionError> {
+        self.function
+            .signature
+            .parameters
+            .iter()
+            .try_fold(0_u32, |total, type_id| {
+                let (size, _) = self.abi_size(*type_id)?;
+                total.checked_add(size).ok_or(SelectionError::IdExhausted {
+                    function: self.function.id,
+                })
+            })
     }
 
     fn fresh_virtual_register(
@@ -1120,14 +1714,16 @@ impl<'types> FunctionSelector<'types> {
         }
     }
 
-    fn finish(self) -> MachineFunction {
-        MachineFunction {
+    fn finish(self) -> Result<MachineFunction, SelectionError> {
+        Ok(MachineFunction {
             id: MachineFunctionId::new(self.function.id.get()),
             name: self.function.name.clone(),
+            linkage: machine_linkage(self.function.linkage),
+            signature: machine_signature(self.function, self.types)?,
             virtual_registers: self.virtual_registers,
             blocks: self.blocks,
-            frame_objects: Vec::new(),
-        }
+            frame_objects: self.frame_objects,
+        })
     }
 }
 
@@ -1135,6 +1731,41 @@ fn virtual_operand(register: VirtualRegisterId, role: OperandRole) -> MachineOpe
     MachineOperand {
         kind: MachineOperandKind::Register(MachineRegister::Virtual(register)),
         role,
+        constraint: None,
+        tied_to: None,
+    }
+}
+
+fn fixed_virtual_operand(
+    register: VirtualRegisterId,
+    role: OperandRole,
+    fixed: X86Register,
+) -> MachineOperand {
+    MachineOperand {
+        kind: MachineOperandKind::Register(MachineRegister::Virtual(register)),
+        role,
+        constraint: Some(RegisterConstraint::Fixed(fixed.physical())),
+        tied_to: None,
+    }
+}
+
+fn selected_address_operand(location: SelectedLocation) -> MachineOperand {
+    match location {
+        SelectedLocation::Register(register) => virtual_operand(register, OperandRole::Use),
+        SelectedLocation::Frame(index) => frame_operand(index),
+        SelectedLocation::Global { name, addend } => MachineOperand {
+            kind: MachineOperandKind::Global { name, addend },
+            role: OperandRole::None,
+            constraint: None,
+            tied_to: None,
+        },
+    }
+}
+
+fn frame_operand(index: FrameIndex) -> MachineOperand {
+    MachineOperand {
+        kind: MachineOperandKind::FrameIndex { index, addend: 0 },
+        role: OperandRole::None,
         constraint: None,
         tied_to: None,
     }
@@ -1152,6 +1783,15 @@ fn immediate_operand(value: i64) -> MachineOperand {
 fn block_operand(block: MachineBlockId) -> MachineOperand {
     MachineOperand {
         kind: MachineOperandKind::Block(block),
+        role: OperandRole::None,
+        constraint: None,
+        tied_to: None,
+    }
+}
+
+fn function_operand(function: MachineFunctionId) -> MachineOperand {
+    MachineOperand {
+        kind: MachineOperandKind::Function(function),
         role: OperandRole::None,
         constraint: None,
         tied_to: None,
@@ -1181,6 +1821,81 @@ fn call_flags(effects: Effects) -> InstructionFlags {
         may_store,
         volatile: effects.observable && (may_load || may_store),
         ..InstructionFlags::NONE
+    }
+}
+
+fn load_flags(volatile: bool) -> InstructionFlags {
+    InstructionFlags {
+        may_load: true,
+        volatile,
+        ..InstructionFlags::NONE
+    }
+}
+
+fn store_flags(volatile: bool) -> InstructionFlags {
+    InstructionFlags {
+        side_effects: true,
+        may_store: true,
+        volatile,
+        ..InstructionFlags::NONE
+    }
+}
+
+fn machine_linkage(linkage: Linkage) -> MachineLinkage {
+    match linkage {
+        Linkage::Internal => MachineLinkage::Internal,
+        Linkage::External => MachineLinkage::External,
+    }
+}
+
+fn machine_signature(
+    function: &Function,
+    types: &BTreeMap<TypeId, &TypeKind>,
+) -> Result<MachineSignature, SelectionError> {
+    Ok(MachineSignature {
+        result: match type_kind(types, function.signature.result)? {
+            TypeKind::Void => None,
+            _ => Some(machine_value_type(types, function.signature.result)?),
+        },
+        parameters: function
+            .signature
+            .parameters
+            .iter()
+            .map(|type_id| machine_value_type(types, *type_id))
+            .collect::<Result<Vec<_>, _>>()?,
+        variadic: function.signature.variadic,
+        calling_convention: match function.signature.calling_convention {
+            CallingConvention::C => MachineCallingConvention::C,
+            CallingConvention::Basic => MachineCallingConvention::Basic,
+            CallingConvention::Runtime => MachineCallingConvention::Runtime,
+        },
+    })
+}
+
+fn machine_value_type(
+    types: &BTreeMap<TypeId, &TypeKind>,
+    type_id: TypeId,
+) -> Result<MachineValueType, SelectionError> {
+    match type_kind(types, type_id)? {
+        TypeKind::Integer { bits } if *bits != 0 => Ok(MachineValueType::Integer { bits: *bits }),
+        TypeKind::Pointer { address_space } => Ok(MachineValueType::Pointer {
+            bits: match address_space {
+                AddressSpace::NearData | AddressSpace::Segment => 16,
+                AddressSpace::Generic
+                | AddressSpace::FarData
+                | AddressSpace::HugeData
+                | AddressSpace::Code => 32,
+            },
+            address_space: match address_space {
+                AddressSpace::Generic => MachineAddressSpace::Generic,
+                AddressSpace::NearData => MachineAddressSpace::NearData,
+                AddressSpace::FarData => MachineAddressSpace::FarData,
+                AddressSpace::HugeData => MachineAddressSpace::HugeData,
+                AddressSpace::Code => MachineAddressSpace::Code,
+                AddressSpace::Segment => MachineAddressSpace::Segment,
+            },
+        }),
+        _ => Err(SelectionError::UnsupportedType { type_id }),
     }
 }
 
@@ -1333,35 +2048,47 @@ mod tests {
         let function = &selected.functions[0];
         assert_eq!(function.id, MachineFunctionId::new(4));
         assert_eq!(function.virtual_registers.len(), 4);
+        assert!(matches!(
+            function.frame_objects.as_slice(),
+            [FrameObject {
+                size: 4,
+                kind: FrameObjectKind::IncomingArgument { parameter: 0 },
+                ..
+            }]
+        ));
         assert_eq!(function.blocks[0].successors, vec![MachineBlockId::new(3)]);
-        assert_eq!(function.blocks[0].instructions.len(), 6);
+        assert_eq!(function.blocks[0].instructions.len(), 7);
         assert_eq!(
             function.blocks[0].instructions[0].opcode,
-            X86Opcode::Mov.machine_opcode()
+            X86Opcode::Load.machine_opcode()
         );
         assert!(matches!(
             function.blocks[0].instructions[0].operands[0].kind,
             MachineOperandKind::Register(MachineRegister::Virtual(register))
-                if register == VirtualRegisterId::new(1)
+                if register == VirtualRegisterId::new(0)
         ));
         assert_eq!(
             function.blocks[0].instructions[1].opcode,
-            X86Opcode::Copy.machine_opcode()
+            X86Opcode::Mov.machine_opcode()
         );
         assert_eq!(
             function.blocks[0].instructions[2].opcode,
-            X86Opcode::Add.machine_opcode()
-        );
-        assert_eq!(
-            function.blocks[0].instructions[3].opcode,
             X86Opcode::Copy.machine_opcode()
         );
         assert_eq!(
+            function.blocks[0].instructions[3].opcode,
+            X86Opcode::Add.machine_opcode()
+        );
+        assert_eq!(
             function.blocks[0].instructions[4].opcode,
-            X86Opcode::Not.machine_opcode()
+            X86Opcode::Copy.machine_opcode()
         );
         assert_eq!(
             function.blocks[0].instructions[5].opcode,
+            X86Opcode::Not.machine_opcode()
+        );
+        assert_eq!(
+            function.blocks[0].instructions[6].opcode,
             X86Opcode::Jump.machine_opcode()
         );
         assert_eq!(

@@ -60,7 +60,29 @@ impl OperandIndex {
 /// An ordered collection of selected functions.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct MachineModule {
+    /// Defined data objects in deterministic source order.
+    pub data_objects: Vec<MachineDataObject>,
     pub functions: Vec<MachineFunction>,
+}
+
+/// One defined data object with a byte initializer.
+///
+/// Relocations are intentionally not represented here.  Data lowering must
+/// refuse initializers that need one until Machine IR grows that capability.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MachineDataObject {
+    pub name: String,
+    pub bytes: Vec<u8>,
+    pub alignment: u32,
+    pub constant: bool,
+    pub linkage: MachineLinkage,
+}
+
+/// Visibility of a defined machine symbol.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MachineLinkage {
+    Internal,
+    External,
 }
 
 /// One function after instruction selection and before allocation.
@@ -72,9 +94,51 @@ pub struct MachineModule {
 pub struct MachineFunction {
     pub id: MachineFunctionId,
     pub name: String,
+    pub linkage: MachineLinkage,
+    pub signature: MachineSignature,
     pub virtual_registers: Vec<VirtualRegister>,
     pub blocks: Vec<MachineBlock>,
     pub frame_objects: Vec<FrameObject>,
+}
+
+/// Source-level ABI facts attached to a selected function.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MachineSignature {
+    pub result: Option<MachineValueType>,
+    pub parameters: Vec<MachineValueType>,
+    pub variadic: bool,
+    pub calling_convention: MachineCallingConvention,
+}
+
+/// A calling convention understood by the source language or runtime.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MachineCallingConvention {
+    C,
+    Basic,
+    Runtime,
+}
+
+/// A source-level value type, independent of target instruction encodings.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MachineValueType {
+    Integer {
+        bits: u16,
+    },
+    Pointer {
+        bits: u16,
+        address_space: MachineAddressSpace,
+    },
+}
+
+/// An abstract address space for machine-level ABI values.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MachineAddressSpace {
+    Generic,
+    NearData,
+    FarData,
+    HugeData,
+    Code,
+    Segment,
 }
 
 /// One allocatable virtual register and its target-defined register class.
@@ -107,6 +171,7 @@ pub enum FrameObjectKind {
     Local,
     Spill,
     OutgoingArgument,
+    IncomingArgument { parameter: u32 },
 }
 
 /// One target instruction and its target-independent operand contract.
@@ -205,6 +270,7 @@ pub enum MachineOperandKind {
     Immediate(i64),
     FrameIndex { index: FrameIndex, addend: i64 },
     Block(MachineBlockId),
+    Function(MachineFunctionId),
     Global { name: String, addend: i64 },
     ExternalSymbol { name: String, addend: i64 },
 }
@@ -454,6 +520,13 @@ mod tests {
         let function = MachineFunction {
             id: MachineFunctionId::new(1),
             name: "first".to_owned(),
+            linkage: MachineLinkage::Internal,
+            signature: MachineSignature {
+                result: None,
+                parameters: Vec::new(),
+                variadic: false,
+                calling_convention: MachineCallingConvention::Basic,
+            },
             virtual_registers: vec![VirtualRegister {
                 id: VirtualRegisterId::new(2),
                 class: RegisterClass::new(4),
@@ -479,6 +552,7 @@ mod tests {
         };
 
         let module = MachineModule {
+            data_objects: Vec::new(),
             functions: vec![function],
         };
         assert_eq!(module.functions[0].blocks[0].id, MachineBlockId::new(4));

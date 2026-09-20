@@ -161,11 +161,22 @@ pub enum X86Opcode {
     ReturnFar = 24,
     Jump = 25,
     JumpConditional = 26,
+
+    /// Load from a selected frame, global, or register-indirect address.
+    Load = 27,
+    /// Store to a selected frame, global, or register-indirect address.
+    Store = 28,
+    /// Join the low and high ABI words into one semantic dword value.
+    MergeWords = 29,
+    /// Extract the low ABI word from one semantic dword value.
+    LowWord = 30,
+    /// Extract the high ABI word from one semantic dword value.
+    HighWord = 31,
 }
 
 impl X86Opcode {
     /// Every opcode in stable numeric order.
-    pub const ALL: [Self; 26] = [
+    pub const ALL: [Self; 31] = [
         Self::Copy,
         Self::PhiCopy,
         Self::Mov,
@@ -192,6 +203,11 @@ impl X86Opcode {
         Self::ReturnFar,
         Self::Jump,
         Self::JumpConditional,
+        Self::Load,
+        Self::Store,
+        Self::MergeWords,
+        Self::LowWord,
+        Self::HighWord,
     ];
 
     /// The opaque target-independent Machine IR opcode identifier.

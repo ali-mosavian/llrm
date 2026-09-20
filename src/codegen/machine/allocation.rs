@@ -391,6 +391,13 @@ mod tests {
         MachineFunction {
             id: MachineFunctionId::new(0),
             name: "allocation".to_owned(),
+            linkage: crate::codegen::machine::MachineLinkage::Internal,
+            signature: crate::codegen::machine::MachineSignature {
+                result: None,
+                parameters: Vec::new(),
+                variadic: false,
+                calling_convention: crate::codegen::machine::MachineCallingConvention::Basic,
+            },
             virtual_registers: registers
                 .iter()
                 .map(|(id, class)| VirtualRegister {

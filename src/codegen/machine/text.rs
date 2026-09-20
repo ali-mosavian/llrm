@@ -8,15 +8,16 @@ use std::error::Error;
 use std::fmt;
 
 use super::{
-    FrameIndex, FrameObject, FrameObjectKind, InstructionFlags, MachineBlock, MachineBlockId,
-    MachineFunction, MachineFunctionId, MachineInstruction, MachineInstructionId, MachineModule,
-    MachineOperand, MachineOperandKind, MachineRegister, OperandIndex, OperandRole,
-    PhysicalRegister, RegisterClass, RegisterConstraint, TargetOpcode, VirtualRegister,
-    VirtualRegisterId,
+    FrameIndex, FrameObject, FrameObjectKind, InstructionFlags, MachineAddressSpace, MachineBlock,
+    MachineBlockId, MachineCallingConvention, MachineDataObject, MachineFunction,
+    MachineFunctionId, MachineInstruction, MachineInstructionId, MachineLinkage, MachineModule,
+    MachineOperand, MachineOperandKind, MachineRegister, MachineSignature, MachineValueType,
+    OperandIndex, OperandRole, PhysicalRegister, RegisterClass, RegisterConstraint, TargetOpcode,
+    VirtualRegister, VirtualRegisterId,
 };
 
 /// Version of the `.qmir` textual format.
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 
 /// A syntax or value error in `.qmir` text.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -44,15 +45,44 @@ impl Error for TextError {}
 /// Writes one canonical `.qmir` document.
 pub fn write_text(module: &MachineModule) -> String {
     let mut text = format!("qmir {FORMAT_VERSION}\n");
-    for function in &module.functions {
+    for object in &module.data_objects {
         line(
             &mut text,
             &[
-                "function".to_owned(),
-                function.id.get().to_string(),
-                encode_name(&function.name),
+                "data".to_owned(),
+                encode_name(&object.name),
+                encode_bytes(&object.bytes),
+                object.alignment.to_string(),
+                if object.constant {
+                    "constant"
+                } else {
+                    "mutable"
+                }
+                .to_owned(),
+                linkage_name(object.linkage).to_owned(),
             ],
         );
+    }
+    for function in &module.functions {
+        let mut fields = vec![
+            "function".to_owned(),
+            function.id.get().to_string(),
+            encode_name(&function.name),
+            linkage_name(function.linkage).to_owned(),
+            calling_convention_name(function.signature.calling_convention).to_owned(),
+            value_type_name(function.signature.result).to_owned(),
+            u8::from(function.signature.variadic).to_string(),
+            function.signature.parameters.len().to_string(),
+        ];
+        fields.extend(
+            function
+                .signature
+                .parameters
+                .iter()
+                .copied()
+                .map(|value_type| value_type_name(Some(value_type)).to_owned()),
+        );
+        line(&mut text, &fields);
         for register in &function.virtual_registers {
             line(
                 &mut text,
@@ -71,7 +101,7 @@ pub fn write_text(module: &MachineModule) -> String {
                     object.index.get().to_string(),
                     object.size.to_string(),
                     object.alignment.to_string(),
-                    frame_kind_name(object.kind).to_owned(),
+                    frame_kind_name(object.kind),
                 ],
             );
         }
@@ -113,21 +143,29 @@ pub fn write_text(module: &MachineModule) -> String {
 pub fn parse_text(source: &str) -> Result<MachineModule, TextError> {
     let mut parser = Parser::new(source);
     let header = parser.next()?;
-    expect_exact(&header, &["qmir", "1"])?;
+    expect_exact(&header, &["qmir", "2"])?;
 
+    let mut data_objects = Vec::new();
     let mut functions = Vec::new();
     while let Some(line) = parser.peek() {
         let tokens = tokenize(line)?;
         match tokens.first().map(|token| token.value) {
+            Some("data") => {
+                let line = parser.next()?;
+                data_objects.push(parse_data(&tokenize(line)?)?);
+            }
             Some("function") => {
                 let line = parser.next()?;
                 functions.push(parser.parse_function(line)?);
             }
-            Some(_) => return Err(unexpected(&tokens[0], "`function` or end of file")),
+            Some(_) => return Err(unexpected(&tokens[0], "`data`, `function`, or end of file")),
             None => return Err(error(line.number, 1, "blank lines are not permitted")),
         }
     }
-    Ok(MachineModule { functions })
+    Ok(MachineModule {
+        data_objects,
+        functions,
+    })
 }
 
 fn line(text: &mut String, fields: &[String]) {
@@ -164,6 +202,9 @@ fn write_operand(text: &mut String, operand: &MachineOperand) {
         }
         MachineOperandKind::Block(id) => {
             fields.extend(["block".to_owned(), id.get().to_string()]);
+        }
+        MachineOperandKind::Function(id) => {
+            fields.extend(["function".to_owned(), id.get().to_string()]);
         }
         MachineOperandKind::Global { name, addend } => {
             fields.extend(["global".to_owned(), encode_name(name), addend.to_string()]);
@@ -205,11 +246,51 @@ fn parse_flags(token: Token<'_>) -> Result<InstructionFlags, TextError> {
     })
 }
 
-fn frame_kind_name(kind: FrameObjectKind) -> &'static str {
+fn frame_kind_name(kind: FrameObjectKind) -> String {
     match kind {
-        FrameObjectKind::Local => "local",
-        FrameObjectKind::Spill => "spill",
-        FrameObjectKind::OutgoingArgument => "outgoing-argument",
+        FrameObjectKind::Local => "local".to_owned(),
+        FrameObjectKind::Spill => "spill".to_owned(),
+        FrameObjectKind::OutgoingArgument => "outgoing-argument".to_owned(),
+        FrameObjectKind::IncomingArgument { parameter } => {
+            format!("incoming-argument:{parameter}")
+        }
+    }
+}
+
+fn linkage_name(linkage: MachineLinkage) -> &'static str {
+    match linkage {
+        MachineLinkage::Internal => "internal",
+        MachineLinkage::External => "external",
+    }
+}
+
+fn calling_convention_name(calling_convention: MachineCallingConvention) -> &'static str {
+    match calling_convention {
+        MachineCallingConvention::C => "c",
+        MachineCallingConvention::Basic => "basic",
+        MachineCallingConvention::Runtime => "runtime",
+    }
+}
+
+fn value_type_name(value_type: Option<MachineValueType>) -> String {
+    match value_type {
+        None => "-".to_owned(),
+        Some(MachineValueType::Integer { bits }) => format!("i{bits}"),
+        Some(MachineValueType::Pointer {
+            bits,
+            address_space,
+        }) => format!("p{bits}:{}", address_space_name(address_space)),
+    }
+}
+
+fn address_space_name(address_space: MachineAddressSpace) -> &'static str {
+    match address_space {
+        MachineAddressSpace::Generic => "generic",
+        MachineAddressSpace::NearData => "near-data",
+        MachineAddressSpace::FarData => "far-data",
+        MachineAddressSpace::HugeData => "huge-data",
+        MachineAddressSpace::Code => "code",
+        MachineAddressSpace::Segment => "segment",
     }
 }
 
@@ -236,6 +317,18 @@ fn encode_name(name: &str) -> String {
     }
     let mut result = String::with_capacity(name.len() * 2);
     for byte in name.bytes() {
+        use fmt::Write as _;
+        let _ = write!(result, "{byte:02x}");
+    }
+    result
+}
+
+fn encode_bytes(bytes: &[u8]) -> String {
+    if bytes.is_empty() {
+        return "-".to_owned();
+    }
+    let mut result = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
         use fmt::Write as _;
         let _ = write!(result, "{byte:02x}");
     }
@@ -269,6 +362,34 @@ fn decode_name(token: Token<'_>) -> Result<String, TextError> {
         bytes.push(byte);
     }
     String::from_utf8(bytes).map_err(|_| error(token.line, token.column, "name is not valid UTF-8"))
+}
+
+fn decode_bytes(token: Token<'_>) -> Result<Vec<u8>, TextError> {
+    if token.value == "-" {
+        return Ok(Vec::new());
+    }
+    if token.value.len() % 2 != 0 {
+        return Err(error(token.line, token.column, "hex bytes have odd length"));
+    }
+    if !token.value.as_bytes().iter().all(u8::is_ascii_hexdigit) {
+        return Err(error(
+            token.line,
+            token.column,
+            "bytes must contain hexadecimal values",
+        ));
+    }
+    (0..token.value.len())
+        .step_by(2)
+        .map(|offset| {
+            u8::from_str_radix(&token.value[offset..offset + 2], 16).map_err(|_| {
+                error(
+                    token.line,
+                    token.column + offset,
+                    "bytes must contain hexadecimal values",
+                )
+            })
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy)]
@@ -326,10 +447,30 @@ impl<'a> Parser<'a> {
 
     fn parse_function(&mut self, source: SourceLine<'a>) -> Result<MachineFunction, TextError> {
         let tokens = tokenize(source)?;
-        require_len(&tokens, 3)?;
+        require_at_least(&tokens, 8)?;
         expect_value(tokens[0], "function")?;
         let id = MachineFunctionId::new(number(tokens[1])?);
         let name = decode_name(tokens[2])?;
+        let linkage = parse_linkage(tokens[3])?;
+        let calling_convention = parse_calling_convention(tokens[4])?;
+        let result = parse_value_type(tokens[5], true)?;
+        let variadic = parse_bool(tokens[6])?;
+        let parameter_count = number::<usize>(tokens[7])?;
+        if parameter_count.checked_add(8) != Some(tokens.len()) {
+            return Err(error(
+                tokens[7].line,
+                tokens[7].column,
+                "parameter count does not match the number of parameter types",
+            ));
+        }
+        let parameters = tokens[8..]
+            .iter()
+            .copied()
+            .map(|token| {
+                parse_value_type(token, false)?
+                    .ok_or_else(|| error(token.line, token.column, "parameter type cannot be `-`"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let mut virtual_registers = Vec::new();
         let mut blocks = Vec::new();
         let mut frame_objects = Vec::new();
@@ -360,6 +501,13 @@ impl<'a> Parser<'a> {
         Ok(MachineFunction {
             id,
             name,
+            linkage,
+            signature: MachineSignature {
+                result,
+                parameters,
+                variadic,
+                calling_convention,
+            },
             virtual_registers,
             blocks,
             frame_objects,
@@ -453,7 +601,19 @@ fn parse_frame(tokens: &[Token<'_>]) -> Result<FrameObject, TextError> {
         "local" => FrameObjectKind::Local,
         "spill" => FrameObjectKind::Spill,
         "outgoing-argument" => FrameObjectKind::OutgoingArgument,
-        _ => return Err(unexpected(&tokens[4], "a frame object kind")),
+        value => {
+            let Some(parameter) = value.strip_prefix("incoming-argument:") else {
+                return Err(unexpected(&tokens[4], "a frame object kind"));
+            };
+            let parameter = parameter.parse::<u32>().map_err(|_| {
+                error(
+                    tokens[4].line,
+                    tokens[4].column + "incoming-argument:".len(),
+                    "expected an unsigned 32-bit parameter index",
+                )
+            })?;
+            FrameObjectKind::IncomingArgument { parameter }
+        }
     };
     Ok(FrameObject {
         index: FrameIndex::new(number(tokens[1])?),
@@ -461,6 +621,117 @@ fn parse_frame(tokens: &[Token<'_>]) -> Result<FrameObject, TextError> {
         alignment: number(tokens[3])?,
         kind,
     })
+}
+
+fn parse_data(tokens: &[Token<'_>]) -> Result<MachineDataObject, TextError> {
+    require_len(tokens, 6)?;
+    expect_value(tokens[0], "data")?;
+    let constant = match tokens[4].value {
+        "constant" => true,
+        "mutable" => false,
+        _ => return Err(unexpected(&tokens[4], "`constant` or `mutable`")),
+    };
+    Ok(MachineDataObject {
+        name: decode_name(tokens[1])?,
+        bytes: decode_bytes(tokens[2])?,
+        alignment: number(tokens[3])?,
+        constant,
+        linkage: parse_linkage(tokens[5])?,
+    })
+}
+
+fn parse_linkage(token: Token<'_>) -> Result<MachineLinkage, TextError> {
+    match token.value {
+        "internal" => Ok(MachineLinkage::Internal),
+        "external" => Ok(MachineLinkage::External),
+        _ => Err(unexpected(&token, "`internal` or `external`")),
+    }
+}
+
+fn parse_calling_convention(token: Token<'_>) -> Result<MachineCallingConvention, TextError> {
+    match token.value {
+        "c" => Ok(MachineCallingConvention::C),
+        "basic" => Ok(MachineCallingConvention::Basic),
+        "runtime" => Ok(MachineCallingConvention::Runtime),
+        _ => Err(unexpected(&token, "a calling convention")),
+    }
+}
+
+fn parse_value_type(
+    token: Token<'_>,
+    allow_absent: bool,
+) -> Result<Option<MachineValueType>, TextError> {
+    if token.value == "-" {
+        return if allow_absent {
+            Ok(None)
+        } else {
+            Err(error(
+                token.line,
+                token.column,
+                "parameter type cannot be `-`",
+            ))
+        };
+    }
+    if let Some(bits) = token.value.strip_prefix('i') {
+        return bits
+            .parse::<u16>()
+            .map(|bits| Some(MachineValueType::Integer { bits }))
+            .map_err(|_| {
+                error(
+                    token.line,
+                    token.column + 1,
+                    "expected an unsigned 16-bit width",
+                )
+            });
+    }
+    let Some(pointer) = token.value.strip_prefix('p') else {
+        return Err(unexpected(&token, "a machine value type"));
+    };
+    let Some((bits, address_space)) = pointer.split_once(':') else {
+        return Err(error(
+            token.line,
+            token.column,
+            "pointer type must be `p<bits>:<address-space>`",
+        ));
+    };
+    let bits = bits.parse::<u16>().map_err(|_| {
+        error(
+            token.line,
+            token.column + 1,
+            "expected an unsigned 16-bit width",
+        )
+    })?;
+    let address_space = match address_space {
+        "generic" => MachineAddressSpace::Generic,
+        "near-data" => MachineAddressSpace::NearData,
+        "far-data" => MachineAddressSpace::FarData,
+        "huge-data" => MachineAddressSpace::HugeData,
+        "code" => MachineAddressSpace::Code,
+        "segment" => MachineAddressSpace::Segment,
+        _ => {
+            return Err(error(
+                token.line,
+                token.column,
+                "unknown pointer address space",
+            ));
+        }
+    };
+    Ok(Some(MachineValueType::Pointer {
+        bits,
+        address_space,
+    }))
+}
+
+fn parse_bool(token: Token<'_>) -> Result<bool, TextError> {
+    match token.value {
+        "0" => Ok(false),
+        "1" => Ok(true),
+        _ => Err(error(
+            token.line,
+            token.column,
+            "boolean value must be `0` or `1`",
+        )),
+    }
 }
 
 fn parse_operand(tokens: &[Token<'_>]) -> Result<MachineOperand, TextError> {
@@ -506,6 +777,10 @@ fn parse_operand(tokens: &[Token<'_>]) -> Result<MachineOperand, TextError> {
         "block" => {
             require_len(tokens, 6)?;
             MachineOperandKind::Block(MachineBlockId::new(number(tokens[5])?))
+        }
+        "function" => {
+            require_len(tokens, 6)?;
+            MachineOperandKind::Function(MachineFunctionId::new(number(tokens[5])?))
         }
         "global" => {
             require_len(tokens, 7)?;
@@ -679,9 +954,32 @@ mod tests {
     #[test]
     fn round_trips_every_machine_ir_field_canonically() {
         let module = MachineModule {
+            data_objects: vec![MachineDataObject {
+                name: "data.å".to_owned(),
+                bytes: vec![0, 17, 255],
+                alignment: 8,
+                constant: true,
+                linkage: MachineLinkage::Internal,
+            }],
             functions: vec![MachineFunction {
                 id: MachineFunctionId::new(7),
                 name: "main.å".to_owned(),
+                linkage: MachineLinkage::External,
+                signature: MachineSignature {
+                    result: Some(MachineValueType::Pointer {
+                        bits: 16,
+                        address_space: MachineAddressSpace::Code,
+                    }),
+                    parameters: vec![
+                        MachineValueType::Integer { bits: 16 },
+                        MachineValueType::Pointer {
+                            bits: 16,
+                            address_space: MachineAddressSpace::FarData,
+                        },
+                    ],
+                    variadic: true,
+                    calling_convention: MachineCallingConvention::C,
+                },
                 virtual_registers: vec![
                     VirtualRegister {
                         id: VirtualRegisterId::new(4),
@@ -709,7 +1007,7 @@ mod tests {
                         index: FrameIndex::new(8),
                         size: 2,
                         alignment: 2,
-                        kind: FrameObjectKind::OutgoingArgument,
+                        kind: FrameObjectKind::IncomingArgument { parameter: 1 },
                     },
                 ],
                 blocks: vec![
@@ -779,6 +1077,12 @@ mod tests {
                                     tied_to: None,
                                 },
                                 MachineOperand {
+                                    kind: MachineOperandKind::Function(MachineFunctionId::new(7)),
+                                    role: OperandRole::None,
+                                    constraint: None,
+                                    tied_to: None,
+                                },
+                                MachineOperand {
                                     kind: MachineOperandKind::Global {
                                         name: "data.å".to_owned(),
                                         addend: 12,
@@ -817,10 +1121,17 @@ mod tests {
     #[test]
     fn reports_the_malformed_operand_location() {
         let error =
-            parse_text("qmir 1\nfunction 0 66\nblock 0 0\ninst 0 0 0 1\noperand use - - wat\n")
+            parse_text("qmir 2\nfunction 0 66 internal c - 0 0\nblock 0 0\ninst 0 0 0 1\noperand use - - wat\n")
                 .expect_err("unknown operand kind must be rejected");
         assert_eq!(error.line, 5);
         assert_eq!(error.column, 17);
         assert!(error.message.contains("machine operand kind"));
+    }
+
+    #[test]
+    fn accepts_only_the_version_two_schema() {
+        let error = parse_text("qmir 1\n").expect_err("qmir version one is not accepted");
+        assert_eq!(error.line, 1);
+        assert!(error.message.contains("invalid qmir format header"));
     }
 }

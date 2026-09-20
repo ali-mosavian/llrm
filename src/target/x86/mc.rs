@@ -20,6 +20,7 @@ pub enum UnresolvedOperand {
     VirtualRegister,
     FrameIndex,
     Block,
+    Function,
     Global,
     ExternalSymbol,
 }
@@ -131,6 +132,7 @@ pub fn lower_instruction(
                     unresolved(index, UnresolvedOperand::FrameIndex)
                 }
                 MachineOperandKind::Block(_) => unresolved(index, UnresolvedOperand::Block),
+                MachineOperandKind::Function(_) => unresolved(index, UnresolvedOperand::Function),
                 MachineOperandKind::Global { .. } => unresolved(index, UnresolvedOperand::Global),
                 MachineOperandKind::ExternalSymbol { .. } => {
                     unresolved(index, UnresolvedOperand::ExternalSymbol)

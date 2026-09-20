@@ -123,7 +123,12 @@ pub fn encode(instruction: &MCInstruction) -> Result<Vec<u8>, EncodeError> {
         | X86Opcode::CallNear
         | X86Opcode::CallFar
         | X86Opcode::Jump
-        | X86Opcode::JumpConditional => Err(EncodeError::UnsupportedForm {
+        | X86Opcode::JumpConditional
+        | X86Opcode::Load
+        | X86Opcode::Store
+        | X86Opcode::MergeWords
+        | X86Opcode::LowWord
+        | X86Opcode::HighWord => Err(EncodeError::UnsupportedForm {
             opcode,
             reason: "this initial encoder accepts only exact register forms",
         }),

@@ -6,6 +6,7 @@ use crate::frontend::qb::{self, Dialect};
 use crate::hir::{LowerError, Program, RuntimeProfile};
 use crate::ir;
 use crate::object::omf::file::{File as OmfFile, FileError};
+use crate::support::diagnostic::Diagnostic;
 use crate::target::x86::SelectionError;
 
 /// Configuration that affects QB source semantics.
@@ -42,6 +43,7 @@ pub enum Error {
     ExpectedSingleModule { actual: usize },
     Lower(LowerError),
     Selection(SelectionError),
+    Machine(Vec<Diagnostic>),
     Omf(FileError),
 }
 
@@ -56,6 +58,13 @@ impl fmt::Display for Error {
             ),
             Self::Lower(error) => error.fmt(formatter),
             Self::Selection(error) => error.fmt(formatter),
+            Self::Machine(diagnostics) => {
+                if let Some(diagnostic) = diagnostics.first() {
+                    write!(formatter, "invalid x86 Machine IR: {}", diagnostic.message)
+                } else {
+                    write!(formatter, "invalid x86 Machine IR")
+                }
+            }
             Self::Omf(error) => error.fmt(formatter),
         }
     }
@@ -99,7 +108,9 @@ pub fn lower_qb_to_ir(program: &Program) -> Result<ir::Module, Error> {
 pub fn lower_ir_to_machine(
     module: &ir::Module,
 ) -> Result<crate::codegen::machine::MachineModule, Error> {
-    crate::target::x86::select_module(module).map_err(Error::Selection)
+    let machine = crate::target::x86::select_module(module).map_err(Error::Selection)?;
+    crate::target::x86::verify_machine(&machine).map_err(Error::Machine)?;
+    Ok(machine)
 }
 
 fn runtime_name(runtime: RuntimeProfile) -> &'static str {
@@ -113,11 +124,16 @@ fn runtime_name(runtime: RuntimeProfile) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{Error, QbOptions, compile_qb, lower_ir_to_machine, lower_qb_to_ir, parse_omf};
+    use crate::codegen::machine::{
+        FrameObjectKind, MachineAddressSpace, MachineCallingConvention, MachineOperandKind,
+        MachineRegister, MachineValueType, RegisterConstraint,
+    };
     use crate::hir::{
         ArrayOrder, Dialect, FORMAT_VERSION, FloatMode, Program, RuntimeProfile, TargetProfile,
     };
     use crate::ir;
     use crate::object::omf::record::Record;
+    use crate::target::x86::{X86Opcode, X86Register};
 
     #[test]
     fn untouched_omf_survives_the_driver_boundary_byte_for_byte() {
@@ -144,6 +160,124 @@ mod tests {
         assert!(matches!(
             lower_qb_to_ir(&program),
             Err(Error::ExpectedSingleModule { actual: 0 })
+        ));
+    }
+
+    #[test]
+    fn qb_procedure_preserves_byref_frames_and_dx_ax_long_abi() {
+        // The historical Python regressions establish four independent facts:
+        // a default numeric formal is BYREF, its published load stays volatile,
+        // a LONG result crosses a BASIC call in DX:AX, and `retf` pops the
+        // pointer argument.  Keep them together because procedure.bas exercises
+        // the complete source-to-Machine-IR boundary.
+        let program = compile_qb(
+            include_str!("../../frontends/qb/fixtures/procedure.bas"),
+            "procedure",
+            QbOptions::default(),
+        )
+        .expect("procedure fixture compiles to HIR");
+        let ir = lower_qb_to_ir(&program).expect("procedure fixture lowers to portable IR");
+        let machine = lower_ir_to_machine(&ir).expect("procedure fixture selects to x86 qmir");
+
+        assert_eq!(
+            machine
+                .data_objects
+                .iter()
+                .map(|object| object.name.as_str())
+                .collect::<Vec<_>>(),
+            ["RESULT&", "INPUTVALUE&"]
+        );
+        let main = machine
+            .functions
+            .iter()
+            .find(|function| function.name == "__main")
+            .expect("module entry function exists");
+        let procedure = machine
+            .functions
+            .iter()
+            .find(|function| function.name == "TWICE&")
+            .expect("defined BASIC function exists");
+
+        assert_eq!(
+            procedure.signature.calling_convention,
+            MachineCallingConvention::Basic
+        );
+        assert_eq!(
+            procedure.signature.result,
+            Some(MachineValueType::Integer { bits: 32 })
+        );
+        assert_eq!(
+            procedure.signature.parameters,
+            [MachineValueType::Pointer {
+                bits: 16,
+                address_space: MachineAddressSpace::NearData,
+            }]
+        );
+        assert!(matches!(
+            procedure.frame_objects.as_slice(),
+            [
+                crate::codegen::machine::FrameObject {
+                    size: 2,
+                    kind: FrameObjectKind::IncomingArgument { parameter: 0 },
+                    ..
+                },
+                crate::codegen::machine::FrameObject {
+                    size: 4,
+                    kind: FrameObjectKind::Local,
+                    ..
+                }
+            ]
+        ));
+        assert!(
+            procedure
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| {
+                    instruction.opcode == X86Opcode::Load.machine_opcode()
+                        && instruction.flags.volatile
+                        && matches!(
+                            instruction.operands.get(1).map(|operand| &operand.kind),
+                            Some(MachineOperandKind::Register(MachineRegister::Virtual(_)))
+                        )
+                })
+        );
+
+        let call = main
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .find(|instruction| instruction.opcode == X86Opcode::CallFar.machine_opcode())
+            .expect("caller contains a far defined call");
+        assert!(
+            matches!(call.operands[0].kind, MachineOperandKind::Function(id) if id == procedure.id)
+        );
+        assert_eq!(
+            call.operands[1].constraint,
+            Some(RegisterConstraint::Fixed(X86Register::Ax.physical()))
+        );
+        assert_eq!(
+            call.operands[2].constraint,
+            Some(RegisterConstraint::Fixed(X86Register::Dx.physical()))
+        );
+
+        let returned = procedure
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .find(|instruction| instruction.opcode == X86Opcode::ReturnFar.machine_opcode())
+            .expect("callee contains a far return");
+        assert_eq!(
+            returned.operands[0].constraint,
+            Some(RegisterConstraint::Fixed(X86Register::Ax.physical()))
+        );
+        assert_eq!(
+            returned.operands[1].constraint,
+            Some(RegisterConstraint::Fixed(X86Register::Dx.physical()))
+        );
+        assert!(matches!(
+            returned.operands[2].kind,
+            MachineOperandKind::Immediate(2)
         ));
     }
 

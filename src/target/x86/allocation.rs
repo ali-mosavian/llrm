@@ -83,6 +83,13 @@ mod tests {
         let function = MachineFunction {
             id: MachineFunctionId::new(0),
             name: "aliasing".into(),
+            linkage: crate::codegen::machine::MachineLinkage::Internal,
+            signature: crate::codegen::machine::MachineSignature {
+                result: None,
+                parameters: Vec::new(),
+                variadic: false,
+                calling_convention: crate::codegen::machine::MachineCallingConvention::Basic,
+            },
             virtual_registers: vec![
                 VirtualRegister {
                     id: VirtualRegisterId::new(0),
@@ -98,10 +105,7 @@ mod tests {
                 instructions: vec![MachineInstruction {
                     id: MachineInstructionId::new(0),
                     opcode: TargetOpcode::new(0),
-                    operands: vec![
-                        virtual_definition(0),
-                        virtual_definition(1),
-                    ],
+                    operands: vec![virtual_definition(0), virtual_definition(1)],
                     flags: InstructionFlags::NONE,
                 }],
                 successors: Vec::new(),

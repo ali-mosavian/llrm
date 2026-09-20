@@ -9,9 +9,9 @@ use std::collections::BTreeSet;
 use crate::support::diagnostic::{Diagnostic, Severity};
 
 use super::{
-    FrameIndex, MachineBlock, MachineBlockId, MachineFunction, MachineFunctionId,
-    MachineInstruction, MachineModule, MachineOperandKind, MachineRegister, OperandRole,
-    VirtualRegisterId,
+    FrameIndex, FrameObjectKind, MachineBlock, MachineBlockId, MachineCallingConvention,
+    MachineFunction, MachineFunctionId, MachineInstruction, MachineModule, MachineOperandKind,
+    MachineRegister, MachineValueType, OperandRole, VirtualRegisterId,
 };
 
 /// Validates the structural invariants of a Machine IR module.
@@ -59,9 +59,39 @@ impl<'module> Verifier<'module> {
     }
 
     fn verify_module(&mut self) {
+        let mut data_names = BTreeSet::new();
+        for object in &self.module.data_objects {
+            if object.name.is_empty() {
+                self.error("machine data object has an empty name".to_owned());
+            } else if !data_names.insert(&object.name) {
+                self.error(format!(
+                    "duplicate machine data object name `{}`",
+                    object.name
+                ));
+            }
+            if object.alignment == 0 || !object.alignment.is_power_of_two() {
+                self.error(format!(
+                    "machine data object `{}` has invalid alignment {}",
+                    object.name, object.alignment
+                ));
+            }
+        }
+
+        let mut function_names = BTreeSet::new();
         for function in &self.module.functions {
             if !self.function_ids.insert(function.id) {
                 self.error(format!("duplicate machine function id {}", function.id));
+            }
+            if function.name.is_empty() {
+                self.error(format!(
+                    "machine function {} has an empty name",
+                    function.id
+                ));
+            } else if !function_names.insert(&function.name) {
+                self.error(format!(
+                    "duplicate machine function name `{}`",
+                    function.name
+                ));
             }
         }
 
@@ -78,6 +108,7 @@ impl<'module> Verifier<'module> {
         };
         self.verify_instruction_ids(function);
 
+        self.verify_signature(function);
         self.verify_frame_objects(function);
         for block in &function.blocks {
             self.verify_block(function, block, &entities);
@@ -141,6 +172,7 @@ impl<'module> Verifier<'module> {
     }
 
     fn verify_frame_objects(&mut self, function: &MachineFunction) {
+        let mut incoming_parameters = BTreeSet::new();
         for frame_object in &function.frame_objects {
             if frame_object.size == 0 {
                 self.error(format!(
@@ -154,6 +186,59 @@ impl<'module> Verifier<'module> {
                     function.id, frame_object.index, frame_object.alignment
                 ));
             }
+            if let FrameObjectKind::IncomingArgument { parameter } = frame_object.kind {
+                if usize::try_from(parameter).map_or(true, |parameter| {
+                    parameter >= function.signature.parameters.len()
+                }) {
+                    self.error(format!(
+                        "machine function {} frame index {} has incoming argument parameter {} outside signature bounds",
+                        function.id, frame_object.index, parameter
+                    ));
+                }
+                if !incoming_parameters.insert(parameter) {
+                    self.error(format!(
+                        "machine function {} has multiple incoming argument frame objects for parameter {}",
+                        function.id, parameter
+                    ));
+                }
+            }
+        }
+    }
+
+    fn verify_signature(&mut self, function: &MachineFunction) {
+        if function.signature.variadic
+            && matches!(
+                function.signature.calling_convention,
+                MachineCallingConvention::Basic
+            )
+        {
+            self.error(format!(
+                "machine function {} has variadic Basic calling convention",
+                function.id
+            ));
+        }
+        if let Some(result) = function.signature.result {
+            self.verify_value_type(function, "result", result);
+        }
+        for (parameter, value_type) in function.signature.parameters.iter().copied().enumerate() {
+            self.verify_value_type(function, &format!("parameter {parameter}"), value_type);
+        }
+    }
+
+    fn verify_value_type(
+        &mut self,
+        function: &MachineFunction,
+        position: &str,
+        value_type: MachineValueType,
+    ) {
+        let bits = match value_type {
+            MachineValueType::Integer { bits } | MachineValueType::Pointer { bits, .. } => bits,
+        };
+        if bits == 0 {
+            self.error(format!(
+                "machine function {} {} type has zero width",
+                function.id, position
+            ));
         }
     }
 
@@ -267,6 +352,15 @@ impl<'module> Verifier<'module> {
                 if !entities.block_ids.contains(target) {
                     self.error(format!(
                         "machine function {} block {} instruction {} operand {} references unknown block {}",
+                        function.id, block.id, instruction.id, position, target
+                    ));
+                }
+                self.verify_non_register_role(function, block, instruction, position, operand.role);
+            }
+            MachineOperandKind::Function(target) => {
+                if !self.function_ids.contains(target) {
+                    self.error(format!(
+                        "machine function {} block {} instruction {} operand {} references unknown function {}",
                         function.id, block.id, instruction.id, position, target
                     ));
                 }
@@ -393,10 +487,11 @@ fn is_register(kind: &MachineOperandKind) -> bool {
 mod tests {
     use super::*;
     use crate::codegen::machine::{
-        FrameObject, FrameObjectKind, InstructionFlags, MachineBlock, MachineFunction,
-        MachineInstruction, MachineInstructionId, MachineModule, MachineOperand,
-        MachineOperandKind, MachineRegister, OperandIndex, PhysicalRegister, RegisterClass,
-        RegisterConstraint, TargetOpcode, VirtualRegister,
+        FrameObject, FrameObjectKind, InstructionFlags, MachineAddressSpace, MachineBlock,
+        MachineDataObject, MachineFunction, MachineInstruction, MachineInstructionId,
+        MachineLinkage, MachineModule, MachineOperand, MachineOperandKind, MachineRegister,
+        MachineSignature, OperandIndex, PhysicalRegister, RegisterClass, RegisterConstraint,
+        TargetOpcode, VirtualRegister,
     };
 
     fn register(id: u32, role: OperandRole) -> MachineOperand {
@@ -428,6 +523,13 @@ mod tests {
         MachineFunction {
             id: MachineFunctionId::new(0),
             name: "two_address".to_owned(),
+            linkage: MachineLinkage::Internal,
+            signature: MachineSignature {
+                result: None,
+                parameters: vec![MachineValueType::Integer { bits: 16 }],
+                variadic: false,
+                calling_convention: MachineCallingConvention::Basic,
+            },
             virtual_registers: vec![VirtualRegister {
                 id: VirtualRegisterId::new(0),
                 class: RegisterClass::new(0),
@@ -457,6 +559,7 @@ mod tests {
     #[test]
     fn accepts_a_valid_two_address_function() {
         verify(&MachineModule {
+            data_objects: Vec::new(),
             functions: vec![valid_function()],
         })
         .expect("a valid target-independent two-address function must verify");
@@ -484,6 +587,7 @@ mod tests {
         second.id = MachineFunctionId::new(0);
 
         let diagnostic_messages = messages(MachineModule {
+            data_objects: Vec::new(),
             functions: vec![function, second],
         });
         assert!(
@@ -519,6 +623,7 @@ mod tests {
         function.blocks[0].successors = vec![MachineBlockId::new(8), MachineBlockId::new(8)];
 
         let diagnostic_messages = messages(MachineModule {
+            data_objects: Vec::new(),
             functions: vec![function],
         });
         assert!(
@@ -550,6 +655,7 @@ mod tests {
         ];
 
         let diagnostic_messages = messages(MachineModule {
+            data_objects: Vec::new(),
             functions: vec![function],
         });
         assert!(
@@ -571,6 +677,7 @@ mod tests {
         function.frame_objects[0].alignment = 3;
 
         let diagnostic_messages = messages(MachineModule {
+            data_objects: Vec::new(),
             functions: vec![function],
         });
         assert!(
@@ -586,12 +693,144 @@ mod tests {
     }
 
     #[test]
+    fn rejects_invalid_data_objects_and_function_names() {
+        let mut duplicate_name = valid_function();
+        duplicate_name.id = MachineFunctionId::new(1);
+
+        let diagnostic_messages = messages(MachineModule {
+            data_objects: vec![
+                MachineDataObject {
+                    name: String::new(),
+                    bytes: vec![1],
+                    alignment: 3,
+                    constant: true,
+                    linkage: MachineLinkage::Internal,
+                },
+                MachineDataObject {
+                    name: "bytes".to_owned(),
+                    bytes: Vec::new(),
+                    alignment: 1,
+                    constant: false,
+                    linkage: MachineLinkage::External,
+                },
+                MachineDataObject {
+                    name: "bytes".to_owned(),
+                    bytes: vec![2],
+                    alignment: 1,
+                    constant: false,
+                    linkage: MachineLinkage::Internal,
+                },
+            ],
+            functions: vec![valid_function(), duplicate_name],
+        });
+        assert!(
+            diagnostic_messages
+                .iter()
+                .any(|message| message.contains("data object has an empty name"))
+        );
+        assert!(
+            diagnostic_messages
+                .iter()
+                .any(|message| message.contains("invalid alignment 3"))
+        );
+        assert!(
+            diagnostic_messages
+                .iter()
+                .any(|message| message.contains("duplicate machine data object name `bytes`"))
+        );
+        assert!(
+            diagnostic_messages
+                .iter()
+                .any(|message| message.contains("duplicate machine function name `two_address`"))
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_signature_and_incoming_argument_facts() {
+        let mut function = valid_function();
+        function.signature.result = Some(MachineValueType::Integer { bits: 0 });
+        function.signature.parameters = vec![MachineValueType::Pointer {
+            bits: 0,
+            address_space: MachineAddressSpace::Generic,
+        }];
+        function.signature.variadic = true;
+        function.frame_objects.push(FrameObject {
+            index: FrameIndex::new(1),
+            size: 2,
+            alignment: 2,
+            kind: FrameObjectKind::IncomingArgument { parameter: 0 },
+        });
+        function.frame_objects.push(FrameObject {
+            index: FrameIndex::new(2),
+            size: 2,
+            alignment: 2,
+            kind: FrameObjectKind::IncomingArgument { parameter: 0 },
+        });
+        function.frame_objects.push(FrameObject {
+            index: FrameIndex::new(3),
+            size: 2,
+            alignment: 2,
+            kind: FrameObjectKind::IncomingArgument { parameter: 1 },
+        });
+
+        let diagnostic_messages = messages(MachineModule {
+            data_objects: Vec::new(),
+            functions: vec![function],
+        });
+        assert!(
+            diagnostic_messages
+                .iter()
+                .any(|message| message.contains("variadic Basic calling convention"))
+        );
+        assert!(
+            diagnostic_messages
+                .iter()
+                .any(|message| message.contains("result type has zero width"))
+        );
+        assert!(
+            diagnostic_messages
+                .iter()
+                .any(|message| message.contains("parameter 0 type has zero width"))
+        );
+        assert!(diagnostic_messages.iter().any(|message| {
+            message.contains("multiple incoming argument frame objects for parameter 0")
+        }));
+        assert!(
+            diagnostic_messages
+                .iter()
+                .any(|message| message.contains("parameter 1 outside signature bounds"))
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_function_operands() {
+        let mut function = valid_function();
+        function.blocks[0].instructions[0].operands = vec![MachineOperand {
+            kind: MachineOperandKind::Function(MachineFunctionId::new(8)),
+            role: OperandRole::None,
+            constraint: None,
+            tied_to: None,
+        }];
+
+        let diagnostic_messages = messages(MachineModule {
+            data_objects: Vec::new(),
+            functions: vec![function],
+        });
+        assert!(
+            diagnostic_messages
+                .iter()
+                .any(|message| message.contains("references unknown function 8"))
+        );
+    }
+
+    #[test]
     fn rejects_constraints_on_non_virtual_operands() {
         let mut function = valid_function();
         function.blocks[0].instructions[0].operands[0].kind =
             MachineOperandKind::Register(MachineRegister::Physical(PhysicalRegister::new(1)));
 
         let diagnostic_messages = messages(MachineModule {
+            data_objects: Vec::new(),
             functions: vec![function],
         });
         assert!(
@@ -608,6 +847,7 @@ mod tests {
         function.blocks[0].instructions[0].operands[1].tied_to = Some(OperandIndex::new(1));
 
         let diagnostic_messages = messages(MachineModule {
+            data_objects: Vec::new(),
             functions: vec![function],
         });
         assert!(
@@ -629,6 +869,7 @@ mod tests {
         function.blocks[0].instructions[0].operands[0].role = OperandRole::None;
 
         let diagnostic_messages = messages(MachineModule {
+            data_objects: Vec::new(),
             functions: vec![function],
         });
         assert!(
@@ -652,6 +893,7 @@ mod tests {
             .push(instruction(1, Vec::new()));
 
         let diagnostic_messages = messages(MachineModule {
+            data_objects: Vec::new(),
             functions: vec![function],
         });
         assert!(
@@ -667,6 +909,7 @@ mod tests {
         function.blocks[0].instructions[0].flags.volatile = true;
 
         let diagnostic_messages = messages(MachineModule {
+            data_objects: Vec::new(),
             functions: vec![function],
         });
         assert!(
@@ -690,6 +933,7 @@ mod tests {
             });
 
         let diagnostic_messages = messages(MachineModule {
+            data_objects: Vec::new(),
             functions: vec![function],
         });
         assert!(diagnostic_messages.iter().any(|message| message.contains(

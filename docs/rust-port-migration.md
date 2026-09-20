@@ -339,6 +339,22 @@ real `procedure.bas` fixture now reaches verified `.qir` with its call bound to
 the existing function, its by-reference input, and its local function-result
 slot intact.
 
+That procedure now also reaches verified x86 Machine IR. `.qmir` version 2
+preserves initialized data objects, symbol linkage, source ABI signatures,
+incoming-argument homes, and direct references to defined functions. The x86
+selector maps distinct stack allocations to distinct frame objects and keeps a
+BYREF parameter as a near pointer loaded from its incoming home. Its published
+pointee load remains volatile. LONG call results are defined as the two fixed
+word deliveries AX and DX and merged into one semantic i32; returns perform the
+inverse split and carry the exact two-byte callee cleanup. The target verifier
+checks those contracts independently of the generic Machine-IR verifier.
+
+This slice deliberately ends at verified `.qmir`. Frame layout must still add
+the runtime-specific `B$ENRA`/`B$EXSA` envelope, and allocation must model call
+clobbers before this procedure can be emitted as executable OMF. Relocatable
+data initializers remain explicit selection refusals rather than losing their
+patches.
+
 The pass pipeline also contains exact integer algebraic simplification beside
 constant folding, branch simplification, and dead-code elimination. Shared
 operand rewriting is exhaustive over the portable IR instead of being copied
@@ -369,6 +385,18 @@ planning (1.30 s), real QB string relocation lowering (3.17 s), unreachable
 CLI wiring (0.04 s after compilation), all six DSE cases (0.04 s from the warm
 build), runtime call selection (2.07 s), and real QB-to-`.qmir` emission
 (1.44 s). No broad suite, qrender, or DOSBox gate ran during this work.
+
+The procedure Machine-IR work used two compile checks (1.80 s and 1.71 s),
+three fail-first real-fixture invocations (4.46 s, 1.65 s, and 1.96 s), and the
+accepted real-fixture invocation (1.30 s). Delegated Machine-IR schema checks
+consumed 6.8 s before unrelated integration errors stopped them; the focused
+x86 verifier tests passed in 1.67 s. Primary review then ran the exact
+procedure regression in 2.58 s and 0.04 s from the warm build, the amended
+negative target-verifier regression in 1.43 s, and the qmir round-trip and
+unchanged runtime-call selector checks concurrently in 0.04 s. No broad suite
+was run. Updating the adjacent incoming-argument selector regression used one
+0.04 s fail-first run, a 1.33 s correction run, and a 1.28 s accepted run; the
+seven-test selector module then passed from the warm build in 0.04 s.
 
 That regression was observed failing before the general declaration-liveness
 rule was implemented, then passed with a parseable `.qir` result. All focused
