@@ -34,6 +34,17 @@ pub struct CallSignature {
     pub parameters: Vec<ir::TypeId>,
 }
 
+/// The complete shape of a named external declaration inferred from a call.
+///
+/// Calling convention is kept separate from [`CallSignature`] because direct
+/// calls first identify a target by its source-level type signature, then
+/// validate the site and target ABI independently.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RuntimeSignature {
+    signature: CallSignature,
+    calling_convention: ir::CallingConvention,
+}
+
 /// The malformed property of a call ABI order list.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AbiOrderError {
@@ -129,14 +140,10 @@ pub enum CallPlanError {
         expected: hir::TypeId,
         actual: ir::TypeId,
     },
-    UnsupportedDistance {
+    UnsupportedAbi {
         function: hir::FunctionId,
         instruction: hir::InstructionId,
         distance: hir::CallDistance,
-    },
-    UnsupportedCleanup {
-        function: hir::FunctionId,
-        instruction: hir::InstructionId,
         cleanup: hir::StackCleanup,
     },
     ResultArity {
@@ -172,6 +179,11 @@ pub enum CallPlanError {
         existing: CallSignature,
         incoming: CallSignature,
     },
+    CallingConventionConflict {
+        callee: String,
+        existing: ir::CallingConvention,
+        incoming: ir::CallingConvention,
+    },
     MissingDefinedFunction {
         function: hir::FunctionId,
         instruction: hir::InstructionId,
@@ -192,17 +204,14 @@ pub enum CallPlanError {
         expected: CallSignature,
         actual: Vec<CallSignature>,
     },
-    DefinedFunctionDistance {
+    DefinedFunctionAbiMismatch {
         function: hir::FunctionId,
         instruction: hir::InstructionId,
         target: hir::FunctionId,
-        distance: hir::CallDistance,
-    },
-    DefinedFunctionCleanup {
-        function: hir::FunctionId,
-        instruction: hir::InstructionId,
-        target: hir::FunctionId,
-        cleanup: hir::StackCleanup,
+        call_distance: hir::CallDistance,
+        call_cleanup: hir::StackCleanup,
+        target_distance: hir::CallDistance,
+        target_cleanup: hir::StackCleanup,
     },
     DuplicateSite {
         function: hir::FunctionId,
@@ -327,21 +336,14 @@ impl fmt::Display for CallPlanError {
                 formatter,
                 "function {function} call instruction {instruction} callable {callable} parameter {parameter} needs a pointer to type {expected}, not type {actual}"
             ),
-            Self::UnsupportedDistance {
+            Self::UnsupportedAbi {
                 function,
                 instruction,
                 distance,
-            } => write!(
-                formatter,
-                "function {function} call instruction {instruction} has unsupported {distance:?} distance"
-            ),
-            Self::UnsupportedCleanup {
-                function,
-                instruction,
                 cleanup,
             } => write!(
                 formatter,
-                "function {function} call instruction {instruction} has unsupported {cleanup:?} cleanup"
+                "function {function} call instruction {instruction} has unsupported ABI {distance:?} with {cleanup:?} cleanup"
             ),
             Self::ResultArity {
                 function,
@@ -396,6 +398,10 @@ impl fmt::Display for CallPlanError {
                 formatter,
                 "runtime callee {callee:?} has incompatible inferred signatures"
             ),
+            Self::CallingConventionConflict { callee, .. } => write!(
+                formatter,
+                "runtime callee {callee:?} has incompatible inferred calling conventions"
+            ),
             Self::MissingDefinedFunction {
                 function,
                 instruction,
@@ -424,23 +430,17 @@ impl fmt::Display for CallPlanError {
                 formatter,
                 "function {function} call instruction {instruction} callable {callable} target {name:?} has an incompatible ABI signature"
             ),
-            Self::DefinedFunctionDistance {
+            Self::DefinedFunctionAbiMismatch {
                 function,
                 instruction,
                 target,
-                distance,
+                call_distance,
+                call_cleanup,
+                target_distance,
+                target_cleanup,
             } => write!(
                 formatter,
-                "function {function} call instruction {instruction} target {target} has unsupported {distance:?} distance"
-            ),
-            Self::DefinedFunctionCleanup {
-                function,
-                instruction,
-                target,
-                cleanup,
-            } => write!(
-                formatter,
-                "function {function} call instruction {instruction} target {target} has unsupported {cleanup:?} cleanup"
+                "function {function} call instruction {instruction} ABI {call_distance:?} with {call_cleanup:?} cleanup does not match target {target} ABI {target_distance:?} with {target_cleanup:?} cleanup"
             ),
             Self::DuplicateSite {
                 function,
@@ -469,7 +469,7 @@ impl Error for CallPlanError {}
 /// Builds runtime declarations and direct-call lowering metadata.
 pub(super) fn plan_calls(module: &hir::Module) -> Result<CallPlan, CallPlanError> {
     let mut void_type = None;
-    let mut signatures = BTreeMap::<String, CallSignature>::new();
+    let mut signatures = BTreeMap::<String, RuntimeSignature>::new();
     let mut pending = BTreeMap::new();
 
     for function in &module.functions {
@@ -490,7 +490,7 @@ pub(super) fn plan_calls(module: &hir::Module) -> Result<CallPlan, CallPlanError
                     });
                 }
                 let abi = matching_abi(function, instruction.id)?;
-                validate_abi(function.id, instruction, abi)?;
+                let calling_convention = validate_abi(function.id, instruction, abi)?;
                 let signature = infer_signature(
                     module,
                     function.id,
@@ -507,6 +507,7 @@ pub(super) fn plan_calls(module: &hir::Module) -> Result<CallPlan, CallPlanError
                             instruction.id,
                             callable,
                             &signature,
+                            abi,
                         )?,
                         argument_indices: abi.order.clone(),
                     },
@@ -517,16 +518,29 @@ pub(super) fn plan_calls(module: &hir::Module) -> Result<CallPlan, CallPlanError
                                 instruction: instruction.id,
                             },
                         )?;
+                        let runtime_signature = RuntimeSignature {
+                            signature,
+                            calling_convention,
+                        };
                         if let Some(existing) = signatures.get(callee) {
-                            if existing != &signature {
+                            if existing.signature != runtime_signature.signature {
                                 return Err(CallPlanError::SignatureConflict {
                                     callee: callee.clone(),
-                                    existing: existing.clone(),
-                                    incoming: signature,
+                                    existing: existing.signature.clone(),
+                                    incoming: runtime_signature.signature,
+                                });
+                            }
+                            if existing.calling_convention
+                                != runtime_signature.calling_convention
+                            {
+                                return Err(CallPlanError::CallingConventionConflict {
+                                    callee: callee.clone(),
+                                    existing: existing.calling_convention,
+                                    incoming: runtime_signature.calling_convention,
                                 });
                             }
                         } else {
-                            signatures.insert(callee.clone(), signature);
+                            signatures.insert(callee.clone(), runtime_signature);
                         }
                         PendingCall::Runtime {
                             callee: callee.clone(),
@@ -556,7 +570,8 @@ pub(super) fn plan_calls(module: &hir::Module) -> Result<CallPlan, CallPlanError
         .iter()
         .map(|function| function.id.get())
         .max();
-    for (name, signature) in signatures {
+    for (name, runtime_signature) in signatures {
+        let signature = runtime_signature.signature;
         let maximum = next
             .map(hir::FunctionId::new)
             .unwrap_or(hir::FunctionId::new(0));
@@ -589,7 +604,7 @@ pub(super) fn plan_calls(module: &hir::Module) -> Result<CallPlan, CallPlanError
                 result: signature.result,
                 parameters: signature.parameters,
                 variadic: false,
-                calling_convention: ir::CallingConvention::FarPascal,
+                calling_convention: runtime_signature.calling_convention,
             },
             linkage: ir::Linkage::External,
             attributes: Vec::new(),
@@ -678,25 +693,34 @@ fn matching_abi<'a>(
     Ok(abi)
 }
 
+pub(super) fn calling_convention(
+    distance: hir::CallDistance,
+    cleanup: hir::StackCleanup,
+) -> Option<ir::CallingConvention> {
+    match (distance, cleanup) {
+        (hir::CallDistance::Near, hir::StackCleanup::Caller) => Some(ir::CallingConvention::C),
+        (hir::CallDistance::Far, hir::StackCleanup::Caller) => {
+            Some(ir::CallingConvention::FarCdecl)
+        }
+        (hir::CallDistance::Far, hir::StackCleanup::Callee) => {
+            Some(ir::CallingConvention::FarPascal)
+        }
+        (hir::CallDistance::Near, hir::StackCleanup::Callee) => None,
+    }
+}
+
 fn validate_abi(
     function: hir::FunctionId,
     instruction: &hir::Instruction,
     abi: &hir::CallAbi,
-) -> Result<(), CallPlanError> {
-    if abi.distance != hir::CallDistance::Far {
-        return Err(CallPlanError::UnsupportedDistance {
+) -> Result<ir::CallingConvention, CallPlanError> {
+    let calling_convention =
+        calling_convention(abi.distance, abi.cleanup).ok_or(CallPlanError::UnsupportedAbi {
             function,
             instruction: instruction.id,
             distance: abi.distance,
-        });
-    }
-    if abi.cleanup != hir::StackCleanup::Callee {
-        return Err(CallPlanError::UnsupportedCleanup {
-            function,
-            instruction: instruction.id,
             cleanup: abi.cleanup,
-        });
-    }
+        })?;
     if instruction.results.len() > 1 {
         return Err(CallPlanError::ResultArity {
             function,
@@ -729,7 +753,7 @@ fn validate_abi(
             });
         }
     }
-    Ok(())
+    Ok(calling_convention)
 }
 
 fn resolve_defined_target(
@@ -738,6 +762,7 @@ fn resolve_defined_target(
     instruction: hir::InstructionId,
     callable_id: hir::CallableId,
     signature: &CallSignature,
+    call_abi: &hir::CallAbi,
 ) -> Result<ir::FunctionId, CallPlanError> {
     let callable = unique_callable(module, function, instruction, callable_id)?;
     if !callable.defined {
@@ -794,20 +819,17 @@ fn resolve_defined_target(
         });
     }
     let target = matches[0];
-    if target.abi.distance != hir::CallDistance::Far {
-        return Err(CallPlanError::DefinedFunctionDistance {
+    if calling_convention(target.abi.distance, target.abi.cleanup)
+        != calling_convention(call_abi.distance, call_abi.cleanup)
+    {
+        return Err(CallPlanError::DefinedFunctionAbiMismatch {
             function,
             instruction,
             target: target.id,
-            distance: target.abi.distance,
-        });
-    }
-    if target.abi.cleanup != hir::StackCleanup::Callee {
-        return Err(CallPlanError::DefinedFunctionCleanup {
-            function,
-            instruction,
-            target: target.id,
-            cleanup: target.abi.cleanup,
+            call_distance: call_abi.distance,
+            call_cleanup: call_abi.cleanup,
+            target_distance: target.abi.distance,
+            target_cleanup: target.abi.cleanup,
         });
     }
     Ok(ir::FunctionId::new(target.id.get()))
@@ -1382,6 +1404,39 @@ mod tests {
     }
 
     #[test]
+    fn rejects_conflicting_runtime_calling_conventions() {
+        let mut second = abi(1, vec![0]);
+        second.cleanup = hir::StackCleanup::Caller;
+        let module = module(
+            vec![value(0, I16)],
+            vec![
+                call(
+                    0,
+                    "B$SAME",
+                    Vec::new(),
+                    vec![hir::Operand::Value(hir::ValueId::new(0))],
+                ),
+                call(
+                    1,
+                    "B$SAME",
+                    Vec::new(),
+                    vec![hir::Operand::Value(hir::ValueId::new(0))],
+                ),
+            ],
+            vec![abi(0, vec![0]), second],
+        );
+
+        assert!(matches!(
+            plan_calls(&module),
+            Err(CallPlanError::CallingConventionConflict {
+                existing: ir::CallingConvention::FarPascal,
+                incoming: ir::CallingConvention::FarCdecl,
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn rejects_a_malformed_abi_order() {
         let module = module(
             Vec::new(),
@@ -1407,7 +1462,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_caller_cleanup() {
+    fn plans_a_far_cdecl_abi_runtime_declaration() {
         let mut call_abi = abi(0, Vec::new());
         call_abi.cleanup = hir::StackCleanup::Caller;
         let module = module(
@@ -1416,10 +1471,29 @@ mod tests {
             vec![call_abi],
         );
 
+        let plan = plan_calls(&module).expect("far caller-cleanup call is representable");
+
+        assert_eq!(
+            plan.declarations[0].signature.calling_convention,
+            ir::CallingConvention::FarCdecl
+        );
+    }
+
+    #[test]
+    fn rejects_near_callee_cleanup_at_a_call_site() {
+        let mut call_abi = abi(0, Vec::new());
+        call_abi.distance = hir::CallDistance::Near;
+        let module = module(
+            Vec::new(),
+            vec![call(0, "B$RT", Vec::new(), Vec::new())],
+            vec![call_abi],
+        );
+
         assert!(matches!(
             plan_calls(&module),
-            Err(CallPlanError::UnsupportedCleanup {
-                cleanup: hir::StackCleanup::Caller,
+            Err(CallPlanError::UnsupportedAbi {
+                distance: hir::CallDistance::Near,
+                cleanup: hir::StackCleanup::Callee,
                 ..
             })
         ));
@@ -1662,7 +1736,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_a_near_defined_target() {
+    fn rejects_a_defined_target_with_a_different_abi_distance() {
         let mut module = module(
             Vec::new(),
             vec![call(0, "worker", Vec::new(), Vec::new())],
@@ -1677,15 +1751,18 @@ mod tests {
 
         assert!(matches!(
             plan_calls(&module),
-            Err(CallPlanError::DefinedFunctionDistance {
-                distance: hir::CallDistance::Near,
+            Err(CallPlanError::DefinedFunctionAbiMismatch {
+                call_distance: hir::CallDistance::Far,
+                call_cleanup: hir::StackCleanup::Callee,
+                target_distance: hir::CallDistance::Near,
+                target_cleanup: hir::StackCleanup::Callee,
                 ..
             })
         ));
     }
 
     #[test]
-    fn rejects_a_caller_cleanup_defined_target() {
+    fn rejects_a_defined_target_with_a_different_abi_cleanup() {
         let mut module = module(
             Vec::new(),
             vec![call(0, "worker", Vec::new(), Vec::new())],
@@ -1700,11 +1777,39 @@ mod tests {
 
         assert!(matches!(
             plan_calls(&module),
-            Err(CallPlanError::DefinedFunctionCleanup {
-                cleanup: hir::StackCleanup::Caller,
+            Err(CallPlanError::DefinedFunctionAbiMismatch {
+                call_distance: hir::CallDistance::Far,
+                call_cleanup: hir::StackCleanup::Callee,
+                target_distance: hir::CallDistance::Far,
+                target_cleanup: hir::StackCleanup::Caller,
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn resolves_a_near_caller_cleanup_abi_defined_target() {
+        let mut module = module(
+            Vec::new(),
+            vec![call(0, "worker", Vec::new(), Vec::new())],
+            vec![direct_abi(0, Vec::new(), 7)],
+        );
+        module.functions[0].calls[0].distance = hir::CallDistance::Near;
+        module.functions[0].calls[0].cleanup = hir::StackCleanup::Caller;
+        module
+            .callables
+            .push(callable(7, "worker", None, Vec::new()));
+        let mut target = defined_function(1, "worker", VOID, Vec::new());
+        target.abi.distance = hir::CallDistance::Near;
+        target.abi.cleanup = hir::StackCleanup::Caller;
+        module.functions.push(target);
+
+        let plan = plan_calls(&module).expect("matching near caller-cleanup target resolves");
+
+        assert_eq!(
+            plan.sites[&(hir::FunctionId::new(0), hir::InstructionId::new(0))].target,
+            ir::FunctionId::new(1)
+        );
     }
 
     #[test]

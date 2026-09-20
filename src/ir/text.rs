@@ -549,6 +549,7 @@ fn address_space_name(value: AddressSpace) -> &'static str {
 fn calling_convention_name(value: CallingConvention) -> &'static str {
     match value {
         CallingConvention::C => "c",
+        CallingConvention::FarCdecl => "far_cdecl",
         CallingConvention::FarPascal => "far_pascal",
     }
 }
@@ -1417,6 +1418,7 @@ fn parse_linkage(parser: &mut Parser) -> Result<Linkage, TextError> {
 fn parse_calling_convention(parser: &mut Parser) -> Result<CallingConvention, TextError> {
     match parser.word()?.as_str() {
         "c" => Ok(CallingConvention::C),
+        "far_cdecl" => Ok(CallingConvention::FarCdecl),
         "far_pascal" => Ok(CallingConvention::FarPascal),
         _ => Err(parser.error("unknown calling convention")),
     }
@@ -1795,7 +1797,7 @@ mod tests {
     }
 
     #[test]
-    fn writes_only_the_language_neutral_far_pascal_abi_name() {
+    fn writes_language_neutral_calling_convention_names() {
         let module = Module {
             name: "abi".into(),
             types: vec![Type {
@@ -1828,21 +1830,52 @@ mod tests {
     }
 
     #[test]
+    fn far_cdecl_abi_round_trips_with_its_canonical_name() {
+        let module = Module {
+            name: "far-cdecl".into(),
+            types: vec![Type {
+                id: TypeId::new(0),
+                kind: TypeKind::Void,
+            }],
+            globals: Vec::new(),
+            functions: vec![Function {
+                id: FunctionId::new(0),
+                name: "callee".into(),
+                signature: Signature {
+                    result: TypeId::new(0),
+                    parameters: Vec::new(),
+                    variadic: false,
+                    calling_convention: CallingConvention::FarCdecl,
+                },
+                linkage: Linkage::External,
+                attributes: Vec::new(),
+                parameters: Vec::new(),
+                blocks: Vec::new(),
+            }],
+        };
+
+        let text = write(&module);
+
+        assert!(text.contains(" cc far_cdecl "));
+        assert_eq!(parse(&text), Ok(module));
+    }
+
+    #[test]
     fn rejects_unknown_and_malformed_input() {
         for obsolete in ["basic", "runtime"] {
             let source = format!(
-                "qir 3\nmodule \"m\"\ntype 0 void\nfunction 0 \"f\" linkage external result 0 parameters [] variadic false cc {obsolete} attributes []\nendfunction\nend\n"
+                "qir 4\nmodule \"m\"\ntype 0 void\nfunction 0 \"f\" linkage external result 0 parameters [] variadic false cc {obsolete} attributes []\nendfunction\nend\n"
             );
             let error = parse(&source).expect_err("source-language ABI labels must not enter IR");
             assert!(error.message.contains("unknown calling convention"));
         }
         assert!(parse("qir 3\nmodule \"m\"\nend\n").is_err());
         assert!(parse("qir 2\nmodule \"m\"\nend\n").is_err());
-        assert!(parse("qir 3\nmodule \"m\"\ntype 0 nope\nend\n").is_err());
+        assert!(parse("qir 4\nmodule \"m\"\ntype 0 nope\nend\n").is_err());
         assert!(
-            parse("qir 3\nmodule \"m\"\nglobal 0 \"g\" 0 internal false some bytes \"f\"\nend\n")
+            parse("qir 4\nmodule \"m\"\nglobal 0 \"g\" 0 internal false some bytes \"f\"\nend\n")
                 .is_err()
         );
-        assert!(parse("qir 3\nmodule \"m\"\nglobal 0 \"g\" 9 external false none\nend\n").is_err());
+        assert!(parse("qir 4\nmodule \"m\"\nglobal 0 \"g\" 9 external false none\nend\n").is_err());
     }
 }

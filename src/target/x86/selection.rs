@@ -1884,6 +1884,14 @@ fn machine_signature(
         variadic: function.signature.variadic,
         calling_convention: match function.signature.calling_convention {
             CallingConvention::C => MachineCallingConvention::C,
+            CallingConvention::FarCdecl => {
+                return Err(SelectionError::UnsupportedFunctionProperty {
+                    function: function.id,
+                    property: FunctionProperty::CallingConvention(
+                        function.signature.calling_convention,
+                    ),
+                });
+            }
             CallingConvention::FarPascal => MachineCallingConvention::FarPascal,
         },
     })

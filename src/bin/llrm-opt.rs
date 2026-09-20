@@ -217,7 +217,7 @@ mod tests {
     #[test]
     fn verifies_and_canonicalizes_qir() {
         let source = concat!(
-            "qir 3\n",
+            "qir 4\n",
             "module \"m\"\n",
             "type 0 void\n",
             "function 0 \"main\" linkage internal result 0 parameters [] variadic false cc far_pascal attributes []\n",
@@ -234,7 +234,7 @@ mod tests {
     #[test]
     fn runs_the_constant_fold_pipeline() {
         let source = concat!(
-            "qir 3\n",
+            "qir 4\n",
             "module \"m\"\n",
             "type 0 integer 8\n",
             "function 0 \"main\" linkage internal result 0 parameters [] variadic false cc far_pascal attributes []\n",
@@ -255,7 +255,7 @@ mod tests {
     #[test]
     fn composes_constant_folding_with_branch_simplification() {
         let source = concat!(
-            "qir 3\n",
+            "qir 4\n",
             "module \"m\"\n",
             "type 0 integer 8\n",
             "type 1 integer 1\n",
@@ -293,7 +293,7 @@ mod tests {
     #[test]
     fn runs_common_subexpression_elimination() {
         let source = concat!(
-            "qir 3\n",
+            "qir 4\n",
             "module \"m\"\n",
             "type 0 integer 16\n",
             "function 0 \"main\" linkage internal result 0 parameters [0,0] variadic false cc far_pascal attributes []\n",
@@ -323,7 +323,7 @@ mod tests {
     #[test]
     fn removes_unreachable_blocks_deterministically() {
         let source = concat!(
-            "qir 3\n",
+            "qir 4\n",
             "module \"m\"\n",
             "type 0 void\n",
             "function 0 \"main\" linkage internal result 0 parameters [] variadic false cc far_pascal attributes []\n",
@@ -352,7 +352,7 @@ mod tests {
     #[test]
     fn runs_dead_store_elimination_on_direct_global_stores() {
         let source = concat!(
-            "qir 3\n",
+            "qir 4\n",
             "module \"m\"\n",
             "type 0 void\n",
             "type 1 integer 8\n",

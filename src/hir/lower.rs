@@ -10,8 +10,8 @@ use std::fmt;
 use crate::support::diagnostic::Diagnostic;
 use crate::{hir, ir};
 
-use super::calls::{CallPlan, CallPlanError, plan_calls};
-use super::globals::{GlobalPlan, GlobalPlanError, PlannedPlace, plan_globals};
+use super::calls::{calling_convention, plan_calls, CallPlan, CallPlanError};
+use super::globals::{plan_globals, GlobalPlan, GlobalPlanError, PlannedPlace};
 
 /// A HIR feature that the portable scalar lowering cannot represent exactly.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -94,6 +94,11 @@ pub enum LowerError {
     InvalidFunction {
         function: hir::FunctionId,
         property: InvalidProperty,
+    },
+    UnsupportedFunctionAbi {
+        function: hir::FunctionId,
+        distance: hir::CallDistance,
+        cleanup: hir::StackCleanup,
     },
     UnsupportedInstruction {
         function: hir::FunctionId,
@@ -180,6 +185,14 @@ impl fmt::Display for LowerError {
             Self::InvalidFunction { function, property } => {
                 write!(formatter, "invalid function {function}: {property:?}")
             }
+            Self::UnsupportedFunctionAbi {
+                function,
+                distance,
+                cleanup,
+            } => write!(
+                formatter,
+                "cannot lower function {function}: unsupported ABI {distance:?} with {cleanup:?} cleanup"
+            ),
             Self::UnsupportedInstruction {
                 function,
                 block,
@@ -584,6 +597,12 @@ impl<'module> Lowerer<'module> {
             .iter()
             .map(|id| self.lower_value(function, *id, function.entry, None))
             .collect::<Result<Vec<_>, _>>()?;
+        let calling_convention = calling_convention(function.abi.distance, function.abi.cleanup)
+            .ok_or(LowerError::UnsupportedFunctionAbi {
+                function: function.id,
+                distance: function.abi.distance,
+                cleanup: function.abi.cleanup,
+            })?;
         let signature = ir::Signature {
             result: type_id(function.result_type),
             parameters: parameters
@@ -591,7 +610,7 @@ impl<'module> Lowerer<'module> {
                 .map(|parameter| parameter.type_id)
                 .collect(),
             variadic: false,
-            calling_convention: ir::CallingConvention::FarPascal,
+            calling_convention,
         };
         let mut blocks = function
             .blocks
@@ -2168,6 +2187,41 @@ mod tests {
             }
         ));
         assert!(lowered.verify().is_ok());
+    }
+
+    #[test]
+    fn lowers_generic_procedure_abi_pairs_to_calling_conventions() {
+        let mut near_caller = scalar_module();
+        near_caller.functions[0].abi.distance = hir::CallDistance::Near;
+        near_caller.functions[0].abi.cleanup = hir::StackCleanup::Caller;
+        let near = lower_module(&near_caller).expect("near caller-cleanup function lowers");
+        assert_eq!(
+            near.functions[0].signature.calling_convention,
+            ir::CallingConvention::C
+        );
+
+        let mut far_caller = scalar_module();
+        far_caller.functions[0].abi.cleanup = hir::StackCleanup::Caller;
+        let far = lower_module(&far_caller).expect("far caller-cleanup function lowers");
+        assert_eq!(
+            far.functions[0].signature.calling_convention,
+            ir::CallingConvention::FarCdecl
+        );
+    }
+
+    #[test]
+    fn rejects_near_callee_cleanup_procedure_abi() {
+        let mut module = scalar_module();
+        module.functions[0].abi.distance = hir::CallDistance::Near;
+
+        assert!(matches!(
+            lower_module(&module),
+            Err(LowerError::UnsupportedFunctionAbi {
+                distance: hir::CallDistance::Near,
+                cleanup: hir::StackCleanup::Callee,
+                ..
+            })
+        ));
     }
 
     #[test]

@@ -210,7 +210,7 @@ mod tests {
         let module = driver::lower_qb_to_ir(&program).unwrap();
         let text = llrm::ir::write_text(&module);
 
-        assert!(text.starts_with("qir 3\nmodule \"program\"\n"));
+        assert!(text.starts_with("qir 4\nmodule \"program\"\n"));
         assert!(llrm::ir::parse_text(&text).is_ok());
     }
 
