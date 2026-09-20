@@ -18,12 +18,13 @@ use crate::codegen::machine::{
     VirtualRegister, VirtualRegisterId,
 };
 use crate::ir::{
-    AddressSpace, BinaryOp, Block, BlockId, Callee, CallingConvention, CastOp, Constant, Effects,
-    Function, FunctionId, Global, GlobalId, Instruction, InstructionKind, Linkage, MemoryEffects,
-    Module, Operand, Terminator, TypeId, TypeKind, TypedConstant, UnaryOp, Value, ValueId,
+    AddressSpace, BinaryOp, Block, BlockId, Callee, CallingConvention, CastOp, ComparePredicate,
+    Constant, Effects, Function, FunctionId, Global, GlobalId, Instruction, InstructionKind,
+    Linkage, MemoryEffects, Module, Operand, Terminator, TypeId, TypeKind, TypedConstant,
+    UnaryOp, Value, ValueId,
 };
 
-use super::{X86Opcode, X86Register, X86RegisterClass};
+use super::{ConditionCode, X86Opcode, X86Register, X86RegisterClass};
 
 /// A refusal while selecting portable IR into the currently supported x86 subset.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -168,6 +169,11 @@ pub enum SelectionError {
         instruction: crate::ir::InstructionId,
     },
     UnsupportedInstruction {
+        function: FunctionId,
+        block: BlockId,
+        instruction: crate::ir::InstructionId,
+    },
+    UnsupportedCompare {
         function: FunctionId,
         block: BlockId,
         instruction: crate::ir::InstructionId,
@@ -398,6 +404,14 @@ impl fmt::Display for SelectionError {
             } => write!(
                 formatter,
                 "function {function} block {block} instruction {instruction} is unsupported"
+            ),
+            Self::UnsupportedCompare {
+                function,
+                block,
+                instruction,
+            } => write!(
+                formatter,
+                "function {function} block {block} comparison {instruction} is unsupported"
             ),
             Self::UnsupportedTerminator { function, block } => {
                 write!(
@@ -700,6 +714,13 @@ struct SelectedValue {
     type_id: TypeId,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct PendingComparison {
+    left: VirtualRegisterId,
+    right: VirtualRegisterId,
+    condition: ConditionCode,
+}
+
 struct FunctionSelector<'types> {
     function: &'types Function,
     types: &'types BTreeMap<TypeId, &'types TypeKind>,
@@ -707,6 +728,7 @@ struct FunctionSelector<'types> {
     functions_by_id: &'types BTreeMap<FunctionId, &'types Function>,
     block_ids: BTreeSet<BlockId>,
     values: BTreeMap<ValueId, SelectedValue>,
+    comparisons: BTreeMap<ValueId, PendingComparison>,
     virtual_registers: Vec<VirtualRegister>,
     frame_objects: Vec<FrameObject>,
     entry_prefix: Vec<MachineInstruction>,
@@ -743,6 +765,7 @@ impl<'types> FunctionSelector<'types> {
             functions_by_id,
             block_ids,
             values: BTreeMap::new(),
+            comparisons: BTreeMap::new(),
             virtual_registers: Vec::new(),
             frame_objects: Vec::new(),
             entry_prefix: Vec::new(),
@@ -913,8 +936,12 @@ impl<'types> FunctionSelector<'types> {
                 alignment: _,
                 volatile,
             } => self.select_store(block, instruction, address, value, *volatile, output)?,
+            InstructionKind::Compare {
+                predicate,
+                left,
+                right,
+            } => self.select_branch_compare(block, instruction, *predicate, left, right, output)?,
             InstructionKind::Phi { .. }
-            | InstructionKind::Compare { .. }
             | InstructionKind::GetElementPointer { .. }
             | InstructionKind::Select { .. }
             | InstructionKind::Intrinsic { .. } => {
@@ -930,6 +957,54 @@ impl<'types> FunctionSelector<'types> {
                 effects,
             } => self.select_call(block, instruction, callee, arguments, *effects, output)?,
         }
+        Ok(())
+    }
+
+    /// Records a comparison only when its i1 result is later consumed as a
+    /// branch condition.  Materializing that boolean would introduce a
+    /// source-independent value with no x86 representation in this slice;
+    /// the target selector instead emits the flag-producing compare at the
+    /// branch boundary.
+    fn select_branch_compare(
+        &mut self,
+        block: BlockId,
+        instruction: &Instruction,
+        predicate: ComparePredicate,
+        left: &Operand,
+        right: &Operand,
+        output: &mut Vec<MachineInstruction>,
+    ) -> Result<(), SelectionError> {
+        let result = self.result_definition(block, instruction)?;
+        if !matches!(self.type_kind(result.type_id)?, TypeKind::Integer { bits: 1 })
+            || predicate != ComparePredicate::SignedLessThan
+        {
+            return Err(SelectionError::UnsupportedCompare {
+                function: self.function.id,
+                block,
+                instruction: instruction.id,
+            });
+        }
+        let left_type = self.operand_type(block, instruction.id, left)?;
+        let right_type = self.operand_type(block, instruction.id, right)?;
+        if left_type != right_type || self.integer_bits(left_type)? != 16 {
+            return Err(SelectionError::UnsupportedCompare {
+                function: self.function.id,
+                block,
+                instruction: instruction.id,
+            });
+        }
+        let left = self.select_operand(block, instruction.id, left, left_type, output)?;
+        let right = self.select_operand(block, instruction.id, right, left_type, output)?;
+        let left = self.materialize_register(left, output)?;
+        let right = self.materialize_register(right, output)?;
+        self.comparisons.insert(
+            result.id,
+            PendingComparison {
+                left,
+                right,
+                condition: ConditionCode::Less,
+            },
+        );
         Ok(())
     }
 
@@ -1436,6 +1511,61 @@ impl<'types> FunctionSelector<'types> {
         output: &mut Vec<MachineInstruction>,
     ) -> Result<(Option<MachineInstruction>, Vec<MachineBlockId>), SelectionError> {
         match &block.terminator {
+            Terminator::Branch {
+                condition: Operand::Value(condition),
+                then_block,
+                else_block,
+            } => {
+                if !self.block_ids.contains(then_block) {
+                    return Err(SelectionError::UnknownJumpTarget {
+                        function: self.function.id,
+                        block: block.id,
+                        target: *then_block,
+                    });
+                }
+                if !self.block_ids.contains(else_block) {
+                    return Err(SelectionError::UnknownJumpTarget {
+                        function: self.function.id,
+                        block: block.id,
+                        target: *else_block,
+                    });
+                }
+                let comparison = self.comparisons.get(condition).copied().ok_or(
+                    SelectionError::UnsupportedTerminator {
+                        function: self.function.id,
+                        block: block.id,
+                    },
+                )?;
+                let then_block = MachineBlockId::new(then_block.get());
+                let else_block = MachineBlockId::new(else_block.get());
+                self.push_instruction(
+                    X86Opcode::Cmp,
+                    vec![
+                        virtual_operand(comparison.left, OperandRole::Use),
+                        virtual_operand(comparison.right, OperandRole::Use),
+                    ],
+                    InstructionFlags::NONE,
+                    output,
+                )?;
+                self.push_instruction(
+                    X86Opcode::JumpConditional,
+                    vec![
+                        immediate_operand(i64::from(comparison.condition as u8)),
+                        block_operand(then_block),
+                    ],
+                    InstructionFlags::NONE,
+                    output,
+                )?;
+                let jump = self.machine_instruction(
+                    X86Opcode::Jump,
+                    vec![block_operand(else_block)],
+                    InstructionFlags {
+                        terminator: true,
+                        ..InstructionFlags::NONE
+                    },
+                )?;
+                Ok((Some(jump), vec![then_block, else_block]))
+            }
             Terminator::Jump(target) => {
                 if !self.block_ids.contains(target) {
                     return Err(SelectionError::UnknownJumpTarget {
@@ -2182,6 +2312,7 @@ mod tests {
 
     const VOID: TypeId = TypeId::new(0);
     const I32: TypeId = TypeId::new(1);
+    const I1: TypeId = TypeId::new(2);
     const I16: TypeId = TypeId::new(4);
 
     fn signature(result: TypeId, parameters: Vec<TypeId>) -> crate::ir::Signature {
@@ -2225,6 +2356,10 @@ mod tests {
                 kind: TypeKind::Integer { bits: 32 },
             },
             Type {
+                id: I1,
+                kind: TypeKind::Integer { bits: 1 },
+            },
+            Type {
                 id: I16,
                 kind: TypeKind::Integer { bits: 16 },
             },
@@ -2253,6 +2388,87 @@ mod tests {
                 .collect(),
             blocks: Vec::new(),
         }
+    }
+
+    #[test]
+    fn selects_signed_i16_compare_branch_as_cmp_jl_and_false_jump() {
+        // Python cfront.raise_hir.FunctionRaiser.compare/branch/jump_if
+        // lowers scalar.c's `index < 8` followed by O_IF_FALSE.  The true
+        // successor is the loop body; the false successor is loop exit.
+        let left = Value {
+            id: ValueId::new(0),
+            type_id: I16,
+        };
+        let right = Value {
+            id: ValueId::new(1),
+            type_id: I16,
+        };
+        let compared = Value {
+            id: ValueId::new(2),
+            type_id: I1,
+        };
+        let function = function(
+            vec![
+                Block {
+                    id: BlockId::new(0),
+                    instructions: vec![Instruction {
+                        id: crate::ir::InstructionId::new(0),
+                        results: vec![compared.clone()],
+                        kind: InstructionKind::Compare {
+                            predicate: ComparePredicate::SignedLessThan,
+                            left: Operand::Value(left.id),
+                            right: Operand::Value(right.id),
+                        },
+                    }],
+                    terminator: Terminator::Branch {
+                        condition: Operand::Value(compared.id),
+                        then_block: BlockId::new(1),
+                        else_block: BlockId::new(2),
+                    },
+                },
+                Block {
+                    id: BlockId::new(1),
+                    instructions: Vec::new(),
+                    terminator: Terminator::Return(None),
+                },
+                Block {
+                    id: BlockId::new(2),
+                    instructions: Vec::new(),
+                    terminator: Terminator::Return(None),
+                },
+            ],
+            vec![left, right],
+        );
+
+        let selected = select_module(&module(basic_types(), vec![function])).unwrap();
+        selected.verify().unwrap();
+        let block = &selected.functions[0].blocks[0];
+        assert_eq!(block.successors, [MachineBlockId::new(1), MachineBlockId::new(2)]);
+        assert_eq!(
+            block
+                .instructions
+                .iter()
+                .map(|instruction| instruction.opcode)
+                .collect::<Vec<_>>(),
+            vec![
+                X86Opcode::Load.machine_opcode(),
+                X86Opcode::Load.machine_opcode(),
+                X86Opcode::Cmp.machine_opcode(),
+                X86Opcode::JumpConditional.machine_opcode(),
+                X86Opcode::Jump.machine_opcode(),
+            ]
+        );
+        assert_eq!(
+            block.instructions[3].operands,
+            vec![
+                immediate_operand(i64::from(ConditionCode::Less as u8)),
+                block_operand(MachineBlockId::new(1)),
+            ]
+        );
+        assert_eq!(
+            block.instructions[4].operands,
+            vec![block_operand(MachineBlockId::new(2))]
+        );
     }
 
     #[test]
