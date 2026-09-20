@@ -329,7 +329,7 @@ The PDS-linked original and candidate both print `S= 487.5` and `DONE`;
 their output files match byte-for-byte. Both additions, all SINGLE conversions
 and checkpoints remain. This is initial runtime evidence only: varied inputs,
 floating-environment behavior and independent cost auditing are still required,
-so the denominator remains provisional. See `tools/references/README.md`.
+so the denominator remains provisional. See `tools/references/readme.md`.
 The 144-case arithmetic/environment comparison matched in DOSBox-X, but its
 rounding/exception sanity checks failed. That run is rejected as evidence for
 floating-environment equivalence; it does not make the target valid.

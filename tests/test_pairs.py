@@ -145,7 +145,7 @@ def test_raised_longs_leave_no_consumer_without_a_producer(stem: str) -> None:
     from qbopt.objectfile import omf
     from qbopt.objectfile import module
 
-    found = module.of(omf.parse((Path("fixtures/omf") / f"{stem}.obj").read_bytes()))
+    found = module.of(omf.parse((Path("fixtures/omf") / f"{stem}.obj".lower()).read_bytes()))
     blocks = split.partition(found, code_map(found))
     for _name, body in mir.bodies(found, blocks):
         made = {one.id for block in body.blocks for op in block.ops for one in op.defines}

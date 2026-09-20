@@ -29,7 +29,7 @@ def test_indexed_record_accumulators_store_only_after_loop(tag):
         if isinstance(body, mir.MirBody):
             states.append(body)
 
-    result = wholeseg.emitted(Path(f"fixtures/regressions/udtrng-{tag}.obj").read_bytes(), watch=watch)
+    result = wholeseg.emitted(Path(f"fixtures/regressions/udtrng-{tag}.obj".lower()).read_bytes(), watch=watch)
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     body = states[-1]
     hot = {at for loop in loops.loops(body.blocks, body.entry) for at in loop.body}
@@ -101,7 +101,7 @@ def test_harr_constant_column_exit_is_stored_once_only_after_a_nonempty_loop(tag
     """HARR wrote c=11 once per row after its inner counter became a constant."""
     from qbopt.optimize import transform
 
-    path = Path(f"fixtures/omf/harr-{tag}.obj")
+    path = Path(f"fixtures/omf/harr-{tag}.obj".lower())
     found = corpus.loaded(path)
     partition = corpus.partitioned(path)
     body = mir.bodies(found, partition)[0][1]
@@ -283,7 +283,7 @@ def test_addrm_exit_store_requires_complete_initial_memory(tag, initialization, 
     """ADDRM wrote u 20 times; moving it must preserve memory even when the loop takes zero trips."""
     from qbopt.optimize import transform
 
-    path = Path(f"fixtures/omf/addrm-{tag}.obj")
+    path = Path(f"fixtures/omf/addrm-{tag}.obj".lower())
     found = corpus.loaded(path)
     partition = corpus.partitioned(path)
     body = mir.bodies(found, partition)[0][1]

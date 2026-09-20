@@ -82,7 +82,7 @@ def test_registered_handler_does_not_land_in_a_phi_edge(tag):
     from qbopt.objectfile import module, omf
     from qbopt.abi.events import handler_entries
     from qbopt.frontend.declen import decode
-    result = wholeseg.emitted(Path(f"fixtures/regressions/evtrap-{tag}.obj").read_bytes())
+    result = wholeseg.emitted(Path(f"fixtures/regressions/evtrap-{tag}.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
     entry, = handler_entries(found)
@@ -113,7 +113,7 @@ def test_handler_discovery_accepts_lowered_push_only_with_matching_relocations()
 def test_event_stub_near_call_has_no_register_arguments(tag: str) -> None:
     """ADDRM /V refused at 0048 before its first statement could execute."""
     from qbopt.objectfile import module
-    found = module.load(Path(f"fixtures/omf/addrm-{tag}.obj"))
+    found = module.load(Path(f"fixtures/omf/addrm-{tag}.obj".lower()))
     routine = runtime.for_module(found)[0x48]
     assert routine.inputs == frozenset()
     assert routine.cleanup == 0
@@ -150,7 +150,7 @@ def test_event_stub_requires_exact_relocation(field: int, monkeypatch) -> None:
 def test_addrm_event_adapter_emits_without_fallback(tag: str) -> None:
     """ADDRM /V had no output: strict lowering refused the call at 0048."""
     from qbopt import wholeseg
-    result = wholeseg.emitted(Path(f"fixtures/omf/addrm-{tag}.obj").read_bytes())
+    result = wholeseg.emitted(Path(f"fixtures/omf/addrm-{tag}.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
 
 

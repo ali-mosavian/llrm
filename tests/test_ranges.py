@@ -12,7 +12,7 @@ from qbopt.objectfile.module import Addr, Space
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_fpdeep_one_based_index_has_a_bounded_byte_offset(tag):
     """FPDEEP lost its 1..3 bound at i-1, leaving p(i)'s byte extent unknown."""
-    path = Path(f"fixtures/omf/fpdeep-{tag}.obj")
+    path = Path(f"fixtures/omf/fpdeep-{tag}.obj".lower())
     found = corpus.loaded(path)
     partition = corpus.partitioned(path)
     body = transform.applied(mir.bodies(found, partition)[0][1], found.dgroup,
@@ -53,7 +53,7 @@ def test_signed_widening_keeps_the_numeric_range(low, high):
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_addrm_long_array_value_keeps_counter_bounds(tag):
     """ADDRM lost the 1..20 bound at the integer-to-long conversion feeding b(i)."""
-    path = Path(f"fixtures/omf/addrm-{tag}.obj")
+    path = Path(f"fixtures/omf/addrm-{tag}.obj".lower())
     found = corpus.loaded(path)
     partition = corpus.partitioned(path)
     body = transform.applied(mir.bodies(found, partition)[0][1], found.dgroup,

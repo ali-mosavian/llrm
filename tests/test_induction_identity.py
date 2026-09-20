@@ -192,7 +192,7 @@ def test_nine_dimensional_loop_carries_its_pointer(tag):
         # address was rebuilt.
         if stage == "mir-r02-strength":
             states.append(state)
-    result = wholeseg.emitted(Path(f"fixtures/regressions/ndarr-{tag}.obj").read_bytes(), watch=watch)
+    result = wholeseg.emitted(Path(f"fixtures/regressions/ndarr-{tag}.obj".lower()).read_bytes(), watch=watch)
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     body = states[0]
     carried = {phi.result for block in body.blocks for phi in block.phis}
@@ -209,7 +209,7 @@ def test_native_array_helper_does_not_block_frame_forwarding(tag, monkeypatch):
     def watch(stage, name, state):
         if stage == "mir-widen":
             states.append(state)
-    result = wholeseg.emitted(Path(f"fixtures/regressions/hugelp-{tag}.obj").read_bytes(), watch=watch)
+    result = wholeseg.emitted(Path(f"fixtures/regressions/hugelp-{tag}.obj".lower()).read_bytes(), watch=watch)
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     body = states[0]
     loop = loops.loops(body.blocks, body.entry)[0]
@@ -226,7 +226,7 @@ def test_huge_loop_byte_offsets_are_induction_variables(tag, monkeypatch):
     def watch(stage, name, state):
         if stage == "mir-widen":
             states.append(state)
-    result = wholeseg.emitted(Path(f"fixtures/regressions/hugelp-{tag}.obj").read_bytes(), watch=watch)
+    result = wholeseg.emitted(Path(f"fixtures/regressions/hugelp-{tag}.obj".lower()).read_bytes(), watch=watch)
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     body = states[0]
     loop = loops.loops(body.blocks, body.entry)[0]
@@ -246,7 +246,7 @@ def test_huge_loop_carries_whole_pointers(tag, monkeypatch):
     def watch(stage, name, state):
         if stage == "mir-widen":
             states.append(state)
-    result = wholeseg.emitted(Path(f"fixtures/regressions/hugelp-{tag}.obj").read_bytes(), watch=watch)
+    result = wholeseg.emitted(Path(f"fixtures/regressions/hugelp-{tag}.obj".lower()).read_bytes(), watch=watch)
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     body = states[0]
     loop = loops.loops(body.blocks, body.entry)[0]
@@ -423,7 +423,7 @@ def test_matrix_reduced_stride_keeps_its_multiplier_address(tag):
     from qbopt.frontend import blocks
     from qbopt.objectfile import module
 
-    result = wholeseg.emitted(Path(f"fixtures/omf/matrix-{tag}.obj").read_bytes())
+    result = wholeseg.emitted(Path(f"fixtures/omf/matrix-{tag}.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
     for one in blocks.instructions(found):
@@ -439,7 +439,7 @@ def test_harr_hoisted_descriptor_read_keeps_its_address(tag):
     from qbopt.frontend import blocks
     from qbopt.objectfile import module
 
-    result = wholeseg.emitted(Path(f"fixtures/omf/harr-{tag}.obj").read_bytes())
+    result = wholeseg.emitted(Path(f"fixtures/omf/harr-{tag}.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
     bad = [one.at for one in blocks.instructions(found)
@@ -470,7 +470,7 @@ def test_harr_stored_row_plus_column_is_loop_carried(tag: str) -> None:
     """HARR recomputed row + column for every element instead of advancing its stored value."""
     import corpus
 
-    path = Path(f"fixtures/omf/harr-{tag}.obj")
+    path = Path(f"fixtures/omf/harr-{tag}.obj".lower())
     found = corpus.loaded(path)
     partition = corpus.partitioned(path)
     built = mir.bodies(found, partition)[0][1]
@@ -644,7 +644,7 @@ def test_lngmxx_accumulator_has_a_whole_long_start(tag: str, monkeypatch) -> Non
     monkeypatch.setattr(loopexit, "evaluated", lambda body: body)
     _keep_loops(monkeypatch)
 
-    path = Path(f"fixtures/omf/lngmxx-{tag}.obj")
+    path = Path(f"fixtures/omf/lngmxx-{tag}.obj".lower())
     found = corpus.loaded(path)
     partition = corpus.partitioned(path)
     built = mir.bodies(found, partition)[0][1]
@@ -1152,7 +1152,7 @@ def test_nested_row_recurrences_remove_repeated_multiplication(tag):
     from qbopt.objectfile import omf
     from qbopt.frontend import blocks
     from qbopt.objectfile import module
-    result = wholeseg.emitted(Path(f"fixtures/omf/nested-{tag}.obj").read_bytes())
+    result = wholeseg.emitted(Path(f"fixtures/omf/nested-{tag}.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
     assert not any(one.insn.mnemonic == Mnemonic.IMUL for one in blocks.instructions(found))

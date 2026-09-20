@@ -14,7 +14,7 @@ from qbopt.analysis import consts
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_dim_normal_return_supplies_descriptor_constants(tag: str) -> None:
     """HARR's 21-element dimensions were unknown immediately after DDIM returned."""
-    path = Path("fixtures/omf") / f"harr-{tag}.obj"
+    path = Path("fixtures/omf") / f"harr-{tag}.obj".lower()
     found = corpus.loaded(path)
     body = mir.bodies(found, corpus.partitioned(path))[0][1]
     call = next(op for block in body.blocks for op in block.ops if op.array)
@@ -60,7 +60,7 @@ def test_descriptor_fields_have_proven_addresses_without_new_relocations(tag: st
     """HARR's descriptor fields looked like arbitrary pointer accesses to alias analysis."""
     from qbopt.objectfile.module import Addr
 
-    path = Path("fixtures/omf") / f"harr-{tag}.obj"
+    path = Path("fixtures/omf") / f"harr-{tag}.obj".lower()
     found = corpus.loaded(path)
     body = mir.bodies(found, corpus.partitioned(path))[0][1]
     fields = [ref for block in body.blocks for op in block.ops for ref in op.loads if ref.symbolic is not None]
@@ -90,7 +90,7 @@ def test_unknown_segment_wrapping_or_wide_pointer_is_not_resolved(space: Space, 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 @pytest.mark.parametrize(("name", "bounds"), [("harr", ((0, 20), (0, 20))), ("segld", ((0, 100),))])
 def test_real_array_requests(name: str, bounds: tuple[tuple[int, int], ...], tag: str) -> None:
-    obj = Path("fixtures/omf") / f"{name}-{tag}.obj"
+    obj = Path("fixtures/omf") / f"{name}-{tag}.obj".lower()
     found = corpus.loaded(obj)
     assert found is not None
     requests = [
@@ -124,5 +124,4 @@ def test_only_allocating_calls_carry_requests(name: str) -> None:
         assert result is None
     interrupted = replace(body, blocks=(replace(body.blocks[0], ops=(*pushes, replace(call, at=4), call)),))
     assert raising_arrays.annotated(interrupted, {4: "unknown", 5: name}).blocks[0].ops[-1].array is None
-
 

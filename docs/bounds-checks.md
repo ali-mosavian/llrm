@@ -36,7 +36,7 @@ after:  offset = ((column - load(lowerColumn)) * load(rowCount)
 Its `/D` builds print the same answer before/after on all three compilers.
 Artifacts and complete PDS stage dumps:
 `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-harr-native-jbt83893`.
-`fixtures/regressions/harr-bounds-{p-g2,q-O,v-g3}.obj` are unchanged compiler
+`fixtures/regressions/harr-bounds-{p-g2,q-o,v-g3}.obj` are unchanged compiler
 output from `suite/harr.bas` with the named configuration plus `/D`.
 An additional focused expression check uses unequal dimensions and negative
 lower bounds, because HARR's square zero-based allocation cannot detect a
@@ -67,7 +67,7 @@ for relocated operands, not hard-coded addresses. `/D` tracing calls remain
 barriers, so this is exposure of address arithmetic, not yet a claim that every
 address has become a loop-carried induction value.
 
-Regression fixtures `fixtures/regressions/arridx-bounds-{p-g2,q-O,v-g3}.obj`
+Regression fixtures `fixtures/regressions/arridx-bounds-{p-g2,q-o,v-g3}.obj`
 are unchanged BC output from `suite/arridx.bas`, using each named configuration
 plus `/D`. All three execute with output 1260, with checks both enabled and
 disabled (six runs). This also exposed an independent INTO normal-path SSA bug:

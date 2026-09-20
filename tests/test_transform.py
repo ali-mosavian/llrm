@@ -165,7 +165,7 @@ def test_gvn_load_chains_keep_a_defined_return_value() -> None:
     from qbopt.abi import runtime
     from qbopt.frontend import blocks
 
-    found = corpus.loaded(Path("fixtures/omf/procs-q-O.obj"))
+    found = corpus.loaded(Path("fixtures/omf/procs-q-O.obj".lower()))
     partition = blocks.partition(found, blocks.code_map(found))
     body = next(
         body for name, body in mir.bodies(found, partition, runtime.for_module(found)) if name == "procedure TWICE"
@@ -1235,7 +1235,7 @@ def test_deciding_a_branch_leaves_every_byte_accounted_for() -> None:
     from qbopt import wholeseg
 
     for name in ("bools-q-O.obj", "bools-q-noO.obj", "bools-q-O-zd.obj"):
-        path = Path("fixtures/omf") / name
+        path = Path("fixtures/omf") / name.lower()
         if not path.exists():
             continue
         _out, why = wholeseg.rebuilt(path.read_bytes())
@@ -1624,7 +1624,7 @@ def test_an_operation_dead_keeps_has_its_operands_kept_too() -> None:
     from qbopt.frontend import blocks as split
     from qbopt.frontend.blocks import code_map
 
-    found = module.of(omf.parse(Path("fixtures/omf/bools-q-O.obj").read_bytes()))
+    found = module.of(omf.parse(Path("fixtures/omf/bools-q-O.obj".lower()).read_bytes()))
     blocks = split.partition(found, code_map(found))
     for name, body in mir.bodies(found, blocks):
         after = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
@@ -1663,7 +1663,7 @@ def test_dead_boolean_block_does_not_leave_an_unreachable_jump() -> None:
     from qbopt.frontend import blocks
     from qbopt.objectfile import module
 
-    result = wholeseg.emitted(Path("fixtures/omf/bools-q-O.obj").read_bytes())
+    result = wholeseg.emitted(Path("fixtures/omf/bools-q-O.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result
     found = module.of(omf.parse(result.data))
     assert not isinstance(blocks.code_map(found), str)

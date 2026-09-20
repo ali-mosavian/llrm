@@ -25,7 +25,7 @@ The whole build, from the empty plan to the merge, is one session:
     ~/.claude/projects/-Users-alim-work-personal-qbopt--claude-worktrees-mgl-peek-poke-inline-dacaee/29b55cdf-b54c-4c9d-9dfd-c7d736645029.jsonl
 
 7.2 MB of JSONL, one object per line. It is the record of every measurement
-quoted in `docs/` and of the reasoning behind the refusals in `AGENTS.md`, which
+quoted in `docs/` and of the reasoning behind the refusals in `agents.md`, which
 is worth having when a decision here looks arbitrary. The plan it was built to
 is `~/.claude/plans/make-a-end-to-delightful-goose.md`; all ten phases are done.
 
@@ -84,7 +84,7 @@ used to follow it to whatever LEDATA happened to precede it after the drop,
 which failed on 72 of the 73 cases. Measured first, not assumed: every one of
 those 73 crossings spans records in plain file order, never one of BC's own
 backpatch records, which is what the fix leans on and does not attempt to
-generalise past. See AGENTS.md's "Moving code across a LEDATA boundary".
+generalise past. See agents.md's "Moving code across a LEDATA boundary".
 
 **qbopt has been run on qb-qrender, end to end.** All 15 modules rewritten
 between BC and LINK, linked against the patched uGL, run under the pinned

@@ -15,7 +15,7 @@ from qbopt import wholeseg
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_harr_reuses_one_selector_and_forwards_the_array_store(tag):
     """HARR reloaded its selector inside the loop; unequal names also retained an array read."""
-    result = wholeseg.emitted(Path(f"fixtures/omf/harr-{tag}.obj").read_bytes())
+    result = wholeseg.emitted(Path(f"fixtures/omf/harr-{tag}.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
     reached = list(blocks.instructions(found))

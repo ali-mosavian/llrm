@@ -299,8 +299,8 @@ def test_production_fpdeep_unrolls_through_lcssa_exits(tag):
     """PDS/VBDOS FPDEEP retained three iterations because its LCSSA exit phis blocked unrolling."""
     from tools.stages import _bodies
 
-    found, bodies, _ = _bodies(Path(f"fixtures/omf/fpdeep-{tag}.obj").read_bytes())
-    partition = corpus.partitioned(Path(f"fixtures/omf/fpdeep-{tag}.obj"))
+    found, bodies, _ = _bodies(Path(f"fixtures/omf/fpdeep-{tag}.obj".lower()).read_bytes())
+    partition = corpus.partitioned(Path(f"fixtures/omf/fpdeep-{tag}.obj".lower()))
     original = transform.applied(
         bodies[0][1],
         found.dgroup,

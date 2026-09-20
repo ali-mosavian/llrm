@@ -4959,7 +4959,7 @@ still loads a, computes a+b, multiplies by c and stores p; then reloads a,
 recomputes a+b, divides by c and stores q. It retains all three SINGLE
 stores and the final WAIT. No floating transformation was made at this
 checkpoint: before/after arithmetic remains the listing in
-`tools/references/README.md`. A useful next step must establish masked or
+`tools/references/readme.md`. A useful next step must establish masked or
 exception-free reuse, or reduce backend overhead without changing those
 observable operations. Repeating optimizations on the six passing integer
 targets does not address this remaining gap.

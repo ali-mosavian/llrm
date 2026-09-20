@@ -207,7 +207,7 @@ a Microsoft BASIC descriptor opcode or changing MIR.
 
 - [model.md](model.md) defines the entities, operation subset, verifier, and
   exact mapping to the existing MIR.
-- [QB frontend](../frontend/qb/README.md) defines the first producer.
+- [QB frontend](../frontend/qb/readme.md) defines the first producer.
 - [QB real-mode memory model](../frontend/qb/memory-model.md) defines the
   target and runtime facts carried through the adapter.
 - [QB implementation plan](../frontend/qb/plan.md) gives staged gates.

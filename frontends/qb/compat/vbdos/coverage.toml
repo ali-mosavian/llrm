@@ -10,9 +10,9 @@ help_files = [
   { path = "/Users/alim/work/other/d32x/toolchains/vbdos/HLP/ADVISOR.HLP", sha256 = "cfbaf4acdc55b274b1e6c55ba5d24a5e9315284cea12c457e3b0835be426eae9" },
 ]
 help_extracts = [
-  { path = "VBDOS.TXT", lines = 48051, sha256 = "38521f0c35b71c6a718aa7beeb013adc11d4613c17f317ddfa4519c6a149566e" },
-  { path = "VBDPSS.TXT", lines = 11244, sha256 = "c028087169acbfdf6f4920ff9ff414fb8faeaece98bfb3cb842243384d0679dd" },
-  { path = "ADVISOR.TXT", lines = 1237, sha256 = "a7a2bbb3daa49705f627fd4315cc7a634385c98af92b80cbe9aad6858fb80540" },
+  { path = "vbdos.txt", lines = 48051, sha256 = "38521f0c35b71c6a718aa7beeb013adc11d4613c17f317ddfa4519c6a149566e" },
+  { path = "vbdpss.txt", lines = 11244, sha256 = "c028087169acbfdf6f4920ff9ff414fb8faeaece98bfb3cb842243384d0679dd" },
+  { path = "advisor.txt", lines = 1237, sha256 = "a7a2bbb3daa49705f627fd4315cc7a634385c98af92b80cbe9aad6858fb80540" },
 ]
 
 # VBDOS.TXT contains four consecutive databases (622 qck, 329 advisor,
@@ -21,12 +21,12 @@ help_extracts = [
 # coverage row accounts for them.  Example/support/navigation databases remain
 # checked in and hashed but do not manufacture duplicate language features.
 help_inventory = [
-  { path = "VBDOS.TXT", source = "VBDOS.HLP#qck", first_heading = 1, headings = 622, disposition = "classify", inherits_titles = true },
-  { path = "VBDOS.TXT", source = "VBDOS.HLP#advr", first_heading = 623, headings = 329, disposition = "classify", inherits_titles = true },
-  { path = "VBDOS.TXT", source = "VBDOS.HLP#ener", first_heading = 952, headings = 389, disposition = "classify", inherits_titles = true },
-  { path = "VBDOS.TXT", source = "VBDOS.HLP#ex", first_heading = 1341, headings = 243, disposition = "out-of-scope", rationale = "Worked examples exercise contracts defined by qck/advisor; they are retained as oracle prose, not counted as separate features." },
-  { path = "VBDPSS.TXT", source = "VBDPSS.HLP", first_heading = 1, headings = 197, disposition = "out-of-scope", rationale = "Product-support navigation and troubleshooting, not compiled BASIC behavior." },
-  { path = "ADVISOR.TXT", source = "ADVISOR.HLP", first_heading = 1, headings = 41, disposition = "out-of-scope", rationale = "Host help-system navigation, not compiled BASIC behavior." },
+  { path = "vbdos.txt", source = "VBDOS.HLP#qck", first_heading = 1, headings = 622, disposition = "classify", inherits_titles = true },
+  { path = "vbdos.txt", source = "VBDOS.HLP#advr", first_heading = 623, headings = 329, disposition = "classify", inherits_titles = true },
+  { path = "vbdos.txt", source = "VBDOS.HLP#ener", first_heading = 952, headings = 389, disposition = "classify", inherits_titles = true },
+  { path = "vbdos.txt", source = "VBDOS.HLP#ex", first_heading = 1341, headings = 243, disposition = "out-of-scope", rationale = "Worked examples exercise contracts defined by qck/advisor; they are retained as oracle prose, not counted as separate features." },
+  { path = "vbdpss.txt", source = "VBDPSS.HLP", first_heading = 1, headings = 197, disposition = "out-of-scope", rationale = "Product-support navigation and troubleshooting, not compiled BASIC behavior." },
+  { path = "advisor.txt", source = "ADVISOR.HLP", first_heading = 1, headings = 41, disposition = "out-of-scope", rationale = "Host help-system navigation, not compiled BASIC behavior." },
 ]
 
 help_exclusions = [

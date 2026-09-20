@@ -19,7 +19,7 @@ def test_bools_live_cfg_has_no_empty_transit_blocks(tag):
         if isinstance(body, mir.MirBody):
             states.append(body)
 
-    result = wholeseg.emitted(Path(f"fixtures/omf/bools-{tag}.obj").read_bytes(), watch=watch)
+    result = wholeseg.emitted(Path(f"fixtures/omf/bools-{tag}.obj".lower()).read_bytes(), watch=watch)
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     body = states[-1]
     reached, pending = set(), [body.entry]

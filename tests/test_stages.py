@@ -24,7 +24,7 @@ from qbopt.objectfile.module import Space
 
 def test_failed_optimization_keeps_observed_mir(tmp_path, monkeypatch):
     """Qrender PL_MOVE failed convergence and left only the initial dump, hiding all 16 rounds."""
-    path = Path("fixtures/omf/addrm-q-O.obj")
+    path = Path("fixtures/omf/addrm-q-O.obj".lower())
     _, bodies, _ = stages._bodies(path.read_bytes())
 
     def fail(data, *, watch, **kwargs):
@@ -59,7 +59,7 @@ def test_nbody_has_one_complete_file_per_machine_stage(tmp_path):
 
 def test_asm_names_relocations_instead_of_indistinguishable_zeroes(capsys):
     """ADDRM's distinct array operands and runtime calls all displayed as zero."""
-    stages._asm(Path("fixtures/omf/addrm-q-O.obj").read_bytes())
+    stages._asm(Path("fixtures/omf/addrm-q-O.obj".lower()).read_bytes())
     said = capsys.readouterr().out
     assert "reloc " in said
     assert "segment[" in said

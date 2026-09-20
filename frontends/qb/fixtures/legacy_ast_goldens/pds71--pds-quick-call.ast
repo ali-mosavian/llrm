@@ -1,7 +1,7 @@
 # qbfront legacy-derived AST snapshot; schema migrations require projection proof.
 # case-id: pds71/pds-quick-call
 # dialect: Pds71
-# source: pds71/PDQCALL.BAS
+# source: pds71/pdqcall.bas
 
 Module {
     statements: [

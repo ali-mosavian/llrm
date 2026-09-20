@@ -13,7 +13,7 @@ from qbopt.objectfile import module, omf
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_nots_prints_its_known_first_result_without_reloading(tag):
     """NOTS stored EDCBA987h then reloaded both words for PRINT instead of passing constants."""
-    result = wholeseg.emitted(Path(f"fixtures/omf/nots-{tag}.obj").read_bytes())
+    result = wholeseg.emitted(Path(f"fixtures/omf/nots-{tag}.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
     insns = blocks.instructions(found)

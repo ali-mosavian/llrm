@@ -24,7 +24,7 @@ def test_matrix_diagonal_stride_needs_no_register_copies(tag):
     from qbopt.frontend import blocks
     from qbopt.objectfile import module
 
-    result = wholeseg.emitted(Path(f"fixtures/omf/matrix-{tag}.obj").read_bytes())
+    result = wholeseg.emitted(Path(f"fixtures/omf/matrix-{tag}.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
     partition = blocks.partition(found, blocks.code_map(found))

@@ -16,7 +16,7 @@ from qbopt.objectfile.module import Addr, Space
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_nine_dimensional_loop_proves_its_element_store_extent(tag):
     """NDARR's OR-based zero test defeated the extent proof despite valid 1,12,2 output."""
-    path = Path(f"fixtures/regressions/ndarr-{tag}.obj")
+    path = Path(f"fixtures/regressions/ndarr-{tag}.obj".lower())
     found = corpus.loaded(path)
     body = mir.bodies(found, corpus.partitioned(path))[0][1]
     stores = [ref for block in body.blocks for op in block.ops for ref in op.stores if ref.pointer]
@@ -48,7 +48,7 @@ def test_unknown_logical_loop_condition_proves_no_array_extent(monkeypatch):
 def raw_huge(tag, monkeypatch):
     with monkeypatch.context() as context:
         context.setattr(raising_array_bounds, "proven", lambda body: body)
-        path = Path(f"fixtures/regressions/hugelp-{tag}.obj")
+        path = Path(f"fixtures/regressions/hugelp-{tag}.obj".lower())
         found = corpus.loaded(path)
         body = mir.bodies(found, corpus.partitioned(path))[0][1]
     return found, body
@@ -69,7 +69,7 @@ def test_huge_loop_descriptor_loads_leave_the_loop(tag, monkeypatch):
     def watch(stage, name, state):
         if stage == "mir-widen":
             states.append(state)
-    result = wholeseg.emitted(Path(f"fixtures/regressions/hugelp-{tag}.obj").read_bytes(), watch=watch)
+    result = wholeseg.emitted(Path(f"fixtures/regressions/hugelp-{tag}.obj".lower()).read_bytes(), watch=watch)
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     after = states[0]
     loops = loopy.loops(list(after.blocks), after.entry)
@@ -101,7 +101,7 @@ def test_huge_proof_does_not_assume_its_own_disjointness(failure, monkeypatch):
 def raw(name, tag, monkeypatch):
     with monkeypatch.context() as context:
         context.setattr(raising_array_bounds, "proven", lambda body: body)
-        path = Path(f"fixtures/omf/{name}-{tag}.obj")
+        path = Path(f"fixtures/omf/{name}-{tag}.obj".lower())
         module = corpus.loaded(path)
         body = mir.bodies(module, corpus.partitioned(path))[0][1]
     return module, body

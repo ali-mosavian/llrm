@@ -626,7 +626,7 @@ def test_no_phi_survives_elimination_on_a_critical_edge() -> None:
     from qbopt.frontend import blocks as split
     from qbopt.frontend.blocks import code_map
 
-    found = module.of(omf.parse(Path("fixtures/omf/harr-q-O.obj").read_bytes()))
+    found = module.of(omf.parse(Path("fixtures/omf/harr-q-O.obj".lower()).read_bytes()))
     blocks = split.partition(found, code_map(found))
     result = mir.bodies(found, blocks)
     found = result.source.applied(found)

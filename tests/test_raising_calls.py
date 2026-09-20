@@ -53,7 +53,7 @@ def test_known_call_inputs_do_not_establish_unknown_call_effects(inputs):
 @pytest.mark.parametrize("name", ["lngmix", "lngmxx"])
 def test_long_division_setup_is_not_counted_as_stack_arguments(tag, name):
     """QB LNGMIX kept two runtime divisions per iteration because MOV/CWD setup polluted push grouping."""
-    path = Path(f"fixtures/omf/{name}-{tag}.obj")
+    path = Path(f"fixtures/omf/{name}-{tag}.obj".lower())
     found = corpus.loaded(path)
     partition = corpus.partitioned(path)
     body = mir.bodies(found, partition)[0][1]
@@ -179,7 +179,7 @@ def test_nbody_classified_divide_consumes_captured_values() -> None:
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_computed_divisions_are_values_not_runtime_calls(tag: str) -> None:
-    path = Path(f"fixtures/omf/chain-{tag}.obj")
+    path = Path(f"fixtures/omf/chain-{tag}.obj".lower())
     found = corpus.loaded(path)
     bodies = mir.bodies(found, corpus.partitioned(path))
     divisions = [
@@ -206,7 +206,7 @@ def test_recovered_memory_arguments_keep_their_relocations(monkeypatch) -> None:
     """QuickBASIC chain printed CONST2=0 for 13106 after argument loads read address zero."""
     # Needs the stores drop_stores proves unobservable.
     monkeypatch.setattr("qbopt.analysis.observers.private", lambda *args: None)
-    path = Path("fixtures/regressions/chain-stack-q-O.obj")
+    path = Path("fixtures/regressions/chain-stack-q-O.obj".lower())
     result = wholeseg.emitted(path.read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))

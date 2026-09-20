@@ -141,7 +141,7 @@ def test_new_allocation_does_not_revive_a_stale_pointer():
 def test_arrphi_proves_both_unknown_branches_and_the_join(tag):
     """ARRPHI prints 10,9; its six bounded accesses used to lose all allocation facts."""
     import corpus
-    path = Path(f"fixtures/regressions/arrphi-{tag}.obj")
+    path = Path(f"fixtures/regressions/arrphi-{tag}.obj".lower())
     states = [body for _, body in mir.bodies(corpus.loaded(path), corpus.partitioned(path))]
     pointers = [ref for body in states for block in body.blocks for op in block.ops
                 for ref in (*op.loads, *op.stores) if ref.pointer]
@@ -156,7 +156,7 @@ def test_hugerg_has_an_inductive_extent_proof_with_a_small_budget(tag, monkeypat
     from qbopt.frontend import raising_array_bounds
     with monkeypatch.context() as context:
         context.setattr(raising_array_bounds, "proven", lambda body: body)
-        path = Path(f"fixtures/regressions/hugerg-{tag}.obj")
+        path = Path(f"fixtures/regressions/hugerg-{tag}.obj".lower())
         body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
     after = arrayfacts.proven(body, limit=1000)
     stores = [ref for block in after.blocks for op in block.ops for ref in op.stores if ref.pointer]

@@ -104,7 +104,7 @@ def test_whole_negation_requires_exact_carry_chain(mismatch, monkeypatch):
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_addrm_stores_and_reuses_the_signed_whole_value(tag):
     """ADDRM stored b(i) in two words and immediately reloaded the same long on every iteration."""
-    path = Path(f"fixtures/omf/addrm-{tag}.obj")
+    path = Path(f"fixtures/omf/addrm-{tag}.obj".lower())
     found = corpus.loaded(path)
     partition = corpus.partitioned(path)
     body = mir.bodies(found, partition)[0][1]
@@ -283,7 +283,7 @@ def test_localp_signed_index_addition_is_a_whole_long(tag):
     from qbopt.frontend import blocks
     from qbopt.objectfile import module
 
-    found = module.of(omf.parse(Path(f"fixtures/regressions/localp-{tag}.obj").read_bytes()))
+    found = module.of(omf.parse(Path(f"fixtures/regressions/localp-{tag}.obj".lower()).read_bytes()))
     bodies = mir.bodies(found, blocks.partition(found, blocks.code_map(found)))
     ops = [op for _, body in bodies for block in body.blocks for op in block.ops]
     assert any(

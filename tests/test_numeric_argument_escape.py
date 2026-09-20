@@ -11,7 +11,7 @@ from qbopt.objectfile import module
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_read_destination_escapes_across_segment_setup(tag):
     """MEMPHI printed 10 twice instead of 10,9: READ's address crossed PUSH DS/POP ES before PUSH BX."""
-    found = corpus.loaded(Path(f"fixtures/regressions/memphi-{tag}.obj"))
+    found = corpus.loaded(Path(f"fixtures/regressions/memphi-{tag}.obj".lower()))
     assert {(found.program_data, 6), (found.program_data, 8)} <= module.escaped(found)
 
 
@@ -20,7 +20,7 @@ def test_long_arithmetic_values_do_not_escape_chain_inputs(tag):
     """CHAIN retained seven IDIVs because nested numeric arguments made a and b appear escaped."""
     from qbopt import wholeseg
     from qbopt.model import mir
-    path = Path(f"fixtures/regressions/chain5-{tag}.obj")
+    path = Path(f"fixtures/regressions/chain5-{tag}.obj".lower())
     found = corpus.loaded(path)
     assert not any(segment == found.program_data for segment, _ in module.escaped(found))
     states = []
@@ -54,14 +54,14 @@ def test_arithmetic_argument_proof_requires_the_established_external_helper(kind
 
 def test_qb_register_materialized_descriptor_addresses_escape():
     """QB FPDEEP reported no escapes although MOV AX,OFFSET descriptor; PUSH AX passes seven strings."""
-    found = corpus.loaded(Path("fixtures/omf/fpdeep-q-O.obj"))
+    found = corpus.loaded(Path("fixtures/omf/fpdeep-q-O.obj".lower()))
     assert {(9, offset) for offset in (16, 22, 28, 38, 58, 66, 78)} <= module.escaped(found)
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "v-g3"])
 def test_local_copy_address_is_not_a_call_argument(tag):
     """FPDEEP materializes its DOUBLE initializer address for MOVSW, not for a runtime argument."""
-    found = corpus.loaded(Path(f"fixtures/omf/fpdeep-{tag}.obj"))
+    found = corpus.loaded(Path(f"fixtures/omf/fpdeep-{tag}.obj".lower()))
     assert not any(segment == found.program_data for segment, _ in module.escaped(found))
 
 
@@ -69,7 +69,7 @@ def test_local_copy_address_is_not_a_call_argument(tag):
 @pytest.mark.parametrize("program", ["arith", "nots", "fpcse"])
 def test_numeric_prints_do_not_escape_program_variables(tag, program):
     """ARITH/NOTS/FPCSE lost constants because PUSH [r] was interpreted as PUSH OFFSET r."""
-    found = corpus.loaded(Path(f"fixtures/omf/{program}-{tag}.obj"))
+    found = corpus.loaded(Path(f"fixtures/omf/{program}-{tag}.obj".lower()))
     assert not any(segment == found.program_data for segment, _ in module.escaped(found))
 
 
@@ -88,5 +88,5 @@ def test_the_escape_scan_decodes_from_instructions_not_the_header(tag):
     """FPCALC printed its first READ three times on /G3. A sweep from offset 0 decoded the
     module header as code and never landed on `mov bx,offset inputValue`, so READ was
     taken to write nothing the program owns and the unrolled reloads were forwarded."""
-    found = corpus.loaded(Path(f"fixtures/regressions/fpcalc-{tag}.obj"))
+    found = corpus.loaded(Path(f"fixtures/regressions/fpcalc-{tag}.obj".lower()))
     assert (found.program_data, 6) in module.escaped(found)

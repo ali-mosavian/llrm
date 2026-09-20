@@ -52,7 +52,7 @@ def test_runtime_return_does_not_fall_into_the_next_statement(tag: str) -> None:
     """EVTRAP's B$RETA discards its call return address, not a normal CALL."""
     from dataclasses import replace
     from qbopt.frontend.blocks import walk, partition
-    found = module.load(Path(f"fixtures/omf/addrm-{tag}.obj"))
+    found = module.load(Path(f"fixtures/omf/addrm-{tag}.obj".lower()))
     found = replace(found, code=hx("9a 00 00 00 00 90 c3"), start=0, end=7,
                     calls={0: "B$RETA"}, targets=frozenset(), publics=frozenset())
     mapped = walk(found, 0)
@@ -106,7 +106,7 @@ def test_rebuilt_event_code_is_fully_visible(tag: str) -> None:
     from qbopt import wholeseg
     from qbopt.objectfile import omf
     from qbopt.frontend.blocks import instructions
-    result = wholeseg.emitted(Path(f"fixtures/omf/addrm-{tag}.obj").read_bytes())
+    result = wholeseg.emitted(Path(f"fixtures/omf/addrm-{tag}.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR
     found = module.of(omf.parse(result.data))
     code = instructions(found)

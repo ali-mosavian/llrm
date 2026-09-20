@@ -1,6 +1,6 @@
 ' Include directive occupies the end of its source line.
 dim includeValue as integer
-' $INCLUDE: 'Q45I33.INC'
+' $INCLUDE: 'q45i33.inc'
 
 if includeValue = 17 then
     print "PASS include"

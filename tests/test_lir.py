@@ -269,7 +269,7 @@ def test_a_byte_wide_held_is_the_low_byte() -> None:
 def _one_body(stem: str):
     from qbopt.backend import lower
 
-    found = module.of(omf.parse((Path("fixtures/omf") / f"{stem}.obj").read_bytes()))
+    found = module.of(omf.parse((Path("fixtures/omf") / f"{stem}.obj".lower()).read_bytes()))
     blocks = split.partition(found, code_map(found))
     raised = mir.bodies(found, blocks)
     name, body = next(iter(raised))
@@ -449,7 +449,7 @@ def test_an_increment_is_its_own_operation(stem: str, at: int, kind: str, want: 
     """
     from qbopt.backend import lower
 
-    found = module.of(omf.parse((Path("fixtures/omf") / f"{stem}.obj").read_bytes()))
+    found = module.of(omf.parse((Path("fixtures/omf") / f"{stem}.obj".lower()).read_bytes()))
     blocks = split.partition(found, code_map(found))
     raised = mir.bodies(found, blocks)
     expected = getattr(mir.Kind, kind)

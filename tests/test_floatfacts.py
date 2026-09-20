@@ -81,7 +81,7 @@ def test_sqrt_facts_require_an_exact_rational_square(number, negative_zero, expe
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_fpcse_known_inputs_reach_float_computations(tag):
     """FPCSE's 2+4, product 48 and quotient 0.75 should not remain opaque facts."""
-    path = Path(f"fixtures/omf/fpcse-{tag}.obj")
+    path = Path(f"fixtures/omf/fpcse-{tag}.obj".lower())
     found = corpus.loaded(path)
     body = mir.bodies(found, corpus.partitioned(path))[0][1]
     from qbopt.objectfile import omf

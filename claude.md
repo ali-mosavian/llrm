@@ -1,6 +1,6 @@
 # qbopt
 
-See [AGENTS.md](AGENTS.md). It carries the goal, the architecture and the
+See [agents.md](agents.md). It carries the goal, the architecture and the
 six rules, and this file exists only so that either name finds them.
 
 The six rules, because they are the ones most easily forgotten mid-task.

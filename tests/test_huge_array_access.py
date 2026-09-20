@@ -13,7 +13,7 @@ from qbopt.objectfile import module, omf
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 @pytest.mark.parametrize("program,count", [("huge2", 10), ("hugelp", 6)])
 def test_huge_helper_becomes_whole_pointer_mir_and_emitted_accesses(tag, program, count):
-    path = Path(f"fixtures/regressions/{program}-{tag}.obj")
+    path = Path(f"fixtures/regressions/{program}-{tag}.obj".lower())
     found = corpus.loaded(path)
     body = mir.bodies(found, corpus.partitioned(path))[0][1]
     ops = [op for block in body.blocks for op in block.ops]

@@ -79,7 +79,7 @@ def test_bools_constant_program_is_one_live_block(tag):
         if isinstance(body, mir.MirBody):
             states.append(body)
 
-    result = wholeseg.emitted(Path(f"fixtures/omf/bools-{tag}.obj").read_bytes(), watch=watch)
+    result = wholeseg.emitted(Path(f"fixtures/omf/bools-{tag}.obj".lower()).read_bytes(), watch=watch)
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     assert len(states[-1].blocks) == 1
 
@@ -90,7 +90,7 @@ def test_localp_keeps_termination_after_interleaved_procedure(tag):
     from qbopt import wholeseg
     from qbopt.objectfile import omf, module
     from qbopt.frontend import blocks
-    result = wholeseg.emitted(Path(f"fixtures/regressions/localp-{tag}.obj").read_bytes())
+    result = wholeseg.emitted(Path(f"fixtures/regressions/localp-{tag}.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
     mapped = blocks.code_map(found)

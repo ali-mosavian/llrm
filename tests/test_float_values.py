@@ -91,7 +91,7 @@ def test_qrender_word_conversion_lowers_without_extracting_a_word_from_a_word():
 def test_fpdeep_integer_results_are_explicit_values(tag):
     """FPDEEP's CLNG results were opaque calls, disconnecting FP values from PRINT arguments."""
     from qbopt.model.floating import Format
-    path = Path(f"fixtures/omf/fpdeep-{tag}.obj")
+    path = Path(f"fixtures/omf/fpdeep-{tag}.obj".lower())
     found = corpus.loaded(path)
     body = mir.bodies(found, corpus.partitioned(path))[0][1]
     conversions = [op for block in body.blocks for op in block.ops
@@ -109,7 +109,7 @@ def test_fpdeep_integer_results_are_explicit_values(tag):
 def test_fpdeep_does_not_materialize_dead_conversion_halves(tag):
     """FPDEEP rebuilt unused AX/DX halves even though PRINT consumed the whole conversion."""
     from qbopt.optimize import transform
-    path = Path(f"fixtures/omf/fpdeep-{tag}.obj")
+    path = Path(f"fixtures/omf/fpdeep-{tag}.obj".lower())
     found = corpus.loaded(path)
     partition = corpus.partitioned(path)
     body = transform.applied(mir.bodies(found, partition)[0][1], found.dgroup,
@@ -332,7 +332,7 @@ def test_float_cse_preserves_computations_without_reuse_proof(change, monkeypatc
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_fpcse_float_values_link_each_computation(tag):
     """FPCSE's opaque st0 operands concealed all cross-operation data dependencies."""
-    path = Path(f"fixtures/omf/fpcse-{tag}.obj")
+    path = Path(f"fixtures/omf/fpcse-{tag}.obj".lower())
     body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
     operations = [op for block in body.blocks for op in block.ops if op.floating is not None]
     assert operations
@@ -390,7 +390,7 @@ def test_generic_memory_reuse_respects_float_conversion_and_effects():
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_float_allocation_uses_current_ssa_values(tag):
     """FPCSE allocation must follow renamed value edges, not BC's origin identifiers."""
-    path = Path(f"fixtures/omf/fpcse-{tag}.obj")
+    path = Path(f"fixtures/omf/fpcse-{tag}.obj".lower())
     body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
     baseline = _allocated(body, path)
     variables = {arg.value.variable for block in body.blocks for op in block.ops

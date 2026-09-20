@@ -1,4 +1,4 @@
-/* Arithmetic-only reference. See README.md before using its instruction count. */
+/* Arithmetic-only reference. See readme.md before using its instruction count. */
 #pragma STDC FENV_ACCESS ON
 
 void fpcsex(float a, float b, float c,

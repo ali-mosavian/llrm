@@ -4,5 +4,6 @@ __pycache__/
 build/
 /target/
 /tools/buildprs/target/
+/frontends/qb/target/
 owshim/bin/
 .DS_Store

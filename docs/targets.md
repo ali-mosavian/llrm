@@ -1595,7 +1595,7 @@ Apple Clang 21 retains both strict additions in optimized IR but merges them
 in final x87 code, while retaining SINGLE rounding stores/reloads. Therefore
 the EarlyCSE check above must not become a blanket prohibition justified by
 LLVM. Its backend behavior and exception-visibility differences need auditing;
-see `tools/references/README.md`. The old reassociated, unrounded target is
+see `tools/references/readme.md`. The old reassociated, unrounded target is
 still invalid, but useful code-generation opportunities demonstrably remain.
 
 The current PDS stage dump (`/tmp/qbopt-fpcsex-strict-current`) retains both

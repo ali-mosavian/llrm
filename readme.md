@@ -66,7 +66,7 @@ and `--contract-root OBJECT_DIRECTORY` (also supported by `tools/stages.py`).
 The loader checks every artifact's SHA-256 and each symbol's defining object
 before enabling register-input/stack-cleanup facts. Unspecified effects stay
 unknown; this does not automatically prove contracts. See
-[the profile format](docs/contracts/README.md).
+[the profile format](docs/contracts/readme.md).
 
 Native arithmetic is the default, but it is not fast-math: floating-point
 reassociation and observable storage rounding are not discarded. Native LONG

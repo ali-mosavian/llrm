@@ -1,7 +1,7 @@
 # qbfront legacy-derived AST snapshot; schema migrations require projection proof.
 # case-id: qb45/numeric-functions
 # dialect: QuickBasic45
-# source: qb45/Q45NF41.BAS
+# source: qb45/q45nf41.bas
 
 Module {
     statements: [

@@ -6,14 +6,14 @@ help_files = [
   { path = "/Users/alim/dos/QB45/HLP/QB45ENER.HLP", sha256 = "05f63a6847308e25cf915565d37151fba32bd1bae80105d9ec75b19535571320" },
 ]
 help_extracts = [
-  { path = "QB45QCK.TXT", lines = 3346, sha256 = "0810c2ee01fe75b1cf358fdac3fdd36844f8053331660f329ab034f757b391e8" },
-  { path = "QB45ADV.TXT", lines = 17538, sha256 = "e17c3f10581e71dd1de53bd8db7fe36962a09faa422d4b70e21e39d572a48ac1" },
-  { path = "QB45ENE.TXT", lines = 2613, sha256 = "6e3280ab269789caed74ecd06a3c93725fd427563b46be3d339e5079bdcfeb73" },
+  { path = "qb45qck.txt", lines = 3346, sha256 = "0810c2ee01fe75b1cf358fdac3fdd36844f8053331660f329ab034f757b391e8" },
+  { path = "qb45adv.txt", lines = 17538, sha256 = "e17c3f10581e71dd1de53bd8db7fe36962a09faa422d4b70e21e39d572a48ac1" },
+  { path = "qb45ene.txt", lines = 2613, sha256 = "6e3280ab269789caed74ecd06a3c93725fd427563b46be3d339e5079bdcfeb73" },
 ]
 help_inventory = [
-  { path = "QB45QCK.TXT", source = "QB45QCK.HLP", first_heading = 1, headings = 200, disposition = "classify" },
-  { path = "QB45ADV.TXT", source = "QB45ADVR.HLP", first_heading = 1, headings = 533, disposition = "classify" },
-  { path = "QB45ENE.TXT", source = "QB45ENER.HLP", first_heading = 1, headings = 256, disposition = "classify" },
+  { path = "qb45qck.txt", source = "QB45QCK.HLP", first_heading = 1, headings = 200, disposition = "classify" },
+  { path = "qb45adv.txt", source = "QB45ADVR.HLP", first_heading = 1, headings = 533, disposition = "classify" },
+  { path = "qb45ene.txt", source = "QB45ENER.HLP", first_heading = 1, headings = 256, disposition = "classify" },
 ]
 
 # Exhaustive topic inventory extracted from the three unique Microsoft LN databases.

@@ -223,5 +223,5 @@ def test_qb45_string_assignment_and_double_print_have_fixed_cleanup(name, cleanu
 
 @pytest.mark.parametrize("program", ["byref2", "nestud"])
 def test_qb45_programs_reaching_them_are_rewritten(program):
-    result = wholeseg.emitted(Path(f"fixtures/omf/{program}-q-O.obj").read_bytes())
+    result = wholeseg.emitted(Path(f"fixtures/omf/{program}-q-O.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason

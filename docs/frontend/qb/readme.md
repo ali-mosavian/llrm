@@ -134,7 +134,7 @@ Default-`BYREF` pointee reads are volatile HIR indirect places. Raw VBDOS
 `IN_KEYSTROKE` reloads the keyboard flag on every `DO ... LOOP WHILE`
 back-edge because the interrupt handler may release the key without a BASIC
 store in the current function. The frontend initially let GVN reuse the
-entry read and emitted a permanent register-only spin. `BYREFLP.BAS` isolates
+entry read and emitted a permanent register-only spin. `byreflp.bas` isolates
 the rule: both reads remain volatile after optimization, and one remains in
 the natural loop. HIR lowering carries the access property into existing MIR;
 the existing backend receives an ordinary memory comparison.

@@ -20,7 +20,7 @@ def test_nonreturning_call_does_not_justify_narrowing_unknown_memory_reads():
     routine = runtime.contract("B$CENP")
     assert routine.control is runtime.Control.NEVER
     assert routine.reads is runtime.Memory.ANY
-    path = Path("fixtures/omf/fpcse-q-O.obj")
+    path = Path("fixtures/omf/fpcse-q-O.obj".lower())
     found = corpus.loaded(path)
     body = mir.bodies(found, corpus.partitioned(path))[0][1]
     terminal = next(
@@ -50,7 +50,7 @@ def test_fpdeep_mix_outputs_fold_across_string_prints(tag):
         if stage == "mir-widen":
             states.append(state)
 
-    result = wholeseg.emitted(Path(f"fixtures/omf/fpdeep-{tag}.obj").read_bytes(), watch=watch)
+    result = wholeseg.emitted(Path(f"fixtures/omf/fpdeep-{tag}.obj".lower()).read_bytes(), watch=watch)
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     printed = {
         arg.n
@@ -78,7 +78,7 @@ def test_unknown_literal_pool_layout_does_not_exclude_call_writes(tag, fault, mo
     from qbopt.objectfile import module
     from qbopt.frontend import raising_literals
 
-    path = Path(f"fixtures/omf/fpdeep-{tag}.obj")
+    path = Path(f"fixtures/omf/fpdeep-{tag}.obj".lower())
     found = corpus.loaded(path)
     built = mir.bodies(found, corpus.partitioned(path))[0][1]
     literal = built.initial[0][0]
@@ -213,7 +213,7 @@ def test_fpbench_one_survives_unrelated_pointer_relocations():
 
 def test_quickbasic_literal_initializers_prove_the_same_floating_exit():
     """FPCSE's QB object retained ten iterations while PDS/VBDOS proved 487.5."""
-    path = Path("fixtures/omf/fpcse-q-O.obj")
+    path = Path("fixtures/omf/fpcse-q-O.obj".lower())
     found = corpus.loaded(path)
     body = mir.bodies(found, corpus.partitioned(path))[0][1]
     proofs = floatfacts.loop_exits(body, found.dgroup, found.calls)
@@ -224,7 +224,7 @@ def test_quickbasic_literal_initializers_prove_the_same_floating_exit():
 
 
 def test_unknown_write_invalidates_literal_entry_facts():
-    path = Path("fixtures/omf/fpcse-q-O.obj")
+    path = Path("fixtures/omf/fpcse-q-O.obj".lower())
     found = corpus.loaded(path)
     body = mir.bodies(found, corpus.partitioned(path))[0][1]
     entry = body.block(body.entry)
@@ -252,7 +252,7 @@ def test_unknown_write_invalidates_literal_entry_facts():
 def test_literal_entry_requires_unmodified_complete_loader_bytes(change):
     from qbopt.frontend import raising_literals
 
-    path = Path("fixtures/omf/fpcse-q-O.obj")
+    path = Path("fixtures/omf/fpcse-q-O.obj".lower())
     found = corpus.loaded(path)
     body = replace(mir.bodies(found, corpus.partitioned(path))[0][1], initial=())
     ref = body.blocks[0].ops[0].loads[0]

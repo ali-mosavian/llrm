@@ -5,11 +5,11 @@ inherits = "../qb45/suite.toml"
 
 [[case]]
 name = "pds-huge-array"
-source = "PDHUGE.BAS"
+source = "pdhuge.bas"
 level = 1
 features = ["pds71-profile", "dynamic-array", "huge-array", "nonzero-lower-bound", "multidimensional-array", "real-mode-segmented-memory"]
 switches = ["/O", "/FPi", "/G2", "/Ah", "/R", "/Zi"]
-expected = "PDHUGE.OUT"
+expected = "pdhuge.out"
 parser = "required"
 lowering = "required"
 runtime = "required"
@@ -17,11 +17,11 @@ verification = "Writes and rereads five indexed elements spanning the 64 KiB dyn
 
 [[case]]
 name = "pds-row-major-array"
-source = "PDROW.BAS"
+source = "pdrow.bas"
 level = 1
 features = ["pds71-profile", "row-major-array", "varptr", "varseg", "def-seg"]
 switches = ["/O", "/FPi", "/G2", "/R", "/Zi"]
-expected = "PDROW.OUT"
+expected = "pdrow.out"
 parser = "required"
 lowering = "required"
 runtime = "required"
@@ -29,11 +29,11 @@ verification = "PEEK sees the adjacent physical element selected by /R row-major
 
 [[case]]
 name = "pds-far-string"
-source = "PDFAR.BAS"
+source = "pdfar.bas"
 level = 2
 features = ["pds71-profile", "far-string", "dynamic-string", "string-builder", "far-heap"]
 switches = ["/O", "/FPi", "/G2", "/Fs", "/Zi"]
-expected = "PDFAR.OUT"
+expected = "pdfar.out"
 parser = "required"
 lowering = "required"
 runtime = "required"
@@ -41,11 +41,11 @@ verification = "Reads both 30,000-byte string tails after allocating payload bey
 
 [[case]]
 name = "pds-currency"
-source = "PDCUR.BAS"
+source = "pdcur.bas"
 level = 2
 features = ["pds71-profile", "currency", "ccur", "fixed-decimal-arithmetic"]
 switches = ["/O", "/FPi", "/G2", "/Zi"]
-expected = "PDCUR.OUT"
+expected = "pdcur.out"
 parser = "required"
 lowering = "required"
 runtime = "required"
@@ -53,11 +53,11 @@ verification = "CCUR arithmetic yields exactly 124; MKC$ bytes independently wit
 
 [[case]]
 name = "pds-runtime-check"
-source = "PDRTC.BAS"
+source = "pdrtc.bas"
 level = 2
 features = ["pds71-profile", "runtime-bounds-check", "on-error", "resume", "err"]
 switches = ["/O", "/FPi", "/G2", "/D", "/E", "/X", "/Zi"]
-expected = "PDRTC.OUT"
+expected = "pdrtc.out"
 parser = "required"
 lowering = "required"
 runtime = "required"
@@ -65,11 +65,11 @@ verification = "A numbered checked out-of-range store raises exactly ERR 9/ERL 1
 
 [[case]]
 name = "pds-quick-call"
-source = "PDQCALL.BAS"
+source = "pdqcall.bas"
 level = 3
 features = ["pds71-profile", "quick-call", "byval", "function", "long-return"]
 switches = ["/O", "/FPi", "/G2", "/Ot", "/Zi"]
-expected = "PDQCALL.OUT"
+expected = "pdqcall.out"
 parser = "required"
 lowering = "required"
 runtime = "required"
@@ -77,11 +77,11 @@ verification = "A /Ot three-argument noncommutative LONG function returns 39, mu
 
 [[case]]
 name = "pds-local-error"
-source = "PDLOCAL.BAS"
+source = "pdlocal.bas"
 level = 2
 features = ["pds71-profile", "on-local-error", "resume-label", "err", "erl", "error-statement"]
 switches = ["/O", "/FPi", "/G2", "/E", "/X", "/Zi"]
-expected = "PDLOCAL.OUT"
+expected = "pdlocal.out"
 parser = "required"
 lowering = "required"
 runtime = "required"
@@ -89,34 +89,34 @@ verification = "A numbered ERROR 53 is handled inside the SUB; independent exact
 
 [[case]]
 name = "pds-com-event"
-source = "reference/PDCOM.BAS"
+source = "reference/pdcom.bas"
 level = 4
 features = ["pds71-profile", "on-com", "com-buffer", "event-handler", "serial-hardware"]
 switches = ["/O", "/FPi", "/G2", "/C:512", "/V", "/W", "/Zi"]
-expected = "reference/PDCOM.OUT"
+expected = "reference/pdcom.out"
 parser = "required"
 lowering = "required"
 runtime = "reference-only"
 
 [[case]]
 name = "pds-key-pen-play-events"
-source = "reference/PDEVENT.BAS"
+source = "reference/pdevent.bas"
 level = 4
 features = ["pds71-profile", "on-key", "on-pen", "on-play", "event-handler", "keyboard-pen-speaker-hardware"]
 switches = ["/O", "/FPi", "/G2", "/V", "/W", "/Zi"]
-expected = "reference/PDEVENT.OUT"
+expected = "reference/pdevent.out"
 parser = "required"
 lowering = "required"
 runtime = "reference-only"
 
 [[case]]
 name = "pds-common-modules"
-source = "modules/PDCOMM.BAS"
-companions = ["modules/PDCOMW.BAS"]
+source = "modules/pdcomm.bas"
+companions = ["modules/pdcomw.bas"]
 level = 3
 features = ["pds71-profile", "separate-compilation", "common-shared", "named-common-block", "far-procedure-call"]
 switches = ["/O", "/FPi", "/G2", "/Zi"]
-expected = "PDCOMM.OUT"
+expected = "pdcomm.out"
 parser = "required"
 lowering = "required"
 runtime = "required"
@@ -124,11 +124,11 @@ verification = "A separately compiled SUB adds 20 and 12 to named COMMON SHARED 
 
 [[case]]
 name = "pds-timer-event"
-source = "PDTIMER.BAS"
+source = "pdtimer.bas"
 level = 4
 features = ["pds71-profile", "on-timer", "event-handler", "event-return", "event-polling"]
 switches = ["/O", "/FPi", "/G2", "/V", "/W", "/Zi"]
-expected = "PDTIMER.OUT"
+expected = "pdtimer.out"
 parser = "required"
 lowering = "required"
 runtime = "required"
@@ -136,7 +136,7 @@ verification = "The /V /W timer handler runs exactly once and changes VALUE from
 
 [[case]]
 name = "pds-mbf"
-source = "PDMBF.BAS"
+source = "pdmbf.bas"
 level = 4
 features = ["pds71-profile", "MBF", "MKS$", "CVS", "MKD$", "CVD", "compiler-switch", "exact bytes"]
 switches = ["/O", "/FPi", "/G2", "/MBF"]
@@ -148,7 +148,7 @@ verification = "Under /MBF, DATA-fed SINGLE and DOUBLE values must produce the m
 
 [[case]]
 name = "pds-fpa"
-source = "PDFPA.BAS"
+source = "pdfpa.bas"
 level = 4
 features = ["pds71-profile", "alternate-math", "FPa", "COS", "SIN", "LOG", "BCL71ANR runtime", "exact DOUBLE bytes"]
 switches = ["/O", "/G2", "/FPa"]
@@ -161,7 +161,7 @@ verification = "The /FPa object must link against BCL71ANR.LIB; DATA-fed COS, SI
 
 [[case]]
 name = "pds-interrupt"
-source = "reference/PDINTR.BAS"
+source = "reference/pdintr.bas"
 level = 5
 features = ["pds71-profile", "interrupt", "regtype", "dos-interrupt", "qbx-lib"]
 switches = ["/O", "/FPi", "/G2", "QBX.LIB"]
@@ -172,7 +172,7 @@ runtime = "reference-only"
 
 [[case]]
 name = "pds-uevent"
-source = "reference/PDUEVT.BAS"
+source = "reference/pduevt.bas"
 level = 5
 features = ["pds71-profile", "on-uevent", "uevent", "setuevent", "interrupt-service-routine"]
 switches = ["/O", "/FPi", "/G2", "/V", "/W", "external-isr"]
@@ -183,7 +183,7 @@ runtime = "reference-only"
 
 [[case]]
 name = "pds-switch-g3-rejected"
-source = "PDG3NEG.BAS"
+source = "pdg3neg.bas"
 level = 1
 features = ["pds71-profile", "compiler-switch", "negative-acceptance", "g3-rejected"]
 switches = ["/G3"]

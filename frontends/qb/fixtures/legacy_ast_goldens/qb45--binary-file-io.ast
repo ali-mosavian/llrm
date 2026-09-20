@@ -1,7 +1,7 @@
 # qbfront legacy-derived AST snapshot; schema migrations require projection proof.
 # case-id: qb45/binary-file-io
 # dialect: QuickBasic45
-# source: qb45/Q45BI55.BAS
+# source: qb45/q45bi55.bas
 
 Module {
     statements: [

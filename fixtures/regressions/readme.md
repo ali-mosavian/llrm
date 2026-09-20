@@ -196,7 +196,7 @@ pass afterwards. This establishes whole-field recognition, not SROA or
 cross-iteration promotion: the loop still loads and stores both fields.
 There is no registered optimal target for this focused fixture.
 
-`chain-stack-q-O.obj` is real QuickBASIC 4.5 `/O` output from
+`chain-stack-q-o.obj` is real QuickBASIC 4.5 `/O` output from
 `suite/chain.bas`, captured during the stack-argument recovery work. Its
 constant-divisor remainder feeds another remainder and is reused later.
 Unlike the older chain fixture, this compilation has relocated memory

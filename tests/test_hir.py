@@ -118,7 +118,7 @@ def test_qb_driver_never_replays_a_stale_in_tree_release_binary(monkeypatch: pyt
 @pytest.mark.full
 def test_qb45_numeric_read_data_reaches_typed_hir_and_fresh_omf() -> None:
     """Q45N01 stopped at READ, then a native-only spill frame made READ report syntax error."""
-    source = ROOT / "frontends/qb/compat/qb45/Q45N01.BAS"
+    source = ROOT / "frontends/qb/compat/qb45/q45n01.bas"
     program = qb_driver.parsed(source, dialect="qb45", runtime="qb45")
     main = program.modules[0].functions[0]
     calls = [
@@ -770,7 +770,7 @@ def test_source_procedure_names_match_all_three_microsoft_omf_dialects() -> None
         "procs-p-ot.obj",
         "procs-v-g3-zi.obj",
     ):
-        records = omf.read(ROOT / "fixtures/omf" / fixture)
+        records = omf.read(ROOT / "fixtures/omf" / fixture.lower())
         assert set(omf.public_definitions(records)) == expected
         assert expected <= set(omf.externals(records))
 
@@ -952,7 +952,7 @@ def test_fresh_basic_object_does_not_predeclare_the_c_data_class() -> None:
 def test_pds_alternate_math_module_header_records_the_measured_switch() -> None:
     """PDFPA reached LINK, then BCL71ANR rejected the module during initialization."""
     source = qb_driver.parsed(
-        ROOT / "frontends/qb/compat/pds71/PDFPA.BAS",
+        ROOT / "frontends/qb/compat/pds71/pdfpa.bas",
         dialect="pds71",
         runtime="pds71",
         alternate_math=True,
@@ -1125,7 +1125,7 @@ def test_runtime_frame_counts_owned_string_descriptors_not_runtime_temporaries()
 
 def test_source_call_releases_its_materialized_string_argument() -> None:
     """Nibbles left three Center arguments live until loop i became 0x2020."""
-    source = qb_driver.parsed(ROOT / "frontends/qb/fixtures/STRTEMP.BAS", runtime="qb45")
+    source = qb_driver.parsed(ROOT / "frontends/qb/fixtures/strtemp.bas", runtime="qb45")
     main = source.modules[0].functions[0]
     calls = [
         instruction.callee
@@ -1140,7 +1140,7 @@ def test_source_call_releases_its_materialized_string_argument() -> None:
 
 def test_far_array_field_byref_uses_a_near_copy_in_copy_out_slot() -> None:
     """Nibbles pushed four bytes per PrintScore field, then RETF 10 left SP corrupted."""
-    source = qb_driver.parsed(ROOT / "frontends/qb/fixtures/FARBYREF.BAS", runtime="qb45")
+    source = qb_driver.parsed(ROOT / "frontends/qb/fixtures/farbyref.bas", runtime="qb45")
     module = source.modules[0]
     function = next(one for one in module.functions if one.name == "WORK")
     types = {one.id: one for one in module.types}
@@ -1217,7 +1217,7 @@ def test_module_static_numeric_array_has_a_relocated_basic_descriptor() -> None:
 def test_rank_two_descriptor_matches_qb_dimension_order_and_adjusted_offset() -> None:
     """Q45A05 returned dimension 2 for LBOUND(a,1) because its descriptor was source-ordered."""
     source = qb_driver.parsed(
-        ROOT / "frontends/qb/compat/qb45/Q45A05.BAS",
+        ROOT / "frontends/qb/compat/qb45/q45a05.bas",
         dialect="qb45",
         runtime="qb45",
     )
@@ -1235,7 +1235,7 @@ def test_rank_two_descriptor_matches_qb_dimension_order_and_adjusted_offset() ->
 
 def test_static_array_formal_uses_a_lower_bound_adjusted_descriptor() -> None:
     """DYNARR wrote a(2).row, leaving a(1).row at zero after Touch a()."""
-    source = qb_driver.parsed(ROOT / "frontends/qb/fixtures/ADJUDT.BAS")
+    source = qb_driver.parsed(ROOT / "frontends/qb/fixtures/adjudt.bas")
     module = source.modules[0]
     main = module.functions[0]
     values = next(one for one in main.places if one.name == "A")
@@ -1531,7 +1531,7 @@ def test_on_error_registrations_follow_source_order(tmp_path: Path) -> None:
 def test_resume_next_retains_runtime_statement_entries() -> None:
     """Q45R35's post-ERROR statement vanished, leaving RESUME NEXT with no target."""
     source = qb_driver.parsed(
-        ROOT / "frontends/qb/compat/qb45/Q45R35.BAS",
+        ROOT / "frontends/qb/compat/qb45/q45r35.bas",
         dialect="qb45",
         runtime="qb45",
     )
@@ -1559,7 +1559,7 @@ def test_resume_statement_entries_are_optimizer_roots() -> None:
     and 0x36 instead of emitting an object for the bounds-error test.
     """
     source = qb_driver.parsed(
-        ROOT / "frontends/qb/compat/qb45/Q45ER52.BAS",
+        ROOT / "frontends/qb/compat/qb45/q45er52.bas",
         dialect="qb45",
         runtime="qb45",
     )
@@ -1729,7 +1729,7 @@ def test_byref_dynamic_array_field_copies_through_a_near_formal(tmp_path: Path) 
 def test_runtime_frame_owns_spill_reservation_without_a_native_prefix() -> None:
     """Q45N01's native SUB SP shifted B$ENRA's documented frame fields by four bytes."""
     source = qb_driver.parsed(
-        ROOT / "frontends/qb/compat/qb45/Q45N01.BAS",
+        ROOT / "frontends/qb/compat/qb45/q45n01.bas",
         dialect="qb45",
         runtime="qb45",
     )
@@ -1770,7 +1770,7 @@ def test_local_error_and_resume_label_use_their_measured_procedure_abi() -> None
 def test_pds_resume_target_and_numbered_erl_survive_distinct_identity_spaces() -> None:
     """PDLOCAL reported ERL 0 and resumed at L1_9 instead of recovered L1_4."""
     source = qb_driver.parsed(
-        ROOT / "frontends/qb/compat/pds71/PDLOCAL.BAS",
+        ROOT / "frontends/qb/compat/pds71/pdlocal.bas",
         dialect="pds71",
         runtime="pds71",
     )
@@ -1789,7 +1789,7 @@ def test_pds_resume_target_and_numbered_erl_survive_distinct_identity_spaces() -
 def test_pds_huge_array_uses_measured_ddim_and_hary_abi() -> None:
     """PDHUGE wrapped/aliased beyond 64 KiB when /Ah was dropped and B$HARY was guessed inline."""
     source = qb_driver.parsed(
-        ROOT / "frontends/qb/compat/pds71/PDHUGE.BAS",
+        ROOT / "frontends/qb/compat/pds71/pdhuge.bas",
         dialect="pds71",
         runtime="pds71",
         array_order="row-major",
@@ -1816,7 +1816,7 @@ def test_pds_huge_array_uses_measured_ddim_and_hary_abi() -> None:
 def test_byref_call_keeps_the_temporary_values_it_publishes() -> None:
     """Q45P04 passed uninitialized slots after optimization deleted 100000 and 23."""
     source = qb_driver.parsed(
-        ROOT / "frontends/qb/compat/qb45/Q45P04.BAS",
+        ROOT / "frontends/qb/compat/qb45/q45p04.bas",
         dialect="qb45",
         runtime="qb45",
     )
@@ -1837,7 +1837,7 @@ def test_unpublished_float_conversion_temporary_does_not_hold_the_x87_stack_acro
     retain neither that publication nor an x87 value after its exact store
     folds to bits.
     """
-    source = qb_driver.parsed(ROOT / "frontends/qb/fixtures/FSTKBR.BAS")
+    source = qb_driver.parsed(ROOT / "frontends/qb/fixtures/fstkbr.bas")
     function = next(one for one in source.modules[0].functions if one.name == "PICK")
     semantic = hir.lower(source)[list(source.modules[0].functions).index(function)]
     physical = physicalize(source, function, semantic)
@@ -1946,7 +1946,7 @@ def test_qb_frontend_does_not_build_speculative_peel_candidates(monkeypatch: pyt
 def test_double_runtime_argument_is_split_high_to_low_at_the_qb_abi_boundary() -> None:
     """Q45FP61 reached OBJ emission with one unencodable eight-byte PUSH."""
     program = qb_driver.parsed(
-        ROOT / "frontends/qb/compat/qb45/Q45FP61.BAS",
+        ROOT / "frontends/qb/compat/qb45/q45fp61.bas",
         dialect="qb45",
         runtime="qb45",
     )
@@ -2377,7 +2377,7 @@ def test_qb_module_instantiates_user_callee_modref_on_pointer_actuals() -> None:
 
 def test_qb_string_comparison_abi_site_survives_alias_annotation() -> None:
     """SCMPABI's B$SCMP ABI site was dropped because STRING_EQ is not Op.CALL."""
-    source = qb_driver.parsed(ROOT / "frontends/qb/fixtures/SCMPABI.BAS")
+    source = qb_driver.parsed(ROOT / "frontends/qb/fixtures/scmpabi.bas")
     function = next(one for one in source.modules[0].functions if one.name == "MATCHES")
     instruction = next(
         one for block in function.blocks for one in block.instructions if one.id == function.calls[0].instruction
@@ -2608,7 +2608,7 @@ def test_byref_loop_condition_reloads_the_published_pointee() -> None:
     and the back-edge condition must therefore remain observable loads.
     """
     source = qb_driver.parsed(
-        ROOT / "frontends/qb/fixtures/BYREFLP.BAS",
+        ROOT / "frontends/qb/fixtures/byreflp.bas",
         dialect="vbdos",
         runtime="vbdos",
     )
@@ -2639,7 +2639,7 @@ def test_identity_phi_edge_survives_control_flow_threading() -> None:
     control-flow threading is complete.
     """
     source = qb_driver.parsed(
-        ROOT / "frontends/qb/fixtures/ENTPHI.BAS",
+        ROOT / "frontends/qb/fixtures/entphi.bas",
         dialect="vbdos",
         runtime="vbdos",
         array_order="row-major",

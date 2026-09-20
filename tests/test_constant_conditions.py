@@ -14,7 +14,7 @@ from qbopt.optimize import transform
 
 @pytest.mark.parametrize("tag", ["q-O", "p-g2", "v-g3"])
 def test_bools_constant_conditions_leave_no_conditional_jump(tag):
-    result = wholeseg.emitted(Path(f"fixtures/omf/bools-{tag}.obj").read_bytes())
+    result = wholeseg.emitted(Path(f"fixtures/omf/bools-{tag}.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]
     assert not any(one.startswith("j") and not one.startswith("jmp ") for one in instructions)

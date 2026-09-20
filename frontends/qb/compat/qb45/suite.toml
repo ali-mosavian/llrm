@@ -5,13 +5,13 @@ inherits = ""
 
 [[case]]
 name = "text-screen-capture"
-source = "Q45L00.BAS"
+source = "q45l00.bas"
 level = 1
 features = ["text-screen-capture", "apostrophe and REM comments", "colon separators", "const", "case-insensitive names"]
 switches = []
 expected = "PASS text-screen-capture"
 artifacts = ["QBTEXT.BSV"]
-artifact_goldens = ["golden/QBTEXT.BSV"]
+artifact_goldens = ["golden/qbtext.bsv"]
 allow_rem_witness = true
 parser = "required"
 lowering = "required"
@@ -20,7 +20,7 @@ verification = "Apostrophe and REM each comment out a post-assignment state muta
 
 [[case]]
 name = "numeric"
-source = "Q45N01.BAS"
+source = "q45n01.bas"
 level = 1
 features = ["integer", "long", "single", "double", "numeric conversions", "integer division"]
 switches = []
@@ -32,7 +32,7 @@ verification = "DATA/READ-supplied operands make integer division, LONG arithmet
 
 [[case]]
 name = "control"
-source = "Q45C02.BAS"
+source = "q45c02.bas"
 level = 1
 features = ["for", "do while", "while wend", "if elseif else", "select case"]
 switches = []
@@ -44,7 +44,7 @@ verification = "FOR, DO WHILE, and WHILE/WEND have separate state and exact chec
 
 [[case]]
 name = "gotos"
-source = "Q45G03.BAS"
+source = "q45g03.bas"
 level = 2
 features = ["labels", "goto", "gosub", "return", "on gosub"]
 switches = []
@@ -55,7 +55,7 @@ runtime = "pending"
 
 [[case]]
 name = "procedures"
-source = "Q45P04.BAS"
+source = "q45p04.bas"
 level = 2
 features = ["declare", "sub", "function", "byref", "long return"]
 switches = []
@@ -67,7 +67,7 @@ verification = "BYREF SUB increments count and LONG FUNCTION returns 100023."
 
 [[case]]
 name = "arrays"
-source = "Q45A05.BAS"
+source = "q45a05.bas"
 level = 2
 features = ["option base", "bounded arrays", "multidimensional arrays", "lbound", "ubound"]
 switches = []
@@ -79,7 +79,7 @@ verification = "All six distinct two-dimensional elements and both dimensions' e
 
 [[case]]
 name = "dynamicarrays"
-source = "Q45D06.BAS"
+source = "q45d06.bas"
 level = 3
 features = ["$dynamic", "redim", "erase", "long arrays"]
 switches = []
@@ -91,7 +91,7 @@ verification = "$DYNAMIC REDIM LONG array sums to 900000; after ERASE a differen
 
 [[case]]
 name = "strings"
-source = "Q45S07.BAS"
+source = "q45s07.bas"
 level = 2
 features = ["fixed strings", "dynamic strings", "concatenation", "mid assignment", "string intrinsics"]
 switches = []
@@ -103,7 +103,7 @@ verification = "Fixed/dynamic strings, MID$ assignment, trimming, and length yie
 
 [[case]]
 name = "udt"
-source = "Q45U08.BAS"
+source = "q45u08.bas"
 level = 3
 features = ["type", "packed fields", "fixed-string fields", "aggregate copy"]
 switches = []
@@ -115,7 +115,7 @@ verification = "TYPE aggregate copy remains independent after the source changes
 
 [[case]]
 name = "data"
-source = "Q45D09.BAS"
+source = "q45d09.bas"
 level = 3
 features = ["data", "read", "restore", "labelled data"]
 switches = []
@@ -127,7 +127,7 @@ verification = "READ obtains 7 and seven from the first DATA row; labelled RESTO
 
 [[case]]
 name = "files"
-source = "Q45F10.BAS"
+source = "q45f10.bas"
 level = 3
 features = ["freefile", "open output", "print file", "open input", "line input", "close", "kill"]
 switches = []
@@ -139,7 +139,7 @@ verification = "A freshly written sequential file is reopened, LINE INPUT return
 
 [[case]]
 name = "errors"
-source = "Q45E11.BAS"
+source = "q45e11.bas"
 level = 3
 features = ["on error goto", "error", "err"]
 switches = ["/E"]
@@ -151,7 +151,7 @@ verification = "ERROR 13 reaches handler with ERR 13."
 
 [[case]]
 name = "memory"
-source = "Q45M12.BAS"
+source = "q45m12.bas"
 level = 4
 features = ["def seg", "varptr", "varseg", "peek", "poke"]
 switches = []
@@ -163,7 +163,7 @@ verification = "PEEK witnesses the original low byte, POKE changes only the midd
 
 [[case]]
 name = "display"
-source = "Q45V13.BAS"
+source = "q45v13.bas"
 level = 4
 features = ["screen", "pset", "point"]
 switches = []
@@ -174,7 +174,7 @@ runtime = "reference-only"
 
 [[case]]
 name = "operators"
-source = "Q45O29.BAS"
+source = "q45o29.bas"
 level = 1
 features = ["arithmetic operators", "relational operators", "logical operators", "string concatenation", "operator precedence"]
 switches = []
@@ -186,7 +186,7 @@ verification = "DATA/READ operands feed separate arithmetic, precedence, relatio
 
 [[case]]
 name = "intrinsics"
-source = "Q45I30.BAS"
+source = "q45i30.bas"
 level = 2
 features = ["numeric intrinsics", "string intrinsics", "MKI$", "MKL$", "CVI", "CVL"]
 switches = []
@@ -198,7 +198,7 @@ verification = "String/numeric intrinsics return asserted values; MKI$/MKL$ are 
 
 [[case]]
 name = "fieldio"
-source = "Q45F31.BAS"
+source = "q45f31.bas"
 level = 3
 features = ["FIELD", "LSET", "RANDOM record I/O", "LOF"]
 switches = []
@@ -209,7 +209,7 @@ runtime = "pending"
 
 [[case]]
 name = "conversions"
-source = "Q45CV36.BAS"
+source = "q45cv36.bas"
 level = 1
 features = ["CINT", "CLNG", "positive and negative rounding", "LONG conversion range"]
 switches = []
@@ -221,7 +221,7 @@ verification = "DATA-supplied positive and negative fractions round independentl
 
 [[case]]
 name = "math-functions"
-source = "Q45MT37.BAS"
+source = "q45mt37.bas"
 level = 2
 features = ["ATN", "SIN", "COS", "EXP", "LOG", "DOUBLE precision"]
 switches = []
@@ -233,7 +233,7 @@ verification = "DATA operands drive five independent DOUBLE anchors with tight a
 
 [[case]]
 name = "string-parts"
-source = "Q45ST38.BAS"
+source = "q45st38.bas"
 level = 2
 features = ["LEFT$", "MID$ function", "RIGHT$", "INSTR start", "SPACE$", "STRING$"]
 switches = []
@@ -245,7 +245,7 @@ verification = "A DATA-supplied seven-character string has separately checked le
 
 [[case]]
 name = "file-positions"
-source = "Q45FI39.BAS"
+source = "q45fi39.bas"
 level = 3
 features = ["OPEN OUTPUT", "OPEN APPEND", "OPEN INPUT", "INPUT$", "SEEK", "EOF", "LOF", "KILL"]
 switches = []
@@ -257,7 +257,7 @@ verification = "OUTPUT plus APPEND creates exactly four bytes; INPUT$ before and
 
 [[case]]
 name = "signed-array-bounds"
-source = "Q45AR40.BAS"
+source = "q45ar40.bas"
 level = 2
 features = ["negative array lower bound", "LBOUND", "UBOUND", "boundary elements"]
 switches = []
@@ -269,7 +269,7 @@ verification = "A -2 TO 2 array checks both exact bounds and all five distinct b
 
 [[case]]
 name = "numeric-functions"
-source = "Q45NF41.BAS"
+source = "q45nf41.bas"
 level = 1
 features = ["ABS", "SGN", "FIX", "INT", "SQR", "negative rounding"]
 switches = []
@@ -281,7 +281,7 @@ verification = "DATA-fed positive, negative, and square inputs give separate ABS
 
 [[case]]
 name = "character-functions"
-source = "Q45CH42.BAS"
+source = "q45ch42.bas"
 level = 1
 features = ["ASC", "CHR$", "UCASE$", "LCASE$", "LTRIM$", "RTRIM$"]
 switches = []
@@ -293,7 +293,7 @@ verification = "DATA-fed character, mixed-case, and two-sided padded strings ind
 
 [[case]]
 name = "text-conversions"
-source = "Q45TC43.BAS"
+source = "q45tc43.bas"
 level = 1
 features = ["VAL", "STR$", "HEX$", "OCT$", "numeric text spelling"]
 switches = []
@@ -305,7 +305,7 @@ verification = "VAL parses an opaque signed decimal prefix; STR$ positive/negati
 
 [[case]]
 name = "binary-packing"
-source = "Q45PK44.BAS"
+source = "q45pk44.bas"
 level = 2
 features = ["MKI$", "CVI", "MKL$", "CVL", "little-endian layout"]
 switches = []
@@ -317,7 +317,7 @@ verification = "MKI$ and MKL$ must first produce exact independent little-endian
 
 [[case]]
 name = "arithmetic-operators"
-source = "Q45AO45.BAS"
+source = "q45ao45.bas"
 level = 1
 features = ["addition", "subtraction", "multiplication", "integer division", "MOD", "LONG arithmetic"]
 switches = []
@@ -329,7 +329,7 @@ verification = "DATA-fed noncommutative INTEGER operands have separate +, -, *, 
 
 [[case]]
 name = "relational-operators"
-source = "Q45RL46.BAS"
+source = "q45rl46.bas"
 level = 1
 features = ["relational operators", "BASIC boolean values", "signed comparison", "string comparison"]
 switches = []
@@ -341,7 +341,7 @@ verification = "Opaque signed numbers and distinct strings check every relationa
 
 [[case]]
 name = "logical-operators"
-source = "Q45LG47.BAS"
+source = "q45lg47.bas"
 level = 1
 features = ["AND", "OR", "XOR", "EQV", "IMP", "NOT", "bitwise signed INTEGER"]
 switches = []
@@ -353,7 +353,7 @@ verification = "DATA-fed 12 and 10 have independent literal bit-pattern results 
 
 [[case]]
 name = "operator-precedence"
-source = "Q45PR48.BAS"
+source = "q45pr48.bas"
 level = 1
 features = ["operator precedence", "parentheses", "power", "relational before logical"]
 switches = []
@@ -365,7 +365,7 @@ verification = "DATA-fed values distinguish multiplication from addition order, 
 
 [[case]]
 name = "typed-file-io"
-source = "Q45IO49.BAS"
+source = "q45io49.bas"
 level = 3
 features = ["WRITE #", "INPUT #", "quoted strings", "numeric fields", "CRLF"]
 switches = []
@@ -377,7 +377,7 @@ verification = "WRITE # is checked as exact quoted/comma-delimited CRLF bytes vi
 
 [[case]]
 name = "string-mutation"
-source = "Q45SM50.BAS"
+source = "q45sm50.bas"
 level = 2
 features = ["MID$ assignment", "fixed-length string padding", "LEN", "concatenation"]
 switches = []
@@ -389,7 +389,7 @@ verification = "MID$ mutates only characters 2..4 of opaque text; a separately a
 
 [[case]]
 name = "divide-by-zero-error"
-source = "Q45ER51.BAS"
+source = "q45er51.bas"
 level = 3
 features = ["integer divide by zero", "runtime error 11", "ERR", "ERL", "RESUME NEXT"]
 switches = ["/E", "/X"]
@@ -401,7 +401,7 @@ verification = "A DATA-fed zero divisor triggers exactly ERR=11 and ERL=100; PAS
 
 [[case]]
 name = "subscript-error"
-source = "Q45ER52.BAS"
+source = "q45er52.bas"
 level = 3
 features = ["array bounds check", "runtime error 9", "ERR", "ERL", "RESUME NEXT", "/X"]
 switches = ["/E", "/X"]
@@ -413,7 +413,7 @@ verification = "A DATA-fed index one beyond UBOUND triggers exactly ERR=9 and ER
 
 [[case]]
 name = "print-using"
-source = "Q45PF53.BAS"
+source = "q45pf53.bas"
 level = 3
 features = ["PRINT USING", "numeric formatting", "PRINT #", "exact CRLF bytes"]
 switches = ["/E", "/X"]
@@ -425,7 +425,7 @@ verification = "A DATA-fed DOUBLE is formatted through PRINT # USING; INPUT$ the
 
 [[case]]
 name = "rounding-ties"
-source = "Q45RN54.BAS"
+source = "q45rn54.bas"
 level = 2
 features = ["CINT", "CLNG", "nearest-even rounding", "positive and negative half boundaries"]
 switches = []
@@ -437,7 +437,7 @@ verification = "Opaque exact halves on both sides of zero distinguish truncation
 
 [[case]]
 name = "binary-file-io"
-source = "Q45BI55.BAS"
+source = "q45bi55.bas"
 level = 3
 features = ["OPEN BINARY", "PUT", "GET", "SEEK function", "LOC", "LOF", "little-endian file bytes"]
 switches = []
@@ -449,7 +449,7 @@ verification = "Two DATA-fed signed INTEGERs are PUT at explicit byte positions;
 
 [[case]]
 name = "on-dispatch"
-source = "Q45ON56.BAS"
+source = "q45on56.bas"
 level = 3
 features = ["ON GOSUB", "ON GOTO", "GOSUB", "GOTO", "RETURN", "out-of-range dispatch"]
 switches = []
@@ -461,7 +461,7 @@ verification = "DATA-fed selectors visit all three ON GOSUB targets in order, se
 
 [[case]]
 name = "loop-forms"
-source = "Q45LP57.BAS"
+source = "q45lp57.bas"
 level = 2
 features = ["DO WHILE", "LOOP WHILE", "DO UNTIL", "LOOP UNTIL", "EXIT DO", "FOR TO STEP", "NEXT", "negative STEP", "zero-trip loop"]
 switches = []
@@ -473,7 +473,7 @@ verification = "Opaque limit 3 produces separate pre/post WHILE and UNTIL counts
 
 [[case]]
 name = "select-case-forms"
-source = "Q45SC58.BAS"
+source = "q45sc58.bas"
 level = 2
 features = ["SELECT CASE", "CASE value list", "CASE range", "CASE IS relation", "CASE ELSE", "inclusive range boundaries"]
 switches = []
@@ -485,7 +485,7 @@ verification = "Five DATA-fed selectors independently witness a comma list, both
 
 [[case]]
 name = "directory-operations"
-source = "Q45DR59.BAS"
+source = "q45dr59.bas"
 level = 3
 features = ["MKDIR", "CHDIR", "NAME", "KILL", "RMDIR", "DOS paths"]
 switches = ["/E", "/X"]
@@ -497,7 +497,7 @@ verification = "An empty DOS run directory is mutated in sequence: only a succes
 
 [[case]]
 name = "random-sequences"
-source = "Q45RD60.BAS"
+source = "q45rd60.bas"
 level = 2
 features = ["RANDOMIZE", "RND", "RND zero", "RND negative seed", "IEEE SINGLE sequence bytes"]
 switches = []
@@ -509,7 +509,7 @@ verification = "A DATA-fed RANDOMIZE seed and RND's omitted, zero, and negative 
 
 [[case]]
 name = "floating-packing"
-source = "Q45FP61.BAS"
+source = "q45fp61.bas"
 level = 2
 features = ["MKS$", "CVS", "MKD$", "CVD", "IEEE little-endian layout", "SINGLE and DOUBLE"]
 switches = []
@@ -521,7 +521,7 @@ verification = "DATA-fed positive SINGLE and negative DOUBLE values must first p
 
 [[case]]
 name = "negative-square-root"
-source = "Q45ER62.BAS"
+source = "q45er62.bas"
 level = 3
 features = ["SQR", "negative DOUBLE", "NaN", "unordered comparison", "no BASIC error"]
 switches = ["/E", "/X"]
@@ -533,7 +533,7 @@ verification = "A DATA-fed negative DOUBLE reaches SQR at line 100; PASS require
 
 [[case]]
 name = "string-justification"
-source = "Q45LR63.BAS"
+source = "q45lr63.bas"
 level = 2
 features = ["LSET", "RSET", "fixed-length strings", "dynamic string field width", "right truncation"]
 switches = []
@@ -545,7 +545,7 @@ verification = "DATA-fed short and long strings must independently left-pad, rig
 
 [[case]]
 name = "file-attributes"
-source = "Q45FA64.BAS"
+source = "q45fa64.bas"
 level = 3
 features = ["FILEATTR", "INPUT mode", "OUTPUT mode", "RANDOM mode", "APPEND mode", "BINARY mode", "DOS file handles"]
 switches = []
@@ -557,7 +557,7 @@ verification = "Five simultaneously open files require FILEATTR attribute 1 to r
 
 [[case]]
 name = "reset-files"
-source = "Q45RS65.BAS"
+source = "q45rs65.bas"
 level = 3
 features = ["RESET", "file-buffer flush", "all-file close", "ERR", "ERL", "RESUME NEXT"]
 switches = ["/E", "/X"]
@@ -569,7 +569,7 @@ verification = "RESET must flush the exact two pending bytes and close channel 1
 
 [[case]]
 name = "clear-state"
-source = "Q45CL66.BAS"
+source = "q45cl66.bas"
 level = 3
 features = ["CLEAR", "numeric reset", "string reset", "static-array reset", "file-buffer flush", "all-file close", "ERR", "ERL", "RESUME NEXT"]
 switches = ["/E", "/X"]
@@ -581,7 +581,7 @@ verification = "The pre-CLEAR LONG, string, and all three static-array elements 
 
 [[case]]
 name = "shared-scope"
-source = "Q45SH68.BAS"
+source = "q45sh68.bas"
 level = 2
 features = ["DIM SHARED", "SHARED statement", "module scope", "SUB"]
 switches = []
@@ -593,7 +593,7 @@ verification = "A parameterless shared binding changes a DATA-fed module value n
 
 [[case]]
 name = "static-local"
-source = "Q45SL69.BAS"
+source = "q45sl69.bas"
 level = 2
 features = ["STATIC statement", "persistent local", "shared-name shadowing", "FUNCTION"]
 switches = []
@@ -605,7 +605,7 @@ verification = "Three calls with distinct DATA-fed marker arguments must return 
 
 [[case]]
 name = "environment"
-source = "Q45EV70.BAS"
+source = "q45ev70.bas"
 level = 3
 features = ["ENVIRON", "ENVIRON$", "DOS environment replacement", "DOS environment removal"]
 switches = []
@@ -618,7 +618,7 @@ verification = "ENVIRON$ must independently observe Alpha42 after insertion, Bet
 
 [[case]]
 name = "explicit-let"
-source = "Q45LE71.BAS"
+source = "q45le71.bas"
 level = 2
 features = ["LET", "INTEGER assignment", "LONG assignment", "STRING assignment", "same-type UDT copy"]
 switches = []
@@ -630,7 +630,7 @@ verification = "DATA-fed INTEGER, LONG, and STRING values pass through explicit 
 
 [[case]]
 name = "command-line"
-source = "Q45CM72.BAS"
+source = "q45cm72.bas"
 level = 2
 features = ["COMMAND$", "DOS arguments", "argument spacing"]
 switches = []
@@ -643,7 +643,7 @@ verification = "The manifest supplies mixed-case DOS arguments; under the measur
 
 [[case]]
 name = "shell-child"
-source = "Q45PC73.BAS"
+source = "q45pc73.bas"
 level = 4
 features = ["SHELL", "DOS child process", "synchronous return", "exact child file bytes", "ERR", "ERL"]
 switches = ["/E", "/X"]
@@ -655,7 +655,7 @@ verification = "A numbered SHELL runs COMMAND.COM to create a fresh file; only s
 
 [[case]]
 name = "tangent-function"
-source = "Q45TN74.BAS"
+source = "q45tn74.bas"
 level = 2
 features = ["TAN", "DOUBLE precision", "positive input", "negative input", "zero boundary"]
 switches = []
@@ -667,7 +667,7 @@ verification = "Two unrelated DATA-fed DOUBLE inputs are checked against indepen
 
 [[case]]
 name = "definitions"
-source = "Q45D32.BAS"
+source = "q45d32.bas"
 level = 2
 features = ["DEFINT", "DEF FN", "SWAP", "EXIT FOR"]
 switches = []
@@ -679,8 +679,8 @@ verification = "DEFINT/DEF FN, SWAP, and EXIT FOR yield 3, 8, and 3."
 
 [[case]]
 name = "include"
-source = "Q45I33.BAS"
-companions = ["Q45I33.INC"]
+source = "q45i33.bas"
+companions = ["q45i33.inc"]
 level = 3
 features = ["$INCLUDE metacommand", "include source ordering"]
 switches = []
@@ -692,7 +692,7 @@ verification = "$INCLUDE assigns includeValue 17."
 
 [[case]]
 name = "staticdynamic"
-source = "Q45S34.BAS"
+source = "q45s34.bas"
 level = 3
 features = ["$STATIC metacommand", "ERASE static arrays"]
 switches = []
@@ -704,7 +704,7 @@ verification = "After writing 9, ERASE clears the static element to zero while p
 
 [[case]]
 name = "resume"
-source = "Q45R35.BAS"
+source = "q45r35.bas"
 level = 3
 features = ["ON ERROR", "ERR", "ERL", "RESUME NEXT"]
 switches = ["/E", "/X"]
@@ -716,8 +716,8 @@ verification = "Numbered ERROR 11 reaches the handler with exactly ERR=11 and ER
 
 [[case]]
 name = "commonchain"
-source = "Q45C17.BAS"
-companions = ["Q45N17.BAS"]
+source = "q45c17.bas"
+companions = ["q45n17.bas"]
 level = 4
 features = ["common", "chain", "cross-module shared storage"]
 switches = []
@@ -728,7 +728,7 @@ runtime = "pending"
 
 [[case]]
 name = "randomio"
-source = "Q45R18.BAS"
+source = "q45r18.bas"
 level = 4
 features = ["random files", "len", "put", "get", "udt records"]
 switches = []
@@ -739,7 +739,7 @@ runtime = "pending"
 
 [[case]]
 name = "bload"
-source = "Q45B19.BAS"
+source = "q45b19.bas"
 level = 4
 features = ["def seg", "varptr", "varseg", "bsave", "bload"]
 switches = []
@@ -751,7 +751,7 @@ verification = "BSAVE writes four source bytes and BLOAD restores them into a di
 
 [[case]]
 name = "keyevent"
-source = "Q45K20.BAS"
+source = "q45k20.bas"
 level = 5
 features = ["on key", "key on", "key off", "event gosub"]
 switches = ["/V", "/W"]
@@ -762,7 +762,7 @@ runtime = "reference-only"
 
 [[case]]
 name = "comevent"
-source = "Q45C21.BAS"
+source = "q45c21.bas"
 level = 5
 features = ["on com", "com on", "com off", "event gosub"]
 switches = ["/V", "/W"]
@@ -773,7 +773,7 @@ runtime = "reference-only"
 
 [[case]]
 name = "playevent"
-source = "Q45P22.BAS"
+source = "q45p22.bas"
 level = 5
 features = ["on play", "play on", "play off", "event gosub"]
 switches = ["/V", "/W"]
@@ -784,7 +784,7 @@ runtime = "reference-only"
 
 [[case]]
 name = "penevent"
-source = "Q45E23.BAS"
+source = "q45e23.bas"
 level = 5
 features = ["on pen", "pen on", "pen off", "event gosub"]
 switches = ["/V", "/W"]
@@ -795,7 +795,7 @@ runtime = "reference-only"
 
 [[case]]
 name = "strigevent"
-source = "Q45S24.BAS"
+source = "q45s24.bas"
 level = 5
 features = ["on strig", "strig on", "strig off", "event gosub"]
 switches = ["/V", "/W"]
@@ -806,7 +806,7 @@ runtime = "reference-only"
 
 [[case]]
 name = "draw"
-source = "Q45D25.BAS"
+source = "q45d25.bas"
 level = 5
 features = ["screen", "draw", "point"]
 switches = []
@@ -817,7 +817,7 @@ runtime = "reference-only"
 
 [[case]]
 name = "palette"
-source = "Q45P26.BAS"
+source = "q45p26.bas"
 level = 5
 features = ["screen", "palette using", "pcopy"]
 switches = []
@@ -828,7 +828,7 @@ runtime = "reference-only"
 
 [[case]]
 name = "absolute"
-source = "Q45A27.BAS"
+source = "q45a27.bas"
 level = 5
 features = ["def seg", "poke", "call absolute", "far return"]
 switches = []
@@ -839,7 +839,7 @@ runtime = "pending"
 
 [[case]]
 name = "memorymodel"
-source = "Q45M28.BAS"
+source = "q45m28.bas"
 level = 4
 features = ["$static", "module data lifetime"]
 switches = []
@@ -851,7 +851,7 @@ verification = "A bounded array local to a STATIC function increments from 1 to 
 
 [[case]]
 name = "events"
-source = "Q45E14.BAS"
+source = "q45e14.bas"
 level = 5
 features = ["on timer", "timer on", "timer off", "event gosub"]
 switches = ["/V", "/W"]
@@ -862,7 +862,7 @@ runtime = "reference-only"
 
 [[case]]
 name = "static"
-source = "Q45S15.BAS"
+source = "q45s15.bas"
 level = 4
 features = ["function static", "static local lifetime", "zero-argument function call"]
 switches = []
@@ -874,7 +874,7 @@ verification = "Separate calls observe a STATIC statement scalar advancing from 
 
 [[case]]
 name = "graphics"
-source = "Q45G16.BAS"
+source = "q45g16.bas"
 level = 5
 features = ["screen 13", "cls", "pset", "point", "def seg", "bsave"]
 switches = []

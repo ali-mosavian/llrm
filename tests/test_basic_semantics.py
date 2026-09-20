@@ -21,7 +21,7 @@ from iced_x86 import Register
 def test_explicit_integer_overflow_traps_follow_numeric_policy(tag, bounds_checks, program):
     """OVFPOL's 32767+1 printed ERR 6 in native mode; it must wrap to -32768 without INTO."""
     from iced_x86 import Code, Decoder
-    path = Path(f"fixtures/regressions/{program}-{tag}.obj")
+    path = Path(f"fixtures/regressions/{program}-{tag}.obj".lower())
     for basic in (False, True):
         result = wholeseg.emitted(path.read_bytes(), basic_semantics=basic, bounds_checks=bounds_checks)
         assert result.outcome is wholeseg.Emission.LIR, result.reason
@@ -42,7 +42,7 @@ def test_explicit_integer_overflow_traps_follow_numeric_policy(tag, bounds_check
 ])
 def test_basic_keeps_exception_sensitive_helpers(tag, program, names):
     """DIVMOD's BASIC error 11 must not become #DE; FP conversions keep runtime overflow handling."""
-    data = Path(f"fixtures/omf/{program}-{tag}.obj").read_bytes()
+    data = Path(f"fixtures/omf/{program}-{tag}.obj".lower()).read_bytes()
     before = module.of(omf.parse(data))
     expected = names.intersection(before.calls.values())
     assert expected

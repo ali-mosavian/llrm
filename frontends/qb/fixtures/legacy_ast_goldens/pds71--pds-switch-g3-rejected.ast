@@ -1,7 +1,7 @@
 # qbfront legacy-derived AST snapshot; schema migrations require projection proof.
 # case-id: pds71/pds-switch-g3-rejected
 # dialect: Pds71
-# source: pds71/PDG3NEG.BAS
+# source: pds71/pdg3neg.bas
 
 Module {
     statements: [

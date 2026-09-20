@@ -18,11 +18,11 @@ from qbopt.frontend.extent import partition
 def test_registered_error_handler_has_independent_entry_and_emits(tag):
     """DIVMOD refused emission after END lost its false edge to the registered error handler."""
     from qbopt import wholeseg
-    found = module.load(Path(f"fixtures/omf/divmod-{tag}.obj"))
+    found = module.load(Path(f"fixtures/omf/divmod-{tag}.obj".lower()))
     result = partition(found)
     assert not isinstance(result, str) and result.complete
     assert any(str(body.kind) == "error-handler" for body in result.bodies)
-    emitted = wholeseg.emitted(Path(f"fixtures/omf/divmod-{tag}.obj").read_bytes())
+    emitted = wholeseg.emitted(Path(f"fixtures/omf/divmod-{tag}.obj".lower()).read_bytes())
     assert emitted.outcome is wholeseg.Emission.LIR, emitted.reason
 
 
@@ -32,7 +32,7 @@ def test_error_resume_fixture_keeps_registered_entry(tag):
     from qbopt import wholeseg
     from qbopt.abi.handlers import error_entries
     from qbopt.objectfile import omf
-    path = Path(f"fixtures/regressions/errent-{tag}.obj")
+    path = Path(f"fixtures/regressions/errent-{tag}.obj".lower())
     emitted = wholeseg.emitted(path.read_bytes(), basic_semantics=True)
     assert emitted.outcome is wholeseg.Emission.LIR, emitted.reason
     found = module.of(omf.parse(emitted.data))
@@ -46,7 +46,7 @@ def test_error_resume_fixture_keeps_registered_entry(tag):
 @pytest.mark.parametrize("tag,entry", [("p-evt", 0xFA), ("v-evt", 0xF0)])
 def test_timer_handler_has_its_own_entry(tag, entry):
     """EVTRAP's handler was assigned main's SSA by falling through END."""
-    found = module.load(Path(f"fixtures/regressions/evtrap-{tag}.obj"))
+    found = module.load(Path(f"fixtures/regressions/evtrap-{tag}.obj".lower()))
     result = partition(found)
     assert not isinstance(result, str), result
     handler = next(body for body in result.bodies if body.seed == entry)
@@ -83,7 +83,7 @@ def test_emitted_statement_table_does_not_hide_code(tag):
     from qbopt import wholeseg
     from qbopt.objectfile import omf
     from qbopt.frontend.blocks import code_map
-    result = wholeseg.emitted(Path(f"fixtures/omf/divmod-{tag}.obj").read_bytes())
+    result = wholeseg.emitted(Path(f"fixtures/omf/divmod-{tag}.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
     assert not isinstance(code_map(found), str), code_map(found)

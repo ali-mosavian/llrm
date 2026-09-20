@@ -1,6 +1,6 @@
 # Plan
 
-Ordered. See README.md for the goal and the pipeline.
+Ordered. See readme.md for the goal and the pipeline.
 
 ## Checklist
 

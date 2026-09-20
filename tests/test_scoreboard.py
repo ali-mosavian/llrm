@@ -123,7 +123,7 @@ def test_non_benchmark_fixtures_are_explicitly_scoped_out(monkeypatch, capsys):
 def test_chain_legacy_objects_cannot_pass_a_seven_row_reference(tag, capsys, tmp_path):
     """Five-row CHAIN fixtures must not look cheaper by omitting CONST and CONST2 output."""
     path = tmp_path / f"chain-{tag}.obj"
-    path.write_bytes(Path(f"fixtures/regressions/chain5-{tag}.obj").read_bytes())
+    path.write_bytes(Path(f"fixtures/regressions/chain5-{tag}.obj".lower()).read_bytes())
     assert opportunity.against_targets([path]) == 1
     report = capsys.readouterr().out
     assert "PROVISIONAL" in report and "seven-row" in report
@@ -140,7 +140,7 @@ def test_chain_fixtures_cover_current_seven_result_source(path):
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_cmpord_has_a_complete_source_derived_reference(tag, capsys):
     """CMPORD's 24 signed-comparison rows had no reference despite constant answers."""
-    assert opportunity.against_targets([Path(f"fixtures/omf/cmpord-{tag}.obj")]) == 0
+    assert opportunity.against_targets([Path(f"fixtures/omf/cmpord-{tag}.obj".lower())]) == 0
     report = capsys.readouterr().out
     assert "1918" in report and "1.00x" in report
     assert opportunity.TARGETS["CMPORD"] == 24 * 3 * (6 + 20) + (6 + 20) + 20
@@ -174,7 +174,7 @@ def test_fpcse_complete_reference_uses_object_compiler_identity(tag, stores, tmp
     from collections import Counter
 
     path = tmp_path / "renamed.obj"
-    path.write_bytes(Path(f"fixtures/omf/fpcse-{tag}.obj").read_bytes())
+    path.write_bytes(Path(f"fixtures/omf/fpcse-{tag}.obj".lower()).read_bytes())
     target = (
         stores * (2 + opportunity.TOUCH) + opportunity.FLOAT["wait"] + 3 * (6 + opportunity.CALL) + opportunity.CALL
     )
@@ -329,7 +329,7 @@ def test_constant_bitwise_programs_have_references_and_report_the_gap(program, t
 
 def test_qb_nots_meets_the_corrected_reference(capsys):
     """Constant argument propagation closes QB NOTS's gap without increasing its target."""
-    assert opportunity.against_targets([Path("fixtures/omf/nots-q-O.obj")]) == 0
+    assert opportunity.against_targets([Path("fixtures/omf/nots-q-O.obj".lower())]) == 0
     assert "nots-q-O" in capsys.readouterr().out
 
 
@@ -348,7 +348,7 @@ def test_fpdeep_reference_scope_comes_from_object_metadata(
     from collections import Counter
 
     path = tmp_path / "renamed.obj"
-    path.write_bytes(Path(f"fixtures/omf/fpdeep-{tag}.obj").read_bytes())
+    path.write_bytes(Path(f"fixtures/omf/fpdeep-{tag}.obj".lower()).read_bytes())
     monkeypatch.setattr(opportunity, "counted", lambda *args: Counter(cost=1317))
     assert opportunity.against_targets([path]) == int(not accepted)
     report = capsys.readouterr().out
@@ -365,7 +365,7 @@ def test_float_conversion_helpers_are_not_priced_as_empty_calls(name, body_cost)
 def test_event_build_is_outside_the_plain_release_code_gate(tag, tmp_path, capsys):
     """BOOLS /V/W is a correctness configuration, not a failed release-code target."""
     path = tmp_path / "bools-renamed.obj"
-    path.write_bytes(Path(f"fixtures/omf/bools-{tag}.obj").read_bytes())
+    path.write_bytes(Path(f"fixtures/omf/bools-{tag}.obj".lower()).read_bytes())
     assert opportunity.against_targets([path], raw=True) == 0
     report = capsys.readouterr().out
     assert "OUT OF SCOPE" in report and "event" in report
@@ -391,7 +391,7 @@ def test_a_fallback_is_not_scored_as_success(monkeypatch) -> None:
 def test_unmapped_output_is_not_a_zero_cost_success(monkeypatch, capsys) -> None:
     """bools-q-O was reported as 0.0x when the output could not be mapped."""
     monkeypatch.setattr(opportunity, "code_map", lambda _: "unmapped code")
-    status = opportunity.against_targets([Path("fixtures/omf/bools-q-O.obj")])
+    status = opportunity.against_targets([Path("fixtures/omf/bools-q-O.obj".lower())])
     report = capsys.readouterr().out
     assert status != 0
     assert "UNMEASURED" in report and "0.0x" not in report

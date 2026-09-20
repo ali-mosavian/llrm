@@ -21,7 +21,7 @@ def test_guarded_indexed_accumulators_do_not_reload_in_loop(tag):
     def watch(stage, name, body):
         if isinstance(body, mir.MirBody):
             states.append(body)
-    result = wholeseg.emitted(Path(f"fixtures/regressions/udtrng-{tag}.obj").read_bytes(), watch=watch)
+    result = wholeseg.emitted(Path(f"fixtures/regressions/udtrng-{tag}.obj".lower()).read_bytes(), watch=watch)
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     body = states[-1]
     hot = {at for loop in loops.loops(body.blocks, body.entry) for at in loop.body}
@@ -859,7 +859,7 @@ def test_spill_accumulator_is_a_loop_carried_value(tag):
     """SPILL's packed zero initializer prevented promotion of t across its hundred inner iterations."""
     from qbopt.analysis import loops
     from qbopt.optimize import transform
-    path = Path(f"fixtures/omf/spill-{tag}.obj")
+    path = Path(f"fixtures/omf/spill-{tag}.obj".lower())
     found = module.of(omf.parse(path.read_bytes()))
     partition = blocks.partition(found, blocks.code_map(found))
     body = mir.bodies(found, partition)[0][1]
@@ -904,7 +904,7 @@ def test_addrm_long_accumulator_survives_split_initialization(tag):
     """ADDRM reloaded u on all 20 iterations despite initializing both words to zero."""
     from qbopt.analysis import loops
     from qbopt.optimize import transform
-    found = module.of(omf.parse(Path(f"fixtures/omf/addrm-{tag}.obj").read_bytes()))
+    found = module.of(omf.parse(Path(f"fixtures/omf/addrm-{tag}.obj".lower()).read_bytes()))
     partition = blocks.partition(found, blocks.code_map(found))
     body = mir.bodies(found, partition)[0][1]
     cell = next(ref for block in body.blocks for op in block.ops for ref in op.loads

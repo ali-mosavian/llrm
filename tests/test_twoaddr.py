@@ -83,7 +83,7 @@ def test_crc32_ties_the_operand_that_can_join_its_loop_phi() -> None:
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_localp_updates_the_accumulator_without_a_loop_copy(tag):
     """LOCALP copied every LONG sum back because ADD tied to the temporary index."""
-    result = wholeseg.emitted(Path(f"fixtures/regressions/localp-{tag}.obj").read_bytes())
+    result = wholeseg.emitted(Path(f"fixtures/regressions/localp-{tag}.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
     mapped = blocks.code_map(found)

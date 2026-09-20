@@ -11,7 +11,7 @@ from qbopt.optimize import transform
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_stride_quotient_advances_without_division(tag: str) -> None:
     """STRIDE executed i / 5 on every iteration although its answers are 0, 1, ... 20."""
-    path = Path(f"fixtures/omf/stride-{tag}.obj")
+    path = Path(f"fixtures/omf/stride-{tag}.obj".lower())
     module = corpus.loaded(path)
     partition = corpus.partitioned(path)
     body = mir.bodies(module, partition)[0][1]

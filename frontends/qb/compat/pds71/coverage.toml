@@ -11,11 +11,11 @@ help_files = [
   { path = "/Users/alim/work/other/d32x/toolchains/pds71/HELP/BC.HLP", sha256 = "4bda68d5bc63c51309600892d2464f3abe4e1277ef205efe6e50a412294e6aea" },
 ]
 help_extracts = [
-  { path = "B7QCK.TXT", lines = 9787, sha256 = "dbccbed40c6ade79dad91315254fb0a1357577a51a29e9d86300a8e15158b3c9" },
-  { path = "B7ADVR.TXT", lines = 10726, sha256 = "cfe2bd3679f5dd163ead1ef3fd2643755889623f79ab20d54b1f89fd0b343547" },
-  { path = "B7ENER.TXT", lines = 3055, sha256 = "243ad722aecd266496366ae85f3028078688aafaa6a446ac4e2c355505e87335" },
-  { path = "B7EX.TXT", lines = 6842, sha256 = "c4434187912e5d33f38a99103af2a89a194a19f9140e0343d49afb3b85581ee3" },
-  { path = "BCHELP.TXT", lines = 753, sha256 = "9bc49736af807bec8c4122c0f8349a1055abab4d1b374c795939e0e69d7dfe40" },
+  { path = "b7qck.txt", lines = 9787, sha256 = "dbccbed40c6ade79dad91315254fb0a1357577a51a29e9d86300a8e15158b3c9" },
+  { path = "b7advr.txt", lines = 10726, sha256 = "cfe2bd3679f5dd163ead1ef3fd2643755889623f79ab20d54b1f89fd0b343547" },
+  { path = "b7ener.txt", lines = 3055, sha256 = "243ad722aecd266496366ae85f3028078688aafaa6a446ac4e2c355505e87335" },
+  { path = "b7ex.txt", lines = 6842, sha256 = "c4434187912e5d33f38a99103af2a89a194a19f9140e0343d49afb3b85581ee3" },
+  { path = "bchelp.txt", lines = 753, sha256 = "9bc49736af807bec8c4122c0f8349a1055abab4d1b374c795939e0e69d7dfe40" },
 ]
 
 # FULL-extraction ranges are part of the gap instrument.  QCK, Advisor,
@@ -23,11 +23,11 @@ help_extracts = [
 # Worked examples duplicate those contracts and are retained as oracle prose,
 # not counted a second time as independent language features.
 help_inventory = [
-  { path = "B7QCK.TXT", source = "BAS7QCK.HLP", first_heading = 1, headings = 428, disposition = "classify", inherits_titles = true },
-  { path = "B7ADVR.TXT", source = "BAS7ADVR.HLP", first_heading = 1, headings = 268, disposition = "classify", inherits_titles = true },
-  { path = "B7ENER.TXT", source = "BAS7ENER.HLP", first_heading = 1, headings = 280, disposition = "classify", inherits_titles = true },
-  { path = "B7EX.TXT", source = "BAS7EX.HLP", first_heading = 1, headings = 168, disposition = "out-of-scope", rationale = "Worked examples exercise contracts defined by QCK/Advisor; they are retained as oracle prose, not counted as separate features." },
-  { path = "BCHELP.TXT", source = "BC.HLP", first_heading = 1, headings = 39, disposition = "classify", inherits_titles = true },
+  { path = "b7qck.txt", source = "BAS7QCK.HLP", first_heading = 1, headings = 428, disposition = "classify", inherits_titles = true },
+  { path = "b7advr.txt", source = "BAS7ADVR.HLP", first_heading = 1, headings = 268, disposition = "classify", inherits_titles = true },
+  { path = "b7ener.txt", source = "BAS7ENER.HLP", first_heading = 1, headings = 280, disposition = "classify", inherits_titles = true },
+  { path = "b7ex.txt", source = "BAS7EX.HLP", first_heading = 1, headings = 168, disposition = "out-of-scope", rationale = "Worked examples exercise contracts defined by QCK/Advisor; they are retained as oracle prose, not counted as separate features." },
+  { path = "bchelp.txt", source = "BC.HLP", first_heading = 1, headings = 39, disposition = "classify", inherits_titles = true },
 ]
 
 help_exclusions = [

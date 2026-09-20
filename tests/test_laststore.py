@@ -17,7 +17,7 @@ from qbopt.optimize import loopmotion, transform
 @pytest.mark.parametrize("bound,expected", [(37, 34), (7, None), (38, None)])
 def test_last_counter_store_requires_an_exact_nonempty_trip_count(tag, bound, expected):
     """IVARM wrote 7,10,...,34 repeatedly; sinking must store 34 and preserve zero trips."""
-    found = module.load(Path(f"fixtures/regressions/ivarm-{tag}.obj"))
+    found = module.load(Path(f"fixtures/regressions/ivarm-{tag}.obj".lower()))
     body = mir.bodies(found, blocks.partition(found, blocks.code_map(found)))[0][1]
     body = transform.applied(body, found.dgroup, found.calls, found=found, unroll_=False)
     loop, = loops.loops(body.blocks, body.entry)

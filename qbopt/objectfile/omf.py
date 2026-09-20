@@ -831,7 +831,7 @@ def segment_length_at(record: Record) -> int:
 def code_offsets(record: Record, seg: int) -> list[int]:
     """Byte positions in `record.body` of 16-bit offsets into segment `seg`.
 
-    This is the list AGENTS.md calls finite, minus the fixups themselves and the
+    This is the list agents.md calls finite, minus the fixups themselves and the
     self-relative branches, which have their own paths.
     """
     body = record.body

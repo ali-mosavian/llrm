@@ -4,8 +4,8 @@ command = "BC.EXE /O /D SOURCE.BAS,SOURCE.OBJ;"
 
 [[probe]]
 name = "include-goto-internal"
-source = "negative/Q45NGI.BAS"
-companions = ["negative/Q45NGOT.INC"]
+source = "negative/q45ngi.bas"
+companions = ["negative/q45ngot.inc"]
 quickhelp_topic = "QB45ADVR.HLP#90"
 documented_restriction = "Included files must not contain a GOTO statement."
 observed = "accepted"
@@ -13,8 +13,8 @@ evidence = "README.md:87"
 
 [[probe]]
 name = "include-goto-external"
-source = "negative/Q45NGE.BAS"
-companions = ["negative/Q45NGEX.INC"]
+source = "negative/q45nge.bas"
+companions = ["negative/q45ngex.inc"]
 quickhelp_topic = "QB45ADVR.HLP#90"
 documented_restriction = "Included files must not contain a GOTO statement."
 observed = "accepted"
@@ -22,7 +22,7 @@ evidence = "README.md:87"
 
 [[probe]]
 name = "identifier-over-40"
-source = "negative/Q45N41.BAS"
+source = "negative/q45n41.bas"
 quickhelp_topic = "QB45ADVR.HLP#519"
 documented_restriction = "Variable names have a 40-character maximum."
 observed = "rejected"

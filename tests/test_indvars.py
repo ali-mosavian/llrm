@@ -16,7 +16,7 @@ def test_invariant_branch_load_moves_out_but_its_test_stays(tag, monkeypatch):
     from qbopt.optimize import unswitch
 
     monkeypatch.setattr(unswitch, "optimized", lambda body, *args, **kwargs: body)
-    result = wholeseg.emitted(Path(f"fixtures/regressions/ivword-{tag}.obj").read_bytes())
+    result = wholeseg.emitted(Path(f"fixtures/regressions/ivword-{tag}.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     blocks = corpus.partitioned(result.data)
     inside = set().union(*(loop.body for loop in loops.loops(blocks)))
@@ -33,7 +33,7 @@ def test_internal_branch_reuses_the_value_recurrence(tag, program, monkeypatch):
     from qbopt.optimize import unswitch
 
     monkeypatch.setattr(unswitch, "optimized", lambda body, *args, **kwargs: body)
-    result = wholeseg.emitted(Path(f"fixtures/regressions/{program}-{tag}.obj").read_bytes())
+    result = wholeseg.emitted(Path(f"fixtures/regressions/{program}-{tag}.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]
     assert not any(one.startswith("inc ") for one in instructions)
@@ -48,7 +48,7 @@ def test_harr_reuses_an_existing_recurrence_for_termination(
     tag: str, program: str, loop_count: int, increments: int
 ) -> None:
     """HARR has one recurrence per retained loop, or is completely unrolled."""
-    result = wholeseg.emitted(Path(f"fixtures/omf/{program}-{tag}.obj").read_bytes())
+    result = wholeseg.emitted(Path(f"fixtures/omf/{program}-{tag}.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     blocks = corpus.partitioned(result.data)
     instructions = [str(one.insn) for block in blocks for one in block.insns]
@@ -645,6 +645,6 @@ def test_counting_one_loop_to_zero_leaves_a_loop_sharing_its_start_alone(tag, pr
     """SPILL printed T= 4620 and SEGLD T= 975: both loops of each nest start at 1, one
     constant, and counting one to zero rewrote that constant, so the other ran from -10
     (or -5) up to its own bound."""
-    result = wholeseg.emitted(Path(f"fixtures/omf/{program}-{tag}.obj").read_bytes())
+    result = wholeseg.emitted(Path(f"fixtures/omf/{program}-{tag}.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     assert _trip_counts(result.data) == trips

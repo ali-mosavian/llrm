@@ -23,7 +23,7 @@ def test_production_ivarm_has_no_loop_and_stores_last_value(tag):
     import corpus
     from qbopt import wholeseg
 
-    result = wholeseg.emitted(Path(f"fixtures/regressions/ivarm-{tag}.obj").read_bytes())
+    result = wholeseg.emitted(Path(f"fixtures/regressions/ivarm-{tag}.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     decoded = corpus.partitioned(result.data)
     assert not loops.loops(decoded)
@@ -43,14 +43,14 @@ def test_specialized_main_and_legacy_procedure_emit_together(tag):
         if stage == "mir-widen":
             states.append(body)
 
-    result = wholeseg.emitted(Path(f"fixtures/regressions/ivproc-{tag}.obj").read_bytes(), watch=watch)
+    result = wholeseg.emitted(Path(f"fixtures/regressions/ivproc-{tag}.obj".lower()).read_bytes(), watch=watch)
     assert any(body.cloned for body in states) and any(not body.cloned for body in states)
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     assert not loops.loops(corpus.partitioned(result.data))
 
 
 def original(tag):
-    found = module.load(Path(f"fixtures/regressions/ivarm-{tag}.obj"))
+    found = module.load(Path(f"fixtures/regressions/ivarm-{tag}.obj".lower()))
     body = mir.bodies(found, blocks.partition(found, blocks.code_map(found)))[0][1]
     return found, transform.applied(body, found.dgroup, found.calls, found=found, unroll_=False)
 
