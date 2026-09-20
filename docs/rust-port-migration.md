@@ -713,6 +713,17 @@ layout, generic-versus-QB OMF offsets, immutability, and refusal paths; the
 delegated run took 1.67 seconds and the primary review run took 1.46 seconds.
 No broader gate ran.
 
+The next QB-owned adapter now surrounds that generic code object with the
+measured Microsoft BASIC envelope for the scalar vertical slice: `BC_CODE`,
+the ordered runtime support segments, exact class/combine/alignment policy,
+`DGROUP`, the six `MODULE_CODE` offset relocations, and the `BC_SA` far
+registration pointer.  Statement-table and data-segment targets remain
+explicit inputs; generic data sections are refused until QB placement is
+ported rather than guessed.  Independent decode of the constructed OMF checks
+all seven relocation sites and frames.  Its three focused tests passed in 6.7
+seconds; the cached post-review run took 0.04 seconds.  No linker, runtime,
+broad, or optimization gate ran.
+
 The WCC frontend now also owns a typed, source-ordered capture unit above the
 lexical parser.  Distinct IDs preserve symbols, segments, backs, nodes, calls,
 temporaries, and source files; raw WCC names, attributes, calling conventions,
@@ -725,6 +736,32 @@ delegated implementation was stopped after it remained a fail-first stub; the
 primary implemented and reviewed the audited contract.  Focused compile/fix
 and accepted runs consumed about 10.7 seconds; no shared-HIR lowering or broad
 gate ran.
+
+The first C semantic slice exposed a shared ABI distinction that could not be
+faithfully hidden in the frontend.  HIR now maps generic near/caller,
+far/caller, and far/callee procedure and call shapes to IR `c`, `far_cdecl`,
+and `far_pascal` conventions respectively; near/callee remains an explicit
+refusal.  Direct calls compare the site's ABI with the defined target instead
+of assuming Pascal, while source capture attributes and WCC spellings remain
+inside `frontend::wcc`.  The public `.qir` schema is version 4.  x86 selection
+explicitly refuses `far_cdecl` until the C ABI backend is implemented, so this
+representation work cannot silently route C through BASIC code generation.
+Thirty focused ABI tests passed in 1.95 seconds.  Primary review separated a
+same-name runtime calling-convention conflict from a type-signature conflict
+and added its regression; no optimization or broad gate ran.
+
+The real `iparg.cgs` capture now raises into generic HIR and then portable IR:
+an internal near-cdecl `twice`, an exported far-cdecl
+`answer_from_argument`, one direct call, and the source-order scalar argument.
+WCC handles, node spellings, raw attributes, and calling-class bits terminate
+inside `frontend::wcc`; scalar temporaries become value bindings rather than
+invented stack places.  Unsupported nodes remain source-cue refusals.  Primary
+review replaced a fixture-coincidental raw linkage bit with the capture
+model's export rule and restricted WCC's scalar `O_POINTS` convention to the
+established name, temporary, and call-result shapes.  Both review issues have
+regressions.  Delegated focused runs took 5.45 and 4.25 seconds; the reviewed
+four-test run, including HIR verification and HIR-to-IR lowering, took 2.59
+seconds.  No x86 C ABI, optimizer, broad, or external gate ran.
 
 ## End-to-end frontend milestone
 
