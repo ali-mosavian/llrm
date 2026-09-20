@@ -1,0 +1,658 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: pds71/pds-local-error
+# dialect: Pds71
+# source: pds71/PDLOCAL.BAS
+
+Module {
+    statements: [
+        Dim(
+            [
+                Declaration {
+                    name: "RECOVERYCOUNT",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: true,
+                    dynamic: false,
+                    span: Span {
+                        line: 4,
+                        start: 11,
+                        end: 35,
+                    },
+                },
+            ],
+        ),
+        Call {
+            name: "MISSINGFILE",
+            arguments: [],
+            explicit: false,
+            span: Span {
+                line: 6,
+                start: 0,
+                end: 11,
+            },
+        },
+        If {
+            condition: Binary {
+                op: Eq,
+                left: Name(
+                    "RECOVERYCOUNT",
+                    Span {
+                        line: 7,
+                        start: 3,
+                        end: 16,
+                    },
+                ),
+                right: Literal(
+                    Integer(
+                        1,
+                        Integer,
+                    ),
+                    Span {
+                        line: 7,
+                        start: 19,
+                        end: 20,
+                    },
+                ),
+                span: Span {
+                    line: 7,
+                    start: 3,
+                    end: 20,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "PASS pds-local-error",
+                                ),
+                                Span {
+                                    line: 8,
+                                    start: 10,
+                                    end: 32,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 8,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+            ],
+            else_branch: [
+                Call {
+                    name: "REPORTFAIL",
+                    arguments: [
+                        Literal(
+                            String(
+                                "return",
+                            ),
+                            Span {
+                                line: 10,
+                                start: 20,
+                                end: 28,
+                            },
+                        ),
+                    ],
+                    explicit: true,
+                    span: Span {
+                        line: 10,
+                        start: 4,
+                        end: 8,
+                    },
+                },
+            ],
+            span: Span {
+                line: 7,
+                start: 0,
+                end: 2,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 12,
+                start: 0,
+                end: 3,
+            },
+        },
+    ],
+    procedures: [
+        Procedure {
+            name: "MISSINGFILE",
+            alias: None,
+            cdecl: false,
+            kind: Sub,
+            parameters: [],
+            result: None,
+            body: [],
+            declaration: true,
+            is_static: false,
+            span: Span {
+                line: 2,
+                start: 8,
+                end: 11,
+            },
+        },
+        Procedure {
+            name: "REPORTFAIL",
+            alias: None,
+            cdecl: false,
+            kind: Sub,
+            parameters: [
+                Parameter {
+                    declaration: Declaration {
+                        name: "CHECKNAME",
+                        type_name: Some(
+                            String,
+                        ),
+                        array: false,
+                        bounds: [],
+                        fixed_length: None,
+                        shared: false,
+                        dynamic: false,
+                        span: Span {
+                            line: 3,
+                            start: 24,
+                            end: 43,
+                        },
+                    },
+                    by_value: false,
+                    segmented: false,
+                },
+            ],
+            result: None,
+            body: [],
+            declaration: true,
+            is_static: false,
+            span: Span {
+                line: 3,
+                start: 8,
+                end: 11,
+            },
+        },
+        Procedure {
+            name: "MISSINGFILE",
+            alias: None,
+            cdecl: false,
+            kind: Sub,
+            parameters: [],
+            result: None,
+            body: [
+                Dim(
+                    [
+                        Declaration {
+                            name: "HANDLED",
+                            type_name: Some(
+                                Integer,
+                            ),
+                            array: false,
+                            bounds: [],
+                            fixed_length: None,
+                            shared: false,
+                            dynamic: false,
+                            span: Span {
+                                line: 15,
+                                start: 8,
+                                end: 26,
+                            },
+                        },
+                    ],
+                ),
+                OnError {
+                    label: "MISSING",
+                    local: true,
+                    span: Span {
+                        line: 17,
+                        start: 4,
+                        end: 6,
+                    },
+                },
+                Label(
+                    "100",
+                    Span {
+                        line: 18,
+                        start: 0,
+                        end: 3,
+                    },
+                ),
+                Runtime {
+                    name: "ERROR",
+                    arguments: [
+                        Literal(
+                            Integer(
+                                53,
+                                Integer,
+                            ),
+                            Span {
+                                line: 18,
+                                start: 10,
+                                end: 12,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 18,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Call {
+                    name: "REPORTFAIL",
+                    arguments: [
+                        Literal(
+                            String(
+                                "no-error",
+                            ),
+                            Span {
+                                line: 19,
+                                start: 20,
+                                end: 30,
+                            },
+                        ),
+                    ],
+                    explicit: true,
+                    span: Span {
+                        line: 19,
+                        start: 4,
+                        end: 8,
+                    },
+                },
+                Exit(
+                    Sub,
+                    Span {
+                        line: 20,
+                        start: 4,
+                        end: 8,
+                    },
+                ),
+                Label(
+                    "MISSING",
+                    Span {
+                        line: 22,
+                        start: 0,
+                        end: 7,
+                    },
+                ),
+                If {
+                    condition: Binary {
+                        op: NotEqual,
+                        left: Name(
+                            "ERR",
+                            Span {
+                                line: 23,
+                                start: 7,
+                                end: 10,
+                            },
+                        ),
+                        right: Literal(
+                            Integer(
+                                53,
+                                Integer,
+                            ),
+                            Span {
+                                line: 23,
+                                start: 14,
+                                end: 16,
+                            },
+                        ),
+                        span: Span {
+                            line: 23,
+                            start: 7,
+                            end: 16,
+                        },
+                    },
+                    then_branch: [
+                        Call {
+                            name: "REPORTFAIL",
+                            arguments: [
+                                Literal(
+                                    String(
+                                        "errnum",
+                                    ),
+                                    Span {
+                                        line: 24,
+                                        start: 24,
+                                        end: 32,
+                                    },
+                                ),
+                            ],
+                            explicit: true,
+                            span: Span {
+                                line: 24,
+                                start: 8,
+                                end: 12,
+                            },
+                        },
+                        Exit(
+                            Sub,
+                            Span {
+                                line: 25,
+                                start: 8,
+                                end: 12,
+                            },
+                        ),
+                    ],
+                    else_branch: [],
+                    span: Span {
+                        line: 23,
+                        start: 4,
+                        end: 6,
+                    },
+                },
+                If {
+                    condition: Binary {
+                        op: NotEqual,
+                        left: Name(
+                            "ERL",
+                            Span {
+                                line: 27,
+                                start: 7,
+                                end: 10,
+                            },
+                        ),
+                        right: Literal(
+                            Integer(
+                                100,
+                                Integer,
+                            ),
+                            Span {
+                                line: 27,
+                                start: 14,
+                                end: 17,
+                            },
+                        ),
+                        span: Span {
+                            line: 27,
+                            start: 7,
+                            end: 17,
+                        },
+                    },
+                    then_branch: [
+                        Call {
+                            name: "REPORTFAIL",
+                            arguments: [
+                                Literal(
+                                    String(
+                                        "errline",
+                                    ),
+                                    Span {
+                                        line: 28,
+                                        start: 24,
+                                        end: 33,
+                                    },
+                                ),
+                            ],
+                            explicit: true,
+                            span: Span {
+                                line: 28,
+                                start: 8,
+                                end: 12,
+                            },
+                        },
+                        Exit(
+                            Sub,
+                            Span {
+                                line: 29,
+                                start: 8,
+                                end: 12,
+                            },
+                        ),
+                    ],
+                    else_branch: [],
+                    span: Span {
+                        line: 27,
+                        start: 4,
+                        end: 6,
+                    },
+                },
+                Assign {
+                    target: Name(
+                        "HANDLED",
+                        Span {
+                            line: 31,
+                            start: 4,
+                            end: 11,
+                        },
+                    ),
+                    value: Unary {
+                        op: Negative,
+                        operand: Literal(
+                            Integer(
+                                1,
+                                Integer,
+                            ),
+                            Span {
+                                line: 31,
+                                start: 15,
+                                end: 16,
+                            },
+                        ),
+                        span: Span {
+                            line: 31,
+                            start: 14,
+                            end: 16,
+                        },
+                    },
+                    span: Span {
+                        line: 31,
+                        start: 4,
+                        end: 16,
+                    },
+                },
+                Resume {
+                    target: Label(
+                        "RECOVERED",
+                    ),
+                    span: Span {
+                        line: 32,
+                        start: 4,
+                        end: 10,
+                    },
+                },
+                Label(
+                    "RECOVERED",
+                    Span {
+                        line: 34,
+                        start: 0,
+                        end: 9,
+                    },
+                ),
+                If {
+                    condition: Unary {
+                        op: Not,
+                        operand: Name(
+                            "HANDLED",
+                            Span {
+                                line: 35,
+                                start: 11,
+                                end: 18,
+                            },
+                        ),
+                        span: Span {
+                            line: 35,
+                            start: 7,
+                            end: 18,
+                        },
+                    },
+                    then_branch: [
+                        Call {
+                            name: "REPORTFAIL",
+                            arguments: [
+                                Literal(
+                                    String(
+                                        "err",
+                                    ),
+                                    Span {
+                                        line: 36,
+                                        start: 24,
+                                        end: 29,
+                                    },
+                                ),
+                            ],
+                            explicit: true,
+                            span: Span {
+                                line: 36,
+                                start: 8,
+                                end: 12,
+                            },
+                        },
+                        Exit(
+                            Sub,
+                            Span {
+                                line: 37,
+                                start: 8,
+                                end: 12,
+                            },
+                        ),
+                    ],
+                    else_branch: [],
+                    span: Span {
+                        line: 35,
+                        start: 4,
+                        end: 6,
+                    },
+                },
+                Assign {
+                    target: Name(
+                        "RECOVERYCOUNT",
+                        Span {
+                            line: 39,
+                            start: 4,
+                            end: 17,
+                        },
+                    ),
+                    value: Binary {
+                        op: Add,
+                        left: Name(
+                            "RECOVERYCOUNT",
+                            Span {
+                                line: 39,
+                                start: 20,
+                                end: 33,
+                            },
+                        ),
+                        right: Literal(
+                            Integer(
+                                1,
+                                Integer,
+                            ),
+                            Span {
+                                line: 39,
+                                start: 36,
+                                end: 37,
+                            },
+                        ),
+                        span: Span {
+                            line: 39,
+                            start: 20,
+                            end: 37,
+                        },
+                    },
+                    span: Span {
+                        line: 39,
+                        start: 4,
+                        end: 37,
+                    },
+                },
+                Exit(
+                    Sub,
+                    Span {
+                        line: 40,
+                        start: 4,
+                        end: 8,
+                    },
+                ),
+            ],
+            declaration: false,
+            is_static: false,
+            span: Span {
+                line: 14,
+                start: 0,
+                end: 3,
+            },
+        },
+        Procedure {
+            name: "REPORTFAIL",
+            alias: None,
+            cdecl: false,
+            kind: Sub,
+            parameters: [
+                Parameter {
+                    declaration: Declaration {
+                        name: "CHECKNAME",
+                        type_name: Some(
+                            String,
+                        ),
+                        array: false,
+                        bounds: [],
+                        fixed_length: None,
+                        shared: false,
+                        dynamic: false,
+                        span: Span {
+                            line: 43,
+                            start: 16,
+                            end: 35,
+                        },
+                    },
+                    by_value: false,
+                    segmented: false,
+                },
+            ],
+            result: None,
+            body: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL pds-local-error ",
+                                ),
+                                Span {
+                                    line: 44,
+                                    start: 10,
+                                    end: 33,
+                                },
+                            ),
+                            separator: Semicolon,
+                        },
+                        PrintItem {
+                            value: Name(
+                                "CHECKNAME",
+                                Span {
+                                    line: 44,
+                                    start: 35,
+                                    end: 44,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 44,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+            ],
+            declaration: false,
+            is_static: false,
+            span: Span {
+                line: 43,
+                start: 0,
+                end: 3,
+            },
+        },
+    ],
+}

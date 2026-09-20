@@ -1,0 +1,886 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: pds71/pds-currency
+# dialect: Pds71
+# source: pds71/PDCUR.BAS
+
+Module {
+    statements: [
+        Dim(
+            [
+                Declaration {
+                    name: "FIRSTAMOUNT",
+                    type_name: Some(
+                        Named(
+                            "CURRENCY",
+                        ),
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 2,
+                        start: 4,
+                        end: 27,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "SECONDAMOUNT",
+                    type_name: Some(
+                        Named(
+                            "CURRENCY",
+                        ),
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 3,
+                        start: 4,
+                        end: 28,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "PASSED",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 4,
+                        start: 4,
+                        end: 21,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "PACKEDAMOUNT",
+                    type_name: Some(
+                        String,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: Some(
+                        Literal(
+                            Integer(
+                                8,
+                                Integer,
+                            ),
+                            Span {
+                                line: 5,
+                                start: 29,
+                                end: 30,
+                            },
+                        ),
+                    ),
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 5,
+                        start: 4,
+                        end: 30,
+                    },
+                },
+            ],
+        ),
+        Assign {
+            target: Name(
+                "FIRSTAMOUNT",
+                Span {
+                    line: 7,
+                    start: 0,
+                    end: 11,
+                },
+            ),
+            value: Apply {
+                name: "CCUR",
+                arguments: [
+                    Literal(
+                        Real(
+                            "123.45",
+                            Single,
+                        ),
+                        Span {
+                            line: 7,
+                            start: 19,
+                            end: 25,
+                        },
+                    ),
+                ],
+                span: Span {
+                    line: 7,
+                    start: 14,
+                    end: 26,
+                },
+            },
+            span: Span {
+                line: 7,
+                start: 0,
+                end: 26,
+            },
+        },
+        Assign {
+            target: Name(
+                "SECONDAMOUNT",
+                Span {
+                    line: 8,
+                    start: 0,
+                    end: 12,
+                },
+            ),
+            value: Binary {
+                op: Add,
+                left: Name(
+                    "FIRSTAMOUNT",
+                    Span {
+                        line: 8,
+                        start: 15,
+                        end: 26,
+                    },
+                ),
+                right: Apply {
+                    name: "CCUR",
+                    arguments: [
+                        Literal(
+                            Real(
+                                ".55",
+                                Single,
+                            ),
+                            Span {
+                                line: 8,
+                                start: 34,
+                                end: 37,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 8,
+                        start: 29,
+                        end: 38,
+                    },
+                },
+                span: Span {
+                    line: 8,
+                    start: 15,
+                    end: 38,
+                },
+            },
+            span: Span {
+                line: 8,
+                start: 0,
+                end: 38,
+            },
+        },
+        Assign {
+            target: Name(
+                "PASSED",
+                Span {
+                    line: 9,
+                    start: 0,
+                    end: 6,
+                },
+            ),
+            value: Binary {
+                op: Eq,
+                left: Name(
+                    "SECONDAMOUNT",
+                    Span {
+                        line: 9,
+                        start: 9,
+                        end: 21,
+                    },
+                ),
+                right: Apply {
+                    name: "CCUR",
+                    arguments: [
+                        Literal(
+                            Integer(
+                                124,
+                                Integer,
+                            ),
+                            Span {
+                                line: 9,
+                                start: 29,
+                                end: 32,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 9,
+                        start: 24,
+                        end: 33,
+                    },
+                },
+                span: Span {
+                    line: 9,
+                    start: 9,
+                    end: 33,
+                },
+            },
+            span: Span {
+                line: 9,
+                start: 0,
+                end: 33,
+            },
+        },
+        Assign {
+            target: Name(
+                "PACKEDAMOUNT",
+                Span {
+                    line: 10,
+                    start: 0,
+                    end: 12,
+                },
+            ),
+            value: Apply {
+                name: "MKC$",
+                arguments: [
+                    Name(
+                        "FIRSTAMOUNT",
+                        Span {
+                            line: 10,
+                            start: 20,
+                            end: 31,
+                        },
+                    ),
+                ],
+                span: Span {
+                    line: 10,
+                    start: 15,
+                    end: 32,
+                },
+            },
+            span: Span {
+                line: 10,
+                start: 0,
+                end: 32,
+            },
+        },
+        Assign {
+            target: Name(
+                "PASSED",
+                Span {
+                    line: 11,
+                    start: 0,
+                    end: 6,
+                },
+            ),
+            value: Binary {
+                op: And,
+                left: Name(
+                    "PASSED",
+                    Span {
+                        line: 11,
+                        start: 9,
+                        end: 15,
+                    },
+                ),
+                right: Binary {
+                    op: Eq,
+                    left: Apply {
+                        name: "LEN",
+                        arguments: [
+                            Name(
+                                "PACKEDAMOUNT",
+                                Span {
+                                    line: 11,
+                                    start: 24,
+                                    end: 36,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 11,
+                            start: 20,
+                            end: 37,
+                        },
+                    },
+                    right: Literal(
+                        Integer(
+                            8,
+                            Integer,
+                        ),
+                        Span {
+                            line: 11,
+                            start: 40,
+                            end: 41,
+                        },
+                    ),
+                    span: Span {
+                        line: 11,
+                        start: 20,
+                        end: 41,
+                    },
+                },
+                span: Span {
+                    line: 11,
+                    start: 9,
+                    end: 41,
+                },
+            },
+            span: Span {
+                line: 11,
+                start: 0,
+                end: 41,
+            },
+        },
+        Assign {
+            target: Name(
+                "PASSED",
+                Span {
+                    line: 12,
+                    start: 0,
+                    end: 6,
+                },
+            ),
+            value: Binary {
+                op: And,
+                left: Name(
+                    "PASSED",
+                    Span {
+                        line: 12,
+                        start: 9,
+                        end: 15,
+                    },
+                ),
+                right: Binary {
+                    op: Eq,
+                    left: Apply {
+                        name: "ASC",
+                        arguments: [
+                            Apply {
+                                name: "MID$",
+                                arguments: [
+                                    Name(
+                                        "PACKEDAMOUNT",
+                                        Span {
+                                            line: 12,
+                                            start: 29,
+                                            end: 41,
+                                        },
+                                    ),
+                                    Literal(
+                                        Integer(
+                                            1,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 12,
+                                            start: 43,
+                                            end: 44,
+                                        },
+                                    ),
+                                    Literal(
+                                        Integer(
+                                            1,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 12,
+                                            start: 46,
+                                            end: 47,
+                                        },
+                                    ),
+                                ],
+                                span: Span {
+                                    line: 12,
+                                    start: 24,
+                                    end: 48,
+                                },
+                            },
+                        ],
+                        span: Span {
+                            line: 12,
+                            start: 20,
+                            end: 49,
+                        },
+                    },
+                    right: Literal(
+                        Integer(
+                            68,
+                            Integer,
+                        ),
+                        Span {
+                            line: 12,
+                            start: 52,
+                            end: 54,
+                        },
+                    ),
+                    span: Span {
+                        line: 12,
+                        start: 20,
+                        end: 54,
+                    },
+                },
+                span: Span {
+                    line: 12,
+                    start: 9,
+                    end: 54,
+                },
+            },
+            span: Span {
+                line: 12,
+                start: 0,
+                end: 54,
+            },
+        },
+        Assign {
+            target: Name(
+                "PASSED",
+                Span {
+                    line: 13,
+                    start: 0,
+                    end: 6,
+                },
+            ),
+            value: Binary {
+                op: And,
+                left: Name(
+                    "PASSED",
+                    Span {
+                        line: 13,
+                        start: 9,
+                        end: 15,
+                    },
+                ),
+                right: Binary {
+                    op: Eq,
+                    left: Apply {
+                        name: "ASC",
+                        arguments: [
+                            Apply {
+                                name: "MID$",
+                                arguments: [
+                                    Name(
+                                        "PACKEDAMOUNT",
+                                        Span {
+                                            line: 13,
+                                            start: 29,
+                                            end: 41,
+                                        },
+                                    ),
+                                    Literal(
+                                        Integer(
+                                            2,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 13,
+                                            start: 43,
+                                            end: 44,
+                                        },
+                                    ),
+                                    Literal(
+                                        Integer(
+                                            1,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 13,
+                                            start: 46,
+                                            end: 47,
+                                        },
+                                    ),
+                                ],
+                                span: Span {
+                                    line: 13,
+                                    start: 24,
+                                    end: 48,
+                                },
+                            },
+                        ],
+                        span: Span {
+                            line: 13,
+                            start: 20,
+                            end: 49,
+                        },
+                    },
+                    right: Literal(
+                        Integer(
+                            214,
+                            Integer,
+                        ),
+                        Span {
+                            line: 13,
+                            start: 52,
+                            end: 55,
+                        },
+                    ),
+                    span: Span {
+                        line: 13,
+                        start: 20,
+                        end: 55,
+                    },
+                },
+                span: Span {
+                    line: 13,
+                    start: 9,
+                    end: 55,
+                },
+            },
+            span: Span {
+                line: 13,
+                start: 0,
+                end: 55,
+            },
+        },
+        Assign {
+            target: Name(
+                "PASSED",
+                Span {
+                    line: 14,
+                    start: 0,
+                    end: 6,
+                },
+            ),
+            value: Binary {
+                op: And,
+                left: Name(
+                    "PASSED",
+                    Span {
+                        line: 14,
+                        start: 9,
+                        end: 15,
+                    },
+                ),
+                right: Binary {
+                    op: Eq,
+                    left: Apply {
+                        name: "ASC",
+                        arguments: [
+                            Apply {
+                                name: "MID$",
+                                arguments: [
+                                    Name(
+                                        "PACKEDAMOUNT",
+                                        Span {
+                                            line: 14,
+                                            start: 29,
+                                            end: 41,
+                                        },
+                                    ),
+                                    Literal(
+                                        Integer(
+                                            3,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 14,
+                                            start: 43,
+                                            end: 44,
+                                        },
+                                    ),
+                                    Literal(
+                                        Integer(
+                                            1,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 14,
+                                            start: 46,
+                                            end: 47,
+                                        },
+                                    ),
+                                ],
+                                span: Span {
+                                    line: 14,
+                                    start: 24,
+                                    end: 48,
+                                },
+                            },
+                        ],
+                        span: Span {
+                            line: 14,
+                            start: 20,
+                            end: 49,
+                        },
+                    },
+                    right: Literal(
+                        Integer(
+                            18,
+                            Integer,
+                        ),
+                        Span {
+                            line: 14,
+                            start: 52,
+                            end: 54,
+                        },
+                    ),
+                    span: Span {
+                        line: 14,
+                        start: 20,
+                        end: 54,
+                    },
+                },
+                span: Span {
+                    line: 14,
+                    start: 9,
+                    end: 54,
+                },
+            },
+            span: Span {
+                line: 14,
+                start: 0,
+                end: 54,
+            },
+        },
+        Assign {
+            target: Name(
+                "PASSED",
+                Span {
+                    line: 15,
+                    start: 0,
+                    end: 6,
+                },
+            ),
+            value: Binary {
+                op: And,
+                left: Name(
+                    "PASSED",
+                    Span {
+                        line: 15,
+                        start: 9,
+                        end: 15,
+                    },
+                ),
+                right: Binary {
+                    op: Eq,
+                    left: Apply {
+                        name: "ASC",
+                        arguments: [
+                            Apply {
+                                name: "MID$",
+                                arguments: [
+                                    Name(
+                                        "PACKEDAMOUNT",
+                                        Span {
+                                            line: 15,
+                                            start: 29,
+                                            end: 41,
+                                        },
+                                    ),
+                                    Literal(
+                                        Integer(
+                                            4,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 15,
+                                            start: 43,
+                                            end: 44,
+                                        },
+                                    ),
+                                    Literal(
+                                        Integer(
+                                            1,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 15,
+                                            start: 46,
+                                            end: 47,
+                                        },
+                                    ),
+                                ],
+                                span: Span {
+                                    line: 15,
+                                    start: 24,
+                                    end: 48,
+                                },
+                            },
+                        ],
+                        span: Span {
+                            line: 15,
+                            start: 20,
+                            end: 49,
+                        },
+                    },
+                    right: Literal(
+                        Integer(
+                            0,
+                            Integer,
+                        ),
+                        Span {
+                            line: 15,
+                            start: 52,
+                            end: 53,
+                        },
+                    ),
+                    span: Span {
+                        line: 15,
+                        start: 20,
+                        end: 53,
+                    },
+                },
+                span: Span {
+                    line: 15,
+                    start: 9,
+                    end: 53,
+                },
+            },
+            span: Span {
+                line: 15,
+                start: 0,
+                end: 53,
+            },
+        },
+        Assign {
+            target: Name(
+                "PASSED",
+                Span {
+                    line: 16,
+                    start: 0,
+                    end: 6,
+                },
+            ),
+            value: Binary {
+                op: And,
+                left: Name(
+                    "PASSED",
+                    Span {
+                        line: 16,
+                        start: 9,
+                        end: 15,
+                    },
+                ),
+                right: Binary {
+                    op: Eq,
+                    left: Apply {
+                        name: "CVC",
+                        arguments: [
+                            Name(
+                                "PACKEDAMOUNT",
+                                Span {
+                                    line: 16,
+                                    start: 24,
+                                    end: 36,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 16,
+                            start: 20,
+                            end: 37,
+                        },
+                    },
+                    right: Name(
+                        "FIRSTAMOUNT",
+                        Span {
+                            line: 16,
+                            start: 40,
+                            end: 51,
+                        },
+                    ),
+                    span: Span {
+                        line: 16,
+                        start: 20,
+                        end: 51,
+                    },
+                },
+                span: Span {
+                    line: 16,
+                    start: 9,
+                    end: 51,
+                },
+            },
+            span: Span {
+                line: 16,
+                start: 0,
+                end: 51,
+            },
+        },
+        If {
+            condition: Name(
+                "PASSED",
+                Span {
+                    line: 18,
+                    start: 3,
+                    end: 9,
+                },
+            ),
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "PASS pds-currency",
+                                ),
+                                Span {
+                                    line: 19,
+                                    start: 10,
+                                    end: 29,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 19,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+            ],
+            else_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL pds-currency arithmetic",
+                                ),
+                                Span {
+                                    line: 21,
+                                    start: 10,
+                                    end: 40,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 21,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+            ],
+            span: Span {
+                line: 18,
+                start: 0,
+                end: 2,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 23,
+                start: 0,
+                end: 3,
+            },
+        },
+    ],
+    procedures: [],
+}

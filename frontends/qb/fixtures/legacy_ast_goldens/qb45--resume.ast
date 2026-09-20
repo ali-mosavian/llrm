@@ -1,0 +1,464 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: qb45/resume
+# dialect: QuickBasic45
+# source: qb45/Q45R35.BAS
+
+Module {
+    statements: [
+        Dim(
+            [
+                Declaration {
+                    name: "HANDLED",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 2,
+                        start: 4,
+                        end: 22,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "RESUMED",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 3,
+                        start: 4,
+                        end: 22,
+                    },
+                },
+            ],
+        ),
+        OnError {
+            label: "HANDLER",
+            local: false,
+            span: Span {
+                line: 5,
+                start: 0,
+                end: 2,
+            },
+        },
+        Label(
+            "100",
+            Span {
+                line: 6,
+                start: 0,
+                end: 3,
+            },
+        ),
+        Runtime {
+            name: "ERROR",
+            arguments: [
+                Literal(
+                    Integer(
+                        11,
+                        Integer,
+                    ),
+                    Span {
+                        line: 6,
+                        start: 10,
+                        end: 12,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 6,
+                start: 4,
+                end: 9,
+            },
+        },
+        Assign {
+            target: Name(
+                "RESUMED",
+                Span {
+                    line: 7,
+                    start: 0,
+                    end: 7,
+                },
+            ),
+            value: Literal(
+                Integer(
+                    1,
+                    Integer,
+                ),
+                Span {
+                    line: 7,
+                    start: 10,
+                    end: 11,
+                },
+            ),
+            span: Span {
+                line: 7,
+                start: 0,
+                end: 11,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Name(
+                    "HANDLED",
+                    Span {
+                        line: 8,
+                        start: 3,
+                        end: 10,
+                    },
+                ),
+                right: Literal(
+                    Integer(
+                        1,
+                        Integer,
+                    ),
+                    Span {
+                        line: 8,
+                        start: 14,
+                        end: 15,
+                    },
+                ),
+                span: Span {
+                    line: 8,
+                    start: 3,
+                    end: 15,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL resume handled",
+                                ),
+                                Span {
+                                    line: 9,
+                                    start: 10,
+                                    end: 31,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 9,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 10,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 8,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Name(
+                    "RESUMED",
+                    Span {
+                        line: 12,
+                        start: 3,
+                        end: 10,
+                    },
+                ),
+                right: Literal(
+                    Integer(
+                        1,
+                        Integer,
+                    ),
+                    Span {
+                        line: 12,
+                        start: 14,
+                        end: 15,
+                    },
+                ),
+                span: Span {
+                    line: 12,
+                    start: 3,
+                    end: 15,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL resume flow",
+                                ),
+                                Span {
+                                    line: 13,
+                                    start: 10,
+                                    end: 28,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 13,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 14,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 12,
+                start: 0,
+                end: 2,
+            },
+        },
+        Print {
+            file: None,
+            items: [
+                PrintItem {
+                    value: Literal(
+                        String(
+                            "PASS resume",
+                        ),
+                        Span {
+                            line: 16,
+                            start: 6,
+                            end: 19,
+                        },
+                    ),
+                    separator: End,
+                },
+            ],
+            span: Span {
+                line: 16,
+                start: 0,
+                end: 5,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 17,
+                start: 0,
+                end: 3,
+            },
+        },
+        Label(
+            "HANDLER",
+            Span {
+                line: 19,
+                start: 0,
+                end: 7,
+            },
+        ),
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Name(
+                    "ERR",
+                    Span {
+                        line: 20,
+                        start: 3,
+                        end: 6,
+                    },
+                ),
+                right: Literal(
+                    Integer(
+                        11,
+                        Integer,
+                    ),
+                    Span {
+                        line: 20,
+                        start: 10,
+                        end: 12,
+                    },
+                ),
+                span: Span {
+                    line: 20,
+                    start: 3,
+                    end: 12,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL resume errnum",
+                                ),
+                                Span {
+                                    line: 21,
+                                    start: 10,
+                                    end: 30,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 21,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 22,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 20,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Name(
+                    "ERL",
+                    Span {
+                        line: 24,
+                        start: 3,
+                        end: 6,
+                    },
+                ),
+                right: Literal(
+                    Integer(
+                        100,
+                        Integer,
+                    ),
+                    Span {
+                        line: 24,
+                        start: 10,
+                        end: 13,
+                    },
+                ),
+                span: Span {
+                    line: 24,
+                    start: 3,
+                    end: 13,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL resume errline",
+                                ),
+                                Span {
+                                    line: 25,
+                                    start: 10,
+                                    end: 31,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 25,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 26,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 24,
+                start: 0,
+                end: 2,
+            },
+        },
+        Assign {
+            target: Name(
+                "HANDLED",
+                Span {
+                    line: 28,
+                    start: 0,
+                    end: 7,
+                },
+            ),
+            value: Literal(
+                Integer(
+                    1,
+                    Integer,
+                ),
+                Span {
+                    line: 28,
+                    start: 10,
+                    end: 11,
+                },
+            ),
+            span: Span {
+                line: 28,
+                start: 0,
+                end: 11,
+            },
+        },
+        Resume {
+            target: Next,
+            span: Span {
+                line: 29,
+                start: 0,
+                end: 6,
+            },
+        },
+    ],
+    procedures: [],
+}

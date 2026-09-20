@@ -1,0 +1,958 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: vbdos/date_serial_surface
+# dialect: VbDos
+# source: vbdos/dateser.bas
+
+Module {
+    statements: [
+        OptionExplicit(
+            Span {
+                line: 1,
+                start: 0,
+                end: 6,
+            },
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "SERIALDATE",
+                    type_name: Some(
+                        Double,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 3,
+                        start: 4,
+                        end: 24,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "SERIALTIME",
+                    type_name: Some(
+                        Double,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 4,
+                        start: 4,
+                        end: 24,
+                    },
+                },
+            ],
+        ),
+        Assign {
+            target: Name(
+                "SERIALDATE",
+                Span {
+                    line: 7,
+                    start: 0,
+                    end: 10,
+                },
+            ),
+            value: Apply {
+                name: "DATESERIAL",
+                arguments: [
+                    Literal(
+                        Integer(
+                            1992,
+                            Integer,
+                        ),
+                        Span {
+                            line: 7,
+                            start: 24,
+                            end: 28,
+                        },
+                    ),
+                    Literal(
+                        Integer(
+                            2,
+                            Integer,
+                        ),
+                        Span {
+                            line: 7,
+                            start: 30,
+                            end: 31,
+                        },
+                    ),
+                    Literal(
+                        Integer(
+                            29,
+                            Integer,
+                        ),
+                        Span {
+                            line: 7,
+                            start: 33,
+                            end: 35,
+                        },
+                    ),
+                ],
+                span: Span {
+                    line: 7,
+                    start: 13,
+                    end: 36,
+                },
+            },
+            span: Span {
+                line: 7,
+                start: 0,
+                end: 36,
+            },
+        },
+        Assign {
+            target: Name(
+                "SERIALTIME",
+                Span {
+                    line: 8,
+                    start: 0,
+                    end: 10,
+                },
+            ),
+            value: Apply {
+                name: "TIMESERIAL",
+                arguments: [
+                    Literal(
+                        Integer(
+                            12,
+                            Integer,
+                        ),
+                        Span {
+                            line: 8,
+                            start: 24,
+                            end: 26,
+                        },
+                    ),
+                    Literal(
+                        Integer(
+                            34,
+                            Integer,
+                        ),
+                        Span {
+                            line: 8,
+                            start: 28,
+                            end: 30,
+                        },
+                    ),
+                    Literal(
+                        Integer(
+                            56,
+                            Integer,
+                        ),
+                        Span {
+                            line: 8,
+                            start: 32,
+                            end: 34,
+                        },
+                    ),
+                ],
+                span: Span {
+                    line: 8,
+                    start: 13,
+                    end: 35,
+                },
+            },
+            span: Span {
+                line: 8,
+                start: 0,
+                end: 35,
+            },
+        },
+        If {
+            condition: Binary {
+                op: Or,
+                left: Binary {
+                    op: NotEqual,
+                    left: Apply {
+                        name: "DATESERIAL",
+                        arguments: [
+                            Literal(
+                                Integer(
+                                    1899,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 10,
+                                    start: 14,
+                                    end: 18,
+                                },
+                            ),
+                            Literal(
+                                Integer(
+                                    12,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 10,
+                                    start: 20,
+                                    end: 22,
+                                },
+                            ),
+                            Literal(
+                                Integer(
+                                    30,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 10,
+                                    start: 24,
+                                    end: 26,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 10,
+                            start: 3,
+                            end: 27,
+                        },
+                    },
+                    right: Literal(
+                        Integer(
+                            0,
+                            Integer,
+                        ),
+                        Span {
+                            line: 10,
+                            start: 31,
+                            end: 32,
+                        },
+                    ),
+                    span: Span {
+                        line: 10,
+                        start: 3,
+                        end: 32,
+                    },
+                },
+                right: Binary {
+                    op: NotEqual,
+                    left: Apply {
+                        name: "TIMESERIAL",
+                        arguments: [
+                            Literal(
+                                Integer(
+                                    6,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 10,
+                                    start: 47,
+                                    end: 48,
+                                },
+                            ),
+                            Literal(
+                                Integer(
+                                    0,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 10,
+                                    start: 50,
+                                    end: 51,
+                                },
+                            ),
+                            Literal(
+                                Integer(
+                                    0,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 10,
+                                    start: 53,
+                                    end: 54,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 10,
+                            start: 36,
+                            end: 55,
+                        },
+                    },
+                    right: Literal(
+                        Real(
+                            ".25",
+                            Single,
+                        ),
+                        Span {
+                            line: 10,
+                            start: 59,
+                            end: 62,
+                        },
+                    ),
+                    span: Span {
+                        line: 10,
+                        start: 36,
+                        end: 62,
+                    },
+                },
+                span: Span {
+                    line: 10,
+                    start: 3,
+                    end: 62,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL date_serial_surface epoch",
+                                ),
+                                Span {
+                                    line: 11,
+                                    start: 10,
+                                    end: 42,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 11,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 12,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 10,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: Or,
+                left: Binary {
+                    op: Or,
+                    left: Binary {
+                        op: NotEqual,
+                        left: Apply {
+                            name: "YEAR",
+                            arguments: [
+                                Name(
+                                    "SERIALDATE",
+                                    Span {
+                                        line: 15,
+                                        start: 8,
+                                        end: 18,
+                                    },
+                                ),
+                            ],
+                            span: Span {
+                                line: 15,
+                                start: 3,
+                                end: 19,
+                            },
+                        },
+                        right: Literal(
+                            Integer(
+                                1992,
+                                Integer,
+                            ),
+                            Span {
+                                line: 15,
+                                start: 23,
+                                end: 27,
+                            },
+                        ),
+                        span: Span {
+                            line: 15,
+                            start: 3,
+                            end: 27,
+                        },
+                    },
+                    right: Binary {
+                        op: NotEqual,
+                        left: Apply {
+                            name: "MONTH",
+                            arguments: [
+                                Name(
+                                    "SERIALDATE",
+                                    Span {
+                                        line: 15,
+                                        start: 37,
+                                        end: 47,
+                                    },
+                                ),
+                            ],
+                            span: Span {
+                                line: 15,
+                                start: 31,
+                                end: 48,
+                            },
+                        },
+                        right: Literal(
+                            Integer(
+                                2,
+                                Integer,
+                            ),
+                            Span {
+                                line: 15,
+                                start: 52,
+                                end: 53,
+                            },
+                        ),
+                        span: Span {
+                            line: 15,
+                            start: 31,
+                            end: 53,
+                        },
+                    },
+                    span: Span {
+                        line: 15,
+                        start: 3,
+                        end: 53,
+                    },
+                },
+                right: Binary {
+                    op: NotEqual,
+                    left: Apply {
+                        name: "DAY",
+                        arguments: [
+                            Name(
+                                "SERIALDATE",
+                                Span {
+                                    line: 15,
+                                    start: 61,
+                                    end: 71,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 15,
+                            start: 57,
+                            end: 72,
+                        },
+                    },
+                    right: Literal(
+                        Integer(
+                            29,
+                            Integer,
+                        ),
+                        Span {
+                            line: 15,
+                            start: 76,
+                            end: 78,
+                        },
+                    ),
+                    span: Span {
+                        line: 15,
+                        start: 57,
+                        end: 78,
+                    },
+                },
+                span: Span {
+                    line: 15,
+                    start: 3,
+                    end: 78,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL date_serial_surface date",
+                                ),
+                                Span {
+                                    line: 16,
+                                    start: 10,
+                                    end: 41,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 16,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 17,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 15,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: Or,
+                left: Binary {
+                    op: Or,
+                    left: Binary {
+                        op: NotEqual,
+                        left: Apply {
+                            name: "HOUR",
+                            arguments: [
+                                Name(
+                                    "SERIALTIME",
+                                    Span {
+                                        line: 20,
+                                        start: 8,
+                                        end: 18,
+                                    },
+                                ),
+                            ],
+                            span: Span {
+                                line: 20,
+                                start: 3,
+                                end: 19,
+                            },
+                        },
+                        right: Literal(
+                            Integer(
+                                12,
+                                Integer,
+                            ),
+                            Span {
+                                line: 20,
+                                start: 23,
+                                end: 25,
+                            },
+                        ),
+                        span: Span {
+                            line: 20,
+                            start: 3,
+                            end: 25,
+                        },
+                    },
+                    right: Binary {
+                        op: NotEqual,
+                        left: Apply {
+                            name: "MINUTE",
+                            arguments: [
+                                Name(
+                                    "SERIALTIME",
+                                    Span {
+                                        line: 20,
+                                        start: 36,
+                                        end: 46,
+                                    },
+                                ),
+                            ],
+                            span: Span {
+                                line: 20,
+                                start: 29,
+                                end: 47,
+                            },
+                        },
+                        right: Literal(
+                            Integer(
+                                34,
+                                Integer,
+                            ),
+                            Span {
+                                line: 20,
+                                start: 51,
+                                end: 53,
+                            },
+                        ),
+                        span: Span {
+                            line: 20,
+                            start: 29,
+                            end: 53,
+                        },
+                    },
+                    span: Span {
+                        line: 20,
+                        start: 3,
+                        end: 53,
+                    },
+                },
+                right: Binary {
+                    op: NotEqual,
+                    left: Apply {
+                        name: "SECOND",
+                        arguments: [
+                            Name(
+                                "SERIALTIME",
+                                Span {
+                                    line: 20,
+                                    start: 64,
+                                    end: 74,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 20,
+                            start: 57,
+                            end: 75,
+                        },
+                    },
+                    right: Literal(
+                        Integer(
+                            56,
+                            Integer,
+                        ),
+                        Span {
+                            line: 20,
+                            start: 79,
+                            end: 81,
+                        },
+                    ),
+                    span: Span {
+                        line: 20,
+                        start: 57,
+                        end: 81,
+                    },
+                },
+                span: Span {
+                    line: 20,
+                    start: 3,
+                    end: 81,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL date_serial_surface time",
+                                ),
+                                Span {
+                                    line: 21,
+                                    start: 10,
+                                    end: 41,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 21,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 22,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 20,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: Or,
+                left: Binary {
+                    op: NotEqual,
+                    left: Apply {
+                        name: "DATEVALUE",
+                        arguments: [
+                            Literal(
+                                String(
+                                    "2/29/1992",
+                                ),
+                                Span {
+                                    line: 25,
+                                    start: 13,
+                                    end: 24,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 25,
+                            start: 3,
+                            end: 25,
+                        },
+                    },
+                    right: Name(
+                        "SERIALDATE",
+                        Span {
+                            line: 25,
+                            start: 29,
+                            end: 39,
+                        },
+                    ),
+                    span: Span {
+                        line: 25,
+                        start: 3,
+                        end: 39,
+                    },
+                },
+                right: Binary {
+                    op: NotEqual,
+                    left: Apply {
+                        name: "TIMEVALUE",
+                        arguments: [
+                            Literal(
+                                String(
+                                    "12:34:56",
+                                ),
+                                Span {
+                                    line: 25,
+                                    start: 53,
+                                    end: 63,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 25,
+                            start: 43,
+                            end: 64,
+                        },
+                    },
+                    right: Name(
+                        "SERIALTIME",
+                        Span {
+                            line: 25,
+                            start: 68,
+                            end: 78,
+                        },
+                    ),
+                    span: Span {
+                        line: 25,
+                        start: 43,
+                        end: 78,
+                    },
+                },
+                span: Span {
+                    line: 25,
+                    start: 3,
+                    end: 78,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL date_serial_surface parse",
+                                ),
+                                Span {
+                                    line: 26,
+                                    start: 10,
+                                    end: 42,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 26,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 27,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 25,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: Or,
+                left: Binary {
+                    op: NotEqual,
+                    left: Apply {
+                        name: "DATEVALUE",
+                        arguments: [
+                            Literal(
+                                String(
+                                    "12/30/1899",
+                                ),
+                                Span {
+                                    line: 29,
+                                    start: 13,
+                                    end: 25,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 29,
+                            start: 3,
+                            end: 26,
+                        },
+                    },
+                    right: Literal(
+                        Integer(
+                            0,
+                            Integer,
+                        ),
+                        Span {
+                            line: 29,
+                            start: 30,
+                            end: 31,
+                        },
+                    ),
+                    span: Span {
+                        line: 29,
+                        start: 3,
+                        end: 31,
+                    },
+                },
+                right: Binary {
+                    op: NotEqual,
+                    left: Apply {
+                        name: "TIMEVALUE",
+                        arguments: [
+                            Literal(
+                                String(
+                                    "6:00:00",
+                                ),
+                                Span {
+                                    line: 29,
+                                    start: 45,
+                                    end: 54,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 29,
+                            start: 35,
+                            end: 55,
+                        },
+                    },
+                    right: Literal(
+                        Real(
+                            ".25",
+                            Single,
+                        ),
+                        Span {
+                            line: 29,
+                            start: 59,
+                            end: 62,
+                        },
+                    ),
+                    span: Span {
+                        line: 29,
+                        start: 35,
+                        end: 62,
+                    },
+                },
+                span: Span {
+                    line: 29,
+                    start: 3,
+                    end: 62,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL date_serial_surface anchors",
+                                ),
+                                Span {
+                                    line: 30,
+                                    start: 10,
+                                    end: 44,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 30,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 31,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 29,
+                start: 0,
+                end: 2,
+            },
+        },
+        Print {
+            file: None,
+            items: [
+                PrintItem {
+                    value: Literal(
+                        String(
+                            "PASS date_serial_surface",
+                        ),
+                        Span {
+                            line: 34,
+                            start: 6,
+                            end: 32,
+                        },
+                    ),
+                    separator: End,
+                },
+            ],
+            span: Span {
+                line: 34,
+                start: 0,
+                end: 5,
+            },
+        },
+    ],
+    procedures: [],
+}

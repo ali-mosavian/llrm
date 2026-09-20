@@ -1,0 +1,896 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: qb45/rounding-ties
+# dialect: QuickBasic45
+# source: qb45/Q45RN54.BAS
+
+Module {
+    statements: [
+        Dim(
+            [
+                Declaration {
+                    name: "LOWPOSITIVE",
+                    type_name: Some(
+                        Double,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 2,
+                        start: 4,
+                        end: 25,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "HIGHPOSITIVE",
+                    type_name: Some(
+                        Double,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 3,
+                        start: 4,
+                        end: 26,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "LOWNEGATIVE",
+                    type_name: Some(
+                        Double,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 4,
+                        start: 4,
+                        end: 25,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "HIGHNEGATIVE",
+                    type_name: Some(
+                        Double,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 5,
+                        start: 4,
+                        end: 26,
+                    },
+                },
+            ],
+        ),
+        Read {
+            destinations: [
+                Name(
+                    "LOWPOSITIVE",
+                    Span {
+                        line: 7,
+                        start: 5,
+                        end: 16,
+                    },
+                ),
+                Name(
+                    "HIGHPOSITIVE",
+                    Span {
+                        line: 7,
+                        start: 18,
+                        end: 30,
+                    },
+                ),
+                Name(
+                    "LOWNEGATIVE",
+                    Span {
+                        line: 7,
+                        start: 32,
+                        end: 43,
+                    },
+                ),
+                Name(
+                    "HIGHNEGATIVE",
+                    Span {
+                        line: 7,
+                        start: 45,
+                        end: 57,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 7,
+                start: 0,
+                end: 4,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Apply {
+                    name: "CINT",
+                    arguments: [
+                        Name(
+                            "LOWPOSITIVE",
+                            Span {
+                                line: 8,
+                                start: 8,
+                                end: 19,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 8,
+                        start: 3,
+                        end: 20,
+                    },
+                },
+                right: Literal(
+                    Integer(
+                        12,
+                        Integer,
+                    ),
+                    Span {
+                        line: 8,
+                        start: 24,
+                        end: 26,
+                    },
+                ),
+                span: Span {
+                    line: 8,
+                    start: 3,
+                    end: 26,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL round-ties cint-low-positive",
+                                ),
+                                Span {
+                                    line: 9,
+                                    start: 10,
+                                    end: 45,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 9,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 10,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 8,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Apply {
+                    name: "CINT",
+                    arguments: [
+                        Name(
+                            "HIGHPOSITIVE",
+                            Span {
+                                line: 12,
+                                start: 8,
+                                end: 20,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 12,
+                        start: 3,
+                        end: 21,
+                    },
+                },
+                right: Literal(
+                    Integer(
+                        14,
+                        Integer,
+                    ),
+                    Span {
+                        line: 12,
+                        start: 25,
+                        end: 27,
+                    },
+                ),
+                span: Span {
+                    line: 12,
+                    start: 3,
+                    end: 27,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL round-ties cint-high-positive",
+                                ),
+                                Span {
+                                    line: 13,
+                                    start: 10,
+                                    end: 46,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 13,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 14,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 12,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Apply {
+                    name: "CINT",
+                    arguments: [
+                        Name(
+                            "LOWNEGATIVE",
+                            Span {
+                                line: 16,
+                                start: 8,
+                                end: 19,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 16,
+                        start: 3,
+                        end: 20,
+                    },
+                },
+                right: Unary {
+                    op: Negative,
+                    operand: Literal(
+                        Integer(
+                            12,
+                            Integer,
+                        ),
+                        Span {
+                            line: 16,
+                            start: 25,
+                            end: 27,
+                        },
+                    ),
+                    span: Span {
+                        line: 16,
+                        start: 24,
+                        end: 27,
+                    },
+                },
+                span: Span {
+                    line: 16,
+                    start: 3,
+                    end: 27,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL round-ties cint-low-negative",
+                                ),
+                                Span {
+                                    line: 17,
+                                    start: 10,
+                                    end: 45,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 17,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 18,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 16,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Apply {
+                    name: "CINT",
+                    arguments: [
+                        Name(
+                            "HIGHNEGATIVE",
+                            Span {
+                                line: 20,
+                                start: 8,
+                                end: 20,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 20,
+                        start: 3,
+                        end: 21,
+                    },
+                },
+                right: Unary {
+                    op: Negative,
+                    operand: Literal(
+                        Integer(
+                            14,
+                            Integer,
+                        ),
+                        Span {
+                            line: 20,
+                            start: 26,
+                            end: 28,
+                        },
+                    ),
+                    span: Span {
+                        line: 20,
+                        start: 25,
+                        end: 28,
+                    },
+                },
+                span: Span {
+                    line: 20,
+                    start: 3,
+                    end: 28,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL round-ties cint-high-negative",
+                                ),
+                                Span {
+                                    line: 21,
+                                    start: 10,
+                                    end: 46,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 21,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 22,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 20,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Apply {
+                    name: "CLNG",
+                    arguments: [
+                        Name(
+                            "LOWPOSITIVE",
+                            Span {
+                                line: 24,
+                                start: 8,
+                                end: 19,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 24,
+                        start: 3,
+                        end: 20,
+                    },
+                },
+                right: Literal(
+                    Integer(
+                        12,
+                        Integer,
+                    ),
+                    Span {
+                        line: 24,
+                        start: 24,
+                        end: 26,
+                    },
+                ),
+                span: Span {
+                    line: 24,
+                    start: 3,
+                    end: 26,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL round-ties clng-low-positive",
+                                ),
+                                Span {
+                                    line: 25,
+                                    start: 10,
+                                    end: 45,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 25,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 26,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 24,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Apply {
+                    name: "CLNG",
+                    arguments: [
+                        Name(
+                            "HIGHPOSITIVE",
+                            Span {
+                                line: 28,
+                                start: 8,
+                                end: 20,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 28,
+                        start: 3,
+                        end: 21,
+                    },
+                },
+                right: Literal(
+                    Integer(
+                        14,
+                        Integer,
+                    ),
+                    Span {
+                        line: 28,
+                        start: 25,
+                        end: 27,
+                    },
+                ),
+                span: Span {
+                    line: 28,
+                    start: 3,
+                    end: 27,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL round-ties clng-high-positive",
+                                ),
+                                Span {
+                                    line: 29,
+                                    start: 10,
+                                    end: 46,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 29,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 30,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 28,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Apply {
+                    name: "CLNG",
+                    arguments: [
+                        Name(
+                            "LOWNEGATIVE",
+                            Span {
+                                line: 32,
+                                start: 8,
+                                end: 19,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 32,
+                        start: 3,
+                        end: 20,
+                    },
+                },
+                right: Unary {
+                    op: Negative,
+                    operand: Literal(
+                        Integer(
+                            12,
+                            Integer,
+                        ),
+                        Span {
+                            line: 32,
+                            start: 25,
+                            end: 27,
+                        },
+                    ),
+                    span: Span {
+                        line: 32,
+                        start: 24,
+                        end: 27,
+                    },
+                },
+                span: Span {
+                    line: 32,
+                    start: 3,
+                    end: 27,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL round-ties clng-low-negative",
+                                ),
+                                Span {
+                                    line: 33,
+                                    start: 10,
+                                    end: 45,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 33,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 34,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 32,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Apply {
+                    name: "CLNG",
+                    arguments: [
+                        Name(
+                            "HIGHNEGATIVE",
+                            Span {
+                                line: 36,
+                                start: 8,
+                                end: 20,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 36,
+                        start: 3,
+                        end: 21,
+                    },
+                },
+                right: Unary {
+                    op: Negative,
+                    operand: Literal(
+                        Integer(
+                            14,
+                            Integer,
+                        ),
+                        Span {
+                            line: 36,
+                            start: 26,
+                            end: 28,
+                        },
+                    ),
+                    span: Span {
+                        line: 36,
+                        start: 25,
+                        end: 28,
+                    },
+                },
+                span: Span {
+                    line: 36,
+                    start: 3,
+                    end: 28,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL round-ties clng-high-negative",
+                                ),
+                                Span {
+                                    line: 37,
+                                    start: 10,
+                                    end: 46,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 37,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 38,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 36,
+                start: 0,
+                end: 2,
+            },
+        },
+        Print {
+            file: None,
+            items: [
+                PrintItem {
+                    value: Literal(
+                        String(
+                            "PASS round-ties",
+                        ),
+                        Span {
+                            line: 40,
+                            start: 6,
+                            end: 23,
+                        },
+                    ),
+                    separator: End,
+                },
+            ],
+            span: Span {
+                line: 40,
+                start: 0,
+                end: 5,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 41,
+                start: 0,
+                end: 3,
+            },
+        },
+        Data {
+            values: [
+                Literal(
+                    Real(
+                        "12.5",
+                        Single,
+                    ),
+                    Span {
+                        line: 43,
+                        start: 5,
+                        end: 9,
+                    },
+                ),
+                Literal(
+                    Real(
+                        "13.5",
+                        Single,
+                    ),
+                    Span {
+                        line: 43,
+                        start: 11,
+                        end: 15,
+                    },
+                ),
+                Unary {
+                    op: Negative,
+                    operand: Literal(
+                        Real(
+                            "12.5",
+                            Single,
+                        ),
+                        Span {
+                            line: 43,
+                            start: 18,
+                            end: 22,
+                        },
+                    ),
+                    span: Span {
+                        line: 43,
+                        start: 17,
+                        end: 22,
+                    },
+                },
+                Unary {
+                    op: Negative,
+                    operand: Literal(
+                        Real(
+                            "13.5",
+                            Single,
+                        ),
+                        Span {
+                            line: 43,
+                            start: 25,
+                            end: 29,
+                        },
+                    ),
+                    span: Span {
+                        line: 43,
+                        start: 24,
+                        end: 29,
+                    },
+                },
+            ],
+            span: Span {
+                line: 43,
+                start: 0,
+                end: 4,
+            },
+        },
+    ],
+    procedures: [],
+}

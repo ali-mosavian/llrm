@@ -1,0 +1,254 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: vbdos/underscore_identifiers
+# dialect: VbDos
+# source: vbdos/underid.bas
+
+Module {
+    statements: [
+        OptionExplicit(
+            Span {
+                line: 1,
+                start: 0,
+                end: 6,
+            },
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "RENDERER_TICK",
+                    type_name: Some(
+                        Long,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 3,
+                        start: 4,
+                        end: 25,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "FRAME_INDEX",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 4,
+                        start: 4,
+                        end: 26,
+                    },
+                },
+            ],
+        ),
+        Assign {
+            target: Name(
+                "RENDERER_TICK",
+                Span {
+                    line: 6,
+                    start: 0,
+                    end: 13,
+                },
+            ),
+            value: Literal(
+                Integer(
+                    1000,
+                    Integer,
+                ),
+                Span {
+                    line: 6,
+                    start: 16,
+                    end: 20,
+                },
+            ),
+            span: Span {
+                line: 6,
+                start: 0,
+                end: 20,
+            },
+        },
+        For {
+            counter: Name(
+                "FRAME_INDEX",
+                Span {
+                    line: 7,
+                    start: 4,
+                    end: 15,
+                },
+            ),
+            start: Literal(
+                Integer(
+                    1,
+                    Integer,
+                ),
+                Span {
+                    line: 7,
+                    start: 18,
+                    end: 19,
+                },
+            ),
+            end: Literal(
+                Integer(
+                    3,
+                    Integer,
+                ),
+                Span {
+                    line: 7,
+                    start: 23,
+                    end: 24,
+                },
+            ),
+            step: None,
+            body: [
+                Assign {
+                    target: Name(
+                        "RENDERER_TICK",
+                        Span {
+                            line: 8,
+                            start: 4,
+                            end: 17,
+                        },
+                    ),
+                    value: Binary {
+                        op: Add,
+                        left: Name(
+                            "RENDERER_TICK",
+                            Span {
+                                line: 8,
+                                start: 20,
+                                end: 33,
+                            },
+                        ),
+                        right: Name(
+                            "FRAME_INDEX",
+                            Span {
+                                line: 8,
+                                start: 36,
+                                end: 47,
+                            },
+                        ),
+                        span: Span {
+                            line: 8,
+                            start: 20,
+                            end: 47,
+                        },
+                    },
+                    span: Span {
+                        line: 8,
+                        start: 4,
+                        end: 47,
+                    },
+                },
+            ],
+            span: Span {
+                line: 7,
+                start: 0,
+                end: 3,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Name(
+                    "RENDERER_TICK",
+                    Span {
+                        line: 11,
+                        start: 3,
+                        end: 16,
+                    },
+                ),
+                right: Literal(
+                    Integer(
+                        1006,
+                        Integer,
+                    ),
+                    Span {
+                        line: 11,
+                        start: 20,
+                        end: 24,
+                    },
+                ),
+                span: Span {
+                    line: 11,
+                    start: 3,
+                    end: 24,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL underscore_identifiers arithmetic",
+                                ),
+                                Span {
+                                    line: 12,
+                                    start: 10,
+                                    end: 50,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 12,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 13,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 11,
+                start: 0,
+                end: 2,
+            },
+        },
+        Print {
+            file: None,
+            items: [
+                PrintItem {
+                    value: Literal(
+                        String(
+                            "PASS underscore_identifiers",
+                        ),
+                        Span {
+                            line: 16,
+                            start: 6,
+                            end: 35,
+                        },
+                    ),
+                    separator: End,
+                },
+            ],
+            span: Span {
+                line: 16,
+                start: 0,
+                end: 5,
+            },
+        },
+    ],
+    procedures: [],
+}

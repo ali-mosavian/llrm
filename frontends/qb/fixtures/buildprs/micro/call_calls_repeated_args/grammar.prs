@@ -1,0 +1,26 @@
+TOKENS:
+   tkCALL ("CALL"),
+   tkCALLS ("CALLS"),
+   tkABS ("ABS"),
+   tkLParen ("("),
+   tkRParen (")"),
+   tkComma (",");
+
+Statements:
+   tkCALL (MARK(1) IdSubRef
+      [tkLParen IdCallArg {tkComma IdCallArg} tkRParen]);
+     <CgCall(opStCall)>
+   tkCALLS MARK(1) IdSubRef
+     [tkLParen Exp {tkComma Exp} tkRParen];
+     <CgCall(opStCalls)>
+
+Functions:
+   tkABS Exp EMIT(opFnAbs);
+
+NonTerminals:
+Exp:
+   EXTERNAL MSG_ExpExp;
+IdCallArg:
+   EXTERNAL MSG_ExpIdCallArg;
+IdSubRef:
+   EXTERNAL;

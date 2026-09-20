@@ -1,0 +1,11 @@
+TOKENS:
+   tkFILES ("FILES"),
+   tkX ("X");
+
+Statements:
+   tkFILES [tkX];
+     <Cg0or1Args(opStFiles0)>
+
+Functions:
+
+NonTerminals:

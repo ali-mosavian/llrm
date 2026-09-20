@@ -1,0 +1,546 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: qb45/procedures
+# dialect: QuickBasic45
+# source: qb45/Q45P04.BAS
+
+Module {
+    statements: [
+        Dim(
+            [
+                Declaration {
+                    name: "COUNT",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 5,
+                        start: 4,
+                        end: 20,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "TOTAL",
+                    type_name: Some(
+                        Long,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 6,
+                        start: 4,
+                        end: 17,
+                    },
+                },
+            ],
+        ),
+        Assign {
+            target: Name(
+                "COUNT",
+                Span {
+                    line: 8,
+                    start: 0,
+                    end: 5,
+                },
+            ),
+            value: Literal(
+                Integer(
+                    4,
+                    Integer,
+                ),
+                Span {
+                    line: 8,
+                    start: 8,
+                    end: 9,
+                },
+            ),
+            span: Span {
+                line: 8,
+                start: 0,
+                end: 9,
+            },
+        },
+        Call {
+            name: "INCREASE",
+            arguments: [
+                Name(
+                    "COUNT",
+                    Span {
+                        line: 9,
+                        start: 14,
+                        end: 19,
+                    },
+                ),
+            ],
+            explicit: true,
+            span: Span {
+                line: 9,
+                start: 0,
+                end: 4,
+            },
+        },
+        Assign {
+            target: Name(
+                "TOTAL",
+                Span {
+                    line: 10,
+                    start: 0,
+                    end: 5,
+                },
+            ),
+            value: Apply {
+                name: "ADDLONG&",
+                arguments: [
+                    Literal(
+                        Integer(
+                            100000,
+                            Integer,
+                        ),
+                        Span {
+                            line: 10,
+                            start: 17,
+                            end: 23,
+                        },
+                    ),
+                    Literal(
+                        Integer(
+                            23,
+                            Integer,
+                        ),
+                        Span {
+                            line: 10,
+                            start: 25,
+                            end: 27,
+                        },
+                    ),
+                ],
+                span: Span {
+                    line: 10,
+                    start: 8,
+                    end: 28,
+                },
+            },
+            span: Span {
+                line: 10,
+                start: 0,
+                end: 28,
+            },
+        },
+        If {
+            condition: Binary {
+                op: And,
+                left: Binary {
+                    op: Eq,
+                    left: Name(
+                        "COUNT",
+                        Span {
+                            line: 12,
+                            start: 3,
+                            end: 8,
+                        },
+                    ),
+                    right: Literal(
+                        Integer(
+                            5,
+                            Integer,
+                        ),
+                        Span {
+                            line: 12,
+                            start: 11,
+                            end: 12,
+                        },
+                    ),
+                    span: Span {
+                        line: 12,
+                        start: 3,
+                        end: 12,
+                    },
+                },
+                right: Binary {
+                    op: Eq,
+                    left: Name(
+                        "TOTAL",
+                        Span {
+                            line: 12,
+                            start: 17,
+                            end: 22,
+                        },
+                    ),
+                    right: Literal(
+                        Integer(
+                            100023,
+                            Integer,
+                        ),
+                        Span {
+                            line: 12,
+                            start: 25,
+                            end: 31,
+                        },
+                    ),
+                    span: Span {
+                        line: 12,
+                        start: 17,
+                        end: 31,
+                    },
+                },
+                span: Span {
+                    line: 12,
+                    start: 3,
+                    end: 31,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "PASS procedures",
+                                ),
+                                Span {
+                                    line: 13,
+                                    start: 10,
+                                    end: 27,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 13,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+            ],
+            else_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL procedures byref",
+                                ),
+                                Span {
+                                    line: 15,
+                                    start: 10,
+                                    end: 33,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 15,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+            ],
+            span: Span {
+                line: 12,
+                start: 0,
+                end: 2,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 17,
+                start: 0,
+                end: 3,
+            },
+        },
+    ],
+    procedures: [
+        Procedure {
+            name: "INCREASE",
+            alias: None,
+            cdecl: false,
+            kind: Sub,
+            parameters: [
+                Parameter {
+                    declaration: Declaration {
+                        name: "ARGDATA",
+                        type_name: Some(
+                            Integer,
+                        ),
+                        array: false,
+                        bounds: [],
+                        fixed_length: None,
+                        shared: false,
+                        dynamic: false,
+                        span: Span {
+                            line: 2,
+                            start: 22,
+                            end: 40,
+                        },
+                    },
+                    by_value: false,
+                    segmented: false,
+                },
+            ],
+            result: None,
+            body: [],
+            declaration: true,
+            is_static: false,
+            span: Span {
+                line: 2,
+                start: 8,
+                end: 11,
+            },
+        },
+        Procedure {
+            name: "ADDLONG&",
+            alias: None,
+            cdecl: false,
+            kind: Function,
+            parameters: [
+                Parameter {
+                    declaration: Declaration {
+                        name: "FIRSTARG",
+                        type_name: Some(
+                            Long,
+                        ),
+                        array: false,
+                        bounds: [],
+                        fixed_length: None,
+                        shared: false,
+                        dynamic: false,
+                        span: Span {
+                            line: 3,
+                            start: 27,
+                            end: 43,
+                        },
+                    },
+                    by_value: false,
+                    segmented: false,
+                },
+                Parameter {
+                    declaration: Declaration {
+                        name: "SECONDARG",
+                        type_name: Some(
+                            Long,
+                        ),
+                        array: false,
+                        bounds: [],
+                        fixed_length: None,
+                        shared: false,
+                        dynamic: false,
+                        span: Span {
+                            line: 3,
+                            start: 45,
+                            end: 62,
+                        },
+                    },
+                    by_value: false,
+                    segmented: false,
+                },
+            ],
+            result: Some(
+                Long,
+            ),
+            body: [],
+            declaration: true,
+            is_static: false,
+            span: Span {
+                line: 3,
+                start: 8,
+                end: 16,
+            },
+        },
+        Procedure {
+            name: "INCREASE",
+            alias: None,
+            cdecl: false,
+            kind: Sub,
+            parameters: [
+                Parameter {
+                    declaration: Declaration {
+                        name: "ARGDATA",
+                        type_name: Some(
+                            Integer,
+                        ),
+                        array: false,
+                        bounds: [],
+                        fixed_length: None,
+                        shared: false,
+                        dynamic: false,
+                        span: Span {
+                            line: 19,
+                            start: 14,
+                            end: 32,
+                        },
+                    },
+                    by_value: false,
+                    segmented: false,
+                },
+            ],
+            result: None,
+            body: [
+                Assign {
+                    target: Name(
+                        "ARGDATA",
+                        Span {
+                            line: 20,
+                            start: 4,
+                            end: 11,
+                        },
+                    ),
+                    value: Binary {
+                        op: Add,
+                        left: Name(
+                            "ARGDATA",
+                            Span {
+                                line: 20,
+                                start: 14,
+                                end: 21,
+                            },
+                        ),
+                        right: Literal(
+                            Integer(
+                                1,
+                                Integer,
+                            ),
+                            Span {
+                                line: 20,
+                                start: 24,
+                                end: 25,
+                            },
+                        ),
+                        span: Span {
+                            line: 20,
+                            start: 14,
+                            end: 25,
+                        },
+                    },
+                    span: Span {
+                        line: 20,
+                        start: 4,
+                        end: 25,
+                    },
+                },
+            ],
+            declaration: false,
+            is_static: false,
+            span: Span {
+                line: 19,
+                start: 0,
+                end: 3,
+            },
+        },
+        Procedure {
+            name: "ADDLONG&",
+            alias: None,
+            cdecl: false,
+            kind: Function,
+            parameters: [
+                Parameter {
+                    declaration: Declaration {
+                        name: "FIRSTARG",
+                        type_name: Some(
+                            Long,
+                        ),
+                        array: false,
+                        bounds: [],
+                        fixed_length: None,
+                        shared: false,
+                        dynamic: false,
+                        span: Span {
+                            line: 23,
+                            start: 19,
+                            end: 35,
+                        },
+                    },
+                    by_value: false,
+                    segmented: false,
+                },
+                Parameter {
+                    declaration: Declaration {
+                        name: "SECONDARG",
+                        type_name: Some(
+                            Long,
+                        ),
+                        array: false,
+                        bounds: [],
+                        fixed_length: None,
+                        shared: false,
+                        dynamic: false,
+                        span: Span {
+                            line: 23,
+                            start: 37,
+                            end: 54,
+                        },
+                    },
+                    by_value: false,
+                    segmented: false,
+                },
+            ],
+            result: Some(
+                Long,
+            ),
+            body: [
+                Assign {
+                    target: Name(
+                        "ADDLONG&",
+                        Span {
+                            line: 24,
+                            start: 4,
+                            end: 12,
+                        },
+                    ),
+                    value: Binary {
+                        op: Add,
+                        left: Name(
+                            "FIRSTARG",
+                            Span {
+                                line: 24,
+                                start: 15,
+                                end: 23,
+                            },
+                        ),
+                        right: Name(
+                            "SECONDARG",
+                            Span {
+                                line: 24,
+                                start: 26,
+                                end: 35,
+                            },
+                        ),
+                        span: Span {
+                            line: 24,
+                            start: 15,
+                            end: 35,
+                        },
+                    },
+                    span: Span {
+                        line: 24,
+                        start: 4,
+                        end: 35,
+                    },
+                },
+            ],
+            declaration: false,
+            is_static: false,
+            span: Span {
+                line: 23,
+                start: 0,
+                end: 8,
+            },
+        },
+    ],
+}

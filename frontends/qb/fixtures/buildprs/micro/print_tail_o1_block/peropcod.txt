@@ -1,0 +1,17 @@
+opStBload1|x
+opStBsave|x
+opStWrite|x
+opLbs|x
+opChanOut|x
+opPrintTab|x
+opPrintSpc|x
+opPrintComma|x
+opPrintSemi|x
+opPrintItemComma|x
+opPrintItemSemi|x
+opUsing|x
+opFnAbs|x
+opFnPoint1|x
+opFnLbound1|x
+opFnUbound1|x
+opFnIoctl_|x

@@ -1,0 +1,646 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: qb45/character-functions
+# dialect: QuickBasic45
+# source: qb45/Q45CH42.BAS
+
+Module {
+    statements: [
+        Dim(
+            [
+                Declaration {
+                    name: "LETTER",
+                    type_name: Some(
+                        String,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 2,
+                        start: 4,
+                        end: 20,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "MIXEDTEXT",
+                    type_name: Some(
+                        String,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 3,
+                        start: 4,
+                        end: 23,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "PADDEDTEXT",
+                    type_name: Some(
+                        String,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 4,
+                        start: 4,
+                        end: 24,
+                    },
+                },
+            ],
+        ),
+        Read {
+            destinations: [
+                Name(
+                    "LETTER",
+                    Span {
+                        line: 6,
+                        start: 5,
+                        end: 11,
+                    },
+                ),
+                Name(
+                    "MIXEDTEXT",
+                    Span {
+                        line: 6,
+                        start: 13,
+                        end: 22,
+                    },
+                ),
+                Name(
+                    "PADDEDTEXT",
+                    Span {
+                        line: 6,
+                        start: 24,
+                        end: 34,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 6,
+                start: 0,
+                end: 4,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Apply {
+                    name: "ASC",
+                    arguments: [
+                        Name(
+                            "LETTER",
+                            Span {
+                                line: 7,
+                                start: 7,
+                                end: 13,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 7,
+                        start: 3,
+                        end: 14,
+                    },
+                },
+                right: Literal(
+                    Integer(
+                        90,
+                        Integer,
+                    ),
+                    Span {
+                        line: 7,
+                        start: 18,
+                        end: 20,
+                    },
+                ),
+                span: Span {
+                    line: 7,
+                    start: 3,
+                    end: 20,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL charfunc asc",
+                                ),
+                                Span {
+                                    line: 8,
+                                    start: 10,
+                                    end: 29,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 8,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 9,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 7,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Apply {
+                    name: "CHR$",
+                    arguments: [
+                        Literal(
+                            Integer(
+                                65,
+                                Integer,
+                            ),
+                            Span {
+                                line: 11,
+                                start: 8,
+                                end: 10,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 11,
+                        start: 3,
+                        end: 11,
+                    },
+                },
+                right: Literal(
+                    String(
+                        "A",
+                    ),
+                    Span {
+                        line: 11,
+                        start: 15,
+                        end: 18,
+                    },
+                ),
+                span: Span {
+                    line: 11,
+                    start: 3,
+                    end: 18,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL charfunc chr",
+                                ),
+                                Span {
+                                    line: 12,
+                                    start: 10,
+                                    end: 29,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 12,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 13,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 11,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Apply {
+                    name: "UCASE$",
+                    arguments: [
+                        Name(
+                            "MIXEDTEXT",
+                            Span {
+                                line: 15,
+                                start: 10,
+                                end: 19,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 15,
+                        start: 3,
+                        end: 20,
+                    },
+                },
+                right: Literal(
+                    String(
+                        "MIXED",
+                    ),
+                    Span {
+                        line: 15,
+                        start: 24,
+                        end: 31,
+                    },
+                ),
+                span: Span {
+                    line: 15,
+                    start: 3,
+                    end: 31,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL charfunc ucase",
+                                ),
+                                Span {
+                                    line: 16,
+                                    start: 10,
+                                    end: 31,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 16,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 17,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 15,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Apply {
+                    name: "LCASE$",
+                    arguments: [
+                        Name(
+                            "MIXEDTEXT",
+                            Span {
+                                line: 19,
+                                start: 10,
+                                end: 19,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 19,
+                        start: 3,
+                        end: 20,
+                    },
+                },
+                right: Literal(
+                    String(
+                        "mixed",
+                    ),
+                    Span {
+                        line: 19,
+                        start: 24,
+                        end: 31,
+                    },
+                ),
+                span: Span {
+                    line: 19,
+                    start: 3,
+                    end: 31,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL charfunc lcase",
+                                ),
+                                Span {
+                                    line: 20,
+                                    start: 10,
+                                    end: 31,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 20,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 21,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 19,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Apply {
+                    name: "LTRIM$",
+                    arguments: [
+                        Name(
+                            "PADDEDTEXT",
+                            Span {
+                                line: 23,
+                                start: 10,
+                                end: 20,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 23,
+                        start: 3,
+                        end: 21,
+                    },
+                },
+                right: Literal(
+                    String(
+                        "tail  ",
+                    ),
+                    Span {
+                        line: 23,
+                        start: 25,
+                        end: 33,
+                    },
+                ),
+                span: Span {
+                    line: 23,
+                    start: 3,
+                    end: 33,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL charfunc ltrim",
+                                ),
+                                Span {
+                                    line: 24,
+                                    start: 10,
+                                    end: 31,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 24,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 25,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 23,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Apply {
+                    name: "RTRIM$",
+                    arguments: [
+                        Name(
+                            "PADDEDTEXT",
+                            Span {
+                                line: 27,
+                                start: 10,
+                                end: 20,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 27,
+                        start: 3,
+                        end: 21,
+                    },
+                },
+                right: Literal(
+                    String(
+                        "  tail",
+                    ),
+                    Span {
+                        line: 27,
+                        start: 25,
+                        end: 33,
+                    },
+                ),
+                span: Span {
+                    line: 27,
+                    start: 3,
+                    end: 33,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL charfunc rtrim",
+                                ),
+                                Span {
+                                    line: 28,
+                                    start: 10,
+                                    end: 31,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 28,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 29,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 27,
+                start: 0,
+                end: 2,
+            },
+        },
+        Print {
+            file: None,
+            items: [
+                PrintItem {
+                    value: Literal(
+                        String(
+                            "PASS charfunc",
+                        ),
+                        Span {
+                            line: 31,
+                            start: 6,
+                            end: 21,
+                        },
+                    ),
+                    separator: End,
+                },
+            ],
+            span: Span {
+                line: 31,
+                start: 0,
+                end: 5,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 32,
+                start: 0,
+                end: 3,
+            },
+        },
+        Data {
+            values: [
+                Literal(
+                    String(
+                        "Z",
+                    ),
+                    Span {
+                        line: 34,
+                        start: 5,
+                        end: 8,
+                    },
+                ),
+                Literal(
+                    String(
+                        "MiXeD",
+                    ),
+                    Span {
+                        line: 34,
+                        start: 10,
+                        end: 17,
+                    },
+                ),
+                Literal(
+                    String(
+                        "  tail  ",
+                    ),
+                    Span {
+                        line: 34,
+                        start: 19,
+                        end: 29,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 34,
+                start: 0,
+                end: 4,
+            },
+        },
+    ],
+    procedures: [],
+}

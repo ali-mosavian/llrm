@@ -1,0 +1,273 @@
+schema = 1
+dialect = "vbdos10"
+runtime = "vbdos10"
+inherits = "../pds71/suite.toml"
+
+[[case]]
+name = "underscore_identifiers"
+source = "underid.bas"
+level = 1
+features = ["vbdos-only underscore identifiers", "option explicit", "long loop arithmetic"]
+switches = ["/O", "/FPi", "/R", "/G3", "/E"]
+expected = "underid.out"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "The underscore-named LONG accumulates 1+2+3 from 1000 and must equal 1006."
+
+[[case]]
+name = "g2_byval_long"
+source = "g3long.bas"
+level = 2
+features = ["VBDOS /G2 acceptance", "two-word long-argument ABI", "byval long parameter"]
+switches = ["/O", "/FPi", "/R", "/G2", "/E"]
+expected = "g3long.out"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "Three distinct BYVAL LONG arguments feed noncommutative multiply/divide/MOD arithmetic yielding 2577 under /G2; caller canaries remain unchanged."
+
+[[case]]
+name = "g3_byval_long"
+source = "g3long.bas"
+level = 2
+features = ["/G3 long-argument ABI", "byval long parameter", "long multiply divide mod"]
+switches = ["/O", "/FPi", "/R", "/G3", "/E"]
+expected = "g3long.out"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "Three distinct BYVAL LONG arguments feed noncommutative multiply/divide/MOD arithmetic yielding 2577 under /G3; caller canaries remain unchanged."
+
+[[case]]
+name = "vga_framebuffer_bsave"
+source = "vgabsave.bas"
+level = 4
+features = ["SCREEN 13", "DEF SEG = &HA000", "direct VGA framebuffer POKE", "BSAVE source surface"]
+switches = ["/O", "/FPi", "/R", "/G3", "/E"]
+expected = "vgabsave.out"
+parser = "required"
+lowering = "required"
+runtime = "pending"
+
+[[case]]
+name = "interruptx_abi_surface"
+source = "intxabi.bas"
+level = 4
+features = ["vbdos.bi RegTypeX", "DECLARE SUB INTERRUPTX", "DS/ES interrupt ABI"]
+switches = ["/O", "/FPi", "/R", "/G3", "/E", "/L VBDOS.LIB"]
+link_libraries = ["VBDOS.LIB"]
+expected = "intxabi.out"
+parser = "required"
+lowering = "required"
+runtime = "reference-only"
+
+[[case]]
+name = "absolute_abi_surface"
+source = "absabi.bas"
+level = 4
+features = ["DECLARE SUB ABSOLUTE", "absolute far-address runtime entry"]
+switches = ["/O", "/FPi", "/R", "/G3", "/E", "/L VBDOS.LIB"]
+link_libraries = ["VBDOS.LIB"]
+expected = "absabi.out"
+parser = "required"
+lowering = "required"
+runtime = "reference-only"
+
+[[case]]
+name = "legacy_interrupt_abi_surface"
+source = "oldint.bas"
+level = 4
+features = ["DECLARE SUB INT86OLD", "DECLARE SUB INT86XOLD", "legacy integer-array interrupt ABI"]
+switches = ["/O", "/FPi", "/R", "/G3", "/E", "/L VBDOS.LIB"]
+link_libraries = ["VBDOS.LIB"]
+expected = "oldint.out"
+parser = "required"
+lowering = "required"
+runtime = "reference-only"
+
+[[case]]
+name = "segmented_memory"
+source = "segmem.bas"
+level = 4
+features = ["def seg", "varseg", "varptr", "poke", "underscore identifiers"]
+switches = ["/O", "/FPi", "/R", "/G3", "/E"]
+expected = "segmem.out"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "POKE through VARSEG/VARPTR changes the low byte of only the middle array element from 5678h to 562Ah; adjacent word canaries remain exact."
+
+[[case]]
+name = "string_far_address"
+source = "sseg.bas"
+level = 4
+features = ["SSEG", "SSEGADD", "SADD", "dynamic string far address", "null string"]
+switches = ["/O", "/FPi", "/R", "/G3", "/E"]
+expected = "PASS string_address"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "SSEGADD equals the explicit SSEG:SADD far address, PEEK independently witnesses A and D at that physical address, and SSEG of a null string is zero."
+
+[[case]]
+name = "local_error"
+source = "locerr.bas"
+level = 4
+features = ["on local error", "error", "resume next", "procedure-local recovery"]
+switches = ["/O", "/FPi", "/R", "/G3", "/X"]
+expected = "locerr.out"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "A numbered procedure-local ERROR reaches its handler with exactly ERR=53/ERL=100; PASS requires RESUME, a recovery counter, and return to the caller."
+
+[[case]]
+name = "interrupt_abi"
+source = "intabi.bas"
+level = 4
+features = ["vbdos.bi RegType", "DECLARE SUB INTERRUPT", "far external call", "DOS interrupt register ABI"]
+switches = ["/O", "/FPi", "/R", "/G3", "/E", "/L VBDOS.LIB"]
+link_libraries = ["VBDOS.LIB"]
+expected = "intabi.out"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "INTERRUPT 21h function 30h returns a nonzero DOS major version in AX low byte."
+
+[[case]]
+name = "cdecl_alias_external"
+source = "cdeclabi.bas"
+level = 4
+features = ["DECLARE FUNCTION", "CDECL", "ALIAS", "byval long external ABI"]
+switches = ["/O", "/FPi", "/R", "/G3", "/E", "CDEXT.OBJ"]
+expected = "cdeclabi.out"
+parser = "required"
+lowering = "required"
+runtime = "reference-only"
+
+[[case]]
+name = "custom_control_surface"
+source = "custctl.bas"
+level = 4
+features = ["VBDOS custom-control callbacks", "property callback", "method callback", "event callback"]
+switches = ["VBDOS project compiler", "custom-control registration object"]
+expected = "custctl.out"
+parser = "required"
+lowering = "pending"
+runtime = "reference-only"
+
+[[case]]
+name = "timer_event_surface"
+source = "timerevt.bas"
+level = 4
+features = ["Visual Basic Timer event procedure", "form control property"]
+switches = ["VBDOS project compiler", "timer form"]
+expected = "timerevt.out"
+parser = "required"
+lowering = "pending"
+runtime = "reference-only"
+
+[[case]]
+name = "form_event_surface"
+source = "formevt.bas"
+level = 4
+features = ["Visual Basic form event procedures", "form property access", "form method invocation"]
+switches = ["VBDOS project compiler", "FORMEVT.FRM"]
+expected = "formevt.out"
+parser = "required"
+lowering = "pending"
+runtime = "reference-only"
+
+[[case]]
+name = "qrender_shape"
+source = "qrender.bas"
+level = 5
+features = ["qb-qrender identifier style", "$STATIC/$DYNAMIC source directives", "fixed string UDT field", "byref UDT and byval parameter", "logical-line continuation"]
+switches = ["/O", "/FPi", "/R", "/G3", "/E"]
+expected = "qrender.out"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "BYREF UDT mutation advances frameCount from 40 to 42, the fixed string remains exactly QRENDER plus one space, and mutation of the BYVAL formal cannot affect its caller."
+
+[[case]]
+name = "option_explicit_negative"
+source = "optexp.bas"
+level = 1
+features = ["OPTION EXPLICIT", "undeclared-name rejection", "VBDOS negative acceptance"]
+switches = ["/O", "/FPi", "/R", "/G3", "/E"]
+expected = "optexp.out"
+parser = "required"
+lowering = "reference-only"
+runtime = "reference-only"
+
+[[case]]
+name = "continuation_terminal_probe"
+source = "contterm.bas"
+level = 1
+features = ["VBDOS line continuation", "bare terminal underscore acceptance probe"]
+switches = ["/O", "/FPi", "/R", "/G3", "/E"]
+expected = "contterm.out"
+parser = "required"
+lowering = "reference-only"
+runtime = "reference-only"
+
+[[case]]
+name = "dialog_surface"
+source = "dialog.bas"
+level = 4
+features = ["MSGBOX statement", "MSGBOX function", "INPUTBOX$", "screen-mode-0 dialog runtime"]
+switches = ["VBDOS project/runtime", "interactive keyboard input"]
+expected = "dialog.out"
+parser = "required"
+lowering = "reference-only"
+runtime = "reference-only"
+
+[[case]]
+name = "form_lifecycle_surface"
+source = "formlife.bas"
+level = 4
+features = ["Form_Load", "Form_Resize", "Form_Paint", "Form_Unload", "mouse event signatures"]
+switches = ["VBDOS project compiler", "CLOCK.FRM-form shape"]
+expected = "formlife.out"
+parser = "required"
+lowering = "pending"
+runtime = "reference-only"
+
+[[case]]
+name = "object_runtime_surface"
+source = "objrun.bas"
+level = 4
+features = ["CONTROL type", "IF TYPEOF", "LOAD", "UNLOAD", "DOEVENTS", "form methods"]
+switches = ["VBDOS project compiler", "compiled form/control metadata"]
+expected = "objrun.out"
+parser = "required"
+lowering = "pending"
+runtime = "reference-only"
+
+[[case]]
+name = "financial-functions"
+source = "finabi.bas"
+level = 4
+features = ["financial functions", "FINANCE.LIB", "BYVAL double ABI", "array argument ABI", "status outputs", "exact DOUBLE results"]
+switches = ["/O", "/FPi", "/R", "/G3", "/E", "/L FINANCE.LIB"]
+runtime_library = "VBDCL10E.LIB"
+link_libraries = ["FINANCE.LIB"]
+expected = "PASS financial"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "All thirteen FINANCE.LIB functions must return status zero and a distinct measured MKD$ byte result; IRR/MIRR/NPV also cross the array ABI, while noncommutative BYVAL arguments prevent calling-convention permutations from sharing an answer."
+
+[[case]]
+name = "date_serial_surface"
+source = "dateser.bas"
+level = 2
+features = ["VBDOS DATEserial value API", "DATEVALUE", "TIMESERIAL", "TIMEVALUE", "date-part functions"]
+switches = ["/O", "/FPi", "/R", "/G3", "/E"]
+expected = "dateser.out"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "Absolute anchors assert 1899-12-30=0 and 06:00=.25 before component extraction and DATEVALUE/TIMEVALUE checks for 1992-02-29 12:34:56."

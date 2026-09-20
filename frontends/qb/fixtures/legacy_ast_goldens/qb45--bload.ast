@@ -1,0 +1,342 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: qb45/bload
+# dialect: QuickBasic45
+# source: qb45/Q45B19.BAS
+
+Module {
+    statements: [
+        Dim(
+            [
+                Declaration {
+                    name: "SOURCETEXT",
+                    type_name: Some(
+                        String,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: Some(
+                        Literal(
+                            Integer(
+                                4,
+                                Integer,
+                            ),
+                            Span {
+                                line: 2,
+                                start: 27,
+                                end: 28,
+                            },
+                        ),
+                    ),
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 2,
+                        start: 4,
+                        end: 28,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "TARGETTEXT",
+                    type_name: Some(
+                        String,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: Some(
+                        Literal(
+                            Integer(
+                                4,
+                                Integer,
+                            ),
+                            Span {
+                                line: 3,
+                                start: 27,
+                                end: 28,
+                            },
+                        ),
+                    ),
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 3,
+                        start: 4,
+                        end: 28,
+                    },
+                },
+            ],
+        ),
+        Assign {
+            target: Name(
+                "SOURCETEXT",
+                Span {
+                    line: 5,
+                    start: 0,
+                    end: 10,
+                },
+            ),
+            value: Literal(
+                String(
+                    "BLOB",
+                ),
+                Span {
+                    line: 5,
+                    start: 13,
+                    end: 19,
+                },
+            ),
+            span: Span {
+                line: 5,
+                start: 0,
+                end: 19,
+            },
+        },
+        DefSeg {
+            value: Some(
+                Apply {
+                    name: "VARSEG",
+                    arguments: [
+                        Name(
+                            "SOURCETEXT",
+                            Span {
+                                line: 6,
+                                start: 17,
+                                end: 27,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 6,
+                        start: 10,
+                        end: 28,
+                    },
+                },
+            ),
+            span: Span {
+                line: 6,
+                start: 0,
+                end: 3,
+            },
+        },
+        Call {
+            name: "BSAVE",
+            arguments: [
+                Literal(
+                    String(
+                        "Q45M19.BSV",
+                    ),
+                    Span {
+                        line: 7,
+                        start: 6,
+                        end: 18,
+                    },
+                ),
+                Apply {
+                    name: "VARPTR",
+                    arguments: [
+                        Name(
+                            "SOURCETEXT",
+                            Span {
+                                line: 7,
+                                start: 27,
+                                end: 37,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 7,
+                        start: 20,
+                        end: 38,
+                    },
+                },
+                Literal(
+                    Integer(
+                        4,
+                        Integer,
+                    ),
+                    Span {
+                        line: 7,
+                        start: 40,
+                        end: 41,
+                    },
+                ),
+            ],
+            explicit: false,
+            span: Span {
+                line: 7,
+                start: 0,
+                end: 5,
+            },
+        },
+        DefSeg {
+            value: Some(
+                Apply {
+                    name: "VARSEG",
+                    arguments: [
+                        Name(
+                            "TARGETTEXT",
+                            Span {
+                                line: 8,
+                                start: 17,
+                                end: 27,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 8,
+                        start: 10,
+                        end: 28,
+                    },
+                },
+            ),
+            span: Span {
+                line: 8,
+                start: 0,
+                end: 3,
+            },
+        },
+        Call {
+            name: "BLOAD",
+            arguments: [
+                Literal(
+                    String(
+                        "Q45M19.BSV",
+                    ),
+                    Span {
+                        line: 9,
+                        start: 6,
+                        end: 18,
+                    },
+                ),
+                Apply {
+                    name: "VARPTR",
+                    arguments: [
+                        Name(
+                            "TARGETTEXT",
+                            Span {
+                                line: 9,
+                                start: 27,
+                                end: 37,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 9,
+                        start: 20,
+                        end: 38,
+                    },
+                },
+            ],
+            explicit: false,
+            span: Span {
+                line: 9,
+                start: 0,
+                end: 5,
+            },
+        },
+        DefSeg {
+            value: None,
+            span: Span {
+                line: 10,
+                start: 0,
+                end: 3,
+            },
+        },
+        If {
+            condition: Binary {
+                op: Eq,
+                left: Name(
+                    "TARGETTEXT",
+                    Span {
+                        line: 12,
+                        start: 3,
+                        end: 13,
+                    },
+                ),
+                right: Literal(
+                    String(
+                        "BLOB",
+                    ),
+                    Span {
+                        line: 12,
+                        start: 16,
+                        end: 22,
+                    },
+                ),
+                span: Span {
+                    line: 12,
+                    start: 3,
+                    end: 22,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "PASS bload",
+                                ),
+                                Span {
+                                    line: 13,
+                                    start: 10,
+                                    end: 22,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 13,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+            ],
+            else_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL bload bytes",
+                                ),
+                                Span {
+                                    line: 15,
+                                    start: 10,
+                                    end: 28,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 15,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+            ],
+            span: Span {
+                line: 12,
+                start: 0,
+                end: 2,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 17,
+                start: 0,
+                end: 3,
+            },
+        },
+    ],
+    procedures: [],
+}

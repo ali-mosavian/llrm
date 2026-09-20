@@ -1,0 +1,231 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: qb45/absolute
+# dialect: QuickBasic45
+# source: qb45/Q45A27.BAS
+
+Module {
+    statements: [
+        Dim(
+            [
+                Declaration {
+                    name: "MACHINECODE",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: true,
+                    bounds: [
+                        Bound {
+                            lower: Some(
+                                Literal(
+                                    Integer(
+                                        0,
+                                        Integer,
+                                    ),
+                                    Span {
+                                        line: 2,
+                                        start: 16,
+                                        end: 17,
+                                    },
+                                ),
+                            ),
+                            upper: Literal(
+                                Integer(
+                                    0,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 2,
+                                    start: 21,
+                                    end: 22,
+                                },
+                            ),
+                        },
+                    ],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 2,
+                        start: 4,
+                        end: 34,
+                    },
+                },
+            ],
+        ),
+        DefSeg {
+            value: Some(
+                Apply {
+                    name: "VARSEG",
+                    arguments: [
+                        Apply {
+                            name: "MACHINECODE",
+                            arguments: [
+                                Literal(
+                                    Integer(
+                                        0,
+                                        Integer,
+                                    ),
+                                    Span {
+                                        line: 4,
+                                        start: 29,
+                                        end: 30,
+                                    },
+                                ),
+                            ],
+                            span: Span {
+                                line: 4,
+                                start: 17,
+                                end: 31,
+                            },
+                        },
+                    ],
+                    span: Span {
+                        line: 4,
+                        start: 10,
+                        end: 32,
+                    },
+                },
+            ),
+            span: Span {
+                line: 4,
+                start: 0,
+                end: 3,
+            },
+        },
+        Runtime {
+            name: "POKE",
+            arguments: [
+                Apply {
+                    name: "VARPTR",
+                    arguments: [
+                        Apply {
+                            name: "MACHINECODE",
+                            arguments: [
+                                Literal(
+                                    Integer(
+                                        0,
+                                        Integer,
+                                    ),
+                                    Span {
+                                        line: 5,
+                                        start: 24,
+                                        end: 25,
+                                    },
+                                ),
+                            ],
+                            span: Span {
+                                line: 5,
+                                start: 12,
+                                end: 26,
+                            },
+                        },
+                    ],
+                    span: Span {
+                        line: 5,
+                        start: 5,
+                        end: 27,
+                    },
+                },
+                Literal(
+                    Integer(
+                        203,
+                        Integer,
+                    ),
+                    Span {
+                        line: 5,
+                        start: 29,
+                        end: 32,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 5,
+                start: 0,
+                end: 4,
+            },
+        },
+        Call {
+            name: "ABSOLUTE",
+            arguments: [
+                Apply {
+                    name: "VARPTR",
+                    arguments: [
+                        Apply {
+                            name: "MACHINECODE",
+                            arguments: [
+                                Literal(
+                                    Integer(
+                                        0,
+                                        Integer,
+                                    ),
+                                    Span {
+                                        line: 6,
+                                        start: 33,
+                                        end: 34,
+                                    },
+                                ),
+                            ],
+                            span: Span {
+                                line: 6,
+                                start: 21,
+                                end: 35,
+                            },
+                        },
+                    ],
+                    span: Span {
+                        line: 6,
+                        start: 14,
+                        end: 36,
+                    },
+                },
+            ],
+            explicit: true,
+            span: Span {
+                line: 6,
+                start: 0,
+                end: 4,
+            },
+        },
+        DefSeg {
+            value: None,
+            span: Span {
+                line: 7,
+                start: 0,
+                end: 3,
+            },
+        },
+        Print {
+            file: None,
+            items: [
+                PrintItem {
+                    value: Literal(
+                        String(
+                            "PASS absolute",
+                        ),
+                        Span {
+                            line: 8,
+                            start: 6,
+                            end: 21,
+                        },
+                    ),
+                    separator: End,
+                },
+            ],
+            span: Span {
+                line: 8,
+                start: 0,
+                end: 5,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 9,
+                start: 0,
+                end: 3,
+            },
+        },
+    ],
+    procedures: [],
+}

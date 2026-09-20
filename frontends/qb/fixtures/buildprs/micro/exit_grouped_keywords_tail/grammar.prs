@@ -1,0 +1,20 @@
+TOKENS:
+   tkEXIT ("EXIT"),
+   tkDEF ("DEF"),
+   tkFUNCTION ("FUNCTION"),
+   tkSUB ("SUB"),
+   tkDO ("DO"),
+   tkFOR ("FOR"),
+   tkABS ("ABS");
+
+Statements:
+   tkEXIT (((tkDEF | tkFUNCTION | tkSUB) EMIT(opStExitProc)) |
+           (tkDO EMIT(opStExitDo)) |
+           (tkFOR EMIT(opStExitFor)) EMITFFFF);
+
+Functions:
+   tkABS EMIT(opFnAbs);
+
+NonTerminals:
+EMITFFFF:
+   EMIT(UNDEFINED);

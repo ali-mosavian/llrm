@@ -1,0 +1,13 @@
+TOKENS:
+   tkCASE ("CASE"),
+   tkELSE ("ELSE"),
+   tkX ("X"),
+   tkComma (",");
+
+Statements:
+   tkCASE (tkELSE EMIT(opStCaseElse)) | (tkX {tkComma tkX});
+
+Functions:
+   tkABS tkX EMIT(opFnAbs);
+
+NonTerminals:

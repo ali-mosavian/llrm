@@ -1,0 +1,932 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: qb45/numeric
+# dialect: QuickBasic45
+# source: qb45/Q45N01.BAS
+
+Module {
+    statements: [
+        Dim(
+            [
+                Declaration {
+                    name: "INTEGERVALUE",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 2,
+                        start: 4,
+                        end: 27,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "LONGVALUE",
+                    type_name: Some(
+                        Long,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 3,
+                        start: 4,
+                        end: 21,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "SINGLEVALUE",
+                    type_name: Some(
+                        Single,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 4,
+                        start: 4,
+                        end: 25,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "DOUBLEVALUE",
+                    type_name: Some(
+                        Double,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 5,
+                        start: 4,
+                        end: 25,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "PASSED",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 6,
+                        start: 4,
+                        end: 21,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "DIVIDEND",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 7,
+                        start: 4,
+                        end: 23,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "DIVISOR",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 8,
+                        start: 4,
+                        end: 22,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "LONGFACTOR",
+                    type_name: Some(
+                        Long,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 9,
+                        start: 4,
+                        end: 22,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "LONGMULTIPLIER",
+                    type_name: Some(
+                        Long,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 10,
+                        start: 4,
+                        end: 26,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "LONGADDEND",
+                    type_name: Some(
+                        Long,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 11,
+                        start: 4,
+                        end: 22,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "FIRSTSINGLE",
+                    type_name: Some(
+                        Single,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 12,
+                        start: 4,
+                        end: 25,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "SECONDSINGLE",
+                    type_name: Some(
+                        Single,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 13,
+                        start: 4,
+                        end: 26,
+                    },
+                },
+            ],
+        ),
+        Read {
+            destinations: [
+                Name(
+                    "DIVIDEND",
+                    Span {
+                        line: 15,
+                        start: 5,
+                        end: 13,
+                    },
+                ),
+                Name(
+                    "DIVISOR",
+                    Span {
+                        line: 15,
+                        start: 15,
+                        end: 22,
+                    },
+                ),
+                Name(
+                    "LONGFACTOR",
+                    Span {
+                        line: 15,
+                        start: 24,
+                        end: 34,
+                    },
+                ),
+                Name(
+                    "LONGMULTIPLIER",
+                    Span {
+                        line: 15,
+                        start: 36,
+                        end: 50,
+                    },
+                ),
+                Name(
+                    "LONGADDEND",
+                    Span {
+                        line: 15,
+                        start: 52,
+                        end: 62,
+                    },
+                ),
+                Name(
+                    "FIRSTSINGLE",
+                    Span {
+                        line: 15,
+                        start: 64,
+                        end: 75,
+                    },
+                ),
+                Name(
+                    "SECONDSINGLE",
+                    Span {
+                        line: 15,
+                        start: 77,
+                        end: 89,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 15,
+                start: 0,
+                end: 4,
+            },
+        },
+        Assign {
+            target: Name(
+                "INTEGERVALUE",
+                Span {
+                    line: 16,
+                    start: 0,
+                    end: 12,
+                },
+            ),
+            value: Binary {
+                op: IntegerDivide,
+                left: Name(
+                    "DIVIDEND",
+                    Span {
+                        line: 16,
+                        start: 15,
+                        end: 23,
+                    },
+                ),
+                right: Name(
+                    "DIVISOR",
+                    Span {
+                        line: 16,
+                        start: 26,
+                        end: 33,
+                    },
+                ),
+                span: Span {
+                    line: 16,
+                    start: 15,
+                    end: 33,
+                },
+            },
+            span: Span {
+                line: 16,
+                start: 0,
+                end: 33,
+            },
+        },
+        Assign {
+            target: Name(
+                "LONGVALUE",
+                Span {
+                    line: 17,
+                    start: 0,
+                    end: 9,
+                },
+            ),
+            value: Binary {
+                op: Add,
+                left: Binary {
+                    op: Multiply,
+                    left: Name(
+                        "LONGFACTOR",
+                        Span {
+                            line: 17,
+                            start: 12,
+                            end: 22,
+                        },
+                    ),
+                    right: Name(
+                        "LONGMULTIPLIER",
+                        Span {
+                            line: 17,
+                            start: 25,
+                            end: 39,
+                        },
+                    ),
+                    span: Span {
+                        line: 17,
+                        start: 12,
+                        end: 39,
+                    },
+                },
+                right: Name(
+                    "LONGADDEND",
+                    Span {
+                        line: 17,
+                        start: 42,
+                        end: 52,
+                    },
+                ),
+                span: Span {
+                    line: 17,
+                    start: 12,
+                    end: 52,
+                },
+            },
+            span: Span {
+                line: 17,
+                start: 0,
+                end: 52,
+            },
+        },
+        Assign {
+            target: Name(
+                "SINGLEVALUE",
+                Span {
+                    line: 18,
+                    start: 0,
+                    end: 11,
+                },
+            ),
+            value: Binary {
+                op: Add,
+                left: Apply {
+                    name: "CSNG",
+                    arguments: [
+                        Name(
+                            "FIRSTSINGLE",
+                            Span {
+                                line: 18,
+                                start: 19,
+                                end: 30,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 18,
+                        start: 14,
+                        end: 31,
+                    },
+                },
+                right: Apply {
+                    name: "CSNG",
+                    arguments: [
+                        Name(
+                            "SECONDSINGLE",
+                            Span {
+                                line: 18,
+                                start: 39,
+                                end: 51,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 18,
+                        start: 34,
+                        end: 52,
+                    },
+                },
+                span: Span {
+                    line: 18,
+                    start: 14,
+                    end: 52,
+                },
+            },
+            span: Span {
+                line: 18,
+                start: 0,
+                end: 52,
+            },
+        },
+        Assign {
+            target: Name(
+                "DOUBLEVALUE",
+                Span {
+                    line: 19,
+                    start: 0,
+                    end: 11,
+                },
+            ),
+            value: Binary {
+                op: Divide,
+                left: Apply {
+                    name: "CDBL",
+                    arguments: [
+                        Name(
+                            "SINGLEVALUE",
+                            Span {
+                                line: 19,
+                                start: 19,
+                                end: 30,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 19,
+                        start: 14,
+                        end: 31,
+                    },
+                },
+                right: Apply {
+                    name: "CDBL",
+                    arguments: [
+                        Literal(
+                            Integer(
+                                2,
+                                Integer,
+                            ),
+                            Span {
+                                line: 19,
+                                start: 39,
+                                end: 40,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 19,
+                        start: 34,
+                        end: 41,
+                    },
+                },
+                span: Span {
+                    line: 19,
+                    start: 14,
+                    end: 41,
+                },
+            },
+            span: Span {
+                line: 19,
+                start: 0,
+                end: 41,
+            },
+        },
+        Assign {
+            target: Name(
+                "PASSED",
+                Span {
+                    line: 20,
+                    start: 0,
+                    end: 6,
+                },
+            ),
+            value: Binary {
+                op: Eq,
+                left: Name(
+                    "INTEGERVALUE",
+                    Span {
+                        line: 20,
+                        start: 9,
+                        end: 21,
+                    },
+                ),
+                right: Literal(
+                    Integer(
+                        5,
+                        Integer,
+                    ),
+                    Span {
+                        line: 20,
+                        start: 24,
+                        end: 25,
+                    },
+                ),
+                span: Span {
+                    line: 20,
+                    start: 9,
+                    end: 25,
+                },
+            },
+            span: Span {
+                line: 20,
+                start: 0,
+                end: 25,
+            },
+        },
+        If {
+            condition: Name(
+                "PASSED",
+                Span {
+                    line: 21,
+                    start: 3,
+                    end: 9,
+                },
+            ),
+            then_branch: [
+                Assign {
+                    target: Name(
+                        "PASSED",
+                        Span {
+                            line: 21,
+                            start: 15,
+                            end: 21,
+                        },
+                    ),
+                    value: Binary {
+                        op: Eq,
+                        left: Name(
+                            "LONGVALUE",
+                            Span {
+                                line: 21,
+                                start: 24,
+                                end: 33,
+                            },
+                        ),
+                        right: Literal(
+                            Integer(
+                                300007,
+                                Integer,
+                            ),
+                            Span {
+                                line: 21,
+                                start: 36,
+                                end: 42,
+                            },
+                        ),
+                        span: Span {
+                            line: 21,
+                            start: 24,
+                            end: 42,
+                        },
+                    },
+                    span: Span {
+                        line: 21,
+                        start: 15,
+                        end: 42,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 21,
+                start: 0,
+                end: 42,
+            },
+        },
+        If {
+            condition: Name(
+                "PASSED",
+                Span {
+                    line: 22,
+                    start: 3,
+                    end: 9,
+                },
+            ),
+            then_branch: [
+                Assign {
+                    target: Name(
+                        "PASSED",
+                        Span {
+                            line: 22,
+                            start: 15,
+                            end: 21,
+                        },
+                    ),
+                    value: Binary {
+                        op: Eq,
+                        left: Name(
+                            "SINGLEVALUE",
+                            Span {
+                                line: 22,
+                                start: 24,
+                                end: 35,
+                            },
+                        ),
+                        right: Apply {
+                            name: "CSNG",
+                            arguments: [
+                                Literal(
+                                    Integer(
+                                        3,
+                                        Integer,
+                                    ),
+                                    Span {
+                                        line: 22,
+                                        start: 43,
+                                        end: 44,
+                                    },
+                                ),
+                            ],
+                            span: Span {
+                                line: 22,
+                                start: 38,
+                                end: 45,
+                            },
+                        },
+                        span: Span {
+                            line: 22,
+                            start: 24,
+                            end: 45,
+                        },
+                    },
+                    span: Span {
+                        line: 22,
+                        start: 15,
+                        end: 45,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 22,
+                start: 0,
+                end: 45,
+            },
+        },
+        If {
+            condition: Name(
+                "PASSED",
+                Span {
+                    line: 23,
+                    start: 3,
+                    end: 9,
+                },
+            ),
+            then_branch: [
+                Assign {
+                    target: Name(
+                        "PASSED",
+                        Span {
+                            line: 23,
+                            start: 15,
+                            end: 21,
+                        },
+                    ),
+                    value: Binary {
+                        op: Eq,
+                        left: Name(
+                            "DOUBLEVALUE",
+                            Span {
+                                line: 23,
+                                start: 24,
+                                end: 35,
+                            },
+                        ),
+                        right: Apply {
+                            name: "CDBL",
+                            arguments: [
+                                Literal(
+                                    Real(
+                                        "1.5",
+                                        Single,
+                                    ),
+                                    Span {
+                                        line: 23,
+                                        start: 43,
+                                        end: 46,
+                                    },
+                                ),
+                            ],
+                            span: Span {
+                                line: 23,
+                                start: 38,
+                                end: 47,
+                            },
+                        },
+                        span: Span {
+                            line: 23,
+                            start: 24,
+                            end: 47,
+                        },
+                    },
+                    span: Span {
+                        line: 23,
+                        start: 15,
+                        end: 47,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 23,
+                start: 0,
+                end: 47,
+            },
+        },
+        If {
+            condition: Name(
+                "PASSED",
+                Span {
+                    line: 25,
+                    start: 3,
+                    end: 9,
+                },
+            ),
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "PASS numeric",
+                                ),
+                                Span {
+                                    line: 26,
+                                    start: 10,
+                                    end: 24,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 26,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+            ],
+            else_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL numeric conversions",
+                                ),
+                                Span {
+                                    line: 28,
+                                    start: 10,
+                                    end: 36,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 28,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+            ],
+            span: Span {
+                line: 25,
+                start: 0,
+                end: 2,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 30,
+                start: 0,
+                end: 3,
+            },
+        },
+        Data {
+            values: [
+                Literal(
+                    Integer(
+                        17,
+                        Integer,
+                    ),
+                    Span {
+                        line: 32,
+                        start: 5,
+                        end: 7,
+                    },
+                ),
+                Literal(
+                    Integer(
+                        3,
+                        Integer,
+                    ),
+                    Span {
+                        line: 32,
+                        start: 9,
+                        end: 10,
+                    },
+                ),
+                Literal(
+                    Integer(
+                        100000,
+                        Integer,
+                    ),
+                    Span {
+                        line: 32,
+                        start: 12,
+                        end: 18,
+                    },
+                ),
+                Literal(
+                    Integer(
+                        3,
+                        Integer,
+                    ),
+                    Span {
+                        line: 32,
+                        start: 20,
+                        end: 21,
+                    },
+                ),
+                Literal(
+                    Integer(
+                        7,
+                        Integer,
+                    ),
+                    Span {
+                        line: 32,
+                        start: 23,
+                        end: 24,
+                    },
+                ),
+                Literal(
+                    Integer(
+                        1,
+                        Integer,
+                    ),
+                    Span {
+                        line: 32,
+                        start: 26,
+                        end: 27,
+                    },
+                ),
+                Literal(
+                    Integer(
+                        2,
+                        Integer,
+                    ),
+                    Span {
+                        line: 32,
+                        start: 29,
+                        end: 30,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 32,
+                start: 0,
+                end: 4,
+            },
+        },
+    ],
+    procedures: [],
+}

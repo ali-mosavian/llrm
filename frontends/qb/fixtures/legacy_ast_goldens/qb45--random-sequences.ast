@@ -1,0 +1,1725 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: qb45/random-sequences
+# dialect: QuickBasic45
+# source: qb45/Q45RD60.BAS
+
+Module {
+    statements: [
+        Dim(
+            [
+                Declaration {
+                    name: "SEEDVALUE",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 2,
+                        start: 4,
+                        end: 24,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "FIRSTVALUE",
+                    type_name: Some(
+                        Single,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 3,
+                        start: 4,
+                        end: 24,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "SECONDVALUE",
+                    type_name: Some(
+                        Single,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 4,
+                        start: 4,
+                        end: 25,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "RESETVALUE",
+                    type_name: Some(
+                        Single,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 5,
+                        start: 4,
+                        end: 24,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "REPEATVALUE",
+                    type_name: Some(
+                        Single,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 6,
+                        start: 4,
+                        end: 25,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "NEGATIVESEEDVALUE",
+                    type_name: Some(
+                        Single,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 7,
+                        start: 4,
+                        end: 31,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "NEGATIVENEXTVALUE",
+                    type_name: Some(
+                        Single,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 8,
+                        start: 4,
+                        end: 31,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "NEGATIVERESETVALUE",
+                    type_name: Some(
+                        Single,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 9,
+                        start: 4,
+                        end: 32,
+                    },
+                },
+            ],
+        ),
+        Read {
+            destinations: [
+                Name(
+                    "SEEDVALUE",
+                    Span {
+                        line: 11,
+                        start: 5,
+                        end: 14,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 11,
+                start: 0,
+                end: 4,
+            },
+        },
+        Call {
+            name: "RANDOMIZE",
+            arguments: [
+                Name(
+                    "SEEDVALUE",
+                    Span {
+                        line: 12,
+                        start: 10,
+                        end: 19,
+                    },
+                ),
+            ],
+            explicit: false,
+            span: Span {
+                line: 12,
+                start: 0,
+                end: 9,
+            },
+        },
+        Assign {
+            target: Name(
+                "FIRSTVALUE",
+                Span {
+                    line: 13,
+                    start: 0,
+                    end: 10,
+                },
+            ),
+            value: Name(
+                "RND",
+                Span {
+                    line: 13,
+                    start: 13,
+                    end: 16,
+                },
+            ),
+            span: Span {
+                line: 13,
+                start: 0,
+                end: 16,
+            },
+        },
+        Assign {
+            target: Name(
+                "SECONDVALUE",
+                Span {
+                    line: 14,
+                    start: 0,
+                    end: 11,
+                },
+            ),
+            value: Name(
+                "RND",
+                Span {
+                    line: 14,
+                    start: 14,
+                    end: 17,
+                },
+            ),
+            span: Span {
+                line: 14,
+                start: 0,
+                end: 17,
+            },
+        },
+        Call {
+            name: "RANDOMIZE",
+            arguments: [
+                Name(
+                    "SEEDVALUE",
+                    Span {
+                        line: 15,
+                        start: 10,
+                        end: 19,
+                    },
+                ),
+            ],
+            explicit: false,
+            span: Span {
+                line: 15,
+                start: 0,
+                end: 9,
+            },
+        },
+        Assign {
+            target: Name(
+                "RESETVALUE",
+                Span {
+                    line: 16,
+                    start: 0,
+                    end: 10,
+                },
+            ),
+            value: Name(
+                "RND",
+                Span {
+                    line: 16,
+                    start: 13,
+                    end: 16,
+                },
+            ),
+            span: Span {
+                line: 16,
+                start: 0,
+                end: 16,
+            },
+        },
+        Assign {
+            target: Name(
+                "REPEATVALUE",
+                Span {
+                    line: 17,
+                    start: 0,
+                    end: 11,
+                },
+            ),
+            value: Apply {
+                name: "RND",
+                arguments: [
+                    Literal(
+                        Integer(
+                            0,
+                            Integer,
+                        ),
+                        Span {
+                            line: 17,
+                            start: 18,
+                            end: 19,
+                        },
+                    ),
+                ],
+                span: Span {
+                    line: 17,
+                    start: 14,
+                    end: 20,
+                },
+            },
+            span: Span {
+                line: 17,
+                start: 0,
+                end: 20,
+            },
+        },
+        Assign {
+            target: Name(
+                "NEGATIVESEEDVALUE",
+                Span {
+                    line: 18,
+                    start: 0,
+                    end: 17,
+                },
+            ),
+            value: Apply {
+                name: "RND",
+                arguments: [
+                    Unary {
+                        op: Negative,
+                        operand: Literal(
+                            Integer(
+                                7,
+                                Integer,
+                            ),
+                            Span {
+                                line: 18,
+                                start: 25,
+                                end: 26,
+                            },
+                        ),
+                        span: Span {
+                            line: 18,
+                            start: 24,
+                            end: 26,
+                        },
+                    },
+                ],
+                span: Span {
+                    line: 18,
+                    start: 20,
+                    end: 27,
+                },
+            },
+            span: Span {
+                line: 18,
+                start: 0,
+                end: 27,
+            },
+        },
+        Assign {
+            target: Name(
+                "NEGATIVENEXTVALUE",
+                Span {
+                    line: 19,
+                    start: 0,
+                    end: 17,
+                },
+            ),
+            value: Name(
+                "RND",
+                Span {
+                    line: 19,
+                    start: 20,
+                    end: 23,
+                },
+            ),
+            span: Span {
+                line: 19,
+                start: 0,
+                end: 23,
+            },
+        },
+        Assign {
+            target: Name(
+                "NEGATIVERESETVALUE",
+                Span {
+                    line: 20,
+                    start: 0,
+                    end: 18,
+                },
+            ),
+            value: Apply {
+                name: "RND",
+                arguments: [
+                    Unary {
+                        op: Negative,
+                        operand: Literal(
+                            Integer(
+                                7,
+                                Integer,
+                            ),
+                            Span {
+                                line: 20,
+                                start: 26,
+                                end: 27,
+                            },
+                        ),
+                        span: Span {
+                            line: 20,
+                            start: 25,
+                            end: 27,
+                        },
+                    },
+                ],
+                span: Span {
+                    line: 20,
+                    start: 21,
+                    end: 28,
+                },
+            },
+            span: Span {
+                line: 20,
+                start: 0,
+                end: 28,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Apply {
+                    name: "MKS$",
+                    arguments: [
+                        Name(
+                            "FIRSTVALUE",
+                            Span {
+                                line: 21,
+                                start: 8,
+                                end: 18,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 21,
+                        start: 3,
+                        end: 19,
+                    },
+                },
+                right: Binary {
+                    op: Add,
+                    left: Binary {
+                        op: Add,
+                        left: Binary {
+                            op: Add,
+                            left: Apply {
+                                name: "CHR$",
+                                arguments: [
+                                    Literal(
+                                        Integer(
+                                            195,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 21,
+                                            start: 28,
+                                            end: 31,
+                                        },
+                                    ),
+                                ],
+                                span: Span {
+                                    line: 21,
+                                    start: 23,
+                                    end: 32,
+                                },
+                            },
+                            right: Apply {
+                                name: "CHR$",
+                                arguments: [
+                                    Literal(
+                                        Integer(
+                                            229,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 21,
+                                            start: 40,
+                                            end: 43,
+                                        },
+                                    ),
+                                ],
+                                span: Span {
+                                    line: 21,
+                                    start: 35,
+                                    end: 44,
+                                },
+                            },
+                            span: Span {
+                                line: 21,
+                                start: 23,
+                                end: 44,
+                            },
+                        },
+                        right: Apply {
+                            name: "CHR$",
+                            arguments: [
+                                Literal(
+                                    Integer(
+                                        53,
+                                        Integer,
+                                    ),
+                                    Span {
+                                        line: 21,
+                                        start: 52,
+                                        end: 54,
+                                    },
+                                ),
+                            ],
+                            span: Span {
+                                line: 21,
+                                start: 47,
+                                end: 55,
+                            },
+                        },
+                        span: Span {
+                            line: 21,
+                            start: 23,
+                            end: 55,
+                        },
+                    },
+                    right: Apply {
+                        name: "CHR$",
+                        arguments: [
+                            Literal(
+                                Integer(
+                                    63,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 21,
+                                    start: 63,
+                                    end: 65,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 21,
+                            start: 58,
+                            end: 66,
+                        },
+                    },
+                    span: Span {
+                        line: 21,
+                        start: 23,
+                        end: 66,
+                    },
+                },
+                span: Span {
+                    line: 21,
+                    start: 3,
+                    end: 66,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL random first",
+                                ),
+                                Span {
+                                    line: 22,
+                                    start: 10,
+                                    end: 29,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 22,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 23,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 21,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Apply {
+                    name: "MKS$",
+                    arguments: [
+                        Name(
+                            "SECONDVALUE",
+                            Span {
+                                line: 25,
+                                start: 8,
+                                end: 19,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 25,
+                        start: 3,
+                        end: 20,
+                    },
+                },
+                right: Binary {
+                    op: Add,
+                    left: Binary {
+                        op: Add,
+                        left: Binary {
+                            op: Add,
+                            left: Apply {
+                                name: "CHR$",
+                                arguments: [
+                                    Literal(
+                                        Integer(
+                                            244,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 25,
+                                            start: 29,
+                                            end: 32,
+                                        },
+                                    ),
+                                ],
+                                span: Span {
+                                    line: 25,
+                                    start: 24,
+                                    end: 33,
+                                },
+                            },
+                            right: Apply {
+                                name: "CHR$",
+                                arguments: [
+                                    Literal(
+                                        Integer(
+                                            114,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 25,
+                                            start: 41,
+                                            end: 44,
+                                        },
+                                    ),
+                                ],
+                                span: Span {
+                                    line: 25,
+                                    start: 36,
+                                    end: 45,
+                                },
+                            },
+                            span: Span {
+                                line: 25,
+                                start: 24,
+                                end: 45,
+                            },
+                        },
+                        right: Apply {
+                            name: "CHR$",
+                            arguments: [
+                                Literal(
+                                    Integer(
+                                        193,
+                                        Integer,
+                                    ),
+                                    Span {
+                                        line: 25,
+                                        start: 53,
+                                        end: 56,
+                                    },
+                                ),
+                            ],
+                            span: Span {
+                                line: 25,
+                                start: 48,
+                                end: 57,
+                            },
+                        },
+                        span: Span {
+                            line: 25,
+                            start: 24,
+                            end: 57,
+                        },
+                    },
+                    right: Apply {
+                        name: "CHR$",
+                        arguments: [
+                            Literal(
+                                Integer(
+                                    62,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 25,
+                                    start: 65,
+                                    end: 67,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 25,
+                            start: 60,
+                            end: 68,
+                        },
+                    },
+                    span: Span {
+                        line: 25,
+                        start: 24,
+                        end: 68,
+                    },
+                },
+                span: Span {
+                    line: 25,
+                    start: 3,
+                    end: 68,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL random second",
+                                ),
+                                Span {
+                                    line: 26,
+                                    start: 10,
+                                    end: 30,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 26,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 27,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 25,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Apply {
+                    name: "MKS$",
+                    arguments: [
+                        Name(
+                            "RESETVALUE",
+                            Span {
+                                line: 29,
+                                start: 8,
+                                end: 18,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 29,
+                        start: 3,
+                        end: 19,
+                    },
+                },
+                right: Binary {
+                    op: Add,
+                    left: Binary {
+                        op: Add,
+                        left: Binary {
+                            op: Add,
+                            left: Apply {
+                                name: "CHR$",
+                                arguments: [
+                                    Literal(
+                                        Integer(
+                                            170,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 29,
+                                            start: 28,
+                                            end: 31,
+                                        },
+                                    ),
+                                ],
+                                span: Span {
+                                    line: 29,
+                                    start: 23,
+                                    end: 32,
+                                },
+                            },
+                            right: Apply {
+                                name: "CHR$",
+                                arguments: [
+                                    Literal(
+                                        Integer(
+                                            152,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 29,
+                                            start: 40,
+                                            end: 43,
+                                        },
+                                    ),
+                                ],
+                                span: Span {
+                                    line: 29,
+                                    start: 35,
+                                    end: 44,
+                                },
+                            },
+                            span: Span {
+                                line: 29,
+                                start: 23,
+                                end: 44,
+                            },
+                        },
+                        right: Apply {
+                            name: "CHR$",
+                            arguments: [
+                                Literal(
+                                    Integer(
+                                        208,
+                                        Integer,
+                                    ),
+                                    Span {
+                                        line: 29,
+                                        start: 52,
+                                        end: 55,
+                                    },
+                                ),
+                            ],
+                            span: Span {
+                                line: 29,
+                                start: 47,
+                                end: 56,
+                            },
+                        },
+                        span: Span {
+                            line: 29,
+                            start: 23,
+                            end: 56,
+                        },
+                    },
+                    right: Apply {
+                        name: "CHR$",
+                        arguments: [
+                            Literal(
+                                Integer(
+                                    62,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 29,
+                                    start: 64,
+                                    end: 66,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 29,
+                            start: 59,
+                            end: 67,
+                        },
+                    },
+                    span: Span {
+                        line: 29,
+                        start: 23,
+                        end: 67,
+                    },
+                },
+                span: Span {
+                    line: 29,
+                    start: 3,
+                    end: 67,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL random reseed",
+                                ),
+                                Span {
+                                    line: 30,
+                                    start: 10,
+                                    end: 30,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 30,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 31,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 29,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Apply {
+                    name: "MKS$",
+                    arguments: [
+                        Name(
+                            "REPEATVALUE",
+                            Span {
+                                line: 33,
+                                start: 8,
+                                end: 19,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 33,
+                        start: 3,
+                        end: 20,
+                    },
+                },
+                right: Binary {
+                    op: Add,
+                    left: Binary {
+                        op: Add,
+                        left: Binary {
+                            op: Add,
+                            left: Apply {
+                                name: "CHR$",
+                                arguments: [
+                                    Literal(
+                                        Integer(
+                                            170,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 33,
+                                            start: 29,
+                                            end: 32,
+                                        },
+                                    ),
+                                ],
+                                span: Span {
+                                    line: 33,
+                                    start: 24,
+                                    end: 33,
+                                },
+                            },
+                            right: Apply {
+                                name: "CHR$",
+                                arguments: [
+                                    Literal(
+                                        Integer(
+                                            152,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 33,
+                                            start: 41,
+                                            end: 44,
+                                        },
+                                    ),
+                                ],
+                                span: Span {
+                                    line: 33,
+                                    start: 36,
+                                    end: 45,
+                                },
+                            },
+                            span: Span {
+                                line: 33,
+                                start: 24,
+                                end: 45,
+                            },
+                        },
+                        right: Apply {
+                            name: "CHR$",
+                            arguments: [
+                                Literal(
+                                    Integer(
+                                        208,
+                                        Integer,
+                                    ),
+                                    Span {
+                                        line: 33,
+                                        start: 53,
+                                        end: 56,
+                                    },
+                                ),
+                            ],
+                            span: Span {
+                                line: 33,
+                                start: 48,
+                                end: 57,
+                            },
+                        },
+                        span: Span {
+                            line: 33,
+                            start: 24,
+                            end: 57,
+                        },
+                    },
+                    right: Apply {
+                        name: "CHR$",
+                        arguments: [
+                            Literal(
+                                Integer(
+                                    62,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 33,
+                                    start: 65,
+                                    end: 67,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 33,
+                            start: 60,
+                            end: 68,
+                        },
+                    },
+                    span: Span {
+                        line: 33,
+                        start: 24,
+                        end: 68,
+                    },
+                },
+                span: Span {
+                    line: 33,
+                    start: 3,
+                    end: 68,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL random zero-repeat",
+                                ),
+                                Span {
+                                    line: 34,
+                                    start: 10,
+                                    end: 35,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 34,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 35,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 33,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Apply {
+                    name: "MKS$",
+                    arguments: [
+                        Name(
+                            "NEGATIVESEEDVALUE",
+                            Span {
+                                line: 37,
+                                start: 8,
+                                end: 25,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 37,
+                        start: 3,
+                        end: 26,
+                    },
+                },
+                right: Binary {
+                    op: Add,
+                    left: Binary {
+                        op: Add,
+                        left: Binary {
+                            op: Add,
+                            left: Apply {
+                                name: "CHR$",
+                                arguments: [
+                                    Literal(
+                                        Integer(
+                                            24,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 37,
+                                            start: 35,
+                                            end: 37,
+                                        },
+                                    ),
+                                ],
+                                span: Span {
+                                    line: 37,
+                                    start: 30,
+                                    end: 38,
+                                },
+                            },
+                            right: Apply {
+                                name: "CHR$",
+                                arguments: [
+                                    Literal(
+                                        Integer(
+                                            228,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 37,
+                                            start: 46,
+                                            end: 49,
+                                        },
+                                    ),
+                                ],
+                                span: Span {
+                                    line: 37,
+                                    start: 41,
+                                    end: 50,
+                                },
+                            },
+                            span: Span {
+                                line: 37,
+                                start: 30,
+                                end: 50,
+                            },
+                        },
+                        right: Apply {
+                            name: "CHR$",
+                            arguments: [
+                                Literal(
+                                    Integer(
+                                        180,
+                                        Integer,
+                                    ),
+                                    Span {
+                                        line: 37,
+                                        start: 58,
+                                        end: 61,
+                                    },
+                                ),
+                            ],
+                            span: Span {
+                                line: 37,
+                                start: 53,
+                                end: 62,
+                            },
+                        },
+                        span: Span {
+                            line: 37,
+                            start: 30,
+                            end: 62,
+                        },
+                    },
+                    right: Apply {
+                        name: "CHR$",
+                        arguments: [
+                            Literal(
+                                Integer(
+                                    61,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 37,
+                                    start: 70,
+                                    end: 72,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 37,
+                            start: 65,
+                            end: 73,
+                        },
+                    },
+                    span: Span {
+                        line: 37,
+                        start: 30,
+                        end: 73,
+                    },
+                },
+                span: Span {
+                    line: 37,
+                    start: 3,
+                    end: 73,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL random negative-seed",
+                                ),
+                                Span {
+                                    line: 38,
+                                    start: 10,
+                                    end: 37,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 38,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 39,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 37,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Apply {
+                    name: "MKS$",
+                    arguments: [
+                        Name(
+                            "NEGATIVENEXTVALUE",
+                            Span {
+                                line: 41,
+                                start: 8,
+                                end: 25,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 41,
+                        start: 3,
+                        end: 26,
+                    },
+                },
+                right: Binary {
+                    op: Add,
+                    left: Binary {
+                        op: Add,
+                        left: Binary {
+                            op: Add,
+                            left: Apply {
+                                name: "CHR$",
+                                arguments: [
+                                    Literal(
+                                        Integer(
+                                            58,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 41,
+                                            start: 35,
+                                            end: 37,
+                                        },
+                                    ),
+                                ],
+                                span: Span {
+                                    line: 41,
+                                    start: 30,
+                                    end: 38,
+                                },
+                            },
+                            right: Apply {
+                                name: "CHR$",
+                                arguments: [
+                                    Literal(
+                                        Integer(
+                                            149,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 41,
+                                            start: 46,
+                                            end: 49,
+                                        },
+                                    ),
+                                ],
+                                span: Span {
+                                    line: 41,
+                                    start: 41,
+                                    end: 50,
+                                },
+                            },
+                            span: Span {
+                                line: 41,
+                                start: 30,
+                                end: 50,
+                            },
+                        },
+                        right: Apply {
+                            name: "CHR$",
+                            arguments: [
+                                Literal(
+                                    Integer(
+                                        9,
+                                        Integer,
+                                    ),
+                                    Span {
+                                        line: 41,
+                                        start: 58,
+                                        end: 59,
+                                    },
+                                ),
+                            ],
+                            span: Span {
+                                line: 41,
+                                start: 53,
+                                end: 60,
+                            },
+                        },
+                        span: Span {
+                            line: 41,
+                            start: 30,
+                            end: 60,
+                        },
+                    },
+                    right: Apply {
+                        name: "CHR$",
+                        arguments: [
+                            Literal(
+                                Integer(
+                                    63,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 41,
+                                    start: 68,
+                                    end: 70,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 41,
+                            start: 63,
+                            end: 71,
+                        },
+                    },
+                    span: Span {
+                        line: 41,
+                        start: 30,
+                        end: 71,
+                    },
+                },
+                span: Span {
+                    line: 41,
+                    start: 3,
+                    end: 71,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL random negative-next",
+                                ),
+                                Span {
+                                    line: 42,
+                                    start: 10,
+                                    end: 37,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 42,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 43,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 41,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Apply {
+                    name: "MKS$",
+                    arguments: [
+                        Name(
+                            "NEGATIVERESETVALUE",
+                            Span {
+                                line: 45,
+                                start: 8,
+                                end: 26,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 45,
+                        start: 3,
+                        end: 27,
+                    },
+                },
+                right: Binary {
+                    op: Add,
+                    left: Binary {
+                        op: Add,
+                        left: Binary {
+                            op: Add,
+                            left: Apply {
+                                name: "CHR$",
+                                arguments: [
+                                    Literal(
+                                        Integer(
+                                            24,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 45,
+                                            start: 36,
+                                            end: 38,
+                                        },
+                                    ),
+                                ],
+                                span: Span {
+                                    line: 45,
+                                    start: 31,
+                                    end: 39,
+                                },
+                            },
+                            right: Apply {
+                                name: "CHR$",
+                                arguments: [
+                                    Literal(
+                                        Integer(
+                                            228,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 45,
+                                            start: 47,
+                                            end: 50,
+                                        },
+                                    ),
+                                ],
+                                span: Span {
+                                    line: 45,
+                                    start: 42,
+                                    end: 51,
+                                },
+                            },
+                            span: Span {
+                                line: 45,
+                                start: 31,
+                                end: 51,
+                            },
+                        },
+                        right: Apply {
+                            name: "CHR$",
+                            arguments: [
+                                Literal(
+                                    Integer(
+                                        180,
+                                        Integer,
+                                    ),
+                                    Span {
+                                        line: 45,
+                                        start: 59,
+                                        end: 62,
+                                    },
+                                ),
+                            ],
+                            span: Span {
+                                line: 45,
+                                start: 54,
+                                end: 63,
+                            },
+                        },
+                        span: Span {
+                            line: 45,
+                            start: 31,
+                            end: 63,
+                        },
+                    },
+                    right: Apply {
+                        name: "CHR$",
+                        arguments: [
+                            Literal(
+                                Integer(
+                                    61,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 45,
+                                    start: 71,
+                                    end: 73,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 45,
+                            start: 66,
+                            end: 74,
+                        },
+                    },
+                    span: Span {
+                        line: 45,
+                        start: 31,
+                        end: 74,
+                    },
+                },
+                span: Span {
+                    line: 45,
+                    start: 3,
+                    end: 74,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL random negative-reset",
+                                ),
+                                Span {
+                                    line: 46,
+                                    start: 10,
+                                    end: 38,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 46,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 47,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 45,
+                start: 0,
+                end: 2,
+            },
+        },
+        Print {
+            file: None,
+            items: [
+                PrintItem {
+                    value: Literal(
+                        String(
+                            "PASS random",
+                        ),
+                        Span {
+                            line: 49,
+                            start: 6,
+                            end: 19,
+                        },
+                    ),
+                    separator: End,
+                },
+            ],
+            span: Span {
+                line: 49,
+                start: 0,
+                end: 5,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 50,
+                start: 0,
+                end: 3,
+            },
+        },
+        Data {
+            values: [
+                Literal(
+                    Integer(
+                        1234,
+                        Integer,
+                    ),
+                    Span {
+                        line: 52,
+                        start: 5,
+                        end: 9,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 52,
+                start: 0,
+                end: 4,
+            },
+        },
+    ],
+    procedures: [],
+}

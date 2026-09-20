@@ -1,0 +1,73 @@
+TOKENS:
+   tkDEF ("DEF"),
+   tkDECLARE ("DECLARE"),
+   tkFUNCTION ("FUNCTION"),
+   tkSUB ("SUB"),
+   tkSEG ("SEG"),
+   tkBLOAD ("BLOAD"),
+   tkBSAVE ("BSAVE"),
+   tkWAIT ("WAIT"),
+   tkABS ("ABS"),
+   tkPOINT ("POINT"),
+   tkLBOUND ("LBOUND"),
+   tkUBOUND ("UBOUND"),
+   tkINPUT_ ("INPUT$"),
+   tkIOCTL_ ("IOCTL$"),
+   tkLbs ("#"),
+   tkLParen ("("),
+   tkRParen (")"),
+   tkComma (","),
+   tkEQ ("=");
+
+Statements:
+   tkDEF IdFn MARK(3) parms [tkEQ MARK(5) Exp];
+     <CgDeclare(opStDefFn)>
+   tkDEF tkSEG [tkEQ Exp];
+     <Cg0or1Args(opStDefSeg0)>
+   tkDECLARE ((tkFUNCTION IdFuncDecl) | (tkSUB IdSubDecl)) MARK(3) parms;
+     <CgDeclare(opStDeclare)>
+   tkBLOAD Exp optCommaExp;
+     <Cg1or2Args(opStBload1)>
+   tkBSAVE expCommaExp commaExp EMIT(opStBsave);
+   tkWAIT Exp exp12;
+
+Functions:
+   tkABS fn1arg EMIT(opFnAbs);
+   tkPOINT fn12arg;
+     <Cg1or2Args(opFnPoint1)>
+   tkLBOUND fnBoundArg;
+     <Cg1or2Args(opFnLbound1)>
+   tkUBOUND fnBoundArg;
+     <Cg1or2Args(opFnUbound1)>
+   tkINPUT_ tkLParen Exp [tkComma optFilenum] tkRParen;
+   tkIOCTL_ tkLParen optFilenum tkRParen EMIT(opFnIoctl_);
+
+NonTerminals:
+commaExp:
+   tkComma Exp;
+Exp:
+   EXTERNAL MSG_ExpExp;
+exp12:
+   commaExp optCommaExp;
+expCommaExp:
+   Exp tkComma Exp;
+fn1arg:
+   tkLParen Exp tkRParen;
+fn12arg:
+   tkLParen Exp optCommaExp tkRParen;
+fnBoundArg:
+   tkLParen IdArray optCommaExp tkRParen;
+IdArray:
+   EXTERNAL MSG_ExpVar;
+IdFn:
+   EXTERNAL;
+IdFuncDecl:
+   EXTERNAL;
+IdSubDecl:
+   EXTERNAL;
+optCommaExp:
+   [commaExp];
+optFilenum:
+   (tkLbs Exp EMIT(opLbs)) | Exp;
+parms:
+   EXTERNAL;

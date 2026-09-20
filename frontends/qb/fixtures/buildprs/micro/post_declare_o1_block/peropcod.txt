@@ -1,0 +1,13 @@
+opStDoWhile|x
+opStDoUntil|x
+opStDo|x
+opStDraw|x
+opStElseIf|x
+opStElse|x
+opStEndDef|x
+opStEndProc|x
+opStEndIfBlock|x
+opStEndSelect|x
+opStEndType|x
+opStEnd|x
+opFnAbs|x

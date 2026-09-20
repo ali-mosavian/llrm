@@ -75,6 +75,7 @@ from dataclasses import field
 from dataclasses import replace
 from typing import TYPE_CHECKING
 from dataclasses import dataclass
+from collections.abc import Iterable
 
 if TYPE_CHECKING:
     from qbopt.objectfile.module import Module
@@ -281,6 +282,23 @@ for _family in ("qb45", "pds71", "vbdos"):
             "remain worst-case; no preservation or termination claim."
         ),
     )
+
+# PDS 7.1 has the same zero-argument clock interface as the independently
+# audited QB 4.5 and VBDOS libraries.  Keep the profile-specific evidence
+# here: source lowering asks the shared table, rather than teaching the
+# frontend a runtime-family exception.
+VARIANTS[("B$TIMR", "pds71")] = replace(
+    worst("B$TIMR"),
+    inputs=frozenset({Reg.AX, Reg.BX, Reg.CX, Reg.DX, Reg.SI, Reg.DI}),
+    cleanup=0,
+    evidence=(
+        "BCL71ENR.LIB rt/ostimer.asm B$TIMR 0000..0042: balanced BP/SI saves; "
+        "DOS GETTIM at 0004; MUL CH at 000a kills incoming arithmetic flags; "
+        "the result is stored through BX at 0037..003b and its near pointer "
+        "returned in AX by XCHG BX,AX; POP SI/BP / RETF consumes no caller "
+        "arguments. Time, memory, x87, errors and GP effects remain conservative."
+    ),
+)
 
 
 def own(name: str) -> Contract:
@@ -1020,7 +1038,7 @@ VARIANTS[("B$EXSA", "qb45")] = replace(
 )
 
 
-def for_module(found, *, external: dict[str, Contract] | None = None) -> "dict[int, Contract]":
+def for_module(found: "Module", *, external: dict[str, Contract] | None = None) -> "dict[int, Contract]":
     """The per-site map for a whole module, from the object itself.
 
     One place, because the raise and the lowering must be handed the same
@@ -1064,7 +1082,7 @@ def _redim_sites(found: "Module", contracts: dict[int, Contract]) -> None:
     if isinstance(mapped, str):
         return
     for block in blocks.partition(found, mapped):
-        for rank, descriptor, call in zip(block.insns, block.insns[1:], block.insns[2:]):
+        for rank, descriptor, call in zip(block.insns, block.insns[1:], block.insns[2:], strict=False):
             if found.calls.get(call.at) != "B$RDIM" or rank.end != descriptor.at or descriptor.end != call.at:
                 continue
             if rank.insn.code not in {Code.PUSH_IMM16, Code.PUSHW_IMM8}:
@@ -1193,7 +1211,7 @@ def barrier(routine: Contract) -> bool:
     return routine.enters_user_code or routine.error_handling or not routine.established
 
 
-def handles_errors(routines) -> bool:
+def handles_errors(routines: Iterable[Contract]) -> bool:
     """Whether the module has an ON ERROR handler, so a raised error can reach user code."""
     return any(routine.error_handling for routine in routines)
 

@@ -1,0 +1,58 @@
+        page    ,132
+        TITLE   prsstate - Parser state tables
+
+;*********************************
+;*** THIS IS NOT A SOURCE FILE ***
+;*********************************
+
+; This file was created by program 'buildprs' on Sat Jun 13 14:51:38 2026
+
+
+        .xlist
+include version.inc
+PRSSTATE_ASM = ON
+        IncludeOnce opcodes
+        IncludeOnce parser
+        IncludeOnce pcode
+        IncludeOnce qbimsgs
+.list
+
+assumes DS,DATA
+assumes SS,DATA
+assumes ES,NOTHING
+
+sBegin  CP
+assumes CS,CP
+PUBLIC  tIntNtDisp
+PUBLIC  tExtNtDisp
+PUBLIC  tExtNtHelp
+PUBLIC  tState
+
+
+;Internal Nonterminal Dispatch Table
+tIntNtDisp      LABEL   WORD
+
+
+;External Nonterminal Dispatch Table
+tExtNtDisp      LABEL   WORD
+
+;External Nonterminal Help Text Table
+tExtNtHelp      LABEL   BYTE
+
+;Recursive Descent Parse State Tables
+tState  LABEL   BYTE
+        DB      07H             , 01H           ; 0:  tkX->3
+        DB      01H                             ; 2:  Reject
+        DB      05H             , 01H           ; 3:  tkComma->6
+        DB      00H                             ; 5:  Accept
+        DB      07H             , 0FFH          ; 6:  tkX->Accept
+        DB      01H                             ; 8:  Reject
+
+; state table = 9 bytes
+
+sEnd    CP
+
+sBegin  DATA
+sEnd    DATA
+
+        END

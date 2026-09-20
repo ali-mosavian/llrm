@@ -1,0 +1,195 @@
+schema = 1
+dialect = "pds71"
+runtime = "pds71-real-mode"
+inherits = "../qb45/suite.toml"
+
+[[case]]
+name = "pds-huge-array"
+source = "PDHUGE.BAS"
+level = 1
+features = ["pds71-profile", "dynamic-array", "huge-array", "nonzero-lower-bound", "multidimensional-array", "real-mode-segmented-memory"]
+switches = ["/O", "/FPi", "/G2", "/Ah", "/R", "/Zi"]
+expected = "PDHUGE.OUT"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "Writes and rereads five indexed elements spanning the 64 KiB dynamic-array boundary."
+
+[[case]]
+name = "pds-row-major-array"
+source = "PDROW.BAS"
+level = 1
+features = ["pds71-profile", "row-major-array", "varptr", "varseg", "def-seg"]
+switches = ["/O", "/FPi", "/G2", "/R", "/Zi"]
+expected = "PDROW.OUT"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "PEEK sees the adjacent physical element selected by /R row-major layout."
+
+[[case]]
+name = "pds-far-string"
+source = "PDFAR.BAS"
+level = 2
+features = ["pds71-profile", "far-string", "dynamic-string", "string-builder", "far-heap"]
+switches = ["/O", "/FPi", "/G2", "/Fs", "/Zi"]
+expected = "PDFAR.OUT"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "Reads both 30,000-byte string tails after allocating payload beyond the near heap."
+
+[[case]]
+name = "pds-currency"
+source = "PDCUR.BAS"
+level = 2
+features = ["pds71-profile", "currency", "ccur", "fixed-decimal-arithmetic"]
+switches = ["/O", "/FPi", "/G2", "/Zi"]
+expected = "PDCUR.OUT"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "CCUR arithmetic yields exactly 124; MKC$ bytes independently witness 123.45 as the little-endian scaled integer 1,234,500 before CVC round-trip."
+
+[[case]]
+name = "pds-runtime-check"
+source = "PDRTC.BAS"
+level = 2
+features = ["pds71-profile", "runtime-bounds-check", "on-error", "resume", "err"]
+switches = ["/O", "/FPi", "/G2", "/D", "/E", "/X", "/Zi"]
+expected = "PDRTC.OUT"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "A numbered checked out-of-range store raises exactly ERR 9/ERL 100; PASS is printed only after RESUME reaches the recovery label."
+
+[[case]]
+name = "pds-quick-call"
+source = "PDQCALL.BAS"
+level = 3
+features = ["pds71-profile", "quick-call", "byval", "function", "long-return"]
+switches = ["/O", "/FPi", "/G2", "/Ot", "/Zi"]
+expected = "PDQCALL.OUT"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "A /Ot three-argument noncommutative LONG function returns 39, mutates its BYREF first argument, and leaves two mutated BYVAL formals unchanged in the caller."
+
+[[case]]
+name = "pds-local-error"
+source = "PDLOCAL.BAS"
+level = 2
+features = ["pds71-profile", "on-local-error", "resume-label", "err", "erl", "error-statement"]
+switches = ["/O", "/FPi", "/G2", "/E", "/X", "/Zi"]
+expected = "PDLOCAL.OUT"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "A numbered ERROR 53 is handled inside the SUB; independent exact ERR and ERL checks must pass before RESUME to a label, one recovery count, and return to the caller."
+
+[[case]]
+name = "pds-com-event"
+source = "reference/PDCOM.BAS"
+level = 4
+features = ["pds71-profile", "on-com", "com-buffer", "event-handler", "serial-hardware"]
+switches = ["/O", "/FPi", "/G2", "/C:512", "/V", "/W", "/Zi"]
+expected = "reference/PDCOM.OUT"
+parser = "required"
+lowering = "required"
+runtime = "reference-only"
+
+[[case]]
+name = "pds-key-pen-play-events"
+source = "reference/PDEVENT.BAS"
+level = 4
+features = ["pds71-profile", "on-key", "on-pen", "on-play", "event-handler", "keyboard-pen-speaker-hardware"]
+switches = ["/O", "/FPi", "/G2", "/V", "/W", "/Zi"]
+expected = "reference/PDEVENT.OUT"
+parser = "required"
+lowering = "required"
+runtime = "reference-only"
+
+[[case]]
+name = "pds-common-modules"
+source = "modules/PDCOMM.BAS"
+companions = ["modules/PDCOMW.BAS"]
+level = 3
+features = ["pds71-profile", "separate-compilation", "common-shared", "named-common-block", "far-procedure-call"]
+switches = ["/O", "/FPi", "/G2", "/Zi"]
+expected = "PDCOMM.OUT"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "A separately compiled SUB adds 20 and 12 to named COMMON SHARED value 10, leaving 42."
+
+[[case]]
+name = "pds-timer-event"
+source = "PDTIMER.BAS"
+level = 4
+features = ["pds71-profile", "on-timer", "event-handler", "event-return", "event-polling"]
+switches = ["/O", "/FPi", "/G2", "/V", "/W", "/Zi"]
+expected = "PDTIMER.OUT"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "The /V /W timer handler runs exactly once and changes VALUE from 7 to 99 before the finite cap."
+
+[[case]]
+name = "pds-mbf"
+source = "PDMBF.BAS"
+level = 4
+features = ["pds71-profile", "MBF", "MKS$", "CVS", "MKD$", "CVD", "compiler-switch", "exact bytes"]
+switches = ["/O", "/FPi", "/G2", "/MBF"]
+expected = "PASS pds-mbf"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "Under /MBF, DATA-fed SINGLE and DOUBLE values must produce the measured 4-byte and 8-byte Microsoft Binary Format strings before CVS/CVD round-trip checks; the bytes distinguish this profile from inherited IEEE behavior."
+
+[[case]]
+name = "pds-fpa"
+source = "PDFPA.BAS"
+level = 4
+features = ["pds71-profile", "alternate-math", "FPa", "COS", "SIN", "LOG", "BCL71ANR runtime", "exact DOUBLE bytes"]
+switches = ["/O", "/G2", "/FPa"]
+runtime_library = "BCL71ANR.LIB"
+expected = "PASS pds-fpa"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "The /FPa object must link against BCL71ANR.LIB; DATA-fed COS, SIN, and LOG inputs produce three independent measured MKD$ byte anchors, so an ordinary/emulator runtime or wrong call cannot pass."
+
+[[case]]
+name = "pds-interrupt"
+source = "reference/PDINTR.BAS"
+level = 5
+features = ["pds71-profile", "interrupt", "regtype", "dos-interrupt", "qbx-lib"]
+switches = ["/O", "/FPi", "/G2", "QBX.LIB"]
+expected = "REFERENCE ONLY pds-interrupt"
+parser = "required"
+lowering = "required"
+runtime = "reference-only"
+
+[[case]]
+name = "pds-uevent"
+source = "reference/PDUEVT.BAS"
+level = 5
+features = ["pds71-profile", "on-uevent", "uevent", "setuevent", "interrupt-service-routine"]
+switches = ["/O", "/FPi", "/G2", "/V", "/W", "external-isr"]
+expected = "REFERENCE ONLY pds-uevent"
+parser = "required"
+lowering = "required"
+runtime = "reference-only"
+
+[[case]]
+name = "pds-switch-g3-rejected"
+source = "PDG3NEG.BAS"
+level = 1
+features = ["pds71-profile", "compiler-switch", "negative-acceptance", "g3-rejected"]
+switches = ["/G3"]
+expected = "BC : Ignored unknown command line option : /G3"
+compiler_probe = "negative-acceptance"
+expected_diagnostic = "BC : Ignored unknown command line option : /G3"
+parser = "required"
+lowering = "reference-only"
+runtime = "reference-only"

@@ -88,11 +88,16 @@ def placed(body: lir.LirBody) -> lir.LirBody:
         block = by_at[current]
         order.append(block)
         done.add(current)
-        current, source = _onward(block, done, inside.get(block.at, frozenset())), current
+        current, source = _onward(block, done, inside.get(block.at, frozenset()), by_at), current
     return replace(body, blocks=tuple(order))
 
 
-def _onward(block: lir.LirBlock, done: set[int], inside: frozenset[int] = frozenset()) -> int | None:
+def _onward(
+    block: lir.LirBlock,
+    done: set[int],
+    inside: frozenset[int] = frozenset(),
+    by_at: dict[int, lir.LirBlock] | None = None,
+) -> int | None:
     """The block to place next: where the final jump goes, or else where the branch before it goes.
 
     The branch's target second, so that `jcc target; jmp placed` becomes one inverted branch.
@@ -103,6 +108,17 @@ def _onward(block: lir.LirBlock, done: set[int], inside: frozenset[int] = frozen
     targets = [real[-1].target]
     if len(real) > 1 and real[-2].op is ir.Operation.BRANCH:
         targets.append(real[-2].target)
+        # A conditional arm that rejoins the other edge is the complete
+        # straight-line trace: placing it first removes both the explicit
+        # false-edge jump and the arm's jump to the join.  Following the
+        # source fall-through first instead strands the arm after its join,
+        # as the QB frontend's two clamp assignments demonstrated.
+        jump_target, branch_target = targets
+        arm = None if by_at is None else by_at.get(branch_target)
+        passage = None if by_at is None or jump_target not in by_at else _passage(by_at[jump_target])
+        join = jump_target if passage is None else passage
+        if arm is not None and arm.succ == (join,):
+            targets = [branch_target, jump_target]
     # Keep a loop chain together before following an exit.  The final jump is
     # still preferred when both edges stay in the loop, preserving the source
     # fall-through unless doing so would strand the rest of the loop.
@@ -442,7 +458,18 @@ def _passage(block: lir.LirBlock) -> int | None:
     handled when a chosen fall-through removes the instruction itself.
     """
     if block.phis or any(
-        one.what is not None and one.what.op is ir.Operation.NOTHING and (not one.inserted or one.spread)
+        one.what is not None
+        and one.what.op is ir.Operation.NOTHING
+        and (
+            not one.inserted
+            or one.spread
+            # An identity copy may emit no instruction after allocation, but
+            # its anchor still establishes a virtual definition on this CFG
+            # edge. Threading around it would leave the successor's operand
+            # naming a value no surviving instruction defines.
+            or one.defines
+            or one.uses
+        )
         for one in block.insns
     ):
         return None

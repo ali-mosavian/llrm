@@ -1,0 +1,685 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: qb45/udt
+# dialect: QuickBasic45
+# source: qb45/Q45U08.BAS
+
+Module {
+    statements: [
+        TypeDecl {
+            name: "VERTEX",
+            fields: [
+                Declaration {
+                    name: "X",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 3,
+                        start: 4,
+                        end: 5,
+                    },
+                },
+                Declaration {
+                    name: "Y",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 4,
+                        start: 4,
+                        end: 5,
+                    },
+                },
+                Declaration {
+                    name: "LABEL",
+                    type_name: Some(
+                        String,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: Some(
+                        Literal(
+                            Integer(
+                                4,
+                                Integer,
+                            ),
+                            Span {
+                                line: 5,
+                                start: 22,
+                                end: 23,
+                            },
+                        ),
+                    ),
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 5,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+            ],
+            span: Span {
+                line: 2,
+                start: 0,
+                end: 4,
+            },
+        },
+        Dim(
+            [
+                Declaration {
+                    name: "FIRSTVERTEX",
+                    type_name: Some(
+                        Named(
+                            "VERTEX",
+                        ),
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 8,
+                        start: 4,
+                        end: 25,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "SECONDVERTEX",
+                    type_name: Some(
+                        Named(
+                            "VERTEX",
+                        ),
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 9,
+                        start: 4,
+                        end: 26,
+                    },
+                },
+            ],
+        ),
+        Assign {
+            target: Field {
+                base: Name(
+                    "FIRSTVERTEX",
+                    Span {
+                        line: 11,
+                        start: 0,
+                        end: 11,
+                    },
+                ),
+                name: "X",
+                span: Span {
+                    line: 11,
+                    start: 0,
+                    end: 13,
+                },
+            },
+            value: Literal(
+                Integer(
+                    4660,
+                    Integer,
+                ),
+                Span {
+                    line: 11,
+                    start: 16,
+                    end: 22,
+                },
+            ),
+            span: Span {
+                line: 11,
+                start: 0,
+                end: 22,
+            },
+        },
+        Assign {
+            target: Field {
+                base: Name(
+                    "FIRSTVERTEX",
+                    Span {
+                        line: 12,
+                        start: 0,
+                        end: 11,
+                    },
+                ),
+                name: "Y",
+                span: Span {
+                    line: 12,
+                    start: 0,
+                    end: 13,
+                },
+            },
+            value: Literal(
+                Integer(
+                    22136,
+                    Integer,
+                ),
+                Span {
+                    line: 12,
+                    start: 16,
+                    end: 22,
+                },
+            ),
+            span: Span {
+                line: 12,
+                start: 0,
+                end: 22,
+            },
+        },
+        Assign {
+            target: Field {
+                base: Name(
+                    "FIRSTVERTEX",
+                    Span {
+                        line: 13,
+                        start: 0,
+                        end: 11,
+                    },
+                ),
+                name: "LABEL",
+                span: Span {
+                    line: 13,
+                    start: 0,
+                    end: 17,
+                },
+            },
+            value: Literal(
+                String(
+                    "node",
+                ),
+                Span {
+                    line: 13,
+                    start: 20,
+                    end: 26,
+                },
+            ),
+            span: Span {
+                line: 13,
+                start: 0,
+                end: 26,
+            },
+        },
+        Assign {
+            target: Name(
+                "SECONDVERTEX",
+                Span {
+                    line: 14,
+                    start: 0,
+                    end: 12,
+                },
+            ),
+            value: Name(
+                "FIRSTVERTEX",
+                Span {
+                    line: 14,
+                    start: 15,
+                    end: 26,
+                },
+            ),
+            span: Span {
+                line: 14,
+                start: 0,
+                end: 26,
+            },
+        },
+        Assign {
+            target: Field {
+                base: Name(
+                    "FIRSTVERTEX",
+                    Span {
+                        line: 15,
+                        start: 0,
+                        end: 11,
+                    },
+                ),
+                name: "X",
+                span: Span {
+                    line: 15,
+                    start: 0,
+                    end: 13,
+                },
+            },
+            value: Literal(
+                Integer(
+                    0,
+                    Integer,
+                ),
+                Span {
+                    line: 15,
+                    start: 16,
+                    end: 17,
+                },
+            ),
+            span: Span {
+                line: 15,
+                start: 0,
+                end: 17,
+            },
+        },
+        DefSeg {
+            value: Some(
+                Apply {
+                    name: "VARSEG",
+                    arguments: [
+                        Name(
+                            "SECONDVERTEX",
+                            Span {
+                                line: 17,
+                                start: 17,
+                                end: 29,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 17,
+                        start: 10,
+                        end: 30,
+                    },
+                },
+            ),
+            span: Span {
+                line: 17,
+                start: 0,
+                end: 3,
+            },
+        },
+        If {
+            condition: Binary {
+                op: And,
+                left: Binary {
+                    op: And,
+                    left: Binary {
+                        op: And,
+                        left: Binary {
+                            op: And,
+                            left: Binary {
+                                op: And,
+                                left: Binary {
+                                    op: Eq,
+                                    left: Field {
+                                        base: Name(
+                                            "SECONDVERTEX",
+                                            Span {
+                                                line: 18,
+                                                start: 3,
+                                                end: 15,
+                                            },
+                                        ),
+                                        name: "X",
+                                        span: Span {
+                                            line: 18,
+                                            start: 3,
+                                            end: 17,
+                                        },
+                                    },
+                                    right: Literal(
+                                        Integer(
+                                            4660,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 18,
+                                            start: 20,
+                                            end: 26,
+                                        },
+                                    ),
+                                    span: Span {
+                                        line: 18,
+                                        start: 3,
+                                        end: 26,
+                                    },
+                                },
+                                right: Binary {
+                                    op: Eq,
+                                    left: Field {
+                                        base: Name(
+                                            "SECONDVERTEX",
+                                            Span {
+                                                line: 18,
+                                                start: 31,
+                                                end: 43,
+                                            },
+                                        ),
+                                        name: "Y",
+                                        span: Span {
+                                            line: 18,
+                                            start: 31,
+                                            end: 45,
+                                        },
+                                    },
+                                    right: Literal(
+                                        Integer(
+                                            22136,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 18,
+                                            start: 48,
+                                            end: 54,
+                                        },
+                                    ),
+                                    span: Span {
+                                        line: 18,
+                                        start: 31,
+                                        end: 54,
+                                    },
+                                },
+                                span: Span {
+                                    line: 18,
+                                    start: 3,
+                                    end: 54,
+                                },
+                            },
+                            right: Binary {
+                                op: Eq,
+                                left: Field {
+                                    base: Name(
+                                        "SECONDVERTEX",
+                                        Span {
+                                            line: 18,
+                                            start: 59,
+                                            end: 71,
+                                        },
+                                    ),
+                                    name: "LABEL",
+                                    span: Span {
+                                        line: 18,
+                                        start: 59,
+                                        end: 77,
+                                    },
+                                },
+                                right: Literal(
+                                    String(
+                                        "node",
+                                    ),
+                                    Span {
+                                        line: 18,
+                                        start: 80,
+                                        end: 86,
+                                    },
+                                ),
+                                span: Span {
+                                    line: 18,
+                                    start: 59,
+                                    end: 86,
+                                },
+                            },
+                            span: Span {
+                                line: 18,
+                                start: 3,
+                                end: 86,
+                            },
+                        },
+                        right: Binary {
+                            op: Eq,
+                            left: Apply {
+                                name: "LEN",
+                                arguments: [
+                                    Name(
+                                        "SECONDVERTEX",
+                                        Span {
+                                            line: 18,
+                                            start: 95,
+                                            end: 107,
+                                        },
+                                    ),
+                                ],
+                                span: Span {
+                                    line: 18,
+                                    start: 91,
+                                    end: 108,
+                                },
+                            },
+                            right: Literal(
+                                Integer(
+                                    8,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 18,
+                                    start: 111,
+                                    end: 112,
+                                },
+                            ),
+                            span: Span {
+                                line: 18,
+                                start: 91,
+                                end: 112,
+                            },
+                        },
+                        span: Span {
+                            line: 18,
+                            start: 3,
+                            end: 112,
+                        },
+                    },
+                    right: Binary {
+                        op: Eq,
+                        left: Apply {
+                            name: "PEEK",
+                            arguments: [
+                                Apply {
+                                    name: "VARPTR",
+                                    arguments: [
+                                        Name(
+                                            "SECONDVERTEX",
+                                            Span {
+                                                line: 18,
+                                                start: 129,
+                                                end: 141,
+                                            },
+                                        ),
+                                    ],
+                                    span: Span {
+                                        line: 18,
+                                        start: 122,
+                                        end: 142,
+                                    },
+                                },
+                            ],
+                            span: Span {
+                                line: 18,
+                                start: 117,
+                                end: 143,
+                            },
+                        },
+                        right: Literal(
+                            Integer(
+                                52,
+                                Integer,
+                            ),
+                            Span {
+                                line: 18,
+                                start: 146,
+                                end: 150,
+                            },
+                        ),
+                        span: Span {
+                            line: 18,
+                            start: 117,
+                            end: 150,
+                        },
+                    },
+                    span: Span {
+                        line: 18,
+                        start: 3,
+                        end: 150,
+                    },
+                },
+                right: Binary {
+                    op: Eq,
+                    left: Apply {
+                        name: "PEEK",
+                        arguments: [
+                            Binary {
+                                op: Add,
+                                left: Apply {
+                                    name: "VARPTR",
+                                    arguments: [
+                                        Name(
+                                            "SECONDVERTEX",
+                                            Span {
+                                                line: 18,
+                                                start: 167,
+                                                end: 179,
+                                            },
+                                        ),
+                                    ],
+                                    span: Span {
+                                        line: 18,
+                                        start: 160,
+                                        end: 180,
+                                    },
+                                },
+                                right: Literal(
+                                    Integer(
+                                        1,
+                                        Integer,
+                                    ),
+                                    Span {
+                                        line: 18,
+                                        start: 183,
+                                        end: 184,
+                                    },
+                                ),
+                                span: Span {
+                                    line: 18,
+                                    start: 160,
+                                    end: 184,
+                                },
+                            },
+                        ],
+                        span: Span {
+                            line: 18,
+                            start: 155,
+                            end: 185,
+                        },
+                    },
+                    right: Literal(
+                        Integer(
+                            18,
+                            Integer,
+                        ),
+                        Span {
+                            line: 18,
+                            start: 188,
+                            end: 192,
+                        },
+                    ),
+                    span: Span {
+                        line: 18,
+                        start: 155,
+                        end: 192,
+                    },
+                },
+                span: Span {
+                    line: 18,
+                    start: 3,
+                    end: 192,
+                },
+            },
+            then_branch: [
+                DefSeg {
+                    value: None,
+                    span: Span {
+                        line: 19,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "PASS udt",
+                                ),
+                                Span {
+                                    line: 20,
+                                    start: 10,
+                                    end: 20,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 20,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+            ],
+            else_branch: [
+                DefSeg {
+                    value: None,
+                    span: Span {
+                        line: 22,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL udt copy",
+                                ),
+                                Span {
+                                    line: 23,
+                                    start: 10,
+                                    end: 25,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 23,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+            ],
+            span: Span {
+                line: 18,
+                start: 0,
+                end: 2,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 25,
+                start: 0,
+                end: 3,
+            },
+        },
+    ],
+    procedures: [],
+}

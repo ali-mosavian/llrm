@@ -1,0 +1,68 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: vbdos/timer_event_surface
+# dialect: VbDos
+# source: vbdos/timerevt.bas
+
+Module {
+    statements: [
+        OptionExplicit(
+            Span {
+                line: 1,
+                start: 0,
+                end: 6,
+            },
+        ),
+    ],
+    procedures: [
+        Procedure {
+            name: "TMRCOMPAT_TIMER",
+            alias: None,
+            cdecl: false,
+            kind: Sub,
+            parameters: [],
+            result: None,
+            body: [
+                Assign {
+                    target: Field {
+                        base: Name(
+                            "FRMCOMPAT",
+                            Span {
+                                line: 4,
+                                start: 4,
+                                end: 13,
+                            },
+                        ),
+                        name: "CAPTION",
+                        span: Span {
+                            line: 4,
+                            start: 4,
+                            end: 21,
+                        },
+                    },
+                    value: Literal(
+                        String(
+                            "timer",
+                        ),
+                        Span {
+                            line: 4,
+                            start: 24,
+                            end: 31,
+                        },
+                    ),
+                    span: Span {
+                        line: 4,
+                        start: 4,
+                        end: 31,
+                    },
+                },
+            ],
+            declaration: false,
+            is_static: false,
+            span: Span {
+                line: 3,
+                start: 0,
+                end: 3,
+            },
+        },
+    ],
+}

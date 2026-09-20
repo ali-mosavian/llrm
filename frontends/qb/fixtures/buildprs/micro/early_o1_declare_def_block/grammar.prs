@@ -1,0 +1,167 @@
+TOKENS:
+   tkBEEP ("BEEP"),
+   tkBLOAD ("BLOAD"),
+   tkBSAVE ("BSAVE"),
+   tkCALL ("CALL"),
+   tkCALLS ("CALLS"),
+   tkCASE ("CASE"),
+   tkCHAIN ("CHAIN"),
+   tkCHDIR ("CHDIR"),
+   tkCIRCLE ("CIRCLE"),
+   tkCLEAR ("CLEAR"),
+   tkCLOSE ("CLOSE"),
+   tkCLS ("CLS"),
+   tkCOLOR ("COLOR"),
+   tkCOM ("COM"),
+   tkCOMMON ("COMMON", no_direct),
+   tkCONST ("CONST"),
+   tkDATE_ ("DATE$"),
+   tkDECLARE ("DECLARE"),
+   tkDEF ("DEF"),
+   tkDEFINT ("DEFINT"),
+   tkDEFLNG ("DEFLNG"),
+   tkDEFSNG ("DEFSNG"),
+   tkDEFDBL ("DEFDBL"),
+   tkDEFSTR ("DEFSTR"),
+   tkDIM ("DIM"),
+   tkDO ("DO"),
+   tkPEN ("PEN"),
+   tkPLAY ("PLAY"),
+   tkTIMER ("TIMER"),
+   tkUEVENT ("UEVENT"),
+   tkSHARED ("SHARED", no_direct),
+   tkELSE ("ELSE"),
+   tkFUNCTION ("FUNCTION"),
+   tkSUB ("SUB"),
+   tkSEG ("SEG"),
+   tkWHILE ("WHILE"),
+   tkUNTIL ("UNTIL"),
+   tkON ("ON"),
+   tkOFF ("OFF"),
+   tkSTOP ("STOP"),
+   tkABS ("ABS"),
+   tkEQ ("="),
+   tkDiv ("/"),
+   tkLParen ("("),
+   tkRParen (")"),
+   tkComma (",");
+
+Statements:
+   tkBEEP EMIT(opStBeep);
+   tkBLOAD Exp optCommaExp;
+     <Cg1or2Args(opStBload1)>
+   tkBSAVE expCommaExp commaExp EMIT(opStBsave);
+   tkCALL (MARK(1) IdSubRef
+      [tkLParen IdCallArg {tkComma IdCallArg} tkRParen]);
+     <CgCall(opStCall)>
+   tkCALLS MARK(1) IdSubRef
+     [tkLParen Exp {tkComma Exp} tkRParen];
+     <CgCall(opStCalls)>
+   tkCASE (tkELSE EMIT(opStCaseElse)) | (caseItem {tkComma caseItem});
+   tkCHAIN Exp EMIT(opStChain);
+   tkCHDIR Exp EMIT(opStChdir);
+   tkCIRCLE coordStep commaExp
+     [tkComma [Exp MARK(1)]
+       [CommaNoEos (Exp | EMIT(opNull)) EMIT(opCircleStart)
+         [CommaNoEos [Exp EMIT(opCircleEnd)]
+           [commaExp EMIT(opCircleAspect)]]]];
+      <CgCircle(opStCircle)>
+   tkCLEAR NArgsMax3;
+     <CgStmtCnt(opStClear)>
+   tkCLOSE [optFilenum {tkComma optFilenum}];
+     <CgStmtCnt(opStClose)>
+   tkCLS (Exp | EMIT(opUndef)) EMIT(opStCls);
+   tkCOLOR NArgsMax3;
+     <CgStmtCnt(opStColor)>
+   tkCOM fn1arg EMIT(opEvCom) evSwitch;
+   tkCOMMON (tkSHARED EMIT(opShared) EMIT(opStCommon) EMITFFFF
+               ((tkDiv IdNamCom tkDiv) | EMITFFFF) ACTIONidShared) |
+            (EMIT(opStCommon) EMITFFFF
+               ((tkDiv IdNamCom tkDiv) | EMITFFFF))
+     ACTIONidCommon IdAryI {tkComma IdAryI};
+   tkCONST EMIT(opStConst) ConstAssign {tkComma ConstAssign};
+   tkDATE_ tkEQ Exp EMIT(opStDate_);
+   tkDECLARE ((tkFUNCTION IdFuncDecl) | (tkSUB IdSubDecl)) MARK(3) parms;
+     <CgDeclare(opStDeclare)>
+   tkDEF IdFn MARK(3) parms [tkEQ MARK(5) Exp];
+     <CgDeclare(opStDefFn)>
+   tkDEF tkSEG [tkEQ Exp];
+     <Cg0or1Args(opStDefSeg0)>
+   tkDEFINT DeflistI2;
+   tkDEFLNG DeflistI4;
+   tkDEFSNG DeflistR4;
+   tkDEFDBL DeflistR8;
+   tkDEFSTR DeflistSD;
+   tkDIM [tkSHARED ACTIONidShared EMIT(opShared)] EMIT(opStDim) EMITFFFF
+     IdAryDim {tkComma IdAryDim};
+   tkDO (tkWHILE Exp EMIT(opStDoWhile) EMITFFFF) |
+        (tkUNTIL Exp EMIT(opStDoUntil) EMITFFFF) |
+        (EMIT(opStDo));
+   tkPEN EMIT(opEvPen) evSwitch;
+   tkPLAY Exp EMIT(opStPlay);
+   tkPLAY EMIT(opEvPlay0) evSwitch;
+   tkTIMER EMIT(opEvTimer0) evSwitch;
+   tkUEVENT EMIT(opEvUEvent) evSwitch;
+
+Functions:
+   tkABS Exp EMIT(opFnAbs);
+
+NonTerminals:
+ACTIONidCommon:
+   EXTERNAL;
+ACTIONidShared:
+   EXTERNAL;
+caseItem:
+   Exp;
+commaExp:
+   tkComma Exp;
+CommaNoEos:
+   EXTERNAL;
+ConstAssign:
+   EXTERNAL;
+coordStep:
+   EXTERNAL MSG_ExpCoord;
+DeflistI2:
+   EXTERNAL;
+DeflistI4:
+   EXTERNAL;
+DeflistR4:
+   EXTERNAL;
+DeflistR8:
+   EXTERNAL;
+DeflistSD:
+   EXTERNAL;
+evSwitch:
+   (tkON EMIT(opEvOn)) | (tkOFF EMIT(opEvOff)) | (tkSTOP EMIT(opEvStop));
+Exp:
+   EXTERNAL MSG_ExpExp;
+expCommaExp:
+   Exp tkComma Exp;
+EMITFFFF:
+   EMIT(UNDEFINED);
+fn1arg:
+   tkLParen Exp tkRParen;
+IdAryDim:
+   EXTERNAL MSG_ExpVar;
+IdAryI:
+   EXTERNAL MSG_ExpVar;
+IdCallArg:
+   EXTERNAL MSG_ExpIdCallArg;
+IdFn:
+   EXTERNAL;
+IdFuncDecl:
+   EXTERNAL;
+IdNamCom:
+   EXTERNAL;
+IdSubDecl:
+   EXTERNAL;
+IdSubRef:
+   EXTERNAL;
+NArgsMax3:
+   EXTERNAL MSG_ExpNArgs;
+optCommaExp:
+   [tkComma Exp];
+optFilenum:
+   EXTERNAL;
+parms:
+   EXTERNAL;

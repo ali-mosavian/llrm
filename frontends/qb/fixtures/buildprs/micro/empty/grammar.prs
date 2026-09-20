@@ -1,0 +1,11 @@
+TOKENS:
+   tkA ("A");
+
+Statements:
+   tkA;
+
+Functions:
+
+NonTerminals:
+empty:
+   ;

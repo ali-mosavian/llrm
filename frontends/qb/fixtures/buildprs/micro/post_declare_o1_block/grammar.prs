@@ -1,0 +1,46 @@
+TOKENS:
+   tkDO ("DO"),
+   tkDRAW ("DRAW"),
+   tkELSEIF ("ELSEIF"),
+   tkELSE ("ELSE"),
+   tkEND ("END"),
+   tkENDIF ("ENDIF"),
+   tkDEF ("DEF"),
+   tkFUNCTION ("FUNCTION"),
+   tkIF ("IF"),
+   tkSELECT ("SELECT"),
+   tkSUB ("SUB"),
+   tkTYPE ("TYPE"),
+   tkWHILE ("WHILE"),
+   tkUNTIL ("UNTIL"),
+   tkTHEN ("THEN"),
+   tkABS ("ABS");
+
+Statements:
+   tkDO (tkWHILE Exp EMIT(opStDoWhile) EMITFFFF) |
+        (tkUNTIL Exp EMIT(opStDoUntil) EMITFFFF) |
+        (EMIT(opStDo));
+   tkDRAW Exp EMIT(opStDraw);
+   tkELSEIF Exp tkTHEN EMIT(opStElseIf) EMITFFFF [StatementList];
+   tkELSE EMIT(opStElse) EMITFFFF [StatementList];
+   tkEND (tkDEF EMIT(opStEndDef) EMIT(2) EMITFFFF) |
+         (tkFUNCTION EMIT(opStEndProc)) |
+         (tkIF EMIT(opStEndIfBlock) ErrIfNot1st) |
+         (tkSELECT EMIT(opStEndSelect)) |
+         (tkSUB EMIT(opStEndProc)) |
+         (tkTYPE EMIT(opStEndType) EMITFFFF) |
+         (EMIT(opStEnd));
+   tkENDIF EMIT(opStEndIfBlock) ErrIfNot1st;
+
+Functions:
+   tkABS Exp EMIT(opFnAbs);
+
+NonTerminals:
+EMITFFFF:
+   EMIT(UNDEFINED);
+ErrIfNot1st:
+   EXTERNAL;
+Exp:
+   EXTERNAL MSG_ExpExp;
+StatementList:
+   EXTERNAL MSG_ExpStatement;

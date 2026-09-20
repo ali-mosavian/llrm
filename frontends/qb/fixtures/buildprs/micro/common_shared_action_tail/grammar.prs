@@ -1,0 +1,30 @@
+TOKENS:
+   tkCOMMON ("COMMON", no_direct),
+   tkSHARED ("SHARED", no_direct),
+   tkABS ("ABS"),
+   tkDiv ("/"),
+   tkComma (",");
+
+Statements:
+   tkCOMMON (tkSHARED EMIT(opShared) EMIT(opStCommon) EMITFFFF
+               ((tkDiv IdNamCom tkDiv) | EMITFFFF) ACTIONidShared) |
+            (EMIT(opStCommon) EMITFFFF
+               ((tkDiv IdNamCom tkDiv) | EMITFFFF))
+     ACTIONidCommon IdAryI {tkComma IdAryI};
+
+Functions:
+   tkABS Exp EMIT(opFnAbs);
+
+NonTerminals:
+ACTIONidCommon:
+   EXTERNAL;
+ACTIONidShared:
+   EXTERNAL;
+Exp:
+   EXTERNAL MSG_ExpExp;
+EMITFFFF:
+   EMIT(UNDEFINED);
+IdAryI:
+   EXTERNAL MSG_ExpVar;
+IdNamCom:
+   EXTERNAL;

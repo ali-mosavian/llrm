@@ -1,0 +1,32 @@
+TOKENS:
+   tkLINE ("LINE"),
+   tkABS ("ABS"),
+   tkComma (","),
+   tkMinus ("-");
+
+Statements:
+   tkLINE [coordStep] tkMinus coord2Step
+     [tkComma [Exp MARK(1)]
+       [tkComma [(RwBF MARK(3)) | (RwB (RwF MARK(3)) | MARK(2))]
+         [commaExp MARK(4)]]];
+
+Functions:
+   tkABS fn1arg EMIT(opFnAbs);
+
+NonTerminals:
+coordStep:
+   EXTERNAL MSG_ExpExp;
+coord2Step:
+   EXTERNAL MSG_ExpExp;
+Exp:
+   EXTERNAL MSG_ExpExp;
+RwB:
+   EXTERNAL MSG_ExpRwB;
+RwF:
+   EXTERNAL MSG_ExpRwF;
+RwBF:
+   EXTERNAL MSG_ExpRwBF;
+fn1arg:
+   EXTERNAL MSG_ExpExp;
+commaExp:
+   tkComma Exp;

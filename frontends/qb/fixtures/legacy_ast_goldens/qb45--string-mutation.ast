@@ -1,0 +1,498 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: qb45/string-mutation
+# dialect: QuickBasic45
+# source: qb45/Q45SM50.BAS
+
+Module {
+    statements: [
+        Dim(
+            [
+                Declaration {
+                    name: "DYNAMICTEXT",
+                    type_name: Some(
+                        String,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 2,
+                        start: 4,
+                        end: 25,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "FIXEDTEXT",
+                    type_name: Some(
+                        String,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: Some(
+                        Literal(
+                            Integer(
+                                5,
+                                Integer,
+                            ),
+                            Span {
+                                line: 3,
+                                start: 26,
+                                end: 27,
+                            },
+                        ),
+                    ),
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 3,
+                        start: 4,
+                        end: 27,
+                    },
+                },
+            ],
+        ),
+        Read {
+            destinations: [
+                Name(
+                    "DYNAMICTEXT",
+                    Span {
+                        line: 5,
+                        start: 5,
+                        end: 16,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 5,
+                start: 0,
+                end: 4,
+            },
+        },
+        Assign {
+            target: Apply {
+                name: "MID$",
+                arguments: [
+                    Name(
+                        "DYNAMICTEXT",
+                        Span {
+                            line: 6,
+                            start: 5,
+                            end: 16,
+                        },
+                    ),
+                    Literal(
+                        Integer(
+                            2,
+                            Integer,
+                        ),
+                        Span {
+                            line: 6,
+                            start: 18,
+                            end: 19,
+                        },
+                    ),
+                    Literal(
+                        Integer(
+                            3,
+                            Integer,
+                        ),
+                        Span {
+                            line: 6,
+                            start: 21,
+                            end: 22,
+                        },
+                    ),
+                ],
+                span: Span {
+                    line: 6,
+                    start: 0,
+                    end: 23,
+                },
+            },
+            value: Literal(
+                String(
+                    "XYZ",
+                ),
+                Span {
+                    line: 6,
+                    start: 26,
+                    end: 31,
+                },
+            ),
+            span: Span {
+                line: 6,
+                start: 0,
+                end: 31,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Name(
+                    "DYNAMICTEXT",
+                    Span {
+                        line: 7,
+                        start: 3,
+                        end: 14,
+                    },
+                ),
+                right: Literal(
+                    String(
+                        "aXYZef",
+                    ),
+                    Span {
+                        line: 7,
+                        start: 18,
+                        end: 26,
+                    },
+                ),
+                span: Span {
+                    line: 7,
+                    start: 3,
+                    end: 26,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL stringmut mid",
+                                ),
+                                Span {
+                                    line: 8,
+                                    start: 10,
+                                    end: 30,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 8,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 9,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 7,
+                start: 0,
+                end: 2,
+            },
+        },
+        Assign {
+            target: Name(
+                "FIXEDTEXT",
+                Span {
+                    line: 11,
+                    start: 0,
+                    end: 9,
+                },
+            ),
+            value: Literal(
+                String(
+                    "Q",
+                ),
+                Span {
+                    line: 11,
+                    start: 12,
+                    end: 15,
+                },
+            ),
+            span: Span {
+                line: 11,
+                start: 0,
+                end: 15,
+            },
+        },
+        If {
+            condition: Binary {
+                op: Or,
+                left: Binary {
+                    op: NotEqual,
+                    left: Name(
+                        "FIXEDTEXT",
+                        Span {
+                            line: 12,
+                            start: 3,
+                            end: 12,
+                        },
+                    ),
+                    right: Literal(
+                        String(
+                            "Q    ",
+                        ),
+                        Span {
+                            line: 12,
+                            start: 16,
+                            end: 23,
+                        },
+                    ),
+                    span: Span {
+                        line: 12,
+                        start: 3,
+                        end: 23,
+                    },
+                },
+                right: Binary {
+                    op: NotEqual,
+                    left: Apply {
+                        name: "LEN",
+                        arguments: [
+                            Name(
+                                "FIXEDTEXT",
+                                Span {
+                                    line: 12,
+                                    start: 31,
+                                    end: 40,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 12,
+                            start: 27,
+                            end: 41,
+                        },
+                    },
+                    right: Literal(
+                        Integer(
+                            5,
+                            Integer,
+                        ),
+                        Span {
+                            line: 12,
+                            start: 45,
+                            end: 46,
+                        },
+                    ),
+                    span: Span {
+                        line: 12,
+                        start: 27,
+                        end: 46,
+                    },
+                },
+                span: Span {
+                    line: 12,
+                    start: 3,
+                    end: 46,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL stringmut fixed",
+                                ),
+                                Span {
+                                    line: 13,
+                                    start: 10,
+                                    end: 32,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 13,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 14,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 12,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Binary {
+                    op: Add,
+                    left: Name(
+                        "DYNAMICTEXT",
+                        Span {
+                            line: 16,
+                            start: 3,
+                            end: 14,
+                        },
+                    ),
+                    right: Apply {
+                        name: "LEFT$",
+                        arguments: [
+                            Name(
+                                "FIXEDTEXT",
+                                Span {
+                                    line: 16,
+                                    start: 23,
+                                    end: 32,
+                                },
+                            ),
+                            Literal(
+                                Integer(
+                                    1,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 16,
+                                    start: 34,
+                                    end: 35,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 16,
+                            start: 17,
+                            end: 36,
+                        },
+                    },
+                    span: Span {
+                        line: 16,
+                        start: 3,
+                        end: 36,
+                    },
+                },
+                right: Literal(
+                    String(
+                        "aXYZefQ",
+                    ),
+                    Span {
+                        line: 16,
+                        start: 40,
+                        end: 49,
+                    },
+                ),
+                span: Span {
+                    line: 16,
+                    start: 3,
+                    end: 49,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL stringmut concat",
+                                ),
+                                Span {
+                                    line: 17,
+                                    start: 10,
+                                    end: 33,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 17,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 18,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 16,
+                start: 0,
+                end: 2,
+            },
+        },
+        Print {
+            file: None,
+            items: [
+                PrintItem {
+                    value: Literal(
+                        String(
+                            "PASS stringmut",
+                        ),
+                        Span {
+                            line: 20,
+                            start: 6,
+                            end: 22,
+                        },
+                    ),
+                    separator: End,
+                },
+            ],
+            span: Span {
+                line: 20,
+                start: 0,
+                end: 5,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 21,
+                start: 0,
+                end: 3,
+            },
+        },
+        Data {
+            values: [
+                Literal(
+                    String(
+                        "abcdef",
+                    ),
+                    Span {
+                        line: 23,
+                        start: 5,
+                        end: 13,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 23,
+                start: 0,
+                end: 4,
+            },
+        },
+    ],
+    procedures: [],
+}

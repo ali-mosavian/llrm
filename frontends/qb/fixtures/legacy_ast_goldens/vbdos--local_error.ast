@@ -1,0 +1,573 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: vbdos/local_error
+# dialect: VbDos
+# source: vbdos/locerr.bas
+
+Module {
+    statements: [
+        OptionExplicit(
+            Span {
+                line: 1,
+                start: 0,
+                end: 6,
+            },
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "RECOVERY_COUNT",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: true,
+                    dynamic: false,
+                    span: Span {
+                        line: 5,
+                        start: 11,
+                        end: 36,
+                    },
+                },
+            ],
+        ),
+        Call {
+            name: "RECOVER_LOCALLY",
+            arguments: [],
+            explicit: true,
+            span: Span {
+                line: 7,
+                start: 0,
+                end: 4,
+            },
+        },
+        If {
+            condition: Binary {
+                op: Eq,
+                left: Name(
+                    "RECOVERY_COUNT",
+                    Span {
+                        line: 8,
+                        start: 3,
+                        end: 17,
+                    },
+                ),
+                right: Literal(
+                    Integer(
+                        1,
+                        Integer,
+                    ),
+                    Span {
+                        line: 8,
+                        start: 20,
+                        end: 21,
+                    },
+                ),
+                span: Span {
+                    line: 8,
+                    start: 3,
+                    end: 21,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "PASS local_error",
+                                ),
+                                Span {
+                                    line: 9,
+                                    start: 10,
+                                    end: 28,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 9,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+            ],
+            else_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL local_error return",
+                                ),
+                                Span {
+                                    line: 11,
+                                    start: 10,
+                                    end: 35,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 11,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+            ],
+            span: Span {
+                line: 8,
+                start: 0,
+                end: 2,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 13,
+                start: 0,
+                end: 3,
+            },
+        },
+    ],
+    procedures: [
+        Procedure {
+            name: "RECOVER_LOCALLY",
+            alias: None,
+            cdecl: false,
+            kind: Sub,
+            parameters: [],
+            result: None,
+            body: [],
+            declaration: true,
+            is_static: false,
+            span: Span {
+                line: 3,
+                start: 8,
+                end: 11,
+            },
+        },
+        Procedure {
+            name: "RECOVER_LOCALLY",
+            alias: None,
+            cdecl: false,
+            kind: Sub,
+            parameters: [],
+            result: None,
+            body: [
+                Dim(
+                    [
+                        Declaration {
+                            name: "RECOVERED_HERE",
+                            type_name: Some(
+                                Integer,
+                            ),
+                            array: false,
+                            bounds: [],
+                            fixed_length: None,
+                            shared: false,
+                            dynamic: false,
+                            span: Span {
+                                line: 16,
+                                start: 8,
+                                end: 33,
+                            },
+                        },
+                    ],
+                ),
+                OnError {
+                    label: "CAUGHTERROR",
+                    local: true,
+                    span: Span {
+                        line: 18,
+                        start: 4,
+                        end: 6,
+                    },
+                },
+                Label(
+                    "100",
+                    Span {
+                        line: 19,
+                        start: 0,
+                        end: 3,
+                    },
+                ),
+                Runtime {
+                    name: "ERROR",
+                    arguments: [
+                        Literal(
+                            Integer(
+                                53,
+                                Integer,
+                            ),
+                            Span {
+                                line: 19,
+                                start: 10,
+                                end: 12,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 19,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL local_error missed",
+                                ),
+                                Span {
+                                    line: 20,
+                                    start: 10,
+                                    end: 35,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 20,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 21,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+                Label(
+                    "CAUGHTERROR",
+                    Span {
+                        line: 23,
+                        start: 0,
+                        end: 11,
+                    },
+                ),
+                If {
+                    condition: Binary {
+                        op: NotEqual,
+                        left: Name(
+                            "ERR",
+                            Span {
+                                line: 24,
+                                start: 7,
+                                end: 10,
+                            },
+                        ),
+                        right: Literal(
+                            Integer(
+                                53,
+                                Integer,
+                            ),
+                            Span {
+                                line: 24,
+                                start: 14,
+                                end: 16,
+                            },
+                        ),
+                        span: Span {
+                            line: 24,
+                            start: 7,
+                            end: 16,
+                        },
+                    },
+                    then_branch: [
+                        Print {
+                            file: None,
+                            items: [
+                                PrintItem {
+                                    value: Literal(
+                                        String(
+                                            "FAIL local_error errnum",
+                                        ),
+                                        Span {
+                                            line: 25,
+                                            start: 14,
+                                            end: 39,
+                                        },
+                                    ),
+                                    separator: End,
+                                },
+                            ],
+                            span: Span {
+                                line: 25,
+                                start: 8,
+                                end: 13,
+                            },
+                        },
+                        Runtime {
+                            name: "END",
+                            arguments: [],
+                            span: Span {
+                                line: 26,
+                                start: 8,
+                                end: 11,
+                            },
+                        },
+                    ],
+                    else_branch: [],
+                    span: Span {
+                        line: 24,
+                        start: 4,
+                        end: 6,
+                    },
+                },
+                If {
+                    condition: Binary {
+                        op: NotEqual,
+                        left: Name(
+                            "ERL",
+                            Span {
+                                line: 28,
+                                start: 7,
+                                end: 10,
+                            },
+                        ),
+                        right: Literal(
+                            Integer(
+                                100,
+                                Integer,
+                            ),
+                            Span {
+                                line: 28,
+                                start: 14,
+                                end: 17,
+                            },
+                        ),
+                        span: Span {
+                            line: 28,
+                            start: 7,
+                            end: 17,
+                        },
+                    },
+                    then_branch: [
+                        Print {
+                            file: None,
+                            items: [
+                                PrintItem {
+                                    value: Literal(
+                                        String(
+                                            "FAIL local_error errline",
+                                        ),
+                                        Span {
+                                            line: 29,
+                                            start: 14,
+                                            end: 40,
+                                        },
+                                    ),
+                                    separator: End,
+                                },
+                            ],
+                            span: Span {
+                                line: 29,
+                                start: 8,
+                                end: 13,
+                            },
+                        },
+                        Runtime {
+                            name: "END",
+                            arguments: [],
+                            span: Span {
+                                line: 30,
+                                start: 8,
+                                end: 11,
+                            },
+                        },
+                    ],
+                    else_branch: [],
+                    span: Span {
+                        line: 28,
+                        start: 4,
+                        end: 6,
+                    },
+                },
+                Assign {
+                    target: Name(
+                        "RECOVERED_HERE",
+                        Span {
+                            line: 32,
+                            start: 4,
+                            end: 18,
+                        },
+                    ),
+                    value: Unary {
+                        op: Negative,
+                        operand: Literal(
+                            Integer(
+                                1,
+                                Integer,
+                            ),
+                            Span {
+                                line: 32,
+                                start: 22,
+                                end: 23,
+                            },
+                        ),
+                        span: Span {
+                            line: 32,
+                            start: 21,
+                            end: 23,
+                        },
+                    },
+                    span: Span {
+                        line: 32,
+                        start: 4,
+                        end: 23,
+                    },
+                },
+                Resume {
+                    target: Label(
+                        "200",
+                    ),
+                    span: Span {
+                        line: 33,
+                        start: 4,
+                        end: 10,
+                    },
+                },
+                Label(
+                    "200",
+                    Span {
+                        line: 35,
+                        start: 0,
+                        end: 3,
+                    },
+                ),
+                If {
+                    condition: Binary {
+                        op: Eq,
+                        left: Name(
+                            "RECOVERED_HERE",
+                            Span {
+                                line: 36,
+                                start: 7,
+                                end: 21,
+                            },
+                        ),
+                        right: Literal(
+                            Integer(
+                                0,
+                                Integer,
+                            ),
+                            Span {
+                                line: 36,
+                                start: 24,
+                                end: 25,
+                            },
+                        ),
+                        span: Span {
+                            line: 36,
+                            start: 7,
+                            end: 25,
+                        },
+                    },
+                    then_branch: [
+                        Print {
+                            file: None,
+                            items: [
+                                PrintItem {
+                                    value: Literal(
+                                        String(
+                                            "FAIL local_error exact",
+                                        ),
+                                        Span {
+                                            line: 37,
+                                            start: 14,
+                                            end: 38,
+                                        },
+                                    ),
+                                    separator: End,
+                                },
+                            ],
+                            span: Span {
+                                line: 37,
+                                start: 8,
+                                end: 13,
+                            },
+                        },
+                        Runtime {
+                            name: "END",
+                            arguments: [],
+                            span: Span {
+                                line: 38,
+                                start: 8,
+                                end: 11,
+                            },
+                        },
+                    ],
+                    else_branch: [],
+                    span: Span {
+                        line: 36,
+                        start: 4,
+                        end: 6,
+                    },
+                },
+                Assign {
+                    target: Name(
+                        "RECOVERY_COUNT",
+                        Span {
+                            line: 40,
+                            start: 4,
+                            end: 18,
+                        },
+                    ),
+                    value: Binary {
+                        op: Add,
+                        left: Name(
+                            "RECOVERY_COUNT",
+                            Span {
+                                line: 40,
+                                start: 21,
+                                end: 35,
+                            },
+                        ),
+                        right: Literal(
+                            Integer(
+                                1,
+                                Integer,
+                            ),
+                            Span {
+                                line: 40,
+                                start: 38,
+                                end: 39,
+                            },
+                        ),
+                        span: Span {
+                            line: 40,
+                            start: 21,
+                            end: 39,
+                        },
+                    },
+                    span: Span {
+                        line: 40,
+                        start: 4,
+                        end: 39,
+                    },
+                },
+            ],
+            declaration: false,
+            is_static: false,
+            span: Span {
+                line: 15,
+                start: 0,
+                end: 3,
+            },
+        },
+    ],
+}

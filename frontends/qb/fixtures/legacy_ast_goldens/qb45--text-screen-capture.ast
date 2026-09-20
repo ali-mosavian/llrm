@@ -1,0 +1,910 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: qb45/text-screen-capture
+# dialect: QuickBasic45
+# source: qb45/Q45L00.BAS
+
+Module {
+    statements: [
+        Dim(
+            [
+                Declaration {
+                    name: "QCOUNT",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 3,
+                        start: 4,
+                        end: 21,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "QTOTAL",
+                    type_name: Some(
+                        Long,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 4,
+                        start: 4,
+                        end: 18,
+                    },
+                },
+            ],
+        ),
+        Const {
+            name: "LIMIT",
+            value: Literal(
+                Integer(
+                    7,
+                    Integer,
+                ),
+                Span {
+                    line: 5,
+                    start: 14,
+                    end: 15,
+                },
+            ),
+            span: Span {
+                line: 5,
+                start: 6,
+                end: 15,
+            },
+        },
+        Runtime {
+            name: "SCREEN",
+            arguments: [
+                Literal(
+                    Integer(
+                        0,
+                        Integer,
+                    ),
+                    Span {
+                        line: 7,
+                        start: 7,
+                        end: 8,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 7,
+                start: 0,
+                end: 6,
+            },
+        },
+        Runtime {
+            name: "CLS",
+            arguments: [],
+            span: Span {
+                line: 8,
+                start: 0,
+                end: 3,
+            },
+        },
+        DefSeg {
+            value: Some(
+                Literal(
+                    Integer(
+                        -18432,
+                        Integer,
+                    ),
+                    Span {
+                        line: 9,
+                        start: 10,
+                        end: 16,
+                    },
+                ),
+            ),
+            span: Span {
+                line: 9,
+                start: 0,
+                end: 3,
+            },
+        },
+        Runtime {
+            name: "POKE",
+            arguments: [
+                Literal(
+                    Integer(
+                        0,
+                        Integer,
+                    ),
+                    Span {
+                        line: 10,
+                        start: 5,
+                        end: 6,
+                    },
+                ),
+                Literal(
+                    Integer(
+                        81,
+                        Integer,
+                    ),
+                    Span {
+                        line: 10,
+                        start: 8,
+                        end: 10,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 10,
+                start: 0,
+                end: 4,
+            },
+        },
+        Runtime {
+            name: "POKE",
+            arguments: [
+                Literal(
+                    Integer(
+                        1,
+                        Integer,
+                    ),
+                    Span {
+                        line: 10,
+                        start: 17,
+                        end: 18,
+                    },
+                ),
+                Literal(
+                    Integer(
+                        7,
+                        Integer,
+                    ),
+                    Span {
+                        line: 10,
+                        start: 20,
+                        end: 21,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 10,
+                start: 12,
+                end: 16,
+            },
+        },
+        Runtime {
+            name: "POKE",
+            arguments: [
+                Literal(
+                    Integer(
+                        2,
+                        Integer,
+                    ),
+                    Span {
+                        line: 11,
+                        start: 5,
+                        end: 6,
+                    },
+                ),
+                Literal(
+                    Integer(
+                        66,
+                        Integer,
+                    ),
+                    Span {
+                        line: 11,
+                        start: 8,
+                        end: 10,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 11,
+                start: 0,
+                end: 4,
+            },
+        },
+        Runtime {
+            name: "POKE",
+            arguments: [
+                Literal(
+                    Integer(
+                        3,
+                        Integer,
+                    ),
+                    Span {
+                        line: 11,
+                        start: 17,
+                        end: 18,
+                    },
+                ),
+                Literal(
+                    Integer(
+                        7,
+                        Integer,
+                    ),
+                    Span {
+                        line: 11,
+                        start: 20,
+                        end: 21,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 11,
+                start: 12,
+                end: 16,
+            },
+        },
+        Runtime {
+            name: "POKE",
+            arguments: [
+                Literal(
+                    Integer(
+                        4,
+                        Integer,
+                    ),
+                    Span {
+                        line: 12,
+                        start: 5,
+                        end: 6,
+                    },
+                ),
+                Literal(
+                    Integer(
+                        52,
+                        Integer,
+                    ),
+                    Span {
+                        line: 12,
+                        start: 8,
+                        end: 10,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 12,
+                start: 0,
+                end: 4,
+            },
+        },
+        Runtime {
+            name: "POKE",
+            arguments: [
+                Literal(
+                    Integer(
+                        5,
+                        Integer,
+                    ),
+                    Span {
+                        line: 12,
+                        start: 17,
+                        end: 18,
+                    },
+                ),
+                Literal(
+                    Integer(
+                        7,
+                        Integer,
+                    ),
+                    Span {
+                        line: 12,
+                        start: 20,
+                        end: 21,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 12,
+                start: 12,
+                end: 16,
+            },
+        },
+        Runtime {
+            name: "POKE",
+            arguments: [
+                Literal(
+                    Integer(
+                        6,
+                        Integer,
+                    ),
+                    Span {
+                        line: 13,
+                        start: 5,
+                        end: 6,
+                    },
+                ),
+                Literal(
+                    Integer(
+                        53,
+                        Integer,
+                    ),
+                    Span {
+                        line: 13,
+                        start: 8,
+                        end: 10,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 13,
+                start: 0,
+                end: 4,
+            },
+        },
+        Runtime {
+            name: "POKE",
+            arguments: [
+                Literal(
+                    Integer(
+                        7,
+                        Integer,
+                    ),
+                    Span {
+                        line: 13,
+                        start: 17,
+                        end: 18,
+                    },
+                ),
+                Literal(
+                    Integer(
+                        7,
+                        Integer,
+                    ),
+                    Span {
+                        line: 13,
+                        start: 20,
+                        end: 21,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 13,
+                start: 12,
+                end: 16,
+            },
+        },
+        Runtime {
+            name: "POKE",
+            arguments: [
+                Literal(
+                    Integer(
+                        8,
+                        Integer,
+                    ),
+                    Span {
+                        line: 14,
+                        start: 5,
+                        end: 6,
+                    },
+                ),
+                Literal(
+                    Integer(
+                        84,
+                        Integer,
+                    ),
+                    Span {
+                        line: 14,
+                        start: 8,
+                        end: 10,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 14,
+                start: 0,
+                end: 4,
+            },
+        },
+        Runtime {
+            name: "POKE",
+            arguments: [
+                Literal(
+                    Integer(
+                        9,
+                        Integer,
+                    ),
+                    Span {
+                        line: 14,
+                        start: 17,
+                        end: 18,
+                    },
+                ),
+                Literal(
+                    Integer(
+                        7,
+                        Integer,
+                    ),
+                    Span {
+                        line: 14,
+                        start: 20,
+                        end: 21,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 14,
+                start: 12,
+                end: 16,
+            },
+        },
+        Runtime {
+            name: "POKE",
+            arguments: [
+                Literal(
+                    Integer(
+                        10,
+                        Integer,
+                    ),
+                    Span {
+                        line: 15,
+                        start: 5,
+                        end: 7,
+                    },
+                ),
+                Literal(
+                    Integer(
+                        69,
+                        Integer,
+                    ),
+                    Span {
+                        line: 15,
+                        start: 9,
+                        end: 11,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 15,
+                start: 0,
+                end: 4,
+            },
+        },
+        Runtime {
+            name: "POKE",
+            arguments: [
+                Literal(
+                    Integer(
+                        11,
+                        Integer,
+                    ),
+                    Span {
+                        line: 15,
+                        start: 18,
+                        end: 20,
+                    },
+                ),
+                Literal(
+                    Integer(
+                        7,
+                        Integer,
+                    ),
+                    Span {
+                        line: 15,
+                        start: 22,
+                        end: 23,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 15,
+                start: 13,
+                end: 17,
+            },
+        },
+        Runtime {
+            name: "POKE",
+            arguments: [
+                Literal(
+                    Integer(
+                        12,
+                        Integer,
+                    ),
+                    Span {
+                        line: 16,
+                        start: 5,
+                        end: 7,
+                    },
+                ),
+                Literal(
+                    Integer(
+                        88,
+                        Integer,
+                    ),
+                    Span {
+                        line: 16,
+                        start: 9,
+                        end: 11,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 16,
+                start: 0,
+                end: 4,
+            },
+        },
+        Runtime {
+            name: "POKE",
+            arguments: [
+                Literal(
+                    Integer(
+                        13,
+                        Integer,
+                    ),
+                    Span {
+                        line: 16,
+                        start: 18,
+                        end: 20,
+                    },
+                ),
+                Literal(
+                    Integer(
+                        7,
+                        Integer,
+                    ),
+                    Span {
+                        line: 16,
+                        start: 22,
+                        end: 23,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 16,
+                start: 13,
+                end: 17,
+            },
+        },
+        Runtime {
+            name: "POKE",
+            arguments: [
+                Literal(
+                    Integer(
+                        14,
+                        Integer,
+                    ),
+                    Span {
+                        line: 17,
+                        start: 5,
+                        end: 7,
+                    },
+                ),
+                Literal(
+                    Integer(
+                        84,
+                        Integer,
+                    ),
+                    Span {
+                        line: 17,
+                        start: 9,
+                        end: 11,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 17,
+                start: 0,
+                end: 4,
+            },
+        },
+        Runtime {
+            name: "POKE",
+            arguments: [
+                Literal(
+                    Integer(
+                        15,
+                        Integer,
+                    ),
+                    Span {
+                        line: 17,
+                        start: 18,
+                        end: 20,
+                    },
+                ),
+                Literal(
+                    Integer(
+                        7,
+                        Integer,
+                    ),
+                    Span {
+                        line: 17,
+                        start: 22,
+                        end: 23,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 17,
+                start: 13,
+                end: 17,
+            },
+        },
+        DefSeg {
+            value: None,
+            span: Span {
+                line: 18,
+                start: 0,
+                end: 3,
+            },
+        },
+        Assign {
+            target: Name(
+                "QCOUNT",
+                Span {
+                    line: 19,
+                    start: 0,
+                    end: 6,
+                },
+            ),
+            value: Name(
+                "LIMIT",
+                Span {
+                    line: 19,
+                    start: 9,
+                    end: 14,
+                },
+            ),
+            span: Span {
+                line: 19,
+                start: 0,
+                end: 14,
+            },
+        },
+        Assign {
+            target: Name(
+                "QTOTAL",
+                Span {
+                    line: 19,
+                    start: 16,
+                    end: 22,
+                },
+            ),
+            value: Binary {
+                op: Add,
+                left: Literal(
+                    Integer(
+                        100000,
+                        Integer,
+                    ),
+                    Span {
+                        line: 19,
+                        start: 25,
+                        end: 31,
+                    },
+                ),
+                right: Name(
+                    "QCOUNT",
+                    Span {
+                        line: 19,
+                        start: 34,
+                        end: 40,
+                    },
+                ),
+                span: Span {
+                    line: 19,
+                    start: 25,
+                    end: 40,
+                },
+            },
+            span: Span {
+                line: 19,
+                start: 16,
+                end: 40,
+            },
+        },
+        Comment(
+            Span {
+                line: 21,
+                start: 0,
+                end: 14,
+            },
+        ),
+        If {
+            condition: Binary {
+                op: And,
+                left: Binary {
+                    op: Eq,
+                    left: Name(
+                        "QCOUNT",
+                        Span {
+                            line: 23,
+                            start: 3,
+                            end: 9,
+                        },
+                    ),
+                    right: Literal(
+                        Integer(
+                            7,
+                            Integer,
+                        ),
+                        Span {
+                            line: 23,
+                            start: 12,
+                            end: 13,
+                        },
+                    ),
+                    span: Span {
+                        line: 23,
+                        start: 3,
+                        end: 13,
+                    },
+                },
+                right: Binary {
+                    op: Eq,
+                    left: Name(
+                        "QTOTAL",
+                        Span {
+                            line: 23,
+                            start: 18,
+                            end: 24,
+                        },
+                    ),
+                    right: Literal(
+                        Integer(
+                            100007,
+                            Integer,
+                        ),
+                        Span {
+                            line: 23,
+                            start: 27,
+                            end: 33,
+                        },
+                    ),
+                    span: Span {
+                        line: 23,
+                        start: 18,
+                        end: 33,
+                    },
+                },
+                span: Span {
+                    line: 23,
+                    start: 3,
+                    end: 33,
+                },
+            },
+            then_branch: [
+                DefSeg {
+                    value: Some(
+                        Literal(
+                            Integer(
+                                -18432,
+                                Integer,
+                            ),
+                            Span {
+                                line: 24,
+                                start: 14,
+                                end: 20,
+                            },
+                        ),
+                    ),
+                    span: Span {
+                        line: 24,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+                Call {
+                    name: "BSAVE",
+                    arguments: [
+                        Literal(
+                            String(
+                                "QBTEXT.BSV",
+                            ),
+                            Span {
+                                line: 25,
+                                start: 10,
+                                end: 22,
+                            },
+                        ),
+                        Literal(
+                            Integer(
+                                0,
+                                Integer,
+                            ),
+                            Span {
+                                line: 25,
+                                start: 24,
+                                end: 25,
+                            },
+                        ),
+                        Literal(
+                            Integer(
+                                4000,
+                                Integer,
+                            ),
+                            Span {
+                                line: 25,
+                                start: 27,
+                                end: 31,
+                            },
+                        ),
+                    ],
+                    explicit: false,
+                    span: Span {
+                        line: 25,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                DefSeg {
+                    value: None,
+                    span: Span {
+                        line: 26,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "PASS text-screen-capture",
+                                ),
+                                Span {
+                                    line: 27,
+                                    start: 10,
+                                    end: 36,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 27,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+            ],
+            else_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL text-screen-capture values",
+                                ),
+                                Span {
+                                    line: 29,
+                                    start: 10,
+                                    end: 43,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 29,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+            ],
+            span: Span {
+                line: 23,
+                start: 0,
+                end: 2,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 31,
+                start: 0,
+                end: 3,
+            },
+        },
+    ],
+    procedures: [],
+}

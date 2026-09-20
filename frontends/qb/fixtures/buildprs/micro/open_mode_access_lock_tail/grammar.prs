@@ -1,0 +1,43 @@
+TOKENS:
+   tkOPEN ("OPEN"),
+   tkABS ("ABS"),
+   tkFOR ("FOR"),
+   tkAPPEND ("APPEND"),
+   tkINPUT ("INPUT"),
+   tkOUTPUT ("OUTPUT"),
+   tkRANDOM ("RANDOM"),
+   tkBINARY ("BINARY"),
+   tkACCESS ("ACCESS"),
+   tkREAD ("READ"),
+   tkWRITE ("WRITE"),
+   tkLOCK ("LOCK"),
+   tkSHARED ("SHARED", no_direct),
+   tkAS ("AS"),
+   tkComma (","),
+   tkLEN ("LEN"),
+   tkEQ ("=");
+
+Statements:
+   tkOPEN Exp
+    ([(tkFOR ((tkAPPEND  MARK(1)) |
+              (tkINPUT   MARK(2)) |
+              (tkOUTPUT  MARK(3)) |
+              (tkRANDOM  MARK(4)) |
+              (tkBINARY  MARK(5))))]
+     [tkACCESS ((tkREAD  MARK(6) [tkWRITE MARK(8)]) | (tkWRITE MARK(7)))]
+     [(tkLOCK ((tkREAD ((tkWRITE MARK(11)) | MARK(9))) |
+               (tkWRITE MARK(10)))) |
+      (tkSHARED MARK(12))]
+     tkAS optFilenum [tkLEN tkEQ Exp MARK(13)])  |
+    (tkComma optFilenum exp12 MARK(14));
+
+Functions:
+   tkABS Exp EMIT(opFnAbs);
+
+NonTerminals:
+Exp:
+   EXTERNAL MSG_ExpExp;
+optFilenum:
+   EXTERNAL;
+exp12:
+   EXTERNAL MSG_ExpExp;

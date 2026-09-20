@@ -1,0 +1,43 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: vbdos/option_explicit_negative
+# dialect: VbDos
+# source: vbdos/optexp.bas
+
+Module {
+    statements: [
+        OptionExplicit(
+            Span {
+                line: 1,
+                start: 0,
+                end: 6,
+            },
+        ),
+        Assign {
+            target: Name(
+                "UNDECLAREDVALUE",
+                Span {
+                    line: 3,
+                    start: 0,
+                    end: 15,
+                },
+            ),
+            value: Literal(
+                Integer(
+                    1,
+                    Integer,
+                ),
+                Span {
+                    line: 3,
+                    start: 18,
+                    end: 19,
+                },
+            ),
+            span: Span {
+                line: 3,
+                start: 0,
+                end: 19,
+            },
+        },
+    ],
+    procedures: [],
+}

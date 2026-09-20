@@ -1,0 +1,12 @@
+TOKENS:
+   tkCOLOR ("COLOR"),
+   tkX ("X"),
+   tkComma (",");
+
+Statements:
+   tkCOLOR [tkX] [tkComma tkX];
+     <CgStmtCnt(opStColor)>
+
+Functions:
+
+NonTerminals:

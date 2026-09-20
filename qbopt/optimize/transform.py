@@ -1200,7 +1200,13 @@ def _invariant_run(
         changing = False
         for one in ops:
             real = mir.instruction(one)
-            if one in run or one.stores or (one.floating is not None and id(one) not in floating_allowed) or not real:
+            if (
+                one in run
+                or one.volatile
+                or one.stores
+                or (one.floating is not None and id(one) not in floating_allowed)
+                or not real
+            ):
                 continue
             # A branch is where the loop is. hotlop's latch block held
             # `cmp`, `jle` and `jmp`, all three reading nothing the loop

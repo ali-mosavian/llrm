@@ -1,0 +1,884 @@
+schema = 1
+dialect = "qb45"
+runtime = "qb45"
+inherits = ""
+
+[[case]]
+name = "text-screen-capture"
+source = "Q45L00.BAS"
+level = 1
+features = ["text-screen-capture", "apostrophe and REM comments", "colon separators", "const", "case-insensitive names"]
+switches = []
+expected = "PASS text-screen-capture"
+artifacts = ["QBTEXT.BSV"]
+artifact_goldens = ["golden/QBTEXT.BSV"]
+allow_rem_witness = true
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "Apostrophe and REM each comment out a post-assignment state mutation, so qCount=7 and qTotal=100007; only that success branch writes the B800 text-page BSAVE, with QBTEXT character bytes at offsets 0,2,...,14 and attribute 07 bytes at offsets 1,3,...,15."
+
+[[case]]
+name = "numeric"
+source = "Q45N01.BAS"
+level = 1
+features = ["integer", "long", "single", "double", "numeric conversions", "integer division"]
+switches = []
+expected = "PASS numeric"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "DATA/READ-supplied operands make integer division, LONG arithmetic, CSNG, and CDBL independently produce 5, 300007, 3, and 1.5."
+
+[[case]]
+name = "control"
+source = "Q45C02.BAS"
+level = 1
+features = ["for", "do while", "while wend", "if elseif else", "select case"]
+switches = []
+expected = "PASS control"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "FOR, DO WHILE, and WHILE/WEND have separate state and exact checkpoints before IF/ELSEIF and SELECT choose the pass branch."
+
+[[case]]
+name = "gotos"
+source = "Q45G03.BAS"
+level = 2
+features = ["labels", "goto", "gosub", "return", "on gosub"]
+switches = []
+expected = "PASS gotos"
+parser = "required"
+lowering = "pending"
+runtime = "pending"
+
+[[case]]
+name = "procedures"
+source = "Q45P04.BAS"
+level = 2
+features = ["declare", "sub", "function", "byref", "long return"]
+switches = []
+expected = "PASS procedures"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "BYREF SUB increments count and LONG FUNCTION returns 100023."
+
+[[case]]
+name = "arrays"
+source = "Q45A05.BAS"
+level = 2
+features = ["option base", "bounded arrays", "multidimensional arrays", "lbound", "ubound"]
+switches = []
+expected = "PASS arrays"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "All six distinct two-dimensional elements and both dimensions' exact OPTION BASE 1 bounds are checked."
+
+[[case]]
+name = "dynamicarrays"
+source = "Q45D06.BAS"
+level = 3
+features = ["$dynamic", "redim", "erase", "long arrays"]
+switches = []
+expected = "PASS dynamicarrays"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "$DYNAMIC REDIM LONG array sums to 900000; after ERASE a differently bounded REDIM stores and rereads 17, 23, and 29."
+
+[[case]]
+name = "strings"
+source = "Q45S07.BAS"
+level = 2
+features = ["fixed strings", "dynamic strings", "concatenation", "mid assignment", "string intrinsics"]
+switches = []
+expected = "PASS strings"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "Fixed/dynamic strings, MID$ assignment, trimming, and length yield the asserted dog-text result."
+
+[[case]]
+name = "udt"
+source = "Q45U08.BAS"
+level = 3
+features = ["type", "packed fields", "fixed-string fields", "aggregate copy"]
+switches = []
+expected = "PASS udt"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "TYPE aggregate copy remains independent after the source changes; LEN and PEEK witness packed integer bytes and the fixed-string field."
+
+[[case]]
+name = "data"
+source = "Q45D09.BAS"
+level = 3
+features = ["data", "read", "restore", "labelled data"]
+switches = []
+expected = "PASS data"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "READ obtains 7 and seven from the first DATA row; labelled RESTORE independently redirects the next READ to 11."
+
+[[case]]
+name = "files"
+source = "Q45F10.BAS"
+level = 3
+features = ["freefile", "open output", "print file", "open input", "line input", "close", "kill"]
+switches = []
+expected = "PASS files"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "A freshly written sequential file is reopened, LINE INPUT returns the exact text, and KILL removes it."
+
+[[case]]
+name = "errors"
+source = "Q45E11.BAS"
+level = 3
+features = ["on error goto", "error", "err"]
+switches = ["/E"]
+expected = "PASS errors"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "ERROR 13 reaches handler with ERR 13."
+
+[[case]]
+name = "memory"
+source = "Q45M12.BAS"
+level = 4
+features = ["def seg", "varptr", "varseg", "peek", "poke"]
+switches = []
+expected = "PASS memory"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "PEEK witnesses the original low byte, POKE changes only the middle INTEGER low byte through VARSEG/VARPTR, and adjacent word canaries remain exact."
+
+[[case]]
+name = "display"
+source = "Q45V13.BAS"
+level = 4
+features = ["screen", "pset", "point"]
+switches = []
+expected = "PASS display"
+parser = "required"
+lowering = "pending"
+runtime = "reference-only"
+
+[[case]]
+name = "operators"
+source = "Q45O29.BAS"
+level = 1
+features = ["arithmetic operators", "relational operators", "logical operators", "string concatenation", "operator precedence"]
+switches = []
+expected = "PASS operators"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "DATA/READ operands feed separate arithmetic, precedence, relational, logical, power, MOD, and string-concatenation checkpoints."
+
+[[case]]
+name = "intrinsics"
+source = "Q45I30.BAS"
+level = 2
+features = ["numeric intrinsics", "string intrinsics", "MKI$", "MKL$", "CVI", "CVL"]
+switches = []
+expected = "PASS intrinsics"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "String/numeric intrinsics return asserted values; MKI$/MKL$ are also checked by independent little-endian byte witnesses before CVI/CVL."
+
+[[case]]
+name = "fieldio"
+source = "Q45F31.BAS"
+level = 3
+features = ["FIELD", "LSET", "RANDOM record I/O", "LOF"]
+switches = []
+expected = "PASS fieldio"
+parser = "required"
+lowering = "pending"
+runtime = "pending"
+
+[[case]]
+name = "conversions"
+source = "Q45CV36.BAS"
+level = 1
+features = ["CINT", "CLNG", "positive and negative rounding", "LONG conversion range"]
+switches = []
+expected = "PASS conversions"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "DATA-supplied positive and negative fractions round independently through CINT, while CLNG converts 40000.4 outside INTEGER range."
+
+[[case]]
+name = "math-functions"
+source = "Q45MT37.BAS"
+level = 2
+features = ["ATN", "SIN", "COS", "EXP", "LOG", "DOUBLE precision"]
+switches = []
+expected = "PASS math"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "DATA operands drive five independent DOUBLE anchors with tight absolute tolerances; no tested function supplies another function's oracle."
+
+[[case]]
+name = "string-parts"
+source = "Q45ST38.BAS"
+level = 2
+features = ["LEFT$", "MID$ function", "RIGHT$", "INSTR start", "SPACE$", "STRING$"]
+switches = []
+expected = "PASS stringparts"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "A DATA-supplied seven-character string has separately checked left, middle, right, search-start, and constructed-string results, plus zero-length and past-end boundary witnesses for all six functions."
+
+[[case]]
+name = "file-positions"
+source = "Q45FI39.BAS"
+level = 3
+features = ["OPEN OUTPUT", "OPEN APPEND", "OPEN INPUT", "INPUT$", "SEEK", "EOF", "LOF", "KILL"]
+switches = []
+expected = "PASS filepos"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "OUTPUT plus APPEND creates exactly four bytes; INPUT$ before and after SEEK returns AB and CD, LOF is 4, and EOF is true only at the end."
+
+[[case]]
+name = "signed-array-bounds"
+source = "Q45AR40.BAS"
+level = 2
+features = ["negative array lower bound", "LBOUND", "UBOUND", "boundary elements"]
+switches = []
+expected = "PASS arraybounds"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "A -2 TO 2 array checks both exact bounds and all five distinct boundary/interior element values."
+
+[[case]]
+name = "numeric-functions"
+source = "Q45NF41.BAS"
+level = 1
+features = ["ABS", "SGN", "FIX", "INT", "SQR", "negative rounding"]
+switches = []
+expected = "PASS numfunc"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "DATA-fed positive, negative, and square inputs give separate ABS, three-way SGN, FIX-toward-zero, INT-toward-negative-infinity, and SQR checkpoints."
+
+[[case]]
+name = "character-functions"
+source = "Q45CH42.BAS"
+level = 1
+features = ["ASC", "CHR$", "UCASE$", "LCASE$", "LTRIM$", "RTRIM$"]
+switches = []
+expected = "PASS charfunc"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "DATA-fed character, mixed-case, and two-sided padded strings independently check ASC/CHR$, case conversion, and left/right trimming."
+
+[[case]]
+name = "text-conversions"
+source = "Q45TC43.BAS"
+level = 1
+features = ["VAL", "STR$", "HEX$", "OCT$", "numeric text spelling"]
+switches = []
+expected = "PASS textconv"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "VAL parses an opaque signed decimal prefix; STR$ positive/negative spacing and unrelated HEX$/OCT$ constants are checked against literal spellings rather than inverse conversions."
+
+[[case]]
+name = "binary-packing"
+source = "Q45PK44.BAS"
+level = 2
+features = ["MKI$", "CVI", "MKL$", "CVL", "little-endian layout"]
+switches = []
+expected = "PASS packing"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "MKI$ and MKL$ must first produce exact independent little-endian byte sequences; CVI and CVL then decode the values in separate checkpoints."
+
+[[case]]
+name = "arithmetic-operators"
+source = "Q45AO45.BAS"
+level = 1
+features = ["addition", "subtraction", "multiplication", "integer division", "MOD", "LONG arithmetic"]
+switches = []
+expected = "PASS arithmetic"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "DATA-fed noncommutative INTEGER operands have separate +, -, *, integer-divide/MOD witnesses and feed a LONG mixed-expression anchor."
+
+[[case]]
+name = "relational-operators"
+source = "Q45RL46.BAS"
+level = 1
+features = ["relational operators", "BASIC boolean values", "signed comparison", "string comparison"]
+switches = []
+expected = "PASS relation"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "Opaque signed numbers and distinct strings check every relational family in both true/false directions and require BASIC's exact -1/0 truth values."
+
+[[case]]
+name = "logical-operators"
+source = "Q45LG47.BAS"
+level = 1
+features = ["AND", "OR", "XOR", "EQV", "IMP", "NOT", "bitwise signed INTEGER"]
+switches = []
+expected = "PASS logical"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "DATA-fed 12 and 10 have independent literal bit-pattern results for AND, OR, XOR, EQV, IMP, and NOT; no operator acts as another's oracle."
+
+[[case]]
+name = "operator-precedence"
+source = "Q45PR48.BAS"
+level = 1
+features = ["operator precedence", "parentheses", "power", "relational before logical"]
+switches = []
+expected = "PASS precedence"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "DATA-fed values distinguish multiplication from addition order, parentheses override it, power binds before multiplication, and relations bind before AND."
+
+[[case]]
+name = "typed-file-io"
+source = "Q45IO49.BAS"
+level = 3
+features = ["WRITE #", "INPUT #", "quoted strings", "numeric fields", "CRLF"]
+switches = []
+expected = "PASS typedio"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "WRITE # is checked as exact quoted/comma-delimited CRLF bytes via INPUT$; INPUT # separately parses a file produced with PRINT # into string and signed numeric witnesses."
+
+[[case]]
+name = "string-mutation"
+source = "Q45SM50.BAS"
+level = 2
+features = ["MID$ assignment", "fixed-length string padding", "LEN", "concatenation"]
+switches = []
+expected = "PASS stringmut"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "MID$ mutates only characters 2..4 of opaque text; a separately assigned fixed string has four literal padding spaces and length five before concatenation."
+
+[[case]]
+name = "divide-by-zero-error"
+source = "Q45ER51.BAS"
+level = 3
+features = ["integer divide by zero", "runtime error 11", "ERR", "ERL", "RESUME NEXT"]
+switches = ["/E", "/X"]
+expected = "PASS divzero"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "A DATA-fed zero divisor triggers exactly ERR=11 and ERL=100; PASS requires RESUME NEXT to execute a post-error assignment."
+
+[[case]]
+name = "subscript-error"
+source = "Q45ER52.BAS"
+level = 3
+features = ["array bounds check", "runtime error 9", "ERR", "ERL", "RESUME NEXT", "/X"]
+switches = ["/E", "/X"]
+expected = "PASS bounds-error"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "A DATA-fed index one beyond UBOUND triggers exactly ERR=9 and ERL=100; three in-range canaries and a post-RESUME assignment must remain intact."
+
+[[case]]
+name = "print-using"
+source = "Q45PF53.BAS"
+level = 3
+features = ["PRINT USING", "numeric formatting", "PRINT #", "exact CRLF bytes"]
+switches = ["/E", "/X"]
+expected = "PASS print-using"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "A DATA-fed DOUBLE is formatted through PRINT # USING; INPUT$ then witnesses the independent exact leading blank, two decimal digits, and CRLF bytes."
+
+[[case]]
+name = "rounding-ties"
+source = "Q45RN54.BAS"
+level = 2
+features = ["CINT", "CLNG", "nearest-even rounding", "positive and negative half boundaries"]
+switches = []
+expected = "PASS round-ties"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "Opaque exact halves on both sides of zero distinguish truncation and away-from-zero rounding from CINT/CLNG's required nearest-even results at even and odd integer boundaries."
+
+[[case]]
+name = "binary-file-io"
+source = "Q45BI55.BAS"
+level = 3
+features = ["OPEN BINARY", "PUT", "GET", "SEEK function", "LOC", "LOF", "little-endian file bytes"]
+switches = []
+expected = "PASS binaryio"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "Two DATA-fed signed INTEGERs are PUT at explicit byte positions; LOF, next SEEK position, post-GET LOC, reversed GET order, and independent INPUT$ little-endian bytes each have distinct checkpoints."
+
+[[case]]
+name = "on-dispatch"
+source = "Q45ON56.BAS"
+level = 3
+features = ["ON GOSUB", "ON GOTO", "GOSUB", "GOTO", "RETURN", "out-of-range dispatch"]
+switches = []
+expected = "PASS on-dispatch"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "DATA-fed selectors visit all three ON GOSUB targets in order, selectors 0 and 4 must fall through, every GOSUB must RETURN exactly once, and a separate ON GOTO selector can only reach its noncommutative target witness."
+
+[[case]]
+name = "loop-forms"
+source = "Q45LP57.BAS"
+level = 2
+features = ["DO WHILE", "LOOP WHILE", "DO UNTIL", "LOOP UNTIL", "EXIT DO", "FOR TO STEP", "NEXT", "negative STEP", "zero-trip loop"]
+switches = []
+expected = "PASS loopforms"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "Opaque limit 3 produces separate pre/post WHILE and UNTIL counts, exact EXIT DO count, noncommutative 123/321 FOR traces for positive/negative STEP, and a zero-trip direction-mismatch counter."
+
+[[case]]
+name = "select-case-forms"
+source = "Q45SC58.BAS"
+level = 2
+features = ["SELECT CASE", "CASE value list", "CASE range", "CASE IS relation", "CASE ELSE", "inclusive range boundaries"]
+switches = []
+expected = "PASS selectforms"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "Five DATA-fed selectors independently witness a comma list, both inclusive endpoints of 4 TO 6, IS > 6, and CASE ELSE; each form writes a different literal checkpoint."
+
+[[case]]
+name = "directory-operations"
+source = "Q45DR59.BAS"
+level = 3
+features = ["MKDIR", "CHDIR", "NAME", "KILL", "RMDIR", "DOS paths"]
+switches = ["/E", "/X"]
+expected = "PASS dirops"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "An empty DOS run directory is mutated in sequence: only a successful CHDIR places the marker at the parent-relative path later consumed by NAME, which must preserve exact file text; KILL must then make the directory removable, and any DOS error reports ERR and ERL as FAIL."
+
+[[case]]
+name = "random-sequences"
+source = "Q45RD60.BAS"
+level = 2
+features = ["RANDOMIZE", "RND", "RND zero", "RND negative seed", "IEEE SINGLE sequence bytes"]
+switches = []
+expected = "PASS random"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "A DATA-fed RANDOMIZE seed and RND's omitted, zero, and negative arguments are checked against seven independently measured MKS$ byte anchors, distinguishing repeat, advance, and reset behavior without decimal formatting."
+
+[[case]]
+name = "floating-packing"
+source = "Q45FP61.BAS"
+level = 2
+features = ["MKS$", "CVS", "MKD$", "CVD", "IEEE little-endian layout", "SINGLE and DOUBLE"]
+switches = []
+expected = "PASS floatpack"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "DATA-fed positive SINGLE and negative DOUBLE values must first produce exact independent IEEE little-endian bytes; CVS and CVD then decode those strings in separate value checkpoints."
+
+[[case]]
+name = "negative-square-root"
+source = "Q45ER62.BAS"
+level = 3
+features = ["SQR", "negative DOUBLE", "NaN", "unordered comparison", "no BASIC error"]
+switches = ["/E", "/X"]
+expected = "PASS sqrt-negative"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "A DATA-fed negative DOUBLE reaches SQR at line 100; PASS requires no BASIC error and the result to be unordered even against itself, while any unexpected error reports ERR and ERL as FAIL."
+
+[[case]]
+name = "string-justification"
+source = "Q45LR63.BAS"
+level = 2
+features = ["LSET", "RSET", "fixed-length strings", "dynamic string field width", "right truncation"]
+switches = []
+expected = "PASS justify"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "DATA-fed short and long strings must independently left-pad, right-pad, truncate from the right, and preserve a pre-existing dynamic field width against exact literal results."
+
+[[case]]
+name = "file-attributes"
+source = "Q45FA64.BAS"
+level = 3
+features = ["FILEATTR", "INPUT mode", "OUTPUT mode", "RANDOM mode", "APPEND mode", "BINARY mode", "DOS file handles"]
+switches = []
+expected = "PASS fileattr"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "Five simultaneously open files require FILEATTR attribute 1 to return distinct exact mode codes 1, 2, 4, 8, and 32; attribute 2 must return five distinct DOS handles outside the reserved 0..4 range."
+
+[[case]]
+name = "reset-files"
+source = "Q45RS65.BAS"
+level = 3
+features = ["RESET", "file-buffer flush", "all-file close", "ERR", "ERL", "RESUME NEXT"]
+switches = ["/E", "/X"]
+expected = "PASS reset"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "RESET must flush the exact two pending bytes and close channel 1; a numbered post-RESET PRINT # must raise exactly ERR 52 at ERL 100, RESUME NEXT must set its checkpoint, and reopening reads only AB."
+
+[[case]]
+name = "clear-state"
+source = "Q45CL66.BAS"
+level = 3
+features = ["CLEAR", "numeric reset", "string reset", "static-array reset", "file-buffer flush", "all-file close", "ERR", "ERL", "RESUME NEXT"]
+switches = ["/E", "/X"]
+expected = "PASS clear"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "The pre-CLEAR LONG, string, and all three static-array elements first construct the independent file witness QnB, preventing dead setup; CLEAR must then zero/empty them, flush the three bytes, and close channel 1, after which a numbered PRINT # requires ERR 52/ERL 100 and a post-RESUME checkpoint."
+
+[[case]]
+name = "shared-scope"
+source = "Q45SH68.BAS"
+level = 2
+features = ["DIM SHARED", "SHARED statement", "module scope", "SUB"]
+switches = []
+expected = "PASS shared"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "A parameterless shared binding changes a DATA-fed module value noncommutatively from 5 to 53, while a distinct default-by-reference witness returns the same exact value."
+
+[[case]]
+name = "static-local"
+source = "Q45SL69.BAS"
+level = 2
+features = ["STATIC statement", "persistent local", "shared-name shadowing", "FUNCTION"]
+switches = []
+expected = "PASS static-local"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "Three calls with distinct DATA-fed marker arguments must return 11, 22, and 33 from one STATIC local, while a same-named DIM SHARED module variable remains 99 to prove local shadowing."
+
+[[case]]
+name = "environment"
+source = "Q45EV70.BAS"
+level = 3
+features = ["ENVIRON", "ENVIRON$", "DOS environment replacement", "DOS environment removal"]
+switches = []
+environment = { QBCOMPAT = "Padding8" }
+expected = "PASS environ"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "ENVIRON$ must independently observe Alpha42 after insertion, Beta7 after replacement, and the empty string after removal of one private environment variable."
+
+[[case]]
+name = "explicit-let"
+source = "Q45LE71.BAS"
+level = 2
+features = ["LET", "INTEGER assignment", "LONG assignment", "STRING assignment", "same-type UDT copy"]
+switches = []
+expected = "PASS let"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "DATA-fed INTEGER, LONG, and STRING values pass through explicit LET assignments, while LET copies a mixed same-type record whose source is then destroyed; every destination field has an independent literal checkpoint."
+
+[[case]]
+name = "command-line"
+source = "Q45CM72.BAS"
+level = 2
+features = ["COMMAND$", "DOS arguments", "argument spacing"]
+switches = []
+arguments = ["Alpha", "Beta42"]
+expected = "PASS command"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "The manifest supplies mixed-case DOS arguments; under the measured QB45 COMMAND.COM path, COMMAND$ must return exact uppercased text with one separator and twelve-character length."
+
+[[case]]
+name = "shell-child"
+source = "Q45PC73.BAS"
+level = 4
+features = ["SHELL", "DOS child process", "synchronous return", "exact child file bytes", "ERR", "ERL"]
+switches = ["/E", "/X"]
+expected = "PASS shell"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "A numbered SHELL runs COMMAND.COM to create a fresh file; only synchronous successful return can expose the exact seven CHILD+CRLF bytes, and every BASIC/DOS error reports exact ERR/ERL as FAIL."
+
+[[case]]
+name = "tangent-function"
+source = "Q45TN74.BAS"
+level = 2
+features = ["TAN", "DOUBLE precision", "positive input", "negative input", "zero boundary"]
+switches = []
+expected = "PASS tangent"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "Two unrelated DATA-fed DOUBLE inputs are checked against independently derived positive and negative TAN anchors at 1e-12 tolerance, with an exact zero boundary in a third checkpoint."
+
+[[case]]
+name = "definitions"
+source = "Q45D32.BAS"
+level = 2
+features = ["DEFINT", "DEF FN", "SWAP", "EXIT FOR"]
+switches = []
+expected = "PASS definitions"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "DEFINT/DEF FN, SWAP, and EXIT FOR yield 3, 8, and 3."
+
+[[case]]
+name = "include"
+source = "Q45I33.BAS"
+companions = ["Q45I33.INC"]
+level = 3
+features = ["$INCLUDE metacommand", "include source ordering"]
+switches = []
+expected = "PASS include"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "$INCLUDE assigns includeValue 17."
+
+[[case]]
+name = "staticdynamic"
+source = "Q45S34.BAS"
+level = 3
+features = ["$STATIC metacommand", "ERASE static arrays"]
+switches = []
+expected = "PASS staticdynamic"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "After writing 9, ERASE clears the static element to zero while preserving UBOUND 2."
+
+[[case]]
+name = "resume"
+source = "Q45R35.BAS"
+level = 3
+features = ["ON ERROR", "ERR", "ERL", "RESUME NEXT"]
+switches = ["/E", "/X"]
+expected = "PASS resume"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "Numbered ERROR 11 reaches the handler with exactly ERR=11 and ERL=100; only RESUME NEXT executes the post-error assignment."
+
+[[case]]
+name = "commonchain"
+source = "Q45C17.BAS"
+companions = ["Q45N17.BAS"]
+level = 4
+features = ["common", "chain", "cross-module shared storage"]
+switches = []
+expected = "PASS commonchain"
+parser = "required"
+lowering = "pending"
+runtime = "pending"
+
+[[case]]
+name = "randomio"
+source = "Q45R18.BAS"
+level = 4
+features = ["random files", "len", "put", "get", "udt records"]
+switches = []
+expected = "PASS randomio"
+parser = "required"
+lowering = "pending"
+runtime = "pending"
+
+[[case]]
+name = "bload"
+source = "Q45B19.BAS"
+level = 4
+features = ["def seg", "varptr", "varseg", "bsave", "bload"]
+switches = []
+expected = "PASS bload"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "BSAVE writes four source bytes and BLOAD restores them into a distinct cleared fixed string before exact comparison."
+
+[[case]]
+name = "keyevent"
+source = "Q45K20.BAS"
+level = 5
+features = ["on key", "key on", "key off", "event gosub"]
+switches = ["/V", "/W"]
+expected = "PASS keyevent"
+parser = "required"
+lowering = "pending"
+runtime = "reference-only"
+
+[[case]]
+name = "comevent"
+source = "Q45C21.BAS"
+level = 5
+features = ["on com", "com on", "com off", "event gosub"]
+switches = ["/V", "/W"]
+expected = "PASS comevent"
+parser = "required"
+lowering = "pending"
+runtime = "reference-only"
+
+[[case]]
+name = "playevent"
+source = "Q45P22.BAS"
+level = 5
+features = ["on play", "play on", "play off", "event gosub"]
+switches = ["/V", "/W"]
+expected = "PASS playevent"
+parser = "required"
+lowering = "pending"
+runtime = "reference-only"
+
+[[case]]
+name = "penevent"
+source = "Q45E23.BAS"
+level = 5
+features = ["on pen", "pen on", "pen off", "event gosub"]
+switches = ["/V", "/W"]
+expected = "PASS penevent"
+parser = "required"
+lowering = "pending"
+runtime = "reference-only"
+
+[[case]]
+name = "strigevent"
+source = "Q45S24.BAS"
+level = 5
+features = ["on strig", "strig on", "strig off", "event gosub"]
+switches = ["/V", "/W"]
+expected = "PASS strigevent"
+parser = "required"
+lowering = "pending"
+runtime = "reference-only"
+
+[[case]]
+name = "draw"
+source = "Q45D25.BAS"
+level = 5
+features = ["screen", "draw", "point"]
+switches = []
+expected = "PASS draw"
+parser = "required"
+lowering = "pending"
+runtime = "reference-only"
+
+[[case]]
+name = "palette"
+source = "Q45P26.BAS"
+level = 5
+features = ["screen", "palette using", "pcopy"]
+switches = []
+expected = "PASS palette"
+parser = "required"
+lowering = "pending"
+runtime = "reference-only"
+
+[[case]]
+name = "absolute"
+source = "Q45A27.BAS"
+level = 5
+features = ["def seg", "poke", "call absolute", "far return"]
+switches = []
+expected = "PASS absolute"
+parser = "required"
+lowering = "pending"
+runtime = "pending"
+
+[[case]]
+name = "memorymodel"
+source = "Q45M28.BAS"
+level = 4
+features = ["$static", "module data lifetime"]
+switches = []
+expected = "PASS memorymodel"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "A bounded array local to a STATIC function increments from 1 to 2 across separate calls."
+
+[[case]]
+name = "events"
+source = "Q45E14.BAS"
+level = 5
+features = ["on timer", "timer on", "timer off", "event gosub"]
+switches = ["/V", "/W"]
+expected = "PASS events"
+parser = "required"
+lowering = "pending"
+runtime = "reference-only"
+
+[[case]]
+name = "static"
+source = "Q45S15.BAS"
+level = 4
+features = ["function static", "static local lifetime", "zero-argument function call"]
+switches = []
+expected = "PASS static"
+parser = "required"
+lowering = "required"
+runtime = "required"
+verification = "Separate calls observe a STATIC statement scalar advancing from 1 to 2."
+
+[[case]]
+name = "graphics"
+source = "Q45G16.BAS"
+level = 5
+features = ["screen 13", "cls", "pset", "point", "def seg", "bsave"]
+switches = []
+expected = "PASS graphics"
+parser = "required"
+lowering = "pending"
+runtime = "reference-only"

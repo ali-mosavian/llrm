@@ -1,0 +1,7 @@
+opEvCom|x
+opEvPen|x
+opEvPlay0|x
+opEvOn|x
+opEvOff|x
+opEvStop|x
+opFnAbs|x

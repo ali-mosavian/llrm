@@ -1,0 +1,427 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: vbdos/vga_framebuffer_bsave
+# dialect: VbDos
+# source: vbdos/vgabsave.bas
+
+Module {
+    statements: [
+        OptionExplicit(
+            Span {
+                line: 1,
+                start: 0,
+                end: 6,
+            },
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "PIXEL_OFFSET",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 3,
+                        start: 4,
+                        end: 27,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "PIXEL_VALUE",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 4,
+                        start: 4,
+                        end: 26,
+                    },
+                },
+            ],
+        ),
+        Runtime {
+            name: "SCREEN",
+            arguments: [
+                Literal(
+                    Integer(
+                        13,
+                        Integer,
+                    ),
+                    Span {
+                        line: 6,
+                        start: 7,
+                        end: 9,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 6,
+                start: 0,
+                end: 6,
+            },
+        },
+        DefSeg {
+            value: Some(
+                Literal(
+                    Integer(
+                        -24576,
+                        Integer,
+                    ),
+                    Span {
+                        line: 7,
+                        start: 10,
+                        end: 16,
+                    },
+                ),
+            ),
+            span: Span {
+                line: 7,
+                start: 0,
+                end: 3,
+            },
+        },
+        For {
+            counter: Name(
+                "PIXEL_OFFSET",
+                Span {
+                    line: 8,
+                    start: 4,
+                    end: 16,
+                },
+            ),
+            start: Literal(
+                Integer(
+                    0,
+                    Integer,
+                ),
+                Span {
+                    line: 8,
+                    start: 19,
+                    end: 20,
+                },
+            ),
+            end: Literal(
+                Integer(
+                    15,
+                    Integer,
+                ),
+                Span {
+                    line: 8,
+                    start: 24,
+                    end: 26,
+                },
+            ),
+            step: None,
+            body: [
+                Runtime {
+                    name: "POKE",
+                    arguments: [
+                        Name(
+                            "PIXEL_OFFSET",
+                            Span {
+                                line: 9,
+                                start: 9,
+                                end: 21,
+                            },
+                        ),
+                        Name(
+                            "PIXEL_OFFSET",
+                            Span {
+                                line: 9,
+                                start: 23,
+                                end: 35,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 9,
+                        start: 4,
+                        end: 8,
+                    },
+                },
+            ],
+            span: Span {
+                line: 8,
+                start: 0,
+                end: 3,
+            },
+        },
+        For {
+            counter: Name(
+                "PIXEL_OFFSET",
+                Span {
+                    line: 11,
+                    start: 4,
+                    end: 16,
+                },
+            ),
+            start: Literal(
+                Integer(
+                    0,
+                    Integer,
+                ),
+                Span {
+                    line: 11,
+                    start: 19,
+                    end: 20,
+                },
+            ),
+            end: Literal(
+                Integer(
+                    15,
+                    Integer,
+                ),
+                Span {
+                    line: 11,
+                    start: 24,
+                    end: 26,
+                },
+            ),
+            step: None,
+            body: [
+                Assign {
+                    target: Name(
+                        "PIXEL_VALUE",
+                        Span {
+                            line: 12,
+                            start: 4,
+                            end: 15,
+                        },
+                    ),
+                    value: Apply {
+                        name: "PEEK",
+                        arguments: [
+                            Name(
+                                "PIXEL_OFFSET",
+                                Span {
+                                    line: 12,
+                                    start: 23,
+                                    end: 35,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 12,
+                            start: 18,
+                            end: 36,
+                        },
+                    },
+                    span: Span {
+                        line: 12,
+                        start: 4,
+                        end: 36,
+                    },
+                },
+                If {
+                    condition: Binary {
+                        op: NotEqual,
+                        left: Name(
+                            "PIXEL_VALUE",
+                            Span {
+                                line: 13,
+                                start: 7,
+                                end: 18,
+                            },
+                        ),
+                        right: Name(
+                            "PIXEL_OFFSET",
+                            Span {
+                                line: 13,
+                                start: 22,
+                                end: 34,
+                            },
+                        ),
+                        span: Span {
+                            line: 13,
+                            start: 7,
+                            end: 34,
+                        },
+                    },
+                    then_branch: [
+                        Print {
+                            file: None,
+                            items: [
+                                PrintItem {
+                                    value: Literal(
+                                        String(
+                                            "FAIL vga_framebuffer_bsave pixel",
+                                        ),
+                                        Span {
+                                            line: 14,
+                                            start: 14,
+                                            end: 48,
+                                        },
+                                    ),
+                                    separator: End,
+                                },
+                            ],
+                            span: Span {
+                                line: 14,
+                                start: 8,
+                                end: 13,
+                            },
+                        },
+                        DefSeg {
+                            value: None,
+                            span: Span {
+                                line: 15,
+                                start: 8,
+                                end: 11,
+                            },
+                        },
+                        Runtime {
+                            name: "SCREEN",
+                            arguments: [
+                                Literal(
+                                    Integer(
+                                        0,
+                                        Integer,
+                                    ),
+                                    Span {
+                                        line: 16,
+                                        start: 15,
+                                        end: 16,
+                                    },
+                                ),
+                            ],
+                            span: Span {
+                                line: 16,
+                                start: 8,
+                                end: 14,
+                            },
+                        },
+                        Runtime {
+                            name: "END",
+                            arguments: [],
+                            span: Span {
+                                line: 17,
+                                start: 8,
+                                end: 11,
+                            },
+                        },
+                    ],
+                    else_branch: [],
+                    span: Span {
+                        line: 13,
+                        start: 4,
+                        end: 6,
+                    },
+                },
+            ],
+            span: Span {
+                line: 11,
+                start: 0,
+                end: 3,
+            },
+        },
+        Call {
+            name: "BSAVE",
+            arguments: [
+                Literal(
+                    String(
+                        "VBGFX.BIN",
+                    ),
+                    Span {
+                        line: 20,
+                        start: 6,
+                        end: 17,
+                    },
+                ),
+                Literal(
+                    Integer(
+                        0,
+                        Integer,
+                    ),
+                    Span {
+                        line: 20,
+                        start: 19,
+                        end: 20,
+                    },
+                ),
+                Literal(
+                    Integer(
+                        16,
+                        Integer,
+                    ),
+                    Span {
+                        line: 20,
+                        start: 22,
+                        end: 24,
+                    },
+                ),
+            ],
+            explicit: false,
+            span: Span {
+                line: 20,
+                start: 0,
+                end: 5,
+            },
+        },
+        DefSeg {
+            value: None,
+            span: Span {
+                line: 21,
+                start: 0,
+                end: 3,
+            },
+        },
+        Runtime {
+            name: "SCREEN",
+            arguments: [
+                Literal(
+                    Integer(
+                        0,
+                        Integer,
+                    ),
+                    Span {
+                        line: 22,
+                        start: 7,
+                        end: 8,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 22,
+                start: 0,
+                end: 6,
+            },
+        },
+        Print {
+            file: None,
+            items: [
+                PrintItem {
+                    value: Literal(
+                        String(
+                            "PASS vga_framebuffer_bsave",
+                        ),
+                        Span {
+                            line: 24,
+                            start: 6,
+                            end: 34,
+                        },
+                    ),
+                    separator: End,
+                },
+            ],
+            span: Span {
+                line: 24,
+                start: 0,
+                end: 5,
+            },
+        },
+    ],
+    procedures: [],
+}

@@ -1,0 +1,18 @@
+TOKENS:
+   tkLOCK ("LOCK"),
+   tkABS ("ABS"),
+   tkComma (","),
+   tkTO ("TO");
+
+Statements:
+   tkLOCK optFilenum
+      [tkComma (Exp MARK(1) [tkTO MARK(2) Exp]) | (tkTO MARK(3) Exp)];
+
+Functions:
+   tkABS Exp EMIT(opFnAbs);
+
+NonTerminals:
+optFilenum:
+   EXTERNAL;
+Exp:
+   EXTERNAL MSG_ExpExp;

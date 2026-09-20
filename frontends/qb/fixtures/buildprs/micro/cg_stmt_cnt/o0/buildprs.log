@@ -1,0 +1,14 @@
+starting
+found buildprs
+cwd=
+buildprs: Line    12 -> syntax error
+end of input, sorting nonterminal table
+sorting token table
+sorting state table
+producing output files
+Used 3 Token table entries
+     0 Nonterminal table entries
+     6 State table entries
+     58 Name table entries
+after buildprs
+copying

@@ -1,0 +1,454 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: pds71/pds-far-string
+# dialect: Pds71
+# source: pds71/PDFAR.BAS
+
+Module {
+    statements: [
+        Dim(
+            [
+                Declaration {
+                    name: "LEFTTEXT",
+                    type_name: Some(
+                        String,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 2,
+                        start: 4,
+                        end: 22,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "RIGHTTEXT",
+                    type_name: Some(
+                        String,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 3,
+                        start: 4,
+                        end: 23,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "COUNT",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 4,
+                        start: 4,
+                        end: 20,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "PASSED",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 5,
+                        start: 4,
+                        end: 21,
+                    },
+                },
+            ],
+        ),
+        Assign {
+            target: Name(
+                "COUNT",
+                Span {
+                    line: 7,
+                    start: 0,
+                    end: 5,
+                },
+            ),
+            value: Literal(
+                Integer(
+                    30000,
+                    Integer,
+                ),
+                Span {
+                    line: 7,
+                    start: 8,
+                    end: 13,
+                },
+            ),
+            span: Span {
+                line: 7,
+                start: 0,
+                end: 13,
+            },
+        },
+        Assign {
+            target: Name(
+                "LEFTTEXT",
+                Span {
+                    line: 8,
+                    start: 0,
+                    end: 8,
+                },
+            ),
+            value: Apply {
+                name: "STRING$",
+                arguments: [
+                    Name(
+                        "COUNT",
+                        Span {
+                            line: 8,
+                            start: 19,
+                            end: 24,
+                        },
+                    ),
+                    Literal(
+                        String(
+                            "x",
+                        ),
+                        Span {
+                            line: 8,
+                            start: 26,
+                            end: 29,
+                        },
+                    ),
+                ],
+                span: Span {
+                    line: 8,
+                    start: 11,
+                    end: 30,
+                },
+            },
+            span: Span {
+                line: 8,
+                start: 0,
+                end: 30,
+            },
+        },
+        Assign {
+            target: Name(
+                "RIGHTTEXT",
+                Span {
+                    line: 9,
+                    start: 0,
+                    end: 9,
+                },
+            ),
+            value: Apply {
+                name: "STRING$",
+                arguments: [
+                    Name(
+                        "COUNT",
+                        Span {
+                            line: 9,
+                            start: 20,
+                            end: 25,
+                        },
+                    ),
+                    Literal(
+                        String(
+                            "y",
+                        ),
+                        Span {
+                            line: 9,
+                            start: 27,
+                            end: 30,
+                        },
+                    ),
+                ],
+                span: Span {
+                    line: 9,
+                    start: 12,
+                    end: 31,
+                },
+            },
+            span: Span {
+                line: 9,
+                start: 0,
+                end: 31,
+            },
+        },
+        Assign {
+            target: Name(
+                "PASSED",
+                Span {
+                    line: 10,
+                    start: 0,
+                    end: 6,
+                },
+            ),
+            value: Binary {
+                op: Eq,
+                left: Apply {
+                    name: "ASC",
+                    arguments: [
+                        Apply {
+                            name: "MID$",
+                            arguments: [
+                                Name(
+                                    "LEFTTEXT",
+                                    Span {
+                                        line: 10,
+                                        start: 18,
+                                        end: 26,
+                                    },
+                                ),
+                                Name(
+                                    "COUNT",
+                                    Span {
+                                        line: 10,
+                                        start: 28,
+                                        end: 33,
+                                    },
+                                ),
+                                Literal(
+                                    Integer(
+                                        1,
+                                        Integer,
+                                    ),
+                                    Span {
+                                        line: 10,
+                                        start: 35,
+                                        end: 36,
+                                    },
+                                ),
+                            ],
+                            span: Span {
+                                line: 10,
+                                start: 13,
+                                end: 37,
+                            },
+                        },
+                    ],
+                    span: Span {
+                        line: 10,
+                        start: 9,
+                        end: 38,
+                    },
+                },
+                right: Literal(
+                    Integer(
+                        120,
+                        Integer,
+                    ),
+                    Span {
+                        line: 10,
+                        start: 41,
+                        end: 44,
+                    },
+                ),
+                span: Span {
+                    line: 10,
+                    start: 9,
+                    end: 44,
+                },
+            },
+            span: Span {
+                line: 10,
+                start: 0,
+                end: 44,
+            },
+        },
+        Assign {
+            target: Name(
+                "PASSED",
+                Span {
+                    line: 11,
+                    start: 0,
+                    end: 6,
+                },
+            ),
+            value: Binary {
+                op: And,
+                left: Name(
+                    "PASSED",
+                    Span {
+                        line: 11,
+                        start: 9,
+                        end: 15,
+                    },
+                ),
+                right: Binary {
+                    op: Eq,
+                    left: Apply {
+                        name: "ASC",
+                        arguments: [
+                            Apply {
+                                name: "MID$",
+                                arguments: [
+                                    Name(
+                                        "RIGHTTEXT",
+                                        Span {
+                                            line: 11,
+                                            start: 29,
+                                            end: 38,
+                                        },
+                                    ),
+                                    Name(
+                                        "COUNT",
+                                        Span {
+                                            line: 11,
+                                            start: 40,
+                                            end: 45,
+                                        },
+                                    ),
+                                    Literal(
+                                        Integer(
+                                            1,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 11,
+                                            start: 47,
+                                            end: 48,
+                                        },
+                                    ),
+                                ],
+                                span: Span {
+                                    line: 11,
+                                    start: 24,
+                                    end: 49,
+                                },
+                            },
+                        ],
+                        span: Span {
+                            line: 11,
+                            start: 20,
+                            end: 50,
+                        },
+                    },
+                    right: Literal(
+                        Integer(
+                            121,
+                            Integer,
+                        ),
+                        Span {
+                            line: 11,
+                            start: 53,
+                            end: 56,
+                        },
+                    ),
+                    span: Span {
+                        line: 11,
+                        start: 20,
+                        end: 56,
+                    },
+                },
+                span: Span {
+                    line: 11,
+                    start: 9,
+                    end: 56,
+                },
+            },
+            span: Span {
+                line: 11,
+                start: 0,
+                end: 56,
+            },
+        },
+        If {
+            condition: Name(
+                "PASSED",
+                Span {
+                    line: 13,
+                    start: 3,
+                    end: 9,
+                },
+            ),
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "PASS pds-far-string",
+                                ),
+                                Span {
+                                    line: 14,
+                                    start: 10,
+                                    end: 31,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 14,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+            ],
+            else_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL pds-far-string payload",
+                                ),
+                                Span {
+                                    line: 16,
+                                    start: 10,
+                                    end: 39,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 16,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+            ],
+            span: Span {
+                line: 13,
+                start: 0,
+                end: 2,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 18,
+                start: 0,
+                end: 3,
+            },
+        },
+    ],
+    procedures: [],
+}

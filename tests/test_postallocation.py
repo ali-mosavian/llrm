@@ -8,6 +8,7 @@ from iced_x86 import Register
 from qbopt.model import ir
 from qbopt.model import lir
 from qbopt.model import mir
+from qbopt.backend import masm
 from qbopt.backend import select
 from qbopt.backend import peephole
 from qbopt.objectfile.module import Addr
@@ -344,7 +345,15 @@ def test_frontend_parity_listing_keeps_blocks_after_an_early_basic_exit() -> Non
     )
     body = lir.LirBody("branch", 1, blocks, {}, {})
 
-    result = basic_core(body, {1: "B$ENRA", 3: "B$EXSA"})
+    procedure = masm.Procedure(
+        "branch",
+        False,
+        True,
+        body,
+        0,
+        {1: masm.Callee("B$ENRA", True), 3: masm.Callee("B$EXSA", True)},
+    )
+    result = basic_core(procedure)
 
     assert [line for _block, line in result] == ["mov ax, 1", "mov ax, 2"]
 

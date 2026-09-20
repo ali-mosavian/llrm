@@ -1,0 +1,23 @@
+TOKENS:
+   tkBLOAD ("BLOAD"),
+   tkWAIT ("WAIT"),
+   tkABS ("ABS"),
+   tkComma (",");
+
+Statements:
+   tkBLOAD Exp optCommaExp;
+     <Cg1or2Args(opStBload1)>
+   tkWAIT Exp exp12;
+
+Functions:
+   tkABS Exp EMIT(opFnAbs);
+
+NonTerminals:
+Exp:
+   EXTERNAL MSG_ExpExp;
+commaExp:
+   tkComma Exp;
+exp12:
+   commaExp optCommaExp;
+optCommaExp:
+   [commaExp];

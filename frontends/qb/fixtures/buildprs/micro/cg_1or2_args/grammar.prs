@@ -1,0 +1,12 @@
+TOKENS:
+   tkBLOAD ("BLOAD"),
+   tkX ("X"),
+   tkComma (",");
+
+Statements:
+   tkBLOAD tkX [tkComma tkX];
+     <Cg1or2Args(opStBload1)>
+
+Functions:
+
+NonTerminals:

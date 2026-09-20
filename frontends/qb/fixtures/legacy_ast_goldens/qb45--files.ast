@@ -1,0 +1,327 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: qb45/files
+# dialect: QuickBasic45
+# source: qb45/Q45F10.BAS
+
+Module {
+    statements: [
+        Dim(
+            [
+                Declaration {
+                    name: "FILENUMBER",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 2,
+                        start: 4,
+                        end: 25,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "TEXT",
+                    type_name: Some(
+                        String,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 3,
+                        start: 4,
+                        end: 18,
+                    },
+                },
+            ],
+        ),
+        Assign {
+            target: Name(
+                "FILENUMBER",
+                Span {
+                    line: 5,
+                    start: 0,
+                    end: 10,
+                },
+            ),
+            value: Name(
+                "FREEFILE",
+                Span {
+                    line: 5,
+                    start: 13,
+                    end: 21,
+                },
+            ),
+            span: Span {
+                line: 5,
+                start: 0,
+                end: 21,
+            },
+        },
+        Open {
+            path: Literal(
+                String(
+                    "q45f10.tmp",
+                ),
+                Span {
+                    line: 6,
+                    start: 5,
+                    end: 17,
+                },
+            ),
+            mode: Output,
+            file: Name(
+                "FILENUMBER",
+                Span {
+                    line: 6,
+                    start: 33,
+                    end: 43,
+                },
+            ),
+            span: Span {
+                line: 6,
+                start: 0,
+                end: 4,
+            },
+        },
+        Print {
+            file: Some(
+                Name(
+                    "FILENUMBER",
+                    Span {
+                        line: 7,
+                        start: 7,
+                        end: 17,
+                    },
+                ),
+            ),
+            items: [
+                PrintItem {
+                    value: Literal(
+                        String(
+                            "QB45 FILE",
+                        ),
+                        Span {
+                            line: 7,
+                            start: 19,
+                            end: 30,
+                        },
+                    ),
+                    separator: End,
+                },
+            ],
+            span: Span {
+                line: 7,
+                start: 0,
+                end: 5,
+            },
+        },
+        Close {
+            files: [
+                Name(
+                    "FILENUMBER",
+                    Span {
+                        line: 8,
+                        start: 7,
+                        end: 17,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 8,
+                start: 0,
+                end: 5,
+            },
+        },
+        Open {
+            path: Literal(
+                String(
+                    "q45f10.tmp",
+                ),
+                Span {
+                    line: 10,
+                    start: 5,
+                    end: 17,
+                },
+            ),
+            mode: Input,
+            file: Name(
+                "FILENUMBER",
+                Span {
+                    line: 10,
+                    start: 32,
+                    end: 42,
+                },
+            ),
+            span: Span {
+                line: 10,
+                start: 0,
+                end: 4,
+            },
+        },
+        LineInput {
+            file: Name(
+                "FILENUMBER",
+                Span {
+                    line: 11,
+                    start: 12,
+                    end: 22,
+                },
+            ),
+            destination: Name(
+                "TEXT",
+                Span {
+                    line: 11,
+                    start: 24,
+                    end: 28,
+                },
+            ),
+            span: Span {
+                line: 11,
+                start: 0,
+                end: 4,
+            },
+        },
+        Close {
+            files: [
+                Name(
+                    "FILENUMBER",
+                    Span {
+                        line: 12,
+                        start: 7,
+                        end: 17,
+                    },
+                ),
+            ],
+            span: Span {
+                line: 12,
+                start: 0,
+                end: 5,
+            },
+        },
+        Call {
+            name: "KILL",
+            arguments: [
+                Literal(
+                    String(
+                        "q45f10.tmp",
+                    ),
+                    Span {
+                        line: 13,
+                        start: 5,
+                        end: 17,
+                    },
+                ),
+            ],
+            explicit: false,
+            span: Span {
+                line: 13,
+                start: 0,
+                end: 4,
+            },
+        },
+        If {
+            condition: Binary {
+                op: Eq,
+                left: Name(
+                    "TEXT",
+                    Span {
+                        line: 15,
+                        start: 3,
+                        end: 7,
+                    },
+                ),
+                right: Literal(
+                    String(
+                        "QB45 FILE",
+                    ),
+                    Span {
+                        line: 15,
+                        start: 10,
+                        end: 21,
+                    },
+                ),
+                span: Span {
+                    line: 15,
+                    start: 3,
+                    end: 21,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "PASS files",
+                                ),
+                                Span {
+                                    line: 16,
+                                    start: 10,
+                                    end: 22,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 16,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+            ],
+            else_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL files roundtrip",
+                                ),
+                                Span {
+                                    line: 18,
+                                    start: 10,
+                                    end: 32,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 18,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+            ],
+            span: Span {
+                line: 15,
+                start: 0,
+                end: 2,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 20,
+                start: 0,
+                end: 3,
+            },
+        },
+    ],
+    procedures: [],
+}

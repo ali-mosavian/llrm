@@ -1,0 +1,900 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: qb45/binary-packing
+# dialect: QuickBasic45
+# source: qb45/Q45PK44.BAS
+
+Module {
+    statements: [
+        Dim(
+            [
+                Declaration {
+                    name: "PACKEDINTEGER",
+                    type_name: Some(
+                        String,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: Some(
+                        Literal(
+                            Integer(
+                                2,
+                                Integer,
+                            ),
+                            Span {
+                                line: 2,
+                                start: 30,
+                                end: 31,
+                            },
+                        ),
+                    ),
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 2,
+                        start: 4,
+                        end: 31,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "PACKEDLONG",
+                    type_name: Some(
+                        String,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: Some(
+                        Literal(
+                            Integer(
+                                4,
+                                Integer,
+                            ),
+                            Span {
+                                line: 3,
+                                start: 27,
+                                end: 28,
+                            },
+                        ),
+                    ),
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 3,
+                        start: 4,
+                        end: 28,
+                    },
+                },
+            ],
+        ),
+        Assign {
+            target: Name(
+                "PACKEDINTEGER",
+                Span {
+                    line: 5,
+                    start: 0,
+                    end: 13,
+                },
+            ),
+            value: Apply {
+                name: "MKI$",
+                arguments: [
+                    Literal(
+                        Integer(
+                            4660,
+                            Integer,
+                        ),
+                        Span {
+                            line: 5,
+                            start: 21,
+                            end: 25,
+                        },
+                    ),
+                ],
+                span: Span {
+                    line: 5,
+                    start: 16,
+                    end: 26,
+                },
+            },
+            span: Span {
+                line: 5,
+                start: 0,
+                end: 26,
+            },
+        },
+        If {
+            condition: Binary {
+                op: Or,
+                left: Binary {
+                    op: NotEqual,
+                    left: Apply {
+                        name: "ASC",
+                        arguments: [
+                            Apply {
+                                name: "MID$",
+                                arguments: [
+                                    Name(
+                                        "PACKEDINTEGER",
+                                        Span {
+                                            line: 6,
+                                            start: 12,
+                                            end: 25,
+                                        },
+                                    ),
+                                    Literal(
+                                        Integer(
+                                            1,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 6,
+                                            start: 27,
+                                            end: 28,
+                                        },
+                                    ),
+                                    Literal(
+                                        Integer(
+                                            1,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 6,
+                                            start: 30,
+                                            end: 31,
+                                        },
+                                    ),
+                                ],
+                                span: Span {
+                                    line: 6,
+                                    start: 7,
+                                    end: 32,
+                                },
+                            },
+                        ],
+                        span: Span {
+                            line: 6,
+                            start: 3,
+                            end: 33,
+                        },
+                    },
+                    right: Literal(
+                        Integer(
+                            52,
+                            Integer,
+                        ),
+                        Span {
+                            line: 6,
+                            start: 37,
+                            end: 39,
+                        },
+                    ),
+                    span: Span {
+                        line: 6,
+                        start: 3,
+                        end: 39,
+                    },
+                },
+                right: Binary {
+                    op: NotEqual,
+                    left: Apply {
+                        name: "ASC",
+                        arguments: [
+                            Apply {
+                                name: "MID$",
+                                arguments: [
+                                    Name(
+                                        "PACKEDINTEGER",
+                                        Span {
+                                            line: 6,
+                                            start: 52,
+                                            end: 65,
+                                        },
+                                    ),
+                                    Literal(
+                                        Integer(
+                                            2,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 6,
+                                            start: 67,
+                                            end: 68,
+                                        },
+                                    ),
+                                    Literal(
+                                        Integer(
+                                            1,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 6,
+                                            start: 70,
+                                            end: 71,
+                                        },
+                                    ),
+                                ],
+                                span: Span {
+                                    line: 6,
+                                    start: 47,
+                                    end: 72,
+                                },
+                            },
+                        ],
+                        span: Span {
+                            line: 6,
+                            start: 43,
+                            end: 73,
+                        },
+                    },
+                    right: Literal(
+                        Integer(
+                            18,
+                            Integer,
+                        ),
+                        Span {
+                            line: 6,
+                            start: 77,
+                            end: 79,
+                        },
+                    ),
+                    span: Span {
+                        line: 6,
+                        start: 43,
+                        end: 79,
+                    },
+                },
+                span: Span {
+                    line: 6,
+                    start: 3,
+                    end: 79,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL packing mki bytes",
+                                ),
+                                Span {
+                                    line: 7,
+                                    start: 10,
+                                    end: 34,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 7,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 8,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 6,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Apply {
+                    name: "CVI",
+                    arguments: [
+                        Name(
+                            "PACKEDINTEGER",
+                            Span {
+                                line: 10,
+                                start: 7,
+                                end: 20,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 10,
+                        start: 3,
+                        end: 21,
+                    },
+                },
+                right: Literal(
+                    Integer(
+                        4660,
+                        Integer,
+                    ),
+                    Span {
+                        line: 10,
+                        start: 25,
+                        end: 29,
+                    },
+                ),
+                span: Span {
+                    line: 10,
+                    start: 3,
+                    end: 29,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL packing cvi",
+                                ),
+                                Span {
+                                    line: 11,
+                                    start: 10,
+                                    end: 28,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 11,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 12,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 10,
+                start: 0,
+                end: 2,
+            },
+        },
+        Assign {
+            target: Name(
+                "PACKEDLONG",
+                Span {
+                    line: 14,
+                    start: 0,
+                    end: 10,
+                },
+            ),
+            value: Apply {
+                name: "MKL$",
+                arguments: [
+                    Literal(
+                        Integer(
+                            305419896,
+                            Integer,
+                        ),
+                        Span {
+                            line: 14,
+                            start: 18,
+                            end: 27,
+                        },
+                    ),
+                ],
+                span: Span {
+                    line: 14,
+                    start: 13,
+                    end: 28,
+                },
+            },
+            span: Span {
+                line: 14,
+                start: 0,
+                end: 28,
+            },
+        },
+        If {
+            condition: Binary {
+                op: Or,
+                left: Binary {
+                    op: NotEqual,
+                    left: Apply {
+                        name: "ASC",
+                        arguments: [
+                            Apply {
+                                name: "MID$",
+                                arguments: [
+                                    Name(
+                                        "PACKEDLONG",
+                                        Span {
+                                            line: 15,
+                                            start: 12,
+                                            end: 22,
+                                        },
+                                    ),
+                                    Literal(
+                                        Integer(
+                                            1,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 15,
+                                            start: 24,
+                                            end: 25,
+                                        },
+                                    ),
+                                    Literal(
+                                        Integer(
+                                            1,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 15,
+                                            start: 27,
+                                            end: 28,
+                                        },
+                                    ),
+                                ],
+                                span: Span {
+                                    line: 15,
+                                    start: 7,
+                                    end: 29,
+                                },
+                            },
+                        ],
+                        span: Span {
+                            line: 15,
+                            start: 3,
+                            end: 30,
+                        },
+                    },
+                    right: Literal(
+                        Integer(
+                            120,
+                            Integer,
+                        ),
+                        Span {
+                            line: 15,
+                            start: 34,
+                            end: 37,
+                        },
+                    ),
+                    span: Span {
+                        line: 15,
+                        start: 3,
+                        end: 37,
+                    },
+                },
+                right: Binary {
+                    op: NotEqual,
+                    left: Apply {
+                        name: "ASC",
+                        arguments: [
+                            Apply {
+                                name: "MID$",
+                                arguments: [
+                                    Name(
+                                        "PACKEDLONG",
+                                        Span {
+                                            line: 15,
+                                            start: 50,
+                                            end: 60,
+                                        },
+                                    ),
+                                    Literal(
+                                        Integer(
+                                            2,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 15,
+                                            start: 62,
+                                            end: 63,
+                                        },
+                                    ),
+                                    Literal(
+                                        Integer(
+                                            1,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 15,
+                                            start: 65,
+                                            end: 66,
+                                        },
+                                    ),
+                                ],
+                                span: Span {
+                                    line: 15,
+                                    start: 45,
+                                    end: 67,
+                                },
+                            },
+                        ],
+                        span: Span {
+                            line: 15,
+                            start: 41,
+                            end: 68,
+                        },
+                    },
+                    right: Literal(
+                        Integer(
+                            86,
+                            Integer,
+                        ),
+                        Span {
+                            line: 15,
+                            start: 72,
+                            end: 74,
+                        },
+                    ),
+                    span: Span {
+                        line: 15,
+                        start: 41,
+                        end: 74,
+                    },
+                },
+                span: Span {
+                    line: 15,
+                    start: 3,
+                    end: 74,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL packing mkl low",
+                                ),
+                                Span {
+                                    line: 16,
+                                    start: 10,
+                                    end: 32,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 16,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 17,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 15,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: Or,
+                left: Binary {
+                    op: NotEqual,
+                    left: Apply {
+                        name: "ASC",
+                        arguments: [
+                            Apply {
+                                name: "MID$",
+                                arguments: [
+                                    Name(
+                                        "PACKEDLONG",
+                                        Span {
+                                            line: 19,
+                                            start: 12,
+                                            end: 22,
+                                        },
+                                    ),
+                                    Literal(
+                                        Integer(
+                                            3,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 19,
+                                            start: 24,
+                                            end: 25,
+                                        },
+                                    ),
+                                    Literal(
+                                        Integer(
+                                            1,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 19,
+                                            start: 27,
+                                            end: 28,
+                                        },
+                                    ),
+                                ],
+                                span: Span {
+                                    line: 19,
+                                    start: 7,
+                                    end: 29,
+                                },
+                            },
+                        ],
+                        span: Span {
+                            line: 19,
+                            start: 3,
+                            end: 30,
+                        },
+                    },
+                    right: Literal(
+                        Integer(
+                            52,
+                            Integer,
+                        ),
+                        Span {
+                            line: 19,
+                            start: 34,
+                            end: 36,
+                        },
+                    ),
+                    span: Span {
+                        line: 19,
+                        start: 3,
+                        end: 36,
+                    },
+                },
+                right: Binary {
+                    op: NotEqual,
+                    left: Apply {
+                        name: "ASC",
+                        arguments: [
+                            Apply {
+                                name: "MID$",
+                                arguments: [
+                                    Name(
+                                        "PACKEDLONG",
+                                        Span {
+                                            line: 19,
+                                            start: 49,
+                                            end: 59,
+                                        },
+                                    ),
+                                    Literal(
+                                        Integer(
+                                            4,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 19,
+                                            start: 61,
+                                            end: 62,
+                                        },
+                                    ),
+                                    Literal(
+                                        Integer(
+                                            1,
+                                            Integer,
+                                        ),
+                                        Span {
+                                            line: 19,
+                                            start: 64,
+                                            end: 65,
+                                        },
+                                    ),
+                                ],
+                                span: Span {
+                                    line: 19,
+                                    start: 44,
+                                    end: 66,
+                                },
+                            },
+                        ],
+                        span: Span {
+                            line: 19,
+                            start: 40,
+                            end: 67,
+                        },
+                    },
+                    right: Literal(
+                        Integer(
+                            18,
+                            Integer,
+                        ),
+                        Span {
+                            line: 19,
+                            start: 71,
+                            end: 73,
+                        },
+                    ),
+                    span: Span {
+                        line: 19,
+                        start: 40,
+                        end: 73,
+                    },
+                },
+                span: Span {
+                    line: 19,
+                    start: 3,
+                    end: 73,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL packing mkl high",
+                                ),
+                                Span {
+                                    line: 20,
+                                    start: 10,
+                                    end: 33,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 20,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 21,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 19,
+                start: 0,
+                end: 2,
+            },
+        },
+        If {
+            condition: Binary {
+                op: NotEqual,
+                left: Apply {
+                    name: "CVL",
+                    arguments: [
+                        Name(
+                            "PACKEDLONG",
+                            Span {
+                                line: 23,
+                                start: 7,
+                                end: 17,
+                            },
+                        ),
+                    ],
+                    span: Span {
+                        line: 23,
+                        start: 3,
+                        end: 18,
+                    },
+                },
+                right: Literal(
+                    Integer(
+                        305419896,
+                        Integer,
+                    ),
+                    Span {
+                        line: 23,
+                        start: 22,
+                        end: 31,
+                    },
+                ),
+                span: Span {
+                    line: 23,
+                    start: 3,
+                    end: 31,
+                },
+            },
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL packing cvl",
+                                ),
+                                Span {
+                                    line: 24,
+                                    start: 10,
+                                    end: 28,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 24,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Runtime {
+                    name: "END",
+                    arguments: [],
+                    span: Span {
+                        line: 25,
+                        start: 4,
+                        end: 7,
+                    },
+                },
+            ],
+            else_branch: [],
+            span: Span {
+                line: 23,
+                start: 0,
+                end: 2,
+            },
+        },
+        Print {
+            file: None,
+            items: [
+                PrintItem {
+                    value: Literal(
+                        String(
+                            "PASS packing",
+                        ),
+                        Span {
+                            line: 27,
+                            start: 6,
+                            end: 20,
+                        },
+                    ),
+                    separator: End,
+                },
+            ],
+            span: Span {
+                line: 27,
+                start: 0,
+                end: 5,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 28,
+                start: 0,
+                end: 3,
+            },
+        },
+    ],
+    procedures: [],
+}

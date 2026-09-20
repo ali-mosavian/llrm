@@ -1,12 +1,14 @@
-"""Show final allocated BASIC and C kernels without hiding codegen work.
+"""Show final allocated QB and C source-frontend kernels without hiding work.
 
     uv run python tools/frontend_parity.py algebra branch loop
 
-Only BASIC's explicit B$ENRA/B$EXSA frame calls and both languages' return
-instructions are omitted.  Parameter offsets, physical registers, branches,
-loads, stores, spills, helpers, and every block after an early exit remain
-visible.  This is deliberately a raw listing, not a normalized score: a
-frontend-dependent instruction cannot disappear behind an equivalence rule.
+The BASIC side is compiled from ``bench/parity/*.bas`` by qbopt's own QB
+frontend.  It is not a Microsoft BC object raised back from OMF.  Only QB's
+explicit B$ENRA/B$EXSA frame calls and both languages' return instructions are
+omitted.  Parameter offsets, physical registers, branches, loads, stores,
+spills, helpers, and every block after an early exit remain visible.  This is
+deliberately a raw listing, not a normalized score: a frontend-dependent
+instruction cannot disappear behind an equivalence rule.
 """
 
 from __future__ import annotations
@@ -19,15 +21,14 @@ from dataclasses import dataclass
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tests"))
 
-import corpus
-from qbopt import wholeseg
 from qbopt.model import ir
 from qbopt.model import lir
 from qbopt.backend import masm
 from qbopt.cfront import compile as cfront
+from qbopt.frontend.qb import driver as qb_driver
+from qbopt.frontend.qb import compile as qb_compile
 
 SOURCE = ROOT / "bench" / "parity"
-FIXTURES = ROOT / "fixtures" / "parity"
 
 
 @dataclass(frozen=True)
@@ -62,25 +63,24 @@ class _AnonymousNames(dict):
 _NAMES = _AnonymousNames()
 
 
-def _call_name(one: lir.Insn, calls: dict[int, str]) -> str | None:
-    return (
-        calls.get(one.op.at)
-        if one.op is not None and one.what is not None and one.what.op is ir.Operation.CALL
-        else None
-    )
+def _call_name(one: lir.Insn, calls: dict[int, masm.Callee]) -> str | None:
+    if one.what is None or one.what.op is not ir.Operation.CALL:
+        return None
+    callee = calls.get(one.at)
+    return callee.name if callee is not None else None
 
 
-def basic_core(body: lir.LirBody, calls: dict[int, str]) -> tuple[tuple[int, str], ...]:
-    """The complete allocated kernel after BASIC's frame-entry call.
+def basic_core(procedure: masm.Procedure) -> tuple[tuple[int, str], ...]:
+    """The complete allocated kernel after QB's frame-entry call.
 
     B$EXSA can occur before a later laid-out branch block, so this filters
     individual ABI calls instead of truncating the body at the first exit.
     """
     started = False
     out = []
-    for block in body.blocks:
+    for block in procedure.body.blocks:
         for one in block.insns:
-            callee = _call_name(one, calls)
+            callee = _call_name(one, procedure.callees)
             if not started:
                 started = callee == "B$ENRA"
                 continue
@@ -94,7 +94,7 @@ def basic_core(body: lir.LirBody, calls: dict[int, str]) -> tuple[tuple[int, str
                 }
             ):
                 continue
-            out.append((block.at, _line(one, calls)))
+            out.append((block.at, _line(one, procedure.callees)))
     return tuple(out)
 
 
@@ -107,7 +107,7 @@ def c_core(body: lir.LirBody) -> tuple[tuple[int, str], ...]:
     )
 
 
-def _line(one: lir.Insn, calls: dict[int, str]) -> str:
+def _line(one: lir.Insn, calls: dict[int, masm.Callee]) -> str:
     if callee := _call_name(one, calls):
         return f"call {callee}"
     if one.what is not None and one.what.op is ir.Operation.CALL:
@@ -118,18 +118,15 @@ def _line(one: lir.Insn, calls: dict[int, str]) -> str:
 
 def pair(name: str) -> tuple[tuple[tuple[int, str], ...], tuple[tuple[int, str], ...]]:
     spec = PAIRS[name]
-    fixture = FIXTURES / f"{name}-v-g3.obj"
-    found = corpus.loaded(fixture)
-    basic_bodies = {}
-
-    def basic_watch(stage, procedure, body):
-        if stage == "jumps" and procedure == f"procedure {spec.basic}":
-            basic_bodies[procedure] = body
-
-    emitted = wholeseg.emitted(fixture.read_bytes(), watch=basic_watch)
-    if emitted.outcome is not wholeseg.Emission.LIR:
-        raise RuntimeError(f"{name} BASIC emission: {emitted.reason}")
-    basic = basic_core(next(iter(basic_bodies.values())), found.calls)
+    basic_source = SOURCE / f"{name}.bas"
+    basic_module = qb_compile.assembled(qb_driver.parsed(basic_source, dialect="vbdos", runtime="vbdos"))
+    basic_procedure = next(
+        (one for one in basic_module.procedures if one.name == spec.basic),
+        None,
+    )
+    if basic_procedure is None:
+        raise RuntimeError(f"{name} QB frontend emitted no {spec.basic} procedure")
+    basic = basic_core(basic_procedure)
 
     c_bodies = {}
 
@@ -145,8 +142,8 @@ def pair(name: str) -> tuple[tuple[tuple[int, str], ...], tuple[tuple[int, str],
 def table(name: str, basic: tuple[tuple[int, str], ...], c: tuple[tuple[int, str], ...]) -> str:
     left = [f"{at:04x}  {line}" for at, line in basic]
     right = [f"{at:04x}  {line}" for at, line in c]
-    width = max([len("BASIC"), *(len(one) for one in left)]) + 3
-    rows = [f"{name.upper()}", f"{'BASIC':<{width}}C"]
+    width = max([len("QB"), *(len(one) for one in left)]) + 3
+    rows = [f"{name.upper()}", f"{'QB':<{width}}C"]
     for index in range(max(len(left), len(right))):
         rows.append(
             f"{(left[index] if index < len(left) else ''):<{width}}{right[index] if index < len(right) else ''}"

@@ -1,0 +1,51 @@
+# Dialect additions deliberately kept outside the recovered QBasic 1.1
+# grammar. `token:` names a recovered grammar token; `keyword:` introduces a
+# later-dialect reserved word. build.rs validates both forms and emits the
+# matching table consumed universally by `dialect_extensions`; profile
+# selection begins in semantics/runtime lowering, not in this syntax table.
+
+[[extension]]
+identity = "vbdos.option_explicit"
+action = "OptionExplicit"
+pattern = "token:tkOPTION, keyword:EXPLICIT"
+
+[[extension]]
+identity = "pds71.on_local_error"
+action = "OnLocalError"
+pattern = "token:tkON, token:tkLOCAL, token:tkERROR, token:tkGOTO, capture:label"
+
+[[extension]]
+identity = "vbdos.cdecl_alias_function"
+action = "CdeclAliasFunction"
+pattern = "token:tkDECLARE, token:tkFUNCTION, capture:identifier, token:tkCDECL, token:tkALIAS, capture:string"
+tail = "function_signature"
+
+[[extension]]
+identity = "vbdos.alias_function"
+action = "AliasFunction"
+pattern = "token:tkDECLARE, token:tkFUNCTION, capture:identifier, token:tkALIAS, capture:string"
+tail = "function_signature"
+
+[[extension]]
+identity = "vbdos.cdecl_function"
+action = "CdeclFunction"
+pattern = "token:tkDECLARE, token:tkFUNCTION, capture:identifier, token:tkCDECL"
+tail = "function_signature"
+
+[[extension]]
+identity = "vbdos.cdecl_alias_sub"
+action = "CdeclAliasSub"
+pattern = "token:tkDECLARE, token:tkSUB, capture:identifier, token:tkCDECL, token:tkALIAS, capture:string"
+tail = "function_signature"
+
+[[extension]]
+identity = "vbdos.alias_sub"
+action = "AliasSub"
+pattern = "token:tkDECLARE, token:tkSUB, capture:identifier, token:tkALIAS, capture:string"
+tail = "function_signature"
+
+[[extension]]
+identity = "vbdos.cdecl_sub"
+action = "CdeclSub"
+pattern = "token:tkDECLARE, token:tkSUB, capture:identifier, token:tkCDECL"
+tail = "function_signature"

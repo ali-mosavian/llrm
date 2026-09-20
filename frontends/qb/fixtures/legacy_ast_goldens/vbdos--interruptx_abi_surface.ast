@@ -1,0 +1,269 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: vbdos/interruptx_abi_surface
+# dialect: VbDos
+# source: vbdos/intxabi.bas
+
+Module {
+    statements: [
+        OptionExplicit(
+            Span {
+                line: 1,
+                start: 0,
+                end: 6,
+            },
+        ),
+        TypeDecl {
+            name: "REGTYPEX",
+            fields: [
+                Declaration {
+                    name: "AX",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 4,
+                        start: 4,
+                        end: 6,
+                    },
+                },
+                Declaration {
+                    name: "BX",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 5,
+                        start: 4,
+                        end: 6,
+                    },
+                },
+                Declaration {
+                    name: "CX",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 6,
+                        start: 4,
+                        end: 6,
+                    },
+                },
+                Declaration {
+                    name: "DX",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 7,
+                        start: 4,
+                        end: 6,
+                    },
+                },
+                Declaration {
+                    name: "BP",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 8,
+                        start: 4,
+                        end: 6,
+                    },
+                },
+                Declaration {
+                    name: "SI",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 9,
+                        start: 4,
+                        end: 6,
+                    },
+                },
+                Declaration {
+                    name: "DI",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 10,
+                        start: 4,
+                        end: 6,
+                    },
+                },
+                Declaration {
+                    name: "FLAGS",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 11,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+                Declaration {
+                    name: "DS",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 12,
+                        start: 4,
+                        end: 6,
+                    },
+                },
+                Declaration {
+                    name: "ES",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 13,
+                        start: 4,
+                        end: 6,
+                    },
+                },
+            ],
+            span: Span {
+                line: 3,
+                start: 0,
+                end: 4,
+            },
+        },
+    ],
+    procedures: [
+        Procedure {
+            name: "INTERRUPTX",
+            alias: None,
+            cdecl: false,
+            kind: Sub,
+            parameters: [
+                Parameter {
+                    declaration: Declaration {
+                        name: "INTNUM",
+                        type_name: Some(
+                            Integer,
+                        ),
+                        array: false,
+                        bounds: [],
+                        fixed_length: None,
+                        shared: false,
+                        dynamic: false,
+                        span: Span {
+                            line: 16,
+                            start: 24,
+                            end: 41,
+                        },
+                    },
+                    by_value: false,
+                    segmented: false,
+                },
+                Parameter {
+                    declaration: Declaration {
+                        name: "INREG",
+                        type_name: Some(
+                            Named(
+                                "REGTYPEX",
+                            ),
+                        ),
+                        array: false,
+                        bounds: [],
+                        fixed_length: None,
+                        shared: false,
+                        dynamic: false,
+                        span: Span {
+                            line: 16,
+                            start: 43,
+                            end: 60,
+                        },
+                    },
+                    by_value: false,
+                    segmented: false,
+                },
+                Parameter {
+                    declaration: Declaration {
+                        name: "OUTREG",
+                        type_name: Some(
+                            Named(
+                                "REGTYPEX",
+                            ),
+                        ),
+                        array: false,
+                        bounds: [],
+                        fixed_length: None,
+                        shared: false,
+                        dynamic: false,
+                        span: Span {
+                            line: 16,
+                            start: 62,
+                            end: 80,
+                        },
+                    },
+                    by_value: false,
+                    segmented: false,
+                },
+            ],
+            result: None,
+            body: [],
+            declaration: true,
+            is_static: false,
+            span: Span {
+                line: 16,
+                start: 8,
+                end: 11,
+            },
+        },
+    ],
+}

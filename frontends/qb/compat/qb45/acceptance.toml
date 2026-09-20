@@ -1,0 +1,29 @@
+schema = 1
+compiler = "Microsoft QuickBASIC 4.50 BC.EXE"
+command = "BC.EXE /O /D SOURCE.BAS,SOURCE.OBJ;"
+
+[[probe]]
+name = "include-goto-internal"
+source = "negative/Q45NGI.BAS"
+companions = ["negative/Q45NGOT.INC"]
+quickhelp_topic = "QB45ADVR.HLP#90"
+documented_restriction = "Included files must not contain a GOTO statement."
+observed = "accepted"
+evidence = "README.md:87"
+
+[[probe]]
+name = "include-goto-external"
+source = "negative/Q45NGE.BAS"
+companions = ["negative/Q45NGEX.INC"]
+quickhelp_topic = "QB45ADVR.HLP#90"
+documented_restriction = "Included files must not contain a GOTO statement."
+observed = "accepted"
+evidence = "README.md:87"
+
+[[probe]]
+name = "identifier-over-40"
+source = "negative/Q45N41.BAS"
+quickhelp_topic = "QB45ADVR.HLP#519"
+documented_restriction = "Variable names have a 40-character maximum."
+observed = "rejected"
+evidence = "README.md:89"

@@ -1,0 +1,309 @@
+# qbfront legacy AST snapshot; do not regenerate from the generated parser.
+# case-id: qb45/staticdynamic
+# dialect: QuickBasic45
+# source: qb45/Q45S34.BAS
+
+Module {
+    statements: [
+        Comment(
+            Span {
+                line: 2,
+                start: 0,
+                end: 9,
+            },
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "CACHELIST",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: true,
+                    bounds: [
+                        Bound {
+                            lower: Some(
+                                Literal(
+                                    Integer(
+                                        0,
+                                        Integer,
+                                    ),
+                                    Span {
+                                        line: 3,
+                                        start: 14,
+                                        end: 15,
+                                    },
+                                ),
+                            ),
+                            upper: Literal(
+                                Integer(
+                                    2,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 3,
+                                    start: 19,
+                                    end: 20,
+                                },
+                            ),
+                        },
+                    ],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 3,
+                        start: 4,
+                        end: 32,
+                    },
+                },
+            ],
+        ),
+        Dim(
+            [
+                Declaration {
+                    name: "PASSED",
+                    type_name: Some(
+                        Integer,
+                    ),
+                    array: false,
+                    bounds: [],
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span: Span {
+                        line: 4,
+                        start: 4,
+                        end: 21,
+                    },
+                },
+            ],
+        ),
+        Assign {
+            target: Apply {
+                name: "CACHELIST",
+                arguments: [
+                    Literal(
+                        Integer(
+                            1,
+                            Integer,
+                        ),
+                        Span {
+                            line: 6,
+                            start: 10,
+                            end: 11,
+                        },
+                    ),
+                ],
+                span: Span {
+                    line: 6,
+                    start: 0,
+                    end: 12,
+                },
+            },
+            value: Literal(
+                Integer(
+                    9,
+                    Integer,
+                ),
+                Span {
+                    line: 6,
+                    start: 15,
+                    end: 16,
+                },
+            ),
+            span: Span {
+                line: 6,
+                start: 0,
+                end: 16,
+            },
+        },
+        Erase(
+            [
+                Name(
+                    "CACHELIST",
+                    Span {
+                        line: 7,
+                        start: 6,
+                        end: 15,
+                    },
+                ),
+            ],
+        ),
+        Assign {
+            target: Name(
+                "PASSED",
+                Span {
+                    line: 8,
+                    start: 0,
+                    end: 6,
+                },
+            ),
+            value: Binary {
+                op: And,
+                left: Binary {
+                    op: Eq,
+                    left: Apply {
+                        name: "CACHELIST",
+                        arguments: [
+                            Literal(
+                                Integer(
+                                    1,
+                                    Integer,
+                                ),
+                                Span {
+                                    line: 8,
+                                    start: 19,
+                                    end: 20,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 8,
+                            start: 9,
+                            end: 21,
+                        },
+                    },
+                    right: Literal(
+                        Integer(
+                            0,
+                            Integer,
+                        ),
+                        Span {
+                            line: 8,
+                            start: 24,
+                            end: 25,
+                        },
+                    ),
+                    span: Span {
+                        line: 8,
+                        start: 9,
+                        end: 25,
+                    },
+                },
+                right: Binary {
+                    op: Eq,
+                    left: Apply {
+                        name: "UBOUND",
+                        arguments: [
+                            Name(
+                                "CACHELIST",
+                                Span {
+                                    line: 8,
+                                    start: 37,
+                                    end: 46,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 8,
+                            start: 30,
+                            end: 47,
+                        },
+                    },
+                    right: Literal(
+                        Integer(
+                            2,
+                            Integer,
+                        ),
+                        Span {
+                            line: 8,
+                            start: 50,
+                            end: 51,
+                        },
+                    ),
+                    span: Span {
+                        line: 8,
+                        start: 30,
+                        end: 51,
+                    },
+                },
+                span: Span {
+                    line: 8,
+                    start: 9,
+                    end: 51,
+                },
+            },
+            span: Span {
+                line: 8,
+                start: 0,
+                end: 51,
+            },
+        },
+        If {
+            condition: Name(
+                "PASSED",
+                Span {
+                    line: 10,
+                    start: 3,
+                    end: 9,
+                },
+            ),
+            then_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "PASS staticdynamic",
+                                ),
+                                Span {
+                                    line: 11,
+                                    start: 10,
+                                    end: 30,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 11,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+            ],
+            else_branch: [
+                Print {
+                    file: None,
+                    items: [
+                        PrintItem {
+                            value: Literal(
+                                String(
+                                    "FAIL staticdynamic allocation",
+                                ),
+                                Span {
+                                    line: 13,
+                                    start: 10,
+                                    end: 41,
+                                },
+                            ),
+                            separator: End,
+                        },
+                    ],
+                    span: Span {
+                        line: 13,
+                        start: 4,
+                        end: 9,
+                    },
+                },
+            ],
+            span: Span {
+                line: 10,
+                start: 0,
+                end: 2,
+            },
+        },
+        Runtime {
+            name: "END",
+            arguments: [],
+            span: Span {
+                line: 15,
+                start: 0,
+                end: 3,
+            },
+        },
+    ],
+    procedures: [],
+}

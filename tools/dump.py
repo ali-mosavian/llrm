@@ -8,33 +8,31 @@ instead of re-instrumented or re-run.
 
 Written under build/dump/<object stem>/, one file per stage:
 module, blocks, extent, ir, live, loops, mir, regalloc, analysis.
-live.txt is qbopt.registers' own ax/dx/cx/bx liveness, one line per
-instruction -- what a disassembly alone can't show, and what a manual audit
-of this pass has had to reconstruct by hand more than once.
+live.txt is MIR value liveness, one line per operation -- what a disassembly
+alone cannot show, and what a manual audit otherwise has to reconstruct.
 """
 
 import sys
 import argparse
 from pathlib import Path
 
-from iced_x86 import Register
 from iced_x86 import Formatter
 from iced_x86 import FormatterSyntax
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from qbopt.model import ir
-from qbopt.analysis import liveness
 from qbopt.model import mir
-from qbopt.backend import target
-from qbopt.objectfile import omf
 from qbopt.frontend import wide
 from qbopt.analysis import loops
-from qbopt.frontend import blocks
+from qbopt.backend import target
+from qbopt.objectfile import omf
 from qbopt.analysis import consts
+from qbopt.frontend import blocks
 from qbopt.frontend import extent
-from qbopt.objectfile import module
 from qbopt.legacy import regalloc
+from qbopt.analysis import liveness
+from qbopt.objectfile import module
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "build" / "dump"
@@ -93,29 +91,32 @@ def _regs(regs: frozenset | None) -> str:
     return "{" + ",".join(sorted(_FMT.format_register(r) for r in regs)) + "}"
 
 
-# ax/dx/cx/bx, in the order registers.Liveness carries them.
-_LIVE_TARGETS = (("ax", Register.AX), ("dx", Register.DX), ("cx", Register.CX), ("bx", Register.BX))
+def _values(values) -> str:
+    return "{" + ",".join(map(str, sorted(values, key=lambda value: value.id))) + "}"
 
 
-def _live_set(block: blocks.Block, at: int, live: regs.Liveness) -> str:
-    names = [name for name, target in _LIVE_TARGETS if regs.live_after(block, at, target, getattr(live, name))]
-    return "{" + ",".join(names) + "}" if names else "{}"
-
-
-def dump_live(found_blocks: list[blocks.Block] | None) -> str:
-    """Per-instruction ax/dx/cx/bx liveness -- what's still wanted before and
-    after each instruction, the thing a plain disassembly can't show and a
-    human auditing one by hand has to reconstruct from scratch every time."""
+def dump_live(found: module.Module, found_blocks: list[blocks.Block] | None) -> str:
+    """Per-operation MIR value liveness for every successfully raised body."""
     if found_blocks is None:
         return "code_map failed -- no blocks to analyse\n"
-    live = regs.analyse(found_blocks)
     out: list[str] = []
-    for block in found_blocks:
-        out.append(f"{block.at:#06x}-{block.end:#06x}  {block.ends}  succ={list(block.succ)}")
-        for insn in block.insns:
-            before = _live_set(block, insn.at, live)
-            after = _live_set(block, insn.end, live)
-            out.append(f"  {insn.at:#06x}  in={before:<14} out={after:<14} {insn.insn}")
+    for name, body in _bodies_in_mir(found, found_blocks):
+        live = liveness.live(body)
+        out.append(name)
+        for block in body.blocks:
+            after = {}
+            alive = set(live.live_out[block.at])
+            for operation in reversed(block.ops):
+                after[id(operation)] = frozenset(alive)
+                alive -= set(operation.defines)
+                alive |= set(operation.uses)
+            out.append(f"  {block.at:#06x} in={_values(live.live_in[block.at])} out={_values(live.live_out[block.at])}")
+            for operation in block.ops:
+                incoming = (set(after[id(operation)]) - set(operation.defines)) | set(operation.uses)
+                out.append(
+                    f"    {operation.at:#06x} in={_values(incoming)} "
+                    f"out={_values(after[id(operation)])} {operation.kind.value}"
+                )
         out.append("")
     return "\n".join(out)
 
@@ -272,21 +273,8 @@ def dump_analysis(found: module.Module, found_blocks: list[blocks.Block] | None)
     if not found_blocks:
         return "code_map failed -- no blocks\n"
     out: list[str] = []
-    reloads = memory.redundant_loads(found_blocks, found.resolve, found.calls, found.dgroup)
-    stores = memory.dead_stores(found_blocks, found.resolve, found.calls, found.dgroup)
-    removable = forward.removable(found_blocks, found.resolve, found.calls, found.dgroup)
-    out.append(f"redundant loads: {sum(len(v) for v in reloads.values())}")
-    for at, where in sorted(reloads.items()):
-        if where:
-            out.append(f"  block {at:#06x}: {[hex(x) for x in where]}")
-    out.append(f"dead stores: {sum(len(v) for v in stores.values())}")
-    for at, where in sorted(stores.items()):
-        if where:
-            out.append(f"  block {at:#06x}: {[hex(x) for x in where]}")
-    out.append(f"loads removable with no reallocation: {sorted(hex(x) for x in removable)}")
-
     for label, body in _bodies_in_mir(found, found_blocks):
-        out += ["", f"{label}:"]
+        out += [f"{label}:"]
         facts = consts.known(body)
         out.append(f"  known constants: {len(facts)}")
         for value, fact in sorted(facts.items(), key=lambda kv: kv[0].id)[:40]:
@@ -321,7 +309,7 @@ def dump_one(path: Path) -> Path:
     (out / "extent.txt").write_text(dump_extent(found_extent) + "\n")
 
     (out / "ir.txt").write_text(dump_ir(ir.decode_module(found)) + "\n")
-    (out / "live.txt").write_text(dump_live(found_blocks) + "\n")
+    (out / "live.txt").write_text(dump_live(found, found_blocks) + "\n")
     (out / "loops.txt").write_text(dump_loops(found_blocks) + "\n")
     (out / "mir.txt").write_text(dump_mir(found, found_blocks) + "\n")
     (out / "regalloc.txt").write_text(dump_regalloc(found, found_blocks) + "\n")
