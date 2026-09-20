@@ -339,8 +339,9 @@ real `procedure.bas` fixture now reaches verified `.qir` with its call bound to
 the existing function, its by-reference input, and its local function-result
 slot intact.
 
-That procedure now also reaches verified x86 Machine IR. `.qmir` version 2
-preserves initialized data objects, symbol linkage, source ABI signatures,
+That procedure now also reaches verified x86 Machine IR. `.qmir` version 3
+preserves explicit entry blocks, initialized data objects, symbol linkage,
+source ABI signatures,
 incoming-argument homes, and direct references to defined functions. The x86
 selector maps distinct stack allocations to distinct frame objects and keeps a
 BYREF parameter as a near pointer loaded from its incoming home. Its published
