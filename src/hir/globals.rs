@@ -2,7 +2,7 @@
 //!
 //! This helper has no lowering side effects.  It identifies the portable IR
 //! declarations, symbolic relocations, and opaque pointer types needed to
-//! represent static data exactly.
+//! represent static data and stack addresses exactly.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
@@ -21,6 +21,8 @@ pub(super) struct GlobalPlan {
     pub(super) globals: Vec<ir::Global>,
     /// Addressable module and static places in deterministic source-ID order.
     pub(super) places: BTreeMap<(hir::FunctionId, hir::PlaceId), PlannedPlace>,
+    /// Pointer types shared by global and stack-backed places.
+    pub(super) pointer_types: BTreeMap<hir::AddressKind, ir::TypeId>,
 }
 
 /// The portable global address associated with one HIR place.
@@ -184,20 +186,27 @@ pub(super) fn plan_globals(module: &hir::Module) -> Result<GlobalPlan, GlobalPla
     let data = DataTable::new(module);
     let mut referenced = BTreeSet::new();
     let mut pending_places = Vec::new();
+    let mut addresses = BTreeSet::new();
 
     for function in &module.functions {
         for place in &function.places {
-            if !matches!(place.storage, hir::Storage::Module | hir::Storage::Static) {
-                return Err(GlobalPlanError::UnsupportedStorage {
-                    function: function.id,
-                    place: place.id,
-                    storage: place.storage,
-                });
+            addresses.insert(place.address);
+            match place.storage {
+                hir::Storage::Module | hir::Storage::Static => {
+                    let object = data.get(function.id, place.id, place.symbol)?;
+                    validate_place(function.id, place, object)?;
+                    referenced.insert(place.symbol);
+                    pending_places.push((function.id, place, object.readonly));
+                }
+                hir::Storage::Local => {}
+                hir::Storage::Parameter | hir::Storage::Common | hir::Storage::External => {
+                    return Err(GlobalPlanError::UnsupportedStorage {
+                        function: function.id,
+                        place: place.id,
+                        storage: place.storage,
+                    });
+                }
             }
-            let object = data.get(function.id, place.id, place.symbol)?;
-            validate_place(function.id, place, object)?;
-            referenced.insert(place.symbol);
-            pending_places.push((function.id, place, object.readonly));
         }
     }
 
@@ -233,19 +242,24 @@ pub(super) fn plan_globals(module: &hir::Module) -> Result<GlobalPlan, GlobalPla
         }
     }
 
-    if selected.is_empty() {
+    if selected.is_empty() && addresses.is_empty() {
         return Ok(GlobalPlan {
             source_types: BTreeSet::new(),
             extra_types: Vec::new(),
             globals: Vec::new(),
             places: BTreeMap::new(),
+            pointer_types: BTreeMap::new(),
         });
     }
 
     let mut allocator = TypeIdAllocator::new(module);
-    let (i8, synthetic_i8) = match existing_i8(module) {
-        Some(type_id) => (type_id, false),
-        None => (allocator.allocate()?, true),
+    let byte_type = if selected.is_empty() {
+        None
+    } else {
+        Some(match existing_i8(module) {
+            Some(type_id) => (type_id, false),
+            None => (allocator.allocate()?, true),
+        })
     };
 
     let lengths = selected
@@ -256,19 +270,17 @@ pub(super) fn plan_globals(module: &hir::Module) -> Result<GlobalPlan, GlobalPla
         })
         .collect::<Result<BTreeSet<_>, _>>()?;
     let mut arrays = BTreeMap::new();
-    for length in lengths {
-        arrays.insert(length, allocator.allocate()?);
+    if byte_type.is_some() {
+        for length in lengths {
+            arrays.insert(length, allocator.allocate()?);
+        }
     }
 
     let existing_pointers = existing_pointers(module);
     let mut source_types = BTreeSet::new();
-    if !synthetic_i8 {
+    if let Some((i8, false)) = byte_type {
         source_types.insert(hir::TypeId::new(i8.get()));
     }
-    let addresses = pending_places
-        .iter()
-        .map(|(_, place, _)| place.address)
-        .collect::<BTreeSet<_>>();
     let mut pointers = BTreeMap::new();
     let mut synthetic_pointers = BTreeSet::new();
     for address in addresses {
@@ -282,20 +294,22 @@ pub(super) fn plan_globals(module: &hir::Module) -> Result<GlobalPlan, GlobalPla
     }
 
     let mut extra_types = Vec::new();
-    if synthetic_i8 {
+    if let Some((i8, true)) = byte_type {
         extra_types.push(ir::Type {
             id: i8,
             kind: ir::TypeKind::Integer { bits: 8 },
         });
     }
-    for (length, type_id) in &arrays {
-        extra_types.push(ir::Type {
-            id: *type_id,
-            kind: ir::TypeKind::Array {
-                element: i8,
-                length: *length,
-            },
-        });
+    if let Some((i8, _)) = byte_type {
+        for (length, type_id) in &arrays {
+            extra_types.push(ir::Type {
+                id: *type_id,
+                kind: ir::TypeKind::Array {
+                    element: i8,
+                    length: *length,
+                },
+            });
+        }
     }
     for (address, type_id) in &pointers {
         if synthetic_pointers.contains(address) {
@@ -393,6 +407,7 @@ pub(super) fn plan_globals(module: &hir::Module) -> Result<GlobalPlan, GlobalPla
         extra_types,
         globals,
         places,
+        pointer_types: pointers,
     })
 }
 
@@ -775,16 +790,60 @@ mod tests {
     }
 
     #[test]
-    fn refuses_unsupported_storage() {
+    fn plans_pointer_types_for_stack_places() {
         let module = module(
+            Vec::new(),
+            vec![place(0, hir::Storage::Local, -4, 4, hir::AddressKind::Near)],
+        );
+
+        let plan = plan_globals(&module).expect("local places need pointer types but no globals");
+
+        assert!(plan.globals.is_empty());
+        assert!(plan.places.is_empty());
+        assert_eq!(
+            plan.pointer_types[&hir::AddressKind::Near],
+            ir::TypeId::new(1)
+        );
+        assert_eq!(
+            plan.extra_types,
+            vec![ir::Type {
+                id: ir::TypeId::new(1),
+                kind: ir::TypeKind::Pointer {
+                    address_space: ir::AddressSpace::NearData,
+                },
+            }]
+        );
+    }
+
+    #[test]
+    fn refuses_unsupported_storage() {
+        let common_module = module(
             vec![data(7, vec![1], hir::AddressKind::Near)],
-            vec![place(0, hir::Storage::Local, 0, 1, hir::AddressKind::Near)],
+            vec![place(0, hir::Storage::Common, 0, 1, hir::AddressKind::Near)],
         );
 
         assert!(matches!(
+            plan_globals(&common_module),
+            Err(GlobalPlanError::UnsupportedStorage {
+                storage: hir::Storage::Common,
+                ..
+            })
+        ));
+
+        let module = module(
+            Vec::new(),
+            vec![place(
+                0,
+                hir::Storage::Parameter,
+                0,
+                1,
+                hir::AddressKind::Near,
+            )],
+        );
+        assert!(matches!(
             plan_globals(&module),
             Err(GlobalPlanError::UnsupportedStorage {
-                storage: hir::Storage::Local,
+                storage: hir::Storage::Parameter,
                 ..
             })
         ));

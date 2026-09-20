@@ -178,8 +178,12 @@ mod tests {
 
     #[test]
     fn qb_string_relocations_reach_verified_portable_ir() {
-        let program = compile_qb("dim n as long\nprint \"A\"\n", "strings", QbOptions::default())
-            .expect("QB string source compiles to HIR");
+        let program = compile_qb(
+            "dim n as long\nprint \"A\"\n",
+            "strings",
+            QbOptions::default(),
+        )
+        .expect("QB string source compiles to HIR");
 
         let module = lower_qb_to_ir(&program).expect("QB data relocations lower to portable IR");
 
@@ -189,13 +193,58 @@ mod tests {
             Some(ir::Constant::RelocatableBytes { relocations, .. })
                 if !relocations.is_empty()
         )));
-        assert!(module.functions[0].blocks[0]
-            .instructions
+        assert!(
+            module.functions[0].blocks[0]
+                .instructions
+                .iter()
+                .any(|instruction| matches!(instruction.kind, ir::InstructionKind::Call { .. }))
+        );
+    }
+
+    #[test]
+    fn qb_defined_procedure_and_local_result_reach_portable_ir() {
+        let program = compile_qb(
+            include_str!("../../frontends/qb/fixtures/procedure.bas"),
+            "procedure",
+            QbOptions::default(),
+        )
+        .expect("QB procedure source compiles to HIR");
+
+        let module = lower_qb_to_ir(&program).expect("QB procedure lowers to portable IR");
+
+        assert!(module.verify().is_ok());
+        let main = module
+            .functions
             .iter()
-            .any(|instruction| matches!(
-                instruction.kind,
-                ir::InstructionKind::Call { .. }
-            )));
+            .find(|function| function.name == "__main")
+            .expect("module entry function");
+        let procedure = module
+            .functions
+            .iter()
+            .find(|function| function.name.eq_ignore_ascii_case("twice&"))
+            .expect("defined QB function");
+        assert!(
+            main.blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(
+                    instruction.kind,
+                    ir::InstructionKind::Call {
+                        callee: ir::Callee::Direct(target),
+                        ..
+                    } if target == procedure.id
+                ))
+        );
+        assert!(
+            procedure
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(
+                    instruction.kind,
+                    ir::InstructionKind::StackAlloc { size: 4, .. }
+                ))
+        );
     }
 
     #[test]
