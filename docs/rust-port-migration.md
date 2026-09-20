@@ -640,3 +640,20 @@ in portable IR relocation verification as the next architecture debt to
 remove rather than propagate. The failed and accepted writer checks, adapter
 checks, and real-procedure vertical check consumed about 15 seconds total. No
 broad suite, Python suite, qrender, DOSBox, or linker gate ran.
+
+Portable IR relocation bounds no longer infer an emitted x86/OMF field size
+from address-space names. `GlobalRelocation` now records an explicit,
+target-neutral patch width; the verifier checks only target existence,
+nonzero width, initializer bounds, and overlap. The HIR adapter supplies the
+already-established 16-bit ABI representation and explicitly refuses a
+relocation with no concrete address representation. Target lowering remains
+responsible for choosing an instruction/object relocation kind.
+
+This changes `.qir` to version 3: each `relocbytes` entry includes its width,
+and version 2 is rejected instead of being guessed. The new generic-address
+regression was observed failing when the former address-space rejection was
+temporarily restored, then passed with explicit-width verification. Focused
+IR verifier, `.qir` round-trip, and HIR relocation tests plus one all-target
+compile check consumed about nine seconds. The compile check reported one
+pre-existing test-only `llrm-opt` helper warning; no broad test suite or
+external runtime gate ran.

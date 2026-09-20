@@ -1,6 +1,6 @@
 use std::fmt;
 
-pub const FORMAT_VERSION: u32 = 2;
+pub const FORMAT_VERSION: u32 = 3;
 
 macro_rules! entity_id {
     ($name:ident) => {
@@ -118,6 +118,11 @@ pub struct GlobalRelocation {
     pub offset: u64,
     pub target: GlobalId,
     pub addend: i64,
+    /// Size of the initialized byte field patched by the object writer.
+    ///
+    /// This is data-layout intent, not an object-format relocation kind. A
+    /// target decides later how to represent a patch of this width.
+    pub width: u8,
     pub address_space: AddressSpace,
 }
 

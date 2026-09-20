@@ -63,6 +63,10 @@ pub enum GlobalPlanError {
         data: hir::DataId,
         addend: isize,
     },
+    UnsupportedRelocationAddress {
+        data: hir::DataId,
+        address: hir::AddressKind,
+    },
     NegativePlaceOffset {
         function: hir::FunctionId,
         place: hir::PlaceId,
@@ -130,6 +134,10 @@ impl fmt::Display for GlobalPlanError {
             Self::RelocationAddendOverflow { data, addend } => write!(
                 formatter,
                 "data {data} relocation addend {addend} cannot be represented in IR"
+            ),
+            Self::UnsupportedRelocationAddress { data, address } => write!(
+                formatter,
+                "data {data} relocation has no concrete address representation: {address:?}"
             ),
             Self::NegativePlaceOffset {
                 function,
@@ -353,6 +361,7 @@ pub(super) fn plan_globals(module: &hir::Module) -> Result<GlobalPlan, GlobalPla
                                     addend: relocation.addend,
                                 }
                             })?,
+                            width: relocation_width(object.id, relocation.address)?,
                             address_space: address_space(relocation.address),
                         })
                     })
@@ -590,6 +599,16 @@ fn address_space(address: hir::AddressKind) -> ir::AddressSpace {
     }
 }
 
+fn relocation_width(data: hir::DataId, address: hir::AddressKind) -> Result<u8, GlobalPlanError> {
+    match address {
+        hir::AddressKind::Near | hir::AddressKind::Segment => Ok(2),
+        hir::AddressKind::Far | hir::AddressKind::Huge | hir::AddressKind::Code => Ok(4),
+        hir::AddressKind::None => {
+            Err(GlobalPlanError::UnsupportedRelocationAddress { data, address })
+        }
+    }
+}
+
 fn linkage(linkage: hir::Linkage) -> ir::Linkage {
     match linkage {
         hir::Linkage::Internal => ir::Linkage::Internal,
@@ -760,6 +779,7 @@ mod tests {
                     offset: 0,
                     target: ir::GlobalId::new(8),
                     addend: 0,
+                    width: 2,
                     address_space: ir::AddressSpace::Segment,
                 }],
             })
@@ -785,6 +805,29 @@ mod tests {
             Err(GlobalPlanError::MissingRelocationTarget {
                 data: hir::DataId::new(7),
                 target: hir::DataId::new(8),
+            })
+        );
+    }
+
+    #[test]
+    fn refuses_a_relocation_without_a_concrete_patch_representation() {
+        let mut object = data(7, vec![0], hir::AddressKind::Near);
+        object.relocations.push(hir::DataRelocation {
+            at: 0,
+            target: hir::DataId::new(8),
+            addend: 0,
+            address: hir::AddressKind::None,
+        });
+        let module = module(
+            vec![object, data(8, Vec::new(), hir::AddressKind::Far)],
+            Vec::new(),
+        );
+
+        assert_eq!(
+            plan_globals(&module),
+            Err(GlobalPlanError::UnsupportedRelocationAddress {
+                data: hir::DataId::new(7),
+                address: hir::AddressKind::None,
             })
         );
     }

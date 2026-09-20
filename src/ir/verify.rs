@@ -9,9 +9,9 @@ use std::collections::BTreeSet;
 use crate::support::diagnostic::{Diagnostic, Severity};
 
 use super::{
-    AddressSpace, Block, BlockId, Callee, Constant, Function, FunctionAttribute, FunctionId,
-    GlobalId, GlobalRelocation, Instruction, InstructionKind, Module, Operand, Terminator, TypeId,
-    TypeKind, TypedConstant, Value, ValueId,
+    Block, BlockId, Callee, Constant, Function, FunctionAttribute, FunctionId, GlobalId,
+    GlobalRelocation, Instruction, InstructionKind, Module, Operand, Terminator, TypeId, TypeKind,
+    TypedConstant, Value, ValueId,
 };
 
 /// Validates the representation-level invariants of a portable IR module.
@@ -638,17 +638,13 @@ impl<'module> Verifier<'module> {
                 relocation.target,
                 format!("{context} relocation {index} target"),
             );
-            let width = match relocation.address_space {
-                AddressSpace::NearData | AddressSpace::Segment => 2,
-                AddressSpace::FarData | AddressSpace::HugeData | AddressSpace::Code => 4,
-                AddressSpace::Generic => {
-                    self.error(format!(
-                        "{context} relocation {index} uses unsupported generic address space"
-                    ));
-                    continue;
-                }
-            };
-            let Some(end) = relocation.offset.checked_add(width) else {
+            if relocation.width == 0 {
+                self.error(format!(
+                    "{context} relocation {index} has a zero-width patch"
+                ));
+                continue;
+            }
+            let Some(end) = relocation.offset.checked_add(u64::from(relocation.width)) else {
                 self.error(format!(
                     "{context} relocation {index} patch range overflows its byte offset"
                 ));
@@ -838,6 +834,43 @@ mod tests {
     }
 
     #[test]
+    fn relocation_bounds_use_explicit_width_not_target_address_space() {
+        let mut module = minimal_module();
+        module.types.extend([
+            Type {
+                id: TypeId::new(1),
+                kind: TypeKind::Integer { bits: 8 },
+            },
+            Type {
+                id: TypeId::new(2),
+                kind: TypeKind::Array {
+                    element: TypeId::new(1),
+                    length: 1,
+                },
+            },
+        ]);
+        module.globals.push(Global {
+            id: GlobalId::new(0),
+            name: "data".into(),
+            type_id: TypeId::new(2),
+            linkage: Linkage::Internal,
+            constant: true,
+            initializer: Some(Constant::RelocatableBytes {
+                bytes: vec![0],
+                relocations: vec![GlobalRelocation {
+                    offset: 0,
+                    target: GlobalId::new(0),
+                    addend: 0,
+                    width: 1,
+                    address_space: AddressSpace::Generic,
+                }],
+            }),
+        });
+
+        assert!(verify(&module).is_ok());
+    }
+
+    #[test]
     fn rejects_invalid_relocatable_byte_patches() {
         let mut module = minimal_module();
         module.types.extend([
@@ -866,24 +899,28 @@ mod tests {
                         offset: 0,
                         target: GlobalId::new(9),
                         addend: 0,
+                        width: 2,
                         address_space: AddressSpace::NearData,
                     },
                     GlobalRelocation {
                         offset: 3,
                         target: GlobalId::new(0),
                         addend: 0,
+                        width: 4,
                         address_space: AddressSpace::FarData,
                     },
                     GlobalRelocation {
                         offset: 0,
                         target: GlobalId::new(0),
                         addend: 0,
+                        width: 2,
                         address_space: AddressSpace::Segment,
                     },
                     GlobalRelocation {
                         offset: 2,
                         target: GlobalId::new(0),
                         addend: 0,
+                        width: 0,
                         address_space: AddressSpace::Generic,
                     },
                 ],
@@ -907,8 +944,10 @@ mod tests {
         assert!(messages.iter().any(|message| {
             message.contains("relocation 2 patch range 0..2 overlaps relocation 0")
         }));
-        assert!(messages.iter().any(|message| {
-            message.contains("relocation 3 uses unsupported generic address space")
-        }));
+        assert!(
+            messages
+                .iter()
+                .any(|message| { message.contains("relocation 3 has a zero-width patch") })
+        );
     }
 }

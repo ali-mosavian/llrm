@@ -469,10 +469,11 @@ fn push_constant(out: &mut String, constant: &Constant) {
                 }
                 write!(
                     out,
-                    "{} {} {} {}",
+                    "{} {} {} {} {}",
                     relocation.offset,
                     relocation.target,
                     relocation.addend,
+                    relocation.width,
                     address_space_name(relocation.address_space)
                 )
                 .expect("string writes cannot fail");
@@ -748,6 +749,9 @@ impl Parser {
     }
     fn u16(&mut self) -> Result<u16, TextError> {
         parse_number(&self.word()?, self, "u16")
+    }
+    fn u8(&mut self) -> Result<u8, TextError> {
+        parse_number(&self.word()?, self, "u8")
     }
     fn u32(&mut self) -> Result<u32, TextError> {
         parse_number(&self.word()?, self, "u32")
@@ -1313,6 +1317,7 @@ fn parse_constant(parser: &mut Parser) -> Result<Constant, TextError> {
                         offset: parser.u64()?,
                         target: GlobalId::new(parser.u32()?),
                         addend: parser.i64()?,
+                        width: parser.u8()?,
                         address_space: parse_address_space(parser)?,
                     });
                     if matches!(&parser.token().kind, TokenKind::Punctuation(']')) {
@@ -1764,12 +1769,14 @@ mod tests {
                                 offset: 4,
                                 target: GlobalId::new(0),
                                 addend: -4,
+                                width: 4,
                                 address_space: AddressSpace::FarData,
                             },
                             GlobalRelocation {
                                 offset: 0,
                                 target: GlobalId::new(1),
                                 addend: 7,
+                                width: 2,
                                 address_space: AddressSpace::Segment,
                             },
                         ],
@@ -1781,7 +1788,9 @@ mod tests {
 
         let text = write(&module);
 
-        assert!(text.contains("relocbytes \"0000000000000000\" [4 0 -4 fardata,0 1 7 segment]"));
+        assert!(
+            text.contains("relocbytes \"0000000000000000\" [4 0 -4 4 fardata,0 1 7 2 segment]")
+        );
         assert_eq!(parse(&text), Ok(module));
     }
 
@@ -1822,18 +1831,18 @@ mod tests {
     fn rejects_unknown_and_malformed_input() {
         for obsolete in ["basic", "runtime"] {
             let source = format!(
-                "qir 2\nmodule \"m\"\ntype 0 void\nfunction 0 \"f\" linkage external result 0 parameters [] variadic false cc {obsolete} attributes []\nendfunction\nend\n"
+                "qir 3\nmodule \"m\"\ntype 0 void\nfunction 0 \"f\" linkage external result 0 parameters [] variadic false cc {obsolete} attributes []\nendfunction\nend\n"
             );
             let error = parse(&source).expect_err("source-language ABI labels must not enter IR");
             assert!(error.message.contains("unknown calling convention"));
         }
         assert!(parse("qir 3\nmodule \"m\"\nend\n").is_err());
-        assert!(parse("qir 1\nmodule \"m\"\nend\n").is_err());
-        assert!(parse("qir 2\nmodule \"m\"\ntype 0 nope\nend\n").is_err());
+        assert!(parse("qir 2\nmodule \"m\"\nend\n").is_err());
+        assert!(parse("qir 3\nmodule \"m\"\ntype 0 nope\nend\n").is_err());
         assert!(
-            parse("qir 2\nmodule \"m\"\nglobal 0 \"g\" 0 internal false some bytes \"f\"\nend\n")
+            parse("qir 3\nmodule \"m\"\nglobal 0 \"g\" 0 internal false some bytes \"f\"\nend\n")
                 .is_err()
         );
-        assert!(parse("qir 2\nmodule \"m\"\nglobal 0 \"g\" 9 external false none\nend\n").is_err());
+        assert!(parse("qir 3\nmodule \"m\"\nglobal 0 \"g\" 9 external false none\nend\n").is_err());
     }
 }
