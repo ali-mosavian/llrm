@@ -189,7 +189,14 @@ impl ParseState {
 
     fn emit(&mut self, word: u16) {
         for action in tables::emit_actions(word).into_iter().flatten() {
-            self.sink.invoke(action);
+            if matches!(
+                action,
+                tables::AstAction::OperandPlaceholder | tables::AstAction::NullOperand
+            ) {
+                self.mark(u8::MAX);
+            } else {
+                self.sink.invoke(action);
+            }
         }
     }
 }
@@ -376,10 +383,7 @@ mod tests {
         let mut state = ParseState::new(tokens);
 
         assert_eq!(engine.parse(&mut state, 0), ParseResult::GoodSyntax);
-        assert_eq!(
-            state.sink.actions,
-            vec![tables::AstAction::OperandPlaceholder]
-        );
+        assert_eq!(state.sink.actions, vec![tables::AstAction::Mark { slot: u8::MAX, token: 0 }]);
     }
 
     #[test]

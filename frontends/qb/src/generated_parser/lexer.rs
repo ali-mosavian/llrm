@@ -211,7 +211,13 @@ fn identifier_or_reserved(line: &str, at: &mut usize, dialect: Dialect) -> Token
     let name = line[start..*at].to_ascii_uppercase();
     let bare = name.trim_end_matches(['%', '&', '!', '#', '$']);
     if bare == "REM" {
+        let directive = line[*at..].trim().to_ascii_uppercase();
         *at = bytes.len();
+        return match directive.as_str() {
+            "$DYNAMIC" => TokenKind::ArrayDynamic,
+            "$STATIC" => TokenKind::ArrayStatic,
+            _ => reserved_token("REM"),
+        };
     }
     reserved(&name)
         .or_else(|| reserved(bare))

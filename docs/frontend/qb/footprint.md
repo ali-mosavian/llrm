@@ -319,3 +319,19 @@ of runtime correctness.
 The BASIC-owned scope is **0.5% above BC**. Complete linked code is **2.1%
 smaller than BC**, after charging BC for the runtime helpers behind its calls.
 Runtime failure remains a separate blocking gate.
+
+## 2026-09-20: Gorillas renders and completes a shot
+
+Both objects come from the unmodified QB 4.5 `GORILLA.BAS`. BC used
+`/O /E /X /FPi`; its output reported zero severe errors. Both objects linked
+against `BCOM45.LIB`. The qbopt image completed an automated graphics-mode,
+city, sprite, and banana-shot run before the interactive build was launched.
+
+| Module | BC bytes | qbopt bytes | Delta |
+| --- | ---: | ---: | ---: |
+| GORILLA | 21,731 | 20,228 | -1,503 |
+| **BASIC-owned BC_CODE** | **21,731** | **20,228** | **-1,503** |
+| **Complete linked code** | **75,719** | **73,369** | **-2,350** |
+
+The frontend output is **6.9% smaller** in BASIC-owned code. The complete
+linked image is **3.1% smaller** after charging both sides for runtime code.

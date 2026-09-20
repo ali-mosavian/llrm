@@ -239,7 +239,7 @@ pub enum Statement {
     },
     Select {
         selector: Expr,
-        arms: Vec<(Vec<Expr>, Vec<Statement>)>,
+        arms: Vec<(Vec<CaseItem>, Vec<Statement>)>,
         otherwise: Vec<Statement>,
         span: Span,
     },
@@ -277,7 +277,8 @@ pub enum Statement {
         span: Span,
     },
     LineInput {
-        file: Expr,
+        file: Option<Expr>,
+        prompt: Option<Expr>,
         destination: Expr,
         span: Span,
     },
@@ -320,6 +321,56 @@ pub enum Statement {
         arguments: Vec<Expr>,
         span: Span,
     },
+}
+
+impl Statement {
+    pub fn span(&self) -> Span {
+        match self {
+            Self::Dim(items) | Self::Static(items) | Self::Redim(items) => items
+                .first()
+                .map_or(Span { line: 0, start: 0, end: 0 }, |item| item.span),
+            Self::Erase(items) => items
+                .first()
+                .map_or(Span { line: 0, start: 0, end: 0 }, Expr::span),
+            Self::DefType { span, .. }
+            | Self::TypeDecl { span, .. }
+            | Self::Const { span, .. }
+            | Self::Assign { span, .. }
+            | Self::Label(_, span)
+            | Self::Goto(_, span)
+            | Self::CallOrGoto(_, span)
+            | Self::If { span, .. }
+            | Self::For { span, .. }
+            | Self::While { span, .. }
+            | Self::Do { span, .. }
+            | Self::Select { span, .. }
+            | Self::Call { span, .. }
+            | Self::Comment(span)
+            | Self::OptionExplicit(span)
+            | Self::OptionBase(_, span)
+            | Self::Exit(_, span)
+            | Self::DefSeg { span, .. }
+            | Self::OnError { span, .. }
+            | Self::Resume { span, .. }
+            | Self::Open { span, .. }
+            | Self::Close { span, .. }
+            | Self::LineInput { span, .. }
+            | Self::FileTransfer { span, .. }
+            | Self::Seek { span, .. }
+            | Self::Print { span, .. }
+            | Self::Input { span, .. }
+            | Self::Data { span, .. }
+            | Self::Read { span, .. }
+            | Self::Runtime { span, .. } => *span,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CaseItem {
+    Value(Expr),
+    Range(Expr, Expr),
+    Relation(Binary, Expr),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

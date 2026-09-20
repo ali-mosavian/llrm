@@ -91,9 +91,14 @@ def _emitted_asm(program: hir.Program) -> str:
                 case _:
                     lines += [f"    {line}" for line in masm._instruction(item, module.names, number)]
         lines.append(ending)
-        before, rest = rendered.split(heading, 1)
-        _old, after = rest.split(ending, 1)
-        rendered = before + "\n".join(lines) + after
+        rendered_lines = rendered.splitlines()
+        try:
+            start = rendered_lines.index(heading)
+            stop = rendered_lines.index(ending, start + 1)
+        except ValueError as error:
+            raise ValueError(f"missing exact procedure envelope for {procedure.name}") from error
+        rendered_lines[start : stop + 1] = lines
+        rendered = "\n".join(rendered_lines) + "\n"
 
     current = None
     lines = []

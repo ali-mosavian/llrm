@@ -1,5 +1,5 @@
 use qbfront::semantic::{compile_with_array_order, compile_with_options};
-use qbfront::syntax::{Binary, ExitTarget, Expr, Literal, Statement, TypeName};
+use qbfront::syntax::{Binary, ExitTarget, Expr, Literal, Procedure, Statement, TypeName};
 use qbfront::{compile, parse, Dialect};
 
 #[test]
@@ -117,6 +117,131 @@ fn color_retains_omitted_positional_arguments() {
 }
 
 #[test]
+fn palette_is_a_statement_inside_a_single_line_if() {
+    // Gorillas probes EGA memory with `IF mode = 9 THEN PALETTE 4, 0`.
+    let module = parse("if mode = 9 then palette 4, 0\r\n", Dialect::VbDos).unwrap();
+    let Statement::If { then_branch, .. } = &module.statements[0] else {
+        panic!("expected IF")
+    };
+    assert!(matches!(
+        &then_branch[..],
+        [Statement::Runtime { name, arguments, .. }] if name == "PALETTE" && arguments.len() == 2
+    ));
+}
+
+#[test]
+fn inline_def_fn_does_not_capture_the_following_function() {
+    // Gorillas defines FnRan inline before the ordinary CalcDelay function.
+    let module = parse(
+        "def FnRan (x) = int(rnd(1) * x) + 1\r\n\
+         function CalcDelay!\r\nCalcDelay! = 1\r\nend function\r\n",
+        Dialect::VbDos,
+    )
+    .unwrap();
+    assert!(matches!(
+        &module.procedures[..],
+        [Procedure { name: first, body: first_body, .. }, Procedure { name: second, body: second_body, .. }]
+            if first == "FNRAN" && first_body.len() == 1 && second == "CALCDELAY!" && second_body.len() == 1
+    ));
+}
+
+#[test]
+fn circle_retains_coordinates_radius_and_color() {
+    // Gorillas draws an explosion with the four-operand CIRCLE form.
+    let module = parse("circle (x, y), radius, color\r\n", Dialect::VbDos).unwrap();
+    assert!(matches!(
+        &module.statements[..],
+        [Statement::Runtime { name, arguments, .. }] if name == "CIRCLE" && arguments.len() == 4
+    ));
+}
+
+#[test]
+fn circle_retains_omitted_angles_before_aspect() {
+    let module = parse("circle (x, y), radius, color, , , aspect\r\n", Dialect::VbDos).unwrap();
+    assert!(matches!(
+        &module.statements[..],
+        [Statement::Runtime { name, arguments, .. }]
+            if name == "CIRCLE" && arguments.len() == 7
+                && matches!(arguments[4], Expr::Omitted(_))
+                && matches!(arguments[5], Expr::Omitted(_))
+    ));
+}
+
+#[test]
+fn line_input_with_prompt_is_not_a_graphics_line() {
+    // Gorillas uses the console form; dispatching only on the shared LINE
+    // keyword silently turned it into a two-operand graphics statement.
+    let module = parse(
+        "line input \"Name: \"; player$\r\n",
+        Dialect::QuickBasic45,
+    )
+    .unwrap();
+    assert!(matches!(
+        &module.statements[..],
+        [Statement::LineInput { file: None, prompt: Some(_), destination: Expr::Name(name, _), .. }]
+            if name == "PLAYER$"
+    ));
+}
+
+#[test]
+fn line_retains_both_coordinates_color_and_box_fill() {
+    // Gorillas clears the sun with LINE (x1,y1)-(x2,y2), color, BF.
+    let module = parse("line (x1, y1)-(x2, y2), color, bf\r\n", Dialect::VbDos).unwrap();
+    assert!(matches!(
+        &module.statements[..],
+        [Statement::Runtime { name, arguments, .. }]
+            if name == "LINE" && arguments.len() == 6 && matches!(&arguments[5], Expr::Name(option, _) if option == "BF")
+    ));
+}
+
+#[test]
+fn paint_retains_coordinates_and_fill_color() {
+    let module = parse("paint (x, y), color\r\n", Dialect::VbDos).unwrap();
+    assert!(matches!(
+        &module.statements[..],
+        [Statement::Runtime { name, arguments, .. }] if name == "PAINT" && arguments.len() == 3
+    ));
+}
+
+#[test]
+fn pset_retains_coordinates_and_color() {
+    let module = parse("pset (x, y), color\r\n", Dialect::VbDos).unwrap();
+    assert!(matches!(
+        &module.statements[..],
+        [Statement::Runtime { name, arguments, .. }] if name == "PSET" && arguments.len() == 3
+    ));
+}
+
+#[test]
+fn graphics_put_retains_coordinates_array_and_raster_operation() {
+    // Gorillas uses both PSET and XOR raster operations in single-line IF arms.
+    let module = parse("put (x, y), banana, xor\r\n", Dialect::VbDos).unwrap();
+    assert!(matches!(
+        &module.statements[..],
+        [Statement::Runtime { name, arguments, .. }]
+            if name == "PUT" && arguments.len() == 4 && matches!(&arguments[3], Expr::Name(mode, _) if mode == "XOR")
+    ));
+}
+
+#[test]
+fn graphics_get_retains_rectangle_and_destination_array() {
+    let module = parse("get (x1, y1)-(x2, y2), image\r\n", Dialect::VbDos).unwrap();
+    assert!(matches!(
+        &module.statements[..],
+        [Statement::Runtime { name, arguments, .. }] if name == "GET" && arguments.len() == 5
+    ));
+}
+
+#[test]
+fn print_tab_retains_position_without_printing_it_as_a_number() {
+    let module = parse("print name; tab(50); score\r\n", Dialect::VbDos).unwrap();
+    let Statement::Print { items, .. } = &module.statements[0] else {
+        panic!("expected PRINT")
+    };
+    assert!(matches!(&items[1].value, Expr::Apply { name, arguments, .. } if name == "TAB" && arguments.len() == 1));
+}
+
+#[test]
 fn locate_uses_vbdos_count_led_positional_arguments() {
     // Raw VBDOS LOCATE.OBJ emits LOCATE ,9 as 0,1,9,3 followed by B$LOCT.
     // Dropping the omitted row moves the column into the wrong slot.
@@ -184,8 +309,7 @@ fn restore_label_uses_its_precomputed_read_data_offset() {
     )
     .unwrap();
     let hir = compile(&module, "restore", Dialect::VbDos, "vbdos").unwrap();
-    assert!(hir.contains("\"callee\":\"B$RSTB\""), "{hir}");
-    assert!(hir.contains("\"value\":3"), "{hir}");
+    assert!(hir.contains("\"callee\":\"$QB$RSTB:1\""), "{hir}");
 }
 
 #[test]
@@ -1060,6 +1184,52 @@ fn nonstatic_procedure_arrays_are_dynamic_despite_module_static_default() {
 }
 
 #[test]
+fn rem_array_metacommands_match_apostrophe_metacommands() {
+    // Gorillas switches back with REM $STATIC after an apostrophe $DYNAMIC.
+    // Discarding every character after REM left the second form semantically
+    // inert even though Microsoft documents the two spellings as equivalent.
+    let rem = parse(
+        "REM $DYNAMIC\n\
+         dim values(1 to 2) as integer\n",
+        Dialect::QuickBasic45,
+    )
+    .unwrap();
+    let apostrophe = parse(
+        "' $DYNAMIC\n\
+         dim values(1 to 2) as integer\n",
+        Dialect::QuickBasic45,
+    )
+    .unwrap();
+    assert!(matches!(
+        &rem.statements[1],
+        Statement::Dim(declarations) if declarations[0].dynamic
+    ));
+    assert!(matches!(
+        &apostrophe.statements[1],
+        Statement::Dim(declarations) if declarations[0].dynamic
+    ));
+    let hir = compile(&rem, "rem_dynamic", Dialect::QuickBasic45, "qb45").unwrap();
+    assert!(hir.contains("\"callee\":\"B$DDIM\""));
+}
+
+#[test]
+fn automatic_string_locals_are_deleted_before_runtime_frame_exit() {
+    // Gorillas printed GI8P and then stopped with "String space corrupt":
+    // Char$ survived UCASE$/SCMP but the procedure reached B$EXSA without
+    // the B$STDL emitted by QB for every owned local descriptor.
+    let module = parse(
+        "sub probe\n\
+         charValue$ = \"P\"\n\
+         if ucase$(charValue$) = \"V\" then print \"BAD\"\n\
+         end sub\n",
+        Dialect::QuickBasic45,
+    )
+    .unwrap();
+    let hir = compile(&module, "string_cleanup", Dialect::QuickBasic45, "qb45").unwrap();
+    assert!(hir.contains("\"callee\":\"B$STDL\""));
+}
+
+#[test]
 fn static_statement_declares_persistent_procedure_storage() {
     // Q45S15 stopped in the generated parser at NtACTIONidStatic. Once
     // parsed, QCOUNT's tally must be a data object, not a BP-relative local.
@@ -1240,18 +1410,18 @@ fn any_array_declaration_may_be_refined_by_the_definition() {
 }
 
 #[test]
-fn isolated_module_gosub_is_an_internal_hir_call() {
+fn isolated_direct_module_gosub_is_inlined() {
     // Nibbles keeps small module-level helpers after END and enters them with
-    // GOSUB. Treating GOSUB as a runtime symbol made the whole source fail
-    // semantic analysis before any object could be emitted.
+    // GOSUB. A single direct use stays in the module frame and is not emitted
+    // as an unresolved runtime symbol or a new far procedure.
     let module = parse(
         "dim total as integer\r\ngosub addTen\r\nend\r\naddTen:\r\ntotal = total + 10\r\nreturn\r\n",
         Dialect::VbDos,
     )
     .unwrap();
     let hir = compile(&module, "gosub", Dialect::VbDos, "vbdos").unwrap();
-    assert!(hir.contains("\"name\":\"ADDTEN\""), "{hir}");
-    assert!(hir.contains("\"callee\":\"ADDTEN\""), "{hir}");
+    assert!(hir.contains("\"op\":\"add\""), "{hir}");
+    assert!(!hir.contains("\"callee\":\"GOSUB\""), "{hir}");
 }
 
 #[test]

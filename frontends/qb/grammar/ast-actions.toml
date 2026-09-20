@@ -165,6 +165,22 @@ operand = "BSAVE"
 shape = "LegacyImplicitCall"
 
 [[emit]]
+identity = "opStGraphicsPut"
+action = "Runtime"
+operand = "PUT"
+shape = "Runtime"
+
+[[emit]]
+identity = "opStGraphicsGet"
+action = "Runtime"
+operand = "GET"
+shape = "Runtime"
+
+[[emit]]
+identity = "opNull"
+action = "NullOperand"
+
+[[emit]]
 identity = "opStSelectCase"
 action = "Select"
 shape = "Select"
@@ -214,6 +230,14 @@ action = "PrintItemSemicolon"
 [[emit]]
 identity = "opUsing"
 action = "PrintUsing"
+
+[[emit]]
+identity = "opPrintTab"
+action = "PrintTab"
+
+[[emit]]
+identity = "opPrintSpc"
+action = "PrintSpace"
 
 [[emit]]
 identity = "opStDim"
@@ -371,6 +395,12 @@ operand = "CLEAR"
 shape = "LegacyImplicitCall"
 
 [[dispatch]]
+identity = "tkCIRCLE"
+action = "Runtime"
+operand = "CIRCLE"
+shape = "Runtime"
+
+[[dispatch]]
 identity = "tkCOLOR"
 action = "Runtime"
 operand = "COLOR"
@@ -380,6 +410,36 @@ shape = "Runtime"
 identity = "tkLOCATE"
 action = "Runtime"
 operand = "LOCATE"
+shape = "Runtime"
+
+[[dispatch]]
+identity = "tkLINE"
+action = "Runtime"
+operand = "LINE"
+shape = "Runtime"
+
+[[dispatch]]
+identity = "tkPALETTE"
+action = "Runtime"
+operand = "PALETTE"
+shape = "Runtime"
+
+[[dispatch]]
+identity = "tkPAINT"
+action = "Runtime"
+operand = "PAINT"
+shape = "Runtime"
+
+[[dispatch]]
+identity = "tkPSET"
+action = "Runtime"
+operand = "PSET"
+shape = "Runtime"
+
+[[dispatch]]
+identity = "tkPRESET"
+action = "Runtime"
+operand = "PRESET"
 shape = "Runtime"
 
 [[dispatch]]
@@ -458,6 +518,26 @@ shape = "LegacySetCall"
 identity = "NtAssignment"
 action = "Assignment"
 retains = "target,value,span"
+
+[[external]]
+identity = "NtCommaNoEos"
+action = "CommaNoEos"
+retains = "separator,span"
+
+[[external]]
+identity = "NtRwB"
+action = "LineBox"
+retains = "value,span"
+
+[[external]]
+identity = "NtRwF"
+action = "LineFill"
+retains = "value,span"
+
+[[external]]
+identity = "NtRwBF"
+action = "LineBoxFill"
+retains = "value,span"
 
 [[external]]
 identity = "NtExp"
@@ -567,6 +647,11 @@ retains = "name,type_name,fixed_length,array,bounds,by_value,segmented,span"
 [[external]]
 identity = "NtIdAryElemRef"
 action = "AssignableReference"
+retains = "name,indices,member_path,span"
+
+[[external]]
+identity = "NtIdAryGetPut"
+action = "ArrayReference"
 retains = "name,indices,member_path,span"
 
 [[external]]

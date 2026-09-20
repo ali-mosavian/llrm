@@ -2,7 +2,7 @@ use crate::dialect::Dialect;
 use crate::dialect_extensions::{recognize_statement, ExtensionAction};
 use crate::error::ParseError;
 use crate::syntax::{
-    Binary, Bound, Declaration, Expr, Literal, Module, Parameter, PrintItem, PrintSeparator,
+    Binary, Bound, CaseItem, Declaration, Expr, Literal, Module, Parameter, PrintItem, PrintSeparator,
     Procedure, ProcedureKind, Span, Statement, TypeName, Unary,
 };
 
@@ -311,6 +311,16 @@ pub(crate) fn external_action(
     let checkpoint = state.checkpoint();
     let result = match action {
         ExternalAction::Assignment => assignment(state),
+        ExternalAction::CommaNoEos => {
+            if consume_named(state, "tkComma") {
+                ParseResult::GoodSyntax
+            } else {
+                ParseResult::NotFound
+            }
+        }
+        ExternalAction::LineBox => keyword_value(state, "B"),
+        ExternalAction::LineFill => keyword_value(state, "F"),
+        ExternalAction::LineBoxFill => keyword_value(state, "BF"),
         ExternalAction::Expression => match expression(state, 0) {
             Ok(value) => {
                 state.expressions.push(value);
@@ -378,6 +388,21 @@ pub(crate) fn external_action(
         state.rollback(checkpoint);
     }
     result
+}
+
+fn keyword_value(state: &mut ParseState, expected: &str) -> ParseResult {
+    let Some(token) = state.token().cloned() else {
+        return ParseResult::NotFound;
+    };
+    let TokenKind::Identifier(name) = &token.kind else {
+        return ParseResult::NotFound;
+    };
+    if name != expected {
+        return ParseResult::NotFound;
+    }
+    state.at += 1;
+    state.expressions.push(Expr::Name(name.clone(), token.span));
+    ParseResult::GoodSyntax
 }
 
 fn literal_string(state: &mut ParseState) -> ParseResult {
@@ -908,6 +933,17 @@ fn synthesize_statement(
             Err(_) => return false,
         };
         let parameters = state.parameters.split_off(parameter_base);
+        let def_fn = keyword == named("tkDEF");
+        let definition = if def_fn {
+            let values = state.expressions.split_off(expression_base);
+            match values.as_slice() {
+                [] => None,
+                [value] => Some(value.clone()),
+                _ => return false,
+            }
+        } else {
+            None
+        };
         if header.kind == ProcedureKind::Function && consume_named(state, "tkAS") {
             let Some(result) = declaration_type(state) else {
                 return false;
@@ -918,6 +954,16 @@ fn synthesize_statement(
             .iter()
             .any(|action| matches!(action, AstAction::Mark { slot: 4, .. }))
             || consume_named(state, "tkSTATIC");
+        let inline_def_fn = def_fn && definition.is_some();
+        let body = definition
+            .map(|value| {
+                vec![Statement::Assign {
+                    target: Expr::Name(header.name.clone(), header.span),
+                    value,
+                    span: header.span,
+                }]
+            })
+            .unwrap_or_default();
         let procedure = Procedure {
             name: header.name,
             alias: None,
@@ -925,13 +971,13 @@ fn synthesize_statement(
             kind: header.kind,
             parameters,
             result: header.result,
-            body: Vec::new(),
+            body,
             declaration: header.declaration,
             is_static,
             span: header.span,
         };
         state.procedures.push(procedure);
-        if !header.declaration {
+        if !header.declaration && !inline_def_fn {
             if state.open_procedure.is_some() {
                 return false;
             }
@@ -939,9 +985,19 @@ fn synthesize_statement(
         }
         return true;
     }
-    let Some(descriptor) = tables::dispatch_action(keyword)
-        .and_then(|action| action.statement_shape())
-        .or_else(|| actions.iter().find_map(AstAction::statement_shape))
+    let emitted = actions.iter().find_map(AstAction::statement_shape);
+    let dispatched = tables::dispatch_action(keyword).and_then(|action| action.statement_shape());
+    let line_input = keyword == named("tkLINE")
+        && state.tokens[..state.at].iter().any(|token| {
+            token.span.line == span.line
+                && token.span.start >= span.end
+                && matches!(token.kind, TokenKind::Reserved(id) if id == named("tkINPUT"))
+        });
+    let Some(descriptor) = (if line_input {
+        Some(StatementShape::LineInput)
+    } else {
+        dispatched.or(emitted)
+    })
     else {
         return false;
     };
@@ -963,12 +1019,23 @@ fn synthesize_statement(
             }
         }
         StatementShape::LineInput => {
-            let [file, destination]: [Expr; 2] = match arguments.try_into() {
-                Ok(arguments) => arguments,
-                Err(_) => return false,
-            };
+            let channel = actions.contains(&AstAction::LineInputChannel);
+            let has_prompt = actions
+                .iter()
+                .any(|action| matches!(action, AstAction::Mark { slot: 4, .. }));
+            let mut arguments = arguments.into_iter();
+            let file = channel.then(|| arguments.next()).flatten();
+            let prompt = has_prompt.then(|| arguments.next()).flatten();
+            let Some(destination) = arguments.next() else { return false };
+            if arguments.next().is_some()
+                || (channel && file.is_none())
+                || (has_prompt && prompt.is_none())
+            {
+                return false;
+            }
             Statement::LineInput {
                 file,
+                prompt,
                 destination,
                 span,
             }
@@ -1034,28 +1101,36 @@ fn synthesize_statement(
             } else {
                 None
             };
-            let separators = actions
+            let item_actions = actions
                 .iter()
                 .filter_map(|action| match *action {
-                    AstAction::PrintItemComma => Some(PrintSeparator::Comma),
-                    AstAction::PrintItemSemicolon => Some(PrintSeparator::Semicolon),
+                    AstAction::PrintItemComma => Some((None, PrintSeparator::Comma)),
+                    AstAction::PrintItemSemicolon => Some((None, PrintSeparator::Semicolon)),
+                    AstAction::PrintTab => Some((Some("TAB"), PrintSeparator::Semicolon)),
+                    AstAction::PrintSpace => Some((Some("SPC"), PrintSeparator::Semicolon)),
                     _ => None,
                 })
                 .collect::<Vec<_>>();
-            if separators.len() > values.len()
-                || (!values.is_empty() && separators.len() + 1 < values.len())
+            if item_actions.len() > values.len()
+                || (!values.is_empty() && item_actions.len() + 1 < values.len())
             {
                 return false;
             }
             let items = values
                 .into_iter()
                 .enumerate()
-                .map(|(index, value)| PrintItem {
-                    value,
-                    separator: separators
+                .map(|(index, value)| {
+                    let span = value.span();
+                    let (control, separator) = item_actions
                         .get(index)
                         .copied()
-                        .unwrap_or(PrintSeparator::End),
+                        .unwrap_or((None, PrintSeparator::End));
+                    let value = control.map_or(value.clone(), |name| Expr::Apply {
+                        name: name.into(),
+                        arguments: vec![value],
+                        span,
+                    });
+                    PrintItem { value, separator }
                 })
                 .collect();
             Statement::Print {
@@ -1133,11 +1208,50 @@ fn synthesize_statement(
             };
             Statement::Exit(target, span)
         }
-        StatementShape::Runtime(name) => Statement::Runtime {
-            name: name.into(),
-            arguments,
-            span,
-        },
+        StatementShape::Runtime(name) => {
+            let mut arguments = arguments;
+            if name == "CIRCLE" {
+                arguments.extend(actions.iter().filter_map(|action| match action {
+                    AstAction::Mark { slot: u8::MAX, token } => state
+                        .tokens
+                        .get(*token)
+                        .map(|token| Expr::Omitted(token.span)),
+                    _ => None,
+                }));
+                arguments.sort_by_key(|argument| {
+                    let span = argument.span();
+                    (span.line, span.start)
+                });
+                if actions.iter().any(
+                    |action| matches!(action, AstAction::Unsupported("opCircleAspect")),
+                ) && arguments.len() == 6
+                {
+                    let span = arguments[5].span();
+                    arguments.insert(5, Expr::Omitted(span));
+                }
+            }
+            if name == "PUT" {
+                if let Some((mode, mode_span)) = state.tokens[..state.at]
+                    .iter()
+                    .rev()
+                    .find_map(|token| match token.kind {
+                        TokenKind::Reserved(id) if id == named("tkAND") => Some(("AND", token.span)),
+                        TokenKind::Reserved(id) if id == named("tkOR") => Some(("OR", token.span)),
+                        TokenKind::Reserved(id) if id == named("tkPRESET") => Some(("PRESET", token.span)),
+                        TokenKind::Reserved(id) if id == named("tkPSET") => Some(("PSET", token.span)),
+                        TokenKind::Reserved(id) if id == named("tkXOR") => Some(("XOR", token.span)),
+                        _ => None,
+                    })
+                {
+                    arguments.push(Expr::Name(mode.into(), mode_span));
+                }
+            }
+            Statement::Runtime {
+                name: name.into(),
+                arguments,
+                span,
+            }
+        }
         StatementShape::LegacyImplicitCall(name) => {
             let arguments = if name == "GOSUB" {
                 let [(label, label_span)]: [(String, Span); 1] = match labels.try_into() {
@@ -1554,7 +1668,7 @@ fn block_until_wend(state: &mut ParseState) -> Option<Vec<Statement>> {
     }
 }
 
-type SelectArms = Vec<(Vec<Expr>, Vec<Statement>)>;
+type SelectArms = Vec<(Vec<CaseItem>, Vec<Statement>)>;
 
 fn select_case_block(state: &mut ParseState) -> Option<(SelectArms, Vec<Statement>)> {
     if !consume_named(state, "tkNewLine") {
@@ -1579,7 +1693,18 @@ fn select_case_block(state: &mut ParseState) -> Option<(SelectArms, Vec<Statemen
         let mut matches = Vec::new();
         if !is_else {
             loop {
-                matches.push(expression(state, 0).ok()?);
+                let has_is = consume_named(state, "tkIS");
+                if has_is || at_case_relation(state) {
+                    let relation = case_relation(state)?;
+                    matches.push(CaseItem::Relation(relation, expression(state, 0).ok()?));
+                } else {
+                    let lower = expression(state, 0).ok()?;
+                    if consume_named(state, "tkTO") {
+                        matches.push(CaseItem::Range(lower, expression(state, 0).ok()?));
+                    } else {
+                        matches.push(CaseItem::Value(lower));
+                    }
+                }
                 if !consume_named(state, "tkComma") {
                     break;
                 }
@@ -1617,6 +1742,28 @@ fn select_case_block(state: &mut ParseState) -> Option<(SelectArms, Vec<Statemen
             arms.push((matches, body));
         }
     }
+}
+
+fn at_case_relation(state: &ParseState) -> bool {
+    match state.token().map(|token| &token.kind) {
+        Some(TokenKind::Comparison(_)) => true,
+        Some(TokenKind::Reserved(id)) => {
+            *id == named("tkEQ") || *id == named("tkLT") || *id == named("tkGT")
+        }
+        _ => false,
+    }
+}
+
+fn case_relation(state: &mut ParseState) -> Option<Binary> {
+    let relation = match state.token().map(|token| &token.kind)? {
+        TokenKind::Comparison(op) => *op,
+        TokenKind::Reserved(id) if *id == named("tkEQ") => Binary::Eq,
+        TokenKind::Reserved(id) if *id == named("tkLT") => Binary::Less,
+        TokenKind::Reserved(id) if *id == named("tkGT") => Binary::Greater,
+        _ => return None,
+    };
+    state.at += 1;
+    Some(relation)
 }
 
 fn assignment(state: &mut ParseState) -> ParseResult {

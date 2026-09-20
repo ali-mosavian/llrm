@@ -150,22 +150,19 @@ def _read_data_lines(module: hir.Module) -> tuple[bytes, ...]:
     return lines
 
 
-def _read_data_items(module: hir.Module) -> tuple[bytes, ...]:
+def _read_data_items(module: hir.Module, labels: dict[int, str]) -> tuple[masm.Datum, ...]:
     """Serialize the ordered keys consumed by QB45's B$RSTB search.
 
-    BC places a relocated code address before every DATA row and passes the
-    matching address to B$RSTB.  The runtime neither jumps through nor
-    dereferences it: ``read.asm`` only performs an unsigned ordered search.
-    Stable stream offsets preserve that complete contract without inventing
-    code labels for source DATA statements, which emit no instructions.
+    BC places a final code address before every DATA row and passes the
+    matching address to B$RSTB. The frontend carries symbolic row labels until
+    code layout; object emission then writes their literal offsets, as BC does.
     """
-    items: list[bytes] = []
-    key = 0
-    for line in _read_data_lines(module):
-        if key > 0xFFFF:
-            raise EmissionError("READ/DATA stream exceeds B$RSTB's 16-bit ordered key")
-        items.extend((key.to_bytes(2, "little"), line + b"\0"))
-        key += len(line) + 1
+    lines = _read_data_lines(module)
+    if set(labels) != set(range(len(lines))):
+        raise EmissionError("DATA marker labels do not match the serialized DATA rows")
+    items: list[masm.Datum] = []
+    for row, line in enumerate(lines):
+        items.extend((masm.Pointer(labels[row], 0, False), line + b"\0"))
     return tuple(items)
 
 
@@ -293,6 +290,7 @@ def _split_statement_blocks(body: lir.LirBody, markers: frozenset[int]) -> tuple
     next_block = max((block.at for block in body.blocks), default=0) + 1
     made: list[lir.LirBlock] = []
     labels: dict[int, int] = {}
+    located: set[int] = set()
     for block in body.blocks:
         positions: dict[int, list[int]] = {}
         for index, instruction in enumerate(block.insns):
@@ -300,8 +298,9 @@ def _split_statement_blocks(body: lir.LirBody, markers: frozenset[int]) -> tuple
             # not a source-statement key: source instruction 22 and an
             # independently generated jump may both carry id 22.
             source = getattr(instruction.op, "at", None)
-            if source in markers:
+            if source in markers and source not in located:
                 positions.setdefault(index, []).append(source)
+                located.add(source)
         if not positions:
             made.append(block)
             continue
@@ -368,6 +367,101 @@ def _resume_label_transfers(
     return replace(body, blocks=tuple(blocks))
 
 
+def _restore_label_arguments(
+    body: lir.LirBody,
+    restores: dict[int, int],
+    data_keys: dict[int, int],
+) -> lir.LirBody:
+    """Replace a typed placeholder push with RESTORE's relocated DATA label."""
+    if not restores:
+        return body
+    found: set[int] = set()
+    blocks = []
+    for block in body.blocks:
+        instructions = list(block.insns)
+        for index, instruction in enumerate(instructions):
+            source = getattr(instruction.op, "at", None)
+            row = restores.get(source)
+            if row is None:
+                continue
+            if index == 0:
+                raise EmissionError("RESTORE label argument was separated from its call")
+            argument = instructions[index - 1]
+            what = argument.what
+            if (
+                what is None
+                or what.op is not ir.Operation.PUSH
+                or len(what.sources) != 1
+                or not isinstance(what.sources[0], ir.Imm)
+            ):
+                raise EmissionError("RESTORE label lost its typed placeholder push")
+            key = data_keys.get(row)
+            if key is None:
+                raise EmissionError(f"RESTORE names missing DATA row {row}")
+            instructions[index - 1] = replace(
+                argument,
+                what=replace(what, sources=(ir.Imm(0, 2, Addr(Space.SEGMENT, 0, key)),)),
+            )
+            found.add(source)
+        blocks.append(replace(block, insns=tuple(instructions)))
+    missing = set(restores) - found
+    if missing:
+        raise EmissionError(f"RESTORE label calls vanished before final layout: {sorted(missing)}")
+    return replace(body, blocks=tuple(blocks))
+
+
+def _remove_data_markers(
+    body: lir.LirBody,
+    markers: dict[int, int],
+    marker_labels: dict[int, int],
+    procedure: int,
+    data_keys: dict[int, int],
+    code_names: dict[int, str],
+    callees: dict[int, masm.Callee],
+) -> lir.LirBody:
+    """Turn DATA marker calls into BC's one-byte labeled NOPs."""
+    if not markers:
+        return body
+    found: set[int] = set()
+    retained: set[int] = set()
+    blocks = []
+    for block in body.blocks:
+        instructions = []
+        for instruction in block.insns:
+            source = getattr(instruction.op, "at", None)
+            row = markers.get(source)
+            if row is None:
+                instructions.append(instruction)
+                continue
+            label_block = marker_labels.get(source)
+            if label_block != block.at:
+                raise EmissionError(f"DATA marker {source} row {row} is in block {block.at}, labeled {label_block}")
+            key = data_keys[row]
+            code_names[key] = masm.label(procedure, block.at)
+            found.add(source)
+            if source not in retained:
+                callees.pop(source, None)
+                ax = ir.Reg(Register.AX, 2)
+                instructions.append(
+                    replace(
+                        instruction,
+                        # XCHG AX,AX is opcode 90h, the exact NOP BC emits to
+                        # give each DATA row a distinct relocatable code key.
+                        what=ir.Semantics(ir.Operation.EXCHANGE, "xchg", (ax, ax), (ax, ax)),
+                        defines=(),
+                        uses=(),
+                        clobbers=frozenset(),
+                        clobbers_high=frozenset(),
+                    )
+                )
+                retained.add(source)
+        blocks.append(replace(block, insns=tuple(instructions)))
+    missing = set(markers) - found
+    if missing:
+        raise EmissionError(f"DATA markers vanished before final layout: {sorted(missing)}")
+    return replace(body, blocks=tuple(blocks))
+
+
 def _compiler_switches(program: hir.Program) -> int:
     """Return the measured BC ``U_FLAG`` word for this compilation profile.
 
@@ -403,7 +497,7 @@ def _header(program: hir.Program) -> bytes:
 
 
 def _ends_program(body: lir.LirBody) -> tuple[lir.LirBody, dict[int, masm.Callee]]:
-    """Spell a BASIC module return as the runtime's non-returning B$CEND."""
+    """Spell BASIC module fallthrough as the runtime's implicit B$CENP."""
     sites: dict[int, masm.Callee] = {}
     blocks = []
     for block in body.blocks:
@@ -413,7 +507,7 @@ def _ends_program(body: lir.LirBody) -> tuple[lir.LirBody, dict[int, masm.Callee
             what = instruction.what
             if what is not None and what.op is ir.Operation.RETURN:
                 exits = True
-                sites[instruction.at] = masm.Callee("B$CEND", True)
+                sites[instruction.at] = masm.Callee("B$CENP", True)
                 instruction = replace(
                     instruction,
                     what=ir.Semantics(ir.Operation.CALL, "call"),
@@ -426,101 +520,60 @@ def _ends_program(body: lir.LirBody) -> tuple[lir.LirBody, dict[int, masm.Callee
     return replace(body, blocks=tuple(blocks), noreturn=True), sites
 
 
-def _register_error_handler(
+def _materialize_error_registrations(
     body: lir.LirBody,
-    address: Addr,
-    *,
-    local: bool,
-    after_at: int | None = None,
+    sites: dict[int, tuple[Addr | None, bool]],
 ) -> tuple[lir.LirBody, dict[int, masm.Callee]]:
-    """Insert the measured module- or procedure-error registration.
-
-    Keep the four instructions structured.  Opaque inline bytes make the
-    generic MASM shell conservatively invent a BP frame, but QB main is
-    frameless and the error runtime interprets BP as its own frame chain.
-    VBDOS LOCERR.OBJ and PDS71 PDLOCAL.OBJ establish that ON LOCAL ERROR uses
-    B$OEGP with only the offset word, after B$ENRA has installed the procedure
-    frame. Ordinary ON ERROR uses B$OEGA's CS:offset pair.
-    """
-    at = max((one.at for block in body.blocks for one in block.insns), default=0) + 1
+    """Replace source-positioned ON ERROR markers with the runtime protocol."""
+    if not sites:
+        return body, {}
+    serial = max((one.at for block in body.blocks for one in block.insns), default=0) + 1
+    callees: dict[int, masm.Callee] = {}
+    blocks: list[lir.LirBlock] = []
     ax = ir.Reg(Register.AX, 2)
-    moved = lir.Insn(
-        at,
-        (at, at),
-        ir.Semantics(ir.Operation.MOVE, "mov", (ax,), (ir.Imm(0, 2, address),)),
-        (),
-        (),
-    )
-    registration = (
-        (
-            moved,
-            lir.Insn(
-                at + 1,
-                (at + 1, at + 1),
-                ir.Semantics(ir.Operation.PUSH, "push", (), (ax,)),
-                (),
-                (),
-            ),
-            lir.Insn(
-                at + 2,
-                (at + 2, at + 2),
-                ir.Semantics(ir.Operation.CALL, "on-local-error-register"),
-                (),
-                (),
-            ),
-        )
-        if local
-        else (
-            lir.Insn(
-                at,
-                (at, at),
-                ir.Semantics(ir.Operation.MOVE, "mov", (ax,), (ir.Imm(0, 2, address),)),
-                (),
-                (),
-            ),
-            lir.Insn(
-                at + 1,
-                (at + 1, at + 1),
-                ir.Semantics(ir.Operation.PUSH, "push", (), (ir.Reg(Register.CS, 2),)),
-                (),
-                (),
-            ),
-            lir.Insn(
-                at + 2,
-                (at + 2, at + 2),
-                ir.Semantics(ir.Operation.PUSH, "push", (), (ax,)),
-                (),
-                (),
-            ),
-            lir.Insn(
-                at + 3,
-                (at + 3, at + 3),
-                ir.Semantics(ir.Operation.CALL, "on-error-register"),
-                (),
-                (),
-            ),
-        )
-    )
-
-    def insert(block: lir.LirBlock) -> lir.LirBlock:
-        if block.at != body.entry:
-            return block
-        if after_at is None:
-            return replace(block, insns=(*registration, *block.insns))
-        made = []
-        inserted = False
+    for block in body.blocks:
+        made: list[lir.Insn] = []
         for instruction in block.insns:
-            made.append(instruction)
-            if instruction.at == after_at:
-                made.extend(registration)
-                inserted = True
-        if not inserted:
-            raise EmissionError("ON LOCAL ERROR registration has no B$ENRA entry site")
-        return replace(block, insns=tuple(made))
-
-    blocks = tuple(insert(block) for block in body.blocks)
-    call_at = at + (2 if local else 3)
-    return replace(body, blocks=blocks), {call_at: masm.Callee("B$OEGP" if local else "B$OEGA", True)}
+            site = sites.get(instruction.at)
+            if site is None:
+                made.append(instruction)
+                continue
+            address, local = site
+            made.append(
+                lir.Insn(
+                    instruction.at,
+                    instruction.covers,
+                    ir.Semantics(ir.Operation.MOVE, "mov", (ax,), (ir.Imm(0, 2, address),)),
+                    (),
+                    (),
+                )
+            )
+            pushed = (ax,) if local else ((ir.Reg(Register.CS, 2), ax) if address is not None else (ax, ax))
+            for operand in pushed:
+                made.append(
+                    lir.Insn(
+                        serial,
+                        (serial, serial),
+                        ir.Semantics(ir.Operation.PUSH, "push", (), (operand,)),
+                        (),
+                        (),
+                    )
+                )
+                serial += 1
+            call_at = serial
+            made.append(
+                lir.Insn(
+                    call_at,
+                    (call_at, call_at),
+                    ir.Semantics(ir.Operation.CALL, "on-error-register"),
+                    (),
+                    (),
+                )
+            )
+            serial += 1
+            callees[call_at] = masm.Callee("B$OEGP" if local else "B$OEGA", True)
+        blocks.append(replace(block, insns=tuple(made)))
+    return replace(body, blocks=tuple(blocks)), callees
 
 
 def _initialize_frame(body: lir.LirBody, size: int) -> tuple[lir.LirBody, dict[int, masm.Callee]]:
@@ -1160,12 +1213,53 @@ def _alias_annotated(
     )
 
 
+_SCREEN_DRIVER = {
+    1: "B$CGAUSED",
+    2: "B$CGAUSED",
+    3: "B$HRCUSED",
+    4: "B$OLIUSED",
+    7: "B$EGAUSED",
+    8: "B$EGAUSED",
+    9: "B$EGAUSED",
+    10: "B$EGAUSED",
+    11: "B$VGAUSED",
+    12: "B$VGAUSED",
+    13: "B$VGAUSED",
+}
+
+
+def _graphics_dependencies(module: hir.Module) -> frozenset[str]:
+    """Name the runtime graphics modules selected by source SCREEN calls.
+
+    Microsoft BC emits a reference to a mode-specific public for a constant
+    mode and B$GRPUSED for an expression.  The reference is a linker switch,
+    not a call: without it B$CSCN is present but has no device implementation
+    and reports BASIC error 5.  Keep that source-runtime convention here,
+    before MIR, as a private relocation which has no run-time cost.
+    """
+    required: set[str] = set()
+    for function in module.functions:
+        for block in function.blocks:
+            for instruction in block.instructions:
+                if instruction.op is not hir.Op.CALL or instruction.callee != "B$CSCN":
+                    continue
+                mode = instruction.operands[1]
+                if not isinstance(mode, hir.Constant):
+                    required.add("B$GRPUSED")
+                    continue
+                number = int(mode.value)
+                if number:
+                    required.add(_SCREEN_DRIVER.get(number, "B$GRPUSED"))
+    return frozenset(required)
+
+
 def assembled(program: hir.Program) -> masm.Module:
     """Compile one QB HIR module to the shared assembly model."""
     hir.verify(program)
     if len(program.modules) != 1:
         raise EmissionError("one OMF object represents exactly one QB module")
     module = program.modules[0]
+    graphics = _graphics_dependencies(module)
     semantic = hir.lower(program)
     functions = tuple(module.functions)
     if len(semantic) != len(functions):
@@ -1175,7 +1269,9 @@ def assembled(program: hir.Program) -> masm.Module:
     callable_names = {one.name: _object_name(one.name) for one in module.callables}
     defined = {_object_name(one.name) for one in module.callables if one.defined}
     procedures: list[masm.Procedure] = []
-    code_names: dict[int, str] = {}
+    data_rows = _read_data_lines(module)
+    data_keys = {row: -(row + 1) for row in range(len(data_rows))}
+    code_names: dict[int, str] = {key: "" for key in data_keys.values()}
     statement_metadata = _statement_metadata(module)
     statement_targets: list[tuple[int, int, str, int]] = []
     referenced_calls: set[str] = set()
@@ -1246,6 +1342,10 @@ def assembled(program: hir.Program) -> masm.Module:
         final = finalized(low, parameter_bytes=function.abi.parameter_bytes if function.abi else 0)
         callees = dict(final.callees)
         resume_blocks: dict[int, int] = {}
+        data_markers: dict[int, int] = {}
+        restore_markers: dict[int, int] = {}
+        error_registrations: dict[int, tuple[Addr | None, bool]] = {}
+        error_labels: dict[int, int] = {}
         for at, name in physical.calls.items():
             if name.startswith("$QB$RESA:"):
                 try:
@@ -1254,6 +1354,42 @@ def assembled(program: hir.Program) -> masm.Module:
                     raise EmissionError(f"invalid RESUME target marker {name!r}") from error
                 resume_blocks[at] = target_block
                 object_name = "B$RESA"
+            elif name.startswith("$QB$DATA:"):
+                try:
+                    row = int(name.removeprefix("$QB$DATA:"))
+                except ValueError as error:
+                    raise EmissionError(f"invalid DATA marker {name!r}") from error
+                if row not in data_keys:
+                    raise EmissionError(f"DATA marker names missing row {row}")
+                data_markers[at] = row
+                continue
+            elif name.startswith("$QB$RSTB:"):
+                try:
+                    row = int(name.removeprefix("$QB$RSTB:"))
+                except ValueError as error:
+                    raise EmissionError(f"invalid RESTORE marker {name!r}") from error
+                if row not in data_keys:
+                    raise EmissionError(f"RESTORE names missing DATA row {row}")
+                restore_markers[at] = row
+                object_name = "B$RSTB"
+            elif name.startswith("$QB$OERG:"):
+                parts = name.split(":")
+                if len(parts) != 3 or parts[2] not in {"G", "L"}:
+                    raise EmissionError(f"invalid ON ERROR registration marker {name!r}")
+                try:
+                    target = int(parts[1])
+                except ValueError as error:
+                    raise EmissionError(f"invalid ON ERROR target marker {name!r}") from error
+                address = None
+                if target:
+                    key = error_labels.get(target)
+                    if key is None:
+                        key = -(len(code_names) + 1)
+                        error_labels[target] = key
+                        code_names[key] = masm.label(len(procedures), target)
+                    address = Addr(Space.SEGMENT, 0, key)
+                error_registrations[at] = (address, parts[2] == "L")
+                continue
             else:
                 object_name = callable_names.get(name, name)
             referenced_calls.add(object_name)
@@ -1291,26 +1427,13 @@ def assembled(program: hir.Program) -> masm.Module:
                 final_body, initialize = _initialize_frame(final_body, reserve)
             callees.update(initialize)
         final_body = _address_values(final_body)
-        if function.error_handler is not None:
-            assert handler_at is not None
-            handler_key = -(len(code_names) + 1)
-            code_names[handler_key] = masm.label(len(procedures), handler_at)
-            enter_at = next(
-                (at for at, callee in callees.items() if callee.name == "B$ENRA"),
-                None,
-            )
-            final_body, registration = _register_error_handler(
-                final_body,
-                Addr(Space.SEGMENT, 0, handler_key),
-                local=function.error_handler_local,
-                after_at=enter_at if function.error_handler_local else None,
-            )
-            callees.update(registration)
-            referenced_calls.add("B$OEGP" if function.error_handler_local else "B$OEGA")
+        final_body, registrations = _materialize_error_registrations(final_body, error_registrations)
+        callees.update(registrations)
+        referenced_calls.update(callee.name for callee in registrations.values())
         if not public:
             final_body, exits = _ends_program(final_body)
             callees.update(exits)
-            referenced_calls.add("B$CEND")
+            referenced_calls.add("B$CENP")
         final_body = _drop_resume_successors(final_body, physical.calls)
         procedure_number = len(procedures)
         statement_blocks = _statement_table_blocks(function)
@@ -1329,9 +1452,10 @@ def assembled(program: hir.Program) -> masm.Module:
         resume_markers = {
             statement_instructions[target] for target in resume_blocks.values() if target in statement_instructions
         }
+        final_body = _restore_label_arguments(final_body, restore_markers, data_keys)
         final_body, statement_labels = _split_statement_blocks(
             final_body,
-            frozenset(instruction for _block, instruction, _line in rows) | resume_markers,
+            frozenset(instruction for _block, instruction, _line in rows) | resume_markers | frozenset(data_markers),
         )
         final_body = _resume_label_transfers(
             final_body,
@@ -1340,6 +1464,15 @@ def assembled(program: hir.Program) -> masm.Module:
             statement_labels,
             procedure_number,
             code_names,
+        )
+        final_body = _remove_data_markers(
+            final_body,
+            data_markers,
+            statement_labels,
+            procedure_number,
+            data_keys,
+            code_names,
+            callees,
         )
         layout_order = {block.at: index for index, block in enumerate(final_body.blocks)}
         for _source_block, instruction, line in rows:
@@ -1374,10 +1507,13 @@ def assembled(program: hir.Program) -> masm.Module:
     procedures.append(_statement_procedure(tuple(sorted(statement_targets))))
     names, data_by_segment = _data(module)
     names.update(((Space.SEGMENT, key), name) for key, name in code_names.items())
-    read_data = _read_data_items(module)
+    if any(not code_names[key] for key in data_keys.values()):
+        raise EmissionError("one or more DATA rows have no final code label")
+    read_data = _read_data_items(module, {row: code_names[key] for row, key in data_keys.items()})
     external_data = {object_.name for object_ in module.data if object_.linkage is hir.DataLinkage.EXTERNAL}
     externs = {(name, "far") for name in referenced_calls - defined}
     externs.update((name, "byte") for name in external_data)
+    externs.update((name, "near") for name in graphics)
     code = f"{_object_name(module.name)}_CODE"
     basic_data = (
         ("BR_DATA", ()),
@@ -1393,6 +1529,7 @@ def assembled(program: hir.Program) -> masm.Module:
         ("BC_SA", (masm.Label("$QB$SA"), masm.Pointer("$QB$HEADER", 0, True))),
         ("FDATA", ()),
         ("FSL_CONST", data_by_segment["FSL_CONST"]),
+        *(((("QB_LINK", tuple(masm.Pointer(name, 0, False) for name in sorted(graphics))),)) if graphics else ()),
     )
     return masm.Module(
         code=code,
@@ -1401,7 +1538,7 @@ def assembled(program: hir.Program) -> masm.Module:
         publics=tuple(procedure.name for procedure in procedures if procedure.public),
         data=basic_data,
         procedures=tuple(procedures),
-        private=frozenset({"FDATA", "FSL_CONST"}),
+        private=frozenset({"FDATA", "FSL_CONST", *(("QB_LINK",) if graphics else ())}),
     )
 
 
@@ -1415,7 +1552,9 @@ def _basic_listing(procedure: masm.Procedure, number: int) -> list[masm.Item]:
     the frontend rather than teaching the shared backend about BASIC frames.
     """
     listing = masm.listing(procedure, number)
-    if not any(callee.name == "B$ENRA" for callee in procedure.callees.values()):
+    runtime_frame = any(callee.name == "B$ENRA" for callee in procedure.callees.values())
+    module_body = procedure.name == "$QB$MAIN"
+    if not runtime_frame and not module_body:
         return listing
     enter, leave = masm._frame_parts(procedure)
     if listing[: len(enter)] != enter:
@@ -1426,7 +1565,8 @@ def _basic_listing(procedure: masm.Procedure, number: int) -> list[masm.Item]:
     while at < len(listing):
         after = at + len(leave)
         if (
-            leave
+            runtime_frame
+            and leave
             and listing[at:after] == leave
             and after < len(listing)
             and isinstance(listing[after], ir.Semantics)
@@ -1519,6 +1659,18 @@ def object_bytes(program: hir.Program, source: str | Path) -> bytes:
     ]
     symbols = {name: (segment, offset + 48 if segment == 0 else offset) for name, (segment, offset) in symbols.items()}
     symbols["$QB$HEADER"] = (0, 0)
+    # BC_DS stores DATA keys as literal final code offsets, not relocations.
+    # Resolve the frontend's symbolic row labels only after the 30h module
+    # header has shifted every code symbol, then remove their temporary
+    # fixups. Leaving both the 0030h field and an OFFSET fixup made LINK add
+    # them and B$RSTB searched for 0060h forever.
+    read_segment = named["BC_DS"]
+    for fixup in read_segment.fixups:
+        segment, offset = symbols[fixup.name]
+        if fixup.loc != omfwrite.OFFSET or segment != 0:
+            raise EmissionError("BC_DS DATA key must resolve to a near code offset")
+        struct.pack_into("<H", read_segment.image, fixup.at, offset)
+    read_segment.fixups.clear()
     externs = dict(module.externs)
     records = omfwrite._records(module, Path(source).name, segments, symbols, externs)
     emitted = b"".join(record.emit() for record in records)

@@ -70,6 +70,35 @@ _AUDITED_STRING_STACK: dict[str, int] = {
     "B$UCAS": 2,
 }
 
+# Stack widths read from actual QB 4.5 /A listings for the graphics forms,
+# then checked against their runtime RETF cleanup. Coordinate state is latched
+# by N1/N2 before the drawing call; it is deliberately not hidden in MIR.
+_AUDITED_GRAPHICS_STACK: dict[str, int] = {
+    "B$PAL2": 6,
+    "B$N1I2": 4,
+    "B$N2I2": 4,
+    "B$N1R4": 8,
+    "B$N2R4": 8,
+    "B$CSTT": 4,
+    "B$CSTO": 4,
+    "B$CASP": 4,
+    "B$CIRC": 10,
+    "B$LINE": 6,
+    "B$PAIN": 4,
+    "B$PSTC": 2,
+    "B$PNI2": 4,
+    "B$PNR4": 8,
+    "B$GGET": 6,
+    "B$GPUT": 8,
+    "B$FTAB": 2,
+}
+
+_AUDITED_STATEMENT_STACK: dict[str, int] = {
+    "B$BEEP": 0,
+    "B$LNIN": 10,
+    "B$SLEP": 4,
+}
+
 
 @dataclass(frozen=True, slots=True)
 class Physicalized:
@@ -140,7 +169,39 @@ def _stack_argument_parts(argument: mir.Arg) -> tuple[mir.Arg, ...]:
 
 def _contract(name: str, cleanup: model.StackCleanup, pushed: int, family: model.RuntimeProfile) -> runtime.Contract:
     resume_label = name.startswith("$QB$RESA:")
-    found = runtime.per_call({0: "B$RESA" if resume_label else name}, family.value)[0]
+    restore_label = name.startswith("$QB$RSTB:")
+    physical_name = "B$RESA" if resume_label else "B$RSTB" if restore_label else name
+    found = runtime.per_call({0: physical_name}, family.value)[0]
+    if _AUDITED_STATEMENT_STACK.get(physical_name) == pushed:
+        return replace(
+            found,
+            cleanup=pushed,
+            control=runtime.Control.RETURNS,
+            enters_user_code=False,
+            established=True,
+            inputs=frozenset(),
+            i386=True,
+            evidence=(
+                f"{found.evidence} Actual QB45 /A output supplies {pushed} stack bytes "
+                f"to {name}; the shipped runtime returns past that exact fixed block. "
+                "All non-stack effects remain conservative."
+            ),
+        )
+    if _AUDITED_GRAPHICS_STACK.get(name) == pushed:
+        return replace(
+            found,
+            cleanup=pushed,
+            control=runtime.Control.RETURNS,
+            enters_user_code=False,
+            established=True,
+            inputs=frozenset(),
+            i386=True,
+            evidence=(
+                f"{found.evidence} QB45 /A listings show {name} consuming exactly "
+                f"{pushed} typed stack bytes; the shipped runtime returns past the same block. "
+                "All graphics-state, memory, error, and clobber effects remain conservative."
+            ),
+        )
     if _AUDITED_STRING_STACK.get(name) == pushed:
         return replace(
             found,
@@ -178,6 +239,21 @@ def _contract(name: str, cleanup: model.StackCleanup, pushed: int, family: model
                 "B$RES_SETUP, unwinds with B$EXSA, and transfers through RESRET; "
                 "measured VBDOS LOCERR.OBJ and PDS71 PDLOCAL.OBJ use the same "
                 "MOV AX,offset / far-call shape."
+            ),
+        )
+    if name == "B$RES0" and pushed == 0:
+        return replace(
+            found,
+            cleanup=0,
+            control=runtime.Control.NEVER,
+            enters_user_code=True,
+            error_handling=True,
+            established=True,
+            inputs=frozenset(),
+            i386=True,
+            evidence=(
+                "QB45 rt/error.asm B$RES0 calls B$RES_SETUP, reloads b$erradr, "
+                "unwinds with B$EXSA, and transfers through RESRET to the failing statement."
             ),
         )
     if name in {"B$RDIM", "B$DDIM"}:

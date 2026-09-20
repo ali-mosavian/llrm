@@ -51,6 +51,7 @@ pub enum Lowering {
     Floor,
     Truncate,
     Peek,
+    Point,
     Length,
     LowerBound,
     UpperBound,
@@ -189,6 +190,7 @@ pub static INTRINSICS: &[Intrinsic] = &[
     intrinsic!("MKD", 1..=1, String, Runtime, Lowering::PackDouble),
     intrinsic!("OCT", 1..=1, String, Runtime, Lowering::RadixText("B$FOCT")),
     intrinsic!("PEEK", 1..=1, Integer, ReadsMemory, Lowering::Peek),
+    intrinsic!("POINT", 2..=2, Integer, Runtime, Lowering::Point),
     intrinsic!(
         "RTRIM",
         1..=1,

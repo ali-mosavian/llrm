@@ -491,3 +491,24 @@ from 120,181 to 101,533 bytes. Complete linked code falls from 292,210 to
 273,562 bytes, leaving a measured 18,515-byte (7.3%) gap over BC. The corrected
 program still reaches `colormap` and remains black before its first frame, so
 this closes one proven semantic defect but does not claim the integration gate.
+
+### 19. Gorillas first-shot gate
+
+`NESTDIV.BAS` isolates the first-shot fault:
+
+```text
+input:  Scale = 30 \ (80 \ MaxCol)
+HIR:    q1:long <- 80:long div sign_extend(MaxCol)
+        q2:long <- 30:long div sign_extend(copy q1:integer)
+MIR:    the same two ordered divmod operations survive optimization
+LIR:    mov dividend,80; cdq; idiv divisor
+        mov dividend,30; cdq; idiv prior
+MASM:   mov eax,80 / cdq / idiv ebx
+        mov eax,30 / cdq / idiv ebx
+```
+
+The previous 16-bit LIR was `idiv ax / idiv ax`: both constants vanished and
+the first shot raised error 11. Saved stages are
+`build/gorillas-qb45/NESTDIV-STG3`. DOS prints `30` for the isolated program.
+The automated Gorillas probe reaches `RENDER AND SHOT PASS` after drawing the
+city and animating one shot.

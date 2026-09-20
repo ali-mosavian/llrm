@@ -157,27 +157,135 @@ def test_qb45_numeric_read_data_reaches_typed_hir_and_fresh_omf() -> None:
     }
 
     listing = masm.text(qb_compile.assembled(program))
-    assert "B$ENRA" not in externals
+    assert {"B$ENRA", "B$EXSA"} <= set(externals)
     assert "call far ptr B$RDI2" in listing
     assert "call far ptr B$RDI4" in listing
     assert "call far ptr B$RDR4" in listing
 
 
 def test_restore_keys_select_the_labeled_serialized_data_row(tmp_path: Path) -> None:
-    """Nibbles RESTORE normal kept selecting mono, so SET received the wrong color table."""
+    """Gorillas' synthetic DATA keys made B$RSTB fault before its first READ."""
     source = tmp_path / "restore.bas"
     source.write_bytes(b"restore later\r\nfirst: data 1\r\nlater: data 2\r\n")
     program = qb_driver.parsed(source, dialect="qb45", runtime="qb45")
     assembled = qb_compile.assembled(program)
-    read_data = dict(assembled.data)["BC_DS"]
+    records = omf.parse(qb_compile.object_bytes(program, source.name))
+    segments = omf.segments(records)
+    code_size = segments[1][1]
+    ds_index, ds_size = next(
+        (index, size)
+        for index, item in enumerate(segments)
+        if item is not None
+        for name, size in (item,)
+        if name == "BC_DS"
+    )
+    code = omf.segment_image(records, 1, code_size)
+    read_data = omf.segment_image(records, ds_index, ds_size)
+    first = int.from_bytes(read_data[0:2], "little")
+    second_at = read_data.index(0, 2) + 1
+    second = int.from_bytes(read_data[second_at : second_at + 2], "little")
 
-    # B$RSTB compares its argument against the word immediately before each
-    # NUL-terminated row.  The second key must therefore equal RESTORE's 3,
-    # not repeat the first row's relocated main-entry address.
-    assert read_data[1:] == (b"\0\0", b" 1\0", b"\3\0", b" 2\0", b"\xff\xff\1")
+    # BC emits one 90h marker per DATA row and stores those final code offsets
+    # literally in BC_DS. They are not stream offsets and carry no FIXUPP.
+    assert second == first + 1
+    assert code[first] == code[second] == 0x90
+    assert not [fixup for fixup in omf.fixups(records) if fixup.seg == ds_index]
     listing = masm.text(assembled)
-    assert "pushw 3" in listing
+    assert listing.count("xchg ax, ax") == 2
+    assert "push offset" in listing
     assert "call far ptr B$RSTB" in listing
+
+
+def test_inline_module_math_does_not_create_a_native_bp_frame(tmp_path: Path) -> None:
+    """Gorillas' inline ATN added PUSH BP, so READ reported Out of stack space at R 0."""
+    source = tmp_path / "ATNREAD.BAS"
+    source.write_bytes(b"pi# = atn(1#)\r\ndata 7\r\nread value&\r\n")
+    program = qb_driver.parsed(source, dialect="qb45", runtime="qb45")
+    records = omf.parse(qb_compile.object_bytes(program, source.name))
+    code_size = omf.segments(records)[1][1]
+    code = omf.segment_image(records, 1, code_size)
+
+    assert code[48:51] != b"\x55\x8b\xec"
+    assert b"\xd9\xf3" in code
+
+
+def test_gorillas_beep_reaches_the_audited_zero_argument_runtime_call(tmp_path: Path) -> None:
+    """Gorillas stopped in GETNUM because BEEP parsed but had no semantic ABI."""
+    source = tmp_path / "BEEP.BAS"
+    source.write_bytes(b"beep\r\n")
+    program = qb_driver.parsed(source, dialect="qb45", runtime="qb45")
+    listing = masm.text(qb_compile.assembled(program))
+    assert "call far ptr B$BEEP" in listing
+    assert "add sp" not in listing
+
+
+def test_gorillas_console_line_input_keeps_prompt_and_destination(tmp_path: Path) -> None:
+    """Gorillas' player-name prompt was misparsed as a two-operand graphics LINE."""
+    source = tmp_path / "LNINPUT.BAS"
+    source.write_bytes(b'dim player as string\r\nline input "Name: "; player\r\n')
+    program = qb_driver.parsed(source, dialect="qb45", runtime="qb45")
+    listing = masm.text(qb_compile.assembled(program))
+    assert "call far ptr B$LNIN" in listing
+    assert "call far ptr B$LINE" not in listing
+
+
+def test_gorillas_implicit_string_suffix_drives_string_comparison(tmp_path: Path) -> None:
+    """Gorillas stopped at DO WHILE Char$ = "" by treating undeclared Char$ as numeric."""
+    source = tmp_path / "STRLOOP.BAS"
+    source.write_bytes(b'do while char$ = ""\r\nchar$ = inkey$\r\nloop\r\n')
+    program = qb_driver.parsed(source, dialect="qb45", runtime="qb45")
+    listing = masm.text(qb_compile.assembled(program))
+    assert "call far ptr B$SCMP" in listing
+
+
+def test_gorillas_print_tab_is_a_control_call_not_an_array(tmp_path: Path) -> None:
+    """Gorillas' score line stopped because PRINT TAB(50) was resolved as an array."""
+    source = tmp_path / "PRTAB.BAS"
+    source.write_bytes(b'print "score"; tab(50); 7\r\n')
+    program = qb_driver.parsed(source, dialect="qb45", runtime="qb45")
+    listing = masm.text(qb_compile.assembled(program))
+    assert "pushw 50" in listing
+    assert "call far ptr B$FTAB" in listing
+
+
+def test_gorillas_point_is_resolved_from_the_intrinsic_table(tmp_path: Path) -> None:
+    """Gorillas stopped at POINT(x#, y#) because it was resolved as an array."""
+    source = tmp_path / "POINT.BAS"
+    source.write_bytes(b"dim x as double, y as double, pixel as integer\r\npixel = point(x, y)\r\n")
+    program = qb_driver.parsed(source, dialect="qb45", runtime="qb45")
+    listing = masm.text(qb_compile.assembled(program))
+    assert "call far ptr B$PNR4" in listing
+
+
+def test_gorillas_sleep_uses_the_long_runtime_abi(tmp_path: Path) -> None:
+    """Gorillas reached SLEEP 1 with four typed bytes but no audited cleanup."""
+    source = tmp_path / "SLEEP.BAS"
+    source.write_bytes(b"sleep 1\r\n")
+    program = qb_driver.parsed(source, dialect="qb45", runtime="qb45")
+    listing = masm.text(qb_compile.assembled(program))
+    assert "call far ptr B$SLEP" in listing
+
+
+def test_single_module_gosub_keeps_its_module_error_handler(tmp_path: Path) -> None:
+    """Gorillas' InitVars became a fake procedure requiring QB45's nonexistent B$OEGP."""
+    source = tmp_path / "GOSUBERR.BAS"
+    source.write_bytes(
+        b"gosub initvars\r\nend\r\ninitvars:\r\non error goto failed\r\nreturn\r\nfailed:\r\nresume next\r\n"
+    )
+    program = qb_driver.parsed(source, dialect="qb45", runtime="qb45")
+    listing = masm.text(qb_compile.assembled(program))
+    main = listing.split("$QB$MAIN proc far", 1)[1].split("$QB$MAIN endp", 1)[0]
+    assert "INITVARS proc far" not in listing
+    assert "call far ptr B$OEGA" in main
+    assert "call far ptr B$OEGP" not in listing
+
+
+def test_procedure_dim_shadows_implicit_module_variable(tmp_path: Path) -> None:
+    """Inlining Gorillas' GOSUB exposed module INTEGER i before a local SINGLE DIM i."""
+    source = tmp_path / "SHADOW.BAS"
+    source.write_bytes(b"i = 1\r\ncall probe\r\nsub probe\r\ndim i as single\r\ni = 1.5\r\nend sub\r\n")
+    program = qb_driver.parsed(source, dialect="qb45", runtime="qb45")
+    assert any(function.name == "PROBE" for function in program.modules[0].functions)
 
 
 def test_integer_floor_division_stays_integer_until_its_qb_single_result(tmp_path: Path) -> None:
@@ -439,6 +547,31 @@ def test_qb_stage_dump_ends_with_the_emitted_runtime_abi_assembly(tmp_path: Path
     assert "retf 4" in emitted
 
 
+def test_qb_stage_dump_replaces_exact_procedure_names(tmp_path: Path) -> None:
+    """GorillaIntro's final stage displayed Intro's body because INTRO is its suffix."""
+    source = tmp_path / "NAMES.BAS"
+    source.write_bytes(b'sub gorillaIntro\r\nprint "GORILLA"\r\nend sub\r\nsub intro\r\nprint "INTRO"\r\nend sub\r\n')
+    output = tmp_path / "stages"
+    namespace = __import__("runpy").run_path("tools/qbstages.py")
+    namespace["dumped"](
+        source,
+        output,
+        dialect="qb45",
+        runtime="qb45",
+        includes=(),
+    )
+
+    lines = (output / "99-emitted-asm.asm").read_text().splitlines()
+
+    def procedure(name: str) -> str:
+        start = lines.index(f"{name} proc far")
+        stop = lines.index(f"{name} endp", start + 1)
+        return "\n".join(lines[start : stop + 1])
+
+    assert "NAMES$D3" in procedure("GORILLAINTRO")
+    assert "NAMES$D4" in procedure("INTRO")
+
+
 def test_qb45_input_type_table_uses_dgroup_far_pointer(tmp_path: Path) -> None:
     """Nibbles panicked because every INPUT table was mistaken for a VBDOS far literal."""
     source = tmp_path / "INPUT.BAS"
@@ -448,6 +581,18 @@ def test_qb45_input_type_table_uses_dgroup_far_pointer(tmp_path: Path) -> None:
     table = next(one for one in program.modules[0].data if one.name.startswith("$input"))
     assert table.address is hir.AddressKind.NEAR
     qb_compile.object_bytes(program, source.name)
+
+
+def test_implicit_module_end_uses_cenp_not_explicit_end_entry(tmp_path: Path) -> None:
+    """UCA1 printed nothing and never returned because fallthrough called B$CEND."""
+    source = tmp_path / "IMPLICIT.BAS"
+    source.write_bytes(b'print "DONE"\r\n')
+    program = qb_driver.parsed(source, dialect="qb45", runtime="qb45")
+    listing = masm.text(qb_compile.assembled(program))
+    main = listing.split("$QB$MAIN proc far", 1)[1].split("$QB$MAIN endp", 1)[0]
+
+    assert "call far ptr B$CENP" in main
+    assert "call far ptr B$CEND" not in main
 
 
 def test_runtime_entry_reserves_the_complete_live_local_extent() -> None:
@@ -478,7 +623,7 @@ def test_module_exit_rewrite_preserves_conditional_false_edges() -> None:
     # the edge and both arms must converge on the runtime exit.
     assert "cmp eax, 42\n    je L0_2\nL0_3:" in main or "cmp eax, 42\n    je L0_2\n    jmp L0_3" in main
     assert main.count("call far ptr B$PESD") == 2
-    assert "L0_4:\n    call far ptr B$CEND" in main
+    assert "L0_4:\n    call far ptr B$CENP" in main
     assert "L0_2:" in main and "jmp L0_4" in main
 
 
@@ -1230,6 +1375,35 @@ def test_on_error_emits_a_relocated_runtime_registration() -> None:
     )
 
 
+def test_on_error_registrations_follow_source_order(tmp_path: Path) -> None:
+    """Gorillas ignored ON ERROR GOTO 0, sent a shot error to PaletteError, and resumed corrupt state."""
+    basic = tmp_path / "ERRSTATE.BAS"
+    basic.write_bytes(
+        b"on error goto first\r\n"
+        b'print "armed first"\r\n'
+        b"on error goto second\r\n"
+        b'print "armed second"\r\n'
+        b"on error goto 0\r\n"
+        b"error 11\r\n"
+        b"end\r\n"
+        b"first:\r\nresume next\r\n"
+        b"second:\r\nresume next\r\n"
+    )
+    source = qb_driver.parsed(basic, dialect="qb45", runtime="qb45")
+    records = omf.parse(qb_compile.object_bytes(source, "ERRSTATE.BAS"))
+    externals = omf.externals(records)
+    calls = [
+        fixup
+        for fixup in omf.fixups(records)
+        if fixup.seg == 1 and fixup.target == "external" and externals[fixup.index] == "B$OEGA"
+    ]
+
+    assert len(calls) == 3
+    code = omf.segment_image(records, 1, omf.segments(records)[1][1])
+    disabled = calls[-1].offset - 6
+    assert code[disabled : calls[-1].offset] == bytes.fromhex("b8 00 00 50 50 9a")
+
+
 def test_resume_next_retains_runtime_statement_entries() -> None:
     """Q45R35's post-ERROR statement vanished, leaving RESUME NEXT with no target."""
     source = qb_driver.parsed(
@@ -1351,6 +1525,48 @@ def test_bare_def_seg_reaches_object_emission(tmp_path: Path) -> None:
     assert "B$POKE" not in omf.externals(records)
 
 
+def test_constant_screen_mode_pulls_its_graphics_driver(tmp_path: Path) -> None:
+    """SCN9 called B$CSCN without B$EGAUSED, so LINK omitted EGA and SCREEN 9 raised error 5."""
+    basic = tmp_path / "SCN9.BAS"
+    basic.write_bytes(b"screen 9\r\nscreen 0\r\n")
+    source = qb_driver.parsed(basic)
+
+    records = omf.parse(qb_compile.object_bytes(source, "SCN9.BAS"))
+    assert "B$EGAUSED" in omf.externals(records)
+
+
+def test_variable_screen_mode_pulls_all_graphics_drivers(tmp_path: Path) -> None:
+    """Gorillas SCREEN Mode linked no graphics modules and failed before drawing its first frame."""
+    basic = tmp_path / "SCNVAR.BAS"
+    basic.write_bytes(b"dim mode as integer\r\nmode = 9\r\nscreen mode\r\n")
+    source = qb_driver.parsed(basic)
+
+    records = omf.parse(qb_compile.object_bytes(source, "SCNVAR.BAS"))
+    assert "B$GRPUSED" in omf.externals(records)
+
+
+def test_nested_integer_division_keeps_each_dividend(tmp_path: Path) -> None:
+    """Gorillas emitted IDIV AX twice for 30 \\ (80 \\ MaxCol), faulting on its first shot."""
+    basic = tmp_path / "NESTDIV.BAS"
+    basic.write_bytes(
+        b"declare function scale (maxCol)\r\n"
+        b"defint a-z\r\n"
+        b"print scale(80)\r\n"
+        b"end\r\n"
+        b"function scale (maxCol)\r\n"
+        b"scale = 30 \\ (80 \\ maxCol)\r\n"
+        b"end function\r\n"
+    )
+    source = qb_driver.parsed(basic, dialect="qb45", runtime="qb45")
+    assembly = masm.text(qb_compile.assembled(source))
+    scale = assembly.split("SCALE proc far\n", 1)[1].split("SCALE endp\n", 1)[0]
+
+    assert "mov eax, 80\n" in scale
+    assert "mov eax, 30\n" in scale
+    assert scale.count("idiv e") == 2
+    assert "idiv ax" not in scale
+
+
 def test_byref_dynamic_array_field_copies_through_a_near_formal(tmp_path: Path) -> None:
     """ENT_MOVE_TRIGS passed a four-byte far field address to a two-byte scalar formal."""
     basic = tmp_path / "FARFIELD.BAS"
@@ -1457,10 +1673,11 @@ def test_pds_huge_array_uses_measured_ddim_and_hary_abi() -> None:
     physical = physicalize(source, function, optimized)
     listing = hir.mir_text(physical.lowered)
 
-    assert "arg -2:2\n  arg 198:2\n  arg 0:2\n  arg 200:2" in listing
+    assert "v2 <- copy 65534:2" in listing
+    assert "arg v2:2\n  arg 198:2\n  arg 0:2\n  arg 200:2" in listing
     assert "arg 2:2\n  arg 514:2" in listing
     assert listing.count("call B$HARY(") == 10
-    assert "v4, v5 <- call B$HARY(v2:2)" in listing
+    assert re.search(r"v\d+, v\d+ <- call B\$HARY\(v\d+:2\)", listing)
     assert "+v4@v5):2 <- 123:2" in listing
 
     assembly = masm.text(qb_compile.assembled(source))

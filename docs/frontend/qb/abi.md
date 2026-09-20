@@ -109,3 +109,15 @@ ordinary BYREF wrapper and pointer chain around an array type. QuickBASIC 4.5
 uses a direct pointer-to-array record instead. This difference is debug-format
 spelling, not a different calling convention; the three instruction listings
 above all pass the same one-word descriptor address.
+
+## Link-only runtime dependencies
+
+`SCREEN` has a second ABI effect beyond its `B$CSCN` call. A constant mode
+references `B$CGAUSED`, `B$EGAUSED`, `B$VGAUSED`, `B$HRCUSED`, or
+`B$OLIUSED`; an expression references `B$GRPUSED`. These zero-cost private
+relocations pull the selected graphics module from the Microsoft runtime.
+Without one, `SCREEN 9` reaches `B$CSCN` but raises error 5.
+
+`ON ERROR` registration is executable state, not function metadata. Each
+source statement materializes `B$OEGA` with a far module offset or `B$OEGP`
+with a local offset. `ON ERROR GOTO 0` passes zero at that exact position.

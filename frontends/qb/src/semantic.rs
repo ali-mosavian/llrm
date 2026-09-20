@@ -6,7 +6,7 @@ use std::fmt::Write;
 use crate::intrinsics::{self, Lowering, ResultClass};
 use crate::dialect::Dialect;
 use crate::syntax::{
-    Binary, Declaration, ExitTarget, Expr, FileMode, Literal, Module, PrintSeparator,
+    Binary, CaseItem, Declaration, ExitTarget, Expr, FileMode, Literal, Module, PrintSeparator,
     Procedure, ProcedureKind, ResumeTarget, Statement, TypeName, Unary,
 };
 
@@ -231,11 +231,13 @@ struct Compiler {
     descriptor_fields: BTreeMap<(u32, usize, u32), u32>,
     labels: BTreeMap<String, u32>,
     data_labels: BTreeMap<String, usize>,
+    next_read_data_row: usize,
     exits: Vec<(ExitTarget, u32)>,
     return_block: Option<u32>,
     result_place: Option<(u32, u32)>,
     error_handler: Option<u32>,
     error_handler_local: bool,
+    error_handlers: BTreeSet<u32>,
     next_type: u32,
     next_value: u32,
     next_place: u32,
@@ -250,7 +252,9 @@ struct Compiler {
     default_types: [u32; 26],
     option_base: i64,
     statement_entries: Vec<(u32, u32, u16)>,
+    data_entries: Vec<u32>,
     pending_numeric_line: Option<u16>,
+    current_source_line: usize,
 }
 
 pub fn compile(
@@ -460,6 +464,7 @@ pub fn compile_with_options(
                 message: format!("{}: {}", procedure.name, error.message),
             })?;
         compiler.finish();
+        compiler.cleanup_local_strings()?;
         compiler.cleanup_local_arrays()?;
         // STRING expressions in HIR are near descriptor addresses.  The
         // declared result place remains an owned four-byte descriptor, but a
@@ -557,10 +562,133 @@ fn outline_module_gosubs(module: &Module) -> Result<Module, SemanticError> {
         Ok(())
     }
 
+    fn error_targets(statements: &[Statement], targets: &mut BTreeSet<String>) {
+        for statement in statements {
+            match statement {
+                Statement::OnError { label, .. } if label != "0" => {
+                    targets.insert(canonical(label).into());
+                }
+                Statement::If { then_branch, else_branch, .. } => {
+                    error_targets(then_branch, targets);
+                    error_targets(else_branch, targets);
+                }
+                Statement::For { body, .. }
+                | Statement::While { body, .. }
+                | Statement::Do { body, .. } => error_targets(body, targets),
+                Statement::Select { arms, otherwise, .. } => {
+                    for (_, body) in arms {
+                        error_targets(body, targets);
+                    }
+                    error_targets(otherwise, targets);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn ends_error_handler(statement: &Statement) -> bool {
+        match statement {
+            Statement::Resume { .. } => true,
+            Statement::Runtime { name, .. } if matches!(name.as_str(), "END" | "SYSTEM") => true,
+            Statement::If { then_branch, else_branch, .. } => {
+                then_branch.iter().any(ends_error_handler)
+                    || else_branch.iter().any(ends_error_handler)
+            }
+            Statement::For { body, .. }
+            | Statement::While { body, .. }
+            | Statement::Do { body, .. } => body.iter().any(ends_error_handler),
+            Statement::Select { arms, otherwise, .. } => {
+                arms.iter().any(|(_, body)| body.iter().any(ends_error_handler))
+                    || otherwise.iter().any(ends_error_handler)
+            }
+            _ => false,
+        }
+    }
+
+    fn localize_error_handlers(statements: &mut [Statement]) {
+        for statement in statements {
+            match statement {
+                Statement::OnError { local, .. } => *local = true,
+                Statement::If { then_branch, else_branch, .. } => {
+                    localize_error_handlers(then_branch);
+                    localize_error_handlers(else_branch);
+                }
+                Statement::For { body, .. }
+                | Statement::While { body, .. }
+                | Statement::Do { body, .. } => localize_error_handlers(body),
+                Statement::Select { arms, otherwise, .. } => {
+                    for (_, body) in arms {
+                        localize_error_handlers(body);
+                    }
+                    localize_error_handlers(otherwise);
+                }
+                _ => {}
+            }
+        }
+    }
+
     let mut targets = BTreeSet::new();
     visit(&module.statements, &mut targets);
     if targets.is_empty() {
         return Ok(module.clone());
+    }
+
+    // A module GOSUB shares the module frame, variables, and error handler.
+    // When each target has one direct top-level call, inline that region at
+    // its call site. This is both simpler and more faithful than inventing a
+    // far procedure (QB45 has no B$OEGP local-handler entry to support one).
+    let direct_calls = module
+        .statements
+        .iter()
+        .filter_map(|statement| match statement {
+            Statement::Call { name, arguments, .. } if name == "GOSUB" => {
+                match arguments.as_slice() {
+                    [Expr::Name(target, _)] => Some(canonical(target).to_string()),
+                    _ => None,
+                }
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if direct_calls.len() == targets.len()
+        && direct_calls.iter().collect::<BTreeSet<_>>().len() == direct_calls.len()
+    {
+        let mut regions = BTreeMap::new();
+        let mut covered = BTreeSet::new();
+        for target in &direct_calls {
+            let Some(start) = module.statements.iter().position(
+                |statement| matches!(statement, Statement::Label(name, _) if canonical(name) == target),
+            ) else {
+                return Err(SemanticError { message: format!("unknown GOSUB label {target}") });
+            };
+            let Some(end) = module.statements[start + 1..]
+                .iter()
+                .position(|statement| matches!(statement, Statement::Call { name, arguments, .. } if name == "RETURN" && arguments.is_empty()))
+                .map(|offset| start + 1 + offset)
+            else {
+                return Err(SemanticError { message: format!("GOSUB label {target} has no matching RETURN") });
+            };
+            covered.extend(start..=end);
+            regions.insert(target.clone(), module.statements[start + 1..end].to_vec());
+        }
+        let mut statements = Vec::new();
+        for (index, statement) in module.statements.iter().enumerate() {
+            if covered.contains(&index) {
+                continue;
+            }
+            if let Statement::Call { name, arguments, .. } = statement {
+                if name == "GOSUB" {
+                    let [Expr::Name(target, _)] = arguments.as_slice() else { unreachable!() };
+                    statements.extend(regions[canonical(target)].clone());
+                    continue;
+                }
+            }
+            statements.push(statement.clone());
+        }
+        let mut normalized = module.clone();
+        normalized.statements = statements;
+        rewrite(&mut normalized.statements)?;
+        return Ok(normalized);
     }
 
     let mut normalized = module.clone();
@@ -603,6 +731,28 @@ fn outline_module_gosubs(module: &Module) -> Result<Module, SemanticError> {
             _ => unreachable!(),
         };
         let mut body = normalized.statements[start + 1..end].to_vec();
+        let mut handlers = BTreeSet::new();
+        error_targets(&body, &mut handlers);
+        for handler in handlers {
+            let Some(handler_start) = normalized.statements.iter().position(
+                |statement| matches!(statement, Statement::Label(name, _) if canonical(name) == handler),
+            ) else {
+                return Err(SemanticError {
+                    message: format!("unknown ON ERROR label {handler}"),
+                });
+            };
+            for statement in &normalized.statements[handler_start..] {
+                body.push(statement.clone());
+                if ends_error_handler(statement) {
+                    break;
+                }
+            }
+        }
+        // A module GOSUB shares the module's handler frame. Once represented
+        // as a real far procedure, the equivalent runtime contract is ON
+        // LOCAL ERROR so registration follows B$ENRA and RESUME unwinds that
+        // procedure rather than treating its BP as a module frame.
+        localize_error_handlers(&mut body);
         rewrite(&mut body)?;
         normalized.procedures.push(Procedure {
             name: target,
@@ -700,11 +850,13 @@ impl Compiler {
             descriptor_fields: BTreeMap::new(),
             labels: BTreeMap::new(),
             data_labels: BTreeMap::new(),
+            next_read_data_row: 0,
             exits: Vec::new(),
             return_block: None,
             result_place: None,
             error_handler: None,
             error_handler_local: false,
+            error_handlers: BTreeSet::new(),
             next_type: 9,
             next_value: 1,
             next_place: 1,
@@ -719,7 +871,9 @@ impl Compiler {
             default_types: [SINGLE; 26],
             option_base: 0,
             statement_entries: Vec::new(),
+            data_entries: Vec::new(),
             pending_numeric_line: None,
+            current_source_line: 0,
         }
     }
 
@@ -749,8 +903,11 @@ impl Compiler {
         self.result_place = None;
         self.error_handler = None;
         self.error_handler_local = false;
+        self.error_handlers.clear();
         self.statement_entries.clear();
+        self.data_entries.clear();
         self.pending_numeric_line = None;
+        self.current_source_line = 0;
         self.next_value = 1;
         self.next_instruction = 1;
         self.next_block = 2;
@@ -773,6 +930,8 @@ impl Compiler {
             .statement_entries
             .iter()
             .map(|(block, _, _)| *block)
+            .chain(self.data_entries.iter().copied())
+            .chain(self.error_handlers.iter().copied())
             .filter(|block| retained.contains(block))
             .collect::<BTreeSet<_>>()
             .into_iter()
@@ -811,10 +970,11 @@ impl Compiler {
     fn prune_unreachable(&mut self, parameters: &[u32]) {
         let mut reachable = BTreeSet::from([1]);
         reachable.extend(self.statement_entries.iter().map(|(block, _, _)| *block));
-        if let Some(handler) = self.error_handler {
+        reachable.extend(self.data_entries.iter().copied());
+        for handler in &self.error_handlers {
             // ON ERROR is an asynchronous side entry installed by the
             // runtime. It deliberately has no ordinary CFG predecessor.
-            reachable.insert(handler);
+            reachable.insert(*handler);
         }
         loop {
             let before = reachable.len();
@@ -1147,6 +1307,14 @@ impl Compiler {
             match statement {
                 Statement::Dim(items) => {
                     for item in items {
+                        if storage == "local" && !item.shared {
+                            // An explicit procedure DIM shadows an implicit
+                            // module variable of the same name. Gorillas'
+                            // module GOSUB creates INTEGER i, while
+                            // DrawGorilla deliberately declares a local
+                            // SINGLE i.
+                            self.variables.remove(variable_key(&item.name));
+                        }
                         if storage == "local" && item.array {
                             // Microsoft documents every explicitly DIMmed
                             // array in a non-STATIC procedure as dynamic,
@@ -1161,6 +1329,7 @@ impl Compiler {
                 }
                 Statement::Static(items) => {
                     for item in items {
+                        self.variables.remove(variable_key(&item.name));
                         self.declare_as(item, "static")?;
                     }
                 }
@@ -1223,35 +1392,39 @@ impl Compiler {
         } else {
             self.named_type(&declaration.name, declaration.type_name.as_ref())?
         };
-        let bounds = declaration
-            .bounds
-            .iter()
-            .map(|one| {
-                let lower = one
-                    .lower
-                    .as_ref()
-                    .map(|value| self.constant_integer(value))
-                    .transpose()?
-                    .unwrap_or(self.option_base);
-                let upper = self.constant_integer(&one.upper)?;
-                if upper < lower {
-                    return self.fail("array upper bound is below its lower bound");
-                }
-                Ok((lower, upper))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        if declaration.array
-            && !bounds.is_empty()
+        let runtime_bounds = declaration.array
+            && !declaration.bounds.is_empty()
             && storage != "static"
-            && (element == STRING || declaration.dynamic)
-        {
+            && (element == STRING || declaration.dynamic);
+        let bounds = if runtime_bounds {
+            Vec::new()
+        } else {
+            declaration
+                .bounds
+                .iter()
+                .map(|one| {
+                    let lower = one
+                        .lower
+                        .as_ref()
+                        .map(|value| self.constant_integer(value))
+                        .transpose()?
+                        .unwrap_or(self.option_base);
+                    let upper = self.constant_integer(&one.upper)?;
+                    if upper < lower {
+                        return self.fail("array upper bound is below its lower bound");
+                    }
+                    Ok((lower, upper))
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        if runtime_bounds {
             // Variable-length STRING elements are always managed. $DYNAMIC
             // makes the same runtime-owned representation apply to every
             // bounded array. BC creates it with B$DDIM, leaving a mutable
             // descriptor that a later REDIM may legally replace.
             let descriptor_type = self.opaque_type(
                 format!("{} descriptor", declaration.name),
-                14 + 4 * bounds.len(),
+                14 + 4 * declaration.bounds.len(),
             );
             let descriptor_place = self.next_place;
             self.next_place += 1;
@@ -1279,16 +1452,24 @@ impl Compiler {
                 vec![Operand::Place(descriptor_place)],
             );
             let mut operands = Vec::new();
-            for (lower, upper) in &bounds {
-                operands.push(Operand::Constant(INTEGER, Number::Integer(*lower)));
-                operands.push(Operand::Constant(INTEGER, Number::Integer(*upper)));
+            for bound in &declaration.bounds {
+                let lower = if let Some(lower) = &bound.lower {
+                    let (lower, type_id) = self.expression(lower)?;
+                    self.convert(lower, type_id, INTEGER)?
+                } else {
+                    Operand::Constant(INTEGER, Number::Integer(self.option_base))
+                };
+                let (upper, type_id) = self.expression(&bound.upper)?;
+                let upper = self.convert(upper, type_id, INTEGER)?;
+                operands.push(lower);
+                operands.push(upper);
             }
             operands.extend([
                 Operand::Constant(INTEGER, Number::Integer(self.width(element) as i64)),
                 Operand::Constant(
                     INTEGER,
                     Number::Integer(
-                        bounds.len() as i64
+                        declaration.bounds.len() as i64
                             | if element == STRING {
                                 0x8000
                             } else if self.huge_arrays {
@@ -1301,10 +1482,12 @@ impl Compiler {
                 Operand::Value(descriptor),
             ]);
             let mut order = Vec::new();
-            for dimension in (0..bounds.len()).rev() {
+            for dimension in (0..declaration.bounds.len()).rev() {
                 order.extend([2 * dimension, 2 * dimension + 1]);
             }
-            order.extend(2 * bounds.len()..2 * bounds.len() + 3);
+            order.extend(
+                2 * declaration.bounds.len()..2 * declaration.bounds.len() + 3,
+            );
             self.emit_call("B$DDIM", Vec::new(), operands, order, false);
             self.variables.insert(
                 variable_key(&declaration.name).into(),
@@ -1644,12 +1827,7 @@ impl Compiler {
                     self.data_labels.insert(canonical(name).into(), *offset);
                 }
                 Statement::Data { values, .. } => {
-                    let line = values
-                        .iter()
-                        .map(|value| self.read_data_constant(value))
-                        .collect::<Result<Vec<_>, _>>()?
-                        .join(", ");
-                    *offset += 1 + line.len() + 1;
+                    *offset += 1;
                 }
                 Statement::If {
                     then_branch,
@@ -1697,6 +1875,7 @@ impl Compiler {
 
     fn statement_list(&mut self, statements: &[Statement]) -> Result<(), SemanticError> {
         for statement in statements {
+            self.current_source_line = statement.span().line;
             let metadata_only = matches!(
                 statement,
                 Statement::Dim(_)
@@ -1709,7 +1888,6 @@ impl Compiler {
                     | Statement::OptionBase(_, _)
                     | Statement::Data { .. }
                     | Statement::Label(_, _)
-                    | Statement::OnError { .. }
             );
             if self.error_handler.is_some() && !metadata_only {
                 // A numbered BASIC line remains the active ERL value for
@@ -1942,22 +2120,32 @@ impl Compiler {
                     self.emit_runtime_call("B$CLOS", Vec::new(), operands);
                 }
                 Statement::LineInput {
-                    file, destination, ..
+                    file,
+                    prompt,
+                    destination,
+                    ..
                 } => {
-                    let (file, file_type) = self.expression(file)?;
-                    let file = self.convert(file, file_type, INTEGER)?;
-                    self.emit_runtime_call("B$DSKI", Vec::new(), vec![file]);
+                    if let Some(file) = file {
+                        let (file, file_type) = self.expression(file)?;
+                        let file = self.convert(file, file_type, INTEGER)?;
+                        self.emit_runtime_call("B$DSKI", Vec::new(), vec![file]);
+                    }
 
                     let (destination, destination_type) = self.destination(destination)?;
                     if destination_type != STRING {
                         return self.fail("LINE INPUT destination must be a dynamic STRING");
                     }
                     let destination = self.far_address(destination, destination_type);
+                    let prompt = if let Some(prompt) = prompt {
+                        self.string_descriptor(prompt)?
+                    } else {
+                        Operand::Constant(INTEGER, Number::Integer(0))
+                    };
                     self.emit_runtime_call(
                         "B$LNIN",
                         Vec::new(),
                         vec![
-                            Operand::Constant(INTEGER, Number::Integer(0)),
+                            prompt,
                             Operand::Value(destination),
                             Operand::Constant(INTEGER, Number::Integer(0)),
                             Operand::Constant(INTEGER, Number::Integer(1)),
@@ -2029,6 +2217,22 @@ impl Compiler {
                         continue;
                     }
                     for item in items {
+                        if let Expr::Apply {
+                            name,
+                            arguments,
+                            ..
+                        } = &item.value
+                        {
+                            if canonical(name) == "TAB" {
+                                let [column] = arguments.as_slice() else {
+                                    return self.fail("PRINT TAB expects one column");
+                                };
+                                let (column, type_id) = self.expression(column)?;
+                                let column = self.convert(column, type_id, INTEGER)?;
+                                self.emit_runtime_call("B$FTAB", Vec::new(), vec![column]);
+                                continue;
+                            }
+                        }
                         let term = match item.separator {
                             PrintSeparator::Comma => 'C',
                             PrintSeparator::Semicolon => 'S',
@@ -2165,7 +2369,13 @@ impl Compiler {
                     }
                     self.emit_runtime_call("B$PEOS", Vec::new(), Vec::new());
                 }
-                Statement::Data { values, .. } => self.append_read_data(values)?,
+                Statement::Data { values, .. } => {
+                    let row = self.next_read_data_row;
+                    self.next_read_data_row += 1;
+                    self.data_entries.push(self.blocks[self.current_block].id);
+                    self.emit_runtime_call(&format!("$QB$DATA:{row}"), Vec::new(), Vec::new());
+                    self.append_read_data(values)?;
+                }
                 Statement::Read { destinations, .. } => {
                     for destination in destinations {
                         let (place, type_id) = self.destination(destination)?;
@@ -2191,17 +2401,29 @@ impl Compiler {
                     }
                 }
                 Statement::OnError { label, local, .. } => {
-                    let handler = *self.labels.get(label).ok_or_else(|| SemanticError {
-                        message: format!("unknown ON ERROR label {label}"),
-                    })?;
-                    if self.error_handler.replace(handler).is_some() {
-                        return self.fail("multiple ON ERROR registrations in one procedure");
+                    let handler = if label == "0" {
+                        0
+                    } else {
+                        *self.labels.get(label).ok_or_else(|| SemanticError {
+                            message: format!("unknown ON ERROR label {label}"),
+                        })?
+                    };
+                    if handler != 0 {
+                        self.error_handlers.insert(handler);
+                        if self.error_handler.is_none() {
+                            self.error_handler = Some(handler);
+                            self.error_handler_local = *local;
+                        }
                     }
-                    self.error_handler_local = *local;
-                    // Registration is function/module side metadata. The OMF
-                    // adapter materializes B$OEGA or the procedure-local
-                    // B$OEGP with a relocated handler after code layout; no
-                    // fake ordinary CFG edge enters MIR.
+                    // Registration changes at this exact source position.
+                    // The handler address is a code-layout fact, so retain a
+                    // zero-argument marker through HIR/MIR and materialize the
+                    // measured B$OEGA/B$OEGP sequence in the source adapter.
+                    self.emit_runtime_call(
+                        &format!("$QB$OERG:{handler}:{}", if *local { "L" } else { "G" }),
+                        Vec::new(),
+                        Vec::new(),
+                    );
                 }
                 Statement::Resume { target, .. } => {
                     match target {
@@ -2213,9 +2435,9 @@ impl Compiler {
                             self.emit_runtime_call("B$RESN", Vec::new(), Vec::new());
                         }
                         ResumeTarget::Current => {
-                            return self.fail(
-                                "RESUME without a target requires the audited B$RES0 statement map",
-                            );
+                            // B$RES0 uses b$erradr and MODULE_CODE.OF_STA to
+                            // transfer back to the statement that faulted.
+                            self.emit_runtime_call("B$RES0", Vec::new(), Vec::new());
                         }
                         ResumeTarget::Label(label) => {
                             let target = *self.labels.get(label).ok_or_else(|| SemanticError {
@@ -2239,6 +2461,12 @@ impl Compiler {
                 Statement::Runtime {
                     name, arguments, ..
                 } => match name.as_str() {
+                    "BEEP" => {
+                        if !arguments.is_empty() {
+                            return self.fail("BEEP takes no arguments");
+                        }
+                        self.emit_runtime_call("B$BEEP", Vec::new(), Vec::new());
+                    }
                     "ERROR" => {
                         if arguments.len() != 1 {
                             return self.fail("ERROR expects one error number");
@@ -2291,6 +2519,138 @@ impl Compiler {
                         };
                         let commands = self.string_descriptor(commands)?;
                         self.emit_runtime_call("B$SPLY", Vec::new(), vec![commands]);
+                    }
+                    "PALETTE" => {
+                        let [attribute, color] = arguments.as_slice() else {
+                            return self.fail("PALETTE expects an attribute and color");
+                        };
+                        let (attribute, attribute_type) = self.expression(attribute)?;
+                        let attribute = self.convert(attribute, attribute_type, INTEGER)?;
+                        let (color, color_type) = self.expression(color)?;
+                        let color = self.convert(color, color_type, LONG)?;
+                        self.emit_runtime_call("B$PAL2", Vec::new(), vec![attribute, color]);
+                    }
+                    "CIRCLE" => {
+                        if arguments.len() < 3 || arguments.len() > 7 {
+                            return self.fail("CIRCLE expects coordinates, radius, and optional color, angles, and aspect");
+                        }
+                        self.graphics_coordinate("B$N1I2", "B$N1R4", &arguments[0], &arguments[1])?;
+                        for (index, callee) in [(4, "B$CSTT"), (5, "B$CSTO"), (6, "B$CASP")] {
+                            if let Some(argument) = arguments.get(index) {
+                                if !matches!(argument, Expr::Omitted(_)) {
+                                    let (value, type_id) = self.expression(argument)?;
+                                    let value = self.stored_float_argument(value, type_id, SINGLE)?;
+                                    self.emit_runtime_call(callee, Vec::new(), vec![value]);
+                                }
+                            }
+                        }
+                        let (radius, radius_type) = self.expression(&arguments[2])?;
+                        let radius = self.stored_float_argument(radius, radius_type, SINGLE)?;
+                        let color = if let Some(argument) = arguments.get(3) {
+                            if matches!(argument, Expr::Omitted(_)) {
+                                Operand::Constant(INTEGER, Number::Integer(-1))
+                            } else {
+                                let (value, type_id) = self.expression(argument)?;
+                                self.convert(value, type_id, INTEGER)?
+                            }
+                        } else {
+                            Operand::Constant(INTEGER, Number::Integer(-1))
+                        };
+                        // BC passes the radius twice. The runtime applies the
+                        // independently latched aspect ratio to the two axes.
+                        self.emit_runtime_call(
+                            "B$CIRC",
+                            Vec::new(),
+                            vec![radius.clone(), radius, color],
+                        );
+                    }
+                    "LINE" => {
+                        if !(4..=6).contains(&arguments.len()) {
+                            return self.fail("LINE expects two coordinate pairs, an optional color, and B or BF");
+                        }
+                        self.graphics_coordinate("B$N1I2", "B$N1R4", &arguments[0], &arguments[1])?;
+                        self.graphics_coordinate("B$N2I2", "B$N2R4", &arguments[2], &arguments[3])?;
+                        let color = if let Some(argument) = arguments.get(4) {
+                            let (value, type_id) = self.expression(argument)?;
+                            self.convert(value, type_id, INTEGER)?
+                        } else {
+                            Operand::Constant(INTEGER, Number::Integer(-1))
+                        };
+                        let mode = match arguments.get(5) {
+                            None => 0,
+                            Some(Expr::Name(name, _)) if canonical(name) == "B" => 1,
+                            Some(Expr::Name(name, _)) if canonical(name) == "BF" => 2,
+                            _ => return self.fail("LINE style must be B or BF"),
+                        };
+                        self.emit_runtime_call(
+                            "B$LINE",
+                            Vec::new(),
+                            vec![
+                                color,
+                                Operand::Constant(INTEGER, Number::Integer(-1)),
+                                Operand::Constant(INTEGER, Number::Integer(mode)),
+                            ],
+                        );
+                    }
+                    "PAINT" => {
+                        if !(3..=4).contains(&arguments.len()) {
+                            return self.fail("PAINT expects coordinates, fill, and optional border");
+                        }
+                        self.graphics_coordinate("B$N1I2", "B$N1R4", &arguments[0], &arguments[1])?;
+                        let (fill, fill_type) = self.expression(&arguments[2])?;
+                        let fill = self.convert(fill, fill_type, INTEGER)?;
+                        let border = if let Some(argument) = arguments.get(3) {
+                            let (value, type_id) = self.expression(argument)?;
+                            self.convert(value, type_id, INTEGER)?
+                        } else {
+                            Operand::Constant(INTEGER, Number::Integer(-1))
+                        };
+                        self.emit_runtime_call("B$PAIN", Vec::new(), vec![fill, border]);
+                    }
+                    "PSET" | "PRESET" => {
+                        if !(2..=3).contains(&arguments.len()) {
+                            return self.fail(format!("{name} expects coordinates and optional color"));
+                        }
+                        self.graphics_coordinate("B$N1I2", "B$N1R4", &arguments[0], &arguments[1])?;
+                        let color = if let Some(argument) = arguments.get(2) {
+                            let (value, type_id) = self.expression(argument)?;
+                            self.convert(value, type_id, INTEGER)?
+                        } else {
+                            Operand::Constant(
+                                INTEGER,
+                                Number::Integer(if name == "PRESET" { 0 } else { -1 }),
+                            )
+                        };
+                        self.emit_runtime_call("B$PSTC", Vec::new(), vec![color]);
+                    }
+                    "GET" | "PUT" => {
+                        let expected = if name == "GET" { 5 } else { 4 };
+                        if arguments.len() != expected {
+                            return self.fail(format!("graphics {name} has the wrong number of operands"));
+                        }
+                        self.graphics_coordinate("B$N1I2", "B$N1R4", &arguments[0], &arguments[1])?;
+                        let array_index = if name == "GET" {
+                            self.graphics_coordinate("B$N2I2", "B$N2R4", &arguments[2], &arguments[3])?;
+                            4
+                        } else {
+                            2
+                        };
+                        let mut operands = self.graphics_array(&arguments[array_index])?;
+                        if name == "PUT" {
+                            let mode = match &arguments[3] {
+                                Expr::Name(mode, _) => match canonical(mode) {
+                                    "PSET" => 3,
+                                    "PRESET" => 2,
+                                    "AND" => 1,
+                                    "OR" => 4,
+                                    "XOR" => 5,
+                                    _ => return self.fail("graphics PUT mode is not recognized"),
+                                },
+                                _ => return self.fail("graphics PUT requires a raster operation"),
+                            };
+                            operands.push(Operand::Constant(INTEGER, Number::Integer(mode)));
+                        }
+                        self.emit_runtime_call(if name == "GET" { "B$GGET" } else { "B$GPUT" }, Vec::new(), operands);
                     }
                     "POKE" => {
                         if arguments.len() != 2 {
@@ -2380,23 +2740,24 @@ impl Compiler {
                         self.emit_runtime_call("B$LOCT", Vec::new(), operands);
                     }
                     "RESTORE" => {
-                        let offset = match arguments.as_slice() {
-                            [] => 0,
-                            [Expr::Name(label, _)] => *self
+                        let row = match arguments.as_slice() {
+                            [] => None,
+                            [Expr::Name(label, _)] => Some(*self
                                 .data_labels
                                 .get(canonical(label))
                                 .ok_or_else(|| SemanticError {
                                     message: format!("unknown RESTORE label {label}"),
-                                })?,
+                                })?),
                             _ => return self.fail("RESTORE expects zero or one label"),
                         };
-                        let offset = i64::try_from(offset).map_err(|_| SemanticError {
-                            message: "RESTORE data offset exceeds its INTEGER ABI".into(),
-                        })?;
+                        let callee = row.map_or_else(
+                            || "B$RSTB".to_string(),
+                            |row| format!("$QB$RSTB:{row}"),
+                        );
                         self.emit_runtime_call(
-                            "B$RSTB",
+                            &callee,
                             Vec::new(),
-                            vec![Operand::Constant(INTEGER, Number::Integer(offset))],
+                            vec![Operand::Constant(INTEGER, Number::Integer(0))],
                         );
                     }
                     "SCREEN" => {
@@ -2569,7 +2930,7 @@ impl Compiler {
     fn select_statement(
         &mut self,
         selector: &Expr,
-        arms: &[(Vec<Expr>, Vec<Statement>)],
+        arms: &[(Vec<CaseItem>, Vec<Statement>)],
         otherwise: &[Statement],
     ) -> Result<(), SemanticError> {
         let string_selector = self.string_syntax(selector);
@@ -2589,28 +2950,53 @@ impl Compiler {
             let body_block = self.new_block();
             let next_arm = self.new_block();
             for (index, candidate) in matches.iter().enumerate() {
-                let equal = self.value(BOOLEAN);
-                if string_selector {
-                    if !self.string_syntax(candidate) {
-                        return self.fail("string SELECT CASE requires string case values");
-                    }
-                    let candidate = self.string_descriptor(candidate)?;
-                    self.emit_string_compare("string_eq", equal, selector.clone(), candidate);
-                } else {
-                    let (candidate, candidate_type) = self.expression(candidate)?;
-                    let candidate = self.convert(candidate, candidate_type, selector_type)?;
-                    self.emit("eq", vec![equal], vec![selector.clone(), candidate]);
-                }
                 let no_match = if index + 1 == matches.len() {
                     next_arm
                 } else {
                     self.new_block()
                 };
-                self.terminate(
-                    "branch",
-                    vec![Operand::Value(equal)],
-                    vec![body_block, no_match],
-                )?;
+                match candidate {
+                    CaseItem::Value(candidate) => {
+                        let matches = self.select_compare(
+                            &selector,
+                            selector_type,
+                            string_selector,
+                            candidate,
+                            Binary::Eq,
+                        )?;
+                        self.terminate("branch", vec![matches], vec![body_block, no_match])?;
+                    }
+                    CaseItem::Relation(relation, candidate) => {
+                        let matches = self.select_compare(
+                            &selector,
+                            selector_type,
+                            string_selector,
+                            candidate,
+                            *relation,
+                        )?;
+                        self.terminate("branch", vec![matches], vec![body_block, no_match])?;
+                    }
+                    CaseItem::Range(lower, upper) => {
+                        let upper_check = self.new_block();
+                        let above_lower = self.select_compare(
+                            &selector,
+                            selector_type,
+                            string_selector,
+                            lower,
+                            Binary::GreaterEqual,
+                        )?;
+                        self.terminate("branch", vec![above_lower], vec![upper_check, no_match])?;
+                        self.select_block(upper_check);
+                        let below_upper = self.select_compare(
+                            &selector,
+                            selector_type,
+                            string_selector,
+                            upper,
+                            Binary::LessEqual,
+                        )?;
+                        self.terminate("branch", vec![below_upper], vec![body_block, no_match])?;
+                    }
+                }
                 if no_match != next_arm {
                     self.select_block(no_match);
                 }
@@ -2624,6 +3010,47 @@ impl Compiler {
         self.jump_if_open(done);
         self.select_block(done);
         Ok(())
+    }
+
+    fn select_compare(
+        &mut self,
+        selector: &Operand,
+        selector_type: u32,
+        string_selector: bool,
+        candidate: &Expr,
+        relation: Binary,
+    ) -> Result<Operand, SemanticError> {
+        let result = self.value(BOOLEAN);
+        if string_selector {
+            if !self.string_syntax(candidate) {
+                return self.fail("string SELECT CASE requires string case values");
+            }
+            let candidate = self.string_descriptor(candidate)?;
+            let operation = match relation {
+                Binary::Eq => "string_eq",
+                Binary::NotEqual => "string_ne",
+                Binary::Less => "string_lt",
+                Binary::LessEqual => "string_le",
+                Binary::Greater => "string_gt",
+                Binary::GreaterEqual => "string_ge",
+                _ => return self.fail("invalid SELECT CASE relation"),
+            };
+            self.emit_string_compare(operation, result, selector.clone(), candidate);
+        } else {
+            let (candidate, candidate_type) = self.expression(candidate)?;
+            let candidate = self.convert(candidate, candidate_type, selector_type)?;
+            let operation = match relation {
+                Binary::Eq => "eq",
+                Binary::NotEqual => "ne",
+                Binary::Less => "lt",
+                Binary::LessEqual => "le",
+                Binary::Greater => "gt",
+                Binary::GreaterEqual => "ge",
+                _ => return self.fail("invalid SELECT CASE relation"),
+            };
+            self.emit(operation, vec![result], vec![selector.clone(), candidate]);
+        }
+        Ok(Operand::Value(result))
     }
 
     fn for_statement(
@@ -4751,6 +5178,21 @@ impl Compiler {
             let result = self.convert(Operand::Value(byte), BYTE, INTEGER)?;
             return Ok(Some((result, INTEGER)));
         }
+        if intrinsic.lowering == Lowering::Point {
+            let (x, x_type) = self.expression(&arguments[0])?;
+            let (y, y_type) = self.expression(&arguments[1])?;
+            let result = self.value(INTEGER);
+            if matches!(x_type, SINGLE | DOUBLE) || matches!(y_type, SINGLE | DOUBLE) {
+                let x = self.stored_float_argument(x, x_type, SINGLE)?;
+                let y = self.stored_float_argument(y, y_type, SINGLE)?;
+                self.emit_runtime_call("B$PNR4", vec![result], vec![x, y]);
+            } else {
+                let x = self.convert(x, x_type, INTEGER)?;
+                let y = self.convert(y, y_type, INTEGER)?;
+                self.emit_runtime_call("B$PNI2", vec![result], vec![x, y]);
+            }
+            return Ok(Some((Operand::Value(result), INTEGER)));
+        }
         if intrinsic.lowering == Lowering::Length {
             let produced_string =
                 matches!(
@@ -4931,6 +5373,55 @@ impl Compiler {
             Number::Integer(operands.len() as i64),
         ));
         Ok(operands)
+    }
+
+    fn graphics_coordinate(
+        &mut self,
+        integer_callee: &str,
+        real_callee: &str,
+        x: &Expr,
+        y: &Expr,
+    ) -> Result<(), SemanticError> {
+        let (x, x_type) = self.expression(x)?;
+        let (y, y_type) = self.expression(y)?;
+        if matches!(x_type, SINGLE | DOUBLE) || matches!(y_type, SINGLE | DOUBLE) {
+            let x = self.stored_float_argument(x, x_type, SINGLE)?;
+            let y = self.stored_float_argument(y, y_type, SINGLE)?;
+            self.emit_runtime_call(real_callee, Vec::new(), vec![x, y]);
+        } else {
+            let x = self.convert(x, x_type, INTEGER)?;
+            let y = self.convert(y, y_type, INTEGER)?;
+            self.emit_runtime_call(integer_callee, Vec::new(), vec![x, y]);
+        }
+        Ok(())
+    }
+
+    fn stored_float_argument(
+        &mut self,
+        value: Operand,
+        source_type: u32,
+        destination_type: u32,
+    ) -> Result<Operand, SemanticError> {
+        let value = self.convert(value, source_type, destination_type)?;
+        let place = self.temporary(destination_type)?;
+        self.emit("store", Vec::new(), vec![Operand::Place(place), value]);
+        Ok(Operand::Place(place))
+    }
+
+    fn graphics_array(&mut self, expression: &Expr) -> Result<Vec<Operand>, SemanticError> {
+        let name = match expression {
+            Expr::Name(name, _) => name,
+            Expr::Apply { name, arguments, .. } if arguments.is_empty() => name,
+            _ => return self.fail("graphics GET/PUT requires a bare array"),
+        };
+        let variable = self.variable(name)?;
+        let element = variable.element.ok_or_else(|| SemanticError {
+            message: format!("graphics GET/PUT target {name} is not an array"),
+        })?;
+        let descriptor = self.descriptor_pointer(&variable)?;
+        let data_type = self.far_pointer_type(element);
+        let data = self.descriptor_field(descriptor, 0, data_type);
+        Ok(vec![Operand::Value(data), Operand::Value(descriptor)])
     }
 
     fn binary_memory_statement(
@@ -5295,6 +5786,9 @@ impl Compiler {
         }
         let (mut left_operand, mut left_type) = self.expression(left)?;
         let (mut right_operand, mut right_type) = self.expression(right)?;
+        let narrow_divmod = matches!(op, Binary::Modulo | Binary::IntegerDivide)
+            && !matches!(left_type, SINGLE | DOUBLE | LONG)
+            && !matches!(right_type, SINGLE | DOUBLE | LONG);
         let integral = matches!(
             op,
             Binary::And
@@ -5309,7 +5803,8 @@ impl Compiler {
             // QB rounds floating operands before every integral/logical
             // operator. Any floating operand selects LONG evaluation; BYTE is
             // promoted to INTEGER. Keep both conversions explicit in HIR.
-            let target = if matches!(left_type, SINGLE | DOUBLE)
+            let target = if matches!(op, Binary::Modulo | Binary::IntegerDivide)
+                || matches!(left_type, SINGLE | DOUBLE)
                 || matches!(right_type, SINGLE | DOUBLE)
                 || left_type == LONG
                 || right_type == LONG
@@ -5344,8 +5839,14 @@ impl Compiler {
             self.emit("not", vec![result], vec![Operand::Value(combined)]);
             return Ok((Operand::Value(result), common));
         }
-        let result_type = if comparison { BOOLEAN } else { common };
-        let result = self.value(result_type);
+        let result_type = if comparison {
+            BOOLEAN
+        } else if narrow_divmod {
+            INTEGER
+        } else {
+            common
+        };
+        let result = self.value(if narrow_divmod { common } else { result_type });
         let operation = if matches!(common, SINGLE | DOUBLE) {
             match op {
                 Binary::Add => "fadd",
@@ -5358,7 +5859,13 @@ impl Compiler {
             binary_name(op)
         };
         self.emit(operation, vec![result], vec![left_operand, right_operand]);
-        Ok((Operand::Value(result), result_type))
+        if narrow_divmod {
+            let narrowed = self.value(INTEGER);
+            self.emit("convert", vec![narrowed], vec![Operand::Value(result)]);
+            Ok((Operand::Value(narrowed), result_type))
+        } else {
+            Ok((Operand::Value(result), result_type))
+        }
     }
 
     fn string_syntax(&self, expression: &Expr) -> bool {
@@ -5376,6 +5883,7 @@ impl Compiler {
             {
                 true
             }
+            Expr::Name(name, _) if suffix(name) == Some(TypeName::String) => true,
             Expr::Name(name, _) => self.bare_function_type(name) == Some(STRING),
             Expr::Apply { name, .. }
                 if intrinsics::find(canonical(name), self.dialect)
@@ -6215,6 +6723,41 @@ impl Compiler {
         Ok(())
     }
 
+    fn cleanup_local_strings(&mut self) -> Result<(), SemanticError> {
+        let result = self.result_place.map(|(place, _)| place);
+        let descriptors: Vec<u32> = self
+            .places
+            .iter()
+            .filter(|place| {
+                place.storage == "local" && place.type_id == STRING && Some(place.id) != result
+            })
+            .map(|place| place.id)
+            .collect();
+        if descriptors.is_empty() {
+            return Ok(());
+        }
+        let returns: Vec<usize> = self
+            .blocks
+            .iter()
+            .enumerate()
+            .filter_map(|(index, block)| {
+                block
+                    .terminator
+                    .as_ref()
+                    .is_some_and(|one| one.kind == "return")
+                    .then_some(index)
+            })
+            .collect();
+        for block in returns {
+            self.current_block = block;
+            for place in &descriptors {
+                let descriptor = self.near_string_address(Operand::Place(*place));
+                self.emit_runtime_call("B$STDL", Vec::new(), vec![descriptor]);
+            }
+        }
+        Ok(())
+    }
+
     fn width(&self, type_id: u32) -> usize {
         self.types
             .iter()
@@ -6490,8 +7033,13 @@ impl Compiler {
     }
 
     fn fail<T>(&self, message: impl Into<String>) -> Result<T, SemanticError> {
+        let message = message.into();
         Err(SemanticError {
-            message: message.into(),
+            message: if self.current_source_line == 0 {
+                message
+            } else {
+                format!("line {}: {message}", self.current_source_line)
+            },
         })
     }
 }

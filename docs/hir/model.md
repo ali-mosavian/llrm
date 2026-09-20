@@ -154,6 +154,11 @@ The QB frontend carries its name conservatively through MIR and expands its
 physical x87 sequence only after stack allocation; shared MIR and backend
 vocabulary remain unchanged.
 
+On the 386 target, QB `INTEGER` division and remainder use 32-bit HIR
+operands, then narrow the source result to 16 bits. This keeps both dividends
+explicit through MIR and avoids introducing an x86 implicit-register rule
+into HIR. A `LONG` or rounded floating operand keeps the 32-bit result.
+
 All other BASIC facilities, including strings, files, graphics, events, and
 most library functions, are represented as calls with audited runtime
 contracts when possible. An unaudited call is conservative about memory and
