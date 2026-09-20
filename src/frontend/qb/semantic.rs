@@ -149,10 +149,15 @@ struct Udt {
     fields: BTreeMap<String, Field>,
 }
 
-struct Terminator {
-    kind: &'static str,
-    operands: Vec<Operand>,
-    targets: Vec<u32>,
+enum Terminator {
+    Jump(u32),
+    Branch {
+        condition: Operand,
+        then_block: u32,
+        else_block: u32,
+    },
+    Return(Option<Operand>),
+    Unreachable,
 }
 
 struct Block {
@@ -319,7 +324,7 @@ pub fn compile_with_options(
     mbf: bool,
     alternate_math: bool,
 ) -> Result<String, SemanticError> {
-    Ok(build_with_options(
+    let compiler = build_with_options(
         module,
         module_name,
         dialect,
@@ -329,8 +334,14 @@ pub fn compile_with_options(
         checked_arrays,
         mbf,
         alternate_math,
-    )?
-    .json())
+    )?;
+    let legacy = compiler.json();
+    let program = verified_hir(&compiler)?;
+    let encoded = super::hir_json::write(&program).map_err(|error| SemanticError {
+        message: error.to_string(),
+    })?;
+    debug_assert_eq!(encoded, legacy, "typed HIR changed legacy JSON output");
+    Ok(encoded)
 }
 
 /// Resolves a parsed QB module into owned, typed HIR.
@@ -349,7 +360,7 @@ pub fn compile_hir_with_options(
     mbf: bool,
     alternate_math: bool,
 ) -> Result<hir::Program, SemanticError> {
-    let program = build_with_options(
+    let compiler = build_with_options(
         module,
         module_name,
         dialect,
@@ -359,8 +370,12 @@ pub fn compile_hir_with_options(
         checked_arrays,
         mbf,
         alternate_math,
-    )?
-    .hir()?;
+    )?;
+    verified_hir(&compiler)
+}
+
+fn verified_hir(compiler: &Compiler) -> Result<hir::Program, SemanticError> {
+    let program = compiler.hir()?;
     if let Err(diagnostics) = program.verify() {
         return Err(SemanticError {
             message: diagnostics
@@ -1105,7 +1120,19 @@ impl Compiler {
             for block in &self.blocks {
                 if reachable.contains(&block.id) {
                     if let Some(terminator) = &block.terminator {
-                        reachable.extend(terminator.targets.iter().copied());
+                        match terminator {
+                            Terminator::Jump(target) => {
+                                reachable.insert(*target);
+                            }
+                            Terminator::Branch {
+                                then_block,
+                                else_block,
+                                ..
+                            } => {
+                                reachable.extend([*then_block, *else_block]);
+                            }
+                            Terminator::Return(_) | Terminator::Unreachable => {}
+                        }
                     }
                 }
             }
@@ -2186,7 +2213,7 @@ impl Compiler {
                     let target = *self.labels.get(name).ok_or_else(|| SemanticError {
                         message: format!("unknown label {name}"),
                     })?;
-                    self.terminate("jump", Vec::new(), vec![target])?;
+                    self.terminate(Terminator::Jump(target))?;
                     let continuation = self.new_block();
                     self.select_block(continuation);
                 }
@@ -2197,7 +2224,7 @@ impl Compiler {
                         let target = *self.labels.get(name).ok_or_else(|| SemanticError {
                             message: format!("unknown label or zero-argument procedure {name}"),
                         })?;
-                        self.terminate("jump", Vec::new(), vec![target])?;
+                        self.terminate(Terminator::Jump(target))?;
                         let continuation = self.new_block();
                         self.select_block(continuation);
                     }
@@ -2651,7 +2678,7 @@ impl Compiler {
                             );
                         }
                     }
-                    self.terminate("unreachable", Vec::new(), Vec::new())?;
+                    self.terminate(Terminator::Unreachable)?;
                     let continuation = self.new_block();
                     self.select_block(continuation);
                 }
@@ -2671,7 +2698,7 @@ impl Compiler {
                         let (number, type_id) = self.expression(&arguments[0])?;
                         let number = self.convert(number, type_id, INTEGER)?;
                         self.emit_runtime_call("B$SERR", Vec::new(), vec![number]);
-                        self.terminate("unreachable", Vec::new(), Vec::new())?;
+                        self.terminate(Terminator::Unreachable)?;
                         let continuation = self.new_block();
                         self.select_block(continuation);
                     }
@@ -3022,7 +3049,7 @@ impl Compiler {
                         // B$CEND does not return. Keep following labels as
                         // detached side entries (notably ON ERROR handlers)
                         // instead of inventing a fallthrough from END.
-                        self.terminate("unreachable", Vec::new(), Vec::new())?;
+                        self.terminate(Terminator::Unreachable)?;
                         let continuation = self.new_block();
                         self.select_block(continuation);
                     }
@@ -3035,9 +3062,9 @@ impl Compiler {
                 Statement::Exit(ExitTarget::Sub | ExitTarget::Function, _) => {
                     if self.result_place.is_some() {
                         let target = self.return_block();
-                        self.terminate("jump", Vec::new(), vec![target])?;
+                        self.terminate(Terminator::Jump(target))?;
                     } else {
-                        self.terminate("return", Vec::new(), Vec::new())?;
+                        self.terminate(Terminator::Return(None))?;
                     }
                     let continuation = self.new_block();
                     self.select_block(continuation);
@@ -3051,7 +3078,7 @@ impl Compiler {
                         .ok_or_else(|| SemanticError {
                             message: format!("EXIT {target:?} appears outside its loop"),
                         })?;
-                    self.terminate("jump", Vec::new(), vec![destination])?;
+                    self.terminate(Terminator::Jump(destination))?;
                     let continuation = self.new_block();
                     self.select_block(continuation);
                 }
@@ -3177,7 +3204,11 @@ impl Compiler {
                             candidate,
                             Binary::Eq,
                         )?;
-                        self.terminate("branch", vec![matches], vec![body_block, no_match])?;
+                        self.terminate(Terminator::Branch {
+                            condition: matches,
+                            then_block: body_block,
+                            else_block: no_match,
+                        })?;
                     }
                     CaseItem::Relation(relation, candidate) => {
                         let matches = self.select_compare(
@@ -3187,7 +3218,11 @@ impl Compiler {
                             candidate,
                             *relation,
                         )?;
-                        self.terminate("branch", vec![matches], vec![body_block, no_match])?;
+                        self.terminate(Terminator::Branch {
+                            condition: matches,
+                            then_block: body_block,
+                            else_block: no_match,
+                        })?;
                     }
                     CaseItem::Range(lower, upper) => {
                         let upper_check = self.new_block();
@@ -3198,7 +3233,11 @@ impl Compiler {
                             lower,
                             Binary::GreaterEqual,
                         )?;
-                        self.terminate("branch", vec![above_lower], vec![upper_check, no_match])?;
+                        self.terminate(Terminator::Branch {
+                            condition: above_lower,
+                            then_block: upper_check,
+                            else_block: no_match,
+                        })?;
                         self.select_block(upper_check);
                         let below_upper = self.select_compare(
                             &selector,
@@ -3207,7 +3246,11 @@ impl Compiler {
                             upper,
                             Binary::LessEqual,
                         )?;
-                        self.terminate("branch", vec![below_upper], vec![body_block, no_match])?;
+                        self.terminate(Terminator::Branch {
+                            condition: below_upper,
+                            then_block: body_block,
+                            else_block: no_match,
+                        })?;
                     }
                 }
                 if no_match != next_arm {
@@ -3310,7 +3353,7 @@ impl Compiler {
         let negative_test = self.new_block();
         let body_block = self.new_block();
         let done_block = self.new_block();
-        self.terminate("jump", Vec::new(), vec![test_block])?;
+        self.terminate(Terminator::Jump(test_block))?;
         self.select_block(test_block);
         let step_value = self.value(counter_type);
         self.emit(
@@ -3329,11 +3372,11 @@ impl Compiler {
             vec![direction],
             vec![Operand::Value(step_value), zero],
         );
-        self.terminate(
-            "branch",
-            vec![Operand::Value(direction)],
-            vec![positive_test, negative_test],
-        )?;
+        self.terminate(Terminator::Branch {
+            condition: Operand::Value(direction),
+            then_block: positive_test,
+            else_block: negative_test,
+        })?;
 
         self.select_block(positive_test);
         let counter_value = self.load_destination(counter)?;
@@ -3349,11 +3392,11 @@ impl Compiler {
             vec![within],
             vec![counter_value, Operand::Value(end_value)],
         );
-        self.terminate(
-            "branch",
-            vec![Operand::Value(within)],
-            vec![body_block, done_block],
-        )?;
+        self.terminate(Terminator::Branch {
+            condition: Operand::Value(within),
+            then_block: body_block,
+            else_block: done_block,
+        })?;
 
         self.select_block(negative_test);
         let counter_value = self.load_destination(counter)?;
@@ -3369,11 +3412,11 @@ impl Compiler {
             vec![within],
             vec![counter_value, Operand::Value(end_value)],
         );
-        self.terminate(
-            "branch",
-            vec![Operand::Value(within)],
-            vec![body_block, done_block],
-        )?;
+        self.terminate(Terminator::Branch {
+            condition: Operand::Value(within),
+            then_block: body_block,
+            else_block: done_block,
+        })?;
 
         self.select_block(body_block);
         self.exits.push((ExitTarget::For, done_block));
@@ -3402,7 +3445,7 @@ impl Compiler {
                 Vec::new(),
                 vec![destination, Operand::Value(advanced)],
             );
-            self.terminate("jump", Vec::new(), vec![test_block])?;
+            self.terminate(Terminator::Jump(test_block))?;
         }
         self.select_block(done_block);
         Ok(())
@@ -3416,7 +3459,7 @@ impl Compiler {
         let test_block = self.new_block();
         let body_block = self.new_block();
         let done_block = self.new_block();
-        self.terminate("jump", Vec::new(), vec![test_block])?;
+        self.terminate(Terminator::Jump(test_block))?;
         self.select_block(test_block);
         self.condition(condition, body_block, done_block, true)?;
         self.select_block(body_block);
@@ -3436,11 +3479,11 @@ impl Compiler {
         let body_block = self.new_block();
         let done_block = self.new_block();
         if let Some((while_true, condition)) = pre {
-            self.terminate("jump", Vec::new(), vec![test_block])?;
+            self.terminate(Terminator::Jump(test_block))?;
             self.select_block(test_block);
             self.condition(condition, body_block, done_block, *while_true)?;
         } else {
-            self.terminate("jump", Vec::new(), vec![body_block])?;
+            self.terminate(Terminator::Jump(body_block))?;
         }
         self.select_block(body_block);
         self.exits.push((ExitTarget::Do, done_block));
@@ -3448,13 +3491,13 @@ impl Compiler {
         self.exits.pop();
         if self.block_open() {
             if let Some((while_true, condition)) = post {
-                self.terminate("jump", Vec::new(), vec![test_block])?;
+                self.terminate(Terminator::Jump(test_block))?;
                 self.select_block(test_block);
                 self.condition(condition, body_block, done_block, *while_true)?;
             } else if pre.is_some() {
-                self.terminate("jump", Vec::new(), vec![test_block])?;
+                self.terminate(Terminator::Jump(test_block))?;
             } else {
-                self.terminate("jump", Vec::new(), vec![body_block])?;
+                self.terminate(Terminator::Jump(body_block))?;
             }
         }
         self.select_block(done_block);
@@ -3486,12 +3529,16 @@ impl Compiler {
         // above.  It must not also exchange the final branch: doing both made
         // `(NOT Impact) AND OnScreen` false precisely when both terms were
         // true and skipped Gorillas' whole banana-animation loop.
-        let targets = if while_true {
-            vec![true_target, false_target]
+        let (then_block, else_block) = if while_true {
+            (true_target, false_target)
         } else {
-            vec![false_target, true_target]
+            (false_target, true_target)
         };
-        self.terminate("branch", vec![condition], targets)
+        self.terminate(Terminator::Branch {
+            condition,
+            then_block,
+            else_block,
+        })
     }
 
     fn truth(&mut self, expression: &Expr) -> Result<Operand, SemanticError> {
@@ -6950,30 +6997,17 @@ impl Compiler {
         self.blocks[self.current_block].terminator.is_none()
     }
 
-    fn terminate(
-        &mut self,
-        kind: &'static str,
-        operands: Vec<Operand>,
-        targets: Vec<u32>,
-    ) -> Result<(), SemanticError> {
+    fn terminate(&mut self, terminator: Terminator) -> Result<(), SemanticError> {
         if !self.block_open() {
             return self.fail("statement follows a terminating control transfer");
         }
-        self.blocks[self.current_block].terminator = Some(Terminator {
-            kind,
-            operands,
-            targets,
-        });
+        self.blocks[self.current_block].terminator = Some(terminator);
         Ok(())
     }
 
     fn jump_if_open(&mut self, target: u32) {
         if self.block_open() {
-            self.blocks[self.current_block].terminator = Some(Terminator {
-                kind: "jump",
-                operands: Vec::new(),
-                targets: vec![target],
-            });
+            self.blocks[self.current_block].terminator = Some(Terminator::Jump(target));
         }
     }
 
@@ -6992,11 +7026,7 @@ impl Compiler {
             let target = self.return_block();
             for block in &mut self.blocks {
                 if block.id != target && block.terminator.is_none() {
-                    block.terminator = Some(Terminator {
-                        kind: "jump",
-                        operands: Vec::new(),
-                        targets: vec![target],
-                    });
+                    block.terminator = Some(Terminator::Jump(target));
                 }
             }
             self.select_block(target);
@@ -7017,19 +7047,12 @@ impl Compiler {
                 self.emit(hir::Opcode::Load, vec![result], vec![Operand::Place(place)]);
                 result
             };
-            self.blocks[self.current_block].terminator = Some(Terminator {
-                kind: "return",
-                operands: vec![Operand::Value(result)],
-                targets: Vec::new(),
-            });
+            self.blocks[self.current_block].terminator =
+                Some(Terminator::Return(Some(Operand::Value(result))));
         }
         for block in &mut self.blocks {
             if block.terminator.is_none() {
-                block.terminator = Some(Terminator {
-                    kind: "return",
-                    operands: Vec::new(),
-                    targets: Vec::new(),
-                });
+                block.terminator = Some(Terminator::Return(None));
             }
         }
     }
@@ -7071,7 +7094,7 @@ impl Compiler {
                 block
                     .terminator
                     .as_ref()
-                    .is_some_and(|one| one.kind == "return")
+                    .is_some_and(|one| matches!(one, Terminator::Return(_)))
                     .then_some(index)
             })
             .collect();
@@ -7112,7 +7135,7 @@ impl Compiler {
                 block
                     .terminator
                     .as_ref()
-                    .is_some_and(|one| one.kind == "return")
+                    .is_some_and(|one| matches!(one, Terminator::Return(_)))
                     .then_some(index)
             })
             .collect();
@@ -7427,16 +7450,32 @@ impl Compiler {
                 }
                 let terminator = block.terminator.as_ref().expect("compiler finishes blocks");
                 out.push_str("],\"terminator\":{\"cases\":[],\"kind\":");
-                string(&mut out, terminator.kind);
-                out.push_str(",\"operands\":[");
-                for (index, operand) in terminator.operands.iter().enumerate() {
-                    if index != 0 {
-                        out.push(',');
+                match terminator {
+                    Terminator::Jump(target) => {
+                        out.push_str("\"jump\",\"operands\":[],\"targets\":[");
+                        write!(out, "{target}").unwrap();
                     }
-                    operand_json(&mut out, operand);
+                    Terminator::Branch {
+                        condition,
+                        then_block,
+                        else_block,
+                    } => {
+                        out.push_str("\"branch\",\"operands\":[");
+                        operand_json(&mut out, condition);
+                        out.push_str("],\"targets\":[");
+                        write!(out, "{then_block},{else_block}").unwrap();
+                    }
+                    Terminator::Return(value) => {
+                        out.push_str("\"return\",\"operands\":[");
+                        if let Some(value) = value {
+                            operand_json(&mut out, value);
+                        }
+                        out.push_str("],\"targets\":[");
+                    }
+                    Terminator::Unreachable => {
+                        out.push_str("\"unreachable\",\"operands\":[],\"targets\":[");
+                    }
                 }
-                out.push_str("],\"targets\":[");
-                numbers(&mut out, &terminator.targets);
                 out.push_str("]}}");
             }
             write!(
@@ -7753,23 +7792,21 @@ fn hir_operand(operand: &Operand) -> Result<hir::Operand, SemanticError> {
 }
 
 fn hir_terminator(terminator: &Terminator) -> Result<hir::Terminator, SemanticError> {
-    match (
-        terminator.kind,
-        terminator.operands.as_slice(),
-        terminator.targets.as_slice(),
-    ) {
-        ("jump", [], [target]) => Ok(hir::Terminator::Jump(hir::BlockId::new(*target))),
-        ("branch", [condition], [then_block, else_block]) => Ok(hir::Terminator::Branch {
+    match terminator {
+        Terminator::Jump(target) => Ok(hir::Terminator::Jump(hir::BlockId::new(*target))),
+        Terminator::Branch {
+            condition,
+            then_block,
+            else_block,
+        } => Ok(hir::Terminator::Branch {
             condition: hir_operand(condition)?,
             then_block: hir::BlockId::new(*then_block),
             else_block: hir::BlockId::new(*else_block),
         }),
-        ("return", [], []) => Ok(hir::Terminator::Return(None)),
-        ("return", [value], []) => Ok(hir::Terminator::Return(Some(hir_operand(value)?))),
-        ("unreachable", [], []) => Ok(hir::Terminator::Unreachable),
-        (kind, _, _) => Err(SemanticError {
-            message: format!("invalid {kind} terminator shape"),
-        }),
+        Terminator::Return(value) => Ok(hir::Terminator::Return(
+            value.as_ref().map(hir_operand).transpose()?,
+        )),
+        Terminator::Unreachable => Ok(hir::Terminator::Unreachable),
     }
 }
 

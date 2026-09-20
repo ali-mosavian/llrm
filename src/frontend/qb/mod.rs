@@ -8,6 +8,7 @@ pub mod dialect;
 pub mod dialect_extensions;
 pub mod error;
 pub mod generated_parser;
+mod hir_json;
 pub mod intrinsics;
 pub mod semantic;
 pub mod source;
