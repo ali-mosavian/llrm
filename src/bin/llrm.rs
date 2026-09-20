@@ -38,6 +38,7 @@ enum InputKind {
 enum OutputKind {
     Hir,
     Ir,
+    Machine,
 }
 
 impl Invocation {
@@ -58,6 +59,7 @@ impl Invocation {
                     let kind = match required(&mut arguments, "--emit")?.as_str() {
                         "qhir" => OutputKind::Hir,
                         "qir" => OutputKind::Ir,
+                        "qmir" => OutputKind::Machine,
                         value => return Err(format!("unknown output kind {value:?}")),
                     };
                     if output_kind.replace(kind).is_some() {
@@ -159,12 +161,22 @@ impl Invocation {
         };
         let text = match self.output_kind {
             OutputKind::Hir => llrm::hir::write_text(&program),
-            OutputKind::Ir => match driver::lower_qb_to_ir(&program) {
-                Ok(module) => llrm::ir::write_text(&module),
-                Err(error) => {
-                    return failure(format!("{}: {error}", self.input.display()));
+            OutputKind::Ir | OutputKind::Machine => {
+                let module = match driver::lower_qb_to_ir(&program) {
+                    Ok(module) => module,
+                    Err(error) => return failure(format!("{}: {error}", self.input.display())),
+                };
+                match self.output_kind {
+                    OutputKind::Ir => llrm::ir::write_text(&module),
+                    OutputKind::Machine => match driver::lower_ir_to_machine(&module) {
+                        Ok(machine) => llrm::codegen::machine::write_text(&machine),
+                        Err(error) => {
+                            return failure(format!("{}: {error}", self.input.display()));
+                        }
+                    },
+                    OutputKind::Hir => unreachable!("HIR output does not lower through IR"),
                 }
-            },
+            }
         };
         write_output(self.output.as_deref(), text.as_bytes())
     }
@@ -229,11 +241,14 @@ fn failure(message: String) -> ExitCode {
 }
 
 fn usage() -> &'static str {
-    "usage: llrm [-x qb|wcc|omf] [--emit qhir|qir] [-o FILE] [QB OPTIONS] INPUT"
+    "usage: llrm [-x qb|wcc|omf] [--emit qhir|qir|qmir] [-o FILE] [QB OPTIONS] INPUT"
 }
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     use super::{InputKind, Invocation, OutputKind};
     use llrm::driver::{self, QbOptions};
 
@@ -258,5 +273,41 @@ mod tests {
 
         assert!(text.starts_with("qir 1\nmodule \"program\"\n"));
         assert!(llrm::ir::parse_text(&text).is_ok());
+    }
+
+    #[test]
+    fn lowers_minimal_qb_source_to_machine_ir_text() {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("the system clock must be after the Unix epoch")
+            .as_nanos();
+        let directory =
+            std::env::temp_dir().join(format!("llrm-qmir-cli-{}-{timestamp}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let source = directory.join("program.bas");
+        let output = directory.join("program.qmir");
+        fs::write(&source, "").unwrap();
+
+        let invocation = Invocation::parse(
+            [
+                "--emit".to_owned(),
+                "qmir".to_owned(),
+                "-o".to_owned(),
+                output.display().to_string(),
+                source.display().to_string(),
+            ]
+            .into_iter(),
+        )
+        .unwrap();
+        assert_eq!(invocation.output_kind, OutputKind::Machine);
+        assert_eq!(invocation.run(), std::process::ExitCode::SUCCESS);
+
+        let text = fs::read_to_string(&output).unwrap();
+        let parsed = llrm::codegen::machine::parse_text(&text)
+            .expect("the qmir writer must emit parseable text");
+
+        assert!(text.starts_with("qmir 1\n"));
+        parsed.verify().expect("parsed qmir must verify");
+        fs::remove_dir_all(directory).unwrap();
     }
 }
