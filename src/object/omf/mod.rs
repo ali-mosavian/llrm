@@ -6,6 +6,7 @@ pub mod declarations;
 pub mod file;
 pub mod fixups;
 pub mod lines;
+pub mod module;
 pub mod read;
 pub mod record;
 pub mod segments;
