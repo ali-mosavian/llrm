@@ -82,6 +82,7 @@ impl Invocation {
 #[derive(Clone, Copy)]
 enum PassName {
     ConstantFold,
+    DeadCodeElimination,
     SimplifyBranches,
 }
 
@@ -93,6 +94,7 @@ fn parse_passes(value: &str) -> Result<Vec<PassName>, String> {
         .split(',')
         .map(|name| match name {
             "constant-fold" => Ok(PassName::ConstantFold),
+            "dead-code-elimination" => Ok(PassName::DeadCodeElimination),
             "simplify-branches" => Ok(PassName::SimplifyBranches),
             _ => Err(format!("unknown pass `{name}`")),
         })
@@ -137,6 +139,9 @@ fn run_pipeline(
             PassName::ConstantFold => manager.add_pass(
                 llrm::transforms::ConstantFold::new(&module).map_err(PipelineError::Fold)?,
             ),
+            PassName::DeadCodeElimination => {
+                manager.add_pass(llrm::transforms::DeadCodeElimination::new())
+            }
             PassName::SimplifyBranches => manager.add_pass(
                 llrm::transforms::SimplifyBranches::new(&module)
                     .map_err(PipelineError::BranchSimplify)?,
@@ -240,7 +245,11 @@ mod tests {
 
         let output = run_pipeline(
             source,
-            &[PassName::ConstantFold, PassName::SimplifyBranches],
+            &[
+                PassName::ConstantFold,
+                PassName::SimplifyBranches,
+                PassName::DeadCodeElimination,
+            ],
             true,
         )
         .unwrap();
