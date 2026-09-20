@@ -216,10 +216,10 @@ mod tests {
     #[test]
     fn verifies_and_canonicalizes_qir() {
         let source = concat!(
-            "qir 1\n",
+            "qir 2\n",
             "module \"m\"\n",
             "type 0 void\n",
-            "function 0 \"main\" linkage internal result 0 parameters [] variadic false cc basic attributes []\n",
+            "function 0 \"main\" linkage internal result 0 parameters [] variadic false cc far_pascal attributes []\n",
             "block 0\n",
             "term return none\n",
             "endblock\n",
@@ -233,10 +233,10 @@ mod tests {
     #[test]
     fn runs_the_constant_fold_pipeline() {
         let source = concat!(
-            "qir 1\n",
+            "qir 2\n",
             "module \"m\"\n",
             "type 0 integer 8\n",
-            "function 0 \"main\" linkage internal result 0 parameters [] variadic false cc basic attributes []\n",
+            "function 0 \"main\" linkage internal result 0 parameters [] variadic false cc far_pascal attributes []\n",
             "block 0\n",
             "inst 0 results [0:0] binary add const type 0 integer 1 const type 0 integer 2\n",
             "term return some value 0\n",
@@ -254,11 +254,11 @@ mod tests {
     #[test]
     fn composes_constant_folding_with_branch_simplification() {
         let source = concat!(
-            "qir 1\n",
+            "qir 2\n",
             "module \"m\"\n",
             "type 0 integer 8\n",
             "type 1 integer 1\n",
-            "function 0 \"main\" linkage internal result 0 parameters [] variadic false cc basic attributes []\n",
+            "function 0 \"main\" linkage internal result 0 parameters [] variadic false cc far_pascal attributes []\n",
             "block 0\n",
             "inst 0 results [0:1] binary add const type 1 integer 0 const type 1 integer 1\n",
             "term branch value 0 1 2\n",
@@ -292,10 +292,10 @@ mod tests {
     #[test]
     fn runs_common_subexpression_elimination() {
         let source = concat!(
-            "qir 1\n",
+            "qir 2\n",
             "module \"m\"\n",
             "type 0 integer 16\n",
-            "function 0 \"main\" linkage internal result 0 parameters [0,0] variadic false cc basic attributes []\n",
+            "function 0 \"main\" linkage internal result 0 parameters [0,0] variadic false cc far_pascal attributes []\n",
             "param 0 0\n",
             "param 1 0\n",
             "block 0\n",
@@ -322,10 +322,10 @@ mod tests {
     #[test]
     fn removes_unreachable_blocks_deterministically() {
         let source = concat!(
-            "qir 1\n",
+            "qir 2\n",
             "module \"m\"\n",
             "type 0 void\n",
-            "function 0 \"main\" linkage internal result 0 parameters [] variadic false cc basic attributes []\n",
+            "function 0 \"main\" linkage internal result 0 parameters [] variadic false cc far_pascal attributes []\n",
             "block 0\n",
             "term jump 1\n",
             "endblock\n",
@@ -351,13 +351,13 @@ mod tests {
     #[test]
     fn runs_dead_store_elimination_on_direct_global_stores() {
         let source = concat!(
-            "qir 1\n",
+            "qir 2\n",
             "module \"m\"\n",
             "type 0 void\n",
             "type 1 integer 8\n",
             "type 2 pointer neardata\n",
             "global 0 \"g\" 1 internal false some integer 0\n",
-            "function 0 \"main\" linkage internal result 0 parameters [] variadic false cc basic attributes []\n",
+            "function 0 \"main\" linkage internal result 0 parameters [] variadic false cc far_pascal attributes []\n",
             "block 0\n",
             "inst 0 results [] store 1 false const type 2 globaladdr 0 0 const type 1 integer 1\n",
             "inst 1 results [] store 1 false const type 2 globaladdr 0 0 const type 1 integer 2\n",

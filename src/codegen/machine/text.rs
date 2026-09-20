@@ -17,7 +17,7 @@ use super::{
 };
 
 /// Version of the `.qmir` textual format.
-pub const FORMAT_VERSION: u32 = 3;
+pub const FORMAT_VERSION: u32 = 4;
 
 /// A syntax or value error in `.qmir` text.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -144,7 +144,8 @@ pub fn write_text(module: &MachineModule) -> String {
 pub fn parse_text(source: &str) -> Result<MachineModule, TextError> {
     let mut parser = Parser::new(source);
     let header = parser.next()?;
-    expect_exact(&header, &["qmir", "3"])?;
+    let version = FORMAT_VERSION.to_string();
+    expect_exact(&header, &["qmir", &version])?;
 
     let mut data_objects = Vec::new();
     let mut functions = Vec::new();
@@ -268,8 +269,7 @@ fn linkage_name(linkage: MachineLinkage) -> &'static str {
 fn calling_convention_name(calling_convention: MachineCallingConvention) -> &'static str {
     match calling_convention {
         MachineCallingConvention::C => "c",
-        MachineCallingConvention::Basic => "basic",
-        MachineCallingConvention::Runtime => "runtime",
+        MachineCallingConvention::FarPascal => "far_pascal",
     }
 }
 
@@ -654,8 +654,7 @@ fn parse_linkage(token: Token<'_>) -> Result<MachineLinkage, TextError> {
 fn parse_calling_convention(token: Token<'_>) -> Result<MachineCallingConvention, TextError> {
     match token.value {
         "c" => Ok(MachineCallingConvention::C),
-        "basic" => Ok(MachineCallingConvention::Basic),
-        "runtime" => Ok(MachineCallingConvention::Runtime),
+        "far_pascal" => Ok(MachineCallingConvention::FarPascal),
         _ => Err(unexpected(&token, "a calling convention")),
     }
 }
@@ -981,7 +980,7 @@ mod tests {
                         },
                     ],
                     variadic: true,
-                    calling_convention: MachineCallingConvention::C,
+                    calling_convention: MachineCallingConvention::FarPascal,
                 },
                 entry: MachineBlockId::new(5),
                 virtual_registers: vec![
@@ -1117,6 +1116,9 @@ mod tests {
         };
 
         let text = write_text(&module);
+        assert!(text.contains(" far_pascal "));
+        assert!(!text.contains(" basic "));
+        assert!(!text.contains(" runtime "));
         let reparsed = parse_text(&text).expect("printer output must parse");
         assert_eq!(reparsed, module);
         assert_eq!(write_text(&reparsed), text);
@@ -1125,7 +1127,7 @@ mod tests {
     #[test]
     fn reports_the_malformed_operand_location() {
         let error =
-            parse_text("qmir 3\nfunction 0 0 66 internal c - 0 0\nblock 0 0\ninst 0 0 0 1\noperand use - - wat\n")
+            parse_text("qmir 4\nfunction 0 0 66 internal c - 0 0\nblock 0 0\ninst 0 0 0 1\noperand use - - wat\n")
                 .expect_err("unknown operand kind must be rejected");
         assert_eq!(error.line, 5);
         assert_eq!(error.column, 17);
@@ -1133,9 +1135,16 @@ mod tests {
     }
 
     #[test]
-    fn accepts_only_the_version_three_schema() {
-        let error = parse_text("qmir 2\n").expect_err("qmir version two is not accepted");
+    fn accepts_only_the_version_four_schema() {
+        let error = parse_text("qmir 3\n").expect_err("qmir version three is not accepted");
         assert_eq!(error.line, 1);
         assert!(error.message.contains("invalid qmir format header"));
+
+        for obsolete in ["basic", "runtime"] {
+            let source = format!("qmir 4\nfunction 0 0 66 internal {obsolete} - 0 0\n");
+            let error = parse_text(&source)
+                .expect_err("source-language ABI labels must not enter Machine IR");
+            assert!(error.message.contains("calling convention"));
+        }
     }
 }

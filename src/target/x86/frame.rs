@@ -211,7 +211,7 @@ pub fn plan_basic_frame(
     runtime: BasicRuntime,
     temporary_strings: u32,
 ) -> Result<BasicFramePlan, BasicFramePlanError> {
-    if function.signature.calling_convention != MachineCallingConvention::Basic {
+    if function.signature.calling_convention != MachineCallingConvention::FarPascal {
         return Err(BasicFramePlanError::UnsupportedCallingConvention(
             function.signature.calling_convention,
         ));
@@ -401,7 +401,7 @@ mod tests {
                 result: Some(MachineValueType::Integer { bits: 32 }),
                 parameters,
                 variadic: false,
-                calling_convention: MachineCallingConvention::Basic,
+                calling_convention: MachineCallingConvention::FarPascal,
             },
             entry: MachineBlockId::new(0),
             virtual_registers: Vec::new(),

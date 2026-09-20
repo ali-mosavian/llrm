@@ -548,8 +548,7 @@ fn address_space_name(value: AddressSpace) -> &'static str {
 fn calling_convention_name(value: CallingConvention) -> &'static str {
     match value {
         CallingConvention::C => "c",
-        CallingConvention::Basic => "basic",
-        CallingConvention::Runtime => "runtime",
+        CallingConvention::FarPascal => "far_pascal",
     }
 }
 fn attribute_name(value: FunctionAttribute) -> &'static str {
@@ -1413,8 +1412,7 @@ fn parse_linkage(parser: &mut Parser) -> Result<Linkage, TextError> {
 fn parse_calling_convention(parser: &mut Parser) -> Result<CallingConvention, TextError> {
     match parser.word()?.as_str() {
         "c" => Ok(CallingConvention::C),
-        "basic" => Ok(CallingConvention::Basic),
-        "runtime" => Ok(CallingConvention::Runtime),
+        "far_pascal" => Ok(CallingConvention::FarPascal),
         _ => Err(parser.error("unknown calling convention")),
     }
 }
@@ -1605,7 +1603,7 @@ mod tests {
                     result: TypeId::new(1),
                     parameters: vec![TypeId::new(1)],
                     variadic: true,
-                    calling_convention: CallingConvention::Runtime,
+                    calling_convention: CallingConvention::FarPascal,
                 },
                 attributes: vec![FunctionAttribute::NoReturn, FunctionAttribute::AlwaysInline],
                 parameters: vec![Value {
@@ -1699,7 +1697,7 @@ mod tests {
                     result: TypeId::new(0),
                     parameters: Vec::new(),
                     variadic: false,
-                    calling_convention: CallingConvention::Basic,
+                    calling_convention: CallingConvention::FarPascal,
                 },
                 attributes: Vec::new(),
                 parameters: Vec::new(),
@@ -1788,13 +1786,54 @@ mod tests {
     }
 
     #[test]
+    fn writes_only_the_language_neutral_far_pascal_abi_name() {
+        let module = Module {
+            name: "abi".into(),
+            types: vec![Type {
+                id: TypeId::new(0),
+                kind: TypeKind::Void,
+            }],
+            globals: Vec::new(),
+            functions: vec![Function {
+                id: FunctionId::new(0),
+                name: "callee".into(),
+                signature: Signature {
+                    result: TypeId::new(0),
+                    parameters: Vec::new(),
+                    variadic: false,
+                    calling_convention: CallingConvention::FarPascal,
+                },
+                linkage: Linkage::External,
+                attributes: Vec::new(),
+                parameters: Vec::new(),
+                blocks: Vec::new(),
+            }],
+        };
+
+        let text = write(&module);
+
+        assert!(text.contains(" cc far_pascal "));
+        assert!(!text.contains(" cc basic "));
+        assert!(!text.contains(" cc runtime "));
+        assert_eq!(parse(&text), Ok(module));
+    }
+
+    #[test]
     fn rejects_unknown_and_malformed_input() {
-        assert!(parse("qir 2\nmodule \"m\"\nend\n").is_err());
-        assert!(parse("qir 1\nmodule \"m\"\ntype 0 nope\nend\n").is_err());
+        for obsolete in ["basic", "runtime"] {
+            let source = format!(
+                "qir 2\nmodule \"m\"\ntype 0 void\nfunction 0 \"f\" linkage external result 0 parameters [] variadic false cc {obsolete} attributes []\nendfunction\nend\n"
+            );
+            let error = parse(&source).expect_err("source-language ABI labels must not enter IR");
+            assert!(error.message.contains("unknown calling convention"));
+        }
+        assert!(parse("qir 3\nmodule \"m\"\nend\n").is_err());
+        assert!(parse("qir 1\nmodule \"m\"\nend\n").is_err());
+        assert!(parse("qir 2\nmodule \"m\"\ntype 0 nope\nend\n").is_err());
         assert!(
-            parse("qir 1\nmodule \"m\"\nglobal 0 \"g\" 0 internal false some bytes \"f\"\nend\n")
+            parse("qir 2\nmodule \"m\"\nglobal 0 \"g\" 0 internal false some bytes \"f\"\nend\n")
                 .is_err()
         );
-        assert!(parse("qir 1\nmodule \"m\"\nglobal 0 \"g\" 9 external false none\nend\n").is_err());
+        assert!(parse("qir 2\nmodule \"m\"\nglobal 0 \"g\" 9 external false none\nend\n").is_err());
     }
 }

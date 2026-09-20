@@ -1,6 +1,6 @@
 use std::fmt;
 
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 
 macro_rules! entity_id {
     ($name:ident) => {
@@ -149,8 +149,8 @@ pub struct Signature {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CallingConvention {
     C,
-    Basic,
-    Runtime,
+    /// Far call, left-to-right arguments, and callee stack cleanup.
+    FarPascal,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]

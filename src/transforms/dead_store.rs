@@ -206,7 +206,7 @@ mod tests {
                 result: I8,
                 parameters: parameters.iter().map(|value| value.type_id).collect(),
                 variadic: false,
-                calling_convention: CallingConvention::Basic,
+                calling_convention: CallingConvention::FarPascal,
             },
             linkage: Linkage::Internal,
             attributes: Vec::new(),

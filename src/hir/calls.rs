@@ -589,7 +589,7 @@ pub(super) fn plan_calls(module: &hir::Module) -> Result<CallPlan, CallPlanError
                 result: signature.result,
                 parameters: signature.parameters,
                 variadic: false,
-                calling_convention: ir::CallingConvention::Runtime,
+                calling_convention: ir::CallingConvention::FarPascal,
             },
             linkage: ir::Linkage::External,
             attributes: Vec::new(),
@@ -1308,7 +1308,7 @@ mod tests {
         assert!(plan.declarations[0].signature.parameters.is_empty());
         assert_eq!(
             plan.declarations[0].signature.calling_convention,
-            ir::CallingConvention::Runtime
+            ir::CallingConvention::FarPascal
         );
         assert_eq!(plan.declarations[0].linkage, ir::Linkage::External);
     }

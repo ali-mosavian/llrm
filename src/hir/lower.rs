@@ -591,7 +591,7 @@ impl<'module> Lowerer<'module> {
                 .map(|parameter| parameter.type_id)
                 .collect(),
             variadic: false,
-            calling_convention: ir::CallingConvention::Basic,
+            calling_convention: ir::CallingConvention::FarPascal,
         };
         let mut blocks = function
             .blocks
@@ -2125,7 +2125,7 @@ mod tests {
         assert_eq!(function.id, ir::FunctionId::new(11));
         assert_eq!(
             function.signature.calling_convention,
-            ir::CallingConvention::Basic
+            ir::CallingConvention::FarPascal
         );
         assert_eq!(function.parameters[0].id, ir::ValueId::new(0));
         assert_eq!(function.blocks[0].id, ir::BlockId::new(4));

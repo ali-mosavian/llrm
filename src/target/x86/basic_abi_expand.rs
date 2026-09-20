@@ -808,7 +808,7 @@ mod tests {
                 result: None,
                 parameters: Vec::new(),
                 variadic: false,
-                calling_convention: MachineCallingConvention::Basic,
+                calling_convention: MachineCallingConvention::FarPascal,
             },
             entry: MachineBlockId::new(0),
             virtual_registers: Vec::new(),

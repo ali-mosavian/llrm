@@ -298,7 +298,7 @@ mod tests {
                 result: None,
                 parameters,
                 variadic: false,
-                calling_convention: MachineCallingConvention::Basic,
+                calling_convention: MachineCallingConvention::FarPascal,
             },
             entry: MachineBlockId::new(2),
             virtual_registers: vec![VirtualRegister {

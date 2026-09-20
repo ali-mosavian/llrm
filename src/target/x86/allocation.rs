@@ -47,7 +47,7 @@ pub fn allocate_registers(
         }
     }
 
-    let reserve_bp = function.signature.calling_convention == MachineCallingConvention::Basic
+    let reserve_bp = function.signature.calling_convention == MachineCallingConvention::FarPascal
         || !function.frame_objects.is_empty()
         || uses_basic_runtime_frame(function);
     machine::allocate(function, |class| candidates(class, reserve_bp), overlaps)
@@ -110,7 +110,7 @@ mod tests {
                 result: None,
                 parameters: Vec::new(),
                 variadic: false,
-                calling_convention: crate::codegen::machine::MachineCallingConvention::Basic,
+                calling_convention: crate::codegen::machine::MachineCallingConvention::FarPascal,
             },
             entry: MachineBlockId::new(0),
             virtual_registers: vec![
@@ -161,7 +161,7 @@ mod tests {
                 result: None,
                 parameters: Vec::new(),
                 variadic: false,
-                calling_convention: crate::codegen::machine::MachineCallingConvention::Basic,
+                calling_convention: crate::codegen::machine::MachineCallingConvention::FarPascal,
             },
             entry: MachineBlockId::new(0),
             virtual_registers: vec![VirtualRegister {

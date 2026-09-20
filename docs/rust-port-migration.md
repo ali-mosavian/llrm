@@ -567,3 +567,19 @@ adjacent refusal is the procedure's first unconditional branch, confirming
 that layout and branch relaxation—not an object or frontend special case—is
 the next boundary. Four focused MC-encoding tests and the two fail-first
 adjacent probes consumed about ten seconds. No broad or external gate ran.
+
+An architecture audit removed source-domain calling-convention labels from
+portable IR and Machine IR before more backend work could depend on them. The
+former `basic` and `runtime` variants described the same implemented ABI and
+are now the single language-neutral `far_pascal` convention: far calls,
+left-to-right arguments, and callee cleanup. Linkage continues to distinguish
+defined procedures from external declarations. `.qir` is now version 2 and
+`.qmir` version 4; both reject the old source-language spellings.
+
+The focused schema run exposed that the `.qmir` writer used its version
+constant while the parser still hard-coded version 3. That regression failed
+before the parser was made to consume the same constant. Three Machine-IR text
+tests, the two new IR ABI-schema tests, HIR runtime-call lowering, and x86
+far-call selection then passed in about 5.1 seconds. The deliberately broader
+text filter also exposed an unrelated pre-existing invalid aggregate fixture;
+it was not pursued in this slice. No broad suite or external gate ran.

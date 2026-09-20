@@ -212,6 +212,12 @@ closed intrinsic enum. A transform must not rediscover the meaning of a
 runtime call by naming an external symbol, a register convention, or an x86
 instruction pattern.
 
+Calling conventions name concrete ABI behavior rather than a source language
+or one runtime. The initial `far_pascal` convention means a far call with
+left-to-right arguments and callee stack cleanup. Internal definitions and
+external declarations use linkage to state which side supplies the body; IR
+and Machine IR do not carry `basic`, `qb`, or `runtime` convention variants.
+
 ### No accidental undefined behavior
 
 ir does not inherit undefined behavior, poison, or implicit target behavior

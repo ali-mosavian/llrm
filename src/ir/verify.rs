@@ -746,7 +746,7 @@ mod tests {
                     result: TypeId::new(0),
                     parameters: Vec::new(),
                     variadic: false,
-                    calling_convention: super::super::CallingConvention::Basic,
+                    calling_convention: super::super::CallingConvention::FarPascal,
                 },
                 linkage: Linkage::Internal,
                 attributes: Vec::new(),

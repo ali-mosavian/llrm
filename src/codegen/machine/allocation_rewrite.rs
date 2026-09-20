@@ -256,7 +256,7 @@ mod tests {
                 result: None,
                 parameters: Vec::new(),
                 variadic: false,
-                calling_convention: crate::codegen::machine::MachineCallingConvention::Basic,
+                calling_convention: crate::codegen::machine::MachineCallingConvention::FarPascal,
             },
             entry: blocks
                 .first()

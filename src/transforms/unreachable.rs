@@ -142,7 +142,7 @@ mod tests {
                 result: I16,
                 parameters: Vec::new(),
                 variadic: false,
-                calling_convention: CallingConvention::Basic,
+                calling_convention: CallingConvention::FarPascal,
             },
             linkage: Linkage::Internal,
             attributes: Vec::new(),

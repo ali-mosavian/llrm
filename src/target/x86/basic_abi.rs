@@ -384,7 +384,7 @@ mod tests {
                 result: Some(MachineValueType::Integer { bits: 32 }),
                 parameters: Vec::new(),
                 variadic: false,
-                calling_convention: MachineCallingConvention::Basic,
+                calling_convention: MachineCallingConvention::FarPascal,
             },
             entry,
             virtual_registers: vec![

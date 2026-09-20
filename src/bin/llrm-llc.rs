@@ -131,11 +131,11 @@ mod tests {
     use llrm::target::x86::X86Opcode;
 
     const MINIMAL_INTEGER_IR: &str = concat!(
-        "qir 1\n",
+        "qir 2\n",
         "module \"m\"\n",
         "type 0 void\n",
         "type 1 integer 16\n",
-        "function 0 \"main\" linkage internal result 0 parameters [] variadic false cc basic attributes []\n",
+        "function 0 \"main\" linkage internal result 0 parameters [] variadic false cc far_pascal attributes []\n",
         "block 0\n",
         "inst 0 results [0:1] binary add const type 1 integer 1 const type 1 integer 2\n",
         "term return none\n",
@@ -182,7 +182,7 @@ mod tests {
 
     #[test]
     fn reports_text_failures_without_selecting() {
-        assert!(matches!(compile("qir 1\n"), Err(CompileError::Text(_))));
+        assert!(matches!(compile("qir 2\n"), Err(CompileError::Text(_))));
     }
 
     #[test]

@@ -115,12 +115,12 @@ pub struct MachineSignature {
     pub calling_convention: MachineCallingConvention,
 }
 
-/// A calling convention understood by the source language or runtime.
+/// A language-neutral calling convention retained for target lowering.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MachineCallingConvention {
     C,
-    Basic,
-    Runtime,
+    /// Far call, left-to-right arguments, and callee stack cleanup.
+    FarPascal,
 }
 
 /// A source-level value type, independent of target instruction encodings.
@@ -530,7 +530,7 @@ mod tests {
                 result: None,
                 parameters: Vec::new(),
                 variadic: false,
-                calling_convention: MachineCallingConvention::Basic,
+                calling_convention: MachineCallingConvention::FarPascal,
             },
             entry: MachineBlockId::new(7),
             virtual_registers: vec![VirtualRegister {

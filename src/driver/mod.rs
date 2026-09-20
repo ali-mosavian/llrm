@@ -437,7 +437,7 @@ mod tests {
 
         assert_eq!(
             procedure.signature.calling_convention,
-            MachineCallingConvention::Basic
+            MachineCallingConvention::FarPascal
         );
         assert_eq!(
             procedure.signature.result,
@@ -825,11 +825,11 @@ mod tests {
     #[test]
     fn verified_integer_ir_reaches_x86_machine_ir() {
         let source = concat!(
-            "qir 1\n",
+            "qir 2\n",
             "module \"driver\"\n",
             "type 0 void\n",
             "type 1 integer 16\n",
-            "function 0 \"main\" linkage internal result 0 parameters [] variadic false cc basic attributes []\n",
+            "function 0 \"main\" linkage internal result 0 parameters [] variadic false cc far_pascal attributes []\n",
             "block 0\n",
             "inst 0 results [0:1] binary add const type 1 integer 2 const type 1 integer 3\n",
             "term return none\n",

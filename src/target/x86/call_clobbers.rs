@@ -207,7 +207,7 @@ mod tests {
                 result: None,
                 parameters: Vec::new(),
                 variadic: false,
-                calling_convention: MachineCallingConvention::Basic,
+                calling_convention: MachineCallingConvention::FarPascal,
             },
             entry: crate::codegen::machine::MachineBlockId::new(2),
             virtual_registers: registers,

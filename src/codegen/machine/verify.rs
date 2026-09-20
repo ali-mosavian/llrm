@@ -224,11 +224,11 @@ impl<'module> Verifier<'module> {
         if function.signature.variadic
             && matches!(
                 function.signature.calling_convention,
-                MachineCallingConvention::Basic
+                MachineCallingConvention::FarPascal
             )
         {
             self.error(format!(
-                "machine function {} has variadic Basic calling convention",
+                "machine function {} has variadic far-Pascal calling convention",
                 function.id
             ));
         }
@@ -543,7 +543,7 @@ mod tests {
                 result: None,
                 parameters: vec![MachineValueType::Integer { bits: 16 }],
                 variadic: false,
-                calling_convention: MachineCallingConvention::Basic,
+                calling_convention: MachineCallingConvention::FarPascal,
             },
             entry: MachineBlockId::new(0),
             virtual_registers: vec![VirtualRegister {
@@ -813,7 +813,7 @@ mod tests {
         assert!(
             diagnostic_messages
                 .iter()
-                .any(|message| message.contains("variadic Basic calling convention"))
+                .any(|message| message.contains("variadic far-Pascal calling convention"))
         );
         assert!(
             diagnostic_messages

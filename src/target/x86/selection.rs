@@ -1,8 +1,8 @@
 //! Initial exact portable-IR to x86 Machine IR selection.
 //!
 //! This selector intentionally handles only integer expressions,
-//! unconditional control flow, and direct void calls to declared runtime
-//! routines. Unsupported IR is refused at the boundary instead of being
+//! unconditional control flow, and direct void far-Pascal calls. Unsupported
+//! IR is refused at the boundary instead of being
 //! approximated or silently discarded.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -85,7 +85,7 @@ pub enum SelectionError {
         result: TypeId,
         values: usize,
     },
-    UnsupportedRuntimeResult {
+    UnsupportedExternalResult {
         function: FunctionId,
         result: TypeId,
     },
@@ -275,9 +275,9 @@ impl fmt::Display for SelectionError {
                 formatter,
                 "function {function} block {block} {instruction} call to {callee} has result type {result} and {values} result values, but only void calls without results are supported"
             ),
-            Self::UnsupportedRuntimeResult { function, result } => write!(
+            Self::UnsupportedExternalResult { function, result } => write!(
                 formatter,
-                "runtime declaration {function} has result type {result}, but only void calls are supported"
+                "external far-Pascal declaration {function} has result type {result}, but only void calls are supported"
             ),
             Self::CallArgumentCount {
                 function,
@@ -444,7 +444,7 @@ pub fn select_module(module: &Module) -> Result<MachineModule, SelectionError> {
     let functions_by_id = collect_functions(module)?;
     for function in &module.functions {
         if function.blocks.is_empty() {
-            validate_runtime_declaration(function, &types)?;
+            validate_external_declaration(function, &types)?;
         }
     }
     let mut functions = Vec::with_capacity(module.functions.len());
@@ -533,7 +533,7 @@ fn select_function(
             property: FunctionProperty::Variadic,
         });
     }
-    if function.signature.calling_convention != CallingConvention::Basic {
+    if function.signature.calling_convention != CallingConvention::FarPascal {
         return Err(SelectionError::UnsupportedFunctionProperty {
             function: function.id,
             property: FunctionProperty::CallingConvention(function.signature.calling_convention),
@@ -563,7 +563,7 @@ fn select_function(
     selector.finish()
 }
 
-fn validate_runtime_declaration(
+fn validate_external_declaration(
     function: &Function,
     types: &BTreeMap<TypeId, &TypeKind>,
 ) -> Result<(), SelectionError> {
@@ -578,7 +578,7 @@ fn validate_runtime_declaration(
             property: FunctionProperty::Variadic,
         });
     }
-    if function.signature.calling_convention != CallingConvention::Runtime {
+    if function.signature.calling_convention != CallingConvention::FarPascal {
         return Err(SelectionError::UnsupportedFunctionProperty {
             function: function.id,
             property: FunctionProperty::CallingConvention(function.signature.calling_convention),
@@ -591,7 +591,7 @@ fn validate_runtime_declaration(
         });
     }
     if !matches!(type_kind(types, function.signature.result)?, TypeKind::Void) {
-        return Err(SelectionError::UnsupportedRuntimeResult {
+        return Err(SelectionError::UnsupportedExternalResult {
             function: function.id,
             result: function.signature.result,
         });
@@ -613,12 +613,12 @@ fn validate_runtime_declaration(
                 value: parameter.type_id,
             });
         }
-        runtime_argument_type(types, parameter.type_id)?;
+        far_pascal_argument_type(types, parameter.type_id)?;
     }
     Ok(())
 }
 
-fn runtime_argument_type(
+fn far_pascal_argument_type(
     types: &BTreeMap<TypeId, &TypeKind>,
     type_id: TypeId,
 ) -> Result<(), SelectionError> {
@@ -1098,7 +1098,7 @@ impl<'types> FunctionSelector<'types> {
             target.linkage,
             target.signature.calling_convention,
         ) {
-            (true, Linkage::External, CallingConvention::Runtime) => {
+            (true, Linkage::External, CallingConvention::FarPascal) => {
                 if !matches!(self.type_kind(target.signature.result)?, TypeKind::Void)
                     || !instruction.results.is_empty()
                 {
@@ -1118,9 +1118,13 @@ impl<'types> FunctionSelector<'types> {
                     output,
                 )
             }
-            (false, _, CallingConvention::Basic) => {
-                self.select_basic_call_result(block, instruction, target, effects, output)
-            }
+            (false, _, CallingConvention::FarPascal) => self.select_defined_far_pascal_call_result(
+                block,
+                instruction,
+                target,
+                effects,
+                output,
+            ),
             _ => Err(SelectionError::UnsupportedCallTarget {
                 function: self.function.id,
                 block,
@@ -1130,7 +1134,7 @@ impl<'types> FunctionSelector<'types> {
         }
     }
 
-    fn select_basic_call_result(
+    fn select_defined_far_pascal_call_result(
         &mut self,
         block: BlockId,
         instruction: &Instruction,
@@ -1880,8 +1884,7 @@ fn machine_signature(
         variadic: function.signature.variadic,
         calling_convention: match function.signature.calling_convention {
             CallingConvention::C => MachineCallingConvention::C,
-            CallingConvention::Basic => MachineCallingConvention::Basic,
-            CallingConvention::Runtime => MachineCallingConvention::Runtime,
+            CallingConvention::FarPascal => MachineCallingConvention::FarPascal,
         },
     })
 }
@@ -1939,7 +1942,7 @@ mod tests {
             result,
             parameters,
             variadic: false,
-            calling_convention: CallingConvention::Basic,
+            calling_convention: CallingConvention::FarPascal,
         }
     }
 
@@ -1989,7 +1992,7 @@ mod tests {
                 result: VOID,
                 parameters: parameters.clone(),
                 variadic: false,
-                calling_convention: CallingConvention::Runtime,
+                calling_convention: CallingConvention::FarPascal,
             },
             linkage: Linkage::External,
             attributes: Vec::new(),

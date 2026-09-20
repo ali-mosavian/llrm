@@ -234,7 +234,7 @@ mod tests {
                 result: TypeId::new(0),
                 parameters: vec![TypeId::new(0)],
                 variadic: false,
-                calling_convention: CallingConvention::Basic,
+                calling_convention: CallingConvention::FarPascal,
             },
             linkage: Linkage::Internal,
             attributes: Vec::new(),
