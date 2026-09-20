@@ -1,8 +1,9 @@
 //! Initial exact portable-IR to x86 Machine IR selection.
 //!
-//! This selector intentionally handles only side-effect-free integer
-//! expressions and unconditional control flow.  Unsupported IR is refused at
-//! the boundary instead of being approximated or silently discarded.
+//! This selector intentionally handles only integer expressions,
+//! unconditional control flow, and direct void calls to declared runtime
+//! routines. Unsupported IR is refused at the boundary instead of being
+//! approximated or silently discarded.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
@@ -15,9 +16,9 @@ use crate::codegen::machine::{
     VirtualRegister, VirtualRegisterId,
 };
 use crate::ir::{
-    BinaryOp, Block, BlockId, CallingConvention, Constant, Function, FunctionId, GlobalId,
-    Instruction, InstructionKind, Linkage, Module, Operand, Terminator, TypeId, TypeKind,
-    TypedConstant, UnaryOp, Value, ValueId,
+    BinaryOp, Block, BlockId, Callee, CallingConvention, Constant, Effects, Function, FunctionId,
+    GlobalId, Instruction, InstructionKind, Linkage, MemoryEffects, Module, Operand, Terminator,
+    TypeId, TypeKind, TypedConstant, UnaryOp, Value, ValueId,
 };
 
 use super::{X86Opcode, X86RegisterClass};
@@ -43,6 +44,43 @@ pub enum SelectionError {
     },
     DuplicateFunction {
         function: FunctionId,
+    },
+    UnknownCallee {
+        function: FunctionId,
+        block: BlockId,
+        instruction: crate::ir::InstructionId,
+        callee: FunctionId,
+    },
+    IndirectCallee {
+        function: FunctionId,
+        block: BlockId,
+        instruction: crate::ir::InstructionId,
+    },
+    UnsupportedCallTarget {
+        function: FunctionId,
+        block: BlockId,
+        instruction: crate::ir::InstructionId,
+        callee: FunctionId,
+    },
+    UnsupportedCallResult {
+        function: FunctionId,
+        block: BlockId,
+        instruction: crate::ir::InstructionId,
+        callee: FunctionId,
+        result: TypeId,
+        values: usize,
+    },
+    UnsupportedRuntimeResult {
+        function: FunctionId,
+        result: TypeId,
+    },
+    CallArgumentCount {
+        function: FunctionId,
+        block: BlockId,
+        instruction: crate::ir::InstructionId,
+        callee: FunctionId,
+        expected: usize,
+        actual: usize,
     },
     ExternalDeclaration {
         function: FunctionId,
@@ -161,6 +199,58 @@ impl fmt::Display for SelectionError {
             Self::DuplicateFunction { function } => {
                 write!(formatter, "duplicate IR function {function}")
             }
+            Self::UnknownCallee {
+                function,
+                block,
+                instruction,
+                callee,
+            } => write!(
+                formatter,
+                "function {function} block {block} {instruction} calls unknown function {callee}"
+            ),
+            Self::IndirectCallee {
+                function,
+                block,
+                instruction,
+            } => write!(
+                formatter,
+                "function {function} block {block} {instruction} has an unsupported indirect callee"
+            ),
+            Self::UnsupportedCallTarget {
+                function,
+                block,
+                instruction,
+                callee,
+            } => write!(
+                formatter,
+                "function {function} block {block} {instruction} calls unsupported target {callee}"
+            ),
+            Self::UnsupportedCallResult {
+                function,
+                block,
+                instruction,
+                callee,
+                result,
+                values,
+            } => write!(
+                formatter,
+                "function {function} block {block} {instruction} call to {callee} has result type {result} and {values} result values, but only void calls without results are supported"
+            ),
+            Self::UnsupportedRuntimeResult { function, result } => write!(
+                formatter,
+                "runtime declaration {function} has result type {result}, but only void calls are supported"
+            ),
+            Self::CallArgumentCount {
+                function,
+                block,
+                instruction,
+                callee,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "function {function} block {block} {instruction} call to {callee} has {actual} arguments, expected {expected}"
+            ),
             Self::ExternalDeclaration { function } => {
                 write!(
                     formatter,
@@ -302,18 +392,32 @@ pub fn select_module(module: &Module) -> Result<MachineModule, SelectionError> {
     }
 
     let types = collect_types(module)?;
-    let mut function_ids = BTreeSet::new();
+    let functions_by_id = collect_functions(module)?;
+    for function in &module.functions {
+        if function.blocks.is_empty() {
+            validate_runtime_declaration(function, &types)?;
+        }
+    }
     let mut functions = Vec::with_capacity(module.functions.len());
     for function in &module.functions {
-        if !function_ids.insert(function.id) {
+        if !function.blocks.is_empty() {
+            functions.push(select_function(function, &types, &functions_by_id)?);
+        }
+    }
+
+    Ok(MachineModule { functions })
+}
+
+fn collect_functions(module: &Module) -> Result<BTreeMap<FunctionId, &Function>, SelectionError> {
+    let mut functions = BTreeMap::new();
+    for function in &module.functions {
+        if functions.insert(function.id, function).is_some() {
             return Err(SelectionError::DuplicateFunction {
                 function: function.id,
             });
         }
-        functions.push(select_function(function, &types)?);
     }
-
-    Ok(MachineModule { functions })
+    Ok(functions)
 }
 
 fn collect_types(module: &Module) -> Result<BTreeMap<TypeId, &TypeKind>, SelectionError> {
@@ -329,12 +433,8 @@ fn collect_types(module: &Module) -> Result<BTreeMap<TypeId, &TypeKind>, Selecti
 fn select_function(
     function: &Function,
     types: &BTreeMap<TypeId, &TypeKind>,
+    functions_by_id: &BTreeMap<FunctionId, &Function>,
 ) -> Result<MachineFunction, SelectionError> {
-    if function.blocks.is_empty() {
-        return Err(SelectionError::ExternalDeclaration {
-            function: function.id,
-        });
-    }
     if function.signature.variadic {
         return Err(SelectionError::UnsupportedFunctionProperty {
             function: function.id,
@@ -369,12 +469,95 @@ fn select_function(
 
     let block_ids = collect_blocks(function)?;
     validate_value_ids(function)?;
-    let mut selector = FunctionSelector::new(function, types, block_ids);
+    let mut selector = FunctionSelector::new(function, types, functions_by_id, block_ids);
     selector.select_parameters()?;
     for block in &function.blocks {
         selector.select_block(block)?;
     }
     Ok(selector.finish())
+}
+
+fn validate_runtime_declaration(
+    function: &Function,
+    types: &BTreeMap<TypeId, &TypeKind>,
+) -> Result<(), SelectionError> {
+    if function.linkage != Linkage::External {
+        return Err(SelectionError::ExternalDeclaration {
+            function: function.id,
+        });
+    }
+    if function.signature.variadic {
+        return Err(SelectionError::UnsupportedFunctionProperty {
+            function: function.id,
+            property: FunctionProperty::Variadic,
+        });
+    }
+    if function.signature.calling_convention != CallingConvention::Runtime {
+        return Err(SelectionError::UnsupportedFunctionProperty {
+            function: function.id,
+            property: FunctionProperty::CallingConvention(function.signature.calling_convention),
+        });
+    }
+    if !function.attributes.is_empty() {
+        return Err(SelectionError::UnsupportedFunctionProperty {
+            function: function.id,
+            property: FunctionProperty::Attributes,
+        });
+    }
+    if !matches!(type_kind(types, function.signature.result)?, TypeKind::Void) {
+        return Err(SelectionError::UnsupportedRuntimeResult {
+            function: function.id,
+            result: function.signature.result,
+        });
+    }
+    if function.parameters.len() != function.signature.parameters.len() {
+        return Err(SelectionError::SignatureParameterCount {
+            function: function.id,
+            signature: function.signature.parameters.len(),
+            values: function.parameters.len(),
+        });
+    }
+    for (index, parameter) in function.parameters.iter().enumerate() {
+        let signature_type = function.signature.parameters[index];
+        if parameter.type_id != signature_type {
+            return Err(SelectionError::SignatureParameterTypeMismatch {
+                function: function.id,
+                parameter: index,
+                signature: signature_type,
+                value: parameter.type_id,
+            });
+        }
+        runtime_argument_type(types, parameter.type_id)?;
+    }
+    Ok(())
+}
+
+fn runtime_argument_type(
+    types: &BTreeMap<TypeId, &TypeKind>,
+    type_id: TypeId,
+) -> Result<(), SelectionError> {
+    match type_kind(types, type_id)? {
+        TypeKind::Integer { bits: 16 | 32 } => Ok(()),
+        TypeKind::Integer { bits } => Err(SelectionError::UnsupportedIntegerWidth {
+            type_id,
+            bits: *bits,
+        }),
+        TypeKind::Void
+        | TypeKind::Float(_)
+        | TypeKind::Pointer { .. }
+        | TypeKind::Array { .. }
+        | TypeKind::Structure { .. } => Err(SelectionError::UnsupportedType { type_id }),
+    }
+}
+
+fn type_kind<'types>(
+    types: &'types BTreeMap<TypeId, &'types TypeKind>,
+    type_id: TypeId,
+) -> Result<&'types TypeKind, SelectionError> {
+    types
+        .get(&type_id)
+        .copied()
+        .ok_or(SelectionError::MissingType { type_id })
 }
 
 fn validate_value_ids(function: &Function) -> Result<(), SelectionError> {
@@ -424,6 +607,7 @@ struct SelectedValue {
 struct FunctionSelector<'types> {
     function: &'types Function,
     types: &'types BTreeMap<TypeId, &'types TypeKind>,
+    functions_by_id: &'types BTreeMap<FunctionId, &'types Function>,
     block_ids: BTreeSet<BlockId>,
     values: BTreeMap<ValueId, SelectedValue>,
     virtual_registers: Vec<VirtualRegister>,
@@ -436,11 +620,13 @@ impl<'types> FunctionSelector<'types> {
     fn new(
         function: &'types Function,
         types: &'types BTreeMap<TypeId, &'types TypeKind>,
+        functions_by_id: &'types BTreeMap<FunctionId, &'types Function>,
         block_ids: BTreeSet<BlockId>,
     ) -> Self {
         Self {
             function,
             types,
+            functions_by_id,
             block_ids,
             values: BTreeMap::new(),
             virtual_registers: Vec::new(),
@@ -472,7 +658,9 @@ impl<'types> FunctionSelector<'types> {
             self.select_instruction(block.id, instruction, &mut instructions)?;
         }
         let (terminator, successors) = self.select_terminator(block)?;
-        instructions.push(terminator);
+        if let Some(terminator) = terminator {
+            instructions.push(terminator);
+        }
         self.blocks.push(MachineBlock {
             id: MachineBlockId::new(block.id.get()),
             instructions,
@@ -562,7 +750,6 @@ impl<'types> FunctionSelector<'types> {
             | InstructionKind::Store { .. }
             | InstructionKind::GetElementPointer { .. }
             | InstructionKind::Select { .. }
-            | InstructionKind::Call { .. }
             | InstructionKind::Intrinsic { .. } => {
                 return Err(SelectionError::UnsupportedInstruction {
                     function: self.function.id,
@@ -570,8 +757,90 @@ impl<'types> FunctionSelector<'types> {
                     instruction: instruction.id,
                 });
             }
+            InstructionKind::Call {
+                callee,
+                arguments,
+                effects,
+            } => {
+                self.select_runtime_call(block, instruction, callee, arguments, *effects, output)?
+            }
         }
         Ok(())
+    }
+
+    fn select_runtime_call(
+        &mut self,
+        block: BlockId,
+        instruction: &Instruction,
+        callee: &Callee,
+        arguments: &[Operand],
+        effects: Effects,
+        output: &mut Vec<MachineInstruction>,
+    ) -> Result<(), SelectionError> {
+        let Callee::Direct(callee) = callee else {
+            return Err(SelectionError::IndirectCallee {
+                function: self.function.id,
+                block,
+                instruction: instruction.id,
+            });
+        };
+        let Some(target) = self.functions_by_id.get(callee).copied() else {
+            return Err(SelectionError::UnknownCallee {
+                function: self.function.id,
+                block,
+                instruction: instruction.id,
+                callee: *callee,
+            });
+        };
+        if !target.blocks.is_empty()
+            || target.linkage != Linkage::External
+            || target.signature.calling_convention != CallingConvention::Runtime
+        {
+            return Err(SelectionError::UnsupportedCallTarget {
+                function: self.function.id,
+                block,
+                instruction: instruction.id,
+                callee: *callee,
+            });
+        }
+        if !matches!(self.type_kind(target.signature.result)?, TypeKind::Void)
+            || !instruction.results.is_empty()
+        {
+            return Err(SelectionError::UnsupportedCallResult {
+                function: self.function.id,
+                block,
+                instruction: instruction.id,
+                callee: *callee,
+                result: target.signature.result,
+                values: instruction.results.len(),
+            });
+        }
+        if arguments.len() != target.signature.parameters.len() {
+            return Err(SelectionError::CallArgumentCount {
+                function: self.function.id,
+                block,
+                instruction: instruction.id,
+                callee: *callee,
+                expected: target.signature.parameters.len(),
+                actual: arguments.len(),
+            });
+        }
+        for (argument, expected_type) in arguments.iter().zip(&target.signature.parameters) {
+            let argument =
+                self.select_operand(block, instruction.id, argument, *expected_type, output)?;
+            self.push_instruction(
+                X86Opcode::Push,
+                vec![virtual_operand(argument.register, OperandRole::Use)],
+                InstructionFlags::NONE,
+                output,
+            )?;
+        }
+        self.push_instruction(
+            X86Opcode::CallFar,
+            vec![external_symbol_operand(target.name.clone())],
+            call_flags(effects),
+            output,
+        )
     }
 
     fn result_definition<'instruction>(
@@ -653,7 +922,7 @@ impl<'types> FunctionSelector<'types> {
     fn select_terminator(
         &mut self,
         block: &Block,
-    ) -> Result<(MachineInstruction, Vec<MachineBlockId>), SelectionError> {
+    ) -> Result<(Option<MachineInstruction>, Vec<MachineBlockId>), SelectionError> {
         match &block.terminator {
             Terminator::Jump(target) => {
                 if !self.block_ids.contains(target) {
@@ -672,7 +941,7 @@ impl<'types> FunctionSelector<'types> {
                         ..InstructionFlags::NONE
                     },
                 )?;
-                Ok((instruction, vec![target]))
+                Ok((Some(instruction), vec![target]))
             }
             Terminator::Return(Some(_)) => Err(SelectionError::UnsupportedReturnValue {
                 function: self.function.id,
@@ -697,9 +966,10 @@ impl<'types> FunctionSelector<'types> {
                         ..InstructionFlags::NONE
                     },
                 )?;
-                Ok((instruction, Vec::new()))
+                Ok((Some(instruction), Vec::new()))
             }
-            Terminator::Branch { .. } | Terminator::Switch { .. } | Terminator::Unreachable => {
+            Terminator::Unreachable => Ok((None, Vec::new())),
+            Terminator::Branch { .. } | Terminator::Switch { .. } => {
                 Err(SelectionError::UnsupportedTerminator {
                     function: self.function.id,
                     block: block.id,
@@ -887,6 +1157,32 @@ fn block_operand(block: MachineBlockId) -> MachineOperand {
     }
 }
 
+fn external_symbol_operand(name: String) -> MachineOperand {
+    MachineOperand {
+        kind: MachineOperandKind::ExternalSymbol { name, addend: 0 },
+        role: OperandRole::None,
+        constraint: None,
+        tied_to: None,
+    }
+}
+
+fn call_flags(effects: Effects) -> InstructionFlags {
+    let (may_load, may_store) = match effects.memory {
+        MemoryEffects::None => (false, false),
+        MemoryEffects::Read => (true, false),
+        MemoryEffects::Write => (false, true),
+        MemoryEffects::ReadWrite | MemoryEffects::Unknown => (true, true),
+    };
+    InstructionFlags {
+        call: true,
+        side_effects: !effects.is_pure(),
+        may_load,
+        may_store,
+        volatile: effects.observable && (may_load || may_store),
+        ..InstructionFlags::NONE
+    }
+}
+
 fn integer_immediate(value: i128, bits: u16) -> i64 {
     let modulus = 1_i128 << bits;
     let truncated = value.rem_euclid(modulus);
@@ -906,6 +1202,7 @@ mod tests {
 
     const VOID: TypeId = TypeId::new(0);
     const I32: TypeId = TypeId::new(1);
+    const I16: TypeId = TypeId::new(4);
 
     fn signature(result: TypeId, parameters: Vec<TypeId>) -> crate::ir::Signature {
         Signature {
@@ -947,7 +1244,35 @@ mod tests {
                 id: I32,
                 kind: TypeKind::Integer { bits: 32 },
             },
+            Type {
+                id: I16,
+                kind: TypeKind::Integer { bits: 16 },
+            },
         ]
+    }
+
+    fn runtime_declaration(id: FunctionId, name: &str, parameters: Vec<TypeId>) -> Function {
+        Function {
+            id,
+            name: name.to_owned(),
+            signature: crate::ir::Signature {
+                result: VOID,
+                parameters: parameters.clone(),
+                variadic: false,
+                calling_convention: CallingConvention::Runtime,
+            },
+            linkage: Linkage::External,
+            attributes: Vec::new(),
+            parameters: parameters
+                .into_iter()
+                .enumerate()
+                .map(|(index, type_id)| Value {
+                    id: ValueId::new(index as u32),
+                    type_id,
+                })
+                .collect(),
+            blocks: Vec::new(),
+        }
     }
 
     #[test]
@@ -1164,5 +1489,118 @@ mod tests {
                 property: FunctionProperty::Variadic,
             })
         );
+    }
+
+    #[test]
+    fn selects_runtime_arguments_before_a_far_external_call() {
+        let runtime = runtime_declaration(FunctionId::new(5), "B$RT", vec![I16, I32]);
+        let caller = function(
+            vec![Block {
+                id: BlockId::new(0),
+                instructions: vec![Instruction {
+                    id: crate::ir::InstructionId::new(0),
+                    results: Vec::new(),
+                    kind: InstructionKind::Call {
+                        callee: Callee::Direct(runtime.id),
+                        arguments: vec![
+                            Operand::Constant(TypedConstant {
+                                type_id: I16,
+                                value: Constant::Integer(7),
+                            }),
+                            Operand::Constant(TypedConstant {
+                                type_id: I32,
+                                value: Constant::Integer(9),
+                            }),
+                        ],
+                        effects: Effects {
+                            memory: MemoryEffects::Unknown,
+                            may_trap: true,
+                            observable: true,
+                        },
+                    },
+                }],
+                terminator: Terminator::Unreachable,
+            }],
+            Vec::new(),
+        );
+
+        let selected = select_module(&module(basic_types(), vec![caller, runtime]))
+            .expect("runtime declaration and void call select exactly");
+        selected.verify().expect("selected Machine IR verifies");
+        assert_eq!(
+            selected.functions.len(),
+            1,
+            "declarations have no Machine IR body"
+        );
+        let instructions = &selected.functions[0].blocks[0].instructions;
+        assert_eq!(instructions[0].opcode, X86Opcode::Mov.machine_opcode());
+        assert_eq!(instructions[1].opcode, X86Opcode::Push.machine_opcode());
+        assert_eq!(instructions[2].opcode, X86Opcode::Mov.machine_opcode());
+        assert_eq!(instructions[3].opcode, X86Opcode::Push.machine_opcode());
+        assert_eq!(instructions[4].opcode, X86Opcode::CallFar.machine_opcode());
+        assert_eq!(instructions.len(), 5, "unreachable emits no machine operation");
+        assert!(selected.functions[0].blocks[0].successors.is_empty());
+        assert!(matches!(
+            instructions[4].operands.as_slice(),
+            [MachineOperand {
+                kind: MachineOperandKind::ExternalSymbol { name, addend: 0 },
+                role: OperandRole::None,
+                constraint: None,
+                tied_to: None,
+            }] if name == "B$RT"
+        ));
+        assert_eq!(
+            instructions[1].operands[0].kind, instructions[0].operands[0].kind,
+            "the first ABI argument is pushed before the call"
+        );
+        assert_eq!(
+            instructions[3].operands[0].kind, instructions[2].operands[0].kind,
+            "the second ABI argument is pushed before the call"
+        );
+        assert_eq!(
+            instructions[4].flags,
+            InstructionFlags {
+                call: true,
+                side_effects: true,
+                may_load: true,
+                may_store: true,
+                volatile: true,
+                ..InstructionFlags::NONE
+            }
+        );
+    }
+
+    #[test]
+    fn refuses_runtime_call_results() {
+        let runtime = runtime_declaration(FunctionId::new(5), "B$RT", Vec::new());
+        let caller = function(
+            vec![Block {
+                id: BlockId::new(0),
+                instructions: vec![Instruction {
+                    id: crate::ir::InstructionId::new(0),
+                    results: vec![Value {
+                        id: ValueId::new(0),
+                        type_id: I32,
+                    }],
+                    kind: InstructionKind::Call {
+                        callee: Callee::Direct(runtime.id),
+                        arguments: Vec::new(),
+                        effects: Effects::NONE,
+                    },
+                }],
+                terminator: Terminator::Return(None),
+            }],
+            Vec::new(),
+        );
+
+        assert!(matches!(
+            select_module(&module(basic_types(), vec![caller, runtime])),
+            Err(SelectionError::UnsupportedCallResult {
+                callee,
+                result,
+                values: 1,
+                ..
+            }) if callee == FunctionId::new(5) && result == VOID
+        ));
     }
 }
