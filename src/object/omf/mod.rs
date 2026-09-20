@@ -2,6 +2,7 @@
 
 pub mod archive;
 pub mod data;
+pub mod file;
 pub mod lines;
 pub mod read;
 pub mod record;
