@@ -32,6 +32,7 @@ pub enum Lowering {
     HeapFree,
     FileLength,
     Timer,
+    Random,
     ToInteger,
     ToLong,
     ToSingle,
@@ -149,6 +150,13 @@ pub static INTRINSICS: &[Intrinsic] = &[
     intrinsic!("FREEFILE", 0..=0, Integer, Runtime, Lowering::FreeFile),
     intrinsic!("FRE", 1..=1, Long, Runtime, Lowering::HeapFree),
     intrinsic!("INT", 1..=1, DynamicNumeric, Pure, Lowering::Floor),
+    intrinsic!(
+        "INKEY",
+        0..=0,
+        String,
+        Runtime,
+        Lowering::RuntimeString("B$INKY")
+    ),
     intrinsic!("INSTR", 2..=3, Integer, Runtime, Lowering::Instr),
     intrinsic!(
         "LCASE",
@@ -189,6 +197,7 @@ pub static INTRINSICS: &[Intrinsic] = &[
         Lowering::RuntimeString("B$RTRM")
     ),
     intrinsic!("RIGHT", 2..=2, String, Runtime, Lowering::Right),
+    intrinsic!("RND", 0..=1, Single, Runtime, Lowering::Random),
     intrinsic!("SGN", 1..=1, DynamicNumeric, Pure, Lowering::Sign),
     intrinsic!("SIN", 1..=1, DynamicNumeric, Pure, Lowering::Sin),
     intrinsic!("SQR", 1..=1, DynamicNumeric, Pure, Lowering::Sqrt),

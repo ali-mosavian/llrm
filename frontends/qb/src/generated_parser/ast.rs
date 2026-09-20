@@ -319,6 +319,7 @@ pub(crate) fn external_action(
             Err(ParseResult::NotFound) => ParseResult::NotFound,
             Err(other) => other,
         },
+        ExternalAction::LiteralString => literal_string(state),
         ExternalAction::IfStatement => if_statement(engine, state),
         ExternalAction::SharedDeclaration => {
             state.declaration_shared = true;
@@ -377,6 +378,20 @@ pub(crate) fn external_action(
         state.rollback(checkpoint);
     }
     result
+}
+
+fn literal_string(state: &mut ParseState) -> ParseResult {
+    let Some(token) = state.token().cloned() else {
+        return ParseResult::NotFound;
+    };
+    let TokenKind::String(value) = token.kind else {
+        return ParseResult::NotFound;
+    };
+    state.at += 1;
+    state
+        .expressions
+        .push(Expr::Literal(Literal::String(value), token.span));
+    ParseResult::GoodSyntax
 }
 
 fn declaration(state: &mut ParseState, form: DeclarationForm, require_array: bool) -> ParseResult {
@@ -490,7 +505,10 @@ fn end_print(state: &mut ParseState, has_expression: bool) -> ParseResult {
     if consume_named(state, "tkComma") || consume_named(state, "tkSColon") {
         return ParseResult::GoodSyntax;
     }
-    if at_named(state, "tkNewLine") || at_named(state, "tkColon") {
+    if at_named(state, "tkNewLine")
+        || at_named(state, "tkColon")
+        || (has_expression && at_named(state, "tkUSING"))
+    {
         return if has_expression {
             ParseResult::GoodSyntax
         } else {
@@ -544,6 +562,13 @@ fn argument_list(state: &mut ParseState) -> ParseResult {
         if count == 5 {
             return ParseResult::BadSyntax;
         }
+        if at_named(state, "tkComma") {
+            let span = state.token().expect("matched comma").span;
+            state.at += 1;
+            state.expressions.push(Expr::Omitted(span));
+            count += 1;
+            continue;
+        }
         let value = match expression(state, 0) {
             Ok(value) => value,
             Err(result) => return result,
@@ -551,6 +576,14 @@ fn argument_list(state: &mut ParseState) -> ParseResult {
         state.expressions.push(value);
         count += 1;
         if !consume_named(state, "tkComma") {
+            break;
+        }
+        if at_named(state, "tkNewLine") || at_named(state, "tkColon") {
+            let span = state
+                .tokens
+                .get(state.at.saturating_sub(1))
+                .map_or(Span { line: 1, start: 0, end: 0 }, |token| token.span);
+            state.expressions.push(Expr::Omitted(span));
             break;
         }
     }
@@ -949,12 +982,26 @@ fn synthesize_statement(
             if actions.contains(&AstAction::LineInputChannel) && file.is_none() {
                 return false;
             }
+            let has_prompt = actions
+                .iter()
+                .any(|action| matches!(action, AstAction::Mark { slot: 4, .. }));
+            let prompt = has_prompt.then(|| values.next()).flatten();
+            if has_prompt && prompt.is_none() {
+                return false;
+            }
             let destinations = values.collect::<Vec<_>>();
             if destinations.is_empty() {
                 return false;
             }
             Statement::Input {
                 file,
+                prompt,
+                suppress_question_mark: actions
+                    .iter()
+                    .any(|action| matches!(action, AstAction::Mark { slot: 1, .. })),
+                keep_cursor: actions
+                    .iter()
+                    .any(|action| matches!(action, AstAction::Mark { slot: 2, .. })),
                 destinations,
                 span,
             }
@@ -968,6 +1015,25 @@ fn synthesize_statement(
             if actions.contains(&AstAction::PrintChannel) && file.is_none() {
                 return false;
             }
+            let mut values = values.collect::<Vec<_>>();
+            let using = if actions.contains(&AstAction::PrintUsing) {
+                let Some(using_span) = state.tokens[..state.at]
+                    .iter()
+                    .rfind(|token| matches!(token.kind, TokenKind::Reserved(id) if id == named("tkUSING")))
+                    .map(|token| token.span)
+                else {
+                    return false;
+                };
+                let Some(index) = values
+                    .iter()
+                    .position(|value| value.span().start >= using_span.end)
+                else {
+                    return false;
+                };
+                Some(values.remove(index))
+            } else {
+                None
+            };
             let separators = actions
                 .iter()
                 .filter_map(|action| match *action {
@@ -976,7 +1042,6 @@ fn synthesize_statement(
                     _ => None,
                 })
                 .collect::<Vec<_>>();
-            let values = values.collect::<Vec<_>>();
             if separators.len() > values.len()
                 || (!values.is_empty() && separators.len() + 1 < values.len())
             {
@@ -993,7 +1058,12 @@ fn synthesize_statement(
                         .unwrap_or(PrintSeparator::End),
                 })
                 .collect();
-            Statement::Print { file, items, span }
+            Statement::Print {
+                file,
+                using,
+                items,
+                span,
+            }
         }
         StatementShape::Goto => {
             let [(label, _)]: [(String, Span); 1] = match labels.try_into() {
@@ -1403,7 +1473,7 @@ fn synthesize_statement(
 }
 
 fn block_until_next(state: &mut ParseState) -> Option<Vec<Statement>> {
-    if !consume_named(state, "tkNewLine") {
+    if !consume_named(state, "tkNewLine") && !consume_named(state, "tkColon") {
         return None;
     }
     let mut body = Vec::new();
@@ -1461,7 +1531,7 @@ fn block_until_loop(state: &mut ParseState) -> Option<(Vec<Statement>, Option<(b
 }
 
 fn block_until_wend(state: &mut ParseState) -> Option<Vec<Statement>> {
-    if !consume_named(state, "tkNewLine") {
+    if !consume_named(state, "tkNewLine") && !consume_named(state, "tkColon") {
         return None;
     }
     let mut body = Vec::new();
@@ -2121,6 +2191,7 @@ fn contextual_reserved_name(id: u16) -> Option<String> {
                 | "TO"
                 | "TYPE"
                 | "UNTIL"
+                | "USING"
                 | "WEND"
                 | "WHILE"
                 | "XOR"

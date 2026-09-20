@@ -89,7 +89,15 @@ def lower(program: model.Program) -> tuple[Lowered, ...]:
         types = {one.id: one for one in module.types}
         externals = {one.id: one.name for one in module.data if one.linkage is model.DataLinkage.EXTERNAL}
         for function in module.functions:
-            out.append(_function(module.name, _materialized_booleans(function, types), types, externals))
+            out.append(
+                _function(
+                    module.name,
+                    _materialized_booleans(function, types),
+                    types,
+                    externals,
+                    program.array_order,
+                )
+            )
     return tuple(out)
 
 
@@ -252,6 +260,7 @@ def _function(
     function: model.Function,
     types: dict[int, model.Type],
     externals: dict[int, str],
+    array_order: model.ArrayOrder,
 ) -> Lowered:
     values = {one.id: mir.Value(one.id, one.id, variable=one.id, version=1) for one in function.values}
     value_types = {one.id: types[one.type] for one in function.values}
@@ -343,7 +352,10 @@ def _function(
                 assert array.element is not None
                 element = types[array.element]
                 offset = None
-                for index, (lower, upper) in zip(indices, array.bounds, strict=True):
+                dimensions = list(zip(indices, array.bounds, strict=True))
+                if array_order is model.ArrayOrder.COLUMN_MAJOR:
+                    dimensions.reverse()
+                for index, (lower, upper) in dimensions:
                     got = operand(index, before)
                     index_type = types[index.type] if isinstance(index, model.Constant) else value_types[index.value]
                     adjusted = arithmetic(mir.Kind.SUB, got, mir.Const(lower, index_type.width), index_type, before)
@@ -398,7 +410,10 @@ def _function(
                 assert root.element is not None
                 element = types[root.element]
                 offset = None
-                for index, (lower, upper) in zip(indices, root.bounds, strict=True):
+                dimensions = list(zip(indices, root.bounds, strict=True))
+                if array_order is model.ArrayOrder.COLUMN_MAJOR:
+                    dimensions.reverse()
+                for index, (lower, upper) in dimensions:
                     got = operand(index, before)
                     index_type = types[index.type] if isinstance(index, model.Constant) else value_types[index.value]
                     adjusted = arithmetic(mir.Kind.SUB, got, mir.Const(lower, index_type.width), index_type, before)

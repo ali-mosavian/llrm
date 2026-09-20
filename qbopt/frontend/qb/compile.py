@@ -101,6 +101,15 @@ def _data(module: hir.Module) -> tuple[dict[tuple[Space, int], str], dict[str, t
                 if relocation.addend:
                     raise EmissionError(f"{object_.name}: a segment selector cannot carry an offset")
                 items.append(_SegmentWord(target))
+            elif far and internal[relocation.target].address is hir.AddressKind.NEAR:
+                # A BASIC array descriptor's AD_fhd pointer to DGROUP data is
+                # group-relative in both halves. BC emits an OFFSET fixup with
+                # a DGROUP frame followed by the DGROUP selector. A single OMF
+                # POINTER fixup selects the target segment instead; pairing
+                # that selector with AD_oAdjusted's group-relative offset
+                # shifted every formal-array access by BC_DATA's group offset.
+                items.append(masm.Pointer(target, relocation.addend, False))
+                items.append(_SegmentWord("DGROUP"))
             else:
                 items.append(masm.Pointer(target, relocation.addend, far))
             cursor = relocation.at + width
@@ -139,6 +148,25 @@ def _read_data_lines(module: hir.Module) -> tuple[bytes, ...]:
     if any(not line or not line.isascii() for line in lines):
         raise EmissionError("READ/DATA lines must be nonempty ASCII source text")
     return lines
+
+
+def _read_data_items(module: hir.Module) -> tuple[bytes, ...]:
+    """Serialize the ordered keys consumed by QB45's B$RSTB search.
+
+    BC places a relocated code address before every DATA row and passes the
+    matching address to B$RSTB.  The runtime neither jumps through nor
+    dereferences it: ``read.asm`` only performs an unsigned ordered search.
+    Stable stream offsets preserve that complete contract without inventing
+    code labels for source DATA statements, which emit no instructions.
+    """
+    items: list[bytes] = []
+    key = 0
+    for line in _read_data_lines(module):
+        if key > 0xFFFF:
+            raise EmissionError("READ/DATA stream exceeds B$RSTB's 16-bit ordered key")
+        items.extend((key.to_bytes(2, "little"), line + b"\0"))
+        key += len(line) + 1
+    return tuple(items)
 
 
 def _object_data(
@@ -847,6 +875,14 @@ def _optimized(program: hir.Program, function: hir.Function, body: hir.Lowered) 
         rooted,
         dgroup,
         semantic_calls,
+        # QB's source loops commonly have large exact bounds (screen and
+        # array initialization). The shared peeler speculatively clones those
+        # loops, recursively considers unrolling the clone, then rejects the
+        # result on growth. Nibbles' 50x80 loop spent minutes constructing
+        # candidates of 1,500--3,600 MIR operations which selected no code.
+        # Keep unrolling and every scalar pass; skip that unproductive
+        # speculative transaction at this frontend boundary.
+        peel_=False,
         # Runtime RESUME entries can jump directly into a loop, making the
         # analysis root irreducible. Scalar promotion requires a dominator
         # tree and, more importantly, must not replace frame state that such
@@ -1338,9 +1374,7 @@ def assembled(program: hir.Program) -> masm.Module:
     procedures.append(_statement_procedure(tuple(sorted(statement_targets))))
     names, data_by_segment = _data(module)
     names.update(((Space.SEGMENT, key), name) for key, name in code_names.items())
-    read_data = tuple(
-        item for line in _read_data_lines(module) for item in (masm.Pointer("$QB$MAIN", 0, False), line + b"\0")
-    )
+    read_data = _read_data_items(module)
     external_data = {object_.name for object_ in module.data if object_.linkage is hir.DataLinkage.EXTERNAL}
     externs = {(name, "far") for name in referenced_calls - defined}
     externs.update((name, "byte") for name in external_data)

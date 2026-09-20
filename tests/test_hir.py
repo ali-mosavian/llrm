@@ -163,6 +163,35 @@ def test_qb45_numeric_read_data_reaches_typed_hir_and_fresh_omf() -> None:
     assert "call far ptr B$RDR4" in listing
 
 
+def test_restore_keys_select_the_labeled_serialized_data_row(tmp_path: Path) -> None:
+    """Nibbles RESTORE normal kept selecting mono, so SET received the wrong color table."""
+    source = tmp_path / "restore.bas"
+    source.write_bytes(b"restore later\r\nfirst: data 1\r\nlater: data 2\r\n")
+    program = qb_driver.parsed(source, dialect="qb45", runtime="qb45")
+    assembled = qb_compile.assembled(program)
+    read_data = dict(assembled.data)["BC_DS"]
+
+    # B$RSTB compares its argument against the word immediately before each
+    # NUL-terminated row.  The second key must therefore equal RESTORE's 3,
+    # not repeat the first row's relocated main-entry address.
+    assert read_data[1:] == (b"\0\0", b" 1\0", b"\3\0", b" 2\0", b"\xff\xff\1")
+    listing = masm.text(assembled)
+    assert "pushw 3" in listing
+    assert "call far ptr B$RSTB" in listing
+
+
+def test_integer_floor_division_stays_integer_until_its_qb_single_result(tmp_path: Path) -> None:
+    """Nibbles stored x87 status 16384 as arena(3,1).sister, then COLOR failed on 8224."""
+    source = tmp_path / "floor.bas"
+    source.write_bytes(b"dim row as integer, realRow as integer\r\nrow = 3\r\nrealRow = int((row + 1) / 2)\r\n")
+    program = qb_driver.parsed(source, dialect="qb45", runtime="qb45")
+    projection = hir.mir_text(hir.lower(program)[0])
+
+    assert " divmod 2:2" in projection
+    assert "fcompare" not in projection
+    assert " add 1:2" not in projection
+
+
 def test_hir_json_is_deterministic_strict_and_replayable() -> None:
     text = hir.encode(program())
     assert text == hir.encode(hir.decode(text))
@@ -291,6 +320,32 @@ def test_hir_lowers_typed_array_index_to_whole_offset_arithmetic() -> None:
     assert any(insn.what is not None for insn in lir.insns)
 
 
+def test_hir_lowering_honors_qb_multidimensional_array_order(tmp_path: Path) -> None:
+    """Nibbles indexed ARENA(row,col) as row*80+col and passed garbage colors to B$COLR."""
+    basic = tmp_path / "ORDER.BAS"
+    basic.write_text(
+        "dim shared grid(1 to 2, 1 to 3) as integer\n"
+        "dim row as integer, col as integer, answer as integer\n"
+        "answer = grid(row, col)\n"
+    )
+
+    factors = {}
+    for order in ("column-major", "row-major"):
+        program = qb_driver.parsed(basic, dialect="vbdos", runtime="vbdos", array_order=order)
+        body = hir.lower(program)[0].body
+        factors[order] = [
+            argument.n
+            for block in body.blocks
+            for operation in block.ops
+            if operation.kind is mir.Kind.MUL
+            for argument in operation.args
+            if isinstance(argument, mir.Const)
+        ]
+
+    assert factors["column-major"] == [2, 2]
+    assert factors["row-major"] == [3, 2]
+
+
 def test_canonical_mir_dump_keeps_call_identity() -> None:
     void = hir.Type(0, "void", hir.TypeKind.VOID, 0)
     block = hir.Block(
@@ -353,6 +408,14 @@ def test_machine_stage_dump_is_masm_intel_not_python_repr() -> None:
     assert "db 0d9h,0feh" in inline
 
 
+def test_qb_stage_dump_reads_the_same_cp437_source_as_the_frontend(tmp_path: Path) -> None:
+    """Nibbles reached HIR, but the showcase crashed while copying byte DB from its source."""
+    source = tmp_path / "CP437.BAS"
+    source.write_bytes(b'print "\xdb"\r\n\x1aignored')
+    namespace = __import__("runpy").run_path("tools/qbstages.py")
+    assert namespace["_source_text"](source) == 'print "█"\r\n'
+
+
 def test_qb_stage_dump_ends_with_the_emitted_runtime_abi_assembly(tmp_path: Path) -> None:
     """The showcase omitted ENRA and printed encoded RETF 4 as a bare RETF."""
     namespace = __import__("runpy").run_path("tools/qbstages.py")
@@ -365,11 +428,26 @@ def test_qb_stage_dump_ends_with_the_emitted_runtime_abi_assembly(tmp_path: Path
     )
 
     emitted = (tmp_path / "99-emitted-asm.asm").read_text()
-    assert "REPORT proc far" in emitted
+    report = emitted.split("REPORT proc far\n", 1)[1].split("REPORT endp", 1)[0]
+    # B$ENRA owns BP/SI/DI. The OMF emitter strips the shared backend's native
+    # push-bp shell, so the allegedly exact final stage must strip it too.
+    assert report.startswith("L1_1:\n    mov cx, 6\n")
+    assert "push bp" not in report
     assert "mov cx, 6" in emitted
     assert "call far ptr B$ENRA" in emitted
     assert "call far ptr B$EXSA" in emitted
     assert "retf 4" in emitted
+
+
+def test_qb45_input_type_table_uses_dgroup_far_pointer(tmp_path: Path) -> None:
+    """Nibbles panicked because every INPUT table was mistaken for a VBDOS far literal."""
+    source = tmp_path / "INPUT.BAS"
+    source.write_text('dim answer as string\ninput "Number"; answer\n')
+    program = qb_driver.parsed(source, dialect="vbdos", runtime="qb45")
+
+    table = next(one for one in program.modules[0].data if one.name.startswith("$input"))
+    assert table.address is hir.AddressKind.NEAR
+    qb_compile.object_bytes(program, source.name)
 
 
 def test_runtime_entry_reserves_the_complete_live_local_extent() -> None:
@@ -791,6 +869,41 @@ def test_runtime_frame_counts_owned_string_descriptors_not_runtime_temporaries()
     assert "mov bx, 1" in procedure
 
 
+def test_source_call_releases_its_materialized_string_argument() -> None:
+    """Nibbles left three Center arguments live until loop i became 0x2020."""
+    source = qb_driver.parsed(ROOT / "frontends/qb/fixtures/STRTEMP.BAS", runtime="qb45")
+    main = source.modules[0].functions[0]
+    calls = [
+        instruction.callee
+        for block in main.blocks
+        for instruction in block.instructions
+        if instruction.op is hir.Op.CALL
+    ]
+
+    show = calls.index("SHOW")
+    assert calls[show - 1 : show + 2] == ["B$SASS", "SHOW", "B$STDL"]
+
+
+def test_far_array_field_byref_uses_a_near_copy_in_copy_out_slot() -> None:
+    """Nibbles pushed four bytes per PrintScore field, then RETF 10 left SP corrupted."""
+    source = qb_driver.parsed(ROOT / "frontends/qb/fixtures/FARBYREF.BAS", runtime="qb45")
+    module = source.modules[0]
+    function = next(one for one in module.functions if one.name == "WORK")
+    types = {one.id: one for one in module.types}
+    values = {one.id: types[one.type] for one in function.values}
+    instructions = [instruction for block in function.blocks for instruction in block.instructions]
+    call = next(one for one in instructions if one.op is hir.Op.CALL and one.callee == "TOUCH")
+    argument = call.operands[0]
+
+    assert isinstance(argument, hir.ValueRef)
+    assert values[argument.value].name == "near*integer"
+    after = instructions[instructions.index(call) + 1 :]
+    assert any(
+        instruction.op is hir.Op.STORE and isinstance(instruction.operands[0], hir.IndirectPlace)
+        for instruction in after
+    )
+
+
 def test_fixed_string_array_descriptor_carries_a_near_data_offset() -> None:
     """Fresh SYS loaded argv() as a huge pointer and DIR$ raised BASIC error 64."""
     source = qb_driver.parsed(ROOT / "frontends/qb/fixtures/string-array-element.bas")
@@ -841,7 +954,8 @@ def test_module_static_numeric_array_has_a_relocated_basic_descriptor() -> None:
         "06 00 00 00 00 00 00 00 01 40 06 00 04 00 04 00 00 00"
     )
     assert [(one.offset, one.loc, one.target, one.index) for one in omf.fixups(records) if one.seg == constant] == [
-        (0, 3, "segment", by_name["BC_DATA"][0]),
+        (0, 1, "segment", by_name["BC_DATA"][0]),
+        (2, 2, "group", 1),
         (10, 1, "segment", by_name["BC_DATA"][0]),
     ]
 
@@ -861,7 +975,33 @@ def test_rank_two_descriptor_matches_qb_dimension_order_and_adjusted_offset() ->
     assert bytes(descriptor.bytes[8:22]) == bytes.fromhex("02 40 00 00 02 00 03 00 01 00 02 00 01 00")
     assert [(one.at, one.target, one.addend, one.address.value) for one in descriptor.relocations] == [
         (0, values.symbol, values.offset, "far"),
-        (10, values.symbol, values.offset, "near"),
+        (10, values.symbol, values.offset - 6, "near"),
+    ]
+
+
+def test_static_array_formal_uses_a_lower_bound_adjusted_descriptor() -> None:
+    """DYNARR wrote a(2).row, leaving a(1).row at zero after Touch a()."""
+    source = qb_driver.parsed(ROOT / "frontends/qb/fixtures/ADJUDT.BAS")
+    module = source.modules[0]
+    main = module.functions[0]
+    values = next(one for one in main.places if one.name == "A")
+    descriptor = next(one for one in module.data if one.name == "A$descriptor")
+
+    # QB's AD_oAdjusted is data - lower*elementWidth. The callee then adds
+    # the source subscript directly; it does not subtract the lower bound.
+    assert [(one.at, one.target, one.addend, one.address.value) for one in descriptor.relocations] == [
+        (0, values.symbol, values.offset, "far"),
+        (10, values.symbol, values.offset - 6, "near"),
+    ]
+    records = omf.parse(qb_compile.object_bytes(source, "ADJUDT.BAS"))
+    segments = omf.segments(records)
+    constants = next(index for index, one in enumerate(segments) if one and one[0] == "BC_CN")
+    data = next(index for index, one in enumerate(segments) if one and one[0] == "BC_DATA")
+    descriptor_fixups = [one for one in omf.fixups(records) if one.seg == constants and one.offset <= 10]
+    assert [(one.offset, one.loc, one.target, one.index) for one in descriptor_fixups] == [
+        (0, 1, "segment", data),
+        (2, 2, "group", 1),
+        (10, 1, "segment", data),
     ]
 
 
@@ -1211,8 +1351,8 @@ def test_bare_def_seg_reaches_object_emission(tmp_path: Path) -> None:
     assert "B$POKE" not in omf.externals(records)
 
 
-def test_byref_dynamic_array_field_preserves_far_pointer_width(tmp_path: Path) -> None:
-    """ENT_MOVE_TRIGS narrowed a far UDT-field address before its BYREF call."""
+def test_byref_dynamic_array_field_copies_through_a_near_formal(tmp_path: Path) -> None:
+    """ENT_MOVE_TRIGS passed a four-byte far field address to a two-byte scalar formal."""
     basic = tmp_path / "FARFIELD.BAS"
     basic.write_bytes(
         b"option explicit\r\n"
@@ -1229,17 +1369,16 @@ def test_byref_dynamic_array_field_preserves_far_pointer_width(tmp_path: Path) -
     invoke = next(function for function in module.functions if function.name == "INVOKE")
     types = {type_.id: type_ for type_ in module.types}
     values = {value.id: types[value.type] for value in invoke.values}
-    offsets = [
-        instruction
-        for block in invoke.blocks
-        for instruction in block.instructions
-        if instruction.op is hir.Op.PTR_OFFSET
-    ]
-    assert offsets
-    for instruction in offsets:
-        base = instruction.operands[0]
-        assert isinstance(base, hir.ValueRef)
-        assert values[instruction.results[0]].address is values[base.value].address
+    instructions = [instruction for block in invoke.blocks for instruction in block.instructions]
+    call = next(one for one in instructions if one.op is hir.Op.CALL and one.callee == "CONSUME")
+    argument = call.operands[0]
+    assert isinstance(argument, hir.ValueRef)
+    assert values[argument.value].name == "near*integer"
+    assert any(one.op is hir.Op.LOAD and isinstance(one.operands[0], hir.IndirectPlace) for one in instructions)
+    assert any(
+        one.op is hir.Op.STORE and isinstance(one.operands[0], hir.IndirectPlace)
+        for one in instructions[instructions.index(call) + 1 :]
+    )
 
     assert qb_compile.object_bytes(source, "FARFIELD.BAS")
 
@@ -1424,6 +1563,39 @@ def test_classic_string_stack_abis_are_measured_for_every_runtime_family() -> No
             assert contract.established
             assert contract.cleanup == pushed
             assert contract.inputs == frozenset()
+
+
+def test_vbdos_nibbles_screen_calls_have_fixed_stack_contracts() -> None:
+    """Nibbles reached physical HIR and stopped at unaudited screen-call cleanup."""
+    from qbopt.frontend.qb.abi import _contract
+
+    for name, pushed in {
+        "B$SCLS": 2,
+        "B$VWPT": 4,
+        "B$SPLY": 2,
+        "B$INKY": 0,
+        "B$USNG": 2,
+    }.items():
+        contract = _contract(name, hir.StackCleanup.CALLEE, pushed, hir.RuntimeProfile.VBDOS)
+        assert contract.established
+        assert contract.cleanup == pushed
+        assert contract.inputs == frozenset()
+
+
+def test_qb_frontend_does_not_build_speculative_peel_candidates(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Nibbles INITCOLORS spent minutes optimizing rejected 50x80 peel candidates."""
+    program = qb_driver.parsed(ROOT / "frontends/qb/fixtures/timer-basic.bas")
+    function = program.modules[0].functions[0]
+    body = hir.lower(program)[0]
+    seen: dict[str, object] = {}
+
+    def applied(candidate: mir.MirBody, *args: object, **kwargs: object) -> mir.MirBody:
+        seen.update(kwargs)
+        return candidate
+
+    monkeypatch.setattr(qb_compile.transform, "applied", applied)
+    qb_compile.optimized(program, function, body)
+    assert seen.get("peel_", True) is False
 
 
 def test_double_runtime_argument_is_split_high_to_low_at_the_qb_abi_boundary() -> None:

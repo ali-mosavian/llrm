@@ -137,6 +137,7 @@ pub enum ResumeTarget {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
+    Omitted(Span),
     Literal(Literal, Span),
     Name(String, Span),
     Apply {
@@ -172,7 +173,7 @@ impl Eq for Expr {}
 impl Expr {
     pub fn span(&self) -> Span {
         match self {
-            Self::Literal(_, span) | Self::Name(_, span) => *span,
+            Self::Omitted(span) | Self::Literal(_, span) | Self::Name(_, span) => *span,
             Self::Apply { span, .. }
             | Self::Index { span, .. }
             | Self::Field { span, .. }
@@ -294,11 +295,15 @@ pub enum Statement {
     },
     Print {
         file: Option<Expr>,
+        using: Option<Expr>,
         items: Vec<PrintItem>,
         span: Span,
     },
     Input {
         file: Option<Expr>,
+        prompt: Option<Expr>,
+        suppress_question_mark: bool,
+        keep_cursor: bool,
         destinations: Vec<Expr>,
         span: Span,
     },

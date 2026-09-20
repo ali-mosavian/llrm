@@ -7,7 +7,7 @@ use crate::intrinsics::{self, Lowering, ResultClass};
 use crate::dialect::Dialect;
 use crate::syntax::{
     Binary, Declaration, ExitTarget, Expr, FileMode, Literal, Module, PrintSeparator,
-    ProcedureKind, ResumeTarget, Statement, TypeName, Unary,
+    Procedure, ProcedureKind, ResumeTarget, Statement, TypeName, Unary,
 };
 
 const VOID: u32 = 0;
@@ -111,6 +111,23 @@ struct Signature {
     cdecl: bool,
 }
 
+fn signatures_compatible(left: &Signature, right: &Signature) -> bool {
+    left.result == right.result
+        && left.callee == right.callee
+        && left.cdecl == right.cdecl
+        && left.parameters.len() == right.parameters.len()
+        && left
+            .parameters
+            .iter()
+            .zip(&right.parameters)
+            .all(|(left, right)| {
+                left.1 == right.1
+                    && left.2 == right.2
+                    && left.3 == right.3
+                    && (left.0 == right.0 || left.0 == ANY || right.0 == ANY)
+            })
+}
+
 struct Callable {
     id: u32,
     name: String,
@@ -157,7 +174,7 @@ struct Place {
 struct DataRelocation {
     at: usize,
     target: u32,
-    addend: usize,
+    addend: isize,
     address: &'static str,
 }
 
@@ -213,6 +230,7 @@ struct Compiler {
     descriptor_bases: BTreeMap<(u32, u32, &'static str), u32>,
     descriptor_fields: BTreeMap<(u32, usize, u32), u32>,
     labels: BTreeMap<String, u32>,
+    data_labels: BTreeMap<String, usize>,
     exits: Vec<(ExitTarget, u32)>,
     return_block: Option<u32>,
     result_place: Option<(u32, u32)>,
@@ -275,6 +293,8 @@ pub fn compile_with_options(
     mbf: bool,
     alternate_math: bool,
 ) -> Result<String, SemanticError> {
+    let module = outline_module_gosubs(module)?;
+    let module = &module;
     let mut compiler = Compiler::new(
         module_name,
         dialect,
@@ -290,6 +310,8 @@ pub fn compile_with_options(
     compiler.type_declarations(module)?;
     compiler.signatures(module)?;
     compiler.declarations(module)?;
+    let mut read_data_offset = 0;
+    compiler.reserve_data_labels(&module.statements, &mut read_data_offset)?;
     compiler.reserve_labels(&module.statements)?;
     compiler.statements(module)?;
     compiler.finish();
@@ -345,7 +367,7 @@ pub fn compile_with_options(
             parameter_bytes += compiler.width(value_type).max(2);
             if is_array {
                 compiler.variables.insert(
-                    canonical(&parameter.declaration.name).into(),
+                    variable_key(&parameter.declaration.name).into(),
                     Variable {
                         place: 0,
                         type_id: parameter_type,
@@ -380,7 +402,7 @@ pub fn compile_with_options(
                 );
             } else {
                 compiler.variables.insert(
-                    canonical(&parameter.declaration.name).into(),
+                    variable_key(&parameter.declaration.name).into(),
                     Variable {
                         place: 0,
                         type_id: parameter_type,
@@ -461,6 +483,151 @@ pub fn compile_with_options(
     Ok(compiler.json())
 }
 
+fn outline_module_gosubs(module: &Module) -> Result<Module, SemanticError> {
+    fn visit(statements: &[Statement], targets: &mut BTreeSet<String>) {
+        for statement in statements {
+            match statement {
+                Statement::Call {
+                    name, arguments, ..
+                } if name == "GOSUB" => {
+                    if let [Expr::Name(target, _)] = arguments.as_slice() {
+                        targets.insert(canonical(target).into());
+                    }
+                }
+                Statement::If {
+                    then_branch,
+                    else_branch,
+                    ..
+                } => {
+                    visit(then_branch, targets);
+                    visit(else_branch, targets);
+                }
+                Statement::For { body, .. }
+                | Statement::While { body, .. }
+                | Statement::Do { body, .. } => visit(body, targets),
+                Statement::Select {
+                    arms, otherwise, ..
+                } => {
+                    for (_, body) in arms {
+                        visit(body, targets);
+                    }
+                    visit(otherwise, targets);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn rewrite(statements: &mut [Statement]) -> Result<(), SemanticError> {
+        for statement in statements {
+            match statement {
+                Statement::Call {
+                    name, arguments, ..
+                } if name == "GOSUB" => {
+                    let [Expr::Name(target, _)] = arguments.as_slice() else {
+                        return Err(SemanticError {
+                            message: "GOSUB requires one symbolic label".into(),
+                        });
+                    };
+                    *name = canonical(target).into();
+                    arguments.clear();
+                }
+                Statement::If {
+                    then_branch,
+                    else_branch,
+                    ..
+                } => {
+                    rewrite(then_branch)?;
+                    rewrite(else_branch)?;
+                }
+                Statement::For { body, .. }
+                | Statement::While { body, .. }
+                | Statement::Do { body, .. } => rewrite(body)?,
+                Statement::Select {
+                    arms, otherwise, ..
+                } => {
+                    for (_, body) in arms {
+                        rewrite(body)?;
+                    }
+                    rewrite(otherwise)?;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    let mut targets = BTreeSet::new();
+    visit(&module.statements, &mut targets);
+    if targets.is_empty() {
+        return Ok(module.clone());
+    }
+
+    let mut normalized = module.clone();
+    let mut removed = vec![false; normalized.statements.len()];
+    for target in targets {
+        if normalized
+            .procedures
+            .iter()
+            .any(|procedure| canonical(&procedure.name) == target)
+        {
+            return Err(SemanticError {
+                message: format!("GOSUB label {target} collides with a procedure"),
+            });
+        }
+        let Some(start) = normalized.statements.iter().position(
+            |statement| matches!(statement, Statement::Label(name, _) if canonical(name) == target),
+        ) else {
+            return Err(SemanticError {
+                message: format!("unknown GOSUB label {target}"),
+            });
+        };
+        let Some(end) = normalized.statements[start + 1..]
+            .iter()
+            .position(|statement| {
+                matches!(statement, Statement::Call { name, arguments, .. } if name == "RETURN" && arguments.is_empty())
+            })
+            .map(|offset| start + 1 + offset)
+        else {
+            return Err(SemanticError {
+                message: format!("GOSUB label {target} has no matching RETURN"),
+            });
+        };
+        if removed[start..=end].iter().any(|one| *one) {
+            return Err(SemanticError {
+                message: format!("overlapping GOSUB region at {target}"),
+            });
+        }
+        let span = match &normalized.statements[start] {
+            Statement::Label(_, span) => *span,
+            _ => unreachable!(),
+        };
+        let mut body = normalized.statements[start + 1..end].to_vec();
+        rewrite(&mut body)?;
+        normalized.procedures.push(Procedure {
+            name: target,
+            alias: None,
+            cdecl: false,
+            kind: ProcedureKind::Sub,
+            parameters: Vec::new(),
+            result: None,
+            body,
+            declaration: false,
+            is_static: false,
+            span,
+        });
+        removed[start..=end].fill(true);
+    }
+    normalized.statements = normalized
+        .statements
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, statement)| (!removed[index]).then_some(statement))
+        .collect();
+    rewrite(&mut normalized.statements)?;
+    Ok(normalized)
+}
+
 impl Compiler {
     fn new(
         module_name: &str,
@@ -532,6 +699,7 @@ impl Compiler {
             descriptor_bases: BTreeMap::new(),
             descriptor_fields: BTreeMap::new(),
             labels: BTreeMap::new(),
+            data_labels: BTreeMap::new(),
             exits: Vec::new(),
             return_block: None,
             result_place: None,
@@ -947,7 +1115,7 @@ impl Compiler {
                 cdecl: procedure.cdecl,
             };
             if let Some(previous) = self.signatures.get(key) {
-                if previous != &signature {
+                if !signatures_compatible(previous, &signature) {
                     return self.fail(format!(
                         "declaration and definition of {} do not agree",
                         procedure.name
@@ -1001,7 +1169,7 @@ impl Compiler {
                 | Statement::OptionBase(_, _) => {}
                 Statement::Redim(items) => {
                     for item in items {
-                        if self.variables.contains_key(canonical(&item.name)) {
+                        if self.variables.contains_key(variable_key(&item.name)) {
                             continue;
                         }
                         // REDIM is itself a declaration in QB, including
@@ -1019,7 +1187,7 @@ impl Compiler {
                         .constants
                         .insert(canonical(name).into(), literal)
                         .is_some()
-                        || self.variables.contains_key(canonical(name))
+                        || self.variables.contains_key(variable_key(name))
                     {
                         return self.fail(format!("duplicate declaration {name}"));
                     }
@@ -1035,7 +1203,7 @@ impl Compiler {
         declaration: &Declaration,
         storage: &'static str,
     ) -> Result<u32, SemanticError> {
-        if self.variables.contains_key(canonical(&declaration.name))
+        if self.variables.contains_key(variable_key(&declaration.name))
             || self.constants.contains_key(canonical(&declaration.name))
         {
             return self.fail(format!("duplicate declaration {}", declaration.name));
@@ -1139,7 +1307,7 @@ impl Compiler {
             order.extend(2 * bounds.len()..2 * bounds.len() + 3);
             self.emit_call("B$DDIM", Vec::new(), operands, order, false);
             self.variables.insert(
-                canonical(&declaration.name).into(),
+                variable_key(&declaration.name).into(),
                 Variable {
                     place: 0,
                     type_id: element,
@@ -1194,7 +1362,7 @@ impl Compiler {
                 ));
             }
             self.variables.insert(
-                canonical(&declaration.name).into(),
+                variable_key(&declaration.name).into(),
                 Variable {
                     place: 0,
                     type_id: element,
@@ -1327,7 +1495,7 @@ impl Compiler {
             None
         };
         self.variables.insert(
-            canonical(&declaration.name).into(),
+            variable_key(&declaration.name).into(),
             Variable {
                 place,
                 type_id,
@@ -1377,6 +1545,23 @@ impl Compiler {
             bytes[at..at + 2].copy_from_slice(&count.to_le_bytes());
             bytes[at + 2..at + 4].copy_from_slice(&(*low as u16).to_le_bytes());
         }
+        let ordered_bounds: Vec<_> = if self.row_major {
+            bounds.iter().rev().collect()
+        } else {
+            bounds.iter().collect()
+        };
+        let reversed_bounds: Vec<_> = bounds.iter().rev().collect();
+        let mut lower_linear = None;
+        for (dimension, (lower, _)) in ordered_bounds.into_iter().enumerate() {
+            lower_linear = Some(if let Some(previous) = lower_linear {
+                let (count_lower, count_upper) = reversed_bounds[dimension];
+                previous * (count_upper - count_lower + 1) + lower
+            } else {
+                *lower
+            });
+        }
+        let lower_bias = lower_linear.unwrap_or(0) * element_width as i64;
+        let adjusted_offset = data_offset as i64 - lower_bias;
         self.data.push(DataObject {
             id: symbol,
             name: format!("{name}$descriptor"),
@@ -1386,16 +1571,16 @@ impl Compiler {
                 DataRelocation {
                     at: 0,
                     target: data_symbol,
-                    addend: data_offset,
+                    addend: data_offset as isize,
                     address: "far",
                 },
-                // The same measured object carries an offset16 relocation at
-                // AD_oAdjusted (+10) to BC_DATA+data_offset. It is the array
-                // data address, not a host-computed lower-bound bias.
+                // AD_oAdjusted is biased so generic array code can add source
+                // subscripts directly. QB's one-based six-byte DYNARR record
+                // has data at +6 but AD_oAdjusted at +0; TOUCH adds 1*6.
                 DataRelocation {
                     at: 10,
                     target: data_symbol,
-                    addend: data_offset,
+                    addend: adjusted_offset as isize,
                     address: "near",
                 },
             ],
@@ -1441,6 +1626,49 @@ impl Compiler {
                         self.reserve_labels(body)?;
                     }
                     self.reserve_labels(otherwise)?;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn reserve_data_labels(
+        &mut self,
+        statements: &[Statement],
+        offset: &mut usize,
+    ) -> Result<(), SemanticError> {
+        for statement in statements {
+            match statement {
+                Statement::Label(name, _) => {
+                    self.data_labels.insert(canonical(name).into(), *offset);
+                }
+                Statement::Data { values, .. } => {
+                    let line = values
+                        .iter()
+                        .map(|value| self.read_data_constant(value))
+                        .collect::<Result<Vec<_>, _>>()?
+                        .join(", ");
+                    *offset += 1 + line.len() + 1;
+                }
+                Statement::If {
+                    then_branch,
+                    else_branch,
+                    ..
+                } => {
+                    self.reserve_data_labels(then_branch, offset)?;
+                    self.reserve_data_labels(else_branch, offset)?;
+                }
+                Statement::For { body, .. }
+                | Statement::While { body, .. }
+                | Statement::Do { body, .. } => self.reserve_data_labels(body, offset)?,
+                Statement::Select {
+                    arms, otherwise, ..
+                } => {
+                    for (_, body) in arms {
+                        self.reserve_data_labels(body, offset)?;
+                    }
+                    self.reserve_data_labels(otherwise, offset)?;
                 }
                 _ => {}
             }
@@ -1777,11 +2005,20 @@ impl Compiler {
                     let position = self.convert(position, position_type, LONG)?;
                     self.emit_runtime_call("B$SSEK", Vec::new(), vec![file, position]);
                 }
-                Statement::Print { file, items, .. } => {
+                Statement::Print {
+                    file,
+                    using,
+                    items,
+                    ..
+                } => {
                     if let Some(file) = file {
                         let (file, file_type) = self.expression(file)?;
                         let file = self.convert(file, file_type, INTEGER)?;
                         self.emit_runtime_call("B$CHOU", Vec::new(), vec![file]);
+                    }
+                    if let Some(format) = using {
+                        let format = self.string_descriptor(format)?;
+                        self.emit_runtime_call("B$USNG", Vec::new(), vec![format]);
                     }
                     if items.is_empty() {
                         self.emit_runtime_call(
@@ -1835,16 +2072,77 @@ impl Compiler {
                     }
                 }
                 Statement::Input {
-                    file, destinations, ..
+                    file,
+                    prompt,
+                    suppress_question_mark,
+                    keep_cursor,
+                    destinations,
+                    span,
                 } => {
-                    let Some(file) = file else {
-                        return self.fail("console INPUT requires the audited prompt protocol");
-                    };
-                    let (file, file_type) = self.expression(file)?;
-                    let file = self.convert(file, file_type, INTEGER)?;
-                    self.emit_runtime_call("B$DSKI", Vec::new(), vec![file]);
-                    for destination in destinations {
-                        let (place, type_id) = self.destination(destination)?;
+                    let resolved_destinations = destinations
+                        .iter()
+                        .map(|destination| self.destination(destination))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    if let Some(file) = file {
+                        let (file, file_type) = self.expression(file)?;
+                        let file = self.convert(file, file_type, INTEGER)?;
+                        self.emit_runtime_call("B$DSKI", Vec::new(), vec![file]);
+                    } else {
+                        // B$INPP receives a near prompt descriptor followed by
+                        // a far pointer to [destination count + 1, flags,
+                        // destination type bytes]. VBDOS objects establish
+                        // flag bit 0 as prompt-comma (no '?') and bit 1 as the
+                        // leading semicolon's keep-cursor behavior.
+                        let empty_prompt = Expr::Literal(Literal::String(String::new()), *span);
+                        let prompt = self.string_descriptor(prompt.as_ref().unwrap_or(&empty_prompt))?;
+                        let count = u16::try_from(destinations.len() + 1)
+                            .map_err(|_| SemanticError { message: "INPUT has too many destinations".into() })?;
+                        let mut table = Vec::from(count.to_le_bytes());
+                        table.push(u8::from(*suppress_question_mark) | (u8::from(*keep_cursor) << 1));
+                        for (_, type_id) in &resolved_destinations {
+                            table.push(match type_id {
+                                &INTEGER | &BOOLEAN | &BYTE => 0x02,
+                                &LONG => 0x14,
+                                &SINGLE => 0x04,
+                                &DOUBLE => 0x08,
+                                _ if self.string_width(*type_id).is_some() => 0x03,
+                                _ => return self.fail("INPUT destination has an unsupported type"),
+                            });
+                        }
+                        let symbol = self.next_data;
+                        self.next_data += 1;
+                        self.data.push(DataObject {
+                            id: symbol,
+                            name: format!("$input{symbol}"),
+                            bytes: table,
+                            readonly: true,
+                            relocations: Vec::new(),
+                            linkage: "internal",
+                            // Only VBDOS places INPUT metadata in a far
+                            // constant segment. QB/PDS put the block in
+                            // DGROUP and pass DS:offset, as documented by
+                            // QB45 runtime/rt/inptty.asm's pBlock contract.
+                            address: if self.runtime == "vbdos" { "far" } else { "near" },
+                        });
+                        let place = self.next_place;
+                        self.next_place += 1;
+                        self.places.push(Place {
+                            id: place,
+                            name: format!("$input{symbol}"),
+                            type_id: BYTE,
+                            offset: 0,
+                            extent: destinations.len() + 3,
+                            storage: "static",
+                            symbol,
+                        });
+                        let table = self.far_address(Operand::Place(place), BYTE);
+                        self.emit_runtime_call(
+                            "B$INPP",
+                            Vec::new(),
+                            vec![prompt, Operand::Value(table)],
+                        );
+                    }
+                    for (place, type_id) in resolved_destinations {
                         let address = self.far_address(place, type_id);
                         let (callee, operands) = match type_id {
                             INTEGER | BOOLEAN | BYTE => ("B$RDI2", vec![Operand::Value(address)]),
@@ -1987,6 +2285,13 @@ impl Compiler {
                         };
                         self.emit_runtime_call("B$VWPT", Vec::new(), bounds);
                     }
+                    "PLAY" => {
+                        let [commands] = arguments.as_slice() else {
+                            return self.fail("PLAY expects one command string");
+                        };
+                        let commands = self.string_descriptor(commands)?;
+                        self.emit_runtime_call("B$SPLY", Vec::new(), vec![commands]);
+                    }
                     "POKE" => {
                         if arguments.len() != 2 {
                             return self.fail("POKE expects an offset and byte value");
@@ -2055,6 +2360,44 @@ impl Compiler {
                                 vec![right, Operand::Value(left_value)],
                             );
                         }
+                    }
+                    "COLOR" => {
+                        if arguments.len() > 3 {
+                            return self.fail("COLOR expects at most three positional arguments");
+                        }
+                        let operands = self.count_led_positional_arguments(arguments)?;
+                        self.emit_runtime_call("B$COLR", Vec::new(), operands);
+                    }
+                    "LOCATE" => {
+                        if arguments.len() > 5 {
+                            return self.fail("LOCATE expects at most five positional arguments");
+                        }
+                        // VBDOS LOCATE.OBJ records each source position as a
+                        // presence word plus an optional INTEGER value, then
+                        // appends the number of preceding words. This is the
+                        // same variable-sized convention as COLOR.
+                        let operands = self.count_led_positional_arguments(arguments)?;
+                        self.emit_runtime_call("B$LOCT", Vec::new(), operands);
+                    }
+                    "RESTORE" => {
+                        let offset = match arguments.as_slice() {
+                            [] => 0,
+                            [Expr::Name(label, _)] => *self
+                                .data_labels
+                                .get(canonical(label))
+                                .ok_or_else(|| SemanticError {
+                                    message: format!("unknown RESTORE label {label}"),
+                                })?,
+                            _ => return self.fail("RESTORE expects zero or one label"),
+                        };
+                        let offset = i64::try_from(offset).map_err(|_| SemanticError {
+                            message: "RESTORE data offset exceeds its INTEGER ABI".into(),
+                        })?;
+                        self.emit_runtime_call(
+                            "B$RSTB",
+                            Vec::new(),
+                            vec![Operand::Constant(INTEGER, Number::Integer(offset))],
+                        );
                     }
                     "SCREEN" => {
                         if arguments.len() != 1 {
@@ -2672,9 +3015,12 @@ impl Compiler {
                 }
                 let mut indices = Vec::new();
                 for index in arguments {
-                    let (operand, type_id) = self.expression(index)?;
-                    if !matches!(type_id, INTEGER | LONG) {
-                        return self.fail("array subscript is not integral");
+                    let (mut operand, type_id) = self.expression(index)?;
+                    if !matches!(type_id, INTEGER | LONG | SINGLE | DOUBLE | BYTE) {
+                        return self.fail(format!("array {name} subscript is not numeric"));
+                    }
+                    if matches!(type_id, SINGLE | DOUBLE | BYTE) {
+                        operand = self.convert(operand, type_id, INTEGER)?;
                     }
                     indices.push(operand);
                 }
@@ -2755,9 +3101,12 @@ impl Compiler {
                 }
                 let mut indices = Vec::new();
                 for index in arguments {
-                    let (operand, type_id) = self.expression(index)?;
-                    if !matches!(type_id, INTEGER | LONG) {
-                        return self.fail("array subscript is not integral");
+                    let (mut operand, type_id) = self.expression(index)?;
+                    if !matches!(type_id, INTEGER | LONG | SINGLE | DOUBLE | BYTE) {
+                        return self.fail(format!("array {name} subscript is not numeric"));
+                    }
+                    if matches!(type_id, SINGLE | DOUBLE | BYTE) {
+                        operand = self.convert(operand, type_id, INTEGER)?;
                     }
                     indices.push(operand);
                 }
@@ -2833,9 +3182,18 @@ impl Compiler {
         };
         let mut linear = None;
         for (index, (lower, upper)) in dimensions {
-            let (index, index_type) = self.expression(index)?;
-            if !matches!(index_type, INTEGER | LONG) {
-                return self.fail("array subscript is not integral");
+            let line = index.span().line;
+            let (mut index, mut index_type) = self.expression(index)?;
+            if !matches!(index_type, INTEGER | LONG | SINGLE | DOUBLE | BYTE) {
+                return self.fail(format!(
+                    "line {} array subscript is {} rather than numeric",
+                    line,
+                    self.name(index_type)
+                ));
+            }
+            if matches!(index_type, SINGLE | DOUBLE | BYTE) {
+                index = self.convert(index, index_type, INTEGER)?;
+                index_type = INTEGER;
             }
             let adjusted = self.value(index_type);
             self.emit(
@@ -2913,9 +3271,14 @@ impl Compiler {
             // pointer consumed by the element load/store.
             let mut operands = Vec::new();
             for index in indices {
+                let line = index.span().line;
                 let (index, index_type) = self.expression(index)?;
-                if !matches!(index_type, INTEGER | LONG) {
-                    return self.fail("array subscript is not integral");
+                if !matches!(index_type, INTEGER | LONG | SINGLE | DOUBLE | BYTE) {
+                    return self.fail(format!(
+                        "line {} array subscript is {} rather than numeric",
+                        line,
+                        self.name(index_type)
+                    ));
                 }
                 operands.push(self.convert(index, index_type, INTEGER)?);
             }
@@ -2955,9 +3318,14 @@ impl Compiler {
             indices.iter().collect()
         };
         for (dimension, index) in ordered.into_iter().enumerate() {
+            let line = index.span().line;
             let (index, index_type) = self.expression(index)?;
-            if !matches!(index_type, INTEGER | LONG) {
-                return self.fail("array subscript is not integral");
+            if !matches!(index_type, INTEGER | LONG | SINGLE | DOUBLE | BYTE) {
+                return self.fail(format!(
+                    "line {} array subscript is {} rather than numeric",
+                    line,
+                    self.name(index_type)
+                ));
             }
             let index = self.convert(index, index_type, offset_type)?;
             linear = Some(if let Some(previous) = linear {
@@ -3385,6 +3753,16 @@ impl Compiler {
 
     fn string_descriptor(&mut self, expression: &Expr) -> Result<Operand, SemanticError> {
         if let Expr::Name(name, _) = expression {
+            if let Some(intrinsic) = intrinsics::find(canonical(name), self.dialect) {
+                if intrinsic.accepts(0) {
+                    if let Lowering::RuntimeString(callee) = intrinsic.lowering {
+                        let pointer_type = self.pointer_type(STRING);
+                        let result = self.value(pointer_type);
+                        self.emit_runtime_call(callee, vec![result], Vec::new());
+                        return Ok(Operand::Value(result));
+                    }
+                }
+            }
             if intrinsics::find(canonical(name), self.dialect)
                 .is_some_and(|intrinsic| intrinsic.lowering == Lowering::CommandLine)
             {
@@ -3632,7 +4010,10 @@ impl Compiler {
         Ok(Operand::Value(result))
     }
 
-    fn byref_string_argument(&mut self, expression: &Expr) -> Result<Operand, SemanticError> {
+    fn byref_string_argument(
+        &mut self,
+        expression: &Expr,
+    ) -> Result<(Operand, bool), SemanticError> {
         // A genuine dynamic STRING lvalue already owns a stable descriptor,
         // so ordinary BYREF aliasing passes that descriptor directly. A
         // literal, fixed string, concatenation, or string-function result is
@@ -3652,7 +4033,7 @@ impl Compiler {
             Expr::Apply { name, .. }
                 if intrinsics::find(canonical(name), self.dialect).is_none()
                     && !self.signatures.contains_key(canonical(name))
-                    && self.variables.contains_key(canonical(name)) =>
+                    && self.variables.contains_key(variable_key(name)) =>
             {
                 Some(self.destination(expression)?)
             }
@@ -3661,7 +4042,7 @@ impl Compiler {
         };
         if let Some((place, type_id)) = lvalue {
             if self.string_width(type_id) == Some(0) {
-                return Ok(self.near_string_address(place));
+                return Ok((self.near_string_address(place), false));
             }
         }
 
@@ -3669,7 +4050,7 @@ impl Compiler {
         let temporary = self.owned_string_temporary()?;
         let destination = self.near_string_address(Operand::Place(temporary));
         self.emit_runtime_call("B$SASS", Vec::new(), vec![source, destination.clone()]);
-        Ok(destination)
+        Ok((destination, true))
     }
 
     fn redim(&mut self, declaration: &Declaration) -> Result<(), SemanticError> {
@@ -3728,6 +4109,7 @@ impl Compiler {
 
     fn expression(&mut self, expression: &Expr) -> Result<(Operand, u32), SemanticError> {
         match expression {
+            Expr::Omitted(_) => self.fail("omitted argument used as an expression"),
             Expr::Literal(Literal::Integer(value, type_name), _) => {
                 let type_id = type_id(Some(type_name))?;
                 Ok((Operand::Constant(type_id, Number::Integer(*value)), type_id))
@@ -3958,6 +4340,41 @@ impl Compiler {
             );
             return Ok(Some((Operand::Value(result), SINGLE)));
         }
+        if intrinsic.lowering == Lowering::Random {
+            // VBDOS random.asm returns AX = near address of its current R4
+            // value. RND1 consumes one SINGLE selector; RND0 consumes none.
+            let operands = if let Some(argument) = arguments.first() {
+                let (selector, selector_type) = self.expression(argument)?;
+                let selector = self.convert(selector, selector_type, SINGLE)?;
+                // HIR evaluates floats as extended values. The runtime ABI
+                // consumes the declared R4 representation, so materialize
+                // that rounding boundary before argument physicalization.
+                let place = self.temporary(SINGLE)?;
+                self.emit("store", Vec::new(), vec![Operand::Place(place), selector]);
+                vec![Operand::Place(place)]
+            } else {
+                Vec::new()
+            };
+            let pointer_type = self.pointer_type(SINGLE);
+            let pointer = self.value(pointer_type);
+            self.emit_runtime_call(
+                if operands.is_empty() { "B$RND0" } else { "B$RND1" },
+                vec![pointer],
+                operands,
+            );
+            let result = self.value(SINGLE);
+            self.emit(
+                "load",
+                vec![result],
+                vec![Operand::Indirect {
+                    base: pointer,
+                    offset: 0,
+                    type_id: SINGLE,
+                    volatile: false,
+                }],
+            );
+            return Ok(Some((Operand::Value(result), SINGLE)));
+        }
         if matches!(
             intrinsic.lowering,
             Lowering::ToInteger | Lowering::ToLong | Lowering::ToSingle | Lowering::ToDouble
@@ -4146,6 +4563,133 @@ impl Compiler {
             return Ok(Some((Operand::Value(result), type_id)));
         }
         if intrinsic.lowering == Lowering::Floor {
+            if let Expr::Binary {
+                op: Binary::Divide,
+                left,
+                right,
+                ..
+            } = &arguments[0]
+            {
+                if let Ok((right_type, Number::Integer(divisor))) = self.constant(right) {
+                    if matches!(right_type, INTEGER | BOOLEAN | BYTE)
+                        && (1..=i16::MAX as i64).contains(&divisor)
+                    {
+                        let mut numerator_expression = left.as_ref();
+                        let mut additive = None;
+                        if let Expr::Binary {
+                            op,
+                            left: base,
+                            right: constant,
+                            ..
+                        } = left.as_ref()
+                        {
+                            if matches!(op, Binary::Add | Binary::Subtract) {
+                                if let Ok((constant_type, Number::Integer(value))) =
+                                    self.constant(constant)
+                                {
+                                    if matches!(constant_type, INTEGER | BOOLEAN | BYTE) {
+                                        numerator_expression = base;
+                                        additive = Some(if *op == Binary::Subtract {
+                                            narrow(-value, INTEGER)
+                                        } else {
+                                            narrow(value, INTEGER)
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                        let (numerator, numerator_type) =
+                            self.expression(numerator_expression)?;
+                        if matches!(numerator_type, INTEGER | BOOLEAN | BYTE) {
+                            // INTEGER operands are exact in QB's SINGLE division.
+                            // Keep floor(n / positive-constant) integral until the
+                            // declared SINGLE result boundary: q + (-1 when the
+                            // truncated division left a negative remainder).
+                            let numerator = self.convert(numerator, numerator_type, INTEGER)?;
+                            let numerator = if let Some(additive) = additive {
+                                // Preserve INTEGER wrap while avoiding the same
+                                // `x + step` shape as a surrounding FOR latch.
+                                // (c - 1) - NOT x is x + c modulo 2^16.
+                                let inverted = self.value(INTEGER);
+                                self.emit("not", vec![inverted], vec![numerator]);
+                                let adjusted = self.value(INTEGER);
+                                self.emit(
+                                    "sub",
+                                    vec![adjusted],
+                                    vec![
+                                        Operand::Constant(
+                                            INTEGER,
+                                            Number::Integer(narrow(additive - 1, INTEGER)),
+                                        ),
+                                        Operand::Value(inverted),
+                                    ],
+                                );
+                                Operand::Value(adjusted)
+                            } else {
+                                numerator
+                            };
+                            let quotient = self.value(INTEGER);
+                            let remainder = self.value(INTEGER);
+                            self.emit(
+                                "divmod",
+                                vec![quotient, remainder],
+                                vec![
+                                    numerator.clone(),
+                                    Operand::Constant(INTEGER, Number::Integer(divisor)),
+                                ],
+                            );
+                            let negative = self.value(BOOLEAN);
+                            self.emit(
+                                "lt",
+                                vec![negative],
+                                vec![
+                                    numerator,
+                                    Operand::Constant(INTEGER, Number::Integer(0)),
+                                ],
+                            );
+                            let has_remainder = self.value(BOOLEAN);
+                            self.emit(
+                                "ne",
+                                vec![has_remainder],
+                                vec![
+                                    Operand::Value(remainder),
+                                    Operand::Constant(INTEGER, Number::Integer(0)),
+                                ],
+                            );
+                            let correction = self.value(BOOLEAN);
+                            self.emit(
+                                "and",
+                                vec![correction],
+                                vec![Operand::Value(negative), Operand::Value(has_remainder)],
+                            );
+                            let correction =
+                                self.convert(Operand::Value(correction), BOOLEAN, INTEGER)?;
+                            let floor = self.value(INTEGER);
+                            self.emit(
+                                "add",
+                                vec![floor],
+                                vec![Operand::Value(quotient), correction],
+                            );
+                            let result = self.convert(Operand::Value(floor), INTEGER, SINGLE)?;
+                            return Ok(Some((result, SINGLE)));
+                        }
+
+                        // The left operand has already been evaluated. Rebuild
+                        // the ordinary floating division once rather than
+                        // evaluating an effectful expression a second time.
+                        let common = common_type(numerator_type, right_type, Binary::Divide)?;
+                        let numerator = self.convert(numerator, numerator_type, common)?;
+                        let denominator = self.convert(
+                            Operand::Constant(right_type, Number::Integer(divisor)),
+                            right_type,
+                            common,
+                        )?;
+                        let divided = self.value(common);
+                        self.emit("fdiv", vec![divided], vec![numerator, denominator]);
+                        return self.floor_float(Operand::Value(divided), common).map(Some);
+                    }
+                }
+            }
             let (operand, type_id) = self.expression(&arguments[0])?;
             if matches!(type_id, INTEGER | LONG | BOOLEAN) {
                 return Ok(Some((operand, type_id)));
@@ -4153,19 +4697,7 @@ impl Compiler {
             if !matches!(type_id, SINGLE | DOUBLE) {
                 return self.fail("INT requires a numeric argument");
             }
-            // INT is floor, while x87's current conversion rounds to nearest.
-            // For rounded integer n, floor(x) is n + (x < n ? -1 : 0).
-            // Express the correction in ordinary HIR so optimization sees
-            // every value. QB booleans are -1/0 and supply that correction.
-            let rounded = self.value(LONG);
-            self.emit("convert", vec![rounded], vec![operand.clone()]);
-            let integral = self.convert(Operand::Value(rounded), LONG, type_id)?;
-            let below = self.value(BOOLEAN);
-            self.emit("lt", vec![below], vec![operand, integral.clone()]);
-            let correction = self.convert(Operand::Value(below), BOOLEAN, type_id)?;
-            let result = self.value(type_id);
-            self.emit("fadd", vec![result], vec![integral, correction]);
-            return Ok(Some((Operand::Value(result), type_id)));
+            return self.floor_float(operand, type_id).map(Some);
         }
         if intrinsic.lowering == Lowering::Truncate {
             let (operand, type_id) = self.expression(&arguments[0])?;
@@ -4364,6 +4896,43 @@ impl Compiler {
         ))
     }
 
+    fn floor_float(&mut self, operand: Operand, type_id: u32) -> Result<(Operand, u32), SemanticError> {
+        // INT is floor, while x87's current conversion rounds to nearest.
+        // For rounded integer n, floor(x) is n + (x < n ? -1 : 0).
+        // Express the correction in ordinary HIR so optimization sees every
+        // value. QB booleans are -1/0 and supply that correction.
+        let rounded = self.value(LONG);
+        self.emit("convert", vec![rounded], vec![operand.clone()]);
+        let integral = self.convert(Operand::Value(rounded), LONG, type_id)?;
+        let below = self.value(BOOLEAN);
+        self.emit("lt", vec![below], vec![operand, integral.clone()]);
+        let correction = self.convert(Operand::Value(below), BOOLEAN, type_id)?;
+        let result = self.value(type_id);
+        self.emit("fadd", vec![result], vec![integral, correction]);
+        Ok((Operand::Value(result), type_id))
+    }
+
+    fn count_led_positional_arguments(
+        &mut self,
+        arguments: &[Expr],
+    ) -> Result<Vec<Operand>, SemanticError> {
+        let mut operands = Vec::new();
+        for argument in arguments {
+            if matches!(argument, Expr::Omitted(_)) {
+                operands.push(Operand::Constant(INTEGER, Number::Integer(0)));
+            } else {
+                operands.push(Operand::Constant(INTEGER, Number::Integer(1)));
+                let (value, type_id) = self.expression(argument)?;
+                operands.push(self.convert(value, type_id, INTEGER)?);
+            }
+        }
+        operands.push(Operand::Constant(
+            INTEGER,
+            Number::Integer(operands.len() as i64),
+        ));
+        Ok(operands)
+    }
+
     fn binary_memory_statement(
         &mut self,
         name: &str,
@@ -4430,6 +4999,8 @@ impl Compiler {
             ));
         }
         let mut operands = Vec::new();
+        let mut string_cleanups = Vec::new();
+        let mut byref_copybacks = Vec::new();
         for (argument, (parameter_type, by_value, segmented, array)) in
             arguments.iter().zip(&signature.parameters)
         {
@@ -4490,7 +5061,11 @@ impl Compiler {
                 operands.push(if *by_value {
                     self.string_descriptor(argument)?
                 } else {
-                    self.byref_string_argument(argument)?
+                    let (operand, cleanup) = self.byref_string_argument(argument)?;
+                    if cleanup {
+                        string_cleanups.push(operand.clone());
+                    }
+                    operand
                 });
             } else if *by_value {
                 let (operand, argument_type) = self.expression(argument)?;
@@ -4524,14 +5099,11 @@ impl Compiler {
                 }
                 match place {
                     Operand::Indirect {
-                        base, offset: 0, ..
-                    } => operands.push(Operand::Value(base)),
-                    Operand::Indirect { base, offset, .. } => {
-                        // Offsetting a field preserves the address space of
-                        // its containing object. In particular, a field of a
-                        // dynamic-array UDT remains a far pointer; rebuilding
-                        // its type from the scalar formal silently narrowed it
-                        // to a near pointer before the BYREF call.
+                        base,
+                        offset,
+                        type_id,
+                        volatile,
+                    } => {
                         let pointer_type = self
                             .values
                             .iter()
@@ -4539,21 +5111,64 @@ impl Compiler {
                             .ok_or_else(|| SemanticError {
                                 message: "BYREF indirect base has no pointer type".into(),
                             })?;
-                        let offset_type = if self.width(pointer_type) == 4 {
-                            LONG
-                        } else {
-                            INTEGER
+                        let original = Operand::Indirect {
+                            base,
+                            offset,
+                            type_id,
+                            volatile,
                         };
-                        let adjusted = self.value(pointer_type);
-                        self.emit(
-                            "ptr_offset",
-                            vec![adjusted],
-                            vec![
-                                Operand::Value(base),
-                                Operand::Constant(offset_type, Number::Integer(offset as i64)),
-                            ],
-                        );
-                        operands.push(Operand::Value(adjusted));
+                        if self.width(pointer_type) == 4 {
+                            // Ordinary BASIC BYREF formals carry a near
+                            // address. BC bridges a field in a far dynamic
+                            // array with a near copy-in/copy-out slot; pushing
+                            // the four-byte field pointer leaves two words on
+                            // the stack after the callee's RETF n.
+                            let temporary = self.temporary(*parameter_type)?;
+                            let aggregate = self
+                                .udts
+                                .values()
+                                .any(|record| record.type_id == *parameter_type)
+                                || self
+                                    .string_width(*parameter_type)
+                                    .is_some_and(|width| width != 0);
+                            if aggregate {
+                                self.aggregate_assignment(
+                                    Operand::Place(temporary),
+                                    original.clone(),
+                                    self.width(*parameter_type),
+                                )?;
+                            } else {
+                                let value = self.value(*parameter_type);
+                                self.emit("load", vec![value], vec![original.clone()]);
+                                self.emit(
+                                    "store",
+                                    Vec::new(),
+                                    vec![Operand::Place(temporary), Operand::Value(value)],
+                                );
+                            }
+                            let near = self.pointer_type(*parameter_type);
+                            let address = self.value(near);
+                            self.emit(
+                                "address",
+                                vec![address],
+                                vec![Operand::Place(temporary)],
+                            );
+                            operands.push(Operand::Value(address));
+                            byref_copybacks.push((original, temporary, *parameter_type));
+                        } else if offset == 0 {
+                            operands.push(Operand::Value(base));
+                        } else {
+                            let adjusted = self.value(pointer_type);
+                            self.emit(
+                                "ptr_offset",
+                                vec![adjusted],
+                                vec![
+                                    Operand::Value(base),
+                                    Operand::Constant(INTEGER, Number::Integer(offset as i64)),
+                                ],
+                            );
+                            operands.push(Operand::Value(adjusted));
+                        }
                     }
                     place => {
                         let pointer_type = self.pointer_type(*parameter_type);
@@ -4614,6 +5229,33 @@ impl Compiler {
             signature.cdecl,
             Some(signature.symbol),
         );
+        // Pascal evaluates actuals left-to-right but BC copies aliased far
+        // fields back from the last formal to the first.
+        for (destination, temporary, type_id) in byref_copybacks.into_iter().rev() {
+            let aggregate = self
+                .udts
+                .values()
+                .any(|record| record.type_id == type_id)
+                || self.string_width(type_id).is_some_and(|width| width != 0);
+            if aggregate {
+                self.aggregate_assignment(
+                    destination,
+                    Operand::Place(temporary),
+                    self.width(type_id),
+                )?;
+            } else {
+                let value = self.value(type_id);
+                self.emit("load", vec![value], vec![Operand::Place(temporary)]);
+                self.emit("store", Vec::new(), vec![destination, Operand::Value(value)]);
+            }
+        }
+        // BC ends the lifetime of each descriptor it materialized solely for
+        // this source call. B$STDL clears that owned descriptor without heap
+        // compaction, so a returned STRING remains valid while the caller's
+        // frame slots become reusable and cannot bleed into later locals.
+        for descriptor in string_cleanups {
+            self.emit_runtime_call("B$STDL", Vec::new(), vec![descriptor]);
+        }
         Ok(result)
     }
 
@@ -4756,7 +5398,7 @@ impl Compiler {
     }
 
     fn bare_function_type(&self, name: &str) -> Option<u32> {
-        if self.variables.contains_key(canonical(name)) {
+        if self.variables.contains_key(variable_key(name)) {
             return None;
         }
         self.signatures.get(canonical(name)).and_then(|signature| {
@@ -4770,10 +5412,10 @@ impl Compiler {
 
     fn place_syntax_type(&self, expression: &Expr) -> Option<u32> {
         match expression {
-            Expr::Name(name, _) => self.variables.get(canonical(name)).map(|one| one.type_id),
+            Expr::Name(name, _) => self.variables.get(variable_key(name)).map(|one| one.type_id),
             Expr::Apply { name, .. } => self
                 .variables
-                .get(canonical(name))
+                .get(variable_key(name))
                 .and_then(|one| one.element),
             Expr::Index { base, .. } => {
                 let base = self.place_syntax_type(base)?;
@@ -4931,7 +5573,7 @@ impl Compiler {
     }
 
     fn variable(&mut self, name: &str) -> Result<Variable, SemanticError> {
-        if let Some(variable) = self.variables.get(canonical(name)) {
+        if let Some(variable) = self.variables.get(variable_key(name)) {
             return Ok(variable.clone());
         }
         let type_id = self.named_type(name, None)?;
@@ -4950,11 +5592,12 @@ impl Compiler {
             },
         };
         self.declare_as(&declaration, self.implicit_storage)?;
-        Ok(self.variables[canonical(name)].clone())
+        Ok(self.variables[variable_key(name)].clone())
     }
 
     fn constant(&self, expression: &Expr) -> Result<(u32, Number), SemanticError> {
         match expression {
+            Expr::Omitted(_) => self.fail("omitted argument used as a constant expression"),
             Expr::Literal(Literal::Integer(value, type_name), _) => {
                 Ok((type_id(Some(type_name))?, Number::Integer(*value)))
             }
@@ -5193,10 +5836,10 @@ impl Compiler {
     }
 
     fn string_literal_places(&mut self, text: &str) -> Result<(u32, u32, u32), SemanticError> {
-        if !text.is_ascii() {
-            return self.fail("non-ASCII string literals require an explicit source code page");
-        }
-        if text.len() > i16::MAX as usize {
+        let encoded = crate::source::encode_cp437(text).ok_or_else(|| SemanticError {
+            message: "string literal contains a character outside DOS CP437".into(),
+        })?;
+        if encoded.len() > i16::MAX as usize {
             return self.fail("string literal exceeds the BASIC string limit");
         }
         let payload_symbol = self.next_data;
@@ -5231,8 +5874,8 @@ impl Compiler {
             };
 
             let mut payload_bytes = vec![0, 0, 0, 0];
-            payload_bytes.extend_from_slice(&(text.len() as u16).to_le_bytes());
-            payload_bytes.extend_from_slice(text.as_bytes());
+            payload_bytes.extend_from_slice(&(encoded.len() as u16).to_le_bytes());
+            payload_bytes.extend_from_slice(&encoded);
             if payload_bytes.len() % 2 != 0 {
                 payload_bytes.push(0);
             }
@@ -5277,9 +5920,9 @@ impl Compiler {
             });
             (descriptor_symbol, 6)
         } else {
-            let mut literal = Vec::from((text.len() as u16).to_le_bytes());
+            let mut literal = Vec::from((encoded.len() as u16).to_le_bytes());
             literal.extend_from_slice(&[0, 0]);
-            literal.extend_from_slice(text.as_bytes());
+            literal.extend_from_slice(&encoded);
             if literal.len() % 2 != 0 {
                 literal.push(0);
             }
@@ -5310,7 +5953,7 @@ impl Compiler {
             storage: "static",
             symbol: descriptor_symbol,
         });
-        let payload_type = self.opaque_type(format!("string*{}", text.len()), text.len());
+        let payload_type = self.opaque_type(format!("string*{}", encoded.len()), encoded.len());
         let payload = self.next_place;
         self.next_place += 1;
         self.places.push(Place {
@@ -5318,7 +5961,7 @@ impl Compiler {
             name: format!("$string{payload_symbol}$payload"),
             type_id: payload_type,
             offset: payload_offset,
-            extent: text.len(),
+            extent: encoded.len(),
             storage: "static",
             symbol: payload_symbol,
         });
@@ -5915,6 +6558,10 @@ fn canonical(name: &str) -> &str {
     name.trim_end_matches(['%', '&', '!', '#', '$'])
 }
 
+fn variable_key(name: &str) -> &str {
+    name
+}
+
 fn arity_description(minimum: usize, maximum: usize) -> String {
     if minimum == maximum {
         match minimum {
@@ -6141,7 +6788,7 @@ fn contains_not(expression: &Expr) -> bool {
             contains_not(base) || indices.iter().any(contains_not)
         }
         Expr::Field { base, .. } => contains_not(base),
-        Expr::Literal(..) | Expr::Name(..) => false,
+        Expr::Omitted(..) | Expr::Literal(..) | Expr::Name(..) => false,
     }
 }
 

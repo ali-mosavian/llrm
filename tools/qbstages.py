@@ -19,6 +19,15 @@ from qbopt.frontend.qb import physicalize
 from qbopt.frontend.qb import compile as qb_compile
 
 
+def _source_text(path: Path) -> str:
+    """Decode the physical source exactly as qbfront does before lexing."""
+    raw = path.read_bytes().split(b"\x1a", 1)[0]
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("cp437")
+
+
 def _lir(body, callees=None) -> str:
     callees = {} if callees is None else callees
     lines = [f"; entry L0_{body.entry}", f"{body.name} proc"]
@@ -63,9 +72,32 @@ def _emitted_asm(program: hir.Program) -> str:
             ):
                 cleanup[procedure.name] = item.sources[0].value
 
+    # masm.text() uses the shared native frame shell. BASIC OMF emission uses
+    # _basic_listing(), where B$ENRA/B$EXSA own that shell. Replace each
+    # procedure with the listing which object_bytes() actually encodes.
+    rendered = masm.text(module)
+    for number, procedure in enumerate(module.procedures):
+        heading = f"{procedure.name} proc {'far' if procedure.far else 'near'}"
+        ending = f"{procedure.name} endp"
+        lines = [heading]
+        for item in qb_compile._basic_listing(procedure, number):
+            match item:
+                case masm.Label(name=name):
+                    lines.append(f"{name}:")
+                case masm.Callee(code=code) if code:
+                    lines += [f"    {line}" for line in masm._code(code)]
+                case masm.Callee(name=name, far=far):
+                    lines.append(f"    call {'far ptr ' if far else ''}{name}")
+                case _:
+                    lines += [f"    {line}" for line in masm._instruction(item, module.names, number)]
+        lines.append(ending)
+        before, rest = rendered.split(heading, 1)
+        _old, after = rest.split(ending, 1)
+        rendered = before + "\n".join(lines) + after
+
     current = None
     lines = []
-    for line in masm.text(module).splitlines():
+    for line in rendered.splitlines():
         if line.endswith(" proc far") or line.endswith(" proc near"):
             current = line.split(" proc ", 1)[0]
         elif line.endswith(" endp"):
@@ -103,7 +135,7 @@ def dumped(
     )
     semantic = hir.lower(program)
     functions = tuple(function for module in program.modules for function in module.functions)
-    (output / "00-input.bas").write_text(source.read_text())
+    (output / "00-input.bas").write_text(_source_text(source))
     (output / "01-hir.json").write_text(hir.encode(program))
     for number, (function, body) in enumerate(zip(functions, semantic, strict=True), 1):
         stem = f"{number:02}-{function.name}"

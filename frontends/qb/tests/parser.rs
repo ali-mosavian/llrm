@@ -41,6 +41,185 @@ fn view_print_preserves_the_reset_and_bounded_runtime_forms() {
 }
 
 #[test]
+fn console_input_retains_its_prompt_and_destination() {
+    // Nibbles prompts into a dynamic string. Dropping the prompt expression
+    // shifts it into the destination list and makes the literal assignable.
+    let module = parse(
+        "dim answer as string\r\ninput \"How many\"; answer\r\n",
+        Dialect::VbDos,
+    )
+    .unwrap();
+    assert!(matches!(
+        &module.statements[1],
+        Statement::Input {
+            prompt: Some(Expr::Literal(Literal::String(prompt), _)),
+            suppress_question_mark: false,
+            keep_cursor: false,
+            destinations,
+            ..
+        } if prompt == "How many" && destinations.len() == 1
+    ));
+
+    let unprompted = parse(
+        "dim answer as string\r\ninput answer\r\n",
+        Dialect::VbDos,
+    )
+    .unwrap();
+    assert!(matches!(
+        &unprompted.statements[1],
+        Statement::Input { prompt: None, destinations, .. } if destinations.len() == 1
+    ));
+    let hir = compile(&module, "color", Dialect::VbDos, "vbdos").unwrap();
+    assert!(hir.contains("\"callee\":\"B$INPP\""), "{hir}");
+    assert!(hir.contains("\"callee\":\"B$RDSD\""), "{hir}");
+}
+
+#[test]
+fn input_declares_an_implicit_destination_before_building_its_type_table() {
+    // Nibbles reads num$ and gamespeed$ without DIM. Microsoft BASIC's
+    // implicit declaration must exist before B$INPP's type byte is chosen.
+    let module = parse("input num$\r\n", Dialect::VbDos).unwrap();
+    let hir = compile(&module, "implicit_input", Dialect::VbDos, "vbdos").unwrap();
+    assert!(hir.contains("\"callee\":\"B$INPP\""), "{hir}");
+    assert!(hir.contains("\"callee\":\"B$RDSD\""), "{hir}");
+}
+
+#[test]
+fn for_next_accepts_the_single_line_colon_form() {
+    // Nibbles calibrates TIMER with an empty FOR/NEXT on one physical line.
+    let module = parse("for i# = 1 to 1000: next i#\r\n", Dialect::VbDos).unwrap();
+    assert!(matches!(
+        &module.statements[..],
+        [Statement::For { counter: Expr::Name(name, _), body, .. }]
+            if name == "I#" && body.is_empty()
+    ));
+}
+
+#[test]
+fn play_uses_the_runtime_string_descriptor_contract() {
+    // VBDOS PLAY.OBJ pushes one near string descriptor and calls B$SPLY,
+    // whose far Pascal entry returns with RETF 2.
+    let module = parse("play \"MBT160O1L8C\"\r\n", Dialect::VbDos).unwrap();
+    let hir = compile(&module, "play", Dialect::VbDos, "vbdos").unwrap();
+    assert!(hir.contains("\"callee\":\"B$SPLY\""), "{hir}");
+}
+
+#[test]
+fn color_retains_omitted_positional_arguments() {
+    // Nibbles changes only the background with COLOR , background. The
+    // omitted foreground must remain a positional fact, not shift arguments.
+    let module = parse("color , 4\r\n", Dialect::VbDos).unwrap();
+    assert!(matches!(
+        &module.statements[..],
+        [Statement::Runtime { name, arguments, .. }]
+            if name == "COLOR" && arguments.len() == 2 && matches!(arguments[0], Expr::Omitted(_))
+    ));
+}
+
+#[test]
+fn locate_uses_vbdos_count_led_positional_arguments() {
+    // Raw VBDOS LOCATE.OBJ emits LOCATE ,9 as 0,1,9,3 followed by B$LOCT.
+    // Dropping the omitted row moves the column into the wrong slot.
+    let module = parse("locate , 9\r\n", Dialect::VbDos).unwrap();
+    let hir = compile(&module, "locate", Dialect::VbDos, "vbdos").unwrap();
+    assert!(hir.contains("\"callee\":\"B$LOCT\""), "{hir}");
+    assert!(hir.contains(
+        "\"operands\":[{\"tag\":\"constant\",\"type\":1,\"value\":0},{\"tag\":\"constant\",\"type\":1,\"value\":1},{\"tag\":\"constant\",\"type\":1,\"value\":9},{\"tag\":\"constant\",\"type\":1,\"value\":3}]"
+    ), "{hir}");
+}
+
+#[test]
+fn rnd_loads_the_single_returned_by_the_vbdos_runtime() {
+    // VBDOS RND.OBJ pushes one R4 argument, calls B$RND1, then loads the
+    // SINGLE through the near pointer returned in AX.
+    let module = parse("dim value as single\r\nvalue = rnd(1)\r\n", Dialect::VbDos).unwrap();
+    let hir = compile(&module, "rnd", Dialect::VbDos, "vbdos").unwrap();
+    assert!(hir.contains("\"callee\":\"B$RND1\""), "{hir}");
+    assert!(hir.contains("\"op\":\"load\""), "{hir}");
+    let call = hir.find("\"callee\":\"B$RND1\"").unwrap();
+    assert!(hir[call..].starts_with("\"callee\":\"B$RND1\"") && hir[call..call + 180].contains("\"tag\":\"place\""), "{hir}");
+}
+
+#[test]
+fn floating_array_subscripts_are_converted_to_integer_indices() {
+    // Nibbles first uses `a#` for timing and later indexes sammy(a). Microsoft
+    // BASIC accepts the resulting DOUBLE subscript and converts it for lookup.
+    let module = parse(
+        "defint a-z\r\n\
+         type Snake\r\ndirection as integer\r\nend type\r\n\
+         declare sub moveSnake(s() as Snake)\r\n\
+         sub moveSnake(s() as Snake)\r\nfor a# = 1 to 2\r\nnext a#\r\nfor a = 1 to 2\r\ns(a).direction = 1\r\nnext a\r\nend sub\r\n",
+        Dialect::VbDos,
+    )
+    .unwrap();
+    let hir = compile(&module, "defint_scope", Dialect::VbDos, "vbdos").unwrap();
+    assert!(hir.contains("\"op\":\"convert\""), "{hir}");
+}
+
+#[test]
+fn decoded_cp437_string_literals_are_encoded_back_to_dos_bytes() {
+    // Nibbles' dialog border contains CP437 box drawing characters. Source
+    // loading decodes them for parsing; emitted literal data must recover CD.
+    let module = parse("print \"═\"\r\n", Dialect::VbDos).unwrap();
+    let hir = compile(&module, "cp437", Dialect::VbDos, "vbdos").unwrap();
+    assert!(hir.contains("205"), "{hir}");
+}
+
+#[test]
+fn bare_inkey_is_an_effectful_runtime_string_function() {
+    // Nibbles uses the zero-argument INKEY$ spelling in WHILE conditions.
+    let module = parse("while inkey$ = \"\": wend\r\n", Dialect::VbDos).unwrap();
+    let hir = compile(&module, "inkey", Dialect::VbDos, "vbdos").unwrap();
+    assert!(hir.contains("\"callee\":\"B$INKY\""), "{hir}");
+    assert!(hir.contains("\"callee\":\"B$SCMP\""), "{hir}");
+}
+
+#[test]
+fn restore_label_uses_its_precomputed_read_data_offset() {
+    // Raw VBDOS REST.OBJ pushes the key of the labeled DATA row and
+    // calls B$RSTB, even when RESTORE precedes that label in source order.
+    let module = parse(
+        "restore laterData\r\nend\r\nfirstData: data 1\r\nlaterData: data 2\r\n",
+        Dialect::VbDos,
+    )
+    .unwrap();
+    let hir = compile(&module, "restore", Dialect::VbDos, "vbdos").unwrap();
+    assert!(hir.contains("\"callee\":\"B$RSTB\""), "{hir}");
+    assert!(hir.contains("\"value\":3"), "{hir}");
+}
+
+#[test]
+fn print_using_retains_format_separately_from_values() {
+    // Nibbles' score line formats two values. The format descriptor is setup,
+    // not a third value passed through the ordinary PRINT item path.
+    let module = parse(
+        "dim score as integer, lives as integer\r\n\
+         print using \"#,###,#00  Lives: #\"; score; lives\r\n",
+        Dialect::VbDos,
+    )
+    .unwrap();
+    assert!(matches!(
+        &module.statements[1],
+        Statement::Print { using: Some(Expr::Literal(Literal::String(format), _)), items, .. }
+            if format == "#,###,#00  Lives: #" && items.len() == 2
+    ));
+    let hir = compile(&module, "print_using", Dialect::VbDos, "vbdos").unwrap();
+    for callee in ["B$USNG", "B$PSI2", "B$PEI2"] {
+        assert!(hir.contains(&format!("\"callee\":\"{callee}\"")), "{callee}: {hir}");
+    }
+}
+
+#[test]
+fn while_wend_accepts_the_single_line_colon_form() {
+    // Nibbles drains INKEY$ with compact WHILE condition: WEND loops.
+    let module = parse("while inkey$ <> \"\": wend\r\n", Dialect::VbDos).unwrap();
+    assert!(matches!(
+        &module.statements[..],
+        [Statement::While { body, .. }] if body.is_empty()
+    ));
+}
+
+#[test]
 fn parses_default_type_ranges_as_declarations_not_calls() {
     // DEFLNG previously reached semantic analysis as a call to a nonexistent
     // procedure, so ordinary Microsoft BASIC default typing could not compile.
@@ -1041,6 +1220,38 @@ fn any_array_formal_accepts_a_typed_dynamic_array() {
     let hir = compile(&module, "any_array", Dialect::VbDos, "vbdos").unwrap();
     assert!(hir.matches("\"op\":\"call\"").count() >= 2);
     assert!(hir.contains("descriptor"));
+}
+
+#[test]
+fn any_array_declaration_may_be_refined_by_the_definition() {
+    // Nibbles publishes EraseSnake with AS ANY arrays, then defines the body
+    // with its concrete UDT element types. The public signature stays erased
+    // while the body needs the refined fields.
+    let module = parse(
+        "declare sub refine(values() as any)\r\n\
+         type Item\r\nvalue as integer\r\nend type\r\n\
+         sub refine(values() as Item)\r\nvalues(0).value = 1\r\nend sub\r\n",
+        Dialect::VbDos,
+    )
+    .unwrap();
+    let hir = compile(&module, "any_definition", Dialect::VbDos, "vbdos").unwrap();
+    assert!(hir.contains("\"name\":\"REFINE\""), "{hir}");
+    assert!(hir.contains("\"name\":\"ITEM\""), "{hir}");
+}
+
+#[test]
+fn isolated_module_gosub_is_an_internal_hir_call() {
+    // Nibbles keeps small module-level helpers after END and enters them with
+    // GOSUB. Treating GOSUB as a runtime symbol made the whole source fail
+    // semantic analysis before any object could be emitted.
+    let module = parse(
+        "dim total as integer\r\ngosub addTen\r\nend\r\naddTen:\r\ntotal = total + 10\r\nreturn\r\n",
+        Dialect::VbDos,
+    )
+    .unwrap();
+    let hir = compile(&module, "gosub", Dialect::VbDos, "vbdos").unwrap();
+    assert!(hir.contains("\"name\":\"ADDTEN\""), "{hir}");
+    assert!(hir.contains("\"callee\":\"ADDTEN\""), "{hir}");
 }
 
 #[test]

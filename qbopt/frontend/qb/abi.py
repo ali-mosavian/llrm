@@ -197,6 +197,21 @@ def _contract(name: str, cleanup: model.StackCleanup, pushed: int, family: model
                 "call site's typed operands. Other effects stay conservative."
             ),
         )
+    if name in {"B$COLR", "B$LOCT"} and pushed >= 2 and pushed % 2 == 0:
+        return replace(
+            found,
+            cleanup=pushed,
+            control=runtime.Control.RETURNS,
+            enters_user_code=False,
+            established=True,
+            inputs=frozenset(),
+            i386=True,
+            evidence=(
+                f"QB45 runtime/rt/gwscr.asm documents a presence word and optional value for each "
+                f"positional argument, followed by their word count; this site supplies {pushed} "
+                f"bytes. B$ScCleanUpParms removes that complete count-led block; later runtimes retain it."
+            ),
+        )
     if name == "B$HARY" and pushed >= 4 and pushed % 2 == 0:
         # The rank word plus exactly that many INTEGER subscripts are the
         # complete variable-sized stack block. The descriptor itself is a
@@ -442,6 +457,22 @@ def _contract(name: str, cleanup: model.StackCleanup, pushed: int, family: model
                 f"entry with {pushed} stack bytes; output and error effects remain conservative."
             ),
         )
+    if name == "B$INPP" and pushed == 6:
+        return replace(
+            found,
+            cleanup=6,
+            control=runtime.Control.RETURNS,
+            enters_user_code=False,
+            established=True,
+            inputs=frozenset(),
+            i386=True,
+            evidence=(
+                f"{found.evidence} QB45 runtime/rt/inptty.asm declares one near prompt "
+                "descriptor and one far input-table pointer; its cProc frame reads the "
+                "six-byte argument block at [BP+6]..[BP+0A]. PDS and VBDOS retain the "
+                "same documented entry, confirmed by the measured VBDOS INP*.OBJ sites."
+            ),
+        )
     if name in {"B$RDI2", "B$RDI4", "B$RDR4", "B$RDR8"} and pushed == 4:
         return replace(
             found,
@@ -605,6 +636,120 @@ def _contract(name: str, cleanup: model.StackCleanup, pushed: int, family: model
                 f"{found.evidence} VBDCL10E.LIB random.asm B$RNZP at 0079 "
                 "reads its R8 seed at [BP+0Ah] and returns with RETF 8; "
                 "MAIN.OBJ 07fe..080c pushes the high and low dwords before the call."
+            ),
+        )
+    if name == "B$RND1" and pushed == 4:
+        return replace(
+            found,
+            cleanup=4,
+            control=runtime.Control.RETURNS,
+            enters_user_code=False,
+            established=True,
+            inputs=frozenset(),
+            i386=True,
+            evidence=(
+                f"{found.evidence} VBDCL10E.LIB random.asm B$RND1 reads its R4 "
+                "selector at [BP+6]/[BP+8], returns its result address in AX, "
+                "and exits with RETF 4; RND.OBJ shows the matching dword push."
+            ),
+        )
+    if name == "B$RSTB" and pushed == 2:
+        return replace(
+            found,
+            cleanup=2,
+            control=runtime.Control.RETURNS,
+            enters_user_code=False,
+            established=True,
+            inputs=frozenset(),
+            i386=True,
+            evidence=(
+                f"{found.evidence} VBDOS REST.OBJ moves the labeled DATA key "
+                "to AX, pushes it, and calls B$RSTB with one word."
+            ),
+        )
+    if name == "B$SCLS" and pushed == 2:
+        return replace(
+            found,
+            cleanup=2,
+            control=runtime.Control.RETURNS,
+            enters_user_code=False,
+            established=True,
+            inputs=frozenset(),
+            i386=True,
+            evidence=(
+                f"{found.evidence} QB45 rt/gwscr.asm declares B$SCLS with one "
+                "ScnNum word; its Pascal far entry consumes that selector. "
+                "VBDOS uses the same typed runtime entry."
+            ),
+        )
+    if name == "B$WIDT" and pushed == 4:
+        return replace(
+            found,
+            cleanup=4,
+            control=runtime.Control.RETURNS,
+            enters_user_code=False,
+            established=True,
+            inputs=frozenset(),
+            i386=True,
+            evidence=(
+                f"{found.evidence} QB45 runtime/rt/iotty.asm declares width and height "
+                "as two Pascal words; the typed source site supplies exactly those four bytes."
+            ),
+        )
+    if name == "B$VWPT" and pushed == 4:
+        return replace(
+            found,
+            cleanup=4,
+            control=runtime.Control.RETURNS,
+            enters_user_code=False,
+            established=True,
+            inputs=frozenset(),
+            i386=True,
+            evidence=(
+                f"{found.evidence} QB45 runtime/rt/grview.asm declares TopLine and BotLine "
+                "as two Pascal words; VBDOS VIEWP.OBJ independently confirms that call shape."
+            ),
+        )
+    if name == "B$SPLY" and pushed == 2:
+        return replace(
+            found,
+            cleanup=2,
+            control=runtime.Control.RETURNS,
+            enters_user_code=False,
+            established=True,
+            inputs=frozenset(),
+            i386=True,
+            evidence=(
+                f"{found.evidence} QB45 runtime/rt/gwplays.asm declares one near string "
+                "descriptor; VBDOS PLAY.OBJ independently confirms that call shape."
+            ),
+        )
+    if name == "B$INKY" and pushed == 0:
+        return replace(
+            found,
+            cleanup=0,
+            control=runtime.Control.RETURNS,
+            enters_user_code=False,
+            established=True,
+            inputs=frozenset(),
+            i386=True,
+            evidence=(
+                f"{found.evidence} QB45 rt/stinkey.asm declares sd* pascal "
+                "B$INKY(void); its far entry returns the descriptor in AX with no parameters."
+            ),
+        )
+    if name == "B$USNG" and pushed == 2:
+        return replace(
+            found,
+            cleanup=2,
+            control=runtime.Control.RETURNS,
+            enters_user_code=False,
+            established=True,
+            inputs=frozenset(),
+            i386=True,
+            evidence=(
+                f"{found.evidence} QB45 runtime/rt/prtu.asm declares one near format "
+                "descriptor; VBDOS PRTUSING.OBJ independently confirms that call shape."
             ),
         )
     if found.established and found.cleanup is not None:

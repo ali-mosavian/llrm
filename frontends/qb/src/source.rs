@@ -102,6 +102,21 @@ const CP437: [char; 128] = [
     '\u{00B0}', '\u{2219}', '\u{00B7}', '\u{221A}', '\u{207F}', '\u{00B2}', '\u{25A0}', '\u{00A0}',
 ];
 
+pub(crate) fn encode_cp437(text: &str) -> Option<Vec<u8>> {
+    text.chars()
+        .map(|character| {
+            if character.is_ascii() {
+                Some(character as u8)
+            } else {
+                CP437
+                    .iter()
+                    .position(|candidate| *candidate == character)
+                    .map(|index| index as u8 + 0x80)
+            }
+        })
+        .collect()
+}
+
 fn include_name(line: &str) -> Option<&str> {
     let comment = line.trim_start().strip_prefix('\'')?.trim_start();
     let rest = comment

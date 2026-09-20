@@ -212,6 +212,10 @@ identity = "opPrintItemSemi"
 action = "PrintItemSemicolon"
 
 [[emit]]
+identity = "opUsing"
+action = "PrintUsing"
+
+[[emit]]
 identity = "opStDim"
 action = "Dim"
 
@@ -253,6 +257,12 @@ shape = "Runtime"
 identity = "opStDraw"
 action = "Runtime"
 operand = "DRAW"
+shape = "Runtime"
+
+[[emit]]
+identity = "opStPlay"
+action = "Runtime"
+operand = "PLAY"
 shape = "Runtime"
 
 [[emit]]
@@ -453,6 +463,11 @@ retains = "target,value,span"
 identity = "NtExp"
 action = "Expression"
 retains = "operator,operands,span"
+
+[[external]]
+identity = "NtLitString"
+action = "LiteralString"
+retains = "value,span"
 
 [[external]]
 identity = "NtIfStmt"
