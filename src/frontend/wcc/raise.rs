@@ -390,11 +390,10 @@ impl<'a> FunctionRaiser<'a> {
         let mut temporary_places = BTreeMap::new();
         for (automatic, type_name) in &procedure.automatics {
             let type_id = value_type(unit, type_name, location)?;
-            let id = hir::PlaceId::new(
-                u32::try_from(places.len()).map_err(|_| {
+            let id =
+                hir::PlaceId::new(u32::try_from(places.len()).map_err(|_| {
                     error(location, RaiseErrorKind::IdOverflow { entity: "place" })
-                })?,
-            );
+                })?);
             let name = match automatic {
                 AutomaticId::Symbol(symbol_id) => {
                     let symbol = symbol(unit, *symbol_id, location)?;
@@ -559,7 +558,10 @@ impl<'a> FunctionRaiser<'a> {
     fn new_block(&mut self) -> Result<hir::BlockId, RaiseError> {
         let id = hir::BlockId::new(self.next_block);
         self.next_block = self.next_block.checked_add(1).ok_or_else(|| {
-            error(self.location, RaiseErrorKind::IdOverflow { entity: "block" })
+            error(
+                self.location,
+                RaiseErrorKind::IdOverflow { entity: "block" },
+            )
         })?;
         self.blocks.push(RaisedBlock {
             id,
@@ -583,10 +585,15 @@ impl<'a> FunctionRaiser<'a> {
             .blocks
             .iter()
             .position(|block| block.id == id)
-            .ok_or_else(|| error(self.location, RaiseErrorKind::InvalidNode {
-                node: NodeId::new(0),
-                detail: format!("missing raised block {id}"),
-            }))?;
+            .ok_or_else(|| {
+                error(
+                    self.location,
+                    RaiseErrorKind::InvalidNode {
+                        node: NodeId::new(0),
+                        detail: format!("missing raised block {id}"),
+                    },
+                )
+            })?;
         Ok(())
     }
 
@@ -654,7 +661,12 @@ impl<'a> FunctionRaiser<'a> {
             .get(&symbol)
             .copied()
             .map(hir::Operand::Place)
-            .ok_or_else(|| error(self.location, RaiseErrorKind::MissingParameterBinding(symbol)))
+            .ok_or_else(|| {
+                error(
+                    self.location,
+                    RaiseErrorKind::MissingParameterBinding(symbol),
+                )
+            })
     }
 
     fn temporary_name(&self, id: NodeId, node: &Node) -> Result<hir::Operand, RaiseError> {
@@ -666,7 +678,12 @@ impl<'a> FunctionRaiser<'a> {
             .get(&temporary)
             .copied()
             .map(hir::Operand::Place)
-            .ok_or_else(|| error(self.location, RaiseErrorKind::MissingTemporaryDeclaration(temporary)))
+            .ok_or_else(|| {
+                error(
+                    self.location,
+                    RaiseErrorKind::MissingTemporaryDeclaration(temporary),
+                )
+            })
     }
 
     fn integer(&self, id: NodeId, node: &Node) -> Result<hir::Operand, RaiseError> {
@@ -979,7 +996,9 @@ impl<'a> FunctionRaiser<'a> {
             .iter()
             .find(|candidate| candidate.id == place)
             .map(|candidate| candidate.type_id)
-            .ok_or_else(|| self.invalid_node(NodeId::new(0), "operand refers to an unknown place"))?;
+            .ok_or_else(|| {
+                self.invalid_node(NodeId::new(0), "operand refers to an unknown place")
+            })?;
         if actual == expected {
             Ok(())
         } else {
@@ -1006,11 +1025,9 @@ impl<'a> FunctionRaiser<'a> {
                         .ok_or_else(|| self.invalid_node(id, "CGCall has no call handle"))?,
                     self.location,
                 )?);
-                let pending = self
-                    .unit
-                    .calls
-                    .get(&call)
-                    .ok_or_else(|| error(self.location, RaiseErrorKind::MissingPendingCall(call)))?;
+                let pending = self.unit.calls.get(&call).ok_or_else(|| {
+                    error(self.location, RaiseErrorKind::MissingPendingCall(call))
+                })?;
                 return value_type(self.unit, &pending.value_type, self.location);
             }
             _ => return Err(self.invalid_node(id, "expression has no scalar type")),
@@ -1033,6 +1050,18 @@ impl<'a> FunctionRaiser<'a> {
         require_operand_type(source, &operand, &self.values, self.location)?;
         if source == target {
             return Ok(operand);
+        }
+        if matches!(source, I16_TYPE | I32_TYPE) && matches!(target, I16_TYPE | I32_TYPE) {
+            if let hir::Operand::Constant {
+                value: hir::ConstantValue::Integer(value),
+                ..
+            } = operand
+            {
+                return Ok(hir::Operand::Constant {
+                    type_id: target,
+                    value: hir::ConstantValue::Integer(wrap_signed_integer(value, target)),
+                });
+            }
         }
         let result = self.new_value(target)?;
         self.push_instruction(hir::Opcode::Convert, vec![result], vec![operand], None)?;
@@ -1161,6 +1190,24 @@ fn type_width(type_id: hir::TypeId) -> usize {
         I16_TYPE => 2,
         I32_TYPE => 4,
         _ => 0,
+    }
+}
+
+/// Mirrors `FunctionRaiser.wrapped` for the signed scalar types this slice
+/// has established. A constant conversion is a value fact; nonconstants
+/// still need a HIR conversion so selection can emit `movsx` where required.
+fn wrap_signed_integer(value: i64, target: hir::TypeId) -> i64 {
+    let bits = match target {
+        I16_TYPE => 16,
+        I32_TYPE => 32,
+        _ => unreachable!("constant folding is restricted to signed scalar targets"),
+    };
+    let modulus = 1_i64 << bits;
+    let wrapped = value & (modulus - 1);
+    if wrapped & (modulus >> 1) != 0 {
+        wrapped - modulus
+    } else {
+        wrapped
     }
 }
 
@@ -1296,7 +1343,8 @@ mod tests {
     }
 
     fn parity_scalar() -> capture::CaptureUnit {
-        capture::build(&parse(include_str!("../../../fixtures/c/parity/scalar.cgs")).unwrap()).unwrap()
+        capture::build(&parse(include_str!("../../../fixtures/c/parity/scalar.cgs")).unwrap())
+            .unwrap()
     }
 
     #[test]
@@ -1323,6 +1371,26 @@ mod tests {
         assert_eq!(
             function.blocks[0].terminator,
             hir::Terminator::Jump(hir::BlockId::new(1))
+        );
+        assert!(
+            matches!(
+                function.blocks[0].instructions.first(),
+                Some(hir::Instruction {
+                    opcode: hir::Opcode::Store,
+                    operands,
+                    ..
+                }) if matches!(
+                    operands.as_slice(),
+                    [
+                        hir::Operand::Place(place),
+                        hir::Operand::Constant {
+                            type_id,
+                            value: hir::ConstantValue::Integer(17),
+                        },
+                    ] if *place == hir::PlaceId::new(1) && *type_id == hir::TypeId::new(2)
+                )
+            ),
+            "Python FunctionRaiser.convert folds the widening of integer constants"
         );
         let comparison = function.blocks[1]
             .instructions
@@ -1357,10 +1425,12 @@ mod tests {
         assert!(opcodes.contains(&hir::Opcode::Subtract));
         assert!(opcodes.contains(&hir::Opcode::Multiply));
         assert!(opcodes.contains(&hir::Opcode::LessThan));
-        assert!(function.blocks.iter().any(|block| matches!(
-            block.terminator,
-            hir::Terminator::Jump(_)
-        )));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .any(|block| matches!(block.terminator, hir::Terminator::Jump(_)))
+        );
         assert!(function.blocks.iter().any(|block| matches!(
             block.terminator,
             hir::Terminator::Return(Some(hir::Operand::Value(_)))
@@ -1370,15 +1440,42 @@ mod tests {
         let lowered = hir::lower_to_ir(&module).unwrap();
         let lowered_function = &lowered.functions[0];
         assert_eq!(lowered_function.blocks.len(), 4);
-        assert!(lowered_function.blocks.iter().flat_map(|block| &block.instructions).any(
-            |instruction| matches!(instruction.kind, ir::InstructionKind::StackAlloc { size: 4, .. })
-        ));
-        assert!(lowered_function.blocks.iter().flat_map(|block| &block.instructions).any(
-            |instruction| matches!(instruction.kind, ir::InstructionKind::Compare { predicate: ir::ComparePredicate::SignedLessThan, .. })
-        ));
-        assert!(lowered_function.blocks.iter().flat_map(|block| &block.instructions).any(
-            |instruction| matches!(instruction.kind, ir::InstructionKind::Cast { op: ir::CastOp::SignExtend, .. })
-        ));
+        assert!(
+            lowered_function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(
+                    instruction.kind,
+                    ir::InstructionKind::StackAlloc { size: 4, .. }
+                ))
+        );
+        assert!(
+            lowered_function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(
+                    instruction.kind,
+                    ir::InstructionKind::Compare {
+                        predicate: ir::ComparePredicate::SignedLessThan,
+                        ..
+                    }
+                ))
+        );
+        assert!(
+            lowered_function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(
+                    instruction.kind,
+                    ir::InstructionKind::Cast {
+                        op: ir::CastOp::SignExtend,
+                        ..
+                    }
+                ))
+        );
     }
 
     #[test]
