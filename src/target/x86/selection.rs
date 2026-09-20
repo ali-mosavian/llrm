@@ -1316,11 +1316,10 @@ impl<'types> FunctionSelector<'types> {
         if cleanup == 0 {
             return Ok(());
         }
-        let stack_pointer = self.fresh_virtual_register(X86RegisterClass::Word.machine_class())?;
         self.push_instruction(
             X86Opcode::Add,
             vec![
-                fixed_virtual_operand(stack_pointer, OperandRole::UseDef, X86Register::Sp),
+                physical_operand(X86Register::Sp, OperandRole::UseDef),
                 immediate_operand(i64::from(cleanup)),
             ],
             InstructionFlags::NONE,
@@ -1973,6 +1972,15 @@ fn fixed_virtual_operand(
         kind: MachineOperandKind::Register(MachineRegister::Virtual(register)),
         role,
         constraint: Some(RegisterConstraint::Fixed(fixed.physical())),
+        tied_to: None,
+    }
+}
+
+fn physical_operand(register: X86Register, role: OperandRole) -> MachineOperand {
+    MachineOperand {
+        kind: MachineOperandKind::Register(MachineRegister::Physical(register.physical())),
+        role,
+        constraint: None,
         tied_to: None,
     }
 }
@@ -2669,9 +2677,10 @@ mod tests {
         assert!(matches!(
             caller[5].operands.as_slice(),
             [MachineOperand {
+                kind: MachineOperandKind::Register(MachineRegister::Physical(register)),
                 role: OperandRole::UseDef,
-                constraint: Some(RegisterConstraint::Fixed(register)),
-                ..
+                constraint: None,
+                tied_to: None,
             }, MachineOperand {
                 kind: MachineOperandKind::Immediate(4),
                 ..
