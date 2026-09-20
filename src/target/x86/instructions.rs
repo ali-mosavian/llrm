@@ -198,6 +198,13 @@ impl X86Opcode {
     pub const fn machine_opcode(self) -> TargetOpcode {
         TargetOpcode::new(self as u32)
     }
+
+    /// Recovers an x86 opcode from its Machine IR identity.
+    pub fn from_machine_opcode(opcode: TargetOpcode) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|candidate| candidate.machine_opcode() == opcode)
+    }
 }
 
 #[cfg(test)]
