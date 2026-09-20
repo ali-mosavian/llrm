@@ -219,9 +219,22 @@ manager returns, so partial mutations do not escape.
 
 Primary review added that rollback after the delegated implementation left a
 failed candidate installed. One focused verifier-rejection check, including
-the rollback assertion, ran in 3.24 seconds. Constant folding is the next real
-pass; analysis caching remains deliberately deferred until more than one pass
-needs it.
+the rollback assertion, ran in 3.24 seconds. Analysis caching remains
+deliberately deferred until more than one pass needs it.
+
+`llrm-opt` now runs named, ordered pass pipelines with optional verification
+after each pass. Exact integer constant folding, constant branch and switch
+simplification, and fixed-point dead-instruction elimination are real Rust
+passes. Branch simplification repairs only phi edges that the rewritten
+terminator actually removes. Dead-code elimination retains traps, memory
+effects, observable operations, and all calls until the IR can prove that a
+call returns.
+
+The three transformations ship with focused Rust tests beside their
+implementations. The CLI composition test runs
+`constant-fold,simplify-branches,dead-code-elimination` on textual `.qir` and
+checks the adjacent result. Primary review and the selected transform and CLI
+checks consumed about 14 seconds, including one fail-first text-syntax error.
 
 ## Iteration 9: Machine IR foundation (started)
 
@@ -235,3 +248,50 @@ Review added explicit virtual-register declarations and rejected fake register
 roles on immediates, blocks, frames, and symbols. Load, store, and volatile
 properties are represented for later scheduling and verification. The focused
 two-address construction check ran in 2.06 seconds.
+
+`.qmir` now has a deterministic versioned parser and printer covering every
+current Machine IR field. The parser reports one-based source locations and
+leaves structural acceptance to the independent Machine IR verifier. A
+side-effect-free liveness analysis computes deterministic virtual-register
+live-in and live-out sets to a fixed point, including read-before-write
+`UseDef` semantics and explicit malformed-reference errors.
+
+The initial x86 target describes 8-, 16-, and 32-bit integer views, segment and
+x87 registers, alias families, allocation classes, stable semantic opcodes,
+and all condition-code inversion pairs. These descriptions contain no ABI or
+encoding policy yet.
+
+Focused `.qmir`, x86, and liveness checks consumed about 9 seconds after full
+primary diff review. The first liveness compile exposed an invalid mutable map
+index in delegated work; the primary replaced it with deterministic map
+replacement before acceptance.
+
+## Iteration 10: MC layout foundation (started)
+
+The MC layer now owns typed sections, fragments, symbols, expressions, fixups,
+and physical instructions without SSA values or virtual registers. Its
+verifier rejects malformed references and ranges. Deterministic one-shot
+layout assigns section-relative fragment and symbol offsets with checked
+arithmetic and a single target instruction-size hook; it does not encode,
+relax, or mutate fragments.
+
+Primary review corrected a delegated type-inference failure before accepting
+layout. The focused model, verifier, and layout checks consumed about 6.5
+seconds.
+
+## Current source-to-IR vertical slice
+
+`llrm --emit qir` now composes QB parsing, typed HIR construction, HIR-to-IR
+lowering, IR verification, and deterministic `.qir` printing through the
+driver. The first end-to-end minimal-source regression exposed that the QB
+frontend deliberately carries unused built-in opaque types, callable
+declarations, and empty internal data scaffolding in every module. Lowering now
+selects only types referenced by lowered functions and ignores only empty,
+internal data declarations; referenced unsupported semantics and nonempty or
+externally visible data still fail explicitly.
+
+That regression was observed failing before the general declaration-liveness
+rule was implemented, then passed with a parseable `.qir` result. All focused
+verification in this implementation batch, including compile failures used for
+review, consumed about 33 seconds. No qrender, DOSBox, Python suite, or broad
+Rust suite was run.
