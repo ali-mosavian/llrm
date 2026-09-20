@@ -12,7 +12,7 @@ use std::fmt;
 
 use crate::codegen::machine::{
     FrameIndex, FrameObjectKind, MachineAddressSpace, MachineCallingConvention, MachineFunction,
-    MachineValueType,
+    MachineFunctionId, MachineValueType,
 };
 
 const FAR_PASCAL_FIRST_ARGUMENT: u32 = 6;
@@ -40,6 +40,7 @@ impl BasicRuntime {
 /// A complete, deterministic BP-relative plan for one BASIC procedure.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BasicFramePlan {
+    function: MachineFunctionId,
     runtime: BasicRuntime,
     offsets: BTreeMap<FrameIndex, i32>,
     local_bytes: u16,
@@ -48,6 +49,10 @@ pub struct BasicFramePlan {
 }
 
 impl BasicFramePlan {
+    pub const fn function(&self) -> MachineFunctionId {
+        self.function
+    }
+
     pub const fn runtime(&self) -> BasicRuntime {
         self.runtime
     }
@@ -331,6 +336,7 @@ pub fn plan_basic_frame(
         .map_err(|_| BasicFramePlanError::LocalReservationTooLarge(local_bytes))?;
 
     Ok(BasicFramePlan {
+        function: function.id,
         runtime,
         offsets,
         local_bytes,

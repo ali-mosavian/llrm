@@ -448,6 +448,25 @@ one compile-time assertion correction. Primary review also corrected delegated
 entry inference, ID reservation, malformed fixtures, and BP ownership. No
 broad suite, Python suite, qrender, DOSBox, or external runtime gate ran.
 
+The immutable BASIC frame plan now records its owning Machine function and a
+target-owned frame-index finalizer turns each abstract load, store, or address
+into the LLVM-style x86 operand tuple `BP, displacement`. Incoming far-Pascal
+arguments remain above BP, locals include the QB45/PDS71/VBDOS runtime header
+exactly once, and frame displacements remain literal rather than relocations.
+The adjacent encoder chooses signed disp8 when possible, emits disp16
+otherwise, and preserves x86's mandatory displacement for `[bp+0]`.
+
+Primary review rejected the delegated suggestion to add a generic Machine IR
+memory operand: x86 addressing belongs to the target opcode's explicit operand
+tuple. It also rejected a speculative nonzero frame-addend extension after the
+Python audit confirmed that the current selected source path has one final
+frame displacement. Ported regressions cover the `SUBTRACTPAIR` `BP+10/BP+6`
+ordering bug, the 4096-byte VBDOS local at `BP-4116`, the ordinary incoming
+slot at `BP+6`, VBDOS's four-byte local at `BP-24`, single application of the
+displacement, literal Machine-to-MC bytes, and explicit malformed/repeated
+refusals. Focused compilation and test execution consumed under eight seconds;
+no broad or external gate ran.
+
 That regression was observed failing before the general declaration-liveness
 rule was implemented, then passed with a parseable `.qir` result. All focused
 verification in these implementation batches, including compile failures used

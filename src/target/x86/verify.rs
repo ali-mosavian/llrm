@@ -111,14 +111,18 @@ impl Verifier {
         classes: &BTreeMap<VirtualRegisterId, RegisterClass>,
         frames: &BTreeMap<FrameIndex, &FrameObject>,
     ) {
-        let [destination, address] = instruction.operands.as_slice() else {
-            self.instruction_error(
-                function,
-                block,
-                instruction,
-                "load requires [register def, address]",
-            );
-            return;
+        let (destination, address) = match instruction.operands.as_slice() {
+            [destination, address] => (destination, (address, None)),
+            [destination, base, displacement] => (destination, (base, Some(displacement))),
+            _ => {
+                self.instruction_error(
+                    function,
+                    block,
+                    instruction,
+                    "load requires [register def, address] or [register def, bp use, displacement]",
+                );
+                return;
+            }
         };
         let width = self.require_sized_register(
             function,
@@ -129,16 +133,26 @@ impl Verifier {
             OperandRole::Def,
             classes,
         );
-        self.verify_memory_address(
-            function,
-            block,
-            instruction,
-            1,
-            address,
-            classes,
-            frames,
-            width,
-        );
+        match address {
+            (address, None) => self.verify_memory_address(
+                function,
+                block,
+                instruction,
+                1,
+                address,
+                classes,
+                frames,
+                width,
+            ),
+            (base, Some(displacement)) => self.verify_materialized_frame_address(
+                function,
+                block,
+                instruction,
+                1,
+                base,
+                displacement,
+            ),
+        }
         if !is_load_flags(instruction.flags) {
             self.instruction_error(
                 function,
@@ -157,14 +171,18 @@ impl Verifier {
         classes: &BTreeMap<VirtualRegisterId, RegisterClass>,
         frames: &BTreeMap<FrameIndex, &FrameObject>,
     ) {
-        let [address, source] = instruction.operands.as_slice() else {
-            self.instruction_error(
-                function,
-                block,
-                instruction,
-                "store requires [address, register use]",
-            );
-            return;
+        let (address, source) = match instruction.operands.as_slice() {
+            [address, source] => ((address, None), source),
+            [base, displacement, source] => ((base, Some(displacement)), source),
+            _ => {
+                self.instruction_error(
+                    function,
+                    block,
+                    instruction,
+                    "store requires [address, register use] or [bp use, displacement, register use]",
+                );
+                return;
+            }
         };
         let width = self.require_sized_register(
             function,
@@ -175,16 +193,26 @@ impl Verifier {
             OperandRole::Use,
             classes,
         );
-        self.verify_memory_address(
-            function,
-            block,
-            instruction,
-            0,
-            address,
-            classes,
-            frames,
-            width,
-        );
+        match address {
+            (address, None) => self.verify_memory_address(
+                function,
+                block,
+                instruction,
+                0,
+                address,
+                classes,
+                frames,
+                width,
+            ),
+            (base, Some(displacement)) => self.verify_materialized_frame_address(
+                function,
+                block,
+                instruction,
+                0,
+                base,
+                displacement,
+            ),
+        }
         if !is_store_flags(instruction.flags) {
             self.instruction_error(
                 function,
@@ -255,6 +283,51 @@ impl Verifier {
         }
     }
 
+    fn verify_materialized_frame_address(
+        &mut self,
+        function: &MachineFunction,
+        block: &MachineBlock,
+        instruction: &MachineInstruction,
+        position: usize,
+        base: &MachineOperand,
+        displacement: &MachineOperand,
+    ) {
+        if !matches!(
+            base,
+            MachineOperand {
+                kind: MachineOperandKind::Register(MachineRegister::Physical(register)),
+                role: OperandRole::Use,
+                constraint: None,
+                tied_to: None,
+            } if *register == X86Register::Bp.physical()
+        ) {
+            self.operand_error(
+                function,
+                block,
+                instruction,
+                position,
+                "materialized frame base must be an unconstrained physical BP use",
+            );
+        }
+        if !matches!(
+            displacement,
+            MachineOperand {
+                kind: MachineOperandKind::Immediate(_),
+                role: OperandRole::None,
+                constraint: None,
+                tied_to: None,
+            }
+        ) {
+            self.operand_error(
+                function,
+                block,
+                instruction,
+                position + 1,
+                "materialized frame displacement must be an unconstrained immediate",
+            );
+        }
+    }
+
     fn verify_lea(
         &mut self,
         function: &MachineFunction,
@@ -262,35 +335,48 @@ impl Verifier {
         instruction: &MachineInstruction,
         classes: &BTreeMap<VirtualRegisterId, RegisterClass>,
     ) {
-        let [destination, address] = instruction.operands.as_slice() else {
-            self.instruction_error(
-                function,
-                block,
-                instruction,
-                "lea requires [register def, frame index or global]",
-            );
-            return;
+        let (destination, address) = match instruction.operands.as_slice() {
+            [destination, address] => (destination, (address, None)),
+            [destination, base, displacement] => (destination, (base, Some(displacement))),
+            _ => {
+                self.instruction_error(
+                    function,
+                    block,
+                    instruction,
+                    "lea requires [register def, frame index or global] or [register def, bp use, displacement]",
+                );
+                return;
+            }
         };
-        self.require_virtual_class(
+        self.require_address_register(
             function,
             block,
             instruction,
             0,
             destination,
             OperandRole::Def,
-            X86RegisterClass::Address16,
             classes,
         );
-        match &address.kind {
-            MachineOperandKind::FrameIndex { addend, .. }
-                if matches!(address.role, OperandRole::None) && *addend == 0 => {}
-            MachineOperandKind::Global { .. } if matches!(address.role, OperandRole::None) => {}
-            _ => self.operand_error(
+        match address {
+            (address, None) => match &address.kind {
+                MachineOperandKind::FrameIndex { addend, .. }
+                    if matches!(address.role, OperandRole::None) && *addend == 0 => {}
+                MachineOperandKind::Global { .. } if matches!(address.role, OperandRole::None) => {}
+                _ => self.operand_error(
+                    function,
+                    block,
+                    instruction,
+                    1,
+                    "must be a frame index with addend zero or global with role none",
+                ),
+            },
+            (base, Some(displacement)) => self.verify_materialized_frame_address(
                 function,
                 block,
                 instruction,
                 1,
-                "must be a frame index with addend zero or global with role none",
+                base,
+                displacement,
             ),
         }
         if instruction.flags != InstructionFlags::NONE {
@@ -649,6 +735,47 @@ impl Verifier {
         }
     }
 
+    fn require_address_register(
+        &mut self,
+        function: &MachineFunction,
+        block: &MachineBlock,
+        instruction: &MachineInstruction,
+        position: usize,
+        operand: &MachineOperand,
+        role: OperandRole,
+        classes: &BTreeMap<VirtualRegisterId, RegisterClass>,
+    ) {
+        if operand.role != role {
+            self.operand_error(
+                function,
+                block,
+                instruction,
+                position,
+                format!("must have {:?} role", role),
+            );
+        }
+        let valid = match operand.kind {
+            MachineOperandKind::Register(MachineRegister::Virtual(id)) => {
+                classes.get(&id).copied() == Some(X86RegisterClass::Address16.machine_class())
+            }
+            MachineOperandKind::Register(MachineRegister::Physical(register)) => {
+                X86Register::from_physical(register).is_some_and(|register| {
+                    X86RegisterClass::Address16.members().contains(&register)
+                })
+            }
+            _ => false,
+        };
+        if !valid {
+            self.operand_error(
+                function,
+                block,
+                instruction,
+                position,
+                "must be an address16 x86 register",
+            );
+        }
+    }
+
     fn require_fixed_virtual(
         &mut self,
         function: &MachineFunction,
@@ -902,6 +1029,24 @@ mod tests {
         }
     }
 
+    fn physical(register: X86Register, role: OperandRole) -> MachineOperand {
+        MachineOperand {
+            kind: MachineOperandKind::Register(MachineRegister::Physical(register.physical())),
+            role,
+            constraint: None,
+            tied_to: None,
+        }
+    }
+
+    fn immediate(value: i64) -> MachineOperand {
+        MachineOperand {
+            kind: MachineOperandKind::Immediate(value),
+            role: OperandRole::None,
+            constraint: None,
+            tied_to: None,
+        }
+    }
+
     fn frame(index: u32) -> MachineOperand {
         MachineOperand {
             kind: MachineOperandKind::FrameIndex {
@@ -1140,14 +1285,76 @@ mod tests {
     }
 
     #[test]
+    fn accepts_only_the_materialized_bp_frame_tuple() {
+        let accepted = module(vec![
+            instruction(
+                0,
+                X86Opcode::Load,
+                vec![
+                    physical(X86Register::Ax, OperandRole::Def),
+                    physical(X86Register::Bp, OperandRole::Use),
+                    immediate(6),
+                ],
+                InstructionFlags {
+                    may_load: true,
+                    ..InstructionFlags::NONE
+                },
+            ),
+            instruction(
+                1,
+                X86Opcode::Store,
+                vec![
+                    physical(X86Register::Bp, OperandRole::Use),
+                    immediate(-24),
+                    physical(X86Register::Eax, OperandRole::Use),
+                ],
+                InstructionFlags {
+                    side_effects: true,
+                    may_store: true,
+                    ..InstructionFlags::NONE
+                },
+            ),
+            instruction(
+                2,
+                X86Opcode::Lea,
+                vec![
+                    physical(X86Register::Bx, OperandRole::Def),
+                    physical(X86Register::Bp, OperandRole::Use),
+                    immediate(-24),
+                ],
+                InstructionFlags::NONE,
+            ),
+        ]);
+        assert_eq!(verify_machine(&accepted), Ok(()));
+
+        let invalid = module(vec![instruction(
+            0,
+            X86Opcode::Load,
+            vec![
+                physical(X86Register::Ax, OperandRole::Def),
+                physical(X86Register::Bx, OperandRole::Use),
+                immediate(6),
+            ],
+            InstructionFlags {
+                may_load: true,
+                ..InstructionFlags::NONE
+            },
+        )]);
+        let messages = verify_machine(&invalid)
+            .unwrap_err()
+            .into_iter()
+            .map(|diagnostic| diagnostic.message)
+            .collect::<Vec<_>>();
+        assert!(messages.iter().any(|message| {
+            message.contains("materialized frame base must be an unconstrained physical BP use")
+        }));
+    }
+
+    #[test]
     fn rejects_invalid_pseudo_contracts_and_oversized_frame_access() {
         let mut bad_call_output = virtual_register(2, OperandRole::Use);
         bad_call_output.constraint = Some(RegisterConstraint::Fixed(PhysicalRegister::new(99)));
-        let mut nonzero_frame = frame(0);
-        nonzero_frame.kind = MachineOperandKind::FrameIndex {
-            index: FrameIndex::new(0),
-            addend: 1,
-        };
+        let bad_lea_address = immediate(1);
         let module = module(vec![
             instruction(
                 0,
@@ -1173,7 +1380,7 @@ mod tests {
             instruction(
                 2,
                 X86Opcode::Lea,
-                vec![virtual_register(3, OperandRole::Def), nonzero_frame],
+                vec![virtual_register(3, OperandRole::Def), bad_lea_address],
                 InstructionFlags::NONE,
             ),
             instruction(

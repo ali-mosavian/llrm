@@ -1,9 +1,10 @@
-//! Exact initial i386 register-form instruction encoding.
+//! Exact initial i386 register and BP-relative instruction encoding.
 //!
 //! The initial target has a 16-bit default operand size.  This module encodes
-//! only physical general-purpose register forms; memory, expressions, fixups,
-//! branches, calls, segments, and x87 remain explicit unsupported forms until
-//! their semantics and relocation contracts are implemented.
+//! physical general-purpose register forms plus the BP-relative frame form
+//! produced by frame-index elimination. Expressions, fixups, branches, calls,
+//! segments, and x87 remain explicit unsupported forms until their semantics
+//! and relocation contracts are implemented.
 
 use std::error::Error;
 use std::fmt;
@@ -21,6 +22,8 @@ pub enum EncodeError {
     UnknownRegister { raw: u32 },
     /// The architectural view exists but is outside this register-form subset.
     UnsupportedRegister { raw: u32 },
+    /// A materialized frame address does not use 16-bit BP as its base.
+    UnsupportedFrameBase { opcode: X86Opcode, raw: u32 },
     /// The operand count does not match the selected instruction form.
     Arity {
         opcode: X86Opcode,
@@ -57,6 +60,12 @@ impl fmt::Display for EncodeError {
                 write!(
                     formatter,
                     "x86 register {raw} is not a general-purpose register view"
+                )
+            }
+            Self::UnsupportedFrameBase { opcode, raw } => {
+                write!(
+                    formatter,
+                    "{opcode:?} frame address uses x86 register {raw}, not BP"
                 )
             }
             Self::Arity {
@@ -115,8 +124,10 @@ pub fn encode(instruction: &MCInstruction) -> Result<Vec<u8>, EncodeError> {
         X86Opcode::Pop => encode_push_pop(opcode, &instruction.operands, 0x58),
         X86Opcode::ReturnNear => encode_return(opcode, &instruction.operands, 0xc3),
         X86Opcode::ReturnFar => encode_return(opcode, &instruction.operands, 0xcb),
-        X86Opcode::Lea
-        | X86Opcode::Idiv
+        X86Opcode::Lea => encode_frame_lea(opcode, &instruction.operands),
+        X86Opcode::Load => encode_frame_load(opcode, &instruction.operands),
+        X86Opcode::Store => encode_frame_store(opcode, &instruction.operands),
+        X86Opcode::Idiv
         | X86Opcode::ShiftLeft
         | X86Opcode::ShiftRightLogical
         | X86Opcode::ShiftRightArithmetic
@@ -124,8 +135,6 @@ pub fn encode(instruction: &MCInstruction) -> Result<Vec<u8>, EncodeError> {
         | X86Opcode::CallFar
         | X86Opcode::Jump
         | X86Opcode::JumpConditional
-        | X86Opcode::Load
-        | X86Opcode::Store
         | X86Opcode::MergeWords
         | X86Opcode::LowWord
         | X86Opcode::HighWord => Err(EncodeError::UnsupportedForm {
@@ -133,6 +142,75 @@ pub fn encode(instruction: &MCInstruction) -> Result<Vec<u8>, EncodeError> {
             reason: "this initial encoder accepts only exact register forms",
         }),
     }
+}
+
+fn encode_frame_load(opcode: X86Opcode, operands: &[MCOperand]) -> Result<Vec<u8>, EncodeError> {
+    expect_arity(opcode, operands, 3)?;
+    let destination = register_operand(opcode, operands, 0)?;
+    let displacement = frame_displacement(opcode, operands, 1, 2)?;
+    let mut bytes = prefix_for(destination.size);
+    bytes.push(match destination.size {
+        OperandSize::Byte => 0x8a,
+        OperandSize::Word | OperandSize::Dword => 0x8b,
+    });
+    bytes.extend(displacement.with_register(destination.code));
+    Ok(bytes)
+}
+
+fn encode_frame_store(opcode: X86Opcode, operands: &[MCOperand]) -> Result<Vec<u8>, EncodeError> {
+    expect_arity(opcode, operands, 3)?;
+    let displacement = frame_displacement(opcode, operands, 0, 1)?;
+    let source = register_operand(opcode, operands, 2)?;
+    let mut bytes = prefix_for(source.size);
+    bytes.push(match source.size {
+        OperandSize::Byte => 0x88,
+        OperandSize::Word | OperandSize::Dword => 0x89,
+    });
+    bytes.extend(displacement.with_register(source.code));
+    Ok(bytes)
+}
+
+fn encode_frame_lea(opcode: X86Opcode, operands: &[MCOperand]) -> Result<Vec<u8>, EncodeError> {
+    expect_arity(opcode, operands, 3)?;
+    let destination = register_operand(opcode, operands, 0)?;
+    if destination.size == OperandSize::Byte {
+        return Err(EncodeError::UnsupportedForm {
+            opcode,
+            reason: "lea has no byte-register destination",
+        });
+    }
+    let displacement = frame_displacement(opcode, operands, 1, 2)?;
+    let mut bytes = prefix_for(destination.size);
+    bytes.push(0x8d);
+    bytes.extend(displacement.with_register(destination.code));
+    Ok(bytes)
+}
+
+fn frame_displacement(
+    opcode: X86Opcode,
+    operands: &[MCOperand],
+    base_index: usize,
+    displacement_index: usize,
+) -> Result<FrameDisplacement, EncodeError> {
+    let base = register_operand(opcode, operands, base_index)?;
+    let base_register = decode_register(match operands[base_index] {
+        MCOperand::Register(register) => register.get(),
+        _ => unreachable!("register_operand accepted the frame base"),
+    })?;
+    if base_register != X86Register::Bp || base.size != OperandSize::Word {
+        return Err(EncodeError::UnsupportedFrameBase {
+            opcode,
+            raw: base_register as u32,
+        });
+    }
+    let Some(MCOperand::Immediate(displacement)) = operands.get(displacement_index) else {
+        return Err(EncodeError::OperandKind {
+            opcode,
+            index: displacement_index,
+            expected: "an immediate frame displacement",
+        });
+    };
+    Ok(FrameDisplacement::new(*displacement))
 }
 
 /// Returns the exact encoded size for one instruction.
@@ -379,6 +457,42 @@ fn modrm(reg: u8, rm: u8) -> u8 {
     0xc0 | (reg << 3) | rm
 }
 
+/// The 16-bit ModR/M spelling of `[bp+displacement]`.
+///
+/// Effective offsets wrap at 16 bits.  The conceptual frame depth may be just
+/// below -32768 because the measured runtime header sits below a legal
+/// 0x7ffe-byte reservation, so the word form deliberately retains the low
+/// sixteen bits instead of imposing a signed-i16 source restriction.
+struct FrameDisplacement {
+    mode: u8,
+    bytes: Vec<u8>,
+}
+
+impl FrameDisplacement {
+    fn new(value: i64) -> Self {
+        if (-128..=127).contains(&value) {
+            Self {
+                mode: 0b01,
+                bytes: vec![value as i8 as u8],
+            }
+        } else {
+            Self {
+                mode: 0b10,
+                bytes: (value as u16).to_le_bytes().to_vec(),
+            }
+        }
+    }
+
+    fn with_register(self, register: u8) -> Vec<u8> {
+        let mut encoded = Vec::with_capacity(1 + self.bytes.len());
+        // In 16-bit addressing r/m=110 denotes BP when mod is nonzero.  The
+        // mod=00 spelling is an absolute disp16, so even `[bp]` uses disp8=0.
+        encoded.push((self.mode << 6) | (register << 3) | 0b110);
+        encoded.extend(self.bytes);
+        encoded
+    }
+}
+
 fn decode_opcode(raw: u32) -> Result<X86Opcode, EncodeError> {
     X86Opcode::from_raw(raw).ok_or(EncodeError::UnknownOpcode { raw })
 }
@@ -534,6 +648,79 @@ mod tests {
         assert_eq!(
             encode(&instruction(X86Opcode::ReturnFar, Vec::new())).unwrap(),
             vec![0xcb]
+        );
+    }
+
+    #[test]
+    fn encodes_materialized_basic_frame_load_store_and_address() {
+        // These are the exact post-layout forms behind the Python source
+        // regressions for a far-Pascal argument at BP+6 and a VBDOS local
+        // below the twenty-byte runtime header.
+        assert_eq!(
+            encode(&instruction(
+                X86Opcode::Load,
+                vec![
+                    register(X86Register::Ax),
+                    register(X86Register::Bp),
+                    MCOperand::Immediate(6),
+                ],
+            ))
+            .unwrap(),
+            vec![0x8b, 0x46, 0x06]
+        );
+        assert_eq!(
+            encode(&instruction(
+                X86Opcode::Store,
+                vec![
+                    register(X86Register::Bp),
+                    MCOperand::Immediate(-24),
+                    register(X86Register::Eax),
+                ],
+            ))
+            .unwrap(),
+            vec![0x66, 0x89, 0x46, 0xe8]
+        );
+        assert_eq!(
+            encode(&instruction(
+                X86Opcode::Lea,
+                vec![
+                    register(X86Register::Bx),
+                    register(X86Register::Bp),
+                    MCOperand::Immediate(-32_786),
+                ],
+            ))
+            .unwrap(),
+            vec![0x8d, 0x9e, 0xee, 0x7f]
+        );
+    }
+
+    #[test]
+    fn bp_zero_uses_a_displacement_and_non_bp_frames_are_refused() {
+        assert_eq!(
+            encode(&instruction(
+                X86Opcode::Load,
+                vec![
+                    register(X86Register::Al),
+                    register(X86Register::Bp),
+                    MCOperand::Immediate(0),
+                ],
+            ))
+            .unwrap(),
+            vec![0x8a, 0x46, 0x00]
+        );
+        assert_eq!(
+            encode(&instruction(
+                X86Opcode::Load,
+                vec![
+                    register(X86Register::Ax),
+                    register(X86Register::Bx),
+                    MCOperand::Immediate(6),
+                ],
+            )),
+            Err(EncodeError::UnsupportedFrameBase {
+                opcode: X86Opcode::Load,
+                raw: X86Register::Bx as u32,
+            })
         );
     }
 
