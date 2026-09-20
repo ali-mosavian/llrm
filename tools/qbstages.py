@@ -1,5 +1,6 @@
 """Dump every implemented QB source-frontend stage to adjacent text files."""
 
+import re
 import argparse
 from pathlib import Path
 from dataclasses import replace
@@ -16,6 +17,7 @@ from qbopt.frontend.qb import parsed
 from qbopt.frontend.qb import finalized
 from qbopt.frontend.qb import stage_text
 from qbopt.frontend.qb import physicalize
+from qbopt.objectfile.module import Space
 from qbopt.frontend.qb import compile as qb_compile
 
 
@@ -52,7 +54,127 @@ def _lir(body, callees=None) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _emitted_asm(program: hir.Program) -> str:
+def _source_globals(program: hir.Program, module: masm.Module) -> dict[str, tuple[int, str]]:
+    """Return emitted source-global names with their exact zero-fill extent.
+
+    This is deliberately a diagnostic-only view.  The frontend owns BASIC's
+    spelling of source globals, while the shared MASM writer owns the bytes.
+    Keeping that distinction here lets the showcase be readable without
+    changing either the object writer or its backend-neutral data model.
+    """
+    globals_ = {}
+    for source_module in program.modules:
+        types = {one.id: one for one in source_module.types}
+        for function in source_module.functions:
+            for place in function.places:
+                if place.storage is not hir.Storage.MODULE or place.extent is None or place.name.startswith("$"):
+                    continue
+                name = module.names.get((Space.SEGMENT, place.symbol))
+                if name is None:
+                    continue
+                type_name = types[place.type].name
+                globals_[name] = (place.extent, type_name)
+    return globals_
+
+
+def _zero_fill(size: int) -> str:
+    """Spell initialized zero bytes compactly, preserving the emitted bytes."""
+    match size:
+        case 1:
+            return "db 0"
+        case 2:
+            return "dw 0"
+        case 4:
+            return "dd 0"
+        case 8:
+            return "dq 0"
+        case _:
+            return f"db {size} dup (0)"
+
+
+def _pretty_preamble(program: hir.Program, module: masm.Module) -> str:
+    """Render the emitted data model as readable, byte-equivalent MASM."""
+    globals_ = _source_globals(program, module)
+    out = [".model medium", ".386", ""]
+    out += [f"public {name}" for name in module.publics]
+    out += ["", "; --------------------------------------------------------------------------", "; Data", ""]
+    for segment, items in module.data:
+        private = segment in module.private
+        if out[-1]:
+            out.append("")
+        out.append(masm.SEGMENTS.get(segment, f"{segment} segment word public '{'FAR_DATA' if private else 'DATA'}'"))
+        out += [f"extern {name}:byte" for name, kind in module.externs if kind == "byte"]
+        source_heading = False
+        index = 0
+        while index < len(items):
+            item = items[index]
+            following = items[index + 1] if index + 1 < len(items) else None
+            if isinstance(item, masm.Label) and item.name in globals_ and isinstance(following, bytes):
+                extent, type_name = globals_[item.name]
+                if len(following) == extent and not any(following):
+                    if not source_heading:
+                        out += ["", "    ; QB source globals: BC-compatible effective names", ""]
+                        source_heading = True
+                    out.append(f"{item.name:<20} {_zero_fill(extent):<16} ; {type_name}")
+                    index += 2
+                    continue
+            match item:
+                case bytes() if len(item) >= 4 and not any(item):
+                    out.append(f"    {_zero_fill(len(item))}")
+                case bytes():
+                    out += [f"    {line}" for line in masm.datum(item)]
+                case _:
+                    out += masm.datum(item)
+            index += 1
+        if segment not in masm.SEGMENTS:
+            out.append(f"{segment} ends")
+            if not private:
+                out.append(f"DGROUP group {segment}")
+    out += [
+        f"extern {name}:{'byte' if kind == 'far-byte' else kind}" for name, kind in module.externs if kind != "byte"
+    ]
+    out += [
+        "",
+        "; --------------------------------------------------------------------------",
+        "; Code",
+        f".code {module.code}",
+    ]
+    return "\n".join(out) + "\n"
+
+
+def _display_assembly(text: str) -> str:
+    """Align instructions and hide only display-only, unreferenced block labels."""
+    lines = text.splitlines()
+    referenced = {
+        match.group(1) for line in lines if not line.endswith(":") for match in re.finditer(r"\b(L\d+_\d+)\b", line)
+    }
+    out = []
+    for line in lines:
+        heading = line.endswith(" proc far") or line.endswith(" proc near")
+        label = line.endswith(":")
+        name = line[:-1] if label else ""
+        entry_label = bool(out and (out[-1].endswith(" proc far") or out[-1].endswith(" proc near")))
+        if label and name.startswith("L") and not entry_label and name not in referenced:
+            continue
+        # Keep a procedure's entry label adjacent to its envelope: it makes
+        # the runtime frame sequence easy to scan.  Any surviving internal
+        # label starts a visually distinct basic block.
+        if (heading or (label and not entry_label)) and out and out[-1]:
+            out.append("")
+        if heading:
+            out += [
+                "; --------------------------------------------------------------------------",
+                f"; Procedure: {line.split(' proc ', 1)[0]}",
+            ]
+        if line.startswith("    "):
+            match = re.fullmatch(r"    ([A-Za-z][A-Za-z0-9]*)\s+(.+)", line)
+            if match is not None:
+                line = f"    {match.group(1):<8}{match.group(2)}"
+        out.append(line)
+    return "\n".join(out) + "\n"
+
+
+def _emitted_asm(program: hir.Program, *, pretty: bool = True) -> str:
     """Render the exact return cleanup carried by the emitted assembly model.
 
     The shared MASM diagnostic printer historically spells every far return as
@@ -75,7 +197,13 @@ def _emitted_asm(program: hir.Program) -> str:
     # masm.text() uses the shared native frame shell. BASIC OMF emission uses
     # _basic_listing(), where B$ENRA/B$EXSA own that shell. Replace each
     # procedure with the listing which object_bytes() actually encodes.
-    rendered = masm.text(module)
+    rendered = _pretty_preamble(program, module) if pretty else masm.text(module)
+    if pretty:
+        # The shared printer contributes the procedure envelopes below.  Its
+        # data preamble has already been replaced by the readable equivalent.
+        for number, procedure in enumerate(module.procedures):
+            rendered += "\n".join(masm._procedure(procedure, module.names, number)) + "\n"
+        rendered += "end\n"
     for number, procedure in enumerate(module.procedures):
         heading = f"{procedure.name} proc {'far' if procedure.far else 'near'}"
         ending = f"{procedure.name} endp"
@@ -110,7 +238,8 @@ def _emitted_asm(program: hir.Program) -> str:
         if current in cleanup and line.strip() == "retf":
             line = f"    retf {cleanup[current]}"
         lines.append(line)
-    return "\n".join(lines) + "\n"
+    result = "\n".join(lines) + "\n"
+    return _display_assembly(result) if pretty else result
 
 
 def dumped(
@@ -216,6 +345,7 @@ def dumped(
     # a showcase cannot hide runtime frame entry/exit, parameter cleanup,
     # module initialization, or source-data layout.
     (output / "99-emitted-asm.asm").write_text(_emitted_asm(program))
+    (output / "99-emitted-asm.raw.asm").write_text(_emitted_asm(program, pretty=False))
     return output
 
 

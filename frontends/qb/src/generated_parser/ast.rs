@@ -875,6 +875,7 @@ fn extension_procedure(
         body: Vec::new(),
         declaration: true,
         is_static,
+        exported: true,
         span,
     });
     ParseResult::GoodSyntax
@@ -974,6 +975,7 @@ fn synthesize_statement(
             body,
             declaration: header.declaration,
             is_static,
+            exported: !inline_def_fn,
             span: header.span,
         };
         state.procedures.push(procedure);

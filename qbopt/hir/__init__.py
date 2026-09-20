@@ -40,6 +40,7 @@ from qbopt.hir.model import ProjectedPlace
 from qbopt.hir.model import RuntimeProfile
 from qbopt.hir.model import TerminatorKind
 from qbopt.hir.model import FloatEvaluation
+from qbopt.hir.model import FunctionLinkage
 
 __all__ = [
     "AddressKind",
@@ -56,6 +57,7 @@ __all__ = [
     "FloatEvaluation",
     "FloatMode",
     "Function",
+    "FunctionLinkage",
     "Instruction",
     "IndirectPlace",
     "InvalidHIR",

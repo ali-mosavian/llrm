@@ -202,6 +202,7 @@ struct Function {
     error_handler: Option<u32>,
     error_handler_local: bool,
     external_entries: Vec<u32>,
+    linkage: &'static str,
 }
 
 struct Compiler {
@@ -246,6 +247,7 @@ struct Compiler {
     data_offset: usize,
     implicit_storage: &'static str,
     next_data: u32,
+    next_module_data: u32,
     def_segment_symbol: Option<u32>,
     far_string_segment_symbol: Option<u32>,
     floating_literals: BTreeMap<(u32, Vec<u8>), u32>,
@@ -319,7 +321,7 @@ pub fn compile_with_options(
     compiler.reserve_labels(&module.statements)?;
     compiler.statements(module)?;
     compiler.finish();
-    compiler.save_function(1, "__main", VOID, Vec::new(), false, 0);
+    compiler.save_function(1, "__main", VOID, Vec::new(), false, 0, "internal");
 
     let module_default_types = compiler.default_types;
     let module_variables = compiler.variables.clone();
@@ -483,6 +485,7 @@ pub fn compile_with_options(
             parameters,
             procedure.cdecl,
             parameter_bytes,
+            if procedure.exported { "external" } else { "internal" },
         );
     }
     Ok(compiler.json())
@@ -764,6 +767,7 @@ fn outline_module_gosubs(module: &Module) -> Result<Module, SemanticError> {
             body,
             declaration: false,
             is_static: false,
+            exported: false,
             span,
         });
         removed[start..=end].fill(true);
@@ -865,6 +869,11 @@ impl Compiler {
             data_offset: 0,
             implicit_storage: "module",
             next_data: 3,
+            // Source globals need their own stable data identity so their
+            // names survive to the OMF listing. Keep them outside the
+            // compiler-data sequence: BC's GORILLA$D<n> labels retain their
+            // measured ordinals while globals use BASIC's typed spelling.
+            next_module_data: 1_000_000,
             def_segment_symbol: None,
             far_string_segment_symbol: None,
             floating_literals: BTreeMap::new(),
@@ -923,6 +932,7 @@ impl Compiler {
         parameters: Vec<u32>,
         caller_cleanup: bool,
         parameter_bytes: usize,
+        linkage: &'static str,
     ) {
         self.prune_unreachable(&parameters);
         let retained: BTreeSet<u32> = self.blocks.iter().map(|block| block.id).collect();
@@ -964,6 +974,7 @@ impl Compiler {
             error_handler: self.error_handler,
             error_handler_local: self.error_handler_local,
             external_entries,
+            linkage,
         });
     }
 
@@ -1392,6 +1403,7 @@ impl Compiler {
         } else {
             self.named_type(&declaration.name, declaration.type_name.as_ref())?
         };
+        let module_symbol = self.basic_global_name(&declaration.name, selected, element);
         let runtime_bounds = declaration.array
             && !declaration.bounds.is_empty()
             && storage != "static"
@@ -1426,24 +1438,29 @@ impl Compiler {
                 format!("{} descriptor", declaration.name),
                 14 + 4 * declaration.bounds.len(),
             );
+            let descriptor_extent = self.width(descriptor_type);
+            let (descriptor_offset, descriptor_symbol) = if storage == "module" {
+                (0, self.module_data(module_symbol.clone(), descriptor_extent))
+            } else {
+                (
+                    self.place_offset(storage, descriptor_extent),
+                    if matches!(storage, "local" | "parameter") { 0 } else { 1 },
+                )
+            };
             let descriptor_place = self.next_place;
             self.next_place += 1;
-            let descriptor_extent = self.width(descriptor_type);
             self.places.push(Place {
                 id: descriptor_place,
                 name: format!("{}$descriptor", declaration.name),
                 type_id: descriptor_type,
-                offset: self.place_offset(storage, descriptor_extent),
+                offset: descriptor_offset,
                 extent: descriptor_extent,
                 storage,
-                symbol: if matches!(storage, "local" | "parameter") {
-                    0
-                } else {
-                    1
-                },
+                symbol: descriptor_symbol,
             });
-            self.data_offset += descriptor_extent;
-            self.reserve_module_data(storage);
+            if matches!(storage, "local" | "parameter") {
+                self.data_offset += descriptor_extent;
+            }
             let pointer_type = self.pointer_type(descriptor_type);
             let descriptor = self.value(pointer_type);
             self.emit(
@@ -1520,25 +1537,30 @@ impl Compiler {
                 format!("{} descriptor", declaration.name),
                 14 + 4 * UNSPECIFIED_ARRAY_RANK,
             );
+            let descriptor_extent = self.width(descriptor_type);
+            let (descriptor_offset, descriptor_symbol) = if storage == "module" {
+                (0, self.module_data(module_symbol.clone(), descriptor_extent))
+            } else {
+                (
+                    self.place_offset(storage, descriptor_extent),
+                    if matches!(storage, "local" | "parameter") { 0 } else { 1 },
+                )
+            };
             let descriptor_place = self.next_place;
             self.next_place += 1;
-            let descriptor_extent = self.width(descriptor_type);
             self.places.push(Place {
                 id: descriptor_place,
                 name: format!("{}$descriptor", declaration.name),
                 type_id: descriptor_type,
-                offset: self.place_offset(storage, descriptor_extent),
+                offset: descriptor_offset,
                 extent: descriptor_extent,
                 storage,
-                symbol: if matches!(storage, "local" | "parameter") {
-                    0
-                } else {
-                    1
-                },
+                symbol: descriptor_symbol,
             });
-            self.data_offset += descriptor_extent;
-            self.reserve_module_data(storage);
-            if self.data_offset > 65536 {
+            if matches!(storage, "local" | "parameter") {
+                self.data_offset += descriptor_extent;
+            }
+            if matches!(storage, "local" | "parameter") && self.data_offset > 65536 {
                 return self.fail(format!(
                     "{} descriptor exceeds the 64 KiB near-data budget",
                     declaration.name
@@ -1609,6 +1631,8 @@ impl Compiler {
                 address: "near",
             });
             (0, symbol)
+        } else if storage == "module" {
+            (0, self.module_data(module_symbol, extent))
         } else {
             (
                 self.place_offset(storage, extent),
@@ -1630,9 +1654,8 @@ impl Compiler {
             storage,
             symbol: place_symbol,
         });
-        if storage != "static" {
+        if matches!(storage, "local" | "parameter") {
             self.data_offset += extent;
-            self.reserve_module_data(storage);
         }
         let descriptor_place = if array_element.is_some() {
             let descriptor_type = self.opaque_type(
@@ -1697,6 +1720,49 @@ impl Compiler {
         if !matches!(storage, "local" | "parameter") {
             self.data[0].bytes.resize(self.data_offset, 0);
         }
+    }
+
+    fn module_data(&mut self, name: String, extent: usize) -> u32 {
+        let symbol = self.next_module_data;
+        self.next_module_data += 1;
+        self.data.push(DataObject {
+            id: symbol,
+            name,
+            bytes: vec![0; extent],
+            readonly: false,
+            relocations: Vec::new(),
+            linkage: "internal",
+            address: "near",
+        });
+        symbol
+    }
+
+    fn basic_global_name(
+        &self,
+        name: &str,
+        declared: Option<&TypeName>,
+        type_id: u32,
+    ) -> String {
+        if suffix(name).is_some() {
+            return name.to_ascii_uppercase();
+        }
+        let suffix = match declared {
+            Some(TypeName::Integer) => "%",
+            Some(TypeName::Long) => "&",
+            Some(TypeName::Single) => "!",
+            Some(TypeName::Double) => "#",
+            Some(TypeName::String) => "$",
+            Some(TypeName::Named(_)) => "",
+            None => match type_id {
+                INTEGER => "%",
+                LONG => "&",
+                SINGLE => "!",
+                DOUBLE => "#",
+                STRING => "$",
+                _ => "",
+            },
+        };
+        format!("{}{suffix}", name.to_ascii_uppercase())
     }
 
     fn static_array_descriptor(
@@ -3265,11 +3331,11 @@ impl Compiler {
             return self.condition(operand, true_target, false_target, !while_true);
         }
         let condition = self.truth(expression)?;
-        // Under VBDOS /O, a NOT buried below another operator is still
-        // materialized, but the final control transfer is exchanged.  The
-        // top-level case above is different: BC strips the NOT entirely.
-        let branch_on_true = while_true ^ contains_not(expression);
-        let targets = if branch_on_true {
+        // A nested NOT is already an ordinary integer operation in the value
+        // above.  It must not also exchange the final branch: doing both made
+        // `(NOT Impact) AND OnScreen` false precisely when both terms were
+        // true and skipped Gorillas' whole banana-animation loop.
+        let targets = if while_true {
             vec![true_target, false_target]
         } else {
             vec![false_target, true_target]
@@ -6885,6 +6951,7 @@ impl Compiler {
             numbers(&mut out, &function.external_entries);
             write!(out, "],\"id\":{},\"name\":", function.id).unwrap();
             string(&mut out, &function.name);
+            write!(out, ",\"linkage\":\"{}\"", function.linkage).unwrap();
             out.push_str(",\"parameters\":[");
             numbers(&mut out, &function.parameters);
             out.push_str("],\"places\":[");
@@ -7324,19 +7391,6 @@ fn binary_name(op: Binary) -> &'static str {
         Binary::Multiply => "mul",
         Binary::Divide => "fdiv",
         Binary::Power => "call",
-    }
-}
-
-fn contains_not(expression: &Expr) -> bool {
-    match expression {
-        Expr::Unary { op, operand, .. } => *op == Unary::Not || contains_not(operand),
-        Expr::Binary { left, right, .. } => contains_not(left) || contains_not(right),
-        Expr::Apply { arguments, .. } => arguments.iter().any(contains_not),
-        Expr::Index { base, indices, .. } => {
-            contains_not(base) || indices.iter().any(contains_not)
-        }
-        Expr::Field { base, .. } => contains_not(base),
-        Expr::Omitted(..) | Expr::Literal(..) | Expr::Name(..) => false,
     }
 }
 

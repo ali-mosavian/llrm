@@ -15,10 +15,15 @@ Each run of `tools/qbstages.py` writes:
 3. per-function semantic, optimized, and physical MIR;
 4. per-function Intel/MASM LIR after each existing machine phase;
 5. per-function inline-x87 LIR; and
-6. `99-emitted-asm.asm`, including the QB runtime ABI envelope and the exact
-   `retf n` cleanup encoded in OMF.
+6. `99-emitted-asm.asm`, a readable, byte-equivalent MASM/Intel listing with
+   QB's effective source-global names, compact initialized storage, the
+   runtime ABI envelope, aligned operands, section separators, and the exact
+   `retf n` cleanup encoded in OMF. It elides only unreferenced non-entry
+   generated block labels; and
+7. `99-emitted-asm.raw.asm`, the same emitted model in ungrouped `db` form for
+   direct byte-layout audits.
 
-The last file exists because the ABI envelope is intentionally frontend-owned;
+The final assembly pair exists because the ABI envelope is intentionally frontend-owned;
 stopping at ordinary LIR hides `B$ENRA`, `B$EXSA`, module initialization, and
 callee stack cleanup.
 
@@ -512,3 +517,32 @@ the first shot raised error 11. Saved stages are
 `build/gorillas-qb45/NESTDIV-STG3`. DOS prints `30` for the isolated program.
 The automated Gorillas probe reaches `RENDER AND SHOT PASS` after drawing the
 city and animating one shot.
+
+### 20. Gorillas buried-NOT shot loop and symbol fidelity
+
+The original `PlotShot` source enters its animation with:
+
+```basic
+do while (not Impact) and OnScreen
+  call DrawBan(x#, y#, rot, true)
+loop
+```
+
+The former semantic branch exchanged its successors merely because a nested
+`NOT` occurred in the expression. With `Impact = 0` and `OnScreen = -1`, the
+computed condition was true but execution left the loop before `DrawBan`; no
+banana appeared. The focused regression first failed with branch targets
+`[exit, body]` and now requires `[body, exit]`. The complete corrected source,
+HIR, MIR, Intel/MASM LIR, allocation stages, readable assembly, and its raw
+byte-layout companion are saved in `build/gorillas-qb45/ROUND19`.  The QB 4.5
+object uses BC's `GORILLA_CODE`, `BR_DATA`, `BR_SKYS`, `COMMON`, `BC_DATA`,
+`NMALLOC`, `ENMALLOC`, `BC_FT`, `BC_CN`, `BC_DS`, `BC_SAB`, and `BC_SA`
+SEGDEF sequence. VBDOS alone appends its measured private far-data segments.
+
+The same round audits object names against the unmodified BC object. The cited
+sequence uses `GORILLA$D61`, `GORILLA$D62`, `CENTER`, `B$SASS`, and `B$STDL`
+on both sides. The audit also caught qbopt's extra `FNRAN` PUBDEF: BC keeps a
+`DEF FN` private. HIR now carries function linkage, and the QB OMF adapter
+emits a private callable label without publishing it. The object regression
+fails under the old policy with `{FNPRIVATE, PUBLIC}` and passes with BC's
+sole public `{PUBLIC}`.

@@ -35,6 +35,32 @@ the push order and assigns cleanup to the caller. The raw VBDOS
 then command line in that order; reversing it corrupted the populated array's
 far heap before the semantic call-order fix.
 
+## OMF symbol spelling and scope
+
+The source OMF adapter reproduces Microsoft's linker names exactly. Public
+SUB/FUNCTION names are ASCII uppercase with the BASIC type suffix removed;
+runtime EXTDEF names retain their table spelling, including `$` and case;
+compiler data labels are `<MODULE>$D<number>`. The unmodified Gorillas pair
+therefore uses `CENTER`, `B$SASS`, and `GORILLA$D61` on both sides.
+
+Source globals retain their **effective** BASIC type suffix, not merely their
+spelling in a `DIM`. A QB 4.5 `/Zi` OMF probe establishes: untyped
+`DIM SHARED implicit` is `IMPLICIT!`; `AS INTEGER`, `LONG`, `SINGLE`,
+`DOUBLE`, and `STRING * 8` are respectively `%`, `&`, `!`, `#`, and `$`; an
+untyped numeric array is likewise `IMPLICITARRAY!`. The same probe reads the
+names from `$$SYMBOLS`, where BC actually records its globals.
+
+Scope is independently represented in HIR. A source SUB or FUNCTION is an
+external definition, while `DEF FN` and compiler-outlined module GOSUB bodies
+are internal definitions. Internal procedures retain callable code labels and
+the same BASIC frame ABI but do not produce PUBDEF records. This matters for
+interoperability: BC's Gorillas object defines `FNRAN%` in its listing but does
+not export `FNRAN`; qbopt now does the same.
+
+These rules are shared by QB 4.5, PDS 7.1, and VBDOS. Dialect selection may
+change available syntax and runtime entries, never the spelling of a symbol
+with the same source meaning.
+
 ## Array parameters
 
 `suite/arrprm.bas` was compiled from the same source in all three families.

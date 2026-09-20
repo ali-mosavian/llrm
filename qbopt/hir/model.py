@@ -103,6 +103,11 @@ class DataLinkage(StrEnum):
     EXTERNAL = "external"
 
 
+class FunctionLinkage(StrEnum):
+    INTERNAL = "internal"
+    EXTERNAL = "external"
+
+
 @dataclass(frozen=True, slots=True)
 class Place:
     id: int
@@ -293,6 +298,7 @@ class Function:
     error_handler: int | None = None
     error_handler_local: bool = False
     external_entries: tuple[int, ...] = ()
+    linkage: FunctionLinkage = FunctionLinkage.EXTERNAL
 
 
 @dataclass(frozen=True, slots=True)

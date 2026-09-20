@@ -539,12 +539,12 @@ def test_qb_stage_dump_ends_with_the_emitted_runtime_abi_assembly(tmp_path: Path
     report = emitted.split("REPORT proc far\n", 1)[1].split("REPORT endp", 1)[0]
     # B$ENRA owns BP/SI/DI. The OMF emitter strips the shared backend's native
     # push-bp shell, so the allegedly exact final stage must strip it too.
-    assert report.startswith("L1_1:\n    mov cx, 6\n")
-    assert "push bp" not in report
-    assert "mov cx, 6" in emitted
-    assert "call far ptr B$ENRA" in emitted
-    assert "call far ptr B$EXSA" in emitted
-    assert "retf 4" in emitted
+    assert report.startswith("L1_1:\n    mov     cx, 6\n")
+    assert "push    bp" not in report
+    assert "mov     cx, 6" in emitted
+    assert "call    far ptr B$ENRA" in emitted
+    assert "call    far ptr B$EXSA" in emitted
+    assert "retf    4" in emitted
 
 
 def test_qb_stage_dump_replaces_exact_procedure_names(tmp_path: Path) -> None:
@@ -779,6 +779,112 @@ def test_source_procedure_names_match_all_three_microsoft_omf_dialects() -> None
     caller = qb_driver.parsed(ROOT / "frontends/qb/fixtures/interop-external.bas")
     records = omf.parse(qb_compile.object_bytes(caller, "interop-external.bas"))
     assert expected <= set(omf.externals(records))
+
+
+def test_def_fn_keeps_bcs_private_symbol_scope(tmp_path: Path) -> None:
+    """Gorillas exported FNRAN even though BC keeps its DEF FN label private."""
+    source = tmp_path / "SYMBOLS.BAS"
+    source.write_bytes(
+        b"def fnPrivate(value) = value + 1\r\nfunction Public(value)\r\npublic = fnPrivate(value)\r\nend function\r\n"
+    )
+    program = qb_driver.parsed(source, dialect="qb45", runtime="qb45")
+    functions = {function.name: function for function in program.modules[0].functions}
+    assert functions["FNPRIVATE"].linkage is hir.FunctionLinkage.INTERNAL
+    assert functions["PUBLIC"].linkage is hir.FunctionLinkage.EXTERNAL
+
+    records = omf.parse(qb_compile.object_bytes(program, source.name))
+    assert set(omf.public_definitions(records)) == {"PUBLIC"}
+
+
+def test_module_globals_keep_bcs_effective_type_suffixes(tmp_path: Path) -> None:
+    """QB45 /Zi calls implicit `implicit` IMPLICIT!, not an anonymous data offset."""
+    source = tmp_path / "SYMNAM.BAS"
+    source.write_bytes(
+        b"dim shared implicit\r\n"
+        b"dim shared explicitInteger as integer\r\n"
+        b"dim shared explicitLong as long\r\n"
+        b"dim shared explicitSingle as single\r\n"
+        b"dim shared explicitDouble as double\r\n"
+        b"dim shared explicitString as string * 8\r\n"
+        b"dim shared implicitArray(1 to 2)\r\n"
+        b"implicit = 1\r\n"
+    )
+    program = qb_driver.parsed(source, dialect="qb45", runtime="qb45")
+    listing = masm.text(qb_compile.assembled(program))
+    for name in (
+        "IMPLICIT!",
+        "EXPLICITINTEGER%",
+        "EXPLICITLONG&",
+        "EXPLICITSINGLE!",
+        "EXPLICITDOUBLE#",
+        "EXPLICITSTRING$",
+        "IMPLICITARRAY!",
+    ):
+        assert f"{name} label byte" in listing
+    assert "mov dword ptr IMPLICIT!, 1065353216" in listing
+
+
+def test_qb_stage_assembly_compacts_typed_zero_globals(tmp_path: Path) -> None:
+    """The readable stage must retain QB's named zero bytes, not anonymous DB runs."""
+    source = tmp_path / "SYMNAM.BAS"
+    source.write_bytes(
+        b"dim shared implicit\r\n"
+        b"dim shared explicitInteger as integer\r\n"
+        b"dim shared explicitLong as long\r\n"
+        b"dim shared explicitDouble as double\r\n"
+        b"dim shared implicitArray(1 to 2)\r\n"
+        b"implicit = 1\r\n"
+    )
+    output = tmp_path / "stages"
+    namespace = __import__("runpy").run_path("tools/qbstages.py")
+    namespace["dumped"](
+        source,
+        output,
+        dialect="qb45",
+        runtime="qb45",
+        includes=(),
+    )
+
+    readable = (output / "99-emitted-asm.asm").read_text()
+    raw = (output / "99-emitted-asm.raw.asm").read_text()
+
+    assert "; QB source globals: BC-compatible effective names" in readable
+    assert "IMPLICIT!            dd 0" in readable
+    assert "EXPLICITINTEGER%     dw 0" in readable
+    assert "EXPLICITLONG&        dd 0" in readable
+    assert "EXPLICITDOUBLE#      dq 0" in readable
+    assert "IMPLICITARRAY!       dq 0" in readable
+    assert "\n    db 000h,000h,000h,000h" not in readable  # zero globals use typed declarations
+    assert "\t" not in readable
+    assert "IMPLICIT! label byte\ndb 000h,000h,000h,000h" in raw
+    assert "EXPLICITDOUBLE# label byte\ndb 000h,000h,000h,000h,000h,000h,000h,000h" in raw
+
+
+def test_qb_stage_assembly_aligns_code_and_hides_only_unreferenced_labels() -> None:
+    """A display-only fall-through label obscured code; a jump target must stay visible."""
+    namespace = __import__("runpy").run_path("tools/qbstages.py")
+    displayed = namespace["_display_assembly"](
+        "ONE proc far\n"
+        "L1_1:\n"
+        "    mov ax, 1\n"
+        "L1_2:\n"
+        "    add ax, 2\n"
+        "    jne L1_4\n"
+        "L1_3:\n"
+        "    retf\n"
+        "L1_4:\n"
+        "    retf\n"
+        "ONE endp\n"
+    )
+
+    assert "; Procedure: ONE" in displayed
+    assert "L1_1:" in displayed  # procedure entry is an externally useful anchor
+    assert "L1_2:" not in displayed
+    assert "L1_3:" not in displayed
+    assert "L1_4:" in displayed  # `jne` has a machine-code reference
+    assert "    mov     ax, 1" in displayed
+    assert "    jne     L1_4" in displayed
+    assert "\t" not in displayed
 
 
 @pytest.mark.parametrize("dialect,runtime", [("qb45", "qb45"), ("pds71", "pds71"), ("vbdos", "vbdos")])
@@ -1344,7 +1450,22 @@ def test_qb_and_pds_literals_use_their_measured_near_descriptor(dialect: str, ru
     # BC carries the equivalent displacement in FIXUPP. LINK resolves both to
     # the payload immediately after this four-byte descriptor.
     assert omf.segment_image(records, descriptor, size) == bytes.fromhex("01 00 04 00 41 00")
-    assert by_name["FSL_CONST"][1] == 0
+    # QB 4.5/PDS do not carry VBDOS's empty private far-data tail.  BC's
+    # SEGDEF order ends at BC_SA for this source/runtime pair.
+    assert "FSL_CONST" not in by_name and "FDATA" not in by_name and "QB_LINK" not in by_name
+    assert [one[0] for one in segments if one is not None][1:] == [
+        "BR_DATA",
+        "BR_SKYS",
+        "COMMON",
+        "BC_DATA",
+        "NMALLOC",
+        "ENMALLOC",
+        "BC_FT",
+        "BC_CN",
+        "BC_DS",
+        "BC_SAB",
+        "BC_SA",
+    ]
     descriptor_fixups = [one for one in omf.fixups(records) if one.seg == descriptor]
     assert [(one.offset, one.loc, one.target, one.index) for one in descriptor_fixups] == [
         (2, 1, "segment", descriptor),

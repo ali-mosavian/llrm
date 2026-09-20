@@ -54,6 +54,17 @@ def _object_name(name: str) -> str:
     return name.rstrip("%&!#$").upper()
 
 
+def _data_name(module: hir.Module, object_: hir.DataObject) -> str:
+    """BC keeps source globals typed; compiler-owned data keeps `$D<n>`."""
+    if (
+        object_.linkage is hir.DataLinkage.INTERNAL
+        and not object_.name.startswith("$")
+        and not object_.name.endswith(("$static", "$descriptor"))
+    ):
+        return object_.name.upper()
+    return f"{_object_name(module.name)}$D{object_.id}"
+
+
 def _empty_main(function: hir.Function) -> bool:
     return all(
         not block.instructions and block.terminator.kind is hir.TerminatorKind.RETURN and not block.terminator.operands
@@ -74,7 +85,7 @@ def _data(module: hir.Module) -> tuple[dict[tuple[Space, int], str], dict[str, t
         if object_.linkage is hir.DataLinkage.EXTERNAL:
             names[(Space.EXTERNAL, object_.id)] = object_.name
         else:
-            names[(Space.SEGMENT, object_.id)] = f"{_object_name(module.name)}$D{object_.id}"
+            names[(Space.SEGMENT, object_.id)] = _data_name(module, object_)
 
     grouped: dict[str, list[masm.Datum]] = {"BC_DATA": [], "BC_CN": [], "FSL_CONST": []}
     for object_ in internal.values():
@@ -1396,8 +1407,9 @@ def assembled(program: hir.Program) -> masm.Module:
             callees[at] = masm.Callee(object_name, at in physical.far_calls)
         reserve = -min(min(owned_frame.slots.values(), default=0), owned_frame.floor)
         final_body = _source_instructions(final.body)
-        public = function.name != "__main"
-        if public:
+        module_body = function.name == "__main"
+        public = not module_body and function.linkage is hir.FunctionLinkage.EXTERNAL
+        if not module_body:
             final_body, runtime_frame = _runtime_frame(
                 final_body,
                 reserve,
@@ -1430,7 +1442,7 @@ def assembled(program: hir.Program) -> masm.Module:
         final_body, registrations = _materialize_error_registrations(final_body, error_registrations)
         callees.update(registrations)
         referenced_calls.update(callee.name for callee in registrations.values())
-        if not public:
+        if module_body:
             final_body, exits = _ends_program(final_body)
             callees.update(exits)
             referenced_calls.add("B$CENP")
@@ -1488,7 +1500,7 @@ def assembled(program: hir.Program) -> masm.Module:
                 )
         procedures.append(
             masm.Procedure(
-                "$QB$MAIN" if not public else _object_name(function.name),
+                "$QB$MAIN" if module_body else _object_name(function.name),
                 public,
                 True,
                 final_body,
@@ -1515,7 +1527,10 @@ def assembled(program: hir.Program) -> masm.Module:
     externs.update((name, "byte") for name in external_data)
     externs.update((name, "near") for name in graphics)
     code = f"{_object_name(module.name)}_CODE"
-    basic_data = (
+    vbdos = program.runtime is hir.RuntimeProfile.VBDOS
+    if not vbdos and data_by_segment["FSL_CONST"]:
+        raise EmissionError(f"{program.runtime.value} cannot place literals in VBDOS FSL_CONST")
+    basic_data = [
         ("BR_DATA", ()),
         ("BR_SKYS", ()),
         ("COMMON", (masm.Label("$QB$COMMON"),)),
@@ -1527,18 +1542,22 @@ def assembled(program: hir.Program) -> masm.Module:
         ("BC_DS", (masm.Label("$QB$DS"), *read_data, b"\xff\xff\x01")),
         ("BC_SAB", (masm.Label("$QB$SAB"),)),
         ("BC_SA", (masm.Label("$QB$SA"), masm.Pointer("$QB$HEADER", 0, True))),
-        ("FDATA", ()),
-        ("FSL_CONST", data_by_segment["FSL_CONST"]),
-        *(((("QB_LINK", tuple(masm.Pointer(name, 0, False) for name in sorted(graphics))),)) if graphics else ()),
-    )
+    ]
+    private = set()
+    if vbdos:
+        basic_data += [("FDATA", ()), ("FSL_CONST", data_by_segment["FSL_CONST"])]
+        private.update(("FDATA", "FSL_CONST"))
+    if vbdos and graphics:
+        basic_data.append(("QB_LINK", tuple(masm.Pointer(name, 0, False) for name in sorted(graphics))))
+        private.add("QB_LINK")
     return masm.Module(
         code=code,
         names=names,
         externs=tuple(sorted(externs)),
         publics=tuple(procedure.name for procedure in procedures if procedure.public),
-        data=basic_data,
+        data=tuple(basic_data),
         procedures=tuple(procedures),
-        private=frozenset({"FDATA", "FSL_CONST", *(("QB_LINK",) if graphics else ())}),
+        private=frozenset(private),
     )
 
 

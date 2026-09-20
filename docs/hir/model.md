@@ -223,6 +223,13 @@ contract immediately before machine lowering. Consequently optimizers see
 argument values and alias provenance, while neither MIR nor the backend gains
 a BASIC calling-convention field.
 
+Function linkage is semantic scope, not object-format spelling. HIR
+distinguishes internal and external definitions so any frontend can suppress
+or publish a definition without teaching MIR or the backend a language naming
+rule. The QB OMF adapter alone converts an external BASIC procedure to BC's
+uppercase, unsuffixed Pascal linker name and assigns BC-compatible private
+labels.
+
 Keeping these facts outside instruction operands prevents link format and
 runtime-family details from leaking into general optimization passes.
 

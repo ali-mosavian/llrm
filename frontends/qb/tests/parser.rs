@@ -599,6 +599,29 @@ fn pretested_do_rechecks_its_condition() {
 }
 
 #[test]
+fn gorillas_not_and_loop_enters_when_both_terms_are_true() {
+    // Gorillas drew no banana: Impact=0 and OnScreen=-1 skipped PlotShot's
+    // body because a buried NOT exchanged the DO WHILE branch successors.
+    let module = parse(
+        "dim impact as integer\ndim onScreen as integer\nimpact = 0\nonScreen = -1\ndo while (not impact) and onScreen\nimpact = -1\nloop\n",
+        Dialect::QuickBasic45,
+    )
+    .unwrap();
+    let hir = compile(&module, "gorillas_loop", Dialect::QuickBasic45, "qb45").unwrap();
+    let test = hir
+        .split("\"id\":2,\"instructions\":")
+        .nth(1)
+        .unwrap()
+        .split("{\"id\":3,\"instructions\":")
+        .next()
+        .unwrap();
+    assert!(
+        test.contains("\"kind\":\"branch\"") && test.contains("\"targets\":[3,4]"),
+        "PlotShot's true condition must enter the animation body: {test}"
+    );
+}
+
+#[test]
 fn postfix_subscript_can_follow_a_field_chain() {
     // qb-qrender uses VARSEG(g.wld.tex.ofs(0)); accepting calls only directly
     // after an identifier stopped at the inner `(` and rejected the module.

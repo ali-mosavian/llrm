@@ -140,13 +140,19 @@ the natural loop. HIR lowering carries the access property into existing MIR;
 the existing backend receives an ordinary memory comparison.
 [memory-model.md](memory-model.md) records the raw comparison.
 `tools/qbstages.py` writes input, HIR, semantic MIR, optimized MIR,
-physical MIR, LIR, every machine pass, and inline-x87 output adjacently under
+physical MIR, LIR, every machine pass, inline-x87 output, readable emitted
+MASM, and its byte-layout raw companion adjacently under
 `build/qbstages/*-round` so every transition can be inspected and diffed. MIR
 uses stable three-address assignment notation (`c <- a op b`). LIR and every
 later stage use Intel operand order and MASM spelling; pre-allocation operands
 remain explicit virtual registers (`add v3, v2`), while allocated stages name
 the physical registers. The final inline-x87 stage prints intrinsic bytes as
-in-place MASM `db` directives rather than displaying them as calls.
+in-place MASM `db` directives rather than displaying them as calls. The
+readable emitted assembly uses byte-equivalent `dw`/`dd`/`dq` and `dup (0)`
+storage for source globals; `99-emitted-asm.raw.asm` retains the ungrouped
+bytes used for direct layout comparison. The readable view uses spaces,
+aligned Intel mnemonics, and data/code/procedure separators; it elides only a
+non-entry generated block label that has no emitted-code reference.
 
 The literal-data profile is now independently executable under all three
 runtimes: QB 4.5 and PDS 7.1 receive their near `BC_CN` descriptor/payload,

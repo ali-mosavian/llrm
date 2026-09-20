@@ -89,6 +89,7 @@ pub struct Procedure {
     pub body: Vec<Statement>,
     pub declaration: bool,
     pub is_static: bool,
+    pub exported: bool,
     pub span: Span,
 }
 
