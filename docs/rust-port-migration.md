@@ -90,3 +90,69 @@ The qrender runtime criterion is therefore a named deferred acceptance item,
 not evidence of correctness.  Per the user's direction, the port proceeds to
 the dedicated branch and keeps future checks scoped to the subsystem being
 implemented.
+
+## Iteration 2: lowercase paths and branch
+
+The port now develops on `rust-port`.  Every tracked path is lowercase except
+Cargo's required `Cargo.toml` and `Cargo.lock`; the repository gate checks both
+uppercase paths and case-folding collisions.  Stale manifest, fixture, script,
+and documentation references were repaired in the same iteration.
+
+No qrender work was performed.  A focused pytest request was abandoned when
+repository-wide startup made it cease to be a focused check.  The commit hook's
+broad inherited gate was likewise stopped; subsequent reviewed commits use
+explicit subsystem checks and skip that hook.
+
+## Iteration 3: one Rust package
+
+The root Rust 2024 package is named `llrm`, with Rust 1.87 as its MSRV.  The
+merged QB frontend lives under `src/frontend/qb`, `buildprs` remains a generator
+tool, and the crate exposes the planned LLVM-style subsystem boundaries.  The
+legacy `qbfront` binary remains temporarily for the Python comparison oracle;
+`llrm` is now the default production-facing binary name.
+
+## Iteration 4: typed HIR and `.qhir`
+
+The QB frontend now constructs an owned typed HIR program with typed IDs,
+opcodes, terminators, storage, linkage, address spaces, and floating evaluation
+categories.  The old private JSON builder was deleted after exact compatibility
+comparisons; the remaining JSON encoder is an edge adapter fed only by verified
+typed HIR.  New Rust consumers do not parse that JSON.
+
+`.qhir` is a deterministic versioned textual assembly with a strict parser,
+printer, and verifier boundary.  The first `llrm` vertical slice accepts QB
+source, constructs verified HIR through `driver`, and emits `.qhir`; WCC and OMF
+input modes refuse explicitly until their frontends are ported.
+
+Focused verification in this implementation stretch included:
+
+| Command | Result | Wall time |
+| --- | --- | ---: |
+| `cargo check --all-targets` | all current library and binary targets compiled | 1.07 s |
+| exact QB-to-HIR-to-`.qhir` test | passed; 130 tests filtered out | 2.85 s |
+| exact static procedure-array compatibility test | passed; 130 filtered out | 0.04 s |
+| `cargo run --quiet --bin llrm -- ... suite/arith.bas` | emitted canonical 9,085-byte `.qhir` | 2.54 s |
+
+## Iteration 5: OMF foundation (in progress)
+
+Rust now owns lossless record framing, including intentional preservation of
+BC's checksum-invalid FIXUPP records, a bounded zero-copy primitive reader, and
+typed one-based LNAMES/EXTDEF tables which preserve non-UTF-8 bytes.  Archive,
+record-family, FIXUPP-thread, and exact object editing work remains in progress.
+
+The record-framing tests ran in 2.09 seconds, primitive-reader tests in 1.67
+seconds, and symbol-table tests in 1.63 seconds.  Each selected only its own
+module and executed the assertions in 0.00 seconds after compilation.
+
+## Iteration 6: portable IR (started)
+
+The first portable SSA model is implemented directly in Rust.  It defines
+typed arenas for types, globals, functions, blocks, instructions, and values;
+opaque pointers with explicit address spaces; typed constants; CFG
+terminators; phi inputs; calls and intrinsics; and explicit memory, trap, and
+observable effects.  It imports no frontend, HIR, object, MC, CodeGen, or target
+module.  Verification, textual `.qir`, and HIR lowering are the next slices.
+
+Across the post-baseline work above, measured Rust compile checks and focused
+test commands remain far below 10% of elapsed implementation and review time.
+No broad suite or external runtime gate was run.
