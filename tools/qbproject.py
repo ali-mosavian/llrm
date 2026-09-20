@@ -42,12 +42,13 @@ def _input_record(root: Path, path: Path) -> dict[str, str]:
 
 def emitter_sha256() -> str:
     paths = [
-        REPOSITORY_ROOT / "frontends" / "qb" / "Cargo.toml",
-        REPOSITORY_ROOT / "frontends" / "qb" / "Cargo.lock",
-        REPOSITORY_ROOT / "frontends" / "qb" / "build.rs",
-        *(REPOSITORY_ROOT / "frontends" / "qb" / "src").rglob("*.rs"),
-        *(REPOSITORY_ROOT / "frontends" / "qb" / "grammar").rglob("*"),
-        *(REPOSITORY_ROOT / "frontends" / "qb" / "crates" / "buildprs").rglob("*"),
+        REPOSITORY_ROOT / "Cargo.toml",
+        REPOSITORY_ROOT / "Cargo.lock",
+        REPOSITORY_ROOT / "build.rs",
+        REPOSITORY_ROOT / "src" / "bin" / "qbfront.rs",
+        *(REPOSITORY_ROOT / "src" / "frontend" / "qb").rglob("*.rs"),
+        *(REPOSITORY_ROOT / "src" / "frontend" / "qb" / "grammar").rglob("*"),
+        *(REPOSITORY_ROOT / "tools" / "buildprs").rglob("*"),
         *(REPOSITORY_ROOT / "qbopt").rglob("*.py"),
     ]
     digest = hashlib.sha256()

@@ -359,7 +359,7 @@ attributes, effects, types, and behavior may not be lost. A normalized display
 may alpha-rename internal values for debugging; it is a view, not a second
 semantic representation.
 
-The tools expose this through qbopt-opt:
+The tools expose this through `llrm-opt`:
 
 - --print-before and --print-after print adjacent pass stages;
 - --stop-after stops at a named stage;
@@ -523,7 +523,7 @@ The contract is delivered in palpable verified iterations.
 4. Lower supported HIR families into verified ir, adding behavior, effects,
    CFG, globals, arrays, strings, floating semantics, and exceptional forms
    only with their consumer and tests.
-5. Add pass infrastructure, def-use, dominators, loops, and qbopt-opt.
+5. Add pass infrastructure, def-use, dominators, loops, and `llrm-opt`.
 
 No temporary Python-MIR adapter is introduced. The Rust IR is constructed
 directly, and Python optimizer development remains frozen except correctness

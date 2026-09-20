@@ -2,6 +2,7 @@ __pycache__/
 *.pyc
 .venv/
 build/
-frontends/qb/**/target/
+/target/
+/tools/buildprs/target/
 owshim/bin/
 .DS_Store

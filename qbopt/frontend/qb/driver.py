@@ -8,7 +8,7 @@ from pathlib import Path
 from qbopt import hir
 
 ROOT = Path(__file__).resolve().parents[3]
-MANIFEST = ROOT / "frontends" / "qb" / "Cargo.toml"
+MANIFEST = ROOT / "Cargo.toml"
 DIALECTS = frozenset(one.value for one in hir.Dialect)
 RUNTIMES = frozenset(one.value for one in hir.RuntimeProfile)
 ARRAY_ORDERS = frozenset(one.value for one in hir.ArrayOrder)

@@ -1,0 +1,23 @@
+[package]
+name = "llrm"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.87"
+description = "LLVM-style optimizing compiler and object rewriter for 16-bit x86"
+default-run = "qbfront"
+
+[dependencies]
+
+[build-dependencies]
+buildprs = { path = "tools/buildprs" }
+
+[dev-dependencies]
+buildprs = { path = "tools/buildprs" }
+
+[[bin]]
+name = "qbfront"
+path = "src/bin/qbfront.rs"
+
+[[bin]]
+name = "qbparse-stages"
+path = "src/bin/qbparse_stages.rs"
