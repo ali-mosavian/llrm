@@ -7,6 +7,7 @@ mod dead;
 mod fold;
 mod pass;
 mod rewrite;
+mod unreachable;
 
 pub use algebraic::{AlgebraicError, AlgebraicSimplify};
 pub use branches::{BranchSimplifyError, SimplifyBranches};
@@ -17,3 +18,4 @@ pub use pass::{
     AnalysisInvalidation, FunctionIdentity, FunctionPass, FunctionPassManager, FunctionPassReport,
     PassError, PassExecution, PassFailure, PassInstrumentation, PassOutcome, PreservedAnalyses,
 };
+pub use unreachable::UnreachableBlockElimination;
