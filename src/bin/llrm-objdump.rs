@@ -1,4 +1,5 @@
 use std::env;
+use std::fmt;
 use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -6,6 +7,7 @@ use std::process::ExitCode;
 
 use llrm::object::omf::archive::Module;
 use llrm::object::omf::file::File;
+use llrm::object::omf::module::{DecodedModule, ModuleError};
 use llrm::object::omf::record::Record;
 
 fn main() -> ExitCode {
@@ -47,9 +49,12 @@ fn parse_arguments(mut arguments: impl Iterator<Item = String>) -> Result<PathBu
     Ok(PathBuf::from(path))
 }
 
-fn dump(file: &File, writer: &mut impl Write) -> io::Result<()> {
+fn dump(file: &File, writer: &mut impl Write) -> Result<(), DumpError> {
     match file {
-        File::Object(records) => dump_records(records, writer),
+        File::Object(records) => {
+            dump_records(records, writer)?;
+            dump_decoded(records, writer)
+        }
         File::Library(archive) => {
             writeln!(
                 writer,
@@ -68,11 +73,12 @@ fn dump(file: &File, writer: &mut impl Write) -> io::Result<()> {
     }
 }
 
-fn dump_module(module: &Module, writer: &mut impl Write) -> io::Result<()> {
+fn dump_module(module: &Module, writer: &mut impl Write) -> Result<(), DumpError> {
     write!(writer, "{:08x} module ", module.offset())?;
     write_bytes(module.name(), writer)?;
     writeln!(writer)?;
-    dump_records(module.records(), writer)
+    dump_records(module.records(), writer)?;
+    dump_decoded(module.records(), writer)
 }
 
 fn dump_records(records: &[Record], writer: &mut impl Write) -> io::Result<()> {
@@ -103,6 +109,70 @@ fn write_bytes(bytes: &[u8], writer: &mut impl Write) -> io::Result<()> {
     Ok(())
 }
 
+fn dump_decoded(records: &[Record], writer: &mut impl Write) -> Result<(), DumpError> {
+    let module = DecodedModule::parse(records)?;
+    for (index, external) in module.symbols.externals.iter().enumerate().skip(1) {
+        let Some(external) = external else {
+            continue;
+        };
+        write!(writer, "external {index} ")?;
+        write_bytes(&external.name, writer)?;
+        writeln!(writer, " type={}", external.type_index)?;
+    }
+    for public in &module.declarations.publics {
+        write!(writer, "public {:?} ", public.scope)?;
+        write_bytes(&public.name, writer)?;
+        writeln!(
+            writer,
+            " base={:?} offset={:#x}",
+            public.base, public.offset
+        )?;
+    }
+    for fixup in &module.fixups {
+        writeln!(
+            writer,
+            "relocation segment={} offset={:#x} location={:?} mode={:?} target={:?}:{} displacement={:#x}",
+            fixup.segment_index,
+            fixup.patch_offset,
+            fixup.location,
+            fixup.mode,
+            fixup.target.method,
+            fixup.target.datum,
+            fixup.displacement
+        )?;
+    }
+    Ok(())
+}
+
+#[derive(Debug)]
+enum DumpError {
+    Io(io::Error),
+    Module(ModuleError),
+}
+
+impl fmt::Display for DumpError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io(error) => error.fmt(formatter),
+            Self::Module(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for DumpError {}
+
+impl From<io::Error> for DumpError {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+impl From<ModuleError> for DumpError {
+    fn from(error: ModuleError) -> Self {
+        Self::Module(error)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::dump;
@@ -122,5 +192,21 @@ mod tests {
             String::from_utf8(output).unwrap(),
             "00000000 type=80 body=2 checksum=invalid\n"
         );
+    }
+
+    #[test]
+    fn reports_typed_relocations() {
+        let records = vec![
+            Record::new(0xa0, vec![1, 0, 0, 0, 0]).unwrap(),
+            Record::new(0x9c, vec![0x84, 0, 0x44, 1]).unwrap(),
+        ];
+        let mut output = Vec::new();
+
+        dump(&File::Object(records), &mut output).unwrap();
+
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains(
+            "relocation segment=1 offset=0x0 location=Offset16 mode=SelfRelative target=Segment:1 displacement=0x0"
+        ));
     }
 }
