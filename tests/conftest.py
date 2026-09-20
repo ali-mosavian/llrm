@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from typing import Literal
 
@@ -5,6 +6,7 @@ import pytest
 
 import corpus
 from qbopt.objectfile import omf
+from qbopt.frontend.qb import driver as qb_driver
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "omf"
 
@@ -16,6 +18,22 @@ OPERATOR_OBJECTS = ["pds-g2.obj", "qb45.obj", "vbdos-g2.obj", "vbdos-g3.obj"]
 
 FULL_MARKERS = frozenset({"corpus", "e2e", "full", "slow"})
 FULL_OBJECT_FIXTURES = frozenset({"mapped_obj", "obj", "operator_obj"})
+
+
+def configure_qb_frontend() -> Path | None:
+    if os.environ.get("QBOPT_QBFRONT"):
+        return None
+    executable = qb_driver.build_release()
+    os.environ["QBOPT_QBFRONT"] = str(executable)
+    return executable
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    try:
+        configure_qb_frontend()
+    except qb_driver.FrontendError as error:
+        pytest.exit(f"could not build the Rust QB frontend: {error}", returncode=1)
+
 
 # Tier 1 is intentionally an allow-list: a new test is Tier 2 until somebody
 # decides it belongs in the bounded inner loop. These modules cover the object
@@ -46,6 +64,7 @@ FAST_MODULES = frozenset(
         "test_phi_widths.py",
         "test_postallocation.py",
         "test_private_frame.py",
+        "test_qb_frontend_command.py",
         "test_rewind.py",
         "test_qbcompat.py",
         "test_sccp.py",

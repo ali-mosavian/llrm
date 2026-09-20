@@ -1,6 +1,7 @@
 """Invoke the isolated Rust parser and decode its common-HIR document."""
 
 import os
+import json
 import subprocess
 from pathlib import Path
 
@@ -27,6 +28,47 @@ def command() -> tuple[str, ...]:
     # source edit. Cargo's own dependency check is cheap when the build is
     # current and authoritative when it is not.
     return ("cargo", "run", "--quiet", "--release", "--manifest-path", str(MANIFEST), "--")
+
+
+def build_release() -> Path:
+    try:
+        result = subprocess.run(
+            (
+                "cargo",
+                "build",
+                "--quiet",
+                "--release",
+                "--manifest-path",
+                str(MANIFEST),
+                "--bin",
+                "qbfront",
+                "--message-format=json",
+            ),
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as error:
+        raise FrontendError(f"could not start cargo build: {error}") from error
+    if result.returncode:
+        message = result.stderr.strip() or f"cargo build exited with status {result.returncode}"
+        raise FrontendError(message)
+
+    for line in result.stdout.splitlines():
+        try:
+            message = json.loads(line)
+        except json.JSONDecodeError as error:
+            raise FrontendError("cargo build emitted invalid JSON") from error
+        target = message.get("target", {})
+        if (
+            message.get("reason") == "compiler-artifact"
+            and target.get("name") == "qbfront"
+            and "bin" in target.get("kind", ())
+            and (executable := message.get("executable"))
+        ):
+            return Path(executable)
+    raise FrontendError("cargo build did not report the qbfront executable")
 
 
 def _options(
