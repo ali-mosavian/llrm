@@ -4,6 +4,7 @@
 //! belong at the edge of the pipeline; HIR itself contains no wire-format or
 //! frontend parser state.
 
+mod calls;
 mod lower;
 mod model;
 mod text;
@@ -16,3 +17,4 @@ pub use lower::{
     InvalidProperty as LowerInvalidProperty, LowerError, UnsupportedFeature, UnsupportedOperand,
     lower_module as lower_to_ir,
 };
+pub use calls::{AbiOrderError, CallOperandError, CallPlanError, CallSignature};

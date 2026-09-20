@@ -11,6 +11,8 @@ use std::fmt;
 use crate::support::diagnostic::Diagnostic;
 use crate::{hir, ir};
 
+use super::calls::{CallPlan, CallPlanError, plan_runtime_calls};
+
 /// A HIR feature that the portable scalar lowering cannot represent exactly.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UnsupportedFeature {
@@ -47,6 +49,7 @@ pub enum InvalidProperty {
     BranchCondition,
     SwitchSelector,
     ConstantType,
+    MissingCallPlan,
 }
 
 /// The kind of an unsupported HIR operand.
@@ -123,6 +126,9 @@ pub enum LowerError {
     },
     Verification {
         diagnostics: Vec<Diagnostic>,
+    },
+    CallPlan {
+        error: CallPlanError,
     },
 }
 
@@ -206,11 +212,19 @@ impl fmt::Display for LowerError {
                 "lowered portable IR failed verification with {} diagnostic(s)",
                 diagnostics.len()
             ),
+            Self::CallPlan { error } => write!(formatter, "cannot plan runtime calls: {error}"),
         }
     }
 }
 
-impl Error for LowerError {}
+impl Error for LowerError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::CallPlan { error } => Some(error),
+            _ => None,
+        }
+    }
+}
 
 /// Lowers the representable scalar subset of one HIR module into portable IR.
 ///
@@ -218,7 +232,11 @@ impl Error for LowerError {}
 /// Features without an exact portable representation return [`LowerError`]
 /// rather than being erased or approximated.
 pub fn lower_module(module: &hir::Module) -> Result<ir::Module, LowerError> {
-    let lowerer = Lowerer { module };
+    let calls = plan_runtime_calls(module).map_err(|error| LowerError::CallPlan { error })?;
+    let lowerer = Lowerer {
+        module,
+        calls: &calls,
+    };
     // The QB frontend carries a catalog of built-in types and callables in
     // every module. Declarations that no lowered function references have no
     // portable-IR semantics, so they must not make an otherwise scalar module
@@ -243,11 +261,13 @@ pub fn lower_module(module: &hir::Module) -> Result<ir::Module, LowerError> {
             feature: UnsupportedFeature::DataObject,
         });
     }
-    let functions = module
+    let mut functions = module
         .functions
         .iter()
         .map(|function| lowerer.lower_function(function))
         .collect::<Result<Vec<_>, _>>()?;
+    drop(lowerer);
+    functions.extend(calls.declarations);
     let lowered = ir::Module {
         name: module.name.clone(),
         types,
@@ -315,6 +335,7 @@ fn collect_operand_types(operand: &hir::Operand, required: &mut BTreeSet<hir::Ty
 
 struct Lowerer<'module> {
     module: &'module hir::Module,
+    calls: &'module CallPlan,
 }
 
 impl<'module> Lowerer<'module> {
@@ -393,12 +414,6 @@ impl<'module> Lowerer<'module> {
             return Err(LowerError::UnsupportedFunction {
                 function: function.id,
                 feature: UnsupportedFeature::Place,
-            });
-        }
-        if !function.calls.is_empty() {
-            return Err(LowerError::UnsupportedFunction {
-                function: function.id,
-                feature: UnsupportedFeature::CallAbi,
             });
         }
         if function.error_handler.is_some() || function.error_handler_local {
@@ -632,21 +647,64 @@ impl<'module> Lowerer<'module> {
                     UnsupportedFeature::StringOperation,
                 );
             }
-            Opcode::Call => {
-                return self.unsupported_instruction(
-                    function,
-                    block,
-                    instruction,
-                    UnsupportedFeature::Call,
-                );
-            }
+            Opcode::Call => self.lower_call(function, block, instruction)?,
+        };
+        let results = if instruction.opcode == Opcode::Call {
+            instruction
+                .results
+                .iter()
+                .map(|result| self.lower_value(function, *result, block, Some(instruction.id)))
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            self.one_result(function, block, instruction)
+                .map(|result| vec![result])?
         };
         Ok(ir::Instruction {
             id: instruction_id(instruction.id),
-            results: self
-                .one_result(function, block, instruction)
-                .map(|result| vec![result])?,
+            results,
             kind,
+        })
+    }
+
+    fn lower_call(
+        &self,
+        function: &hir::Function,
+        block: hir::BlockId,
+        instruction: &hir::Instruction,
+    ) -> Result<ir::InstructionKind, LowerError> {
+        let planned = self.calls.sites.get(&(function.id, instruction.id)).ok_or(
+            LowerError::InvalidInstruction {
+                function: function.id,
+                block,
+                instruction: instruction.id,
+                property: InvalidProperty::MissingCallPlan,
+            },
+        )?;
+        let arguments = planned
+            .argument_indices
+            .iter()
+            .map(|index| {
+                let operand =
+                    instruction
+                        .operands
+                        .get(*index)
+                        .ok_or(LowerError::InvalidInstruction {
+                            function: function.id,
+                            block,
+                            instruction: instruction.id,
+                            property: InvalidProperty::MissingCallPlan,
+                        })?;
+                self.lower_operand(function, block, Some(instruction.id), *index, operand)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(ir::InstructionKind::Call {
+            callee: ir::Callee::Direct(planned.target),
+            arguments,
+            effects: ir::Effects {
+                memory: ir::MemoryEffects::Unknown,
+                may_trap: true,
+                observable: true,
+            },
         })
     }
 
@@ -1705,6 +1763,51 @@ mod tests {
                 op: ir::CastOp::FloatExtend,
                 ..
             }
+        ));
+        assert!(lowered.verify().is_ok());
+    }
+
+    #[test]
+    fn lowers_runtime_calls_with_abi_argument_order() {
+        let mut module = scalar_module();
+        module.functions[0].blocks[0]
+            .instructions
+            .push(hir::Instruction {
+                id: hir::InstructionId::new(14),
+                opcode: hir::Opcode::Call,
+                results: Vec::new(),
+                operands: vec![hir::Operand::Value(hir::ValueId::new(1))],
+                callee: Some("B$WRITE".into()),
+            });
+        module.functions[0].calls.push(hir::CallAbi {
+            instruction: hir::InstructionId::new(14),
+            order: vec![0],
+            cleanup: hir::StackCleanup::Callee,
+            distance: hir::CallDistance::Far,
+            callee: None,
+        });
+
+        let lowered = lower_module(&module).expect("runtime call shape lowers exactly");
+
+        let declaration = &lowered.functions[1];
+        assert_eq!(declaration.id, ir::FunctionId::new(12));
+        assert_eq!(declaration.name, "B$WRITE");
+        assert_eq!(declaration.linkage, ir::Linkage::External);
+        assert_eq!(declaration.signature.parameters, vec![ir::TypeId::new(2)]);
+        assert_eq!(declaration.parameters[0].type_id, ir::TypeId::new(2));
+        let call = &lowered.functions[0].blocks[0].instructions[2];
+        assert!(matches!(
+            &call.kind,
+            ir::InstructionKind::Call {
+                callee: ir::Callee::Direct(target),
+                arguments,
+                effects: ir::Effects {
+                    memory: ir::MemoryEffects::Unknown,
+                    may_trap: true,
+                    observable: true,
+                },
+            } if *target == declaration.id
+                && arguments == &vec![ir::Operand::Value(ir::ValueId::new(1))]
         ));
         assert!(lowered.verify().is_ok());
     }
