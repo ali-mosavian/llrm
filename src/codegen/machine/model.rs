@@ -96,6 +96,11 @@ pub struct MachineFunction {
     pub name: String,
     pub linkage: MachineLinkage,
     pub signature: MachineSignature,
+    /// The block where control enters this function.
+    ///
+    /// Every function must contain this block; consequently empty functions
+    /// are invalid Machine IR.
+    pub entry: MachineBlockId,
     pub virtual_registers: Vec<VirtualRegister>,
     pub blocks: Vec<MachineBlock>,
     pub frame_objects: Vec<FrameObject>,
@@ -527,6 +532,7 @@ mod tests {
                 variadic: false,
                 calling_convention: MachineCallingConvention::Basic,
             },
+            entry: MachineBlockId::new(7),
             virtual_registers: vec![VirtualRegister {
                 id: VirtualRegisterId::new(2),
                 class: RegisterClass::new(4),
@@ -556,6 +562,7 @@ mod tests {
             functions: vec![function],
         };
         assert_eq!(module.functions[0].blocks[0].id, MachineBlockId::new(4));
+        assert_eq!(module.functions[0].entry, MachineBlockId::new(7));
         assert_eq!(
             module.functions[0].blocks[0].successors,
             vec![MachineBlockId::new(7)]

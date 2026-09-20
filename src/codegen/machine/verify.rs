@@ -108,10 +108,25 @@ impl<'module> Verifier<'module> {
         };
         self.verify_instruction_ids(function);
 
+        self.verify_entry(function, &entities);
         self.verify_signature(function);
         self.verify_frame_objects(function);
         for block in &function.blocks {
             self.verify_block(function, block, &entities);
+        }
+    }
+
+    fn verify_entry(&mut self, function: &MachineFunction, entities: &FunctionEntities) {
+        if function.blocks.is_empty() {
+            self.error(format!(
+                "machine function {} has no blocks and therefore no entry block",
+                function.id
+            ));
+        } else if !entities.block_ids.contains(&function.entry) {
+            self.error(format!(
+                "machine function {} has unknown entry block {}",
+                function.id, function.entry
+            ));
         }
     }
 
@@ -530,6 +545,7 @@ mod tests {
                 variadic: false,
                 calling_convention: MachineCallingConvention::Basic,
             },
+            entry: MachineBlockId::new(0),
             virtual_registers: vec![VirtualRegister {
                 id: VirtualRegisterId::new(0),
                 class: RegisterClass::new(0),
@@ -563,6 +579,23 @@ mod tests {
             functions: vec![valid_function()],
         })
         .expect("a valid target-independent two-address function must verify");
+    }
+
+    #[test]
+    fn rejects_an_unknown_entry_block() {
+        let mut function = valid_function();
+        function.entry = MachineBlockId::new(9);
+
+        let errors = messages(MachineModule {
+            data_objects: Vec::new(),
+            functions: vec![function],
+        });
+
+        assert!(
+            errors
+                .iter()
+                .any(|message| message.contains("has unknown entry block 9"))
+        );
     }
 
     #[test]

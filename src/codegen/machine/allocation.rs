@@ -398,6 +398,10 @@ mod tests {
                 variadic: false,
                 calling_convention: crate::codegen::machine::MachineCallingConvention::Basic,
             },
+            entry: blocks
+                .first()
+                .map(|block| block.id)
+                .unwrap_or(MachineBlockId::new(0)),
             virtual_registers: registers
                 .iter()
                 .map(|(id, class)| VirtualRegister {

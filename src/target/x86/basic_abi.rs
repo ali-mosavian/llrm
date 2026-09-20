@@ -96,13 +96,12 @@ impl Error for BasicAbiError {
 /// LONG result alive in AX:DX through frame teardown.
 pub fn expand_basic_runtime(
     function: &MachineFunction,
-    entry: MachineBlockId,
     runtime: BasicRuntime,
     temporary_strings: u32,
 ) -> Result<ExpandedBasicFunction, BasicAbiError> {
     let frame =
         plan_basic_frame(function, runtime, temporary_strings).map_err(BasicAbiError::Frame)?;
-    preflight(function, entry)?;
+    preflight(function)?;
 
     let [cx, bx] = reserve_virtual_register_ids(function)?;
     let return_count = function
@@ -168,7 +167,7 @@ pub fn expand_basic_runtime(
     ]);
 
     for block in &mut expanded.blocks {
-        if block.id == entry {
+        if block.id == function.entry {
             block.instructions.splice(0..0, enter.clone());
         }
 
@@ -198,12 +197,16 @@ pub fn expand_basic_runtime(
     })
 }
 
-fn preflight(function: &MachineFunction, entry: MachineBlockId) -> Result<(), BasicAbiError> {
+fn preflight(function: &MachineFunction) -> Result<(), BasicAbiError> {
     if function.blocks.is_empty() {
         return Err(BasicAbiError::EmptyFunction);
     }
-    if !function.blocks.iter().any(|block| block.id == entry) {
-        return Err(BasicAbiError::UnknownEntry(entry));
+    if !function
+        .blocks
+        .iter()
+        .any(|block| block.id == function.entry)
+    {
+        return Err(BasicAbiError::UnknownEntry(function.entry));
     }
 
     for block in &function.blocks {
@@ -372,7 +375,7 @@ mod tests {
         MachineFunctionId, MachineLinkage, MachineSignature, MachineValueType,
     };
 
-    fn procedure(blocks: Vec<MachineBlock>) -> MachineFunction {
+    fn procedure(entry: MachineBlockId, blocks: Vec<MachineBlock>) -> MachineFunction {
         MachineFunction {
             id: MachineFunctionId::new(7),
             name: "twice".into(),
@@ -383,6 +386,7 @@ mod tests {
                 variadic: false,
                 calling_convention: MachineCallingConvention::Basic,
             },
+            entry,
             virtual_registers: vec![
                 VirtualRegister {
                     id: VirtualRegisterId::new(4),
@@ -459,14 +463,16 @@ mod tests {
                 ..InstructionFlags::NONE
             },
         );
-        let function = procedure(vec![
-            block(1, vec![return_far(9)]),
-            block(4, vec![incoming_load, return_far(10)]),
-        ]);
+        let function = procedure(
+            MachineBlockId::new(4),
+            vec![
+                block(1, vec![return_far(9)]),
+                block(4, vec![incoming_load, return_far(10)]),
+            ],
+        );
 
-        let expanded =
-            expand_basic_runtime(&function, MachineBlockId::new(4), BasicRuntime::Pds71, 3)
-                .expect("a selected far-Pascal procedure expands");
+        let expanded = expand_basic_runtime(&function, BasicRuntime::Pds71, 3)
+            .expect("a selected far-Pascal procedure expands");
 
         assert_eq!(expanded.frame.local_bytes(), 4);
         assert_eq!(expanded.frame.temporary_strings(), 3);
@@ -496,14 +502,13 @@ mod tests {
         // LONG function results occupy AX:DX.  Calling B$EXSA without these
         // constrained uses once let allocation destroy the value immediately
         // before RETF, producing the wrong BASIC result after frame teardown.
-        let function = procedure(vec![
-            block(0, vec![return_far(2)]),
-            block(1, vec![return_far(3)]),
-        ]);
+        let function = procedure(
+            MachineBlockId::new(0),
+            vec![block(0, vec![return_far(2)]), block(1, vec![return_far(3)])],
+        );
 
-        let expanded =
-            expand_basic_runtime(&function, MachineBlockId::new(0), BasicRuntime::Qb45, 0)
-                .expect("both exits receive runtime teardown");
+        let expanded = expand_basic_runtime(&function, BasicRuntime::Qb45, 0)
+            .expect("both exits receive runtime teardown");
         for block in &expanded.function.blocks {
             let return_far = block.instructions.last().unwrap();
             let exit = &block.instructions[block.instructions.len() - 2];
@@ -522,24 +527,25 @@ mod tests {
         // Reapplying the shell shifted locals below an extra runtime header;
         // failure must be explicit instead of producing a subtly corrupted BP
         // layout.
-        let function = procedure(vec![block(0, vec![return_far(2)])]);
+        let function = procedure(MachineBlockId::new(0), vec![block(0, vec![return_far(2)])]);
         let original = function.clone();
-        let expanded =
-            expand_basic_runtime(&function, MachineBlockId::new(0), BasicRuntime::Vbdos, 0)
-                .expect("initial expansion succeeds");
+        let expanded = expand_basic_runtime(&function, BasicRuntime::Vbdos, 0)
+            .expect("initial expansion succeeds");
 
         assert_eq!(function, original);
         assert!(matches!(
-            expand_basic_runtime(
-                &expanded.function,
-                MachineBlockId::new(0),
-                BasicRuntime::Vbdos,
-                0
-            ),
+            expand_basic_runtime(&expanded.function, BasicRuntime::Vbdos, 0),
             Err(BasicAbiError::AlreadyExpanded { .. })
         ));
         assert!(matches!(
-            expand_basic_runtime(&function, MachineBlockId::new(99), BasicRuntime::Vbdos, 0),
+            expand_basic_runtime(
+                &MachineFunction {
+                    entry: MachineBlockId::new(99),
+                    ..function.clone()
+                },
+                BasicRuntime::Vbdos,
+                0
+            ),
             Err(BasicAbiError::UnknownEntry(block)) if block == MachineBlockId::new(99)
         ));
     }
@@ -557,36 +563,32 @@ mod tests {
                 ..InstructionFlags::NONE
             },
         );
-        let near_function = procedure(vec![block(0, vec![near])]);
+        let near_function = procedure(MachineBlockId::new(0), vec![block(0, vec![near])]);
         assert!(matches!(
-            expand_basic_runtime(
-                &near_function,
-                MachineBlockId::new(0),
-                BasicRuntime::Qb45,
-                0
-            ),
+            expand_basic_runtime(&near_function, BasicRuntime::Qb45, 0),
             Err(BasicAbiError::ReturnNear { .. })
         ));
 
-        let mut exhausted = procedure(vec![block(0, vec![return_far(u32::MAX)])]);
+        let mut exhausted = procedure(
+            MachineBlockId::new(0),
+            vec![block(0, vec![return_far(u32::MAX)])],
+        );
         exhausted.virtual_registers[1].id = VirtualRegisterId::new(u32::MAX);
         assert!(matches!(
-            expand_basic_runtime(&exhausted, MachineBlockId::new(0), BasicRuntime::Qb45, 0),
+            expand_basic_runtime(&exhausted, BasicRuntime::Qb45, 0),
             Err(BasicAbiError::VirtualRegisterIdExhausted)
         ));
 
-        let instruction_exhausted = procedure(vec![block(0, vec![return_far(u32::MAX)])]);
+        let instruction_exhausted = procedure(
+            MachineBlockId::new(0),
+            vec![block(0, vec![return_far(u32::MAX)])],
+        );
         assert!(matches!(
-            expand_basic_runtime(
-                &instruction_exhausted,
-                MachineBlockId::new(0),
-                BasicRuntime::Qb45,
-                0
-            ),
+            expand_basic_runtime(&instruction_exhausted, BasicRuntime::Qb45, 0),
             Err(BasicAbiError::InstructionIdExhausted)
         ));
 
-        let mut terminal_ids = procedure(vec![block(0, Vec::new())]);
+        let mut terminal_ids = procedure(MachineBlockId::new(0), vec![block(0, Vec::new())]);
         terminal_ids.virtual_registers[0].id = VirtualRegisterId::new(u32::MAX - 2);
         terminal_ids.virtual_registers[1].id = VirtualRegisterId::new(5);
         assert_eq!(
@@ -600,10 +602,9 @@ mod tests {
 
     #[test]
     fn accepts_a_no_return_unreachable_basic_body() {
-        let function = procedure(vec![block(0, Vec::new())]);
-        let expanded =
-            expand_basic_runtime(&function, MachineBlockId::new(0), BasicRuntime::Qb45, 0)
-                .expect("a noreturn body still needs entry frame setup");
+        let function = procedure(MachineBlockId::new(0), vec![block(0, Vec::new())]);
+        let expanded = expand_basic_runtime(&function, BasicRuntime::Qb45, 0)
+            .expect("a noreturn body still needs entry frame setup");
         assert_eq!(expanded.function.blocks[0].instructions.len(), 3);
     }
 
@@ -611,9 +612,9 @@ mod tests {
     fn refuses_an_empty_function_instead_of_inventing_an_entry() {
         // Inventing a synthetic entry for a body with no blocks concealed a
         // malformed compiler boundary and left B$ENRA unreachable.
-        let function = procedure(Vec::new());
+        let function = procedure(MachineBlockId::new(0), Vec::new());
         assert_eq!(
-            expand_basic_runtime(&function, MachineBlockId::new(0), BasicRuntime::Qb45, 0),
+            expand_basic_runtime(&function, BasicRuntime::Qb45, 0),
             Err(BasicAbiError::EmptyFunction)
         );
     }

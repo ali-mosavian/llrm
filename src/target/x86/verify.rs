@@ -1135,6 +1135,7 @@ mod tests {
                     variadic: false,
                     calling_convention: MachineCallingConvention::Basic,
                 },
+                entry: MachineBlockId::new(0),
                 virtual_registers: vec![
                     VirtualRegister {
                         id: VirtualRegisterId::new(0),

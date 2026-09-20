@@ -112,6 +112,7 @@ mod tests {
                 variadic: false,
                 calling_convention: crate::codegen::machine::MachineCallingConvention::Basic,
             },
+            entry: MachineBlockId::new(0),
             virtual_registers: vec![
                 VirtualRegister {
                     id: VirtualRegisterId::new(0),
@@ -162,6 +163,7 @@ mod tests {
                 variadic: false,
                 calling_convention: crate::codegen::machine::MachineCallingConvention::Basic,
             },
+            entry: MachineBlockId::new(0),
             virtual_registers: vec![VirtualRegister {
                 id: VirtualRegisterId::new(0),
                 class: X86RegisterClass::Word.machine_class(),

@@ -209,6 +209,7 @@ mod tests {
                 variadic: false,
                 calling_convention: MachineCallingConvention::Basic,
             },
+            entry: crate::codegen::machine::MachineBlockId::new(2),
             virtual_registers: registers,
             blocks: vec![MachineBlock {
                 id: crate::codegen::machine::MachineBlockId::new(2),

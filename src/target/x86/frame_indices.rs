@@ -300,6 +300,7 @@ mod tests {
                 variadic: false,
                 calling_convention: MachineCallingConvention::Basic,
             },
+            entry: MachineBlockId::new(2),
             virtual_registers: vec![VirtualRegister {
                 id: VirtualRegisterId::new(0),
                 class: super::super::X86RegisterClass::Word.machine_class(),

@@ -483,6 +483,23 @@ rules. General phase-independent register checks fixed that boundary. One
 fail-first run, two accepted runs, and two focused inherited verifier checks
 consumed about eight seconds. No broad or external gate ran.
 
+Machine IR now records its entry block explicitly. This removes a layout
+assumption from module-level MC lowering and lets a function symbol bind to the
+semantic entry even when block order changes. Portable IR still defines its
+first block as entry; x86 selection captures that normalized boundary once,
+then Machine IR preserves the ID independently. The generic verifier rejects
+empty definitions and unknown entry IDs. `.qmir` version 3 writes the entry ID
+in every function header and rejects version 2 rather than guessing it.
+
+Primary review removed the delegated compatibility argument that duplicated
+`MachineFunction.entry` in BASIC ABI expansion, leaving one source of truth for
+`B$ENRA` placement. The non-first-entry text round trip and unknown-entry
+verifier checks consumed 10.5 seconds in delegated verification. Primary
+integration compiled the changed targets in 15.6 seconds, then ran the exact
+non-first-entry BASIC ABI and selection regressions in 0.13 seconds. The
+initial compile command selected zero tests because its exact name was stale;
+it is not claimed as behavioral evidence. No broad suite or external gate ran.
+
 That regression was observed failing before the general declaration-liveness
 rule was implemented, then passed with a parseable `.qir` result. All focused
 verification in these implementation batches, including compile failures used

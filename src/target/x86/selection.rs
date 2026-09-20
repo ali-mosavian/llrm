@@ -707,6 +707,7 @@ struct FunctionSelector<'types> {
     virtual_registers: Vec<VirtualRegister>,
     frame_objects: Vec<FrameObject>,
     entry_prefix: Vec<MachineInstruction>,
+    entry: MachineBlockId,
     blocks: Vec<MachineBlock>,
     next_virtual_register: u32,
     next_frame_index: u32,
@@ -721,6 +722,17 @@ impl<'types> FunctionSelector<'types> {
         functions_by_id: &'types BTreeMap<FunctionId, &'types Function>,
         block_ids: BTreeSet<BlockId>,
     ) -> Result<Self, SelectionError> {
+        // Portable IR carries no entry field: its defined-function contract is
+        // that the first block is the entry.  HIR lowering verifies that its
+        // explicit entry has this position before producing portable IR.
+        let entry = MachineBlockId::new(
+            function
+                .blocks
+                .first()
+                .expect("selection only constructs Machine IR for a defined function")
+                .id
+                .get(),
+        );
         let mut selector = Self {
             function,
             types,
@@ -731,6 +743,7 @@ impl<'types> FunctionSelector<'types> {
             virtual_registers: Vec::new(),
             frame_objects: Vec::new(),
             entry_prefix: Vec::new(),
+            entry,
             blocks: Vec::with_capacity(function.blocks.len()),
             next_virtual_register: 0,
             next_frame_index: 0,
@@ -781,7 +794,7 @@ impl<'types> FunctionSelector<'types> {
     }
 
     fn select_block(&mut self, block: &Block) -> Result<(), SelectionError> {
-        let mut instructions = if self.blocks.is_empty() {
+        let mut instructions = if MachineBlockId::new(block.id.get()) == self.entry {
             std::mem::take(&mut self.entry_prefix)
         } else {
             Vec::new()
@@ -1720,6 +1733,7 @@ impl<'types> FunctionSelector<'types> {
             name: self.function.name.clone(),
             linkage: machine_linkage(self.function.linkage),
             signature: machine_signature(self.function, self.types)?,
+            entry: self.entry,
             virtual_registers: self.virtual_registers,
             blocks: self.blocks,
             frame_objects: self.frame_objects,
@@ -2047,6 +2061,7 @@ mod tests {
         selected.verify().expect("selected Machine IR verifies");
         let function = &selected.functions[0];
         assert_eq!(function.id, MachineFunctionId::new(4));
+        assert_eq!(function.entry, MachineBlockId::new(2));
         assert_eq!(function.virtual_registers.len(), 4);
         assert!(matches!(
             function.frame_objects.as_slice(),

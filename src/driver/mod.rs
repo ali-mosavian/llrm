@@ -4,8 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use crate::codegen::machine::{
-    AllocationRewriteError, MachineBlockId, MachineFunctionId, MachineModule, MachineOperandKind,
-    apply_assignment,
+    AllocationRewriteError, MachineFunctionId, MachineModule, MachineOperandKind, apply_assignment,
 };
 use crate::frontend::qb::{self, Dialect};
 use crate::hir::{LowerError, Program, RuntimeProfile, Storage};
@@ -226,7 +225,6 @@ pub fn lower_qb_to_machine(program: &Program) -> Result<QbMachine, Error> {
             let temporary_strings = temporary_string_slots(source_function, &string_types)?;
             let expanded = crate::target::x86::expand_basic_runtime(
                 function,
-                MachineBlockId::new(source_function.entry.get()),
                 runtime,
                 u32::from(temporary_strings),
             )

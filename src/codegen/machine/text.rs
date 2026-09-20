@@ -17,7 +17,7 @@ use super::{
 };
 
 /// Version of the `.qmir` textual format.
-pub const FORMAT_VERSION: u32 = 2;
+pub const FORMAT_VERSION: u32 = 3;
 
 /// A syntax or value error in `.qmir` text.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -67,6 +67,7 @@ pub fn write_text(module: &MachineModule) -> String {
         let mut fields = vec![
             "function".to_owned(),
             function.id.get().to_string(),
+            function.entry.get().to_string(),
             encode_name(&function.name),
             linkage_name(function.linkage).to_owned(),
             calling_convention_name(function.signature.calling_convention).to_owned(),
@@ -143,7 +144,7 @@ pub fn write_text(module: &MachineModule) -> String {
 pub fn parse_text(source: &str) -> Result<MachineModule, TextError> {
     let mut parser = Parser::new(source);
     let header = parser.next()?;
-    expect_exact(&header, &["qmir", "2"])?;
+    expect_exact(&header, &["qmir", "3"])?;
 
     let mut data_objects = Vec::new();
     let mut functions = Vec::new();
@@ -447,23 +448,24 @@ impl<'a> Parser<'a> {
 
     fn parse_function(&mut self, source: SourceLine<'a>) -> Result<MachineFunction, TextError> {
         let tokens = tokenize(source)?;
-        require_at_least(&tokens, 8)?;
+        require_at_least(&tokens, 9)?;
         expect_value(tokens[0], "function")?;
         let id = MachineFunctionId::new(number(tokens[1])?);
-        let name = decode_name(tokens[2])?;
-        let linkage = parse_linkage(tokens[3])?;
-        let calling_convention = parse_calling_convention(tokens[4])?;
-        let result = parse_value_type(tokens[5], true)?;
-        let variadic = parse_bool(tokens[6])?;
-        let parameter_count = number::<usize>(tokens[7])?;
-        if parameter_count.checked_add(8) != Some(tokens.len()) {
+        let entry = MachineBlockId::new(number(tokens[2])?);
+        let name = decode_name(tokens[3])?;
+        let linkage = parse_linkage(tokens[4])?;
+        let calling_convention = parse_calling_convention(tokens[5])?;
+        let result = parse_value_type(tokens[6], true)?;
+        let variadic = parse_bool(tokens[7])?;
+        let parameter_count = number::<usize>(tokens[8])?;
+        if parameter_count.checked_add(9) != Some(tokens.len()) {
             return Err(error(
-                tokens[7].line,
-                tokens[7].column,
+                tokens[8].line,
+                tokens[8].column,
                 "parameter count does not match the number of parameter types",
             ));
         }
-        let parameters = tokens[8..]
+        let parameters = tokens[9..]
             .iter()
             .copied()
             .map(|token| {
@@ -508,6 +510,7 @@ impl<'a> Parser<'a> {
                 variadic,
                 calling_convention,
             },
+            entry,
             virtual_registers,
             blocks,
             frame_objects,
@@ -980,6 +983,7 @@ mod tests {
                     variadic: true,
                     calling_convention: MachineCallingConvention::C,
                 },
+                entry: MachineBlockId::new(5),
                 virtual_registers: vec![
                     VirtualRegister {
                         id: VirtualRegisterId::new(4),
@@ -1121,7 +1125,7 @@ mod tests {
     #[test]
     fn reports_the_malformed_operand_location() {
         let error =
-            parse_text("qmir 2\nfunction 0 66 internal c - 0 0\nblock 0 0\ninst 0 0 0 1\noperand use - - wat\n")
+            parse_text("qmir 3\nfunction 0 0 66 internal c - 0 0\nblock 0 0\ninst 0 0 0 1\noperand use - - wat\n")
                 .expect_err("unknown operand kind must be rejected");
         assert_eq!(error.line, 5);
         assert_eq!(error.column, 17);
@@ -1129,8 +1133,8 @@ mod tests {
     }
 
     #[test]
-    fn accepts_only_the_version_two_schema() {
-        let error = parse_text("qmir 1\n").expect_err("qmir version one is not accepted");
+    fn accepts_only_the_version_three_schema() {
+        let error = parse_text("qmir 2\n").expect_err("qmir version two is not accepted");
         assert_eq!(error.line, 1);
         assert!(error.message.contains("invalid qmir format header"));
     }

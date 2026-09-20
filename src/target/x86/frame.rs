@@ -385,7 +385,8 @@ fn insert_offset(
 mod tests {
     use super::*;
     use crate::codegen::machine::{
-        FrameObject, MachineFunctionId, MachineLinkage, MachineSignature,
+        FrameObject, MachineBlock, MachineBlockId, MachineFunctionId, MachineLinkage,
+        MachineSignature,
     };
 
     fn function(
@@ -402,8 +403,13 @@ mod tests {
                 variadic: false,
                 calling_convention: MachineCallingConvention::Basic,
             },
+            entry: MachineBlockId::new(0),
             virtual_registers: Vec::new(),
-            blocks: Vec::new(),
+            blocks: vec![MachineBlock {
+                id: MachineBlockId::new(0),
+                instructions: Vec::new(),
+                successors: Vec::new(),
+            }],
             frame_objects,
         }
     }
