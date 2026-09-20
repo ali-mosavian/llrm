@@ -151,13 +151,13 @@ impl Error for AllocationError {
 /// preference order for a register class.  `aliases` reports whether two
 /// different physical registers overlap; identical registers always conflict.
 /// The function remains target-independent by accepting those facts as hooks.
-pub fn allocate<'c, Candidates, Aliases>(
+pub fn allocate<Candidates, Aliases>(
     function: &MachineFunction,
     candidates: Candidates,
     aliases: Aliases,
 ) -> Result<RegisterAssignment, AllocationError>
 where
-    Candidates: Fn(RegisterClass) -> &'c [PhysicalRegister],
+    Candidates: Fn(RegisterClass) -> Vec<PhysicalRegister>,
     Aliases: Fn(PhysicalRegister, PhysicalRegister) -> bool,
 {
     let graph =
@@ -352,15 +352,15 @@ mod tests {
     const GENERAL_CANDIDATES: [PhysicalRegister; 2] = [FIRST, SECOND];
     const ONE_CANDIDATE: [PhysicalRegister; 1] = [FIRST];
 
-    fn candidates(class: RegisterClass) -> &'static [PhysicalRegister] {
+    fn candidates(class: RegisterClass) -> Vec<PhysicalRegister> {
         match class {
-            GENERAL => &GENERAL_CANDIDATES,
-            _ => &[],
+            GENERAL => GENERAL_CANDIDATES.to_vec(),
+            _ => Vec::new(),
         }
     }
 
-    fn one_candidate(_: RegisterClass) -> &'static [PhysicalRegister] {
-        &ONE_CANDIDATE
+    fn one_candidate(_: RegisterClass) -> Vec<PhysicalRegister> {
+        ONE_CANDIDATE.to_vec()
     }
 
     fn does_not_alias(_: PhysicalRegister, _: PhysicalRegister) -> bool {

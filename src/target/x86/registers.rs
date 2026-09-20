@@ -232,9 +232,26 @@ const ST6_FAMILY: [X86Register; 1] = [X86Register::St6];
 const ST7_FAMILY: [X86Register; 1] = [X86Register::St7];
 
 impl X86RegisterClass {
+    /// Every target register class in stable numeric order.
+    pub const ALL: [Self; 6] = [
+        Self::Byte,
+        Self::Word,
+        Self::Dword,
+        Self::Address16,
+        Self::Segment,
+        Self::X87,
+    ];
+
     /// The opaque target-independent Machine IR class identifier.
     pub const fn machine_class(self) -> RegisterClass {
         RegisterClass::new(self as u32)
+    }
+
+    /// Recovers a target class from its Machine IR identifier.
+    pub fn from_machine_class(class: RegisterClass) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|candidate| candidate.machine_class() == class)
     }
 
     /// All architectural views that can satisfy this class.
@@ -268,9 +285,58 @@ impl X86RegisterClass {
 }
 
 impl X86Register {
+    /// Every architectural register view in stable numeric order.
+    pub const ALL: [Self; 38] = [
+        Self::Al,
+        Self::Cl,
+        Self::Dl,
+        Self::Bl,
+        Self::Ah,
+        Self::Ch,
+        Self::Dh,
+        Self::Bh,
+        Self::Ax,
+        Self::Cx,
+        Self::Dx,
+        Self::Bx,
+        Self::Sp,
+        Self::Bp,
+        Self::Si,
+        Self::Di,
+        Self::Eax,
+        Self::Ecx,
+        Self::Edx,
+        Self::Ebx,
+        Self::Esp,
+        Self::Ebp,
+        Self::Esi,
+        Self::Edi,
+        Self::Es,
+        Self::Cs,
+        Self::Ss,
+        Self::Ds,
+        Self::Fs,
+        Self::Gs,
+        Self::St0,
+        Self::St1,
+        Self::St2,
+        Self::St3,
+        Self::St4,
+        Self::St5,
+        Self::St6,
+        Self::St7,
+    ];
+
     /// The opaque target-independent Machine IR register identifier.
     pub const fn physical(self) -> PhysicalRegister {
         PhysicalRegister::new(self as u32)
+    }
+
+    /// Recovers an x86 view from its Machine IR register identifier.
+    pub fn from_physical(register: PhysicalRegister) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|candidate| candidate.physical() == register)
     }
 
     /// Architectural views which directly overlap this view, excluding self.
