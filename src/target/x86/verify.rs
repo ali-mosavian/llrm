@@ -99,6 +99,9 @@ impl Verifier {
             X86Opcode::SignExtendWordToDword => {
                 self.verify_sign_extend_word_to_dword(function, block, instruction, classes)
             }
+            X86Opcode::ShiftLeftDouble => {
+                self.verify_shift_left_double(function, block, instruction)
+            }
             X86Opcode::CallFar => self.verify_far_call(function, block, instruction, classes),
             X86Opcode::ReturnFar => self.verify_far_return(function, block, instruction, classes),
             X86Opcode::Push => self.verify_push(function, block, instruction),
@@ -545,6 +548,57 @@ impl Verifier {
         }
     }
 
+    fn verify_shift_left_double(
+        &mut self,
+        function: &MachineFunction,
+        block: &MachineBlock,
+        instruction: &MachineInstruction,
+    ) {
+        let [destination, source, count] = instruction.operands.as_slice() else {
+            self.instruction_error(
+                function,
+                block,
+                instruction,
+                "shift-left-double requires [physical dword usedef, physical dword use, immediate 16]",
+            );
+            return;
+        };
+        self.require_physical_dword(
+            function,
+            block,
+            instruction,
+            0,
+            destination,
+            OperandRole::UseDef,
+        );
+        self.require_physical_dword(function, block, instruction, 1, source, OperandRole::Use);
+        if !matches!(
+            count,
+            MachineOperand {
+                kind: MachineOperandKind::Immediate(16),
+                role: OperandRole::None,
+                constraint: None,
+                tied_to: None,
+            }
+        ) {
+            self.operand_error(
+                function,
+                block,
+                instruction,
+                2,
+                "must be an unconstrained immediate count of 16",
+            );
+        }
+        if instruction.flags != InstructionFlags::NONE {
+            self.instruction_error(
+                function,
+                block,
+                instruction,
+                "shift-left-double must have no flags",
+            );
+        }
+    }
+
     fn verify_far_call(
         &mut self,
         function: &MachineFunction,
@@ -959,6 +1013,41 @@ impl Verifier {
                 instruction,
                 position,
                 format!("must have {:?} role", role),
+            );
+        }
+    }
+
+    fn require_physical_dword(
+        &mut self,
+        function: &MachineFunction,
+        block: &MachineBlock,
+        instruction: &MachineInstruction,
+        position: usize,
+        operand: &MachineOperand,
+        role: OperandRole,
+    ) {
+        let valid = matches!(
+            operand,
+            MachineOperand {
+                kind: MachineOperandKind::Register(MachineRegister::Physical(register)),
+                role: actual_role,
+                constraint: None,
+                tied_to: None,
+            } if *actual_role == role
+                && X86Register::from_physical(*register).is_some_and(|register| {
+                    X86RegisterClass::Dword.members().contains(&register)
+                })
+        );
+        if !valid {
+            self.operand_error(
+                function,
+                block,
+                instruction,
+                position,
+                format!(
+                    "must be an unconstrained physical dword register with {:?} role",
+                    role
+                ),
             );
         }
     }

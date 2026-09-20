@@ -15,7 +15,7 @@ use crate::codegen::machine::{
     MachineOperandKind, MachineRegister, MachineValueType, OperandRole, VirtualRegisterId,
 };
 
-use super::{X86FrameLayout, X86Opcode, X86Register};
+use super::{X86FrameLayout, X86Opcode, X86Register, X86RegisterClass};
 
 const NEAR_FIRST_ARGUMENT: u32 = 4;
 const FAR_FIRST_ARGUMENT: u32 = 6;
@@ -111,12 +111,18 @@ impl fmt::Display for CFramePlanError {
                 formatter,
                 "16-bit C frame planning does not support {convention:?} calling convention"
             ),
-            Self::VariadicFunction => write!(formatter, "16-bit C frame planning does not support variadic functions"),
+            Self::VariadicFunction => write!(
+                formatter,
+                "16-bit C frame planning does not support variadic functions"
+            ),
             Self::UnsupportedResult(value_type) => write!(
                 formatter,
                 "16-bit C frame planning does not support result type {value_type:?}"
             ),
-            Self::UnsupportedParameter { parameter, value_type } => write!(
+            Self::UnsupportedParameter {
+                parameter,
+                value_type,
+            } => write!(
                 formatter,
                 "16-bit C parameter {parameter} has unsupported ABI type {value_type:?}"
             ),
@@ -132,7 +138,11 @@ impl fmt::Display for CFramePlanError {
                 formatter,
                 "frame index {frame} names incoming C parameter {parameter} outside the signature"
             ),
-            Self::IncomingArgumentSize { frame, parameter, actual } => write!(
+            Self::IncomingArgumentSize {
+                frame,
+                parameter,
+                actual,
+            } => write!(
                 formatter,
                 "frame index {frame} for C parameter {parameter} has size {actual}, expected 2"
             ),
@@ -144,8 +154,14 @@ impl fmt::Display for CFramePlanError {
                 formatter,
                 "frame index {frame} for C parameter {parameter} has alignment {alignment}, expected 2"
             ),
-            Self::DuplicateFrameIndex(frame) => write!(formatter, "C frame contains duplicate frame index {frame}"),
-            Self::InvalidFrameObject { frame, size, alignment } => write!(
+            Self::DuplicateFrameIndex(frame) => {
+                write!(formatter, "C frame contains duplicate frame index {frame}")
+            }
+            Self::InvalidFrameObject {
+                frame,
+                size,
+                alignment,
+            } => write!(
                 formatter,
                 "frame index {frame} has invalid size {size} or alignment {alignment}"
             ),
@@ -161,7 +177,9 @@ impl fmt::Display for CFramePlanError {
                 formatter,
                 "16-bit C local reservation is {bytes} bytes; maximum is {MAX_LOCAL_BYTES}"
             ),
-            Self::ArithmeticOverflow => write!(formatter, "16-bit C frame size arithmetic overflowed"),
+            Self::ArithmeticOverflow => {
+                write!(formatter, "16-bit C frame size arithmetic overflowed")
+            }
         }
     }
 }
@@ -257,7 +275,7 @@ pub fn plan_c_frame(function: &MachineFunction) -> Result<CFramePlan, CFramePlan
                 local_depths.push((frame.index, local_depth));
             }
             FrameObjectKind::OutgoingArgument => {
-                return Err(CFramePlanError::UnsupportedOutgoingArgument(frame.index))
+                return Err(CFramePlanError::UnsupportedOutgoingArgument(frame.index));
             }
         }
     }
@@ -368,17 +386,59 @@ impl fmt::Display for CAbiExpansionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Frame(error) => error.fmt(formatter),
-            Self::MismatchedFramePlan { function, planned } => write!(formatter, "machine function {function} cannot use C frame plan for function {planned}"),
-            Self::StaleFramePlan => write!(formatter, "C frame plan does not match the supplied function's ABI facts"),
+            Self::MismatchedFramePlan { function, planned } => write!(
+                formatter,
+                "machine function {function} cannot use C frame plan for function {planned}"
+            ),
+            Self::StaleFramePlan => write!(
+                formatter,
+                "C frame plan does not match the supplied function's ABI facts"
+            ),
             Self::EmptyFunction => write!(formatter, "C ABI frame has no entry block"),
-            Self::UnknownEntry(block) => write!(formatter, "C ABI frame entry block {block} is absent"),
-            Self::DeclaredVirtualRegister { register } => write!(formatter, "C ABI expansion retains virtual register declaration {register}"),
-            Self::ResidualVirtualRegister { block, instruction, operand, register } => write!(formatter, "block {block} instruction {instruction} operand {operand} retains virtual register {register}"),
-            Self::AlreadyExpanded { block } => write!(formatter, "C ABI frame is already expanded in entry block {block}"),
-            Self::WrongReturn { block, instruction, expected, actual } => write!(formatter, "block {block} instruction {instruction} has {actual:?} return, expected {expected:?}"),
-            Self::MalformedReturn { block, instruction, reason } => write!(formatter, "block {block} instruction {instruction} has malformed C return: {reason}"),
-            Self::MalformedCall { block, instruction } => write!(formatter, "block {block} instruction {instruction} has no direct C call target"),
-            Self::InstructionIdExhausted => write!(formatter, "C ABI frame exhausted instruction IDs"),
+            Self::UnknownEntry(block) => {
+                write!(formatter, "C ABI frame entry block {block} is absent")
+            }
+            Self::DeclaredVirtualRegister { register } => write!(
+                formatter,
+                "C ABI expansion retains virtual register declaration {register}"
+            ),
+            Self::ResidualVirtualRegister {
+                block,
+                instruction,
+                operand,
+                register,
+            } => write!(
+                formatter,
+                "block {block} instruction {instruction} operand {operand} retains virtual register {register}"
+            ),
+            Self::AlreadyExpanded { block } => write!(
+                formatter,
+                "C ABI frame is already expanded in entry block {block}"
+            ),
+            Self::WrongReturn {
+                block,
+                instruction,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "block {block} instruction {instruction} has {actual:?} return, expected {expected:?}"
+            ),
+            Self::MalformedReturn {
+                block,
+                instruction,
+                reason,
+            } => write!(
+                formatter,
+                "block {block} instruction {instruction} has malformed C return: {reason}"
+            ),
+            Self::MalformedCall { block, instruction } => write!(
+                formatter,
+                "block {block} instruction {instruction} has no direct C call target"
+            ),
+            Self::InstructionIdExhausted => {
+                write!(formatter, "C ABI frame exhausted instruction IDs")
+            }
         }
     }
 }
@@ -452,6 +512,32 @@ pub fn expand_allocated_c_abi(
         let mut instructions = Vec::with_capacity(block.instructions.len() + 1);
         for mut original in std::mem::take(&mut block.instructions) {
             match X86Opcode::from_machine_opcode(original.opcode) {
+                Some(X86Opcode::LowWord) => {
+                    let source = dword_source(block.id, &original, &original.operands[1])?;
+                    let [low] = source.sub_registers() else {
+                        unreachable!("preflight validated a dword source")
+                    };
+                    if *low != X86Register::Ax {
+                        original.opcode = X86Opcode::Mov.machine_opcode();
+                        original.operands = vec![
+                            physical(X86Register::Ax, OperandRole::Def),
+                            physical(*low, OperandRole::Use),
+                        ];
+                        original.flags = InstructionFlags::NONE;
+                        instructions.push(original);
+                    }
+                    continue;
+                }
+                Some(X86Opcode::HighWord) => {
+                    let source = dword_source(block.id, &original, &original.operands[1])?;
+                    original.opcode = X86Opcode::ShiftLeftDouble.machine_opcode();
+                    original.operands = vec![
+                        physical(X86Register::Edx, OperandRole::UseDef),
+                        physical(source, OperandRole::Use),
+                        immediate(16),
+                    ];
+                    original.flags = InstructionFlags::NONE;
+                }
                 Some(X86Opcode::CallNear | X86Opcode::CallFar) => {
                     original.operands.truncate(1);
                 }
@@ -524,18 +610,14 @@ fn preflight(function: &MachineFunction, plan: &CFramePlan) -> Result<(), CAbiEx
                 }
             }
             if is_return(instruction) {
-                validate_return(
-                    block.id,
-                    instruction,
-                    expected,
-                    function.signature.result,
-                )?;
+                validate_return(block.id, instruction, expected, function.signature.result)?;
             }
             if is_call(instruction)
                 && !matches!(
                     instruction.operands.first().map(|operand| &operand.kind),
-                    Some(MachineOperandKind::Function(_)
-                        | MachineOperandKind::ExternalSymbol { .. })
+                    Some(
+                        MachineOperandKind::Function(_) | MachineOperandKind::ExternalSymbol { .. }
+                    )
                 )
             {
                 return Err(CAbiExpansionError::MalformedCall {
@@ -544,8 +626,187 @@ fn preflight(function: &MachineFunction, plan: &CFramePlan) -> Result<(), CAbiEx
                 });
             }
         }
+        validate_return_extractions(block.id, &block.instructions, function.signature.result)?;
     }
     Ok(())
+}
+
+/// Validates the two selected pseudos immediately feeding an i32 C return.
+///
+/// This is intentionally a terminal ABI shape, rather than a general pseudo
+/// lowering: `shld` changes flags and all but DX's low word. The following
+/// return is the proof that neither effect has a remaining Machine IR user.
+fn validate_return_extractions(
+    block: MachineBlockId,
+    instructions: &[MachineInstruction],
+    result: Option<MachineValueType>,
+) -> Result<(), CAbiExpansionError> {
+    for (position, instruction) in instructions.iter().enumerate() {
+        let opcode = X86Opcode::from_machine_opcode(instruction.opcode);
+        if matches!(opcode, Some(X86Opcode::LowWord | X86Opcode::HighWord)) {
+            let return_position = match opcode {
+                Some(X86Opcode::LowWord) => position.checked_add(2),
+                Some(X86Opcode::HighWord) => position.checked_add(1),
+                _ => unreachable!(),
+            };
+            let Some(return_position) = return_position else {
+                return malformed_return(
+                    block,
+                    instruction,
+                    "word extraction does not feed a terminal i32 return",
+                );
+            };
+            let Some(returned) = instructions.get(return_position) else {
+                return malformed_return(
+                    block,
+                    instruction,
+                    "word extraction does not feed a terminal i32 return",
+                );
+            };
+            if result != Some(MachineValueType::Integer { bits: 32 })
+                || !is_return(returned)
+                || return_position + 1 != instructions.len()
+            {
+                return malformed_return(
+                    block,
+                    instruction,
+                    "word extraction does not feed a terminal i32 return",
+                );
+            }
+        }
+        if !is_return(instruction) || result != Some(MachineValueType::Integer { bits: 32 }) {
+            continue;
+        }
+        let Some(low_position) = position.checked_sub(2) else {
+            return malformed_return(
+                block,
+                instruction,
+                "i32 return lacks low/high word extraction",
+            );
+        };
+        let Some(high_position) = position.checked_sub(1) else {
+            return malformed_return(
+                block,
+                instruction,
+                "i32 return lacks low/high word extraction",
+            );
+        };
+        let low = &instructions[low_position];
+        let high = &instructions[high_position];
+        if X86Opcode::from_machine_opcode(low.opcode) != Some(X86Opcode::LowWord)
+            || X86Opcode::from_machine_opcode(high.opcode) != Some(X86Opcode::HighWord)
+        {
+            return malformed_return(
+                block,
+                instruction,
+                "i32 return lacks low/high word extraction",
+            );
+        }
+        let source = validate_low_extraction(block, low)?;
+        validate_high_extraction(block, high, source)?;
+    }
+    Ok(())
+}
+
+fn validate_low_extraction(
+    block: MachineBlockId,
+    instruction: &MachineInstruction,
+) -> Result<X86Register, CAbiExpansionError> {
+    let [destination, source] = instruction.operands.as_slice() else {
+        return malformed_return(
+            block,
+            instruction,
+            "low word extraction requires AX and one dword source",
+        );
+    };
+    if instruction.flags != InstructionFlags::NONE
+        || *destination != physical(X86Register::Ax, OperandRole::Def)
+    {
+        return malformed_return(
+            block,
+            instruction,
+            "low word extraction must define AX without flags",
+        );
+    }
+    dword_source(block, instruction, source)
+}
+
+fn validate_high_extraction(
+    block: MachineBlockId,
+    instruction: &MachineInstruction,
+    expected_source: X86Register,
+) -> Result<(), CAbiExpansionError> {
+    let [destination, source] = instruction.operands.as_slice() else {
+        return malformed_return(
+            block,
+            instruction,
+            "high word extraction requires DX and one dword source",
+        );
+    };
+    if instruction.flags != InstructionFlags::NONE
+        || *destination != physical(X86Register::Dx, OperandRole::Def)
+    {
+        return malformed_return(
+            block,
+            instruction,
+            "high word extraction must define DX without flags",
+        );
+    }
+    if dword_source(block, instruction, source)? != expected_source {
+        return malformed_return(
+            block,
+            instruction,
+            "low and high word extractions use different sources",
+        );
+    }
+    Ok(())
+}
+
+fn dword_source(
+    block: MachineBlockId,
+    instruction: &MachineInstruction,
+    operand: &MachineOperand,
+) -> Result<X86Register, CAbiExpansionError> {
+    let MachineOperand {
+        kind: MachineOperandKind::Register(MachineRegister::Physical(physical)),
+        role: OperandRole::Use,
+        constraint: None,
+        tied_to: None,
+    } = operand
+    else {
+        return malformed_return(
+            block,
+            instruction,
+            "word extraction source must be an unconstrained physical dword use",
+        );
+    };
+    let Some(register) = X86Register::from_physical(*physical) else {
+        return malformed_return(
+            block,
+            instruction,
+            "word extraction source has an unknown physical register",
+        );
+    };
+    if !X86RegisterClass::Dword.members().contains(&register) {
+        return malformed_return(
+            block,
+            instruction,
+            "word extraction source must be a dword register",
+        );
+    }
+    Ok(register)
+}
+
+fn malformed_return<T>(
+    block: MachineBlockId,
+    instruction: &MachineInstruction,
+    reason: &'static str,
+) -> Result<T, CAbiExpansionError> {
+    Err(CAbiExpansionError::MalformedReturn {
+        block,
+        instruction: instruction.id,
+        reason,
+    })
 }
 
 fn starts_expanded(block: &crate::codegen::machine::MachineBlock) -> bool {
@@ -893,10 +1154,7 @@ mod tests {
             ]
         );
         assert_eq!(instructions[3].operands, vec![function_operand(9)]);
-        assert_eq!(
-            instructions.last().unwrap().operands,
-            vec![immediate(0)]
-        );
+        assert_eq!(instructions.last().unwrap().operands, vec![immediate(0)]);
         assert_eq!(
             instructions[2].operands,
             vec![physical(X86Register::Sp, OperandRole::UseDef), immediate(4),]
@@ -904,8 +1162,9 @@ mod tests {
     }
 
     #[test]
-    fn plans_and_expands_far_cdecl_i32_result_in_dx_ax() {
-        // C long results arrive from selection as low AX followed by high DX.
+    fn expands_allocated_far_cdecl_i32_return_into_dx_ax() {
+        // The selected i32 result is split after allocation. It must reach
+        // the ABI's DX:AX return pair without leaving pseudos for MC.
         let mut input = function(
             MachineCallingConvention::FarCdecl,
             vec![],
@@ -922,10 +1181,10 @@ mod tests {
             0,
             MachineInstruction {
                 id: MachineInstructionId::new(6),
-                opcode: X86Opcode::Mov.machine_opcode(),
+                opcode: X86Opcode::LowWord.machine_opcode(),
                 operands: vec![
                     physical(X86Register::Ax, OperandRole::Def),
-                    immediate(0x5678),
+                    physical(X86Register::Ecx, OperandRole::Use),
                 ],
                 flags: InstructionFlags::NONE,
             },
@@ -934,10 +1193,10 @@ mod tests {
             1,
             MachineInstruction {
                 id: MachineInstructionId::new(7),
-                opcode: X86Opcode::Mov.machine_opcode(),
+                opcode: X86Opcode::HighWord.machine_opcode(),
                 operands: vec![
                     physical(X86Register::Dx, OperandRole::Def),
-                    immediate(0x1234),
+                    physical(X86Register::Ecx, OperandRole::Use),
                 ],
                 flags: InstructionFlags::NONE,
             },
@@ -958,7 +1217,7 @@ mod tests {
                 Some(X86Opcode::Mov),
                 Some(X86Opcode::Sub),
                 Some(X86Opcode::Mov),
-                Some(X86Opcode::Mov),
+                Some(X86Opcode::ShiftLeftDouble),
                 Some(X86Opcode::Leave),
                 Some(X86Opcode::ReturnFar),
             ]
@@ -967,16 +1226,56 @@ mod tests {
             instructions[3].operands,
             vec![
                 physical(X86Register::Ax, OperandRole::Def),
-                immediate(0x5678),
+                physical(X86Register::Cx, OperandRole::Use),
             ]
         );
+        assert_eq!(instructions[3].id, MachineInstructionId::new(6));
         assert_eq!(
             instructions[4].operands,
             vec![
-                physical(X86Register::Dx, OperandRole::Def),
-                immediate(0x1234),
+                physical(X86Register::Edx, OperandRole::UseDef),
+                physical(X86Register::Ecx, OperandRole::Use),
+                immediate(16),
             ]
         );
+        assert_eq!(instructions[4].id, MachineInstructionId::new(7));
+        assert!(instructions.iter().all(|instruction| !matches!(
+            X86Opcode::from_machine_opcode(instruction.opcode),
+            Some(X86Opcode::LowWord | X86Opcode::HighWord)
+        )));
         assert_eq!(instructions.last().unwrap().operands, vec![immediate(0)]);
+
+        // AX already is EAX's low-word view, so its extraction is deletion,
+        // while the high extraction still owns the original HighWord ID.
+        let mut same_view = input.clone();
+        for instruction in &mut same_view.blocks[0].instructions[..2] {
+            instruction.operands[1] = physical(X86Register::Eax, OperandRole::Use);
+        }
+        let same_view_plan = plan_c_frame(&same_view).unwrap();
+        let same_view = expand_allocated_c_abi(&same_view, &same_view_plan).unwrap();
+        let same_view_instructions = &same_view.blocks[0].instructions;
+        assert_eq!(
+            same_view_instructions
+                .iter()
+                .map(|instruction| X86Opcode::from_machine_opcode(instruction.opcode))
+                .collect::<Vec<_>>(),
+            vec![
+                Some(X86Opcode::Push),
+                Some(X86Opcode::Mov),
+                Some(X86Opcode::Sub),
+                Some(X86Opcode::ShiftLeftDouble),
+                Some(X86Opcode::Leave),
+                Some(X86Opcode::ReturnFar),
+            ]
+        );
+        assert_eq!(same_view_instructions[3].id, MachineInstructionId::new(7));
+        assert_eq!(
+            same_view_instructions[3].operands,
+            vec![
+                physical(X86Register::Edx, OperandRole::UseDef),
+                physical(X86Register::Eax, OperandRole::Use),
+                immediate(16),
+            ]
+        );
     }
 }

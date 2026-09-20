@@ -176,11 +176,13 @@ pub enum X86Opcode {
     Leave = 32,
     /// Sign-extend a 16-bit integer register into a 32-bit integer register.
     SignExtendWordToDword = 33,
+    /// Funnel a dword source's upper word into a dword destination's low word.
+    ShiftLeftDouble = 34,
 }
 
 impl X86Opcode {
     /// Every opcode in stable numeric order.
-    pub const ALL: [Self; 33] = [
+    pub const ALL: [Self; 34] = [
         Self::Copy,
         Self::PhiCopy,
         Self::Mov,
@@ -214,6 +216,7 @@ impl X86Opcode {
         Self::HighWord,
         Self::Leave,
         Self::SignExtendWordToDword,
+        Self::ShiftLeftDouble,
     ];
 
     /// The opaque target-independent Machine IR opcode identifier.
@@ -250,6 +253,7 @@ mod tests {
         }
         assert_eq!(X86Opcode::Copy.machine_opcode().get(), 1);
         assert_eq!(X86Opcode::JumpConditional.machine_opcode().get(), 26);
+        assert_eq!(X86Opcode::ShiftLeftDouble.machine_opcode().get(), 34);
     }
 
     #[test]

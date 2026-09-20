@@ -150,6 +150,7 @@ pub fn encode_with_fixups(instruction: &MCInstruction) -> Result<EncodedInstruct
         X86Opcode::SignExtendWordToDword => {
             encode_sign_extend_word_to_dword(opcode, &instruction.operands)
         }
+        X86Opcode::ShiftLeftDouble => encode_shift_left_double(opcode, &instruction.operands),
         X86Opcode::Neg => encode_unary(opcode, &instruction.operands, 3),
         X86Opcode::Not => encode_unary(opcode, &instruction.operands, 2),
         X86Opcode::Push => encode_push_pop(opcode, &instruction.operands, 0x50),
@@ -563,6 +564,36 @@ fn encode_sign_extend_word_to_dword(
     Ok(vec![0x66, 0x0f, 0xbf, modrm(destination.code, source.code)])
 }
 
+fn encode_shift_left_double(
+    opcode: X86Opcode,
+    operands: &[MCOperand],
+) -> Result<Vec<u8>, EncodeError> {
+    expect_arity(opcode, operands, 3)?;
+    let destination = register_operand(opcode, operands, 0)?;
+    let source = register_operand(opcode, operands, 1)?;
+    let Some(MCOperand::Immediate(16)) = operands.get(2) else {
+        return Err(EncodeError::UnsupportedForm {
+            opcode,
+            reason: "shift-left-double requires immediate count 16",
+        });
+    };
+    if destination.size != OperandSize::Dword || source.size != OperandSize::Dword {
+        return Err(EncodeError::UnsupportedForm {
+            opcode,
+            reason: "shift-left-double requires dword destination and source",
+        });
+    }
+    // SHLD's ModR/M reg field is the source, unlike the destination-first
+    // arithmetic forms above: `shld edx,ecx,16` is 66 0f a4 ca 10.
+    Ok(vec![
+        0x66,
+        0x0f,
+        0xa4,
+        modrm(source.code, destination.code),
+        16,
+    ])
+}
+
 fn encode_unary(
     opcode: X86Opcode,
     operands: &[MCOperand],
@@ -920,6 +951,59 @@ mod tests {
             Err(EncodeError::UnsupportedForm {
                 opcode: X86Opcode::SignExtendWordToDword,
                 ..
+            })
+        ));
+    }
+
+    #[test]
+    fn encodes_i32_high_return_extract_shld_and_refuses_other_forms() {
+        assert_eq!(
+            encode(&instruction(
+                X86Opcode::ShiftLeftDouble,
+                vec![
+                    register(X86Register::Edx),
+                    register(X86Register::Ecx),
+                    MCOperand::Immediate(16),
+                ],
+            ))
+            .unwrap(),
+            vec![0x66, 0x0f, 0xa4, 0xca, 0x10]
+        );
+        assert_eq!(
+            encode(&instruction(
+                X86Opcode::ShiftLeftDouble,
+                vec![
+                    register(X86Register::Edx),
+                    register(X86Register::Eax),
+                    MCOperand::Immediate(16),
+                ],
+            ))
+            .unwrap(),
+            vec![0x66, 0x0f, 0xa4, 0xc2, 0x10]
+        );
+        assert!(matches!(
+            encode(&instruction(
+                X86Opcode::ShiftLeftDouble,
+                vec![
+                    register(X86Register::Dx),
+                    register(X86Register::Ecx),
+                    MCOperand::Immediate(16),
+                ],
+            )),
+            Err(EncodeError::UnsupportedForm {
+                opcode: X86Opcode::ShiftLeftDouble,
+                ..
+            })
+        ));
+        assert!(matches!(
+            encode(&instruction(
+                X86Opcode::ShiftLeftDouble,
+                vec![register(X86Register::Edx), register(X86Register::Ecx)],
+            )),
+            Err(EncodeError::Arity {
+                opcode: X86Opcode::ShiftLeftDouble,
+                expected: 3,
+                actual: 2,
             })
         ));
     }
