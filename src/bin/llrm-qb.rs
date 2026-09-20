@@ -12,7 +12,7 @@ fn main() -> ExitCode {
     match Invocation::parse(env::args().skip(1)) {
         Ok(invocation) => invocation.run(),
         Err(message) => {
-            eprintln!("llrm: {message}");
+            eprintln!("llrm-qb: {message}");
             ExitCode::from(2)
         }
     }
@@ -22,16 +22,8 @@ struct Invocation {
     input: PathBuf,
     output: Option<PathBuf>,
     output_kind: OutputKind,
-    input_kind: InputKind,
     include_dirs: Vec<PathBuf>,
     qb: QbOptions,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum InputKind {
-    Qb,
-    Wcc,
-    Omf,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -47,13 +39,11 @@ impl Invocation {
         let mut input = None;
         let mut output = None;
         let mut output_kind = None;
-        let mut input_kind = None;
         let mut include_dirs = Vec::new();
         let mut qb = QbOptions::default();
 
         while let Some(argument) = arguments.next() {
             match argument.as_str() {
-                "-x" => input_kind = Some(parse_input_kind(required(&mut arguments, "-x")?)?),
                 "-o" => output = Some(PathBuf::from(required(&mut arguments, "-o")?)),
                 "--emit" => {
                     let kind = match required(&mut arguments, "--emit")?.as_str() {
@@ -109,31 +99,23 @@ impl Invocation {
         }
 
         let input = input.ok_or_else(|| usage().to_owned())?;
-        let input_kind = input_kind
-            .or_else(|| infer_input_kind(&input))
-            .ok_or_else(|| "cannot infer input kind; use -x qb, -x wcc, or -x omf".to_owned())?;
-        if input_kind != InputKind::Qb && output_kind.is_some() {
-            return Err("--emit is only valid with QB source input".to_owned());
+        if !input
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("bas"))
+        {
+            return Err("QB input must have a .bas extension".to_owned());
         }
         Ok(Self {
             input,
             output,
             output_kind: output_kind.unwrap_or(OutputKind::Hir),
-            input_kind,
             include_dirs,
             qb,
         })
     }
 
     fn run(self) -> ExitCode {
-        match self.input_kind {
-            InputKind::Qb => self.run_qb(),
-            InputKind::Wcc => unsupported("the WCC capture frontend has not been ported yet"),
-            InputKind::Omf => self.run_omf(),
-        }
-    }
-
-    fn run_qb(self) -> ExitCode {
         let loaded = match source::load_with_map(&self.input, &self.include_dirs) {
             Ok(source) => source,
             Err(error) => return failure(format!("{}: {error}", self.input.display())),
@@ -180,18 +162,6 @@ impl Invocation {
         };
         write_output(self.output.as_deref(), text.as_bytes())
     }
-
-    fn run_omf(self) -> ExitCode {
-        let bytes = match fs::read(&self.input) {
-            Ok(bytes) => bytes,
-            Err(error) => return failure(format!("{}: {error}", self.input.display())),
-        };
-        let file = match driver::parse_omf(&bytes) {
-            Ok(file) => file,
-            Err(error) => return failure(format!("{}: {error}", self.input.display())),
-        };
-        write_output(self.output.as_deref(), &file.to_bytes())
-    }
 }
 
 fn write_output(path: Option<&Path>, bytes: &[u8]) -> ExitCode {
@@ -213,35 +183,13 @@ fn required(arguments: &mut impl Iterator<Item = String>, option: &str) -> Resul
         .ok_or_else(|| format!("{option} requires a value"))
 }
 
-fn parse_input_kind(value: String) -> Result<InputKind, String> {
-    match value.as_str() {
-        "qb" => Ok(InputKind::Qb),
-        "wcc" => Ok(InputKind::Wcc),
-        "omf" => Ok(InputKind::Omf),
-        _ => Err(format!("unknown input kind {value:?}")),
-    }
-}
-
-fn infer_input_kind(path: &Path) -> Option<InputKind> {
-    match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
-        "bas" => Some(InputKind::Qb),
-        "cgs" => Some(InputKind::Wcc),
-        "obj" | "lib" => Some(InputKind::Omf),
-        _ => None,
-    }
-}
-
-fn unsupported(message: &str) -> ExitCode {
-    failure(message.to_owned())
-}
-
 fn failure(message: String) -> ExitCode {
-    eprintln!("llrm: {message}");
+    eprintln!("llrm-qb: {message}");
     ExitCode::FAILURE
 }
 
 fn usage() -> &'static str {
-    "usage: llrm [-x qb|wcc|omf] [--emit qhir|qir|qmir] [-o FILE] [QB OPTIONS] INPUT"
+    "usage: llrm-qb [--emit qhir|qir|qmir] [-o FILE] [QB OPTIONS] INPUT.bas"
 }
 
 #[cfg(test)]
@@ -249,7 +197,7 @@ mod tests {
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{InputKind, Invocation, OutputKind};
+    use super::{Invocation, OutputKind};
     use llrm::driver::{self, QbOptions};
 
     #[test]
@@ -261,7 +209,6 @@ mod tests {
         )
         .unwrap();
 
-        assert!(matches!(invocation.input_kind, InputKind::Qb));
         assert_eq!(invocation.output_kind, OutputKind::Ir);
     }
 

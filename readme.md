@@ -20,10 +20,16 @@ The current vertical slice emits typed HIR or portable SSA IR and can run the
 implemented IR pass pipeline:
 
 ```sh
-cargo run --bin llrm -- --emit qhir PROGRAM.BAS -o PROGRAM.qhir
-cargo run --bin llrm -- --emit qir PROGRAM.BAS -o PROGRAM.qir
+cargo run --bin llrm-qb -- --emit qhir PROGRAM.BAS -o PROGRAM.qhir
+cargo run --bin llrm-qb -- --emit qir PROGRAM.BAS -o PROGRAM.qir
 cargo run --bin llrm-opt -- --passes constant-fold,simplify-branches,dead-code-elimination PROGRAM.qir
 ```
+
+The production-facing tools are named by their input boundary: `llrm-qb` for
+QB-family source, `llrm-c` for WCC `.cgs` captures, and `llrm-omf` for OMF
+objects and libraries. The WCC frontend is not yet ported, so `llrm-c` refuses
+captures explicitly. `llrm-opt`, `llrm-llc`, and `llrm-objdump` expose the
+shared optimizer, backend, and object inspection layers.
 
 Unsupported lowering is an explicit error; there is no hidden Python fallback.
 See [the migration ledger](docs/rust-port-migration.md) for implemented

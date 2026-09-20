@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.87"
 description = "LLVM-style optimizing compiler and object rewriter for 16-bit x86"
-default-run = "llrm"
+default-run = "llrm-qb"
 
 [dependencies]
 
@@ -15,8 +15,16 @@ buildprs = { path = "tools/buildprs" }
 buildprs = { path = "tools/buildprs" }
 
 [[bin]]
-name = "llrm"
-path = "src/bin/llrm.rs"
+name = "llrm-qb"
+path = "src/bin/llrm-qb.rs"
+
+[[bin]]
+name = "llrm-c"
+path = "src/bin/llrm-c.rs"
+
+[[bin]]
+name = "llrm-omf"
+path = "src/bin/llrm-omf.rs"
 
 [[bin]]
 name = "llrm-objdump"

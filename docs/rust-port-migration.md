@@ -108,8 +108,10 @@ explicit subsystem checks and skip that hook.
 The root Rust 2024 package is named `llrm`, with Rust 1.87 as its MSRV.  The
 merged QB frontend lives under `src/frontend/qb`, `buildprs` remains a generator
 tool, and the crate exposes the planned LLVM-style subsystem boundaries.  The
-legacy `qbfront` binary remains temporarily for the Python comparison oracle;
-`llrm` is now the default production-facing binary name.
+legacy `qbfront` binary remains temporarily for the Python comparison oracle.
+The production-facing frontend binaries are `llrm-qb`, `llrm-c`, and
+`llrm-omf`; `llrm-qb` is the package default while the QB vertical slice leads
+the port.
 
 ## Iteration 4: typed HIR and `.qhir`
 
@@ -120,9 +122,8 @@ comparisons; the remaining JSON encoder is an edge adapter fed only by verified
 typed HIR.  New Rust consumers do not parse that JSON.
 
 `.qhir` is a deterministic versioned textual assembly with a strict parser,
-printer, and verifier boundary.  The first `llrm` vertical slice accepts QB
-source, constructs verified HIR through `driver`, and emits `.qhir`; WCC and OMF
-input modes refuse explicitly until their frontends are ported.
+printer, and verifier boundary. The first `llrm-qb` vertical slice accepts QB
+source, constructs verified HIR through `driver`, and emits `.qhir`.
 
 Focused verification in this implementation stretch included:
 
@@ -131,7 +132,7 @@ Focused verification in this implementation stretch included:
 | `cargo check --all-targets` | all current library and binary targets compiled | 1.07 s |
 | exact QB-to-HIR-to-`.qhir` test | passed; 130 tests filtered out | 2.85 s |
 | exact static procedure-array compatibility test | passed; 130 filtered out | 0.04 s |
-| `cargo run --quiet --bin llrm -- ... suite/arith.bas` | emitted canonical 9,085-byte `.qhir` | 2.54 s |
+| `cargo run --quiet --bin llrm-qb -- ... suite/arith.bas` | emitted canonical 9,085-byte `.qhir` | 2.54 s |
 
 ## Iteration 5: OMF foundation (in progress)
 
@@ -144,7 +145,7 @@ raw bytes where OMF does not require UTF-8.
 OMF library framing retains page padding and the opaque dictionary while
 exposing page-aligned modules with absolute record offsets. The common file
 entry point distinguishes standalone objects from libraries and round trips
-either form without changing bytes. `llrm -x omf` now exercises that path for
+either form without changing bytes. `llrm-omf` now exercises that path for
 an untouched rewrite, and `llrm-objdump` reports record framing, checksum
 state, public and external symbols, and resolved relocations. FIXUPP and
 FIXUPP32 thread state is decoded across records. A decoded-module facade joins
@@ -164,7 +165,7 @@ Every newly decoded record family carries focused Rust tests beside its
 implementation, including malformed-record cases. Primary review ran one
 representative test per slice; the archive, LEDATA, LINNUM, file dispatch,
 declaration, driver, and objdump checks together consumed under 15 seconds.
-A real regression object also passed byte-for-byte through the `llrm` CLI in
+A real regression object also passed byte-for-byte through the `llrm-omf` CLI in
 2.4 seconds.
 
 ## Iteration 6: portable IR (started)
@@ -296,7 +297,7 @@ an allocated move through MC into the expected instruction bytes.
 
 ## Current source-to-IR vertical slice
 
-`llrm --emit qir` now composes QB parsing, typed HIR construction, HIR-to-IR
+`llrm-qb --emit qir` now composes QB parsing, typed HIR construction, HIR-to-IR
 lowering, IR verification, and deterministic `.qir` printing through the
 driver. The first end-to-end minimal-source regression exposed that the QB
 frontend deliberately carries unused built-in opaque types, callable
@@ -338,7 +339,7 @@ barriers, and the pass never crosses a block.
 
 The initial integer selector now feeds `llrm-llc --emit qmir` through the
 driver, preserving the rule that only the driver assembles the whole pipeline.
-`llrm --emit qmir` also composes QB source through the same driver path. Direct
+`llrm-qb --emit qmir` also composes QB source through the same driver path. Direct
 void runtime calls materialize and push their i16/i32 ABI arguments in the
 order already established by HIR lowering, retain a symbolic far external
 target, and omit declaration-only functions from Machine IR. An IR
