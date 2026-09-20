@@ -551,3 +551,19 @@ cleanup bytes, symbolic addend, malformed boundary refusals, and immutable
 input behavior. Delegated focused checks and primary review checks consumed
 about eleven seconds in total; no broad suite, Python suite, qrender, DOSBox,
 or object-link gate ran.
+
+Address-independent physical x86 instructions can now cross the next target
+boundary as same-ID MC data fragments. Existing data, alignment, zero-fill,
+symbol definitions, and order remain unchanged; encoder-produced fixups move
+with their bytes. A preexisting instruction fixup is refused rather than
+merged speculatively, and address-dependent branches remain explicit until a
+layout/relaxation stage can choose their form.
+
+The adjacent real-procedure probe identified two general missing x86 forms in
+order: a relocatable near-address `lea` and sixteen-bit register-indirect
+loads/stores. Both now have exact encodings and focused tests; the former uses
+a typed absolute-16 fixup and neither contains QB-specific policy. The next
+adjacent refusal is the procedure's first unconditional branch, confirming
+that layout and branch relaxation—not an object or frontend special case—is
+the next boundary. Four focused MC-encoding tests and the two fail-first
+adjacent probes consumed about ten seconds. No broad or external gate ran.

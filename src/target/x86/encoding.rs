@@ -153,9 +153,9 @@ pub fn encode_with_fixups(instruction: &MCInstruction) -> Result<EncodedInstruct
         X86Opcode::Pop => encode_push_pop(opcode, &instruction.operands, 0x58),
         X86Opcode::ReturnNear => encode_return(opcode, &instruction.operands, 0xc3),
         X86Opcode::ReturnFar => encode_far_return(opcode, &instruction.operands),
-        X86Opcode::Lea => encode_frame_lea(opcode, &instruction.operands),
-        X86Opcode::Load => encode_frame_load(opcode, &instruction.operands),
-        X86Opcode::Store => encode_frame_store(opcode, &instruction.operands),
+        X86Opcode::Lea => return encode_lea(opcode, &instruction.operands),
+        X86Opcode::Load => encode_load(opcode, &instruction.operands),
+        X86Opcode::Store => encode_store(opcode, &instruction.operands),
         X86Opcode::CallFar => return encode_far_call(opcode, &instruction.operands),
         X86Opcode::Idiv
         | X86Opcode::ShiftLeft
@@ -207,6 +207,49 @@ fn encode_far_call(
     })
 }
 
+fn encode_lea(
+    opcode: X86Opcode,
+    operands: &[MCOperand],
+) -> Result<EncodedInstruction, EncodeError> {
+    if let [destination, MCOperand::Expression(expression)] = operands {
+        let destination = match destination {
+            MCOperand::Register(_) => register_operand(opcode, operands, 0)?,
+            _ => {
+                return Err(EncodeError::OperandKind {
+                    opcode,
+                    index: 0,
+                    expected: "a word address register",
+                });
+            }
+        };
+        if destination.size != OperandSize::Word {
+            return Err(EncodeError::UnsupportedForm {
+                opcode,
+                reason: "a relocatable near address requires a word destination",
+            });
+        }
+        let kind = X86FixupKind::Absolute16;
+        let mut bytes = vec![0x8d, (destination.code << 3) | 0b110];
+        let offset = bytes.len() as u32;
+        bytes.extend(vec![0; usize::from(kind.width())]);
+        return Ok(EncodedInstruction {
+            bytes,
+            fixups: vec![Fixup {
+                offset,
+                kind: kind.into(),
+                expression: *expression,
+                pc_relative: kind.pc_relative(),
+            }],
+        });
+    }
+
+    let bytes = encode_frame_lea(opcode, operands)?;
+    Ok(EncodedInstruction {
+        bytes,
+        fixups: Vec::new(),
+    })
+}
+
 fn encode_frame_load(opcode: X86Opcode, operands: &[MCOperand]) -> Result<Vec<u8>, EncodeError> {
     expect_arity(opcode, operands, 3)?;
     let destination = register_operand(opcode, operands, 0)?;
@@ -217,6 +260,22 @@ fn encode_frame_load(opcode: X86Opcode, operands: &[MCOperand]) -> Result<Vec<u8
         OperandSize::Word | OperandSize::Dword => 0x8b,
     });
     bytes.extend(displacement.with_register(destination.code));
+    Ok(bytes)
+}
+
+fn encode_load(opcode: X86Opcode, operands: &[MCOperand]) -> Result<Vec<u8>, EncodeError> {
+    if operands.len() == 3 {
+        return encode_frame_load(opcode, operands);
+    }
+    expect_arity(opcode, operands, 2)?;
+    let destination = register_operand(opcode, operands, 0)?;
+    let address = address16_operand(opcode, operands, 1)?;
+    let mut bytes = prefix_for(destination.size);
+    bytes.push(match destination.size {
+        OperandSize::Byte => 0x8a,
+        OperandSize::Word | OperandSize::Dword => 0x8b,
+    });
+    bytes.extend(address.with_register(destination.code));
     Ok(bytes)
 }
 
@@ -231,6 +290,59 @@ fn encode_frame_store(opcode: X86Opcode, operands: &[MCOperand]) -> Result<Vec<u
     });
     bytes.extend(displacement.with_register(source.code));
     Ok(bytes)
+}
+
+fn encode_store(opcode: X86Opcode, operands: &[MCOperand]) -> Result<Vec<u8>, EncodeError> {
+    if operands.len() == 3 {
+        return encode_frame_store(opcode, operands);
+    }
+    expect_arity(opcode, operands, 2)?;
+    let address = address16_operand(opcode, operands, 0)?;
+    let source = register_operand(opcode, operands, 1)?;
+    let mut bytes = prefix_for(source.size);
+    bytes.push(match source.size {
+        OperandSize::Byte => 0x88,
+        OperandSize::Word | OperandSize::Dword => 0x89,
+    });
+    bytes.extend(address.with_register(source.code));
+    Ok(bytes)
+}
+
+fn address16_operand(
+    opcode: X86Opcode,
+    operands: &[MCOperand],
+    index: usize,
+) -> Result<Address16Encoding, EncodeError> {
+    register_operand(opcode, operands, index)?;
+    let MCOperand::Register(register) = &operands[index] else {
+        unreachable!("register_operand accepted the address base");
+    };
+    let register = decode_register(register.get())?;
+    match register {
+        X86Register::Bx => Ok(Address16Encoding {
+            mode: 0,
+            rm: 0b111,
+            displacement: None,
+        }),
+        X86Register::Bp => Ok(Address16Encoding {
+            mode: 0b01,
+            rm: 0b110,
+            displacement: Some(0),
+        }),
+        X86Register::Si => Ok(Address16Encoding {
+            mode: 0,
+            rm: 0b100,
+            displacement: None,
+        }),
+        X86Register::Di => Ok(Address16Encoding {
+            mode: 0,
+            rm: 0b101,
+            displacement: None,
+        }),
+        _ => Err(EncodeError::UnsupportedRegister {
+            raw: register as u32,
+        }),
+    }
 }
 
 fn encode_frame_lea(opcode: X86Opcode, operands: &[MCOperand]) -> Result<Vec<u8>, EncodeError> {
@@ -556,6 +668,22 @@ struct FrameDisplacement {
     bytes: Vec<u8>,
 }
 
+struct Address16Encoding {
+    mode: u8,
+    rm: u8,
+    displacement: Option<u8>,
+}
+
+impl Address16Encoding {
+    fn with_register(self, register: u8) -> Vec<u8> {
+        let mut bytes = vec![(self.mode << 6) | (register << 3) | self.rm];
+        if let Some(displacement) = self.displacement {
+            bytes.push(displacement);
+        }
+        bytes
+    }
+}
+
 impl FrameDisplacement {
     fn new(value: i64) -> Self {
         if (-128..=127).contains(&value) {
@@ -815,6 +943,41 @@ mod tests {
     }
 
     #[test]
+    fn encodes_legal_sixteen_bit_register_indirect_loads_and_stores() {
+        assert_eq!(
+            encode(&instruction(
+                X86Opcode::Load,
+                vec![register(X86Register::Ax), register(X86Register::Bx)],
+            ))
+            .unwrap(),
+            vec![0x8b, 0x07]
+        );
+        assert_eq!(
+            encode(&instruction(
+                X86Opcode::Store,
+                vec![register(X86Register::Si), register(X86Register::Eax)],
+            ))
+            .unwrap(),
+            vec![0x66, 0x89, 0x04]
+        );
+        assert_eq!(
+            encode(&instruction(
+                X86Opcode::Load,
+                vec![register(X86Register::Ax), register(X86Register::Bp)],
+            ))
+            .unwrap(),
+            vec![0x8b, 0x46, 0x00]
+        );
+        assert!(matches!(
+            encode(&instruction(
+                X86Opcode::Load,
+                vec![register(X86Register::Ax), register(X86Register::Cx)],
+            )),
+            Err(EncodeError::UnsupportedRegister { .. })
+        ));
+    }
+
+    #[test]
     fn bp_zero_uses_a_displacement_and_non_bp_frames_are_refused() {
         assert_eq!(
             encode(&instruction(
@@ -921,6 +1084,39 @@ mod tests {
                 count: 1,
             })
         );
+    }
+
+    #[test]
+    fn encodes_a_relocatable_near_address_with_one_absolute_fixup() {
+        let expression = MCExpression {
+            symbol: SymbolId::new(5),
+            addend: 12,
+        };
+        let instruction = instruction(
+            X86Opcode::Lea,
+            vec![register(X86Register::Bx), MCOperand::Expression(expression)],
+        );
+
+        let encoded = encode_with_fixups(&instruction).unwrap();
+
+        assert_eq!(encoded.bytes, vec![0x8d, 0x1e, 0, 0]);
+        assert_eq!(
+            encoded.fixups,
+            vec![Fixup {
+                offset: 2,
+                kind: X86FixupKind::Absolute16.into(),
+                expression,
+                pc_relative: false,
+            }]
+        );
+        assert_eq!(
+            encode(&instruction),
+            Err(EncodeError::FixupsRequired {
+                opcode: X86Opcode::Lea,
+                count: 1,
+            })
+        );
+        assert_eq!(encoded_size(&instruction), Ok(4));
     }
 
     #[test]

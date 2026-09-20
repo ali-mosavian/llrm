@@ -10,6 +10,7 @@ mod frame;
 mod frame_indices;
 mod instructions;
 mod mc;
+mod mc_encode;
 mod mc_module;
 mod registers;
 mod selection;
@@ -25,6 +26,7 @@ pub use frame::{BasicFramePlan, BasicFramePlanError, BasicRuntime, plan_basic_fr
 pub use frame_indices::{FrameIndexMaterializationError, materialize_frame_indices};
 pub use instructions::{ComparisonKind, ConditionCode, OperandSize, X86Opcode};
 pub use mc::{McLowerError, UnresolvedOperand, lower_instruction};
+pub use mc_encode::{McEncodeVerificationStage, X86McEncodeError, encode_mc_module};
 pub use mc_module::{
     DefinedSymbolKind, McModuleIdKind, X86McModuleLowerError, lower_allocated_module,
 };
