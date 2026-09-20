@@ -1,5 +1,7 @@
 use std::fmt;
 
+pub const FORMAT_VERSION: u32 = 1;
+
 macro_rules! entity_id {
     ($name:ident) => {
         #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
