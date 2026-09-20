@@ -6,6 +6,7 @@ use crate::frontend::qb::{self, Dialect};
 use crate::hir::{LowerError, Program, RuntimeProfile};
 use crate::ir;
 use crate::object::omf::file::{File as OmfFile, FileError};
+use crate::target::x86::SelectionError;
 
 /// Configuration that affects QB source semantics.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -40,6 +41,7 @@ pub enum Error {
     Semantic(qb::SemanticError),
     ExpectedSingleModule { actual: usize },
     Lower(LowerError),
+    Selection(SelectionError),
     Omf(FileError),
 }
 
@@ -53,6 +55,7 @@ impl fmt::Display for Error {
                 "portable IR emission requires exactly one HIR module, got {actual}"
             ),
             Self::Lower(error) => error.fmt(formatter),
+            Self::Selection(error) => error.fmt(formatter),
             Self::Omf(error) => error.fmt(formatter),
         }
     }
@@ -92,6 +95,13 @@ pub fn lower_qb_to_ir(program: &Program) -> Result<ir::Module, Error> {
     crate::hir::lower_to_ir(module).map_err(Error::Lower)
 }
 
+/// Select verified portable IR into initial x86 Machine IR.
+pub fn lower_ir_to_machine(
+    module: &ir::Module,
+) -> Result<crate::codegen::machine::MachineModule, Error> {
+    crate::target::x86::select_module(module).map_err(Error::Selection)
+}
+
 fn runtime_name(runtime: RuntimeProfile) -> &'static str {
     match runtime {
         RuntimeProfile::Qb45 => "qb45",
@@ -102,7 +112,7 @@ fn runtime_name(runtime: RuntimeProfile) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{Error, QbOptions, compile_qb, lower_qb_to_ir, parse_omf};
+    use super::{Error, QbOptions, compile_qb, lower_ir_to_machine, lower_qb_to_ir, parse_omf};
     use crate::hir::{
         ArrayOrder, Dialect, FORMAT_VERSION, FloatMode, Program, RuntimeProfile, TargetProfile,
     };
@@ -145,8 +155,18 @@ mod tests {
         let module = lower_qb_to_ir(&program).expect("runtime calls lower to portable IR");
 
         assert!(module.verify().is_ok());
-        assert!(module.functions.iter().any(|function| function.name == "B$CSCN"));
-        assert!(module.functions.iter().any(|function| function.name == "B$CEND"));
+        assert!(
+            module
+                .functions
+                .iter()
+                .any(|function| function.name == "B$CSCN")
+        );
+        assert!(
+            module
+                .functions
+                .iter()
+                .any(|function| function.name == "B$CEND")
+        );
         assert!(matches!(
             module.functions[0].blocks[0].instructions[0].kind,
             ir::InstructionKind::Call {
@@ -154,5 +174,36 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn verified_integer_ir_reaches_x86_machine_ir() {
+        let source = concat!(
+            "qir 1\n",
+            "module \"driver\"\n",
+            "type 0 void\n",
+            "type 1 integer 16\n",
+            "function 0 \"main\" linkage internal result 0 parameters [] variadic false cc basic attributes []\n",
+            "block 0\n",
+            "inst 0 results [0:1] binary add const type 1 integer 2 const type 1 integer 3\n",
+            "term return none\n",
+            "endblock\n",
+            "endfunction\n",
+            "end\n",
+        );
+        let module = ir::parse_text(source).expect("test qir verifies");
+
+        let machine = lower_ir_to_machine(&module).expect("integer qir selects");
+
+        assert!(machine.verify().is_ok());
+        assert_eq!(machine.functions.len(), 1);
+        assert_eq!(
+            machine.functions[0].blocks[0]
+                .instructions
+                .last()
+                .unwrap()
+                .opcode,
+            crate::target::x86::X86Opcode::ReturnNear.machine_opcode()
+        );
     }
 }
