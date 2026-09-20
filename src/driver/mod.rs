@@ -102,10 +102,11 @@ fn runtime_name(runtime: RuntimeProfile) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{Error, lower_qb_to_ir, parse_omf};
+    use super::{Error, QbOptions, compile_qb, lower_qb_to_ir, parse_omf};
     use crate::hir::{
         ArrayOrder, Dialect, FORMAT_VERSION, FloatMode, Program, RuntimeProfile, TargetProfile,
     };
+    use crate::ir;
     use crate::object::omf::record::Record;
 
     #[test]
@@ -133,6 +134,25 @@ mod tests {
         assert!(matches!(
             lower_qb_to_ir(&program),
             Err(Error::ExpectedSingleModule { actual: 0 })
+        ));
+    }
+
+    #[test]
+    fn qb_runtime_calls_reach_verified_portable_ir() {
+        let program = compile_qb("screen 0\nend\n", "runtime", QbOptions::default())
+            .expect("QB source compiles to HIR");
+
+        let module = lower_qb_to_ir(&program).expect("runtime calls lower to portable IR");
+
+        assert!(module.verify().is_ok());
+        assert!(module.functions.iter().any(|function| function.name == "B$CSCN"));
+        assert!(module.functions.iter().any(|function| function.name == "B$CEND"));
+        assert!(matches!(
+            module.functions[0].blocks[0].instructions[0].kind,
+            ir::InstructionKind::Call {
+                callee: ir::Callee::Direct(_),
+                ..
+            }
         ));
     }
 }
