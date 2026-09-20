@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use llrm::driver::{self, QbOptions};
-use llrm::frontend::qb::{source, Dialect};
+use llrm::frontend::qb::{Dialect, source};
 use llrm::hir::RuntimeProfile;
 
 fn main() -> ExitCode {
@@ -21,16 +21,23 @@ fn main() -> ExitCode {
 struct Invocation {
     input: PathBuf,
     output: Option<PathBuf>,
+    output_kind: OutputKind,
     input_kind: InputKind,
     include_dirs: Vec<PathBuf>,
     qb: QbOptions,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum InputKind {
     Qb,
     Wcc,
     Omf,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OutputKind {
+    Hir,
+    Ir,
 }
 
 impl Invocation {
@@ -38,6 +45,7 @@ impl Invocation {
         let mut arguments = arguments.peekable();
         let mut input = None;
         let mut output = None;
+        let mut output_kind = None;
         let mut input_kind = None;
         let mut include_dirs = Vec::new();
         let mut qb = QbOptions::default();
@@ -46,6 +54,16 @@ impl Invocation {
             match argument.as_str() {
                 "-x" => input_kind = Some(parse_input_kind(required(&mut arguments, "-x")?)?),
                 "-o" => output = Some(PathBuf::from(required(&mut arguments, "-o")?)),
+                "--emit" => {
+                    let kind = match required(&mut arguments, "--emit")?.as_str() {
+                        "qhir" => OutputKind::Hir,
+                        "qir" => OutputKind::Ir,
+                        value => return Err(format!("unknown output kind {value:?}")),
+                    };
+                    if output_kind.replace(kind).is_some() {
+                        return Err("--emit may only be specified once".to_owned());
+                    }
+                }
                 "--include" => {
                     include_dirs.push(PathBuf::from(required(&mut arguments, "--include")?));
                 }
@@ -92,9 +110,13 @@ impl Invocation {
         let input_kind = input_kind
             .or_else(|| infer_input_kind(&input))
             .ok_or_else(|| "cannot infer input kind; use -x qb, -x wcc, or -x omf".to_owned())?;
+        if input_kind != InputKind::Qb && output_kind.is_some() {
+            return Err("--emit is only valid with QB source input".to_owned());
+        }
         Ok(Self {
             input,
             output,
+            output_kind: output_kind.unwrap_or(OutputKind::Hir),
             input_kind,
             include_dirs,
             qb,
@@ -135,7 +157,24 @@ impl Invocation {
             }
             Err(error) => return failure(format!("{}: {error}", self.input.display())),
         };
-        let text = llrm::hir::write_text(&program);
+        let text = match self.output_kind {
+            OutputKind::Hir => llrm::hir::write_text(&program),
+            OutputKind::Ir => {
+                let [module] = program.modules.as_slice() else {
+                    return failure(format!(
+                        "{}: portable IR emission requires exactly one HIR module, got {}",
+                        self.input.display(),
+                        program.modules.len()
+                    ));
+                };
+                match llrm::hir::lower_to_ir(module) {
+                    Ok(module) => llrm::ir::write_text(&module),
+                    Err(error) => {
+                        return failure(format!("{}: {error}", self.input.display()));
+                    }
+                }
+            }
+        };
         write_output(self.output.as_deref(), text.as_bytes())
     }
 
@@ -199,5 +238,23 @@ fn failure(message: String) -> ExitCode {
 }
 
 fn usage() -> &'static str {
-    "usage: llrm [-x qb|wcc|omf] [-o FILE] [QB OPTIONS] INPUT"
+    "usage: llrm [-x qb|wcc|omf] [--emit qhir|qir] [-o FILE] [QB OPTIONS] INPUT"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{InputKind, Invocation, OutputKind};
+
+    #[test]
+    fn selects_portable_ir_output_for_qb_source() {
+        let invocation = Invocation::parse(
+            ["--emit", "qir", "program.bas"]
+                .into_iter()
+                .map(str::to_owned),
+        )
+        .unwrap();
+
+        assert!(matches!(invocation.input_kind, InputKind::Qb));
+        assert_eq!(invocation.output_kind, OutputKind::Ir);
+    }
 }
