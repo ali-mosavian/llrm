@@ -38,7 +38,8 @@ pub use jump_layout::{JumpLayoutVerificationStage, X86JumpLayoutError, relax_and
 pub use mc::{McLowerError, UnresolvedOperand, lower_instruction};
 pub use mc_encode::{McEncodeVerificationStage, X86McEncodeError, encode_mc_module};
 pub use mc_module::{
-    DefinedSymbolKind, McModuleIdKind, X86McModuleLowerError, lower_allocated_module,
+    DefinedSymbolKind, LoweredMcModule, McModuleIdKind, X86McModuleLowerError,
+    lower_allocated_module, lower_allocated_module_with_lineage,
 };
 pub use omf::{X86OmfError, lower_to_omf};
 pub use registers::{X86Register, X86RegisterClass};

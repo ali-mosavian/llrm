@@ -54,6 +54,10 @@ pub enum X86McModuleLowerError {
         function: MachineFunctionId,
         block: MachineBlockId,
     },
+    DuplicateInstructionId {
+        function: MachineFunctionId,
+        instruction: MachineInstructionId,
+    },
     UnknownEntryBlock {
         function: MachineFunctionId,
         block: MachineBlockId,
@@ -114,6 +118,10 @@ impl fmt::Display for X86McModuleLowerError {
             Self::DuplicateBlockId { function, block } => {
                 write!(formatter, "function {function} has duplicate block {block}")
             }
+            Self::DuplicateInstructionId {
+                function,
+                instruction,
+            } => write!(formatter, "function {function} has duplicate instruction {instruction}"),
             Self::UnknownEntryBlock { function, block } => {
                 write!(
                     formatter,
@@ -179,8 +187,26 @@ impl fmt::Display for X86McModuleLowerError {
 
 impl Error for X86McModuleLowerError {}
 
+/// Generic MC lowering together with the fragments assigned to instructions.
+///
+/// The map carries only Machine IR identity. Source and frontend lineage stay
+/// outside target lowering and may join this map at their own boundary.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LoweredMcModule {
+    pub module: MCModule,
+    pub instruction_fragments: BTreeMap<(MachineFunctionId, MachineInstructionId), FragmentId>,
+}
+
 /// Lowers a fully allocated x86 Machine module into ordered MC sections.
 pub fn lower_allocated_module(module: &MachineModule) -> Result<MCModule, X86McModuleLowerError> {
+    Ok(lower_allocated_module_with_lineage(module)?.module)
+}
+
+/// Lowers allocated Machine IR while retaining its exact instruction-fragment
+/// correspondence for downstream source-owned address tables.
+pub fn lower_allocated_module_with_lineage(
+    module: &MachineModule,
+) -> Result<LoweredMcModule, X86McModuleLowerError> {
     for data in &module.data_objects {
         if data.alignment == 0 || !data.alignment.is_power_of_two() {
             return Err(X86McModuleLowerError::InvalidDataAlignment {
@@ -242,6 +268,7 @@ pub fn lower_allocated_module(module: &MachineModule) -> Result<MCModule, X86McM
     let mut text = Vec::new();
     let mut rodata = Vec::new();
     let mut data = Vec::new();
+    let mut instruction_fragments = BTreeMap::new();
 
     for object in &module.data_objects {
         let fragments = if object.constant {
@@ -271,7 +298,13 @@ pub fn lower_allocated_module(module: &MachineModule) -> Result<MCModule, X86McM
     }
 
     for function in &module.functions {
-        lower_function(function, &mut ids, &mut symbols, &mut text)?;
+        lower_function(
+            function,
+            &mut ids,
+            &mut symbols,
+            &mut text,
+            &mut instruction_fragments,
+        )?;
     }
 
     let lowered = MCModule {
@@ -306,7 +339,10 @@ pub fn lower_allocated_module(module: &MachineModule) -> Result<MCModule, X86McM
     lowered
         .verify()
         .map_err(|diagnostics| X86McModuleLowerError::Verification { diagnostics })?;
-    Ok(lowered)
+    Ok(LoweredMcModule {
+        module: lowered,
+        instruction_fragments,
+    })
 }
 
 fn lower_function(
@@ -314,6 +350,7 @@ fn lower_function(
     ids: &mut IdAllocator,
     symbols: &mut SymbolTable,
     fragments: &mut Vec<MCFragment>,
+    instruction_fragments: &mut BTreeMap<(MachineFunctionId, MachineInstructionId), FragmentId>,
 ) -> Result<(), X86McModuleLowerError> {
     for block in &function.blocks {
         let anchor = ids.fragment()?;
@@ -342,10 +379,21 @@ fn lower_function(
         }
 
         for instruction in &block.instructions {
+            let instruction_id = instruction.id;
             let instruction =
                 lower_module_instruction(function, block.id, instruction, ids, symbols)?;
+            let fragment = ids.fragment()?;
+            if instruction_fragments
+                .insert((function.id, instruction_id), fragment)
+                .is_some()
+            {
+                return Err(X86McModuleLowerError::DuplicateInstructionId {
+                    function: function.id,
+                    instruction: instruction_id,
+                });
+            }
             fragments.push(MCFragment::Instruction(InstructionFragment {
-                id: ids.fragment()?,
+                id: fragment,
                 instruction,
                 fixups: Vec::new(),
             }));
@@ -725,6 +773,39 @@ mod tests {
             first.sections[0].fragments[2],
             MCFragment::Data(_)
         ));
+    }
+
+    #[test]
+    fn records_each_machine_instruction_at_its_exact_mc_fragment() {
+        let input = module(vec![
+            function(
+                2,
+                "first",
+                4,
+                vec![block(
+                    4,
+                    vec![instruction(6, vec![]), instruction(8, vec![])],
+                )],
+            ),
+            function(3, "second", 5, vec![block(5, vec![instruction(7, vec![])])]),
+        ]);
+        let before = input.clone();
+
+        let first = lower_allocated_module_with_lineage(&input).unwrap();
+        let second = lower_allocated_module_with_lineage(&input).unwrap();
+        let legacy = lower_allocated_module(&input).unwrap();
+
+        assert_eq!(input, before);
+        assert_eq!(first, second);
+        assert_eq!(first.module, legacy);
+        assert_eq!(first.instruction_fragments.len(), 3);
+        for (function, instruction) in [(2, 6), (2, 8), (3, 7)] {
+            let fragment = first.instruction_fragments
+                [&(MachineFunctionId::new(function), MachineInstructionId::new(instruction))];
+            assert!(first.module.sections[0].fragments.iter().any(
+                |candidate| matches!(candidate, MCFragment::Instruction(value) if value.id == fragment)
+            ));
+        }
     }
 
     #[test]
