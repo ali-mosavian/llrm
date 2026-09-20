@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use llrm::driver::{self, QbOptions};
-use llrm::frontend::qb::{Dialect, source};
+use llrm::frontend::qb::{source, Dialect};
 use llrm::hir::RuntimeProfile;
 
 fn main() -> ExitCode {
@@ -105,7 +105,7 @@ impl Invocation {
         match self.input_kind {
             InputKind::Qb => self.run_qb(),
             InputKind::Wcc => unsupported("the WCC capture frontend has not been ported yet"),
-            InputKind::Omf => unsupported("the OMF rewrite frontend has not been ported yet"),
+            InputKind::Omf => self.run_omf(),
         }
     }
 
@@ -136,16 +136,32 @@ impl Invocation {
             Err(error) => return failure(format!("{}: {error}", self.input.display())),
         };
         let text = llrm::hir::write_text(&program);
-        match self.output {
-            Some(path) => match fs::write(&path, text) {
-                Ok(()) => ExitCode::SUCCESS,
-                Err(error) => failure(format!("{}: {error}", path.display())),
-            },
-            None => match io::stdout().write_all(text.as_bytes()) {
-                Ok(()) => ExitCode::SUCCESS,
-                Err(error) => failure(format!("stdout: {error}")),
-            },
-        }
+        write_output(self.output.as_deref(), text.as_bytes())
+    }
+
+    fn run_omf(self) -> ExitCode {
+        let bytes = match fs::read(&self.input) {
+            Ok(bytes) => bytes,
+            Err(error) => return failure(format!("{}: {error}", self.input.display())),
+        };
+        let file = match driver::parse_omf(&bytes) {
+            Ok(file) => file,
+            Err(error) => return failure(format!("{}: {error}", self.input.display())),
+        };
+        write_output(self.output.as_deref(), &file.to_bytes())
+    }
+}
+
+fn write_output(path: Option<&Path>, bytes: &[u8]) -> ExitCode {
+    match path {
+        Some(path) => match fs::write(path, bytes) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => failure(format!("{}: {error}", path.display())),
+        },
+        None => match io::stdout().write_all(bytes) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => failure(format!("stdout: {error}")),
+        },
     }
 }
 
