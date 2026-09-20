@@ -250,6 +250,63 @@ pub enum Opcode {
     Call,
 }
 
+impl Opcode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Copy => "copy",
+            Self::Load => "load",
+            Self::Store => "store",
+            Self::Address => "address",
+            Self::OffsetPointer => "ptr_offset",
+            Self::PointerOffset => "pointer_offset",
+            Self::PointerSegment => "pointer_segment",
+            Self::Concat => "concat",
+            Self::Convert => "convert",
+            Self::SignExtend => "sign_extend",
+            Self::ZeroExtend => "zero_extend",
+            Self::Add => "add",
+            Self::Subtract => "sub",
+            Self::Multiply => "mul",
+            Self::Divide => "div",
+            Self::Remainder => "rem",
+            Self::DivideRemainder => "divmod",
+            Self::And => "and",
+            Self::Or => "or",
+            Self::Xor => "xor",
+            Self::ShiftLeft => "shl",
+            Self::ShiftRight => "shr",
+            Self::ShiftRightArithmetic => "sar",
+            Self::Negate => "neg",
+            Self::Not => "not",
+            Self::Equal => "eq",
+            Self::NotEqual => "ne",
+            Self::LessThan => "lt",
+            Self::LessEqual => "le",
+            Self::GreaterThan => "gt",
+            Self::GreaterEqual => "ge",
+            Self::StringEqual => "string_eq",
+            Self::StringNotEqual => "string_ne",
+            Self::StringLessThan => "string_lt",
+            Self::StringLessEqual => "string_le",
+            Self::StringGreaterThan => "string_gt",
+            Self::StringGreaterEqual => "string_ge",
+            Self::FloatAdd => "fadd",
+            Self::FloatSubtract => "fsub",
+            Self::FloatMultiply => "fmul",
+            Self::FloatDivide => "fdiv",
+            Self::FloatNegate => "fneg",
+            Self::FloatAbsolute => "fabs",
+            Self::FloatSquareRoot => "fsqrt",
+            Self::FloatSine => "fsin",
+            Self::FloatCosine => "fcos",
+            Self::FloatArctangent => "fatan",
+            Self::FloatLog2 => "flog2",
+            Self::FloatExp2 => "fexp2",
+            Self::Call => "call",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Instruction {
     pub id: InstructionId,

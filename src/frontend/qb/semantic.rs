@@ -90,7 +90,7 @@ enum Number {
 
 struct Instruction {
     id: u32,
-    op: &'static str,
+    op: hir::Opcode,
     results: Vec<u32>,
     operands: Vec<Operand>,
     callee: Option<String>,
@@ -487,7 +487,7 @@ fn build_with_options(
             } else if parameter.by_value {
                 let place = compiler.declare_as(&parameter.declaration, "local")?;
                 compiler.emit(
-                    "store",
+                    hir::Opcode::Store,
                     Vec::new(),
                     vec![Operand::Place(place), Operand::Value(value)],
                 );
@@ -1584,7 +1584,7 @@ impl Compiler {
             let pointer_type = self.pointer_type(descriptor_type);
             let descriptor = self.value(pointer_type);
             self.emit(
-                "address",
+                hir::Opcode::Address,
                 vec![descriptor],
                 vec![Operand::Place(descriptor_place)],
             );
@@ -2166,7 +2166,7 @@ impl Compiler {
                     }
                     let (source, source_type) = self.expression(value)?;
                     let source = self.convert(source, source_type, destination_type)?;
-                    self.emit("store", Vec::new(), vec![destination, source]);
+                    self.emit(hir::Opcode::Store, Vec::new(), vec![destination, source]);
                 }
                 Statement::Label(name, _) => {
                     let target = *self.labels.get(name).ok_or_else(|| SemanticError {
@@ -2244,7 +2244,11 @@ impl Compiler {
                         // rounding boundary in a typed temporary so ordinary
                         // runtime-call lowering materializes those stack bytes.
                         let place = self.temporary(DOUBLE)?;
-                        self.emit("store", Vec::new(), vec![Operand::Place(place), seed]);
+                        self.emit(
+                            hir::Opcode::Store,
+                            Vec::new(),
+                            vec![Operand::Place(place), seed],
+                        );
                         self.emit_runtime_call("B$RNZP", Vec::new(), vec![Operand::Place(place)]);
                     }
                     _ => {
@@ -2260,7 +2264,11 @@ impl Compiler {
                         // load that same external cell, so expose the store
                         // directly instead of hiding it behind a runtime call.
                         let place = self.def_segment_place();
-                        self.emit("store", Vec::new(), vec![Operand::Place(place), value]);
+                        self.emit(
+                            hir::Opcode::Store,
+                            Vec::new(),
+                            vec![Operand::Place(place), value],
+                        );
                     } else {
                         // rt/rtinit.asm's B$DSG0 is the distinct bare-DEF-SEG
                         // operation: copy DS into b$seg. HIR has no machine
@@ -2430,7 +2438,7 @@ impl Compiler {
                                 SINGLE | DOUBLE => {
                                     let place = self.temporary(type_id)?;
                                     self.emit(
-                                        "store",
+                                        hir::Opcode::Store,
                                         Vec::new(),
                                         vec![Operand::Place(place), operand],
                                     );
@@ -2866,16 +2874,20 @@ impl Compiler {
                         let value = self.convert(value, value_type, BYTE)?;
                         let segment_place = self.def_segment_place();
                         let segment = self.value(INTEGER);
-                        self.emit("load", vec![segment], vec![Operand::Place(segment_place)]);
+                        self.emit(
+                            hir::Opcode::Load,
+                            vec![segment],
+                            vec![Operand::Place(segment_place)],
+                        );
                         let pointer_type = self.far_pointer_type(BYTE);
                         let pointer = self.value(pointer_type);
                         self.emit(
-                            "concat",
+                            hir::Opcode::Concat,
                             vec![pointer],
                             vec![Operand::Value(segment), offset],
                         );
                         self.emit(
-                            "store",
+                            hir::Opcode::Store,
                             Vec::new(),
                             vec![
                                 Operand::Indirect {
@@ -2908,11 +2920,19 @@ impl Compiler {
                             self.aggregate_assignment(right, temporary, width)?;
                         } else {
                             let left_value = self.value(left_type);
-                            self.emit("load", vec![left_value], vec![left.clone()]);
+                            self.emit(hir::Opcode::Load, vec![left_value], vec![left.clone()]);
                             let right_value = self.value(right_type);
-                            self.emit("load", vec![right_value], vec![right.clone()]);
-                            self.emit("store", Vec::new(), vec![left, Operand::Value(right_value)]);
-                            self.emit("store", Vec::new(), vec![right, Operand::Value(left_value)]);
+                            self.emit(hir::Opcode::Load, vec![right_value], vec![right.clone()]);
+                            self.emit(
+                                hir::Opcode::Store,
+                                Vec::new(),
+                                vec![left, Operand::Value(right_value)],
+                            );
+                            self.emit(
+                                hir::Opcode::Store,
+                                Vec::new(),
+                                vec![right, Operand::Value(left_value)],
+                            );
                         }
                     }
                     "COLOR" => {
@@ -3220,12 +3240,12 @@ impl Compiler {
             }
             let candidate = self.string_descriptor(candidate)?;
             let operation = match relation {
-                Binary::Eq => "string_eq",
-                Binary::NotEqual => "string_ne",
-                Binary::Less => "string_lt",
-                Binary::LessEqual => "string_le",
-                Binary::Greater => "string_gt",
-                Binary::GreaterEqual => "string_ge",
+                Binary::Eq => hir::Opcode::StringEqual,
+                Binary::NotEqual => hir::Opcode::StringNotEqual,
+                Binary::Less => hir::Opcode::StringLessThan,
+                Binary::LessEqual => hir::Opcode::StringLessEqual,
+                Binary::Greater => hir::Opcode::StringGreaterThan,
+                Binary::GreaterEqual => hir::Opcode::StringGreaterEqual,
                 _ => return self.fail("invalid SELECT CASE relation"),
             };
             self.emit_string_compare(operation, result, selector.clone(), candidate);
@@ -3233,12 +3253,12 @@ impl Compiler {
             let (candidate, candidate_type) = self.expression(candidate)?;
             let candidate = self.convert(candidate, candidate_type, selector_type)?;
             let operation = match relation {
-                Binary::Eq => "eq",
-                Binary::NotEqual => "ne",
-                Binary::Less => "lt",
-                Binary::LessEqual => "le",
-                Binary::Greater => "gt",
-                Binary::GreaterEqual => "ge",
+                Binary::Eq => hir::Opcode::Equal,
+                Binary::NotEqual => hir::Opcode::NotEqual,
+                Binary::Less => hir::Opcode::LessThan,
+                Binary::LessEqual => hir::Opcode::LessEqual,
+                Binary::Greater => hir::Opcode::GreaterThan,
+                Binary::GreaterEqual => hir::Opcode::GreaterEqual,
                 _ => return self.fail("invalid SELECT CASE relation"),
             };
             self.emit(operation, vec![result], vec![selector.clone(), candidate]);
@@ -3260,12 +3280,16 @@ impl Compiler {
         }
         let (start_value, start_type) = self.expression(start)?;
         let start_value = self.convert(start_value, start_type, counter_type)?;
-        self.emit("store", Vec::new(), vec![destination.clone(), start_value]);
+        self.emit(
+            hir::Opcode::Store,
+            Vec::new(),
+            vec![destination.clone(), start_value],
+        );
         let (end_value, end_type) = self.expression(end)?;
         let end_value = self.convert(end_value, end_type, counter_type)?;
         let end_place = self.compiler_temporary("$forEnd", counter_type)?;
         self.emit(
-            "store",
+            hir::Opcode::Store,
             Vec::new(),
             vec![Operand::Place(end_place), end_value],
         );
@@ -3276,7 +3300,7 @@ impl Compiler {
         let step_value = self.convert(step_value, step_type, counter_type)?;
         let step_place = self.compiler_temporary("$forStep", counter_type)?;
         self.emit(
-            "store",
+            hir::Opcode::Store,
             Vec::new(),
             vec![Operand::Place(step_place), step_value],
         );
@@ -3289,7 +3313,11 @@ impl Compiler {
         self.terminate("jump", Vec::new(), vec![test_block])?;
         self.select_block(test_block);
         let step_value = self.value(counter_type);
-        self.emit("load", vec![step_value], vec![Operand::Place(step_place)]);
+        self.emit(
+            hir::Opcode::Load,
+            vec![step_value],
+            vec![Operand::Place(step_place)],
+        );
         let direction = self.value(BOOLEAN);
         let zero = if matches!(counter_type, SINGLE | DOUBLE) {
             self.floating_literal("0.0", counter_type)?
@@ -3297,7 +3325,7 @@ impl Compiler {
             Operand::Constant(counter_type, Number::Integer(0))
         };
         self.emit(
-            "ge",
+            hir::Opcode::GreaterEqual,
             vec![direction],
             vec![Operand::Value(step_value), zero],
         );
@@ -3310,10 +3338,14 @@ impl Compiler {
         self.select_block(positive_test);
         let counter_value = self.load_destination(counter)?;
         let end_value = self.value(counter_type);
-        self.emit("load", vec![end_value], vec![Operand::Place(end_place)]);
+        self.emit(
+            hir::Opcode::Load,
+            vec![end_value],
+            vec![Operand::Place(end_place)],
+        );
         let within = self.value(BOOLEAN);
         self.emit(
-            "le",
+            hir::Opcode::LessEqual,
             vec![within],
             vec![counter_value, Operand::Value(end_value)],
         );
@@ -3326,10 +3358,14 @@ impl Compiler {
         self.select_block(negative_test);
         let counter_value = self.load_destination(counter)?;
         let end_value = self.value(counter_type);
-        self.emit("load", vec![end_value], vec![Operand::Place(end_place)]);
+        self.emit(
+            hir::Opcode::Load,
+            vec![end_value],
+            vec![Operand::Place(end_place)],
+        );
         let within = self.value(BOOLEAN);
         self.emit(
-            "ge",
+            hir::Opcode::GreaterEqual,
             vec![within],
             vec![counter_value, Operand::Value(end_value)],
         );
@@ -3346,19 +3382,23 @@ impl Compiler {
         if self.block_open() {
             let counter_value = self.load_destination(counter)?;
             let step_value = self.value(counter_type);
-            self.emit("load", vec![step_value], vec![Operand::Place(step_place)]);
+            self.emit(
+                hir::Opcode::Load,
+                vec![step_value],
+                vec![Operand::Place(step_place)],
+            );
             let advanced = self.value(counter_type);
             self.emit(
                 if matches!(counter_type, SINGLE | DOUBLE) {
-                    "fadd"
+                    hir::Opcode::FloatAdd
                 } else {
-                    "add"
+                    hir::Opcode::Add
                 },
                 vec![advanced],
                 vec![counter_value, Operand::Value(step_value)],
             );
             self.emit(
-                "store",
+                hir::Opcode::Store,
                 Vec::new(),
                 vec![destination, Operand::Value(advanced)],
             );
@@ -3465,7 +3505,7 @@ impl Compiler {
             // compares unequal to zero.
             let zero = self.floating_literal("0", type_id)?;
             let result = self.value(BOOLEAN);
-            self.emit("ne", vec![result], vec![operand, zero]);
+            self.emit(hir::Opcode::NotEqual, vec![result], vec![operand, zero]);
             return Ok(Operand::Value(result));
         }
         self.fail("condition is not numeric")
@@ -3474,7 +3514,7 @@ impl Compiler {
     fn load_destination(&mut self, expression: &Expr) -> Result<Operand, SemanticError> {
         let (place, type_id) = self.destination(expression)?;
         let value = self.value(type_id);
-        self.emit("load", vec![value], vec![place]);
+        self.emit(hir::Opcode::Load, vec![value], vec![place]);
         Ok(Operand::Value(value))
     }
 
@@ -3549,13 +3589,17 @@ impl Compiler {
             let chunk = self.width(type_id);
             let from = self.subplace(&source, offset, type_id)?;
             let value = self.value(type_id);
-            self.emit("load", vec![value], vec![from]);
+            self.emit(hir::Opcode::Load, vec![value], vec![from]);
             loaded.push((offset, type_id, value));
             offset += chunk;
         }
         for (offset, type_id, value) in loaded {
             let to = self.subplace(&destination, offset, type_id)?;
-            self.emit("store", Vec::new(), vec![to, Operand::Value(value)]);
+            self.emit(
+                hir::Opcode::Store,
+                Vec::new(),
+                vec![to, Operand::Value(value)],
+            );
         }
         Ok(())
     }
@@ -3777,7 +3821,7 @@ impl Compiler {
         };
         let array_pointer_type = self.pointer_type(array_type);
         let array_pointer = self.value(array_pointer_type);
-        self.emit("address", vec![array_pointer], vec![location]);
+        self.emit(hir::Opcode::Address, vec![array_pointer], vec![location]);
 
         let dimensions: Vec<_> = if self.row_major {
             indices.iter().zip(array.bounds.iter()).collect()
@@ -3801,7 +3845,7 @@ impl Compiler {
             }
             let adjusted = self.value(index_type);
             self.emit(
-                "sub",
+                hir::Opcode::Subtract,
                 vec![adjusted],
                 vec![
                     index,
@@ -3811,7 +3855,7 @@ impl Compiler {
             linear = Some(if let Some(previous) = linear {
                 let multiplied = self.value(index_type);
                 self.emit(
-                    "mul",
+                    hir::Opcode::Multiply,
                     vec![multiplied],
                     vec![
                         previous,
@@ -3820,7 +3864,7 @@ impl Compiler {
                 );
                 let combined = self.value(index_type);
                 self.emit(
-                    "add",
+                    hir::Opcode::Add,
                     vec![combined],
                     vec![Operand::Value(multiplied), Operand::Value(adjusted)],
                 );
@@ -3840,7 +3884,7 @@ impl Compiler {
         };
         let bytes = self.value(index_type);
         self.emit(
-            "mul",
+            hir::Opcode::Multiply,
             vec![bytes],
             vec![
                 linear,
@@ -3850,7 +3894,7 @@ impl Compiler {
         let element_pointer_type = self.pointer_type(element);
         let pointer = self.value(element_pointer_type);
         self.emit(
-            "ptr_offset",
+            hir::Opcode::OffsetPointer,
             vec![pointer],
             vec![Operand::Value(array_pointer), Operand::Value(bytes)],
         );
@@ -3899,7 +3943,7 @@ impl Compiler {
             let pointer_type = self.whole_pointer_type(element);
             let pointer = self.value(pointer_type);
             self.emit(
-                "concat",
+                hir::Opcode::Concat,
                 vec![pointer],
                 vec![Operand::Value(selector), Operand::Value(offset)],
             );
@@ -3936,10 +3980,14 @@ impl Compiler {
                 let count = self.descriptor_field(descriptor, 14 + 4 * dimension, INTEGER);
                 let count = self.convert(Operand::Value(count), INTEGER, offset_type)?;
                 let multiplied = self.value(offset_type);
-                self.emit("mul", vec![multiplied], vec![previous, count]);
+                self.emit(
+                    hir::Opcode::Multiply,
+                    vec![multiplied],
+                    vec![previous, count],
+                );
                 let combined = self.value(offset_type);
                 self.emit(
-                    "add",
+                    hir::Opcode::Add,
                     vec![combined],
                     vec![Operand::Value(multiplied), index],
                 );
@@ -3950,7 +3998,7 @@ impl Compiler {
         }
         let bytes = self.value(offset_type);
         self.emit(
-            "mul",
+            hir::Opcode::Multiply,
             vec![bytes],
             vec![
                 linear.expect("non-empty indices"),
@@ -3970,13 +4018,13 @@ impl Compiler {
             let adjusted = self.descriptor_field(descriptor, 10, INTEGER);
             let offset = self.value(INTEGER);
             self.emit(
-                "add",
+                hir::Opcode::Add,
                 vec![offset],
                 vec![Operand::Value(adjusted), Operand::Value(bytes)],
             );
             let pointer = self.value(pointer_type);
             self.emit(
-                "concat",
+                hir::Opcode::Concat,
                 vec![pointer],
                 vec![Operand::Value(selector), Operand::Value(offset)],
             );
@@ -3985,7 +4033,7 @@ impl Compiler {
             let data = self.descriptor_data_pointer(descriptor, pointer_type, address);
             let pointer = self.value(pointer_type);
             self.emit(
-                "ptr_offset",
+                hir::Opcode::OffsetPointer,
                 vec![pointer],
                 vec![Operand::Value(data), Operand::Value(bytes)],
             );
@@ -4023,7 +4071,7 @@ impl Compiler {
         }
         let value = self.value(type_id);
         self.emit(
-            "load",
+            hir::Opcode::Load,
             vec![value],
             vec![Operand::Indirect {
                 base: descriptor,
@@ -4057,7 +4105,11 @@ impl Compiler {
             })?;
         let pointer_type = self.pointer_type(descriptor_type);
         let pointer = self.value(pointer_type);
-        self.emit("address", vec![pointer], vec![Operand::Place(place)]);
+        self.emit(
+            hir::Opcode::Address,
+            vec![pointer],
+            vec![Operand::Place(place)],
+        );
         Ok(pointer)
     }
 
@@ -4083,16 +4135,24 @@ impl Compiler {
                 // literal convention.
                 let offset_type = self.pointer_type(type_id);
                 let near = self.value(offset_type);
-                self.emit("address", vec![near], vec![place.clone()]);
+                self.emit(hir::Opcode::Address, vec![near], vec![place.clone()]);
                 let offset = self.value(INTEGER);
-                self.emit("pointer_offset", vec![offset], vec![Operand::Value(near)]);
+                self.emit(
+                    hir::Opcode::PointerOffset,
+                    vec![offset],
+                    vec![Operand::Value(near)],
+                );
                 let selector_place = self.far_string_segment_place();
                 let selector = self.value(INTEGER);
-                self.emit("load", vec![selector], vec![Operand::Place(selector_place)]);
+                self.emit(
+                    hir::Opcode::Load,
+                    vec![selector],
+                    vec![Operand::Place(selector_place)],
+                );
                 let pointer_type = self.far_pointer_type(type_id);
                 let address = self.value(pointer_type);
                 self.emit(
-                    "concat",
+                    hir::Opcode::Concat,
                     vec![address],
                     vec![Operand::Value(selector), Operand::Value(offset)],
                 );
@@ -4112,7 +4172,7 @@ impl Compiler {
                 let pointer_type = self.far_pointer_type(type_id);
                 let address = self.value(pointer_type);
                 self.emit(
-                    "ptr_offset",
+                    hir::Opcode::OffsetPointer,
                     vec![address],
                     vec![
                         Operand::Value(*base),
@@ -4124,7 +4184,7 @@ impl Compiler {
         }
         let pointer_type = self.far_pointer_type(type_id);
         let address = self.value(pointer_type);
-        self.emit("address", vec![address], vec![place]);
+        self.emit(hir::Opcode::Address, vec![address], vec![place]);
         address
     }
 
@@ -4169,13 +4229,17 @@ impl Compiler {
                 // arena. BC deliberately passes only the computed offset to
                 // SASS/FLEN/SCMP (common.bas 0066..0076 and 01e7..01f9).
                 let offset = self.value(INTEGER);
-                self.emit("pointer_offset", vec![offset], vec![Operand::Value(*base)]);
+                self.emit(
+                    hir::Opcode::PointerOffset,
+                    vec![offset],
+                    vec![Operand::Value(*base)],
+                );
                 return Operand::Value(offset);
             }
         }
         let pointer_type = self.pointer_type(STRING);
         let address = self.value(pointer_type);
-        self.emit("address", vec![address], vec![place]);
+        self.emit(hir::Opcode::Address, vec![address], vec![place]);
         Operand::Value(address)
     }
 
@@ -4332,23 +4396,27 @@ impl Compiler {
         });
         let anchor_type = self.far_pointer_type(INTEGER);
         let anchor = self.value(anchor_type);
-        self.emit("address", vec![anchor], vec![Operand::Place(place)]);
+        self.emit(
+            hir::Opcode::Address,
+            vec![anchor],
+            vec![Operand::Place(place)],
+        );
         let segment = self.value(INTEGER);
         self.emit(
-            "pointer_segment",
+            hir::Opcode::PointerSegment,
             vec![segment],
             vec![Operand::Value(anchor)],
         );
         let offset = self.value(INTEGER);
         self.emit(
-            "pointer_offset",
+            hir::Opcode::PointerOffset,
             vec![offset],
             vec![Operand::Value(descriptor)],
         );
         let pointer_type = self.far_pointer_type(STRING);
         let far = self.value(pointer_type);
         self.emit(
-            "concat",
+            hir::Opcode::Concat,
             vec![far],
             vec![Operand::Value(segment), Operand::Value(offset)],
         );
@@ -4521,7 +4589,11 @@ impl Compiler {
                     // Runtime STR4/STR8 consume the declared 4/8-byte value,
                     // not the frontend's extended-precision evaluation value.
                     let stored = self.temporary(type_id)?;
-                    self.emit("store", Vec::new(), vec![Operand::Place(stored), operand]);
+                    self.emit(
+                        hir::Opcode::Store,
+                        Vec::new(),
+                        vec![Operand::Place(stored), operand],
+                    );
                     operand = Operand::Place(stored);
                 }
                 let pointer_type = self.pointer_type(STRING);
@@ -4552,7 +4624,11 @@ impl Compiler {
                     // The runtime copies the declared 4/8-byte representation,
                     // not the frontend's extended-precision evaluation value.
                     let stored = self.temporary(target)?;
-                    self.emit("store", Vec::new(), vec![Operand::Place(stored), operand]);
+                    self.emit(
+                        hir::Opcode::Store,
+                        Vec::new(),
+                        vec![Operand::Place(stored), operand],
+                    );
                     operand = Operand::Place(stored);
                 }
                 let pointer_type = self.pointer_type(STRING);
@@ -4762,7 +4838,7 @@ impl Compiler {
                 } else {
                     Operand::Place(variable.place)
                 };
-                self.emit("load", vec![result], vec![source]);
+                self.emit(hir::Opcode::Load, vec![result], vec![source]);
                 Ok((Operand::Value(result), variable.type_id))
             }
             Expr::Apply { .. } => {
@@ -4783,13 +4859,13 @@ impl Compiler {
                 }
                 let (place, type_id) = self.destination(expression)?;
                 let result = self.value(type_id);
-                self.emit("load", vec![result], vec![place]);
+                self.emit(hir::Opcode::Load, vec![result], vec![place]);
                 Ok((Operand::Value(result), type_id))
             }
             Expr::Index { .. } => {
                 let (place, type_id) = self.destination(expression)?;
                 let result = self.value(type_id);
-                self.emit("load", vec![result], vec![place]);
+                self.emit(hir::Opcode::Load, vec![result], vec![place]);
                 Ok((Operand::Value(result), type_id))
             }
             Expr::Field { .. } => {
@@ -4800,7 +4876,7 @@ impl Compiler {
                 }
                 let (place, type_id) = self.destination(expression)?;
                 let result = self.value(type_id);
-                self.emit("load", vec![result], vec![place]);
+                self.emit(hir::Opcode::Load, vec![result], vec![place]);
                 Ok((Operand::Value(result), type_id))
             }
             Expr::Unary { op, operand, .. } => {
@@ -4809,9 +4885,11 @@ impl Compiler {
                     return Ok((operand, type_id));
                 }
                 let operation = match op {
-                    Unary::Negative if matches!(type_id, SINGLE | DOUBLE) => "fneg",
-                    Unary::Negative => "neg",
-                    Unary::Not => "not",
+                    Unary::Negative if matches!(type_id, SINGLE | DOUBLE) => {
+                        hir::Opcode::FloatNegate
+                    }
+                    Unary::Negative => hir::Opcode::Negate,
+                    Unary::Not => hir::Opcode::Not,
                     Unary::Positive => unreachable!(),
                 };
                 if *op == Unary::Not && !matches!(type_id, INTEGER | LONG | BOOLEAN) {
@@ -4933,7 +5011,7 @@ impl Compiler {
             self.emit_runtime_call("B$TIMR", vec![pointer], Vec::new());
             let result = self.value(SINGLE);
             self.emit(
-                "load",
+                hir::Opcode::Load,
                 vec![result],
                 vec![Operand::Indirect {
                     base: pointer,
@@ -4954,7 +5032,11 @@ impl Compiler {
                 // consumes the declared R4 representation, so materialize
                 // that rounding boundary before argument physicalization.
                 let place = self.temporary(SINGLE)?;
-                self.emit("store", Vec::new(), vec![Operand::Place(place), selector]);
+                self.emit(
+                    hir::Opcode::Store,
+                    Vec::new(),
+                    vec![Operand::Place(place), selector],
+                );
                 vec![Operand::Place(place)]
             } else {
                 Vec::new()
@@ -4972,7 +5054,7 @@ impl Compiler {
             );
             let result = self.value(SINGLE);
             self.emit(
-                "load",
+                hir::Opcode::Load,
                 vec![result],
                 vec![Operand::Indirect {
                     base: pointer,
@@ -5013,9 +5095,9 @@ impl Compiler {
             let result = self.value(INTEGER);
             self.emit(
                 if intrinsic.lowering == Lowering::PointerSegment {
-                    "pointer_segment"
+                    hir::Opcode::PointerSegment
                 } else {
-                    "pointer_offset"
+                    hir::Opcode::PointerOffset
                 },
                 vec![result],
                 vec![Operand::Value(pointer)],
@@ -5029,7 +5111,7 @@ impl Compiler {
                 // As on the target integer instructions, MIN wraps to itself.
                 let sign = self.value(type_id);
                 self.emit(
-                    "sar",
+                    hir::Opcode::ShiftRightArithmetic,
                     vec![sign],
                     vec![
                         operand.clone(),
@@ -5040,10 +5122,14 @@ impl Compiler {
                     ],
                 );
                 let toggled = self.value(type_id);
-                self.emit("xor", vec![toggled], vec![operand, Operand::Value(sign)]);
+                self.emit(
+                    hir::Opcode::Xor,
+                    vec![toggled],
+                    vec![operand, Operand::Value(sign)],
+                );
                 let result = self.value(type_id);
                 self.emit(
-                    "sub",
+                    hir::Opcode::Subtract,
                     vec![result],
                     vec![Operand::Value(toggled), Operand::Value(sign)],
                 );
@@ -5061,9 +5147,9 @@ impl Compiler {
             let result = self.value(type_id);
             self.emit(
                 if intrinsic.lowering == Lowering::Abs {
-                    "fabs"
+                    hir::Opcode::FloatAbsolute
                 } else {
-                    "fsqrt"
+                    hir::Opcode::FloatSquareRoot
                 },
                 vec![result],
                 vec![operand],
@@ -5081,17 +5167,21 @@ impl Compiler {
                 Operand::Constant(type_id, Number::Integer(0))
             };
             let below = self.value(BOOLEAN);
-            self.emit("lt", vec![below], vec![operand.clone(), zero.clone()]);
+            self.emit(
+                hir::Opcode::LessThan,
+                vec![below],
+                vec![operand.clone(), zero.clone()],
+            );
             let above = self.value(BOOLEAN);
-            self.emit("gt", vec![above], vec![operand, zero]);
+            self.emit(hir::Opcode::GreaterThan, vec![above], vec![operand, zero]);
             let below = self.convert(Operand::Value(below), BOOLEAN, type_id)?;
             let above = self.convert(Operand::Value(above), BOOLEAN, type_id)?;
             let result = self.value(type_id);
             self.emit(
                 if matches!(type_id, SINGLE | DOUBLE) {
-                    "fsub"
+                    hir::Opcode::FloatSubtract
                 } else {
-                    "sub"
+                    hir::Opcode::Subtract
                 },
                 vec![result],
                 vec![below, above],
@@ -5114,19 +5204,19 @@ impl Compiler {
             if intrinsic.lowering == Lowering::Tan {
                 let sine = self.value(type_id);
                 let cosine = self.value(type_id);
-                self.emit("fsin", vec![sine], vec![operand.clone()]);
-                self.emit("fcos", vec![cosine], vec![operand]);
+                self.emit(hir::Opcode::FloatSine, vec![sine], vec![operand.clone()]);
+                self.emit(hir::Opcode::FloatCosine, vec![cosine], vec![operand]);
                 self.emit(
-                    "fdiv",
+                    hir::Opcode::FloatDivide,
                     vec![result],
                     vec![Operand::Value(sine), Operand::Value(cosine)],
                 );
             } else {
                 self.emit(
                     if intrinsic.lowering == Lowering::Sin {
-                        "fsin"
+                        hir::Opcode::FloatSine
                     } else {
-                        "fcos"
+                        hir::Opcode::FloatCosine
                     },
                     vec![result],
                     vec![operand],
@@ -5144,7 +5234,7 @@ impl Compiler {
                 return self.fail("ATN requires a numeric argument");
             }
             let result = self.value(type_id);
-            self.emit("fatan", vec![result], vec![operand]);
+            self.emit(hir::Opcode::FloatArctangent, vec![result], vec![operand]);
             return Ok(Some((Operand::Value(result), type_id)));
         }
         if matches!(intrinsic.lowering, Lowering::Log | Lowering::Exp) {
@@ -5159,14 +5249,26 @@ impl Compiler {
             let result = self.value(type_id);
             if intrinsic.lowering == Lowering::Log {
                 let logarithm = self.value(type_id);
-                self.emit("flog2", vec![logarithm], vec![operand]);
+                self.emit(hir::Opcode::FloatLog2, vec![logarithm], vec![operand]);
                 let ln2 = self.floating_literal("0.69314718055994530942", type_id)?;
-                self.emit("fmul", vec![result], vec![Operand::Value(logarithm), ln2]);
+                self.emit(
+                    hir::Opcode::FloatMultiply,
+                    vec![result],
+                    vec![Operand::Value(logarithm), ln2],
+                );
             } else {
                 let log2e = self.floating_literal("1.4426950408889634074", type_id)?;
                 let scaled = self.value(type_id);
-                self.emit("fmul", vec![scaled], vec![operand, log2e]);
-                self.emit("fexp2", vec![result], vec![Operand::Value(scaled)]);
+                self.emit(
+                    hir::Opcode::FloatMultiply,
+                    vec![scaled],
+                    vec![operand, log2e],
+                );
+                self.emit(
+                    hir::Opcode::FloatExp2,
+                    vec![result],
+                    vec![Operand::Value(scaled)],
+                );
             }
             return Ok(Some((Operand::Value(result), type_id)));
         }
@@ -5218,10 +5320,10 @@ impl Compiler {
                                 // `x + step` shape as a surrounding FOR latch.
                                 // (c - 1) - NOT x is x + c modulo 2^16.
                                 let inverted = self.value(INTEGER);
-                                self.emit("not", vec![inverted], vec![numerator]);
+                                self.emit(hir::Opcode::Not, vec![inverted], vec![numerator]);
                                 let adjusted = self.value(INTEGER);
                                 self.emit(
-                                    "sub",
+                                    hir::Opcode::Subtract,
                                     vec![adjusted],
                                     vec![
                                         Operand::Constant(
@@ -5238,7 +5340,7 @@ impl Compiler {
                             let quotient = self.value(INTEGER);
                             let remainder = self.value(INTEGER);
                             self.emit(
-                                "divmod",
+                                hir::Opcode::DivideRemainder,
                                 vec![quotient, remainder],
                                 vec![
                                     numerator.clone(),
@@ -5247,13 +5349,13 @@ impl Compiler {
                             );
                             let negative = self.value(BOOLEAN);
                             self.emit(
-                                "lt",
+                                hir::Opcode::LessThan,
                                 vec![negative],
                                 vec![numerator, Operand::Constant(INTEGER, Number::Integer(0))],
                             );
                             let has_remainder = self.value(BOOLEAN);
                             self.emit(
-                                "ne",
+                                hir::Opcode::NotEqual,
                                 vec![has_remainder],
                                 vec![
                                     Operand::Value(remainder),
@@ -5262,7 +5364,7 @@ impl Compiler {
                             );
                             let correction = self.value(BOOLEAN);
                             self.emit(
-                                "and",
+                                hir::Opcode::And,
                                 vec![correction],
                                 vec![Operand::Value(negative), Operand::Value(has_remainder)],
                             );
@@ -5270,7 +5372,7 @@ impl Compiler {
                                 self.convert(Operand::Value(correction), BOOLEAN, INTEGER)?;
                             let floor = self.value(INTEGER);
                             self.emit(
-                                "add",
+                                hir::Opcode::Add,
                                 vec![floor],
                                 vec![Operand::Value(quotient), correction],
                             );
@@ -5289,7 +5391,11 @@ impl Compiler {
                             common,
                         )?;
                         let divided = self.value(common);
-                        self.emit("fdiv", vec![divided], vec![numerator, denominator]);
+                        self.emit(
+                            hir::Opcode::FloatDivide,
+                            vec![divided],
+                            vec![numerator, denominator],
+                        );
                         return self.floor_float(Operand::Value(divided), common).map(Some);
                     }
                 }
@@ -5314,18 +5420,30 @@ impl Compiler {
             // For nearest-rounded integer n, trunc(x) is
             // n + (x < n ? -1 : 0) - (x > n ? -1 : 0).
             let rounded = self.value(LONG);
-            self.emit("convert", vec![rounded], vec![operand.clone()]);
+            self.emit(hir::Opcode::Convert, vec![rounded], vec![operand.clone()]);
             let integral = self.convert(Operand::Value(rounded), LONG, type_id)?;
             let below = self.value(BOOLEAN);
-            self.emit("lt", vec![below], vec![operand.clone(), integral.clone()]);
+            self.emit(
+                hir::Opcode::LessThan,
+                vec![below],
+                vec![operand.clone(), integral.clone()],
+            );
             let below = self.convert(Operand::Value(below), BOOLEAN, type_id)?;
             let above = self.value(BOOLEAN);
-            self.emit("gt", vec![above], vec![operand, integral.clone()]);
+            self.emit(
+                hir::Opcode::GreaterThan,
+                vec![above],
+                vec![operand, integral.clone()],
+            );
             let above = self.convert(Operand::Value(above), BOOLEAN, type_id)?;
             let adjusted = self.value(type_id);
-            self.emit("fadd", vec![adjusted], vec![integral, below]);
+            self.emit(hir::Opcode::FloatAdd, vec![adjusted], vec![integral, below]);
             let result = self.value(type_id);
-            self.emit("fsub", vec![result], vec![Operand::Value(adjusted), above]);
+            self.emit(
+                hir::Opcode::FloatSubtract,
+                vec![result],
+                vec![Operand::Value(adjusted), above],
+            );
             return Ok(Some((Operand::Value(result), type_id)));
         }
         if intrinsic.lowering == Lowering::Peek {
@@ -5333,17 +5451,21 @@ impl Compiler {
             let (offset, offset_type) = self.expression(&arguments[0])?;
             let offset = self.convert(offset, offset_type, INTEGER)?;
             let segment = self.value(INTEGER);
-            self.emit("load", vec![segment], vec![Operand::Place(segment_place)]);
+            self.emit(
+                hir::Opcode::Load,
+                vec![segment],
+                vec![Operand::Place(segment_place)],
+            );
             let pointer_type = self.far_pointer_type(BYTE);
             let pointer = self.value(pointer_type);
             self.emit(
-                "concat",
+                hir::Opcode::Concat,
                 vec![pointer],
                 vec![Operand::Value(segment), offset],
             );
             let byte = self.value(BYTE);
             self.emit(
-                "load",
+                hir::Opcode::Load,
                 vec![byte],
                 vec![Operand::Indirect {
                     base: pointer,
@@ -5469,7 +5591,7 @@ impl Compiler {
             self.emit_runtime_call(callee, vec![pointer], vec![descriptor]);
             let result = self.value(type_id);
             self.emit(
-                "load",
+                hir::Opcode::Load,
                 vec![result],
                 vec![Operand::Indirect {
                     base: pointer,
@@ -5491,7 +5613,7 @@ impl Compiler {
             self.emit_runtime_call("B$FVAL", vec![pointer], vec![descriptor]);
             let result = self.value(DOUBLE);
             self.emit(
-                "load",
+                hir::Opcode::Load,
                 vec![result],
                 vec![Operand::Indirect {
                     base: pointer,
@@ -5525,13 +5647,21 @@ impl Compiler {
         // Express the correction in ordinary HIR so optimization sees every
         // value. QB booleans are -1/0 and supply that correction.
         let rounded = self.value(LONG);
-        self.emit("convert", vec![rounded], vec![operand.clone()]);
+        self.emit(hir::Opcode::Convert, vec![rounded], vec![operand.clone()]);
         let integral = self.convert(Operand::Value(rounded), LONG, type_id)?;
         let below = self.value(BOOLEAN);
-        self.emit("lt", vec![below], vec![operand, integral.clone()]);
+        self.emit(
+            hir::Opcode::LessThan,
+            vec![below],
+            vec![operand, integral.clone()],
+        );
         let correction = self.convert(Operand::Value(below), BOOLEAN, type_id)?;
         let result = self.value(type_id);
-        self.emit("fadd", vec![result], vec![integral, correction]);
+        self.emit(
+            hir::Opcode::FloatAdd,
+            vec![result],
+            vec![integral, correction],
+        );
         Ok((Operand::Value(result), type_id))
     }
 
@@ -5585,7 +5715,11 @@ impl Compiler {
     ) -> Result<Operand, SemanticError> {
         let value = self.convert(value, source_type, destination_type)?;
         let place = self.temporary(destination_type)?;
-        self.emit("store", Vec::new(), vec![Operand::Place(place), value]);
+        self.emit(
+            hir::Opcode::Store,
+            Vec::new(),
+            vec![Operand::Place(place), value],
+        );
         Ok(Operand::Place(place))
     }
 
@@ -5700,7 +5834,7 @@ impl Compiler {
                 }
                 let pointer_type = self.far_pointer_type(argument_type);
                 let address = self.value(pointer_type);
-                self.emit("address", vec![address], vec![place]);
+                self.emit(hir::Opcode::Address, vec![address], vec![place]);
                 operands.push(Operand::Value(address));
                 continue;
             }
@@ -5746,7 +5880,11 @@ impl Compiler {
                     // representation by value. Make that rounding boundary
                     // explicit before late stack argument materialization.
                     let place = self.temporary(*parameter_type)?;
-                    self.emit("store", Vec::new(), vec![Operand::Place(place), operand]);
+                    self.emit(
+                        hir::Opcode::Store,
+                        Vec::new(),
+                        vec![Operand::Place(place), operand],
+                    );
                     operands.push(Operand::Place(place));
                 } else {
                     operands.push(operand);
@@ -5760,7 +5898,11 @@ impl Compiler {
                         let (value, type_id) = self.expression(argument)?;
                         let value = self.convert(value, type_id, *parameter_type)?;
                         let place = self.temporary(*parameter_type)?;
-                        self.emit("store", Vec::new(), vec![Operand::Place(place), value]);
+                        self.emit(
+                            hir::Opcode::Store,
+                            Vec::new(),
+                            vec![Operand::Place(place), value],
+                        );
                         (Operand::Place(place), *parameter_type)
                     }
                 };
@@ -5809,16 +5951,20 @@ impl Compiler {
                                 )?;
                             } else {
                                 let value = self.value(*parameter_type);
-                                self.emit("load", vec![value], vec![original.clone()]);
+                                self.emit(hir::Opcode::Load, vec![value], vec![original.clone()]);
                                 self.emit(
-                                    "store",
+                                    hir::Opcode::Store,
                                     Vec::new(),
                                     vec![Operand::Place(temporary), Operand::Value(value)],
                                 );
                             }
                             let near = self.pointer_type(*parameter_type);
                             let address = self.value(near);
-                            self.emit("address", vec![address], vec![Operand::Place(temporary)]);
+                            self.emit(
+                                hir::Opcode::Address,
+                                vec![address],
+                                vec![Operand::Place(temporary)],
+                            );
                             operands.push(Operand::Value(address));
                             byref_copybacks.push((original, temporary, *parameter_type));
                         } else if offset == 0 {
@@ -5826,7 +5972,7 @@ impl Compiler {
                         } else {
                             let adjusted = self.value(pointer_type);
                             self.emit(
-                                "ptr_offset",
+                                hir::Opcode::OffsetPointer,
                                 vec![adjusted],
                                 vec![
                                     Operand::Value(base),
@@ -5839,7 +5985,7 @@ impl Compiler {
                     place => {
                         let pointer_type = self.pointer_type(*parameter_type);
                         let address = self.value(pointer_type);
-                        self.emit("address", vec![address], vec![place]);
+                        self.emit(hir::Opcode::Address, vec![address], vec![place]);
                         operands.push(Operand::Value(address));
                     }
                 }
@@ -5857,7 +6003,11 @@ impl Compiler {
             let place = self.temporary(type_id)?;
             let pointer_type = self.pointer_type(type_id);
             let address = self.value(pointer_type);
-            self.emit("address", vec![address], vec![Operand::Place(place)]);
+            self.emit(
+                hir::Opcode::Address,
+                vec![address],
+                vec![Operand::Place(place)],
+            );
             operands.push(Operand::Value(address));
         }
         let mut results = Vec::new();
@@ -5908,9 +6058,13 @@ impl Compiler {
                 )?;
             } else {
                 let value = self.value(type_id);
-                self.emit("load", vec![value], vec![Operand::Place(temporary)]);
                 self.emit(
-                    "store",
+                    hir::Opcode::Load,
+                    vec![value],
+                    vec![Operand::Place(temporary)],
+                );
+                self.emit(
+                    hir::Opcode::Store,
                     Vec::new(),
                     vec![destination, Operand::Value(value)],
                 );
@@ -5949,12 +6103,12 @@ impl Compiler {
             let right = self.string_descriptor(right)?;
             let result = self.value(BOOLEAN);
             let operation = match op {
-                Binary::Eq => "string_eq",
-                Binary::NotEqual => "string_ne",
-                Binary::Less => "string_lt",
-                Binary::LessEqual => "string_le",
-                Binary::Greater => "string_gt",
-                Binary::GreaterEqual => "string_ge",
+                Binary::Eq => hir::Opcode::StringEqual,
+                Binary::NotEqual => hir::Opcode::StringNotEqual,
+                Binary::Less => hir::Opcode::StringLessThan,
+                Binary::LessEqual => hir::Opcode::StringLessEqual,
+                Binary::Greater => hir::Opcode::StringGreaterThan,
+                Binary::GreaterEqual => hir::Opcode::StringGreaterEqual,
                 _ => unreachable!(),
             };
             self.emit_string_compare(operation, result, left, right);
@@ -5999,10 +6153,10 @@ impl Compiler {
         let right_operand = self.convert(right_operand, right_type, common)?;
         if op == Binary::Imp {
             let temporary = self.value(common);
-            self.emit("not", vec![temporary], vec![left_operand]);
+            self.emit(hir::Opcode::Not, vec![temporary], vec![left_operand]);
             let combined = self.value(common);
             self.emit(
-                "or",
+                hir::Opcode::Or,
                 vec![combined],
                 vec![Operand::Value(temporary), right_operand],
             );
@@ -6010,9 +6164,17 @@ impl Compiler {
         }
         if op == Binary::Eqv {
             let combined = self.value(common);
-            self.emit("xor", vec![combined], vec![left_operand, right_operand]);
+            self.emit(
+                hir::Opcode::Xor,
+                vec![combined],
+                vec![left_operand, right_operand],
+            );
             let result = self.value(common);
-            self.emit("not", vec![result], vec![Operand::Value(combined)]);
+            self.emit(
+                hir::Opcode::Not,
+                vec![result],
+                vec![Operand::Value(combined)],
+            );
             return Ok((Operand::Value(result), common));
         }
         let result_type = if comparison {
@@ -6025,10 +6187,10 @@ impl Compiler {
         let result = self.value(if narrow_divmod { common } else { result_type });
         let operation = if matches!(common, SINGLE | DOUBLE) {
             match op {
-                Binary::Add => "fadd",
-                Binary::Subtract => "fsub",
-                Binary::Multiply => "fmul",
-                Binary::Divide => "fdiv",
+                Binary::Add => hir::Opcode::FloatAdd,
+                Binary::Subtract => hir::Opcode::FloatSubtract,
+                Binary::Multiply => hir::Opcode::FloatMultiply,
+                Binary::Divide => hir::Opcode::FloatDivide,
                 _ => binary_name(op),
             }
         } else {
@@ -6037,7 +6199,11 @@ impl Compiler {
         self.emit(operation, vec![result], vec![left_operand, right_operand]);
         if narrow_divmod {
             let narrowed = self.value(INTEGER);
-            self.emit("convert", vec![narrowed], vec![Operand::Value(result)]);
+            self.emit(
+                hir::Opcode::Convert,
+                vec![narrowed],
+                vec![Operand::Value(result)],
+            );
             Ok((Operand::Value(narrowed), result_type))
         } else {
             Ok((Operand::Value(result), result_type))
@@ -6142,7 +6308,11 @@ impl Compiler {
                     if magnitude & 1 != 0 {
                         result = Some(if let Some(product) = result {
                             let multiplied = self.value(common);
-                            self.emit("fmul", vec![multiplied], vec![product, factor.clone()]);
+                            self.emit(
+                                hir::Opcode::FloatMultiply,
+                                vec![multiplied],
+                                vec![product, factor.clone()],
+                            );
                             Operand::Value(multiplied)
                         } else {
                             factor.clone()
@@ -6156,25 +6326,25 @@ impl Compiler {
                         // duplicate-value float-stack repair tier.
                         let factor_place = self.temporary(common)?;
                         self.emit(
-                            "store",
+                            hir::Opcode::Store,
                             Vec::new(),
                             vec![Operand::Place(factor_place), factor],
                         );
                         let left_factor = self.value(common);
                         self.emit(
-                            "load",
+                            hir::Opcode::Load,
                             vec![left_factor],
                             vec![Operand::Place(factor_place)],
                         );
                         let right_factor = self.value(common);
                         self.emit(
-                            "load",
+                            hir::Opcode::Load,
                             vec![right_factor],
                             vec![Operand::Place(factor_place)],
                         );
                         let squared = self.value(common);
                         self.emit(
-                            "fmul",
+                            hir::Opcode::FloatMultiply,
                             vec![squared],
                             vec![Operand::Value(left_factor), Operand::Value(right_factor)],
                         );
@@ -6187,7 +6357,11 @@ impl Compiler {
                 if exponent < 0 {
                     let one = self.floating_literal("1.0", common)?;
                     let reciprocal = self.value(common);
-                    self.emit("fdiv", vec![reciprocal], vec![one, result]);
+                    self.emit(
+                        hir::Opcode::FloatDivide,
+                        vec![reciprocal],
+                        vec![one, result],
+                    );
                     return Ok((Operand::Value(reciprocal), common));
                 }
                 return Ok((result, common));
@@ -6222,14 +6396,22 @@ impl Compiler {
                 };
                 let base = self.convert(base, base_type, common)?;
                 let logarithm = self.value(common);
-                self.emit("flog2", vec![logarithm], vec![base]);
+                self.emit(hir::Opcode::FloatLog2, vec![logarithm], vec![base]);
                 Operand::Value(logarithm)
             }
         };
         let product = self.value(common);
-        self.emit("fmul", vec![product], vec![logarithm, exponent]);
+        self.emit(
+            hir::Opcode::FloatMultiply,
+            vec![product],
+            vec![logarithm, exponent],
+        );
         let result = self.value(common);
-        self.emit("fexp2", vec![result], vec![Operand::Value(product)]);
+        self.emit(
+            hir::Opcode::FloatExp2,
+            vec![result],
+            vec![Operand::Value(product)],
+        );
         Ok((Operand::Value(result), common))
     }
 
@@ -6249,13 +6431,21 @@ impl Compiler {
         }
         if matches!(from, INTEGER | LONG | BOOLEAN | BYTE) && matches!(to, SINGLE | DOUBLE) {
             let place = self.temporary(from)?;
-            self.emit("store", Vec::new(), vec![Operand::Place(place), operand]);
+            self.emit(
+                hir::Opcode::Store,
+                Vec::new(),
+                vec![Operand::Place(place), operand],
+            );
             let result = self.value(to);
-            self.emit("convert", vec![result], vec![Operand::Place(place)]);
+            self.emit(
+                hir::Opcode::Convert,
+                vec![result],
+                vec![Operand::Place(place)],
+            );
             return Ok(Operand::Value(result));
         }
         let result = self.value(to);
-        self.emit("convert", vec![result], vec![operand]);
+        self.emit(hir::Opcode::Convert, vec![result], vec![operand]);
         Ok(Operand::Value(result))
     }
 
@@ -6518,7 +6708,7 @@ impl Compiler {
             symbol,
         });
         let value = self.value(type_id);
-        self.emit("load", vec![value], vec![Operand::Place(place)]);
+        self.emit(hir::Opcode::Load, vec![value], vec![Operand::Place(place)]);
         Ok(Operand::Value(value))
     }
 
@@ -6656,7 +6846,7 @@ impl Compiler {
         Ok((place, payload, payload_type))
     }
 
-    fn emit(&mut self, op: &'static str, results: Vec<u32>, operands: Vec<Operand>) {
+    fn emit(&mut self, op: hir::Opcode, results: Vec<u32>, operands: Vec<Operand>) {
         let id = self.next_instruction;
         self.next_instruction += 1;
         self.blocks[self.current_block]
@@ -6675,13 +6865,7 @@ impl Compiler {
         self.emit_call(callee, results, operands, order, false);
     }
 
-    fn emit_string_compare(
-        &mut self,
-        op: &'static str,
-        result: u32,
-        left: Operand,
-        right: Operand,
-    ) {
+    fn emit_string_compare(&mut self, op: hir::Opcode, result: u32, left: Operand, right: Operand) {
         let id = self.next_instruction;
         self.next_instruction += 1;
         self.calls.push(CallAbi {
@@ -6734,7 +6918,7 @@ impl Compiler {
             .instructions
             .push(Instruction {
                 id,
-                op: "call",
+                op: hir::Opcode::Call,
                 results,
                 operands,
                 callee: Some(callee.into()),
@@ -6830,7 +7014,7 @@ impl Compiler {
                 result
             } else {
                 let result = self.value(type_id);
-                self.emit("load", vec![result], vec![Operand::Place(place)]);
+                self.emit(hir::Opcode::Load, vec![result], vec![Operand::Place(place)]);
                 result
             };
             self.blocks[self.current_block].terminator = Some(Terminator {
@@ -6896,7 +7080,11 @@ impl Compiler {
             for (place, type_id, callee) in &descriptors {
                 let pointer_type = self.pointer_type(*type_id);
                 let pointer = self.value(pointer_type);
-                self.emit("address", vec![pointer], vec![Operand::Place(*place)]);
+                self.emit(
+                    hir::Opcode::Address,
+                    vec![pointer],
+                    vec![Operand::Place(*place)],
+                );
                 self.emit_runtime_call(callee, Vec::new(), vec![Operand::Value(pointer)]);
             }
         }
@@ -6988,7 +7176,7 @@ impl Compiler {
                             .map(|instruction| {
                                 Ok(hir::Instruction {
                                     id: hir::InstructionId::new(instruction.id),
-                                    opcode: hir_opcode(instruction.op)?,
+                                    opcode: instruction.op,
                                     results: instruction
                                         .results
                                         .iter()
@@ -7223,7 +7411,8 @@ impl Compiler {
                     write!(
                         out,
                         ",\"id\":{},\"op\":\"{}\",\"operands\":[",
-                        instruction.id, instruction.op
+                        instruction.id,
+                        instruction.op.as_str()
                     )
                     .unwrap();
                     for (operand_index, operand) in instruction.operands.iter().enumerate() {
@@ -7514,64 +7703,6 @@ fn hir_linkage(linkage: &str) -> Result<hir::Linkage, SemanticError> {
         "internal" => Ok(hir::Linkage::Internal),
         "external" => Ok(hir::Linkage::External),
         _ => Err(hir_conversion_error("linkage", linkage)),
-    }
-}
-
-fn hir_opcode(op: &str) -> Result<hir::Opcode, SemanticError> {
-    use hir::Opcode;
-
-    match op {
-        "copy" => Ok(Opcode::Copy),
-        "load" => Ok(Opcode::Load),
-        "store" => Ok(Opcode::Store),
-        "address" => Ok(Opcode::Address),
-        "ptr_offset" => Ok(Opcode::OffsetPointer),
-        "pointer_segment" => Ok(Opcode::PointerSegment),
-        "pointer_offset" => Ok(Opcode::PointerOffset),
-        "concat" => Ok(Opcode::Concat),
-        "convert" => Ok(Opcode::Convert),
-        "sign_extend" => Ok(Opcode::SignExtend),
-        "zero_extend" => Ok(Opcode::ZeroExtend),
-        "add" => Ok(Opcode::Add),
-        "sub" => Ok(Opcode::Subtract),
-        "mul" => Ok(Opcode::Multiply),
-        "div" => Ok(Opcode::Divide),
-        "rem" => Ok(Opcode::Remainder),
-        "divmod" => Ok(Opcode::DivideRemainder),
-        "and" => Ok(Opcode::And),
-        "or" => Ok(Opcode::Or),
-        "xor" => Ok(Opcode::Xor),
-        "shl" => Ok(Opcode::ShiftLeft),
-        "shr" => Ok(Opcode::ShiftRight),
-        "sar" => Ok(Opcode::ShiftRightArithmetic),
-        "neg" => Ok(Opcode::Negate),
-        "not" => Ok(Opcode::Not),
-        "eq" => Ok(Opcode::Equal),
-        "ne" => Ok(Opcode::NotEqual),
-        "lt" => Ok(Opcode::LessThan),
-        "le" => Ok(Opcode::LessEqual),
-        "gt" => Ok(Opcode::GreaterThan),
-        "ge" => Ok(Opcode::GreaterEqual),
-        "string_eq" => Ok(Opcode::StringEqual),
-        "string_ne" => Ok(Opcode::StringNotEqual),
-        "string_lt" => Ok(Opcode::StringLessThan),
-        "string_le" => Ok(Opcode::StringLessEqual),
-        "string_gt" => Ok(Opcode::StringGreaterThan),
-        "string_ge" => Ok(Opcode::StringGreaterEqual),
-        "fadd" => Ok(Opcode::FloatAdd),
-        "fsub" => Ok(Opcode::FloatSubtract),
-        "fmul" => Ok(Opcode::FloatMultiply),
-        "fdiv" => Ok(Opcode::FloatDivide),
-        "fneg" => Ok(Opcode::FloatNegate),
-        "fabs" => Ok(Opcode::FloatAbsolute),
-        "fsqrt" => Ok(Opcode::FloatSquareRoot),
-        "fsin" => Ok(Opcode::FloatSine),
-        "fcos" => Ok(Opcode::FloatCosine),
-        "fatan" => Ok(Opcode::FloatArctangent),
-        "flog2" => Ok(Opcode::FloatLog2),
-        "fexp2" => Ok(Opcode::FloatExp2),
-        "call" => Ok(Opcode::Call),
-        _ => Err(hir_conversion_error("opcode", op)),
     }
 }
 
@@ -7908,26 +8039,26 @@ fn common_type(left: u32, right: u32, op: Binary) -> Result<u32, SemanticError> 
     })
 }
 
-fn binary_name(op: Binary) -> &'static str {
+fn binary_name(op: Binary) -> hir::Opcode {
     match op {
-        Binary::Imp => "or",
-        Binary::Eqv => "not",
-        Binary::Xor => "xor",
-        Binary::Or => "or",
-        Binary::And => "and",
-        Binary::Eq => "eq",
-        Binary::NotEqual => "ne",
-        Binary::Less => "lt",
-        Binary::LessEqual => "le",
-        Binary::Greater => "gt",
-        Binary::GreaterEqual => "ge",
-        Binary::Add => "add",
-        Binary::Subtract => "sub",
-        Binary::Modulo => "rem",
-        Binary::IntegerDivide => "div",
-        Binary::Multiply => "mul",
-        Binary::Divide => "fdiv",
-        Binary::Power => "call",
+        Binary::Imp => hir::Opcode::Or,
+        Binary::Eqv => hir::Opcode::Not,
+        Binary::Xor => hir::Opcode::Xor,
+        Binary::Or => hir::Opcode::Or,
+        Binary::And => hir::Opcode::And,
+        Binary::Eq => hir::Opcode::Equal,
+        Binary::NotEqual => hir::Opcode::NotEqual,
+        Binary::Less => hir::Opcode::LessThan,
+        Binary::LessEqual => hir::Opcode::LessEqual,
+        Binary::Greater => hir::Opcode::GreaterThan,
+        Binary::GreaterEqual => hir::Opcode::GreaterEqual,
+        Binary::Add => hir::Opcode::Add,
+        Binary::Subtract => hir::Opcode::Subtract,
+        Binary::Modulo => hir::Opcode::Remainder,
+        Binary::IntegerDivide => hir::Opcode::Divide,
+        Binary::Multiply => hir::Opcode::Multiply,
+        Binary::Divide => hir::Opcode::FloatDivide,
+        Binary::Power => hir::Opcode::Call,
     }
 }
 
