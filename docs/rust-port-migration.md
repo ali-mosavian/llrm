@@ -826,3 +826,43 @@ the next implementation boundary: the Rust frontend explicitly refuses its
 first 32-bit integer type.  The next work therefore ports that existing Python
 semantic family and its regression before attempting the remaining parity
 pairs, `nbody`, or the C-only `sieve` rung.
+
+That boundary is now closed for the scalar C rung.  The WCC raiser applies the
+same signed constant conversions as Python, x86 selection emits the established
+word-to-long extension, and the allocated C ABI returns a long in `DX:AX` using
+the same terminal high-word extraction as Python's post-allocation rewrite.
+Primary review rejected an initial delegated implementation that retained
+allocation-only return operands on the physical return.  The corrected path
+compiles the real `fixtures/c/parity/scalar.cgs`, links it through Microsoft
+LINK, runs under DOSBox-X, and writes the independent paired answer `1789`.
+The checked-in runtime gate took 2.15 seconds; no broad suite or optimizer gate
+ran.
+
+The first QB object/runtime slice now follows the Python emission path rather
+than reconstructing a new one.  The frontend validates and consumes its exact
+14-byte `(function, block, instruction, line)` metadata rows before generic IR
+lowering.  The final QB adapter emits `$QB$STAT` after all real procedures as
+the measured `55 8b ec` private frame prefix, relocated `(offset, line)` rows,
+and zero terminator.  `MODULE_CODE.OF_STA` resolves to the table data after the
+prefix.  Generic IR, Machine IR, MC, x86, and OMF contain no BASIC statement
+meaning.
+
+For the initial data-free object slice, empty generic C data sections are
+removed explicitly because their mere presence changes BASIC's DGROUP and heap
+boundary; any nonempty source data remains an explicit refusal.  The existing
+`frontends/qb/fixtures/emission.bas` regression now passes through `llrm-qb
+--emit obj`, the exact QB45 header/support-segment envelope, JWASM, Microsoft
+LINK with `BCOM45.LIB`, and DOSBox-X.  Its far-Pascal `ADDONE(41)` call returns
+the long value `42` in `DX:AX`.  The independent manual link/run took 1.90
+seconds and the checked-in focused runtime gate took 2.13 seconds.
+
+The scalar FOR boundary also ports Python's complete ten-entry integer branch
+table, preserving `cmp left, right` and mapping signed and unsigned predicates
+to the corresponding x86 conditions.  Primary review rejected the delegated
+three-predicate subset as unfaithful and required equality plus every ordered
+integer predicate already represented by Python.  The real function body from
+`bench/parity/scalar.bas`, without its not-yet-ported string-printing module
+statements, now reaches OMF; the full source still stops at relocatable QB data.
+Metadata, statement-table, comparison, object-envelope, and runtime checks in
+this slice consumed under 40 seconds in total, below ten percent of elapsed
+implementation time.  No broad suite, qrender, or optimization pass ran.
