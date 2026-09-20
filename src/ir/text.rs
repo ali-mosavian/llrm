@@ -447,6 +447,26 @@ fn push_constant(out: &mut String, constant: &Constant) {
             out.push_str("bytes ");
             push_string(out, &hex(bytes));
         }
+        Constant::RelocatableBytes { bytes, relocations } => {
+            out.push_str("relocbytes ");
+            push_string(out, &hex(bytes));
+            out.push_str(" [");
+            for (index, relocation) in relocations.iter().enumerate() {
+                if index != 0 {
+                    out.push(',');
+                }
+                write!(
+                    out,
+                    "{} {} {} {}",
+                    relocation.offset,
+                    relocation.target,
+                    relocation.addend,
+                    address_space_name(relocation.address_space)
+                )
+                .expect("string writes cannot fail");
+            }
+            out.push(']');
+        }
         Constant::Aggregate(values) => {
             out.push_str("aggregate [");
             for (index, value) in values.iter().enumerate() {
@@ -1271,6 +1291,27 @@ fn parse_constant(parser: &mut Parser) -> Result<Constant, TextError> {
         "bytes" => parse_hex(&parser.string()?)
             .map(Constant::Bytes)
             .map_err(|message| parser.error(message)),
+        "relocbytes" => {
+            let bytes = parse_hex(&parser.string()?).map_err(|message| parser.error(message))?;
+            parser.punctuation('[')?;
+            let mut relocations = Vec::new();
+            if !matches!(&parser.token().kind, TokenKind::Punctuation(']')) {
+                loop {
+                    relocations.push(GlobalRelocation {
+                        offset: parser.u64()?,
+                        target: GlobalId::new(parser.u32()?),
+                        addend: parser.i64()?,
+                        address_space: parse_address_space(parser)?,
+                    });
+                    if matches!(&parser.token().kind, TokenKind::Punctuation(']')) {
+                        break;
+                    }
+                    parser.punctuation(',')?;
+                }
+            }
+            parser.punctuation(']')?;
+            Ok(Constant::RelocatableBytes { bytes, relocations })
+        }
         "aggregate" => {
             parser.punctuation('[')?;
             let mut values = Vec::new();
@@ -1617,6 +1658,66 @@ mod tests {
             }],
         };
         let text = write(&module);
+        assert_eq!(parse(&text), Ok(module));
+    }
+
+    #[test]
+    fn relocatable_bytes_round_trip_preserves_patch_order() {
+        let module = Module {
+            name: "relocations".to_owned(),
+            types: vec![
+                Type {
+                    id: TypeId::new(0),
+                    kind: TypeKind::Integer { bits: 8 },
+                },
+                Type {
+                    id: TypeId::new(1),
+                    kind: TypeKind::Array {
+                        element: TypeId::new(0),
+                        length: 8,
+                    },
+                },
+            ],
+            globals: vec![
+                Global {
+                    id: GlobalId::new(0),
+                    name: "target".to_owned(),
+                    type_id: TypeId::new(1),
+                    linkage: Linkage::Internal,
+                    constant: true,
+                    initializer: Some(Constant::Bytes(vec![0; 8])),
+                },
+                Global {
+                    id: GlobalId::new(1),
+                    name: "data".to_owned(),
+                    type_id: TypeId::new(1),
+                    linkage: Linkage::Internal,
+                    constant: true,
+                    initializer: Some(Constant::RelocatableBytes {
+                        bytes: vec![0; 8],
+                        relocations: vec![
+                            GlobalRelocation {
+                                offset: 4,
+                                target: GlobalId::new(0),
+                                addend: -4,
+                                address_space: AddressSpace::FarData,
+                            },
+                            GlobalRelocation {
+                                offset: 0,
+                                target: GlobalId::new(1),
+                                addend: 7,
+                                address_space: AddressSpace::Segment,
+                            },
+                        ],
+                    }),
+                },
+            ],
+            functions: Vec::new(),
+        };
+
+        let text = write(&module);
+
+        assert!(text.contains("relocbytes \"0000000000000000\" [4 0 -4 fardata,0 1 7 segment]"));
         assert_eq!(parse(&text), Ok(module));
     }
 

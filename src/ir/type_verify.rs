@@ -684,7 +684,10 @@ impl<'module> TypeVerifier<'module> {
                 self.error(format!("{context} cannot be undefined void"))
             }
             (Constant::Undefined, _) => {}
-            (Constant::Bytes(bytes), ConstantType::Array { element, length }) => {
+            (
+                Constant::Bytes(bytes) | Constant::RelocatableBytes { bytes, .. },
+                ConstantType::Array { element, length },
+            ) => {
                 if length != bytes.len() as u64 {
                     self.error(format!(
                         "{context} byte length does not match its array type"
@@ -724,7 +727,9 @@ impl<'module> TypeVerifier<'module> {
                     );
                 }
             }
-            (Constant::Aggregate(_), _) | (Constant::Bytes(_), _) => {
+            (Constant::Aggregate(_), _)
+            | (Constant::Bytes(_), _)
+            | (Constant::RelocatableBytes { .. }, _) => {
                 self.error(format!(
                     "{context} has a constant kind incompatible with type {type_id}"
                 ));

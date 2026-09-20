@@ -9,9 +9,9 @@ use std::collections::BTreeSet;
 use crate::support::diagnostic::{Diagnostic, Severity};
 
 use super::{
-    Block, BlockId, Callee, Constant, Function, FunctionAttribute, FunctionId, GlobalId,
-    Instruction, InstructionKind, Module, Operand, Terminator, TypeId, TypeKind, TypedConstant,
-    Value, ValueId,
+    AddressSpace, Block, BlockId, Callee, Constant, Function, FunctionAttribute, FunctionId,
+    GlobalId, GlobalRelocation, Instruction, InstructionKind, Module, Operand, Terminator, TypeId,
+    TypeKind, TypedConstant, Value, ValueId,
 };
 
 /// Validates the representation-level invariants of a portable IR module.
@@ -590,6 +590,9 @@ impl<'module> Verifier<'module> {
                     self.verify_constant(value, format!("{} aggregate element {}", context, index));
                 }
             }
+            Constant::RelocatableBytes { bytes, relocations } => {
+                self.verify_relocatable_bytes(bytes, relocations, context);
+            }
             Constant::GlobalAddress { global, .. } => {
                 self.require_global(*global, format!("{} global address", context));
             }
@@ -601,6 +604,55 @@ impl<'module> Verifier<'module> {
             | Constant::Null
             | Constant::Undefined
             | Constant::Bytes(_) => {}
+        }
+    }
+
+    fn verify_relocatable_bytes(
+        &mut self,
+        bytes: &[u8],
+        relocations: &[GlobalRelocation],
+        context: String,
+    ) {
+        let byte_length = bytes.len() as u64;
+        let mut patches = Vec::new();
+
+        for (index, relocation) in relocations.iter().enumerate() {
+            self.require_global(
+                relocation.target,
+                format!("{context} relocation {index} target"),
+            );
+            let width = match relocation.address_space {
+                AddressSpace::NearData | AddressSpace::Segment => 2,
+                AddressSpace::FarData | AddressSpace::HugeData | AddressSpace::Code => 4,
+                AddressSpace::Generic => {
+                    self.error(format!(
+                        "{context} relocation {index} uses unsupported generic address space"
+                    ));
+                    continue;
+                }
+            };
+            let Some(end) = relocation.offset.checked_add(width) else {
+                self.error(format!(
+                    "{context} relocation {index} patch range overflows its byte offset"
+                ));
+                continue;
+            };
+            if end > byte_length {
+                self.error(format!(
+                    "{context} relocation {index} patch range {}..{end} is outside {} bytes",
+                    relocation.offset, byte_length
+                ));
+                continue;
+            }
+            for &(previous_offset, previous_end, previous_index) in &patches {
+                if relocation.offset < previous_end && previous_offset < end {
+                    self.error(format!(
+                        "{context} relocation {index} patch range {}..{end} overlaps relocation {previous_index} patch range {previous_offset}..{previous_end}",
+                        relocation.offset
+                    ));
+                }
+            }
+            patches.push((relocation.offset, end, index));
         }
     }
 
@@ -653,8 +705,8 @@ fn terminator_targets(terminator: &Terminator) -> Vec<BlockId> {
 mod tests {
     use super::*;
     use crate::ir::{
-        Block, Function, FunctionId, Linkage, Module, Signature, Terminator, Type, TypeId,
-        TypeKind, Value,
+        AddressSpace, Block, Constant, Function, FunctionId, Global, GlobalRelocation, Linkage,
+        Module, Signature, Terminator, Type, TypeId, TypeKind, Value,
     };
 
     fn void_type() -> Type {
@@ -725,5 +777,84 @@ mod tests {
 
         assert!(diagnostics.iter().any(|diagnostic| diagnostic.message
             == "function 0 block 0 return value does not match its result type"));
+    }
+
+    #[test]
+    fn rejects_invalid_relocatable_byte_patches() {
+        let mut module = minimal_module();
+        module.types.extend([
+            Type {
+                id: TypeId::new(1),
+                kind: TypeKind::Integer { bits: 8 },
+            },
+            Type {
+                id: TypeId::new(2),
+                kind: TypeKind::Array {
+                    element: TypeId::new(1),
+                    length: 4,
+                },
+            },
+        ]);
+        module.globals.push(Global {
+            id: GlobalId::new(0),
+            name: "data".into(),
+            type_id: TypeId::new(2),
+            linkage: Linkage::Internal,
+            constant: true,
+            initializer: Some(Constant::RelocatableBytes {
+                bytes: vec![0; 4],
+                relocations: vec![
+                    GlobalRelocation {
+                        offset: 0,
+                        target: GlobalId::new(9),
+                        addend: 0,
+                        address_space: AddressSpace::NearData,
+                    },
+                    GlobalRelocation {
+                        offset: 3,
+                        target: GlobalId::new(0),
+                        addend: 0,
+                        address_space: AddressSpace::FarData,
+                    },
+                    GlobalRelocation {
+                        offset: 0,
+                        target: GlobalId::new(0),
+                        addend: 0,
+                        address_space: AddressSpace::Segment,
+                    },
+                    GlobalRelocation {
+                        offset: 2,
+                        target: GlobalId::new(0),
+                        addend: 0,
+                        address_space: AddressSpace::Generic,
+                    },
+                ],
+            }),
+        });
+
+        let diagnostics = verify(&module).expect_err("invalid relocation patches must be rejected");
+        let messages = diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.message.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(messages
+            .iter()
+            .any(|message| message.contains("relocation 0 target references unknown global 9")));
+        assert!(messages
+            .iter()
+            .any(|message| message.contains("relocation 1 patch range 3..7 is outside 4 bytes")));
+        assert!(
+            messages
+                .iter()
+                .any(|message| message
+                    .contains("relocation 2 patch range 0..2 overlaps relocation 0"))
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|message| message
+                    .contains("relocation 3 uses unsupported generic address space"))
+        );
     }
 }

@@ -96,9 +96,26 @@ pub enum Constant {
     Null,
     Undefined,
     Bytes(Vec<u8>),
+    RelocatableBytes {
+        bytes: Vec<u8>,
+        relocations: Vec<GlobalRelocation>,
+    },
     Aggregate(Vec<TypedConstant>),
     GlobalAddress { global: GlobalId, addend: i64 },
     FunctionAddress(FunctionId),
+}
+
+/// A symbolic patch within a byte-array global initializer.
+///
+/// The object writer resolves `target` in the specified address space and
+/// writes the result plus `addend` at `offset`.  The IR verifier establishes
+/// that every patch has a known target and fits its initializer.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GlobalRelocation {
+    pub offset: u64,
+    pub target: GlobalId,
+    pub addend: i64,
+    pub address_space: AddressSpace,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -177,6 +177,28 @@ mod tests {
     }
 
     #[test]
+    fn qb_string_relocations_reach_verified_portable_ir() {
+        let program = compile_qb("dim n as long\nprint \"A\"\n", "strings", QbOptions::default())
+            .expect("QB string source compiles to HIR");
+
+        let module = lower_qb_to_ir(&program).expect("QB data relocations lower to portable IR");
+
+        assert!(module.verify().is_ok());
+        assert!(module.globals.iter().any(|global| matches!(
+            &global.initializer,
+            Some(ir::Constant::RelocatableBytes { relocations, .. })
+                if !relocations.is_empty()
+        )));
+        assert!(module.functions[0].blocks[0]
+            .instructions
+            .iter()
+            .any(|instruction| matches!(
+                instruction.kind,
+                ir::InstructionKind::Call { .. }
+            )));
+    }
+
+    #[test]
     fn verified_integer_ir_reaches_x86_machine_ir() {
         let source = concat!(
             "qir 1\n",

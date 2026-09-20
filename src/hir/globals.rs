@@ -1,8 +1,8 @@
 //! Exact planning of HIR static data and addressable places.
 //!
 //! This helper has no lowering side effects.  It identifies the portable IR
-//! declarations and opaque pointer types needed to represent the narrow,
-//! relocation-free static-data subset exactly.
+//! declarations, symbolic relocations, and opaque pointer types needed to
+//! represent static data exactly.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
@@ -49,8 +49,17 @@ pub enum GlobalPlanError {
     AmbiguousData {
         data: hir::DataId,
     },
-    Relocations {
+    MissingRelocationTarget {
         data: hir::DataId,
+        target: hir::DataId,
+    },
+    RelocationOffsetOverflow {
+        data: hir::DataId,
+        at: usize,
+    },
+    RelocationAddendOverflow {
+        data: hir::DataId,
+        addend: isize,
     },
     NegativePlaceOffset {
         function: hir::FunctionId,
@@ -109,9 +118,17 @@ impl fmt::Display for GlobalPlanError {
                 "function {function} place {place} refers to missing data {data}"
             ),
             Self::AmbiguousData { data } => write!(formatter, "data id {data} is ambiguous"),
-            Self::Relocations { data } => {
-                write!(formatter, "data {data} has unsupported relocations")
+            Self::MissingRelocationTarget { data, target } => {
+                write!(formatter, "data {data} relocates to missing data {target}")
             }
+            Self::RelocationOffsetOverflow { data, at } => write!(
+                formatter,
+                "data {data} relocation offset {at} cannot be represented in IR"
+            ),
+            Self::RelocationAddendOverflow { data, addend } => write!(
+                formatter,
+                "data {data} relocation addend {addend} cannot be represented in IR"
+            ),
             Self::NegativePlaceOffset {
                 function,
                 place,
@@ -162,7 +179,7 @@ impl fmt::Display for GlobalPlanError {
 
 impl Error for GlobalPlanError {}
 
-/// Plans exact relocation-free HIR data and addressable static places.
+/// Plans exact HIR data and addressable static places.
 pub(super) fn plan_globals(module: &hir::Module) -> Result<GlobalPlan, GlobalPlanError> {
     let data = DataTable::new(module);
     let mut referenced = BTreeSet::new();
@@ -184,22 +201,35 @@ pub(super) fn plan_globals(module: &hir::Module) -> Result<GlobalPlan, GlobalPla
         }
     }
 
+    let mut selected_ids = referenced;
+    selected_ids.extend(
+        module
+            .data
+            .iter()
+            .filter(|object| {
+                object.linkage != hir::Linkage::Internal
+                    || !object.bytes.is_empty()
+                    || !object.relocations.is_empty()
+            })
+            .map(|object| object.id),
+    );
+    for object in &module.data {
+        if !selected_ids.contains(&object.id) {
+            continue;
+        }
+        for relocation in &object.relocations {
+            data.relocation_target(object.id, relocation.target)?;
+            selected_ids.insert(relocation.target);
+        }
+    }
     let selected = module
         .data
         .iter()
-        .filter(|object| {
-            referenced.contains(&object.id)
-                || object.linkage != hir::Linkage::Internal
-                || !object.bytes.is_empty()
-                || !object.relocations.is_empty()
-        })
+        .filter(|object| selected_ids.contains(&object.id))
         .collect::<Vec<_>>();
     for object in &selected {
         if data.is_ambiguous(object.id) {
             return Err(GlobalPlanError::AmbiguousData { data: object.id });
-        }
-        if !object.relocations.is_empty() {
-            return Err(GlobalPlanError::Relocations { data: object.id });
         }
     }
 
@@ -286,13 +316,42 @@ pub(super) fn plan_globals(module: &hir::Module) -> Result<GlobalPlan, GlobalPla
             .get(&length)
             .copied()
             .ok_or(GlobalPlanError::LengthOverflow { data: object.id })?;
+        let initializer = if object.relocations.is_empty() {
+            ir::Constant::Bytes(object.bytes.clone())
+        } else {
+            ir::Constant::RelocatableBytes {
+                bytes: object.bytes.clone(),
+                relocations: object
+                    .relocations
+                    .iter()
+                    .map(|relocation| {
+                        Ok(ir::GlobalRelocation {
+                            offset: u64::try_from(relocation.at).map_err(|_| {
+                                GlobalPlanError::RelocationOffsetOverflow {
+                                    data: object.id,
+                                    at: relocation.at,
+                                }
+                            })?,
+                            target: ir::GlobalId::new(relocation.target.get()),
+                            addend: i64::try_from(relocation.addend).map_err(|_| {
+                                GlobalPlanError::RelocationAddendOverflow {
+                                    data: object.id,
+                                    addend: relocation.addend,
+                                }
+                            })?,
+                            address_space: address_space(relocation.address),
+                        })
+                    })
+                    .collect::<Result<Vec<_>, GlobalPlanError>>()?,
+            }
+        };
         globals.push(ir::Global {
             id: ir::GlobalId::new(object.id.get()),
             name: object.name.clone(),
             type_id,
             linkage: linkage(object.linkage),
             constant: object.readonly,
-            initializer: Some(ir::Constant::Bytes(object.bytes.clone())),
+            initializer: Some(initializer),
         });
     }
 
@@ -379,6 +438,20 @@ impl<'module> DataTable<'module> {
     fn is_ambiguous(&self, id: hir::DataId) -> bool {
         self.duplicates.contains(&id)
     }
+
+    fn relocation_target(
+        &self,
+        data: hir::DataId,
+        target: hir::DataId,
+    ) -> Result<&'module hir::DataObject, GlobalPlanError> {
+        if self.duplicates.contains(&target) {
+            return Err(GlobalPlanError::AmbiguousData { data: target });
+        }
+        self.objects
+            .get(&target)
+            .copied()
+            .ok_or(GlobalPlanError::MissingRelocationTarget { data, target })
+    }
 }
 
 fn validate_place(
@@ -386,9 +459,6 @@ fn validate_place(
     place: &hir::Place,
     object: &hir::DataObject,
 ) -> Result<(), GlobalPlanError> {
-    if !object.relocations.is_empty() {
-        return Err(GlobalPlanError::Relocations { data: object.id });
-    }
     if place.offset < 0 {
         return Err(GlobalPlanError::NegativePlaceOffset {
             function,
@@ -651,11 +721,42 @@ mod tests {
     }
 
     #[test]
-    fn refuses_relocated_data() {
-        let mut object = data(7, vec![1], hir::AddressKind::Near);
+    fn plans_relocated_data_and_retains_an_empty_target() {
+        let mut object = data(7, vec![1, 0], hir::AddressKind::Near);
         object.relocations.push(hir::DataRelocation {
             at: 0,
-            target: hir::DataId::new(7),
+            target: hir::DataId::new(8),
+            addend: 0,
+            address: hir::AddressKind::Segment,
+        });
+        let module = module(
+            vec![object, data(8, Vec::new(), hir::AddressKind::Far)],
+            vec![place(0, hir::Storage::Static, 0, 1, hir::AddressKind::Near)],
+        );
+
+        let plan = plan_globals(&module).expect("symbolic data patches are portable IR");
+
+        assert_eq!(plan.globals.len(), 2);
+        assert_eq!(
+            plan.globals[0].initializer,
+            Some(ir::Constant::RelocatableBytes {
+                bytes: vec![1, 0],
+                relocations: vec![ir::GlobalRelocation {
+                    offset: 0,
+                    target: ir::GlobalId::new(8),
+                    addend: 0,
+                    address_space: ir::AddressSpace::Segment,
+                }],
+            })
+        );
+    }
+
+    #[test]
+    fn refuses_a_missing_relocation_target() {
+        let mut object = data(7, vec![0, 0], hir::AddressKind::Near);
+        object.relocations.push(hir::DataRelocation {
+            at: 0,
+            target: hir::DataId::new(8),
             addend: 0,
             address: hir::AddressKind::Near,
         });
@@ -664,10 +765,13 @@ mod tests {
             vec![place(0, hir::Storage::Static, 0, 1, hir::AddressKind::Near)],
         );
 
-        assert!(matches!(
+        assert_eq!(
             plan_globals(&module),
-            Err(GlobalPlanError::Relocations { .. })
-        ));
+            Err(GlobalPlanError::MissingRelocationTarget {
+                data: hir::DataId::new(7),
+                target: hir::DataId::new(8),
+            })
+        );
     }
 
     #[test]
