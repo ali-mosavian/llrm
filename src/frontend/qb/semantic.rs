@@ -9,6 +9,7 @@ use crate::frontend::qb::syntax::{
     Binary, CaseItem, Declaration, ExitTarget, Expr, FileMode, Literal, Module, PrintSeparator,
     Procedure, ProcedureKind, ResumeTarget, Statement, TypeName, Unary,
 };
+use crate::hir;
 
 const VOID: u32 = 0;
 const INTEGER: u32 = 1;
@@ -268,6 +269,25 @@ pub fn compile(
     compile_with_array_order(module, module_name, dialect, runtime, false)
 }
 
+pub fn compile_hir(
+    module: &Module,
+    module_name: &str,
+    dialect: Dialect,
+    runtime: &str,
+) -> Result<hir::Program, SemanticError> {
+    compile_hir_with_options(
+        module,
+        module_name,
+        dialect,
+        runtime,
+        false,
+        false,
+        false,
+        false,
+        false,
+    )
+}
+
 pub fn compile_with_array_order(
     module: &Module,
     module_name: &str,
@@ -299,6 +319,71 @@ pub fn compile_with_options(
     mbf: bool,
     alternate_math: bool,
 ) -> Result<String, SemanticError> {
+    Ok(build_with_options(
+        module,
+        module_name,
+        dialect,
+        runtime,
+        row_major,
+        huge_arrays,
+        checked_arrays,
+        mbf,
+        alternate_math,
+    )?
+    .json())
+}
+
+/// Resolves a parsed QB module into owned, typed HIR.
+///
+/// This is the production boundary for new Rust pipeline stages. The string
+/// returning functions above remain temporarily for the Python-era JSON
+/// consumer and golden corpus.
+pub fn compile_hir_with_options(
+    module: &Module,
+    module_name: &str,
+    dialect: Dialect,
+    runtime: &str,
+    row_major: bool,
+    huge_arrays: bool,
+    checked_arrays: bool,
+    mbf: bool,
+    alternate_math: bool,
+) -> Result<hir::Program, SemanticError> {
+    let program = build_with_options(
+        module,
+        module_name,
+        dialect,
+        runtime,
+        row_major,
+        huge_arrays,
+        checked_arrays,
+        mbf,
+        alternate_math,
+    )?
+    .hir()?;
+    if let Err(diagnostics) = program.verify() {
+        return Err(SemanticError {
+            message: diagnostics
+                .into_iter()
+                .map(|diagnostic| diagnostic.message)
+                .collect::<Vec<_>>()
+                .join("; "),
+        });
+    }
+    Ok(program)
+}
+
+fn build_with_options(
+    module: &Module,
+    module_name: &str,
+    dialect: Dialect,
+    runtime: &str,
+    row_major: bool,
+    huge_arrays: bool,
+    checked_arrays: bool,
+    mbf: bool,
+    alternate_math: bool,
+) -> Result<Compiler, SemanticError> {
     let module = outline_module_gosubs(module)?;
     let module = &module;
     let mut compiler = Compiler::new(
@@ -492,7 +577,7 @@ pub fn compile_with_options(
             },
         );
     }
-    Ok(compiler.json())
+    Ok(compiler)
 }
 
 fn outline_module_gosubs(module: &Module) -> Result<Module, SemanticError> {
@@ -6870,6 +6955,243 @@ impl Compiler {
             .name
     }
 
+    fn hir(&self) -> Result<hir::Program, SemanticError> {
+        let types = self
+            .types
+            .iter()
+            .map(|type_| {
+                Ok(hir::Type {
+                    id: hir::TypeId::new(type_.id),
+                    name: type_.name.clone(),
+                    kind: hir_type_kind(type_.kind)?,
+                    width: type_.width,
+                    signed: type_.signed,
+                    evaluation: hir_float_evaluation(type_.evaluation)?,
+                    element: type_.element.map(hir::TypeId::new),
+                    bounds: type_.bounds.clone(),
+                    address: hir_address_kind(type_.address)?,
+                })
+            })
+            .collect::<Result<Vec<_>, SemanticError>>()?;
+
+        let functions = self
+            .functions
+            .iter()
+            .map(|function| {
+                let blocks = function
+                    .blocks
+                    .iter()
+                    .map(|block| {
+                        let instructions = block
+                            .instructions
+                            .iter()
+                            .map(|instruction| {
+                                Ok(hir::Instruction {
+                                    id: hir::InstructionId::new(instruction.id),
+                                    opcode: hir_opcode(instruction.op)?,
+                                    results: instruction
+                                        .results
+                                        .iter()
+                                        .copied()
+                                        .map(hir::ValueId::new)
+                                        .collect(),
+                                    operands: instruction
+                                        .operands
+                                        .iter()
+                                        .map(hir_operand)
+                                        .collect::<Result<Vec<_>, _>>()?,
+                                    callee: instruction.callee.clone(),
+                                })
+                            })
+                            .collect::<Result<Vec<_>, SemanticError>>()?;
+                        let terminator = block
+                            .terminator
+                            .as_ref()
+                            .ok_or_else(|| SemanticError {
+                                message: format!("block {} has no terminator", block.id),
+                            })
+                            .and_then(hir_terminator)?;
+                        Ok(hir::Block {
+                            id: hir::BlockId::new(block.id),
+                            instructions,
+                            terminator,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, SemanticError>>()?;
+
+                let places = function
+                    .places
+                    .iter()
+                    .map(|place| {
+                        let address = if place.storage == "static" {
+                            self.data
+                                .iter()
+                                .find_map(|object| {
+                                    (object.id == place.symbol).then_some(object.address)
+                                })
+                                .unwrap_or("near")
+                        } else {
+                            "near"
+                        };
+                        Ok(hir::Place {
+                            id: hir::PlaceId::new(place.id),
+                            name: place.name.clone(),
+                            type_id: hir::TypeId::new(place.type_id),
+                            storage: hir_storage(place.storage)?,
+                            offset: place.offset,
+                            symbol: hir::DataId::new(place.symbol),
+                            extent: place.extent,
+                            address: hir_address_kind(address)?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, SemanticError>>()?;
+
+                Ok(hir::Function {
+                    id: hir::FunctionId::new(function.id),
+                    name: function.name.clone(),
+                    result_type: hir::TypeId::new(function.result_type),
+                    values: function
+                        .values
+                        .iter()
+                        .map(|(id, type_id)| hir::Value {
+                            id: hir::ValueId::new(*id),
+                            type_id: hir::TypeId::new(*type_id),
+                        })
+                        .collect(),
+                    places,
+                    blocks,
+                    entry: hir::BlockId::new(1),
+                    parameters: function
+                        .parameters
+                        .iter()
+                        .copied()
+                        .map(hir::ValueId::new)
+                        .collect(),
+                    abi: hir::ProcedureAbi {
+                        cleanup: if function.caller_cleanup {
+                            hir::StackCleanup::Caller
+                        } else {
+                            hir::StackCleanup::Callee
+                        },
+                        distance: hir::CallDistance::Far,
+                        parameter_bytes: function.parameter_bytes,
+                    },
+                    calls: function
+                        .calls
+                        .iter()
+                        .map(|call| hir::CallAbi {
+                            instruction: hir::InstructionId::new(call.instruction),
+                            order: call.order.clone(),
+                            cleanup: if call.caller_cleanup {
+                                hir::StackCleanup::Caller
+                            } else {
+                                hir::StackCleanup::Callee
+                            },
+                            distance: hir::CallDistance::Far,
+                            callee: call.callee.map(hir::CallableId::new),
+                        })
+                        .collect(),
+                    error_handler: function.error_handler.map(hir::BlockId::new),
+                    error_handler_local: function.error_handler_local,
+                    external_entries: function
+                        .external_entries
+                        .iter()
+                        .copied()
+                        .map(hir::BlockId::new)
+                        .collect(),
+                    linkage: hir_linkage(function.linkage)?,
+                })
+            })
+            .collect::<Result<Vec<_>, SemanticError>>()?;
+
+        let callables = self
+            .callables
+            .iter()
+            .map(|callable| hir::Callable {
+                id: hir::CallableId::new(callable.id),
+                name: callable.name.clone(),
+                result_type: callable.result_type.map(hir::TypeId::new),
+                parameters: callable
+                    .parameters
+                    .iter()
+                    .map(|(type_id, by_value, segmented, array)| hir::Parameter {
+                        type_id: hir::TypeId::new(*type_id),
+                        by_value: *by_value,
+                        segmented: *segmented,
+                        array: *array,
+                    })
+                    .collect(),
+                defined: callable.defined,
+            })
+            .collect();
+
+        let data = self
+            .data
+            .iter()
+            .map(|object| {
+                Ok(hir::DataObject {
+                    id: hir::DataId::new(object.id),
+                    name: object.name.clone(),
+                    bytes: object.bytes.clone(),
+                    readonly: object.readonly,
+                    relocations: object
+                        .relocations
+                        .iter()
+                        .map(|relocation| {
+                            Ok(hir::DataRelocation {
+                                at: relocation.at,
+                                target: hir::DataId::new(relocation.target),
+                                addend: relocation.addend,
+                                address: hir_address_kind(relocation.address)?,
+                            })
+                        })
+                        .collect::<Result<Vec<_>, SemanticError>>()?,
+                    linkage: hir_linkage(object.linkage)?,
+                    address: hir_address_kind(object.address)?,
+                })
+            })
+            .collect::<Result<Vec<_>, SemanticError>>()?;
+
+        Ok(hir::Program {
+            version: hir::FORMAT_VERSION,
+            dialect: match self.dialect {
+                Dialect::QBasic11 => hir::Dialect::Qbasic11,
+                Dialect::QuickBasic45 => hir::Dialect::Qb45,
+                Dialect::Pds71 => hir::Dialect::Pds71,
+                Dialect::VbDos => hir::Dialect::Vbdos,
+            },
+            runtime: match self.runtime.as_str() {
+                "qb45" => hir::RuntimeProfile::Qb45,
+                "pds71" => hir::RuntimeProfile::Pds71,
+                "vbdos" => hir::RuntimeProfile::Vbdos,
+                runtime => {
+                    return Err(SemanticError {
+                        message: format!("unknown runtime profile {runtime}"),
+                    });
+                }
+            },
+            target: hir::TargetProfile::I386RealMode,
+            array_order: if self.row_major {
+                hir::ArrayOrder::RowMajor
+            } else {
+                hir::ArrayOrder::ColumnMajor
+            },
+            float_mode: if self.alternate_math {
+                hir::FloatMode::Alternate
+            } else {
+                hir::FloatMode::Inline
+            },
+            modules: vec![hir::Module {
+                id: hir::ModuleId::new(1),
+                name: self.module_name.clone(),
+                types,
+                functions,
+                data,
+                callables,
+            }],
+        })
+    }
+
     fn json(&self) -> String {
         let mut out = String::new();
         write!(
@@ -7137,6 +7459,192 @@ impl Compiler {
                 format!("line {}: {message}", self.current_source_line)
             },
         })
+    }
+}
+
+fn hir_type_kind(kind: &str) -> Result<hir::TypeKind, SemanticError> {
+    match kind {
+        "void" => Ok(hir::TypeKind::Void),
+        "boolean" => Ok(hir::TypeKind::Boolean),
+        "integer" => Ok(hir::TypeKind::Integer),
+        "float" => Ok(hir::TypeKind::Float),
+        "array" => Ok(hir::TypeKind::Array),
+        "pointer" => Ok(hir::TypeKind::Pointer),
+        "opaque" => Ok(hir::TypeKind::Opaque),
+        _ => Err(hir_conversion_error("type kind", kind)),
+    }
+}
+
+fn hir_address_kind(address: &str) -> Result<hir::AddressKind, SemanticError> {
+    match address {
+        "none" => Ok(hir::AddressKind::None),
+        "near" => Ok(hir::AddressKind::Near),
+        "far" => Ok(hir::AddressKind::Far),
+        "huge" => Ok(hir::AddressKind::Huge),
+        "code" => Ok(hir::AddressKind::Code),
+        "segment" => Ok(hir::AddressKind::Segment),
+        _ => Err(hir_conversion_error("address kind", address)),
+    }
+}
+
+fn hir_float_evaluation(evaluation: &str) -> Result<hir::FloatEvaluation, SemanticError> {
+    match evaluation {
+        "none" => Ok(hir::FloatEvaluation::None),
+        "binary32" => Ok(hir::FloatEvaluation::Binary32),
+        "binary64" => Ok(hir::FloatEvaluation::Binary64),
+        "extended80" => Ok(hir::FloatEvaluation::Extended80),
+        _ => Err(hir_conversion_error("floating evaluation", evaluation)),
+    }
+}
+
+fn hir_storage(storage: &str) -> Result<hir::Storage, SemanticError> {
+    match storage {
+        "local" => Ok(hir::Storage::Local),
+        "parameter" => Ok(hir::Storage::Parameter),
+        "static" => Ok(hir::Storage::Static),
+        "module" => Ok(hir::Storage::Module),
+        "common" => Ok(hir::Storage::Common),
+        "external" => Ok(hir::Storage::External),
+        _ => Err(hir_conversion_error("storage class", storage)),
+    }
+}
+
+fn hir_linkage(linkage: &str) -> Result<hir::Linkage, SemanticError> {
+    match linkage {
+        "internal" => Ok(hir::Linkage::Internal),
+        "external" => Ok(hir::Linkage::External),
+        _ => Err(hir_conversion_error("linkage", linkage)),
+    }
+}
+
+fn hir_opcode(op: &str) -> Result<hir::Opcode, SemanticError> {
+    use hir::Opcode;
+
+    match op {
+        "copy" => Ok(Opcode::Copy),
+        "load" => Ok(Opcode::Load),
+        "store" => Ok(Opcode::Store),
+        "address" => Ok(Opcode::Address),
+        "ptr_offset" => Ok(Opcode::OffsetPointer),
+        "pointer_segment" => Ok(Opcode::PointerSegment),
+        "pointer_offset" => Ok(Opcode::PointerOffset),
+        "concat" => Ok(Opcode::Concat),
+        "convert" => Ok(Opcode::Convert),
+        "sign_extend" => Ok(Opcode::SignExtend),
+        "zero_extend" => Ok(Opcode::ZeroExtend),
+        "add" => Ok(Opcode::Add),
+        "sub" => Ok(Opcode::Subtract),
+        "mul" => Ok(Opcode::Multiply),
+        "div" => Ok(Opcode::Divide),
+        "rem" => Ok(Opcode::Remainder),
+        "divmod" => Ok(Opcode::DivideRemainder),
+        "and" => Ok(Opcode::And),
+        "or" => Ok(Opcode::Or),
+        "xor" => Ok(Opcode::Xor),
+        "shl" => Ok(Opcode::ShiftLeft),
+        "shr" => Ok(Opcode::ShiftRight),
+        "sar" => Ok(Opcode::ShiftRightArithmetic),
+        "neg" => Ok(Opcode::Negate),
+        "not" => Ok(Opcode::Not),
+        "eq" => Ok(Opcode::Equal),
+        "ne" => Ok(Opcode::NotEqual),
+        "lt" => Ok(Opcode::LessThan),
+        "le" => Ok(Opcode::LessEqual),
+        "gt" => Ok(Opcode::GreaterThan),
+        "ge" => Ok(Opcode::GreaterEqual),
+        "string_eq" => Ok(Opcode::StringEqual),
+        "string_ne" => Ok(Opcode::StringNotEqual),
+        "string_lt" => Ok(Opcode::StringLessThan),
+        "string_le" => Ok(Opcode::StringLessEqual),
+        "string_gt" => Ok(Opcode::StringGreaterThan),
+        "string_ge" => Ok(Opcode::StringGreaterEqual),
+        "fadd" => Ok(Opcode::FloatAdd),
+        "fsub" => Ok(Opcode::FloatSubtract),
+        "fmul" => Ok(Opcode::FloatMultiply),
+        "fdiv" => Ok(Opcode::FloatDivide),
+        "fneg" => Ok(Opcode::FloatNegate),
+        "fabs" => Ok(Opcode::FloatAbsolute),
+        "fsqrt" => Ok(Opcode::FloatSquareRoot),
+        "fsin" => Ok(Opcode::FloatSine),
+        "fcos" => Ok(Opcode::FloatCosine),
+        "fatan" => Ok(Opcode::FloatArctangent),
+        "flog2" => Ok(Opcode::FloatLog2),
+        "fexp2" => Ok(Opcode::FloatExp2),
+        "call" => Ok(Opcode::Call),
+        _ => Err(hir_conversion_error("opcode", op)),
+    }
+}
+
+fn hir_operand(operand: &Operand) -> Result<hir::Operand, SemanticError> {
+    Ok(match operand {
+        Operand::Value(value) => hir::Operand::Value(hir::ValueId::new(*value)),
+        Operand::Constant(type_id, value) => hir::Operand::Constant {
+            type_id: hir::TypeId::new(*type_id),
+            value: match value {
+                Number::Integer(value) => hir::ConstantValue::Integer(*value),
+                Number::Real(value) => hir::ConstantValue::Real(value.clone()),
+            },
+        },
+        Operand::Place(place) => hir::Operand::Place(hir::PlaceId::new(*place)),
+        Operand::Element(place, indices) => hir::Operand::Element {
+            place: hir::PlaceId::new(*place),
+            indices: indices
+                .iter()
+                .map(hir_operand)
+                .collect::<Result<Vec<_>, _>>()?,
+        },
+        Operand::Projection {
+            place,
+            indices,
+            offset,
+            type_id,
+        } => hir::Operand::Projection {
+            place: hir::PlaceId::new(*place),
+            indices: indices
+                .iter()
+                .map(hir_operand)
+                .collect::<Result<Vec<_>, _>>()?,
+            offset: *offset,
+            type_id: hir::TypeId::new(*type_id),
+        },
+        Operand::Indirect {
+            base,
+            offset,
+            type_id,
+            volatile,
+        } => hir::Operand::Indirect {
+            base: hir::ValueId::new(*base),
+            offset: *offset,
+            type_id: hir::TypeId::new(*type_id),
+            volatile: *volatile,
+        },
+    })
+}
+
+fn hir_terminator(terminator: &Terminator) -> Result<hir::Terminator, SemanticError> {
+    match (
+        terminator.kind,
+        terminator.operands.as_slice(),
+        terminator.targets.as_slice(),
+    ) {
+        ("jump", [], [target]) => Ok(hir::Terminator::Jump(hir::BlockId::new(*target))),
+        ("branch", [condition], [then_block, else_block]) => Ok(hir::Terminator::Branch {
+            condition: hir_operand(condition)?,
+            then_block: hir::BlockId::new(*then_block),
+            else_block: hir::BlockId::new(*else_block),
+        }),
+        ("return", [], []) => Ok(hir::Terminator::Return(None)),
+        ("return", [value], []) => Ok(hir::Terminator::Return(Some(hir_operand(value)?))),
+        ("unreachable", [], []) => Ok(hir::Terminator::Unreachable),
+        (kind, _, _) => Err(SemanticError {
+            message: format!("invalid {kind} terminator shape"),
+        }),
+    }
+}
+
+fn hir_conversion_error(category: &str, value: &str) -> SemanticError {
+    SemanticError {
+        message: format!("unknown HIR {category} {value}"),
     }
 }
 

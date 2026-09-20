@@ -17,6 +17,5 @@ pub use dialect::Dialect;
 pub use error::LexError;
 pub use error::ParseError;
 pub use generated_parser::parse;
-pub use semantic::SemanticError;
-pub use semantic::compile;
+pub use semantic::{SemanticError, compile, compile_hir};
 pub use syntax::Module;

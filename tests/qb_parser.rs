@@ -2,7 +2,7 @@ use llrm::frontend::qb::semantic::{compile_with_array_order, compile_with_option
 use llrm::frontend::qb::syntax::{
     Binary, ExitTarget, Expr, Literal, Procedure, Statement, TypeName,
 };
-use llrm::frontend::qb::{Dialect, compile, parse};
+use llrm::frontend::qb::{Dialect, compile, compile_hir, parse};
 
 fn json_object_with<'a>(document: &'a str, field: &str) -> &'a str {
     let field_at = document
@@ -11,6 +11,29 @@ fn json_object_with<'a>(document: &'a str, field: &str) -> &'a str {
     let start = document[..field_at].rfind('{').expect("object start");
     let end = document[field_at..].find('}').expect("object end") + field_at + 1;
     &document[start..end]
+}
+
+#[test]
+fn semantic_frontend_returns_verified_typed_hir() {
+    let module = parse(
+        "dim answer as long\nanswer = 20 * 2 + 2\n",
+        Dialect::QuickBasic45,
+    )
+    .unwrap();
+
+    let program = compile_hir(&module, "answer", Dialect::QuickBasic45, "qb45").unwrap();
+    program.verify().unwrap();
+
+    let module = &program.modules[0];
+    assert_eq!(module.name, "answer");
+    assert_eq!(module.functions.len(), 1);
+    assert!(
+        module.functions[0]
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .any(|instruction| instruction.opcode == llrm::hir::Opcode::Multiply)
+    );
 }
 
 #[test]
