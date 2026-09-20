@@ -3,6 +3,7 @@
 mod interpreter;
 mod model;
 mod text;
+mod type_verify;
 mod verify;
 
 pub use interpreter::{

@@ -22,6 +22,9 @@ use super::{
 pub fn verify(module: &Module) -> Result<(), Vec<Diagnostic>> {
     let mut verifier = Verifier::new(module);
     verifier.verify();
+    verifier
+        .diagnostics
+        .extend(super::type_verify::verify_types(module));
     if verifier.diagnostics.is_empty() {
         Ok(())
     } else {
