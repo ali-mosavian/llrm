@@ -702,6 +702,17 @@ removed four out-of-scope files changed by recursive formatting before
 acceptance.  The delegated five-test run took 1.17 seconds and the independent
 review run took 1.50 seconds.  No broader gate ran.
 
+That header can now be prepended immutably to an explicitly selected generic
+MC text section.  The QB-owned adapter validates the input, allocates stable
+fragment and symbol IDs, and lets ordinary MC layout move existing symbols and
+relocation sites by exactly 0x30; generic MC and generic OMF remain unaware of
+BASIC.  This is deliberately only the runtime prefix: the six header
+relocations and the remaining BASIC object envelope are still explicit work,
+not silently guessed by the generic object writer.  Three focused tests cover
+layout, generic-versus-QB OMF offsets, immutability, and refusal paths; the
+delegated run took 1.67 seconds and the primary review run took 1.46 seconds.
+No broader gate ran.
+
 The WCC frontend now also owns a typed, source-ordered capture unit above the
 lexical parser.  Distinct IDs preserve symbols, segments, backs, nodes, calls,
 temporaries, and source files; raw WCC names, attributes, calling conventions,

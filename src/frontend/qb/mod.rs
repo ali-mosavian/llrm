@@ -10,6 +10,7 @@ pub mod error;
 pub mod generated_parser;
 mod hir_json;
 pub mod intrinsics;
+pub mod mc;
 pub mod module_header;
 pub mod semantic;
 pub mod source;
