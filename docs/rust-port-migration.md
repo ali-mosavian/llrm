@@ -798,3 +798,31 @@ established expected result and ports the corresponding focused and regression
 tests with the implementation.  Failures are localized at adjacent stage
 boundaries; this gate does not authorize QB or WCC policy in shared HIR, MIR,
 LIR, MC, x86, or generic OMF code.
+
+The first unoptimized C object slice is now executable.  The real
+`fixtures/c/iparg.cgs` capture passes through WCC capture construction, HIR,
+portable IR, x86 Machine IR, allocation, conventional near/far cdecl frame
+finalization, MC, encoding, and fresh OMF emission from `llrm-c --emit obj`.
+The linker-visible names remain WCC's `_twice` and
+`_answer_from_argument`.  A checked-in assembly caller links the Rust object
+with Microsoft LINK 5.31 and the resulting DOS program writes the independent
+answer 42 under DOSBox-X.
+
+This slice follows the existing Python convention rules rather than defining
+a new ABI: C arguments are pushed right-to-left, cleanup is caller-owned,
+near/far distance selects the call and return encoding, scalar results use AX,
+and allocation-only call/return operands are removed at the same final target
+boundary where Python's emitter ignores them.  Primary review caught and
+removed an unnecessary virtual register for SP; the caller cleanup now names
+physical SP directly.  It also restored Python's frameless behavior when a C
+function has no frame objects.  The focused Rust MC, C ABI, driver, and OMF
+checks consumed about 16 seconds in this slice.  The single link-and-run gate
+took 6.0 seconds, including 1.52 seconds in DOSBox-X.  No broad suite or
+optimizer test ran.
+
+`iparg` proves the production path but is not counted as one of the paired
+acceptance programs.  A fresh WCC capture of `bench/parity/scalar.c` now gives
+the next implementation boundary: the Rust frontend explicitly refuses its
+first 32-bit integer type.  The next work therefore ports that existing Python
+semantic family and its regression before attempting the remaining parity
+pairs, `nbody`, or the C-only `sieve` rung.
