@@ -21,6 +21,8 @@ const WCC_CALLER_CLEANUP: u32 = 0x80;
 
 const VOID_TYPE: hir::TypeId = hir::TypeId::new(0);
 const I16_TYPE: hir::TypeId = hir::TypeId::new(1);
+const I32_TYPE: hir::TypeId = hir::TypeId::new(2);
+const BOOL_TYPE: hir::TypeId = hir::TypeId::new(3);
 
 /// A source-located refusal while raising a WCC capture unit.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -201,6 +203,28 @@ fn scalar_types() -> Vec<hir::Type> {
             bounds: Vec::new(),
             address: hir::AddressKind::None,
         },
+        hir::Type {
+            id: I32_TYPE,
+            name: "i32".into(),
+            kind: hir::TypeKind::Integer,
+            width: 4,
+            signed: Some(true),
+            evaluation: hir::FloatEvaluation::None,
+            element: None,
+            bounds: Vec::new(),
+            address: hir::AddressKind::None,
+        },
+        hir::Type {
+            id: BOOL_TYPE,
+            name: "bool".into(),
+            kind: hir::TypeKind::Boolean,
+            width: 1,
+            signed: None,
+            evaluation: hir::FloatEvaluation::None,
+            element: None,
+            bounds: Vec::new(),
+            address: hir::AddressKind::None,
+        },
     ]
 }
 
@@ -295,20 +319,16 @@ fn raise_function(
             })
         })?;
     builder.raise_statements()?;
+    let places = std::mem::take(&mut builder.places);
+    let blocks = builder.finish_blocks()?;
 
     Ok(hir::Function {
         id: hir::FunctionId::new(id),
         name: symbol.object_name(),
         result_type: value_type(unit, &procedure.value_type, location)?,
         values: builder.values,
-        places: Vec::new(),
-        blocks: vec![hir::Block {
-            id: hir::BlockId::new(0),
-            instructions: builder.instructions,
-            terminator: builder
-                .terminator
-                .ok_or_else(|| error(location, RaiseErrorKind::MissingReturn))?,
-        }],
+        places,
+        blocks,
         entry: hir::BlockId::new(0),
         parameters,
         abi: hir::ProcedureAbi {
@@ -338,15 +358,24 @@ struct FunctionRaiser<'a> {
     location: SourceLocation,
     callable_ids: &'a BTreeMap<SymbolId, hir::CallableId>,
     values: Vec<hir::Value>,
-    instructions: Vec<hir::Instruction>,
+    places: Vec<hir::Place>,
+    blocks: Vec<RaisedBlock>,
+    current_block: usize,
+    labels: BTreeMap<String, hir::BlockId>,
     calls: Vec<hir::CallAbi>,
     parameter_bindings: BTreeMap<SymbolId, hir::Operand>,
-    temporary_types: BTreeMap<TempId, hir::TypeId>,
-    temporary_bindings: BTreeMap<TempId, hir::Operand>,
+    automatic_places: BTreeMap<SymbolId, hir::PlaceId>,
+    temporary_places: BTreeMap<TempId, hir::PlaceId>,
     node_bindings: BTreeMap<NodeId, hir::Operand>,
-    terminator: Option<hir::Terminator>,
     next_value: u32,
     next_instruction: u32,
+    next_block: u32,
+}
+
+struct RaisedBlock {
+    id: hir::BlockId,
+    instructions: Vec<hir::Instruction>,
+    terminator: Option<hir::Terminator>,
 }
 
 impl<'a> FunctionRaiser<'a> {
@@ -356,12 +385,37 @@ impl<'a> FunctionRaiser<'a> {
         location: SourceLocation,
         callable_ids: &'a BTreeMap<SymbolId, hir::CallableId>,
     ) -> Result<Self, RaiseError> {
-        let mut temporary_types = BTreeMap::new();
+        let mut places = Vec::new();
+        let mut automatic_places = BTreeMap::new();
+        let mut temporary_places = BTreeMap::new();
         for (automatic, type_name) in &procedure.automatics {
-            let AutomaticId::Temporary(temporary) = automatic else {
-                continue;
+            let type_id = value_type(unit, type_name, location)?;
+            let id = hir::PlaceId::new(
+                u32::try_from(places.len()).map_err(|_| {
+                    error(location, RaiseErrorKind::IdOverflow { entity: "place" })
+                })?,
+            );
+            let name = match automatic {
+                AutomaticId::Symbol(symbol_id) => {
+                    let symbol = symbol(unit, *symbol_id, location)?;
+                    automatic_places.insert(*symbol_id, id);
+                    symbol.name.clone()
+                }
+                AutomaticId::Temporary(temporary) => {
+                    temporary_places.insert(*temporary, id);
+                    format!("temporary{}", temporary.get())
+                }
             };
-            temporary_types.insert(*temporary, value_type(unit, type_name, location)?);
+            places.push(hir::Place {
+                id,
+                name,
+                type_id,
+                storage: hir::Storage::Local,
+                offset: 0,
+                symbol: hir::DataId::new(0),
+                extent: type_width(type_id),
+                address: hir::AddressKind::Near,
+            });
         }
         Ok(Self {
             unit,
@@ -369,15 +423,22 @@ impl<'a> FunctionRaiser<'a> {
             location,
             callable_ids,
             values: Vec::new(),
-            instructions: Vec::new(),
+            places,
+            blocks: vec![RaisedBlock {
+                id: hir::BlockId::new(0),
+                instructions: Vec::new(),
+                terminator: None,
+            }],
+            current_block: 0,
+            labels: BTreeMap::new(),
             calls: Vec::new(),
             parameter_bindings: BTreeMap::new(),
-            temporary_types,
-            temporary_bindings: BTreeMap::new(),
+            automatic_places,
+            temporary_places,
             node_bindings: BTreeMap::new(),
-            terminator: None,
             next_value: 0,
             next_instruction: 0,
+            next_block: 1,
         })
     }
 
@@ -395,7 +456,9 @@ impl<'a> FunctionRaiser<'a> {
 
     fn raise_statements(&mut self) -> Result<(), RaiseError> {
         for statement in &self.procedure.body {
-            if self.terminator.is_some() {
+            if self.current().terminator.is_some()
+                && !matches!(statement.call.as_str(), "CGControl")
+            {
                 return Err(error(
                     statement.location,
                     RaiseErrorKind::DuplicateTerminator,
@@ -422,8 +485,9 @@ impl<'a> FunctionRaiser<'a> {
                     )?;
                     let operand = self.node(node)?;
                     require_operand_type(expected, &operand, &self.values, self.location)?;
-                    self.terminator = Some(hir::Terminator::Return(Some(operand)));
+                    self.current_mut().terminator = Some(hir::Terminator::Return(Some(operand)));
                 }
+                "CGControl" => self.control(statement)?,
                 call => {
                     return Err(error(
                         statement.location,
@@ -435,6 +499,113 @@ impl<'a> FunctionRaiser<'a> {
             }
         }
         Ok(())
+    }
+
+    fn control(&mut self, statement: &super::capture::Statement) -> Result<(), RaiseError> {
+        let operation = self.require_argument(&statement.args, 0)?;
+        let label = self.require_argument(&statement.args, 2)?.to_owned();
+        match operation {
+            "O_LABEL" => {
+                let target = self.label(&label)?;
+                if self.current().id != target && self.current().terminator.is_none() {
+                    self.current_mut().terminator = Some(hir::Terminator::Jump(target));
+                }
+                self.select_block(target)?;
+            }
+            "O_GOTO" => {
+                let target = self.label(&label)?;
+                self.current_mut().terminator = Some(hir::Terminator::Jump(target));
+            }
+            "O_IF_TRUE" | "O_IF_FALSE" => {
+                let condition = self.node(NodeId::new(parse_node_id(
+                    self.require_argument(&statement.args, 1)?,
+                    self.location,
+                )?))?;
+                require_operand_type(BOOL_TYPE, &condition, &self.values, self.location)?;
+                let target = self.label(&label)?;
+                let fallthrough = self.new_block()?;
+                let (then_block, else_block) = if operation == "O_IF_TRUE" {
+                    (target, fallthrough)
+                } else {
+                    (fallthrough, target)
+                };
+                self.current_mut().terminator = Some(hir::Terminator::Branch {
+                    condition,
+                    then_block,
+                    else_block,
+                });
+                self.select_block(fallthrough)?;
+            }
+            _ => {
+                return Err(error(
+                    self.location,
+                    RaiseErrorKind::UnsupportedStatement {
+                        call: format!("CGControl {operation}"),
+                    },
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn current(&self) -> &RaisedBlock {
+        &self.blocks[self.current_block]
+    }
+
+    fn current_mut(&mut self) -> &mut RaisedBlock {
+        &mut self.blocks[self.current_block]
+    }
+
+    fn new_block(&mut self) -> Result<hir::BlockId, RaiseError> {
+        let id = hir::BlockId::new(self.next_block);
+        self.next_block = self.next_block.checked_add(1).ok_or_else(|| {
+            error(self.location, RaiseErrorKind::IdOverflow { entity: "block" })
+        })?;
+        self.blocks.push(RaisedBlock {
+            id,
+            instructions: Vec::new(),
+            terminator: None,
+        });
+        Ok(id)
+    }
+
+    fn label(&mut self, name: &str) -> Result<hir::BlockId, RaiseError> {
+        if let Some(id) = self.labels.get(name) {
+            return Ok(*id);
+        }
+        let id = self.new_block()?;
+        self.labels.insert(name.to_owned(), id);
+        Ok(id)
+    }
+
+    fn select_block(&mut self, id: hir::BlockId) -> Result<(), RaiseError> {
+        self.current_block = self
+            .blocks
+            .iter()
+            .position(|block| block.id == id)
+            .ok_or_else(|| error(self.location, RaiseErrorKind::InvalidNode {
+                node: NodeId::new(0),
+                detail: format!("missing raised block {id}"),
+            }))?;
+        Ok(())
+    }
+
+    fn finish_blocks(&mut self) -> Result<Vec<hir::Block>, RaiseError> {
+        if self.blocks.iter().any(|block| block.terminator.is_none()) {
+            return Err(error(self.location, RaiseErrorKind::MissingReturn));
+        }
+        let mut finished = Vec::with_capacity(self.blocks.len());
+        for block in std::mem::take(&mut self.blocks) {
+            let terminator = block
+                .terminator
+                .ok_or_else(|| error(self.location, RaiseErrorKind::MissingReturn))?;
+            finished.push(hir::Block {
+                id: block.id,
+                instructions: block.instructions,
+                terminator,
+            });
+        }
+        Ok(finished)
     }
 
     fn node(&mut self, id: NodeId) -> Result<hir::Operand, RaiseError> {
@@ -453,7 +624,9 @@ impl<'a> FunctionRaiser<'a> {
             "CGInteger" => self.integer(id, &node)?,
             "CGUnary" => self.unary(id, &node)?,
             "CGBinary" => self.binary(id, &node)?,
+            "CGCompare" => self.compare(id, &node)?,
             "CGAssign" => self.assign(id, &node)?,
+            "CGPreGets" => self.pre_gets(id, &node)?,
             "CGCall" => self.call(id, &node)?,
             _ => {
                 return Err(error(
@@ -474,15 +647,14 @@ impl<'a> FunctionRaiser<'a> {
             self.node_argument(id, node, 0)?,
             self.location,
         )?);
-        self.parameter_bindings
+        if let Some(parameter) = self.parameter_bindings.get(&symbol) {
+            return Ok(parameter.clone());
+        }
+        self.automatic_places
             .get(&symbol)
-            .cloned()
-            .ok_or_else(|| {
-                error(
-                    self.location,
-                    RaiseErrorKind::MissingParameterBinding(symbol),
-                )
-            })
+            .copied()
+            .map(hir::Operand::Place)
+            .ok_or_else(|| error(self.location, RaiseErrorKind::MissingParameterBinding(symbol)))
     }
 
     fn temporary_name(&self, id: NodeId, node: &Node) -> Result<hir::Operand, RaiseError> {
@@ -490,21 +662,11 @@ impl<'a> FunctionRaiser<'a> {
             self.node_argument(id, node, 0)?,
             self.location,
         )?);
-        if !self.temporary_types.contains_key(&temporary) {
-            return Err(error(
-                self.location,
-                RaiseErrorKind::MissingTemporaryDeclaration(temporary),
-            ));
-        }
-        self.temporary_bindings
+        self.temporary_places
             .get(&temporary)
-            .cloned()
-            .ok_or_else(|| {
-                error(
-                    self.location,
-                    RaiseErrorKind::MissingTemporaryBinding(temporary),
-                )
-            })
+            .copied()
+            .map(hir::Operand::Place)
+            .ok_or_else(|| error(self.location, RaiseErrorKind::MissingTemporaryDeclaration(temporary)))
     }
 
     fn integer(&self, id: NodeId, node: &Node) -> Result<hir::Operand, RaiseError> {
@@ -540,32 +702,83 @@ impl<'a> FunctionRaiser<'a> {
         }
         let operand = self.node(operand_id)?;
         let type_id = value_type(self.unit, self.node_argument(id, node, 2)?, self.location)?;
-        require_operand_type(type_id, &operand, &self.values, self.location)?;
         match operation {
-            // WCC uses O_POINTS around scalar parameter and temporary nodes.
-            // It is its lvalue convention, not a portable pointer load.
-            "O_POINTS" | "O_CONVERT" => Ok(operand),
+            // WCC wraps scalar frame cells in O_POINTS. Parameters and call
+            // results are already values, while automatic and temporary cells
+            // become explicit generic HIR loads.
+            "O_POINTS" => match operand {
+                hir::Operand::Place(place) => {
+                    self.require_place_type(place, type_id)?;
+                    let result = self.new_value(type_id)?;
+                    self.push_instruction(
+                        hir::Opcode::Load,
+                        vec![result],
+                        vec![hir::Operand::Place(place)],
+                        None,
+                    )?;
+                    Ok(hir::Operand::Value(result))
+                }
+                _ => {
+                    require_operand_type(type_id, &operand, &self.values, self.location)?;
+                    Ok(operand)
+                }
+            },
+            "O_CONVERT" => {
+                let source_type = self.node_type(operand_id)?;
+                require_operand_type(source_type, &operand, &self.values, self.location)?;
+                self.convert(operand, source_type, type_id)
+            }
             _ => Err(self.invalid_node(id, "unsupported unary operation")),
         }
     }
 
     fn binary(&mut self, id: NodeId, node: &Node) -> Result<hir::Operand, RaiseError> {
-        if self.node_argument(id, node, 0)? != "O_TIMES" {
-            return Err(self.invalid_node(id, "unsupported binary operation"));
-        }
-        let left = self.node(NodeId::new(parse_node_id(
+        let opcode = match self.node_argument(id, node, 0)? {
+            "O_TIMES" => hir::Opcode::Multiply,
+            "O_PLUS" => hir::Opcode::Add,
+            "O_MINUS" => hir::Opcode::Subtract,
+            _ => return Err(self.invalid_node(id, "unsupported binary operation")),
+        };
+        let left_id = NodeId::new(parse_node_id(
             self.node_argument(id, node, 1)?,
             self.location,
-        )?))?;
-        let right = self.node(NodeId::new(parse_node_id(
+        )?);
+        let right_id = NodeId::new(parse_node_id(
             self.node_argument(id, node, 2)?,
             self.location,
-        )?))?;
+        )?);
+        let left = self.node(left_id)?;
+        let right = self.node(right_id)?;
         let type_id = value_type(self.unit, self.node_argument(id, node, 3)?, self.location)?;
-        require_operand_type(type_id, &left, &self.values, self.location)?;
-        require_operand_type(type_id, &right, &self.values, self.location)?;
+        let left = self.coerce(left, self.node_type(left_id)?, type_id)?;
+        let right = self.coerce(right, self.node_type(right_id)?, type_id)?;
         let result = self.new_value(type_id)?;
-        self.push_instruction(hir::Opcode::Multiply, vec![result], vec![left, right], None)?;
+        self.push_instruction(opcode, vec![result], vec![left, right], None)?;
+        Ok(hir::Operand::Value(result))
+    }
+
+    fn compare(&mut self, id: NodeId, node: &Node) -> Result<hir::Operand, RaiseError> {
+        let opcode = match self.node_argument(id, node, 0)? {
+            "O_LT" => hir::Opcode::LessThan,
+            _ => return Err(self.invalid_node(id, "unsupported comparison operation")),
+        };
+        let left_id = NodeId::new(parse_node_id(
+            self.node_argument(id, node, 1)?,
+            self.location,
+        )?);
+        let right_id = NodeId::new(parse_node_id(
+            self.node_argument(id, node, 2)?,
+            self.location,
+        )?);
+        let type_id = value_type(self.unit, self.node_argument(id, node, 3)?, self.location)?;
+        let left_type = self.node_type(left_id)?;
+        let left = self.node(left_id)?;
+        let left = self.coerce(left, left_type, type_id)?;
+        let right_type = self.node_type(right_id)?;
+        let right = self.node(right_id)?;
+        let right = self.coerce(right, right_type, type_id)?;
+        let result = self.new_value(BOOL_TYPE)?;
+        self.push_instruction(opcode, vec![result], vec![left, right], None)?;
         Ok(hir::Operand::Value(result))
     }
 
@@ -579,40 +792,84 @@ impl<'a> FunctionRaiser<'a> {
             .nodes
             .get(&destination)
             .ok_or_else(|| error(self.location, RaiseErrorKind::MissingNode(destination)))?;
-        if destination_node.call != "CGTempName" {
+        if !matches!(destination_node.call.as_str(), "CGTempName" | "CGFEName") {
             return Err(error(
                 self.location,
                 RaiseErrorKind::InvalidAssignmentTarget(destination),
             ));
         }
-        let temporary = TempId::new(parse_temp_id(
-            destination_node
-                .args
-                .first()
-                .ok_or_else(|| self.invalid_node(destination, "temporary name has no handle"))?,
-            self.location,
-        )?);
-        let temporary_type = self
-            .temporary_types
-            .get(&temporary)
-            .copied()
-            .ok_or_else(|| {
-                error(
-                    self.location,
-                    RaiseErrorKind::MissingTemporaryDeclaration(temporary),
-                )
-            })?;
-        let value = self.node(NodeId::new(parse_node_id(
+        let target = self.node(destination)?;
+        let hir::Operand::Place(place) = target else {
+            return Err(error(
+                self.location,
+                RaiseErrorKind::InvalidAssignmentTarget(destination),
+            ));
+        };
+        let source = NodeId::new(parse_node_id(
             self.node_argument(id, node, 1)?,
             self.location,
-        )?))?;
+        )?);
+        let source_type = self.node_type(source)?;
+        let value = self.node(source)?;
         let type_id = value_type(self.unit, self.node_argument(id, node, 2)?, self.location)?;
-        require_operand_type(type_id, &value, &self.values, self.location)?;
-        if temporary_type != type_id {
-            return Err(self.invalid_node(id, "temporary type disagrees with assignment type"));
-        }
-        self.temporary_bindings.insert(temporary, value.clone());
+        let value = self.coerce(value, source_type, type_id)?;
+        self.require_place_type(place, type_id)?;
+        self.push_instruction(
+            hir::Opcode::Store,
+            Vec::new(),
+            vec![hir::Operand::Place(place), value.clone()],
+            None,
+        )?;
         Ok(value)
+    }
+
+    fn pre_gets(&mut self, id: NodeId, node: &Node) -> Result<hir::Operand, RaiseError> {
+        let opcode = match self.node_argument(id, node, 0)? {
+            "O_PLUS" => hir::Opcode::Add,
+            "O_MINUS" => hir::Opcode::Subtract,
+            _ => return Err(self.invalid_node(id, "unsupported pre-get operation")),
+        };
+        let target_id = NodeId::new(parse_node_id(
+            self.node_argument(id, node, 1)?,
+            self.location,
+        )?);
+        let target = self.node(target_id)?;
+        let hir::Operand::Place(place) = target else {
+            return Err(error(
+                self.location,
+                RaiseErrorKind::InvalidAssignmentTarget(target_id),
+            ));
+        };
+        let type_id = value_type(self.unit, self.node_argument(id, node, 3)?, self.location)?;
+        self.require_place_type(place, type_id)?;
+        let old = self.new_value(type_id)?;
+        self.push_instruction(
+            hir::Opcode::Load,
+            vec![old],
+            vec![hir::Operand::Place(place)],
+            None,
+        )?;
+        let source_id = NodeId::new(parse_node_id(
+            self.node_argument(id, node, 2)?,
+            self.location,
+        )?);
+        let source_type = self.node_type(source_id)?;
+        let source = self.node(source_id)?;
+        let source = self.coerce(source, source_type, type_id)?;
+        let result = self.new_value(type_id)?;
+        self.push_instruction(
+            opcode,
+            vec![result],
+            vec![hir::Operand::Value(old), source],
+            None,
+        )?;
+        self.push_instruction(
+            hir::Opcode::Store,
+            Vec::new(),
+            vec![hir::Operand::Place(place), hir::Operand::Value(result)],
+            None,
+        )?;
+        Ok(hir::Operand::Value(result))
     }
 
     fn call(&mut self, id: NodeId, node: &Node) -> Result<hir::Operand, RaiseError> {
@@ -712,6 +969,85 @@ impl<'a> FunctionRaiser<'a> {
         Ok(id)
     }
 
+    fn require_place_type(
+        &self,
+        place: hir::PlaceId,
+        expected: hir::TypeId,
+    ) -> Result<(), RaiseError> {
+        let actual = self
+            .places
+            .iter()
+            .find(|candidate| candidate.id == place)
+            .map(|candidate| candidate.type_id)
+            .ok_or_else(|| self.invalid_node(NodeId::new(0), "operand refers to an unknown place"))?;
+        if actual == expected {
+            Ok(())
+        } else {
+            Err(self.invalid_node(NodeId::new(0), "place type disagrees with capture type"))
+        }
+    }
+
+    fn node_type(&self, id: NodeId) -> Result<hir::TypeId, RaiseError> {
+        let node = self
+            .unit
+            .nodes
+            .get(&id)
+            .ok_or_else(|| error(self.location, RaiseErrorKind::MissingNode(id)))?;
+        if node.call == "CGCompare" {
+            return Ok(BOOL_TYPE);
+        }
+        let type_index = match node.call.as_str() {
+            "CGFEName" | "CGTempName" | "CGInteger" => 1,
+            "CGUnary" | "CGBinary" | "CGAssign" | "CGPreGets" => node.args.len() - 1,
+            "CGCall" => {
+                let call = CallId::new(parse_call_id(
+                    node.args
+                        .first()
+                        .ok_or_else(|| self.invalid_node(id, "CGCall has no call handle"))?,
+                    self.location,
+                )?);
+                let pending = self
+                    .unit
+                    .calls
+                    .get(&call)
+                    .ok_or_else(|| error(self.location, RaiseErrorKind::MissingPendingCall(call)))?;
+                return value_type(self.unit, &pending.value_type, self.location);
+            }
+            _ => return Err(self.invalid_node(id, "expression has no scalar type")),
+        };
+        value_type(
+            self.unit,
+            node.args
+                .get(type_index)
+                .ok_or_else(|| self.invalid_node(id, "expression is missing its type"))?,
+            self.location,
+        )
+    }
+
+    fn coerce(
+        &mut self,
+        operand: hir::Operand,
+        source: hir::TypeId,
+        target: hir::TypeId,
+    ) -> Result<hir::Operand, RaiseError> {
+        require_operand_type(source, &operand, &self.values, self.location)?;
+        if source == target {
+            return Ok(operand);
+        }
+        let result = self.new_value(target)?;
+        self.push_instruction(hir::Opcode::Convert, vec![result], vec![operand], None)?;
+        Ok(hir::Operand::Value(result))
+    }
+
+    fn convert(
+        &mut self,
+        operand: hir::Operand,
+        source: hir::TypeId,
+        target: hir::TypeId,
+    ) -> Result<hir::Operand, RaiseError> {
+        self.coerce(operand, source, target)
+    }
+
     fn push_instruction(
         &mut self,
         opcode: hir::Opcode,
@@ -728,7 +1064,7 @@ impl<'a> FunctionRaiser<'a> {
                 },
             )
         })?;
-        self.instructions.push(hir::Instruction {
+        self.current_mut().instructions.push(hir::Instruction {
             id,
             opcode,
             results,
@@ -810,12 +1146,21 @@ fn value_type(
 ) -> Result<hir::TypeId, RaiseError> {
     match unit.canonical_type(name).as_str() {
         "TY_INT_2" | "TY_INTEGER" => Ok(I16_TYPE),
+        "TY_INT_4" => Ok(I32_TYPE),
         _ => Err(error(
             location,
             RaiseErrorKind::UnsupportedType {
                 name: name.to_owned(),
             },
         )),
+    }
+}
+
+fn type_width(type_id: hir::TypeId) -> usize {
+    match type_id {
+        I16_TYPE => 2,
+        I32_TYPE => 4,
+        _ => 0,
     }
 }
 
@@ -950,6 +1295,92 @@ mod tests {
         capture::build(&parse(include_str!("../../../fixtures/c/iparg.cgs")).unwrap()).unwrap()
     }
 
+    fn parity_scalar() -> capture::CaptureUnit {
+        capture::build(&parse(include_str!("../../../fixtures/c/parity/scalar.cgs")).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn raises_the_real_scalar_capture_with_typed_cells_and_loop_control() {
+        let module = raise_module(&parity_scalar(), "parity_scalar").unwrap();
+        let function = &module.functions[0];
+
+        assert_eq!(module.types.len(), 4);
+        assert_eq!(function.name, "_parity_scalar");
+        assert_eq!(function.result_type, hir::TypeId::new(2));
+        assert_eq!(
+            function
+                .places
+                .iter()
+                .map(|place| (place.name.as_str(), place.type_id, place.extent))
+                .collect::<Vec<_>>(),
+            vec![
+                ("temporary3", hir::TypeId::new(2), 4),
+                ("total", hir::TypeId::new(2), 4),
+                ("index", hir::TypeId::new(1), 2),
+            ]
+        );
+        assert_eq!(function.blocks.len(), 4);
+        assert_eq!(
+            function.blocks[0].terminator,
+            hir::Terminator::Jump(hir::BlockId::new(1))
+        );
+        let comparison = function.blocks[1]
+            .instructions
+            .iter()
+            .find(|instruction| instruction.opcode == hir::Opcode::LessThan)
+            .and_then(|instruction| instruction.results.first())
+            .copied()
+            .expect("loop header has a comparison result");
+        assert_eq!(
+            function.blocks[1].terminator,
+            hir::Terminator::Branch {
+                condition: hir::Operand::Value(comparison),
+                then_block: hir::BlockId::new(3),
+                else_block: hir::BlockId::new(2),
+            },
+            "Python FunctionRaiser.branch sends O_IF_FALSE to l5 and falls through to the loop body"
+        );
+        assert_eq!(
+            function.blocks[3].terminator,
+            hir::Terminator::Jump(hir::BlockId::new(1))
+        );
+        let opcodes = function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .map(|instruction| instruction.opcode)
+            .collect::<Vec<_>>();
+        assert!(opcodes.contains(&hir::Opcode::Load));
+        assert!(opcodes.contains(&hir::Opcode::Store));
+        assert!(opcodes.contains(&hir::Opcode::Convert));
+        assert!(opcodes.contains(&hir::Opcode::Add));
+        assert!(opcodes.contains(&hir::Opcode::Subtract));
+        assert!(opcodes.contains(&hir::Opcode::Multiply));
+        assert!(opcodes.contains(&hir::Opcode::LessThan));
+        assert!(function.blocks.iter().any(|block| matches!(
+            block.terminator,
+            hir::Terminator::Jump(_)
+        )));
+        assert!(function.blocks.iter().any(|block| matches!(
+            block.terminator,
+            hir::Terminator::Return(Some(hir::Operand::Value(_)))
+        )));
+        assert!(module.verify().is_ok());
+
+        let lowered = hir::lower_to_ir(&module).unwrap();
+        let lowered_function = &lowered.functions[0];
+        assert_eq!(lowered_function.blocks.len(), 4);
+        assert!(lowered_function.blocks.iter().flat_map(|block| &block.instructions).any(
+            |instruction| matches!(instruction.kind, ir::InstructionKind::StackAlloc { size: 4, .. })
+        ));
+        assert!(lowered_function.blocks.iter().flat_map(|block| &block.instructions).any(
+            |instruction| matches!(instruction.kind, ir::InstructionKind::Compare { predicate: ir::ComparePredicate::SignedLessThan, .. })
+        ));
+        assert!(lowered_function.blocks.iter().flat_map(|block| &block.instructions).any(
+            |instruction| matches!(instruction.kind, ir::InstructionKind::Cast { op: ir::CastOp::SignExtend, .. })
+        ));
+    }
+
     #[test]
     fn raises_the_real_iparg_capture_to_generic_hir() {
         let module = raise_module(&iparg(), "iparg").unwrap();
@@ -962,13 +1393,13 @@ mod tests {
         assert_eq!(module.functions[0].abi.distance, hir::CallDistance::Near);
         assert_eq!(module.functions[0].parameters, [hir::ValueId::new(0)]);
         assert!(matches!(
-            module.functions[0].blocks[0].instructions.as_slice(),
-            [hir::Instruction {
+            module.functions[0].blocks[0].instructions.iter().find(|instruction| matches!(instruction.opcode, hir::Opcode::Multiply)),
+            Some(hir::Instruction {
                 opcode: hir::Opcode::Multiply,
                 results,
                 operands,
                 ..
-            }] if results == &vec![hir::ValueId::new(1)]
+            }) if results == &vec![hir::ValueId::new(1)]
                 && matches!(operands.as_slice(), [hir::Operand::Value(value), hir::Operand::Constant { value: hir::ConstantValue::Integer(2), .. }] if *value == hir::ValueId::new(0))
         ));
 
