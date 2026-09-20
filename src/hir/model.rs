@@ -99,7 +99,21 @@ pub enum TypeKind {
     Opaque,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+impl TypeKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Void => "void",
+            Self::Boolean => "boolean",
+            Self::Integer => "integer",
+            Self::Float => "float",
+            Self::Array => "array",
+            Self::Pointer => "pointer",
+            Self::Opaque => "opaque",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum AddressKind {
     None,
     Near,
@@ -109,12 +123,36 @@ pub enum AddressKind {
     Segment,
 }
 
+impl AddressKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Near => "near",
+            Self::Far => "far",
+            Self::Huge => "huge",
+            Self::Code => "code",
+            Self::Segment => "segment",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FloatEvaluation {
     None,
     Binary32,
     Binary64,
     Extended80,
+}
+
+impl FloatEvaluation {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Binary32 => "binary32",
+            Self::Binary64 => "binary64",
+            Self::Extended80 => "extended80",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -140,10 +178,32 @@ pub enum Storage {
     External,
 }
 
+impl Storage {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Parameter => "parameter",
+            Self::Static => "static",
+            Self::Module => "module",
+            Self::Common => "common",
+            Self::External => "external",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Linkage {
     Internal,
     External,
+}
+
+impl Linkage {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Internal => "internal",
+            Self::External => "external",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

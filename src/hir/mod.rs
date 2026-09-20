@@ -5,7 +5,9 @@
 //! frontend parser state.
 
 mod model;
+mod text;
 mod verify;
 
 pub use model::*;
+pub use text::{TextError, parse as parse_text, write as write_text};
 pub use verify::verify;

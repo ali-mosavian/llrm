@@ -7,9 +7,8 @@
 use std::fmt::{self, Write};
 
 use crate::hir::{
-    AddressKind, ArrayOrder, CallDistance, ConstantValue, Dialect, FloatEvaluation, FloatMode,
-    Linkage, Operand, Program, RuntimeProfile, StackCleanup, Storage, TargetProfile, Terminator,
-    TypeKind,
+    ArrayOrder, CallDistance, ConstantValue, Dialect, FloatMode, Operand, Program, RuntimeProfile,
+    StackCleanup, TargetProfile, Terminator,
 };
 
 /// Serializes a typed HIR program in the exact deterministic JSON layout used
@@ -107,7 +106,7 @@ pub(crate) fn write(program: &Program) -> Result<String, Error> {
             block_ids(&mut out, &function.external_entries);
             write!(out, "],\"id\":{},\"name\":", function.id).unwrap();
             string(&mut out, &function.name);
-            write!(out, ",\"linkage\":\"{}\"", linkage_name(function.linkage)).unwrap();
+            write!(out, ",\"linkage\":\"{}\"", function.linkage.as_str()).unwrap();
             out.push_str(",\"parameters\":[");
             value_ids(&mut out, &function.parameters);
             out.push_str("],\"places\":[");
@@ -118,7 +117,7 @@ pub(crate) fn write(program: &Program) -> Result<String, Error> {
                 write!(
                     out,
                     "{{\"address\":\"{}\",\"extent\":{},\"id\":{},\"name\":",
-                    address_name(place.address),
+                    place.address.as_str(),
                     place.extent,
                     place.id
                 )
@@ -128,7 +127,7 @@ pub(crate) fn write(program: &Program) -> Result<String, Error> {
                     out,
                     ",\"offset\":{},\"storage\":\"{}\",\"symbol\":{},\"type\":{}}}",
                     place.offset,
-                    storage_name(place.storage),
+                    place.storage.as_str(),
                     place.symbol,
                     place.type_id
                 )
@@ -202,9 +201,9 @@ pub(crate) fn write(program: &Program) -> Result<String, Error> {
             write!(
                 out,
                 "],\"address\":\"{}\",\"id\":{},\"linkage\":\"{}\",\"name\":",
-                address_name(data.address),
+                data.address.as_str(),
                 data.id,
-                linkage_name(data.linkage)
+                data.linkage.as_str()
             )
             .unwrap();
             string(&mut out, &data.name);
@@ -217,7 +216,7 @@ pub(crate) fn write(program: &Program) -> Result<String, Error> {
                     out,
                     "{{\"addend\":{},\"address\":\"{}\",\"at\":{},\"target\":{}}}",
                     relocation.addend,
-                    address_name(relocation.address),
+                    relocation.address.as_str(),
                     relocation.at,
                     relocation.target
                 )
@@ -368,7 +367,7 @@ fn type_json(out: &mut String, type_: &crate::hir::Type) {
     write!(
         out,
         "{{\"address\":\"{}\",\"bounds\":[",
-        address_name(type_.address)
+        type_.address.as_str()
     )
     .unwrap();
     for (bound_index, (lower, upper)) in type_.bounds.iter().enumerate() {
@@ -382,9 +381,9 @@ fn type_json(out: &mut String, type_: &crate::hir::Type) {
     write!(
         out,
         ",\"evaluation\":\"{}\",\"id\":{},\"kind\":\"{}\",\"name\":",
-        evaluation_name(type_.evaluation),
+        type_.evaluation.as_str(),
         type_.id,
-        type_kind_name(type_.kind)
+        type_.kind.as_str()
     )
     .unwrap();
     string(out, &type_.name);
@@ -506,56 +505,6 @@ fn float_mode_name(float_mode: FloatMode) -> &'static str {
     match float_mode {
         FloatMode::Inline => "inline",
         FloatMode::Alternate => "alternate",
-    }
-}
-
-fn type_kind_name(kind: TypeKind) -> &'static str {
-    match kind {
-        TypeKind::Void => "void",
-        TypeKind::Boolean => "boolean",
-        TypeKind::Integer => "integer",
-        TypeKind::Float => "float",
-        TypeKind::Array => "array",
-        TypeKind::Pointer => "pointer",
-        TypeKind::Opaque => "opaque",
-    }
-}
-
-fn address_name(address: AddressKind) -> &'static str {
-    match address {
-        AddressKind::None => "none",
-        AddressKind::Near => "near",
-        AddressKind::Far => "far",
-        AddressKind::Huge => "huge",
-        AddressKind::Code => "code",
-        AddressKind::Segment => "segment",
-    }
-}
-
-fn evaluation_name(evaluation: FloatEvaluation) -> &'static str {
-    match evaluation {
-        FloatEvaluation::None => "none",
-        FloatEvaluation::Binary32 => "binary32",
-        FloatEvaluation::Binary64 => "binary64",
-        FloatEvaluation::Extended80 => "extended80",
-    }
-}
-
-fn storage_name(storage: Storage) -> &'static str {
-    match storage {
-        Storage::Local => "local",
-        Storage::Parameter => "parameter",
-        Storage::Static => "static",
-        Storage::Module => "module",
-        Storage::Common => "common",
-        Storage::External => "external",
-    }
-}
-
-fn linkage_name(linkage: Linkage) -> &'static str {
-    match linkage {
-        Linkage::Internal => "internal",
-        Linkage::External => "external",
     }
 }
 

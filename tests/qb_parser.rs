@@ -23,6 +23,8 @@ fn semantic_frontend_returns_verified_typed_hir() {
 
     let program = compile_hir(&module, "answer", Dialect::QuickBasic45, "qb45").unwrap();
     program.verify().unwrap();
+    let text = llrm::hir::write_text(&program);
+    assert_eq!(llrm::hir::parse_text(&text).unwrap(), program);
 
     let module = &program.modules[0];
     assert_eq!(module.name, "answer");
