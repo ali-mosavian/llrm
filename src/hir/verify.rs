@@ -19,9 +19,28 @@ pub fn verify(program: &Program) -> Result<(), Vec<Diagnostic>> {
     }
 }
 
+/// Verify one source-neutral HIR module without inventing program policy.
+pub fn verify_module(module: &Module) -> Result<(), Vec<Diagnostic>> {
+    let mut verifier = Verifier {
+        diagnostics: Vec::new(),
+    };
+    verifier.module(module);
+    if verifier.diagnostics.is_empty() {
+        Ok(())
+    } else {
+        Err(verifier.diagnostics)
+    }
+}
+
 impl Program {
     pub fn verify(&self) -> Result<(), Vec<Diagnostic>> {
         verify(self)
+    }
+}
+
+impl Module {
+    pub fn verify(&self) -> Result<(), Vec<Diagnostic>> {
+        verify_module(self)
     }
 }
 

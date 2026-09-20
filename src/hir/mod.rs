@@ -21,4 +21,4 @@ pub use lower::{
 };
 pub use model::*;
 pub use text::{TextError, parse as parse_text, write as write_text};
-pub use verify::verify;
+pub use verify::{verify, verify_module};

@@ -950,18 +950,6 @@ mod tests {
         capture::build(&parse(include_str!("../../../fixtures/c/iparg.cgs")).unwrap()).unwrap()
     }
 
-    fn program(module: hir::Module) -> hir::Program {
-        hir::Program {
-            version: hir::FORMAT_VERSION,
-            dialect: hir::Dialect::Qb45,
-            runtime: hir::RuntimeProfile::Qb45,
-            target: hir::TargetProfile::I386RealMode,
-            array_order: hir::ArrayOrder::ColumnMajor,
-            float_mode: hir::FloatMode::Inline,
-            modules: vec![module],
-        }
-    }
-
     #[test]
     fn raises_the_real_iparg_capture_to_generic_hir() {
         let module = raise_module(&iparg(), "iparg").unwrap();
@@ -1008,7 +996,7 @@ mod tests {
         assert_eq!(answer.calls[0].cleanup, hir::StackCleanup::Caller);
         assert_eq!(answer.calls[0].distance, hir::CallDistance::Near);
         assert_eq!(answer.calls[0].callee, Some(hir::CallableId::new(0)));
-        assert!(program(module.clone()).verify().is_ok());
+        assert!(module.verify().is_ok());
         let lowered = hir::lower_to_ir(&module).unwrap();
         assert_eq!(
             lowered.functions[0].signature.calling_convention,

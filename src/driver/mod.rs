@@ -7,6 +7,7 @@ use crate::codegen::machine::{
     AllocationRewriteError, MachineFunctionId, MachineModule, MachineOperandKind, apply_assignment,
 };
 use crate::frontend::qb::{self, Dialect};
+use crate::frontend::wcc;
 use crate::hir::{LowerError, Program, RuntimeProfile, Storage};
 use crate::ir;
 use crate::object::omf::file::{File as OmfFile, FileError};
@@ -56,6 +57,10 @@ impl Default for QbOptions {
 pub enum Error {
     Parse(qb::ParseError),
     Semantic(qb::SemanticError),
+    WccParse(wcc::ParseError),
+    WccCapture(wcc::capture::BuildError),
+    WccRaise(wcc::RaiseError),
+    Hir(Vec<Diagnostic>),
     ExpectedSingleModule {
         actual: usize,
     },
@@ -106,6 +111,16 @@ impl fmt::Display for Error {
         match self {
             Self::Parse(error) => error.message.fmt(formatter),
             Self::Semantic(error) => error.message.fmt(formatter),
+            Self::WccParse(error) => error.fmt(formatter),
+            Self::WccCapture(error) => error.fmt(formatter),
+            Self::WccRaise(error) => error.fmt(formatter),
+            Self::Hir(diagnostics) => {
+                if let Some(diagnostic) = diagnostics.first() {
+                    write!(formatter, "invalid HIR: {}", diagnostic.message)
+                } else {
+                    write!(formatter, "invalid HIR")
+                }
+            }
             Self::ExpectedSingleModule { actual } => write!(
                 formatter,
                 "portable IR emission requires exactly one HIR module, got {actual}"
@@ -190,6 +205,15 @@ pub fn compile_qb(source: &str, module_name: &str, options: QbOptions) -> Result
         options.alternate_math,
     )
     .map_err(Error::Semantic)
+}
+
+/// Parse a WCC capture and lower its verified source-neutral HIR to IR.
+pub fn compile_wcc_capture(source: &str, module_name: &str) -> Result<ir::Module, Error> {
+    let records = wcc::parse(source).map_err(Error::WccParse)?;
+    let unit = wcc::capture::build(&records).map_err(Error::WccCapture)?;
+    let module = wcc::raise_module(&unit, module_name).map_err(Error::WccRaise)?;
+    module.verify().map_err(Error::Hir)?;
+    crate::hir::lower_to_ir(&module).map_err(Error::Lower)
 }
 
 /// Lower one verified QB HIR program into portable SSA IR.
