@@ -67,6 +67,7 @@ impl Default for QbOptions {
 pub enum Error {
     Parse(qb::ParseError),
     Semantic(qb::SemanticError),
+    QbStatementMetadata(qb::statement_table::MetadataError),
     WccParse(wcc::ParseError),
     WccCapture(wcc::capture::BuildError),
     WccRaise(wcc::RaiseError),
@@ -132,6 +133,7 @@ impl fmt::Display for Error {
         match self {
             Self::Parse(error) => error.message.fmt(formatter),
             Self::Semantic(error) => error.message.fmt(formatter),
+            Self::QbStatementMetadata(error) => error.fmt(formatter),
             Self::WccParse(error) => error.fmt(formatter),
             Self::WccCapture(error) => error.fmt(formatter),
             Self::WccRaise(error) => error.fmt(formatter),
@@ -258,7 +260,8 @@ pub fn lower_qb_to_ir(program: &Program) -> Result<ir::Module, Error> {
             actual: program.modules.len(),
         });
     };
-    crate::hir::lower_to_ir(module).map_err(Error::Lower)
+    let extracted = qb::statement_table::extract(module).map_err(Error::QbStatementMetadata)?;
+    crate::hir::lower_to_ir(&extracted.module).map_err(Error::Lower)
 }
 
 /// Select verified portable IR into initial x86 Machine IR.
@@ -587,6 +590,28 @@ mod tests {
         assert!(matches!(
             lower_qb_to_ir(&program),
             Err(Error::ExpectedSingleModule { actual: 0 })
+        ));
+    }
+
+    #[test]
+    fn qb_statement_rows_do_not_become_portable_data() {
+        let mut program = compile_qb("", "metadata", QbOptions::default()).unwrap();
+        let metadata = program.modules[0]
+            .data
+            .iter_mut()
+            .find(|object| {
+                object.name == crate::frontend::qb::statement_table::METADATA_OBJECT_NAME
+            })
+            .unwrap();
+        metadata.bytes.extend_from_slice(&1_u32.to_le_bytes());
+        metadata.bytes.extend_from_slice(&2_u32.to_le_bytes());
+        metadata.bytes.extend_from_slice(&3_u32.to_le_bytes());
+        metadata.bytes.extend_from_slice(&100_u16.to_le_bytes());
+
+        let lowered = lower_qb_to_ir(&program).unwrap();
+
+        assert!(lowered.globals.iter().all(
+            |global| global.name != crate::frontend::qb::statement_table::METADATA_OBJECT_NAME
         ));
     }
 

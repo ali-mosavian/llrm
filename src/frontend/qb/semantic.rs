@@ -10,6 +10,8 @@ use crate::frontend::qb::syntax::{
 };
 use crate::hir;
 
+use super::statement_table::METADATA_OBJECT_NAME;
+
 const VOID: u32 = 0;
 const INTEGER: u32 = 1;
 const LONG: u32 = 2;
@@ -24,7 +26,6 @@ const BYTE: u32 = 8;
 // rule, distinct from the language's 60-index parser ceiling.
 const UNSPECIFIED_ARRAY_RANK: usize = 8;
 const READ_DATA_OBJECT: &str = "$qb$readData";
-const STATEMENT_TABLE_OBJECT: &str = "$qb$statementTable";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SemanticError {
@@ -1028,7 +1029,7 @@ impl Compiler {
                 },
                 DataObject {
                     id: 2,
-                    name: STATEMENT_TABLE_OBJECT.into(),
+                    name: METADATA_OBJECT_NAME.into(),
                     bytes: Vec::new(),
                     readonly: true,
                     relocations: Vec::new(),
@@ -1144,7 +1145,7 @@ impl Compiler {
         let table = self
             .data
             .iter_mut()
-            .find(|object| object.name == STATEMENT_TABLE_OBJECT)
+            .find(|object| object.name == METADATA_OBJECT_NAME)
             .expect("statement table metadata object");
         for (block, instruction, line) in self.statement_entries.drain(..) {
             if !retained.contains(&block) {
