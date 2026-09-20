@@ -2,16 +2,24 @@
 //!
 //! The initial target has a 16-bit default operand size.  This module encodes
 //! physical general-purpose register forms plus the BP-relative frame form
-//! produced by frame-index elimination. Expressions, fixups, branches, calls,
-//! segments, and x87 remain explicit unsupported forms until their semantics
-//! and relocation contracts are implemented.
+//! produced by frame-index elimination. Direct far calls retain their symbolic
+//! target in one typed x86 fixup; branches, calls of other forms, segments,
+//! and x87 remain explicit unsupported forms until their semantics and
+//! relocation contracts are implemented.
 
 use std::error::Error;
 use std::fmt;
 
-use crate::mc::{MCInstruction, MCOperand};
+use crate::mc::{Fixup, MCInstruction, MCOperand};
 
-use super::{OperandSize, X86Opcode, X86Register};
+use super::{OperandSize, X86FixupKind, X86Opcode, X86Register};
+
+/// The bytes and relocations selected for one x86 instruction.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EncodedInstruction {
+    pub bytes: Vec<u8>,
+    pub fixups: Vec<Fixup>,
+}
 
 /// An x86 instruction which the initial register-form encoder cannot encode.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -30,6 +38,8 @@ pub enum EncodeError {
         expected: usize,
         actual: usize,
     },
+    /// The byte-only API cannot represent this instruction's relocations.
+    FixupsRequired { opcode: X86Opcode, count: usize },
     /// An operand has a kind the selected form cannot encode.
     OperandKind {
         opcode: X86Opcode,
@@ -76,6 +86,9 @@ impl fmt::Display for EncodeError {
                 formatter,
                 "{opcode:?} expects {expected} operands, found {actual}"
             ),
+            Self::FixupsRequired { opcode, count } => {
+                write!(formatter, "{opcode:?} requires {count} fixups")
+            }
             Self::OperandKind {
                 opcode,
                 index,
@@ -104,9 +117,25 @@ impl fmt::Display for EncodeError {
 impl Error for EncodeError {}
 
 /// Encodes one physical-register x86 instruction using a 16-bit default mode.
+///
+/// This compatibility entry point returns only bytes.  Use
+/// [`encode_with_fixups`] when a caller needs relocation information.
 pub fn encode(instruction: &MCInstruction) -> Result<Vec<u8>, EncodeError> {
+    let encoded = encode_with_fixups(instruction)?;
+    if encoded.fixups.is_empty() {
+        Ok(encoded.bytes)
+    } else {
+        Err(EncodeError::FixupsRequired {
+            opcode: decode_opcode(instruction.opcode.get())?,
+            count: encoded.fixups.len(),
+        })
+    }
+}
+
+/// Encodes one x86 instruction and preserves every target-owned fixup.
+pub fn encode_with_fixups(instruction: &MCInstruction) -> Result<EncodedInstruction, EncodeError> {
     let opcode = decode_opcode(instruction.opcode.get())?;
-    match opcode {
+    let bytes = match opcode {
         X86Opcode::Copy | X86Opcode::PhiCopy | X86Opcode::Mov => {
             encode_move(opcode, &instruction.operands)
         }
@@ -123,16 +152,16 @@ pub fn encode(instruction: &MCInstruction) -> Result<Vec<u8>, EncodeError> {
         X86Opcode::Push => encode_push_pop(opcode, &instruction.operands, 0x50),
         X86Opcode::Pop => encode_push_pop(opcode, &instruction.operands, 0x58),
         X86Opcode::ReturnNear => encode_return(opcode, &instruction.operands, 0xc3),
-        X86Opcode::ReturnFar => encode_return(opcode, &instruction.operands, 0xcb),
+        X86Opcode::ReturnFar => encode_far_return(opcode, &instruction.operands),
         X86Opcode::Lea => encode_frame_lea(opcode, &instruction.operands),
         X86Opcode::Load => encode_frame_load(opcode, &instruction.operands),
         X86Opcode::Store => encode_frame_store(opcode, &instruction.operands),
+        X86Opcode::CallFar => return encode_far_call(opcode, &instruction.operands),
         X86Opcode::Idiv
         | X86Opcode::ShiftLeft
         | X86Opcode::ShiftRightLogical
         | X86Opcode::ShiftRightArithmetic
         | X86Opcode::CallNear
-        | X86Opcode::CallFar
         | X86Opcode::Jump
         | X86Opcode::JumpConditional
         | X86Opcode::MergeWords
@@ -141,7 +170,41 @@ pub fn encode(instruction: &MCInstruction) -> Result<Vec<u8>, EncodeError> {
             opcode,
             reason: "this initial encoder accepts only exact register forms",
         }),
-    }
+    }?;
+    Ok(EncodedInstruction {
+        bytes,
+        fixups: Vec::new(),
+    })
+}
+
+fn encode_far_call(
+    opcode: X86Opcode,
+    operands: &[MCOperand],
+) -> Result<EncodedInstruction, EncodeError> {
+    expect_arity(opcode, operands, 1)?;
+    let MCOperand::Expression(expression) = &operands[0] else {
+        return Err(EncodeError::OperandKind {
+            opcode,
+            index: 0,
+            expected: "a symbolic far-call target",
+        });
+    };
+    let kind = X86FixupKind::FarPointer1616;
+    // These zero bytes are the pre-fixup skeleton. The future fixup
+    // application/object stage materializes the expression, including its
+    // addend, exactly once.
+    let mut bytes = vec![0x9a];
+    bytes.extend(vec![0; usize::from(kind.width())]);
+
+    Ok(EncodedInstruction {
+        bytes,
+        fixups: vec![Fixup {
+            offset: 1,
+            kind: kind.into(),
+            expression: *expression,
+            pc_relative: kind.pc_relative(),
+        }],
+    })
 }
 
 fn encode_frame_load(opcode: X86Opcode, operands: &[MCOperand]) -> Result<Vec<u8>, EncodeError> {
@@ -215,7 +278,7 @@ fn frame_displacement(
 
 /// Returns the exact encoded size for one instruction.
 pub fn encoded_size(instruction: &MCInstruction) -> Result<u64, EncodeError> {
-    Ok(encode(instruction)?.len() as u64)
+    Ok(encode_with_fixups(instruction)?.bytes.len() as u64)
 }
 
 fn encode_move(opcode: X86Opcode, operands: &[MCOperand]) -> Result<Vec<u8>, EncodeError> {
@@ -334,6 +397,31 @@ fn encode_return(
 ) -> Result<Vec<u8>, EncodeError> {
     expect_arity(opcode, operands, 0)?;
     Ok(vec![encoding])
+}
+
+fn encode_far_return(opcode: X86Opcode, operands: &[MCOperand]) -> Result<Vec<u8>, EncodeError> {
+    match operands {
+        [] | [MCOperand::Immediate(0)] => Ok(vec![0xcb]),
+        [MCOperand::Immediate(cleanup)] if (1..=i64::from(u16::MAX)).contains(cleanup) => {
+            let mut bytes = vec![0xca];
+            bytes.extend((*cleanup as u16).to_le_bytes());
+            Ok(bytes)
+        }
+        [MCOperand::Immediate(cleanup)] => Err(EncodeError::ImmediateOutOfRange {
+            value: *cleanup,
+            bits: 16,
+        }),
+        [_] => Err(EncodeError::OperandKind {
+            opcode,
+            index: 0,
+            expected: "a u16 stack-cleanup immediate",
+        }),
+        _ => Err(EncodeError::Arity {
+            opcode,
+            expected: 1,
+            actual: operands.len(),
+        }),
+    }
 }
 
 fn expect_arity(
@@ -510,7 +598,13 @@ struct RegisterEncoding {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codegen::machine::{
+        InstructionFlags, MachineBlock, MachineBlockId, MachineCallingConvention, MachineFunction,
+        MachineFunctionId, MachineInstruction, MachineInstructionId, MachineLinkage, MachineModule,
+        MachineOperand, MachineOperandKind, MachineSignature, OperandRole,
+    };
     use crate::mc::{MCExpression, MCOperand, PhysicalRegister, SymbolId, TargetOpcode};
+    use crate::target::x86::lower_allocated_module;
 
     fn instruction(opcode: X86Opcode, operands: Vec<MCOperand>) -> MCInstruction {
         MCInstruction {
@@ -649,6 +743,32 @@ mod tests {
             encode(&instruction(X86Opcode::ReturnFar, Vec::new())).unwrap(),
             vec![0xcb]
         );
+        assert_eq!(
+            encode(&instruction(
+                X86Opcode::ReturnFar,
+                vec![MCOperand::Immediate(0)],
+            ))
+            .unwrap(),
+            vec![0xcb]
+        );
+        assert_eq!(
+            encode(&instruction(
+                X86Opcode::ReturnFar,
+                vec![MCOperand::Immediate(4)],
+            ))
+            .unwrap(),
+            vec![0xca, 0x04, 0x00]
+        );
+        assert_eq!(
+            encode(&instruction(
+                X86Opcode::ReturnFar,
+                vec![MCOperand::Immediate(-1)],
+            )),
+            Err(EncodeError::ImmediateOutOfRange {
+                value: -1,
+                bits: 16,
+            })
+        );
     }
 
     #[test]
@@ -757,5 +877,154 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn encodes_far_call_with_one_symbolic_far_pointer_fixup() {
+        // The external far target's addend belongs to the
+        // expression exactly once, not to the four zero bytes of `call far`.
+        let expression = MCExpression {
+            symbol: SymbolId::new(7),
+            addend: -12,
+        };
+        let encoded = encode_with_fixups(&instruction(
+            X86Opcode::CallFar,
+            vec![MCOperand::Expression(expression)],
+        ))
+        .unwrap();
+
+        assert_eq!(encoded.bytes, vec![0x9a, 0, 0, 0, 0]);
+        assert_eq!(
+            encoded_size(&instruction(
+                X86Opcode::CallFar,
+                vec![MCOperand::Expression(expression)],
+            ))
+            .unwrap(),
+            5
+        );
+        assert_eq!(
+            encoded.fixups,
+            vec![Fixup {
+                offset: 1,
+                kind: X86FixupKind::FarPointer1616.into(),
+                expression,
+                pc_relative: X86FixupKind::FarPointer1616.pc_relative(),
+            }]
+        );
+        assert_eq!(
+            encode(&instruction(
+                X86Opcode::CallFar,
+                vec![MCOperand::Expression(expression)],
+            )),
+            Err(EncodeError::FixupsRequired {
+                opcode: X86Opcode::CallFar,
+                count: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn refuses_extra_far_call_operands() {
+        let expression = MCExpression {
+            symbol: SymbolId::new(3),
+            addend: 0,
+        };
+        assert_eq!(
+            encode_with_fixups(&instruction(
+                X86Opcode::CallFar,
+                vec![MCOperand::Expression(expression), register(X86Register::Ax)],
+            )),
+            Err(EncodeError::Arity {
+                opcode: X86Opcode::CallFar,
+                expected: 1,
+                actual: 2,
+            })
+        );
+    }
+
+    #[test]
+    fn refuses_missing_or_non_symbolic_far_call_targets() {
+        assert_eq!(
+            encode_with_fixups(&instruction(X86Opcode::CallFar, Vec::new())),
+            Err(EncodeError::Arity {
+                opcode: X86Opcode::CallFar,
+                expected: 1,
+                actual: 0,
+            })
+        );
+        assert_eq!(
+            encode_with_fixups(&instruction(
+                X86Opcode::CallFar,
+                vec![MCOperand::Immediate(0)],
+            )),
+            Err(EncodeError::OperandKind {
+                opcode: X86Opcode::CallFar,
+                index: 0,
+                expected: "a symbolic far-call target",
+            })
+        );
+    }
+
+    #[test]
+    fn lowers_an_external_far_call_then_preserves_its_target_through_encoding() {
+        // The module boundary creates the external MC symbol and expression;
+        // encoding must retain it through the fixup rather than interpreting
+        // it as an immediate field.
+        let module = MachineModule {
+            data_objects: Vec::new(),
+            functions: vec![MachineFunction {
+                id: MachineFunctionId::new(0),
+                name: "caller".to_owned(),
+                linkage: MachineLinkage::External,
+                signature: MachineSignature {
+                    result: None,
+                    parameters: Vec::new(),
+                    variadic: false,
+                    calling_convention: MachineCallingConvention::C,
+                },
+                entry: MachineBlockId::new(0),
+                virtual_registers: Vec::new(),
+                blocks: vec![MachineBlock {
+                    id: MachineBlockId::new(0),
+                    instructions: vec![MachineInstruction {
+                        id: MachineInstructionId::new(0),
+                        opcode: X86Opcode::CallFar.machine_opcode(),
+                        operands: vec![MachineOperand {
+                            kind: MachineOperandKind::ExternalSymbol {
+                                name: "runtime".to_owned(),
+                                addend: 6,
+                            },
+                            role: OperandRole::None,
+                            constraint: None,
+                            tied_to: None,
+                        }],
+                        flags: InstructionFlags::NONE,
+                    }],
+                    successors: Vec::new(),
+                }],
+                frame_objects: Vec::new(),
+            }],
+        };
+
+        let lowered = lower_allocated_module(&module).unwrap();
+        let instruction = match &lowered.sections[0].fragments[1] {
+            crate::mc::MCFragment::Instruction(fragment) => &fragment.instruction,
+            _ => panic!("the external call follows the entry anchor"),
+        };
+        let runtime = lowered
+            .symbols
+            .iter()
+            .find(|symbol| symbol.name == "runtime")
+            .unwrap();
+        let encoded = encode_with_fixups(instruction).unwrap();
+
+        assert_eq!(encoded.bytes, vec![0x9a, 0, 0, 0, 0]);
+        assert_eq!(
+            encoded.fixups[0].expression,
+            MCExpression {
+                symbol: runtime.id,
+                addend: 6,
+            }
+        );
     }
 }

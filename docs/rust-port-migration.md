@@ -526,3 +526,28 @@ rule was implemented, then passed with a parseable `.qir` result. All focused
 verification in these implementation batches, including compile failures used
 for review, remains below the ten-percent wall-clock budget. No qrender,
 DOSBox, Python suite, or broad Rust suite was run.
+
+The allocated x86 boundary now consumes the Python backend's established LONG
+ABI forms before MC lowering. `MergeWords` becomes `push high; push low; pop
+dword`; low-word extraction uses the physical word view directly; high-word
+extraction uses the flag-preserving `push dword; pop word; pop word` spelling.
+Far-call register operands remain visible through allocation, then disappear
+as allocator metadata. Far returns similarly retain only their checked callee
+cleanup immediate after the AX-low/DX-high contract has been validated.
+
+This is a target-owned calling-convention finalizer, not a new optimizer pass
+or representation feature. No QB runtime name, LONG marker, or frontend fact
+was added to portable IR, generic Machine IR, MC, or their passes. The driver
+alone selects the BASIC ABI hook. The real `procedure.bas` regression was
+observed failing while its word pseudos still reached MC, then passing after
+the finalizer was placed between allocation and MC lowering.
+
+The x86 encoder now emits a direct far-call skeleton only through a
+relocation-aware API: `9a 00 00 00 00` plus one typed 16:16 fixup at byte one.
+The byte-only compatibility API refuses instead of dropping that fixup.
+`retf` now emits `cb` for no cleanup and `ca imm16` for callee cleanup. Ported
+tests retain the exact DX:AX merge bytes, flag-preserving high-word bytes,
+cleanup bytes, symbolic addend, malformed boundary refusals, and immutable
+input behavior. Delegated focused checks and primary review checks consumed
+about eleven seconds in total; no broad suite, Python suite, qrender, DOSBox,
+or object-link gate ran.

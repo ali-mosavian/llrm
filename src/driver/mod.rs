@@ -12,8 +12,8 @@ use crate::ir;
 use crate::object::omf::file::{File as OmfFile, FileError};
 use crate::support::diagnostic::Diagnostic;
 use crate::target::x86::{
-    BasicAbiError, BasicFramePlan, BasicRuntime, CallClobberError, FrameIndexMaterializationError,
-    SelectionError, X86AllocationError, X86McModuleLowerError,
+    BasicAbiError, BasicAbiExpansionError, BasicFramePlan, BasicRuntime, CallClobberError,
+    FrameIndexMaterializationError, SelectionError, X86AllocationError, X86McModuleLowerError,
 };
 
 /// Configuration that affects QB source semantics.
@@ -79,6 +79,10 @@ pub enum Error {
         function: String,
         error: FrameIndexMaterializationError,
     },
+    BasicAbiExpansion {
+        function: String,
+        error: BasicAbiExpansionError,
+    },
     MissingFramePlan {
         function: String,
     },
@@ -125,6 +129,10 @@ impl fmt::Display for Error {
             Self::FrameIndices { function, error } => write!(
                 formatter,
                 "cannot materialize x86 frame indices for {function}: {error}"
+            ),
+            Self::BasicAbiExpansion { function, error } => write!(
+                formatter,
+                "cannot finalize the allocated BASIC x86 ABI for {function}: {error}"
             ),
             Self::MissingFramePlan { function } => write!(
                 formatter,
@@ -292,9 +300,18 @@ pub fn allocate_qb_machine(selected: &QbMachine) -> Result<QbMachine, Error> {
     Ok(allocated)
 }
 
-/// Allocates selected QB Machine IR and lowers its module-wide symbols to MC.
+/// Allocates selected QB Machine IR, finalizes its target ABI, and lowers it to MC.
 pub fn lower_qb_machine_to_mc(selected: &QbMachine) -> Result<crate::mc::MCModule, Error> {
-    let allocated = allocate_qb_machine(selected)?;
+    let mut allocated = allocate_qb_machine(selected)?;
+    for function in &mut allocated.module.functions {
+        *function = crate::target::x86::expand_allocated_basic_abi(function).map_err(|error| {
+            Error::BasicAbiExpansion {
+                function: function.name.clone(),
+                error,
+            }
+        })?;
+    }
+    crate::target::x86::verify_machine(&allocated.module).map_err(Error::Machine)?;
     crate::target::x86::lower_allocated_module(&allocated.module).map_err(Error::Mc)
 }
 
@@ -345,7 +362,7 @@ mod tests {
         ArrayOrder, Dialect, FORMAT_VERSION, FloatMode, Program, RuntimeProfile, TargetProfile,
     };
     use crate::ir;
-    use crate::mc::SymbolDefinition;
+    use crate::mc::{MCFragment, MCOperand, SymbolDefinition};
     use crate::object::omf::record::Record;
     use crate::target::x86::{X86Opcode, X86Register};
 
@@ -648,6 +665,32 @@ mod tests {
                 .expect("BASIC frame runtime call has an MC symbol");
             assert_eq!(symbol.definition, SymbolDefinition::Undefined);
         }
+
+        let instructions = first.sections[0]
+            .fragments
+            .iter()
+            .filter_map(|fragment| match fragment {
+                MCFragment::Instruction(fragment) => Some(&fragment.instruction),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(instructions.iter().all(|instruction| !matches!(
+            X86Opcode::from_raw(instruction.opcode.get()),
+            Some(X86Opcode::MergeWords | X86Opcode::LowWord | X86Opcode::HighWord)
+        )));
+        assert!(instructions
+            .iter()
+            .filter(|instruction| {
+                X86Opcode::from_raw(instruction.opcode.get()) == Some(X86Opcode::CallFar)
+            })
+            .all(|instruction| matches!(
+                instruction.operands.as_slice(),
+                [MCOperand::Expression(_)]
+            )));
+        assert!(instructions.iter().any(|instruction| {
+            X86Opcode::from_raw(instruction.opcode.get()) == Some(X86Opcode::ReturnFar)
+                && instruction.operands == [MCOperand::Immediate(2)]
+        }));
     }
 
     #[test]

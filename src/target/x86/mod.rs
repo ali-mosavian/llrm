@@ -2,8 +2,10 @@
 
 mod allocation;
 mod basic_abi;
+mod basic_abi_expand;
 mod call_clobbers;
 mod encoding;
+mod fixup;
 mod frame;
 mod frame_indices;
 mod instructions;
@@ -15,8 +17,10 @@ mod verify;
 
 pub use allocation::{X86AllocationError, allocate_registers};
 pub use basic_abi::{BasicAbiError, ExpandedBasicFunction, expand_basic_runtime};
+pub use basic_abi_expand::{BasicAbiExpansionError, expand_allocated_basic_abi};
 pub use call_clobbers::{CallClobberError, materialize_far_call_clobbers};
-pub use encoding::{EncodeError, encode, encoded_size};
+pub use encoding::{EncodeError, EncodedInstruction, encode, encode_with_fixups, encoded_size};
+pub use fixup::X86FixupKind;
 pub use frame::{BasicFramePlan, BasicFramePlanError, BasicRuntime, plan_basic_frame};
 pub use frame_indices::{FrameIndexMaterializationError, materialize_frame_indices};
 pub use instructions::{ComparisonKind, ConditionCode, OperandSize, X86Opcode};
