@@ -310,14 +310,49 @@ the exact far/callee-cleanup ABI record, preserves its argument permutation,
 creates deterministic typed external declarations, and marks unknown runtime
 effects conservatively. Primary review caught missing declaration parameter
 values and orphan ABI metadata before integration. A real `screen 0`/`end`
-source now emits verified `.qir`; ordinary variable-bearing programs currently
-stop explicitly at static-data/place lowering, which is the next frontend
-boundary.
+source now emits verified `.qir`.
+
+Module and static places now lower to typed global addresses, loads, stores,
+and address values. Static objects retain their exact bytes, linkage,
+mutability, source order, and otherwise-empty relocation targets. Portable IR
+represents symbolic near, far, huge, code, and segment patches directly in a
+relocatable byte initializer; its text format round trips patch order and its
+verifier rejects missing targets, overlapping patches, generic address spaces,
+and out-of-range writes. The focused vertical regression compiles the real
+`readonly-data.bas` fixture and retains VBDOS's segment selector, far string
+payload, and near descriptor patches in verified `.qir`. Local and parameter
+storage remain explicit refusals until stack allocation is represented.
 
 The pass pipeline also contains exact integer algebraic simplification beside
 constant folding, branch simplification, and dead-code elimination. Shared
 operand rewriting is exhaustive over the portable IR instead of being copied
 into each pass.
+
+Same-block common-subexpression elimination, unreachable-block elimination,
+and conservative dead-store elimination are now implemented and exposed by
+`llrm-opt`. Dead-store elimination keys direct global stores by pointer type,
+global, addend, and stored value type; primary review rejected an earlier form
+that could have treated an 8-bit overwrite as killing a 32-bit store. Loads,
+unknown addresses, volatile operations, and memory-affecting calls remain
+barriers, and the pass never crosses a block.
+
+The initial integer selector now feeds `llrm-llc --emit qmir` through the
+driver, preserving the rule that only the driver assembles the whole pipeline.
+`llrm --emit qmir` also composes QB source through the same driver path. Direct
+void runtime calls materialize and push their i16/i32 ABI arguments in the
+order already established by HIR lowering, retain a symbolic far external
+target, and omit declaration-only functions from Machine IR. An IR
+`unreachable` terminator produces a zero-successor Machine-IR block without
+inventing an instruction. The real `terminal.bas` fixture now reaches verified
+`.qmir` with its `screen`, `width`, `sleep`, and `end` calls.
+
+Focused selection, Machine-IR round-trip, and adjacent Machine-to-MC byte tests
+cover this path. Recent focused verification consisted of individual tests or
+one real CLI invocation: static place lowering (2.38 s), relocatable global
+planning (1.30 s), real QB string relocation lowering (3.17 s), unreachable
+CLI wiring (0.04 s after compilation), all six DSE cases (0.04 s from the warm
+build), runtime call selection (2.07 s), and real QB-to-`.qmir` emission
+(1.44 s). No broad suite, qrender, or DOSBox gate ran during this work.
 
 That regression was observed failing before the general declaration-liveness
 rule was implemented, then passed with a parseable `.qir` result. All focused
