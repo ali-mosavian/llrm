@@ -678,7 +678,8 @@ def validate_coverage(profile: str, *, verify_help: bool = True) -> list[dict]:
     topics = data.get("topic", [])
     if not topics:
         raise ValueError(f"{path}: no help topics")
-    known_cases = {case.name for case in cases(profile)}
+    case_by_name = {case.name: case for case in cases(profile)}
+    known_cases = set(case_by_name)
     identities: set[tuple[str, object]] = set()
     for number, topic in enumerate(topics, 1):
         label = f"{path}: topic {number} ({topic.get('context', '?')})"
@@ -698,7 +699,7 @@ def validate_coverage(profile: str, *, verify_help: bool = True) -> list[dict]:
         status = topic["status"]
         if status == "covered" and not mapped:
             raise ValueError(f"{label}: covered topic has no compatibility case")
-        mapped_cases = [case for case in cases(profile) if case.name in mapped]
+        mapped_cases = [case_by_name[name] for name in mapped]
         if status == "covered" and not any(
             case.values["runtime"] == "required" and case.values.get("verification", "").strip()
             for case in mapped_cases

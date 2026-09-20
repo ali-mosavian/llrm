@@ -1,3 +1,4 @@
+from typing import Any
 from pathlib import Path
 
 import pytest
@@ -64,6 +65,22 @@ def test_help_coverage_points_to_cases_and_source_lines() -> None:
             or any(case_by_name[name].values["runtime"] == "required" for name in topic["cases"])
             for topic in topics
         )
+
+
+def test_help_coverage_loads_cases_once_per_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+    namespace = __import__("runpy").run_path(ROOT / "tools/qbcompat.py")
+    globals_ = namespace["validate_coverage"].__globals__
+    original = globals_["cases"]
+    loaded: list[str] = []
+
+    def cases(profile: str) -> list[Any]:
+        loaded.append(profile)
+        return original(profile)
+
+    monkeypatch.setitem(globals_, "cases", cases)
+
+    assert namespace["validate_coverage"]("vbdos", verify_help=False)
+    assert loaded == ["vbdos"]
 
 
 def test_measured_artifact_requires_a_fresh_prepared_dos_run(tmp_path: Path) -> None:
