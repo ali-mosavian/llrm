@@ -200,6 +200,7 @@ mod tests {
                 mc::MCOperand::Immediate(42),
             ]
         );
+        assert_eq!(super::super::encode(&lowered).unwrap(), vec![0xb8, 42, 0]);
     }
 
     #[test]
