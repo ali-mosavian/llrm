@@ -15,6 +15,7 @@ pub mod module_header;
 pub mod object;
 pub mod semantic;
 pub mod source;
+pub mod statement_mc;
 pub mod statement_table;
 pub mod syntax;
 
