@@ -19,6 +19,10 @@ name = "llrm"
 path = "src/bin/llrm.rs"
 
 [[bin]]
+name = "llrm-objdump"
+path = "src/bin/llrm-objdump.rs"
+
+[[bin]]
 name = "qbfront"
 path = "src/bin/qbfront.rs"
 
