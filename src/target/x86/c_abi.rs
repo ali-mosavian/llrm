@@ -183,7 +183,7 @@ pub fn plan_c_frame(function: &MachineFunction) -> Result<CFramePlan, CFramePlan
         return Err(CFramePlanError::VariadicFunction);
     }
     if let Some(value_type) = function.signature.result {
-        require_word_value(value_type)
+        require_c_result_value(value_type)
             .map_err(|_| CFramePlanError::UnsupportedResult(value_type))?;
     }
     for (parameter, value_type) in function.signature.parameters.iter().copied().enumerate() {
@@ -306,6 +306,12 @@ pub fn plan_c_frame(function: &MachineFunction) -> Result<CFramePlan, CFramePlan
 
 fn require_word_value(value_type: MachineValueType) -> Result<(), ()> {
     matches!(value_type, MachineValueType::Integer { bits: 16 })
+        .then_some(())
+        .ok_or(())
+}
+
+fn require_c_result_value(value_type: MachineValueType) -> Result<(), ()> {
+    matches!(value_type, MachineValueType::Integer { bits: 16 | 32 })
         .then_some(())
         .ok_or(())
 }
@@ -522,7 +528,7 @@ fn preflight(function: &MachineFunction, plan: &CFramePlan) -> Result<(), CAbiEx
                     block.id,
                     instruction,
                     expected,
-                    function.signature.result.is_some(),
+                    function.signature.result,
                 )?;
             }
             if is_call(instruction)
@@ -551,7 +557,7 @@ fn validate_return(
     block: MachineBlockId,
     instruction: &MachineInstruction,
     expected: X86Opcode,
-    has_result: bool,
+    result: Option<MachineValueType>,
 ) -> Result<(), CAbiExpansionError> {
     let actual = X86Opcode::from_machine_opcode(instruction.opcode);
     if actual != Some(expected) {
@@ -575,12 +581,23 @@ fn validate_return(
         });
     }
     let ax = physical(X86Register::Ax, OperandRole::Use);
-    let valid_operands = match (expected, has_result) {
-        (X86Opcode::ReturnNear, false) => instruction.operands.is_empty(),
-        (X86Opcode::ReturnNear, true) => instruction.operands == [ax],
-        (X86Opcode::ReturnFar, false) => instruction.operands == [immediate(0)],
-        (X86Opcode::ReturnFar, true) => instruction.operands == [ax, immediate(0)],
-        _ => unreachable!(),
+    let dx = physical(X86Register::Dx, OperandRole::Use);
+    let valid_operands = match (expected, result) {
+        (X86Opcode::ReturnNear, None) => instruction.operands.is_empty(),
+        (X86Opcode::ReturnNear, Some(MachineValueType::Integer { bits: 16 })) => {
+            instruction.operands == [ax]
+        }
+        (X86Opcode::ReturnNear, Some(MachineValueType::Integer { bits: 32 })) => {
+            instruction.operands == [ax, dx]
+        }
+        (X86Opcode::ReturnFar, None) => instruction.operands == [immediate(0)],
+        (X86Opcode::ReturnFar, Some(MachineValueType::Integer { bits: 16 })) => {
+            instruction.operands == [ax, immediate(0)]
+        }
+        (X86Opcode::ReturnFar, Some(MachineValueType::Integer { bits: 32 })) => {
+            instruction.operands == [ax, dx, immediate(0)]
+        }
+        _ => false,
     };
     if !valid_operands {
         return Err(CAbiExpansionError::MalformedReturn {
@@ -884,5 +901,82 @@ mod tests {
             instructions[2].operands,
             vec![physical(X86Register::Sp, OperandRole::UseDef), immediate(4),]
         );
+    }
+
+    #[test]
+    fn plans_and_expands_far_cdecl_i32_result_in_dx_ax() {
+        // C long results arrive from selection as low AX followed by high DX.
+        let mut input = function(
+            MachineCallingConvention::FarCdecl,
+            vec![],
+            vec![local(9, 2)],
+            true,
+        );
+        input.signature.result = Some(MachineValueType::Integer { bits: 32 });
+        input.blocks[0].instructions[0].operands = vec![
+            physical(X86Register::Ax, OperandRole::Use),
+            physical(X86Register::Dx, OperandRole::Use),
+            immediate(0),
+        ];
+        input.blocks[0].instructions.insert(
+            0,
+            MachineInstruction {
+                id: MachineInstructionId::new(6),
+                opcode: X86Opcode::Mov.machine_opcode(),
+                operands: vec![
+                    physical(X86Register::Ax, OperandRole::Def),
+                    immediate(0x5678),
+                ],
+                flags: InstructionFlags::NONE,
+            },
+        );
+        input.blocks[0].instructions.insert(
+            1,
+            MachineInstruction {
+                id: MachineInstructionId::new(7),
+                opcode: X86Opcode::Mov.machine_opcode(),
+                operands: vec![
+                    physical(X86Register::Dx, OperandRole::Def),
+                    immediate(0x1234),
+                ],
+                flags: InstructionFlags::NONE,
+            },
+        );
+
+        let plan = plan_c_frame(&input).unwrap();
+        let expanded = expand_allocated_c_abi(&input, &plan).unwrap();
+        let instructions = &expanded.blocks[0].instructions;
+
+        assert!(plan.framed());
+        assert_eq!(
+            instructions
+                .iter()
+                .map(|instruction| X86Opcode::from_machine_opcode(instruction.opcode))
+                .collect::<Vec<_>>(),
+            vec![
+                Some(X86Opcode::Push),
+                Some(X86Opcode::Mov),
+                Some(X86Opcode::Sub),
+                Some(X86Opcode::Mov),
+                Some(X86Opcode::Mov),
+                Some(X86Opcode::Leave),
+                Some(X86Opcode::ReturnFar),
+            ]
+        );
+        assert_eq!(
+            instructions[3].operands,
+            vec![
+                physical(X86Register::Ax, OperandRole::Def),
+                immediate(0x5678),
+            ]
+        );
+        assert_eq!(
+            instructions[4].operands,
+            vec![
+                physical(X86Register::Dx, OperandRole::Def),
+                immediate(0x1234),
+            ]
+        );
+        assert_eq!(instructions.last().unwrap().operands, vec![immediate(0)]);
     }
 }
