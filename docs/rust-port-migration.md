@@ -258,8 +258,14 @@ live-in and live-out sets to a fixed point, including read-before-write
 
 The initial x86 target describes 8-, 16-, and 32-bit integer views, segment and
 x87 registers, alias families, allocation classes, stable semantic opcodes,
-and all condition-code inversion pairs. These descriptions contain no ABI or
-encoding policy yet.
+and all condition-code inversion pairs.
+
+Machine liveness now feeds a deterministic interference graph and deliberately
+limited greedy allocator. The generic allocator takes target-owned candidate
+and alias hooks; the x86 adapter prevents overlapping views such as `AX` and
+`EAX` from being assigned to interfering values. Allocation application is a
+separate immutable step which refuses missing, stale, tied, or fixed-register
+inconsistent assignments before replacing virtual operands.
 
 Focused `.qmir`, x86, and liveness checks consumed about 9 seconds after full
 primary diff review. The first liveness compile exposed an invalid mutable map
@@ -279,6 +285,15 @@ Primary review corrected a delegated type-inference failure before accepting
 layout. The focused model, verifier, and layout checks consumed about 6.5
 seconds.
 
+The first exact x86 encoder handles byte, word, and dword physical-register
+forms for moves, core arithmetic and logical operations, two-operand multiply,
+unary negation/complement, stack operations, and near/far returns in 16-bit
+default mode. It emits the operand-size prefix only for dword forms and refuses
+every unresolved expression, memory form, control transfer, segment register,
+and x87 form it cannot yet encode. A strict Machine-IR-to-MC boundary rejects
+virtual registers and stale allocation metadata. Its adjacent regression runs
+an allocated move through MC into the expected instruction bytes.
+
 ## Current source-to-IR vertical slice
 
 `llrm --emit qir` now composes QB parsing, typed HIR construction, HIR-to-IR
@@ -290,8 +305,22 @@ selects only types referenced by lowered functions and ignores only empty,
 internal data declarations; referenced unsupported semantics and nonempty or
 externally visible data still fail explicitly.
 
+External QB runtime calls now cross the same source-to-IR path. Lowering checks
+the exact far/callee-cleanup ABI record, preserves its argument permutation,
+creates deterministic typed external declarations, and marks unknown runtime
+effects conservatively. Primary review caught missing declaration parameter
+values and orphan ABI metadata before integration. A real `screen 0`/`end`
+source now emits verified `.qir`; ordinary variable-bearing programs currently
+stop explicitly at static-data/place lowering, which is the next frontend
+boundary.
+
+The pass pipeline also contains exact integer algebraic simplification beside
+constant folding, branch simplification, and dead-code elimination. Shared
+operand rewriting is exhaustive over the portable IR instead of being copied
+into each pass.
+
 That regression was observed failing before the general declaration-liveness
 rule was implemented, then passed with a parseable `.qir` result. All focused
-verification in this implementation batch, including compile failures used for
-review, consumed about 33 seconds. No qrender, DOSBox, Python suite, or broad
-Rust suite was run.
+verification in these implementation batches, including compile failures used
+for review, remains below the ten-percent wall-clock budget. No qrender,
+DOSBox, Python suite, or broad Rust suite was run.
