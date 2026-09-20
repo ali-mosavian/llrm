@@ -1583,15 +1583,16 @@ impl<'types> FunctionSelector<'types> {
         value: &Operand,
         output: &mut Vec<MachineInstruction>,
     ) -> Result<(Option<MachineInstruction>, Vec<MachineBlockId>), SelectionError> {
-        if !matches!(
-            self.type_kind(self.function.signature.result)?,
-            TypeKind::Integer { bits: 16 }
-        ) {
-            return Err(SelectionError::UnsupportedReturnValue {
-                function: self.function.id,
-                block: block.id,
-            });
-        }
+        let bits = match self.type_kind(self.function.signature.result)? {
+            TypeKind::Integer { bits: 16 } => 16,
+            TypeKind::Integer { bits: 32 } => 32,
+            _ => {
+                return Err(SelectionError::UnsupportedReturnValue {
+                    function: self.function.id,
+                    block: block.id,
+                });
+            }
+        };
         let Operand::Value(value) = value else {
             return Err(SelectionError::UnsupportedReturnValue {
                 function: self.function.id,
@@ -1611,22 +1612,49 @@ impl<'types> FunctionSelector<'types> {
             });
         }
         let value = self.materialize_register(selected, output)?;
-        let (opcode, operands) = match self.function.signature.calling_convention {
-            CallingConvention::C => (
-                X86Opcode::ReturnNear,
-                vec![fixed_virtual_operand(
-                    value,
-                    OperandRole::Use,
-                    X86Register::Ax,
-                )],
-            ),
-            CallingConvention::FarCdecl => (
-                X86Opcode::ReturnFar,
+        let mut operands = if bits == 16 {
+            vec![fixed_virtual_operand(
+                value,
+                OperandRole::Use,
+                X86Register::Ax,
+            )]
+        } else {
+            // Open Watcom's 16-bit C conventions return a 32-bit integer in
+            // DX:AX.  Python's cfront splits the whole value in `ret`, and
+            // backend::lower places those two words through `_RETURNED` in
+            // AX then DX.  Keep the portable IR value whole until this target
+            // boundary, then reproduce that placement exactly.
+            let low = self.fresh_virtual_register(X86RegisterClass::Word.machine_class())?;
+            let high = self.fresh_virtual_register(X86RegisterClass::Word.machine_class())?;
+            self.push_instruction(
+                X86Opcode::LowWord,
                 vec![
-                    fixed_virtual_operand(value, OperandRole::Use, X86Register::Ax),
-                    immediate_operand(0),
+                    virtual_operand(low, OperandRole::Def),
+                    virtual_operand(value, OperandRole::Use),
                 ],
-            ),
+                InstructionFlags::NONE,
+                output,
+            )?;
+            self.push_instruction(
+                X86Opcode::HighWord,
+                vec![
+                    virtual_operand(high, OperandRole::Def),
+                    virtual_operand(value, OperandRole::Use),
+                ],
+                InstructionFlags::NONE,
+                output,
+            )?;
+            vec![
+                fixed_virtual_operand(low, OperandRole::Use, X86Register::Ax),
+                fixed_virtual_operand(high, OperandRole::Use, X86Register::Dx),
+            ]
+        };
+        let opcode = match self.function.signature.calling_convention {
+            CallingConvention::C => X86Opcode::ReturnNear,
+            CallingConvention::FarCdecl => {
+                operands.push(immediate_operand(0));
+                X86Opcode::ReturnFar
+            }
             CallingConvention::FarPascal => {
                 return Err(SelectionError::UnsupportedReturnValue {
                     function: self.function.id,
@@ -2795,6 +2823,69 @@ mod tests {
                 .expect("callee has return")
                 .opcode,
             X86Opcode::ReturnNear.machine_opcode()
+        );
+    }
+
+    #[test]
+    fn selects_far_cdecl_i32_return_in_dx_ax() {
+        // Python cfront.raise_hir.FunctionRaiser.ret splits a 32-bit C
+        // result into two words, and backend.lower._RETURNED places them in
+        // AX then DX.  parity/scalar returns an i32 through this exact ABI.
+        let function = Function {
+            id: FunctionId::new(0),
+            name: "parity_scalar".into(),
+            signature: Signature {
+                result: I32,
+                parameters: vec![I32],
+                variadic: false,
+                calling_convention: CallingConvention::FarCdecl,
+            },
+            linkage: Linkage::Internal,
+            attributes: Vec::new(),
+            parameters: vec![Value {
+                id: ValueId::new(0),
+                type_id: I32,
+            }],
+            blocks: vec![Block {
+                id: BlockId::new(0),
+                instructions: Vec::new(),
+                terminator: Terminator::Return(Some(Operand::Value(ValueId::new(0)))),
+            }],
+        };
+
+        let selected = select_module(&module(basic_types(), vec![function]))
+            .expect("far cdecl i32 return selects");
+        selected.verify().expect("selected Machine IR verifies");
+
+        let instructions = &selected.functions[0].blocks[0].instructions;
+        let returned = instructions.last().expect("function has a return");
+        assert_eq!(returned.opcode, X86Opcode::ReturnFar.machine_opcode());
+        assert!(matches!(
+            returned.operands.as_slice(),
+            [
+                MachineOperand {
+                    role: OperandRole::Use,
+                    constraint: Some(RegisterConstraint::Fixed(low)),
+                    ..
+                },
+                MachineOperand {
+                    role: OperandRole::Use,
+                    constraint: Some(RegisterConstraint::Fixed(high)),
+                    ..
+                },
+                MachineOperand {
+                    kind: MachineOperandKind::Immediate(0),
+                    ..
+                }
+            ] if *low == X86Register::Ax.physical() && *high == X86Register::Dx.physical()
+        ));
+        assert_eq!(
+            instructions[instructions.len() - 3].opcode,
+            X86Opcode::LowWord.machine_opcode()
+        );
+        assert_eq!(
+            instructions[instructions.len() - 2].opcode,
+            X86Opcode::HighWord.machine_opcode()
         );
     }
 }
