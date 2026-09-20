@@ -115,6 +115,7 @@ def test_qb_driver_never_replays_a_stale_in_tree_release_binary(monkeypatch: pyt
     assert str(qb_driver.MANIFEST) in command
 
 
+@pytest.mark.full
 def test_qb45_numeric_read_data_reaches_typed_hir_and_fresh_omf() -> None:
     """Q45N01 stopped at READ, then a native-only spill frame made READ report syntax error."""
     source = ROOT / "frontends/qb/compat/qb45/Q45N01.BAS"
@@ -524,6 +525,7 @@ def test_qb_stage_dump_reads_the_same_cp437_source_as_the_frontend(tmp_path: Pat
     assert namespace["_source_text"](source) == 'print "█"\r\n'
 
 
+@pytest.mark.full
 def test_qb_stage_dump_ends_with_the_emitted_runtime_abi_assembly(tmp_path: Path) -> None:
     """The showcase omitted ENRA and printed encoded RETF 4 as a bare RETF."""
     namespace = __import__("runpy").run_path("tools/qbstages.py")
@@ -946,6 +948,7 @@ def test_fresh_basic_object_does_not_predeclare_the_c_data_class() -> None:
     assert [segments[index][0] for index in omf.groups(records)["DGROUP"]] == names[1:-2]
 
 
+@pytest.mark.full
 def test_pds_alternate_math_module_header_records_the_measured_switch() -> None:
     """PDFPA reached LINK, then BCL71ANR rejected the module during initialization."""
     source = qb_driver.parsed(
@@ -1548,6 +1551,7 @@ def test_resume_next_retains_runtime_statement_entries() -> None:
     assert int.from_bytes(code[statement_at + 2 : statement_at + 4], "little") == 100
 
 
+@pytest.mark.full
 def test_resume_statement_entries_are_optimizer_roots() -> None:
     """Q45ER52 optimization made RESUME entries use values defined only from main.
 
@@ -1606,6 +1610,7 @@ def test_string_fre_emits_the_measured_vbdos_runtime_call(tmp_path: Path) -> Non
     assert "B$FRSD" in omf.externals(records)
 
 
+@pytest.mark.full
 def test_dynamic_array_walk_keeps_far_pointer_halves_defined(tmp_path: Path) -> None:
     """D_SURF SC_FTAKE lost far-array address definitions during secondary folding."""
     basic = tmp_path / "FARWALK.BAS"
@@ -1720,6 +1725,7 @@ def test_byref_dynamic_array_field_copies_through_a_near_formal(tmp_path: Path) 
     assert qb_compile.object_bytes(source, "FARFIELD.BAS")
 
 
+@pytest.mark.full
 def test_runtime_frame_owns_spill_reservation_without_a_native_prefix() -> None:
     """Q45N01's native SUB SP shifted B$ENRA's documented frame fields by four bytes."""
     source = qb_driver.parsed(
@@ -1779,6 +1785,7 @@ def test_pds_resume_target_and_numbered_erl_survive_distinct_identity_spaces() -
     assert rows[-1] == "db 000h,000h"
 
 
+@pytest.mark.full
 def test_pds_huge_array_uses_measured_ddim_and_hary_abi() -> None:
     """PDHUGE wrapped/aliased beyond 64 KiB when /Ah was dropped and B$HARY was guessed inline."""
     source = qb_driver.parsed(
@@ -2622,6 +2629,7 @@ def test_byref_loop_condition_reloads_the_published_pointee() -> None:
     )
 
 
+@pytest.mark.full
 def test_identity_phi_edge_survives_control_flow_threading() -> None:
     """ENTPHI lost a dynamic-array address after its identity phi edge vanished.
 
