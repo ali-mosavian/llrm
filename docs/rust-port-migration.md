@@ -136,22 +136,51 @@ Focused verification in this implementation stretch included:
 ## Iteration 5: OMF foundation (in progress)
 
 Rust now owns lossless record framing, including intentional preservation of
-BC's checksum-invalid FIXUPP records, a bounded zero-copy primitive reader, and
-typed one-based LNAMES/EXTDEF tables which preserve non-UTF-8 bytes.  Archive,
-record-family, FIXUPP-thread, and exact object editing work remains in progress.
+BC's checksum-invalid FIXUPP records, a bounded zero-copy primitive reader,
+typed one-based LNAMES/EXTDEF tables, SEGDEF, LEDATA/LEDATA32,
+LINNUM/LINNUM32, GRPDEF, PUBDEF/PUBDEF32, and LPUBDEF/LPUBDEF32. Names remain
+raw bytes where OMF does not require UTF-8.
+
+OMF library framing retains page padding and the opaque dictionary while
+exposing page-aligned modules with absolute record offsets. The common file
+entry point distinguishes standalone objects from libraries and round trips
+either form without changing bytes. `llrm -x omf` now exercises that path for
+an untouched rewrite, and `llrm-objdump` reports record framing and checksum
+state. FIXUPP threads, record editing, CodeView, and semantic object raising
+remain in progress.
 
 The record-framing tests ran in 2.09 seconds, primitive-reader tests in 1.67
 seconds, and symbol-table tests in 1.63 seconds.  Each selected only its own
 module and executed the assertions in 0.00 seconds after compilation.
 
+Every newly decoded record family carries focused Rust tests beside its
+implementation, including malformed-record cases. Primary review ran one
+representative test per slice; the archive, LEDATA, LINNUM, file dispatch,
+declaration, driver, and objdump checks together consumed under 15 seconds.
+A real regression object also passed byte-for-byte through the `llrm` CLI in
+2.4 seconds.
+
 ## Iteration 6: portable IR (started)
 
-The first portable SSA model is implemented directly in Rust.  It defines
+The portable SSA model is implemented directly in Rust.  It defines
 typed arenas for types, globals, functions, blocks, instructions, and values;
 opaque pointers with explicit address spaces; typed constants; CFG
 terminators; phi inputs; calls and intrinsics; and explicit memory, trap, and
-observable effects.  It imports no frontend, HIR, object, MC, CodeGen, or target
-module.  Verification, textual `.qir`, and HIR lowering are the next slices.
+observable effects. It imports no frontend, HIR, object, MC, CodeGen, or target
+module.
+
+The structural verifier now checks IDs and references, function signatures,
+CFG targets and phi predecessor sets, result arity, nested constants, and
+return shape without mutating IR. `.qir` has a deterministic versioned printer
+and strict parser covering every current model variant; parsing ends by running
+the verifier. `llrm-opt` provides the first standalone replay and verification
+path. HIR lowering and the focused interpreter are the next slices.
+
+The verifier and `.qir` commits include Rust-side valid and malformed-input
+tests. Primary review found and corrected three compile/API errors in the
+delegated verifier, a missing non-void return invariant, a stale no-verifier
+assumption in the delegated text parser, and an escape-column error before
+acceptance. Focused IR checks consumed under six seconds.
 
 Across the post-baseline work above, measured Rust compile checks and focused
 test commands remain far below 10% of elapsed implementation and review time.
