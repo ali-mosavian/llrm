@@ -101,7 +101,10 @@ pub enum Constant {
         relocations: Vec<GlobalRelocation>,
     },
     Aggregate(Vec<TypedConstant>),
-    GlobalAddress { global: GlobalId, addend: i64 },
+    GlobalAddress {
+        global: GlobalId,
+        addend: i64,
+    },
     FunctionAddress(FunctionId),
 }
 
@@ -207,6 +210,7 @@ impl Instruction {
                 observable: false,
             },
             InstructionKind::Phi { .. }
+            | InstructionKind::StackAlloc { .. }
             | InstructionKind::Unary { .. }
             | InstructionKind::Binary { .. }
             | InstructionKind::Compare { .. }
@@ -221,6 +225,16 @@ impl Instruction {
 pub enum InstructionKind {
     Phi {
         incoming: Vec<PhiIncoming>,
+    },
+    /// Allocates distinct automatic storage for the current function.
+    ///
+    /// The allocation is pure as far as externally observable effects are
+    /// concerned, but it must never be commoned: equal allocations designate
+    /// different storage.
+    StackAlloc {
+        size: u32,
+        alignment: u32,
+        address_space: AddressSpace,
     },
     Unary {
         op: UnaryOp,

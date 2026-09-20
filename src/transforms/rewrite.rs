@@ -28,6 +28,7 @@ fn rewrite_instruction(
 ) -> bool {
     let mut changed = false;
     match &mut instruction.kind {
+        InstructionKind::StackAlloc { .. } => {}
         InstructionKind::Phi { incoming } => {
             for incoming in incoming {
                 changed |= rewrite_operand(&mut incoming.value, replacements);

@@ -86,7 +86,11 @@ fn candidate(instruction: &Instruction) -> Option<(&crate::ir::Value, Instructio
     let [result] = instruction.results.as_slice() else {
         return None;
     };
-    if !instruction.effects().is_pure() || matches!(&instruction.kind, InstructionKind::Call { .. })
+    if !instruction.effects().is_pure()
+        || matches!(
+            &instruction.kind,
+            InstructionKind::Call { .. } | InstructionKind::StackAlloc { .. }
+        )
     {
         return None;
     }
@@ -341,5 +345,43 @@ mod tests {
 
         assert!(!outcome.changed_ir());
         assert_eq!(module.functions[0].blocks[0].instructions.len(), 6);
+    }
+
+    #[test]
+    fn keeps_identical_stack_allocations_distinct() {
+        let mut module = module(
+            vec![Block {
+                id: BlockId::new(0),
+                instructions: vec![
+                    Instruction {
+                        id: InstructionId::new(0),
+                        results: vec![value(0, PTR)],
+                        kind: InstructionKind::StackAlloc {
+                            size: 8,
+                            alignment: 4,
+                            address_space: crate::ir::AddressSpace::Generic,
+                        },
+                    },
+                    Instruction {
+                        id: InstructionId::new(1),
+                        results: vec![value(1, PTR)],
+                        kind: InstructionKind::StackAlloc {
+                            size: 8,
+                            alignment: 4,
+                            address_space: crate::ir::AddressSpace::Generic,
+                        },
+                    },
+                ],
+                terminator: Terminator::Return(Some(integer(0))),
+            }],
+            Vec::new(),
+        );
+
+        let outcome = CommonSubexpressionElimination::new()
+            .run(&mut module.functions[0])
+            .unwrap();
+
+        assert!(!outcome.changed_ir());
+        assert_eq!(module.functions[0].blocks[0].instructions.len(), 2);
     }
 }

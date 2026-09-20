@@ -744,6 +744,7 @@ impl<'types> FunctionSelector<'types> {
                 )?;
             }
             InstructionKind::Phi { .. }
+            | InstructionKind::StackAlloc { .. }
             | InstructionKind::Compare { .. }
             | InstructionKind::Cast { .. }
             | InstructionKind::Load { .. }
@@ -1538,7 +1539,11 @@ mod tests {
         assert_eq!(instructions[2].opcode, X86Opcode::Mov.machine_opcode());
         assert_eq!(instructions[3].opcode, X86Opcode::Push.machine_opcode());
         assert_eq!(instructions[4].opcode, X86Opcode::CallFar.machine_opcode());
-        assert_eq!(instructions.len(), 5, "unreachable emits no machine operation");
+        assert_eq!(
+            instructions.len(),
+            5,
+            "unreachable emits no machine operation"
+        );
         assert!(selected.functions[0].blocks[0].successors.is_empty());
         assert!(matches!(
             instructions[4].operands.as_slice(),

@@ -9,9 +9,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::support::diagnostic::{Diagnostic, Severity};
 
 use super::{
-    BinaryOp, Callee, CastOp, ComparePredicate, Constant, FloatKind, Function, FunctionId,
-    Instruction, InstructionKind, Intrinsic, Module, Operand, Terminator, TypeId, TypeKind,
-    TypedConstant, UnaryOp, ValueId,
+    AddressSpace, BinaryOp, Callee, CastOp, ComparePredicate, Constant, FloatKind, Function,
+    FunctionId, Instruction, InstructionKind, Intrinsic, Module, Operand, Terminator, TypeId,
+    TypeKind, TypedConstant, UnaryOp, ValueId,
 };
 
 /// Verifies portable-IR type consistency after structural verification.
@@ -89,6 +89,7 @@ impl<'module> TypeVerifier<'module> {
 
     fn verify_instruction_constants(&mut self, instruction: &Instruction) {
         match &instruction.kind {
+            InstructionKind::StackAlloc { .. } => {}
             InstructionKind::Phi { incoming } => {
                 for incoming in incoming {
                     self.verify_operand_constant(&incoming.value);
@@ -181,6 +182,19 @@ impl<'module> TypeVerifier<'module> {
                         ),
                     );
                 }
+            }
+            InstructionKind::StackAlloc { address_space, .. } => {
+                let Some(result) = self.single_result_type(instruction) else {
+                    return;
+                };
+                self.require_pointer_address_space(
+                    result,
+                    *address_space,
+                    format!(
+                        "function {} instruction {} stack allocation result",
+                        function.id, instruction.id
+                    ),
+                );
             }
             InstructionKind::Unary { op, operand } => {
                 let Some(result) = self.single_result_type(instruction) else {
@@ -881,6 +895,22 @@ impl<'module> TypeVerifier<'module> {
         }
     }
 
+    fn require_pointer_address_space(
+        &mut self,
+        type_id: TypeId,
+        expected: AddressSpace,
+        context: String,
+    ) {
+        match self.types.get(type_id) {
+            Some(TypeKind::Pointer { address_space }) if *address_space == expected => {}
+            Some(TypeKind::Pointer { address_space }) => self.error(format!(
+                "{context} has address space {address_space:?}, expected {expected:?}"
+            )),
+            Some(_) => self.error(format!("{context} has type {type_id}, expected pointer")),
+            None => {}
+        }
+    }
+
     fn require_non_void(&mut self, type_id: TypeId, context: String) {
         if matches!(self.types.get(type_id), Some(TypeKind::Void)) {
             self.error(format!("{context} has void type"));
@@ -1283,6 +1313,52 @@ mod tests {
         assert!(verify_types(&module).iter().any(|diagnostic| {
             diagnostic.message.contains("instruction 0 result 0")
                 && diagnostic.message.contains("void type")
+        }));
+    }
+
+    #[test]
+    fn rejects_stack_allocation_with_non_pointer_or_wrong_address_space() {
+        let mut module = module(
+            VOID,
+            vec![
+                Instruction {
+                    id: InstructionId::new(0),
+                    results: vec![value(0, I8)],
+                    kind: InstructionKind::StackAlloc {
+                        size: 1,
+                        alignment: 1,
+                        address_space: AddressSpace::NearData,
+                    },
+                },
+                Instruction {
+                    id: InstructionId::new(1),
+                    results: vec![value(1, TypeId::new(4))],
+                    kind: InstructionKind::StackAlloc {
+                        size: 1,
+                        alignment: 1,
+                        address_space: AddressSpace::NearData,
+                    },
+                },
+            ],
+            Terminator::Return(None),
+        );
+        module.types.push(Type {
+            id: TypeId::new(4),
+            kind: TypeKind::Pointer {
+                address_space: AddressSpace::FarData,
+            },
+        });
+
+        let diagnostics = verify_types(&module);
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("stack allocation result has type 2, expected pointer")
+        }));
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("stack allocation result has address space FarData, expected NearData")
         }));
     }
 }

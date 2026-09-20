@@ -105,6 +105,7 @@ impl ConstantFold {
                 else_value,
             } => self.fold_select(condition, then_value, else_value, result.type_id),
             InstructionKind::Phi { .. }
+            | InstructionKind::StackAlloc { .. }
             | InstructionKind::Load { .. }
             | InstructionKind::Store { .. }
             | InstructionKind::GetElementPointer { .. }

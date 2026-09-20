@@ -135,6 +135,7 @@ fn is_memory_barrier(instruction: &Instruction) -> bool {
             !matches!(intrinsic.effects().memory, MemoryEffects::None)
         }
         InstructionKind::Phi { .. }
+        | InstructionKind::StackAlloc { .. }
         | InstructionKind::Unary { .. }
         | InstructionKind::Binary { .. }
         | InstructionKind::Compare { .. }
@@ -148,8 +149,8 @@ fn is_memory_barrier(instruction: &Instruction) -> bool {
 mod tests {
     use super::*;
     use crate::ir::{
-        Block, BlockId, Callee, CallingConvention, Constant, Effects, Function,
-        FunctionId, InstructionId, Linkage, Signature, Terminator, TypedConstant, Value, ValueId,
+        Block, BlockId, Callee, CallingConvention, Constant, Effects, Function, FunctionId,
+        InstructionId, Linkage, Signature, Terminator, TypedConstant, Value, ValueId,
     };
 
     const I8: TypeId = TypeId::new(0);
@@ -221,7 +222,10 @@ mod tests {
     #[test]
     fn removes_an_overwritten_direct_global_store() {
         let mut function = function(
-            vec![store(0, global_address(0), 1), store(1, global_address(0), 2)],
+            vec![
+                store(0, global_address(0), 1),
+                store(1, global_address(0), 2),
+            ],
             Vec::new(),
         );
 
@@ -299,7 +303,10 @@ mod tests {
     #[test]
     fn keeps_direct_global_stores_with_distinct_addends() {
         let mut function = function(
-            vec![store(0, global_address(0), 1), store(1, global_address(1), 2)],
+            vec![
+                store(0, global_address(0), 1),
+                store(1, global_address(1), 2),
+            ],
             Vec::new(),
         );
 

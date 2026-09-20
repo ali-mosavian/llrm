@@ -627,7 +627,8 @@ fn execute_instruction(
                 then_value
             }))
         }
-        InstructionKind::Load { .. }
+        InstructionKind::StackAlloc { .. }
+        | InstructionKind::Load { .. }
         | InstructionKind::Store { .. }
         | InstructionKind::GetElementPointer { .. }
         | InstructionKind::Call { .. }

@@ -225,6 +225,18 @@ fn write_instruction(out: &mut String, instruction: &Instruction) {
             }
             out.push(']');
         }
+        InstructionKind::StackAlloc {
+            size,
+            alignment,
+            address_space,
+        } => {
+            write!(
+                out,
+                "alloca {size} {alignment} {}",
+                address_space_name(*address_space)
+            )
+            .expect("string writes cannot fail");
+        }
         InstructionKind::Unary { op, operand } => {
             write!(out, "unary {} ", unary_name(*op)).expect("string writes cannot fail");
             push_operand(out, operand);
@@ -508,11 +520,7 @@ fn push_string(out: &mut String, value: &str) {
 }
 
 fn bool_name(value: bool) -> &'static str {
-    if value {
-        "true"
-    } else {
-        "false"
-    }
+    if value { "true" } else { "false" }
 }
 fn linkage_name(value: Linkage) -> &'static str {
     match value {
@@ -822,7 +830,7 @@ fn tokenize(input: &str) -> Result<Vec<Token>, TextError> {
                             break;
                         }
                         '\n' | '\r' => {
-                            return Err(TextError::new(line, column, "newline in string"))
+                            return Err(TextError::new(line, column, "newline in string"));
                         }
                         '\\' => {
                             let Some((_, escape)) = characters.next() else {
@@ -863,13 +871,13 @@ fn tokenize(input: &str) -> Result<Vec<Token>, TextError> {
                                         line,
                                         column,
                                         "unknown string escape",
-                                    ))
+                                    ));
                                 }
                             }
                             column += 2;
                         }
                         current if current.is_control() => {
-                            return Err(TextError::new(line, column, "control character in string"))
+                            return Err(TextError::new(line, column, "control character in string"));
                         }
                         current => {
                             value.push(current);
@@ -1080,6 +1088,11 @@ fn parse_instruction(parser: &mut Parser) -> Result<Instruction, TextError> {
     let kind = match parser.word()?.as_str() {
         "phi" => InstructionKind::Phi {
             incoming: parse_phi_incoming(parser)?,
+        },
+        "alloca" => InstructionKind::StackAlloc {
+            size: parser.u32()?,
+            alignment: parser.u32()?,
+            address_space: parse_address_space(parser)?,
         },
         "unary" => InstructionKind::Unary {
             op: parse_unary(parser)?,
@@ -1662,6 +1675,59 @@ mod tests {
     }
 
     #[test]
+    fn stack_allocation_round_trips() {
+        let module = Module {
+            name: "stack-allocation".into(),
+            types: vec![
+                Type {
+                    id: TypeId::new(0),
+                    kind: TypeKind::Void,
+                },
+                Type {
+                    id: TypeId::new(1),
+                    kind: TypeKind::Pointer {
+                        address_space: AddressSpace::NearData,
+                    },
+                },
+            ],
+            globals: Vec::new(),
+            functions: vec![Function {
+                id: FunctionId::new(0),
+                name: "main".into(),
+                linkage: Linkage::Internal,
+                signature: Signature {
+                    result: TypeId::new(0),
+                    parameters: Vec::new(),
+                    variadic: false,
+                    calling_convention: CallingConvention::Basic,
+                },
+                attributes: Vec::new(),
+                parameters: Vec::new(),
+                blocks: vec![Block {
+                    id: BlockId::new(0),
+                    instructions: vec![Instruction {
+                        id: InstructionId::new(0),
+                        results: vec![Value {
+                            id: ValueId::new(0),
+                            type_id: TypeId::new(1),
+                        }],
+                        kind: InstructionKind::StackAlloc {
+                            size: 8,
+                            alignment: 4,
+                            address_space: AddressSpace::NearData,
+                        },
+                    }],
+                    terminator: Terminator::Return(None),
+                }],
+            }],
+        };
+
+        let text = write(&module);
+        assert!(text.contains("alloca 8 4 neardata"));
+        assert_eq!(parse(&text), Ok(module));
+    }
+
+    #[test]
     fn relocatable_bytes_round_trip_preserves_patch_order() {
         let module = Module {
             name: "relocations".to_owned(),
@@ -1725,10 +1791,10 @@ mod tests {
     fn rejects_unknown_and_malformed_input() {
         assert!(parse("qir 2\nmodule \"m\"\nend\n").is_err());
         assert!(parse("qir 1\nmodule \"m\"\ntype 0 nope\nend\n").is_err());
-        assert!(parse(
-            "qir 1\nmodule \"m\"\nglobal 0 \"g\" 0 internal false some bytes \"f\"\nend\n"
-        )
-        .is_err());
+        assert!(
+            parse("qir 1\nmodule \"m\"\nglobal 0 \"g\" 0 internal false some bytes \"f\"\nend\n")
+                .is_err()
+        );
         assert!(parse("qir 1\nmodule \"m\"\nglobal 0 \"g\" 9 external false none\nend\n").is_err());
     }
 }

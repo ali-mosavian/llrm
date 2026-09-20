@@ -272,6 +272,7 @@ impl<'module> Verifier<'module> {
         let expected_results = match &instruction.kind {
             InstructionKind::Store { .. } => Some(0),
             InstructionKind::Phi { .. }
+            | InstructionKind::StackAlloc { .. }
             | InstructionKind::Unary { .. }
             | InstructionKind::Binary { .. }
             | InstructionKind::Compare { .. }
@@ -346,6 +347,22 @@ impl<'module> Verifier<'module> {
                     self.error(format!(
                         "function {} block {} phi instruction {} predecessors do not match the CFG",
                         function.id, block.id, instruction.id
+                    ));
+                }
+            }
+            InstructionKind::StackAlloc {
+                size, alignment, ..
+            } => {
+                if *size == 0 {
+                    self.error(format!(
+                        "function {} instruction {} stack allocation has zero size",
+                        function.id, instruction.id
+                    ));
+                }
+                if *alignment == 0 || !alignment.is_power_of_two() {
+                    self.error(format!(
+                        "function {} instruction {} stack allocation alignment must be a nonzero power of two",
+                        function.id, instruction.id
                     ));
                 }
             }
@@ -705,8 +722,9 @@ fn terminator_targets(terminator: &Terminator) -> Vec<BlockId> {
 mod tests {
     use super::*;
     use crate::ir::{
-        AddressSpace, Block, Constant, Function, FunctionId, Global, GlobalRelocation, Linkage,
-        Module, Signature, Terminator, Type, TypeId, TypeKind, Value,
+        AddressSpace, Block, Constant, Function, FunctionId, Global, GlobalRelocation, Instruction,
+        InstructionId, InstructionKind, Linkage, Module, Signature, Terminator, Type, TypeId,
+        TypeKind, Value,
     };
 
     fn void_type() -> Type {
@@ -780,6 +798,46 @@ mod tests {
     }
 
     #[test]
+    fn rejects_zero_sized_or_misaligned_stack_allocations() {
+        let mut module = minimal_module();
+        module.types.push(Type {
+            id: TypeId::new(1),
+            kind: TypeKind::Pointer {
+                address_space: AddressSpace::NearData,
+            },
+        });
+        module.functions[0].blocks[0]
+            .instructions
+            .push(Instruction {
+                id: InstructionId::new(0),
+                results: vec![Value {
+                    id: ValueId::new(0),
+                    type_id: TypeId::new(1),
+                }],
+                kind: InstructionKind::StackAlloc {
+                    size: 0,
+                    alignment: 3,
+                    address_space: AddressSpace::NearData,
+                },
+            });
+
+        let diagnostics = verify(&module).expect_err("invalid stack allocation must be rejected");
+        let messages = diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.message.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("stack allocation has zero size"))
+        );
+        assert!(messages.iter().any(|message| {
+            message.contains("stack allocation alignment must be a nonzero power of two")
+        }));
+    }
+
+    #[test]
     fn rejects_invalid_relocatable_byte_patches() {
         let mut module = minimal_module();
         module.types.extend([
@@ -838,23 +896,19 @@ mod tests {
             .map(|diagnostic| diagnostic.message.as_str())
             .collect::<Vec<_>>();
 
-        assert!(messages
-            .iter()
-            .any(|message| message.contains("relocation 0 target references unknown global 9")));
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("relocation 0 target references unknown global 9"))
+        );
         assert!(messages
             .iter()
             .any(|message| message.contains("relocation 1 patch range 3..7 is outside 4 bytes")));
-        assert!(
-            messages
-                .iter()
-                .any(|message| message
-                    .contains("relocation 2 patch range 0..2 overlaps relocation 0"))
-        );
-        assert!(
-            messages
-                .iter()
-                .any(|message| message
-                    .contains("relocation 3 uses unsupported generic address space"))
-        );
+        assert!(messages.iter().any(|message| {
+            message.contains("relocation 2 patch range 0..2 overlaps relocation 0")
+        }));
+        assert!(messages.iter().any(|message| {
+            message.contains("relocation 3 uses unsupported generic address space")
+        }));
     }
 }
