@@ -235,20 +235,29 @@ impl std::error::Error for RecordError {}
 /// untouched stream can always be written back byte-for-byte. Call
 /// [`Record::validate_checksum`] when strict validation is required.
 pub fn parse(input: &[u8]) -> Result<Vec<Record>, RecordError> {
+    parse_at(input, 0)
+}
+
+/// Parses a record stream whose first byte starts at `base_offset` in its
+/// containing file.
+pub(super) fn parse_at(input: &[u8], base_offset: usize) -> Result<Vec<Record>, RecordError> {
     let mut records = Vec::new();
     let mut offset = 0;
 
     while offset < input.len() {
         let remaining = input.len() - offset;
         if remaining < 3 {
-            return Err(RecordError::TruncatedHeader { offset, remaining });
+            return Err(RecordError::TruncatedHeader {
+                offset: base_offset + offset,
+                remaining,
+            });
         }
 
         let record_type = input[offset];
         let declared_length = u16::from_le_bytes([input[offset + 1], input[offset + 2]]);
         if declared_length == 0 {
             return Err(RecordError::InvalidLength {
-                offset,
+                offset: base_offset + offset,
                 record_type,
                 declared_length,
             });
@@ -259,7 +268,7 @@ pub fn parse(input: &[u8]) -> Result<Vec<Record>, RecordError> {
         let available = input.len() - payload_offset;
         if payload_length > available {
             return Err(RecordError::TruncatedRecord {
-                offset,
+                offset: base_offset + offset,
                 record_type,
                 declared_length,
                 available,
@@ -269,7 +278,7 @@ pub fn parse(input: &[u8]) -> Result<Vec<Record>, RecordError> {
         let body_length = payload_length - 1;
         let body_end = payload_offset + body_length;
         records.push(Record {
-            offset: Some(offset),
+            offset: Some(base_offset + offset),
             record_type,
             body: input[payload_offset..body_end].to_vec(),
             checksum: input[body_end],
@@ -295,7 +304,7 @@ pub fn serialize(records: &[Record]) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::{RecordError, parse, serialize};
+    use super::{parse, serialize, RecordError};
 
     #[test]
     fn parses_and_serializes_known_record_losslessly() {
