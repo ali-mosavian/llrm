@@ -235,6 +235,7 @@ fn usage() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{InputKind, Invocation, OutputKind};
+    use llrm::driver::{self, QbOptions};
 
     #[test]
     fn selects_portable_ir_output_for_qb_source() {
@@ -247,5 +248,15 @@ mod tests {
 
         assert!(matches!(invocation.input_kind, InputKind::Qb));
         assert_eq!(invocation.output_kind, OutputKind::Ir);
+    }
+
+    #[test]
+    fn lowers_minimal_qb_source_to_portable_ir_text() {
+        let program = driver::compile_qb("", "program", QbOptions::default()).unwrap();
+        let module = driver::lower_qb_to_ir(&program).unwrap();
+        let text = llrm::ir::write_text(&module);
+
+        assert!(text.starts_with("qir 1\nmodule \"program\"\n"));
+        assert!(llrm::ir::parse_text(&text).is_ok());
     }
 }

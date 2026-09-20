@@ -4,6 +4,7 @@
 //! operations, call semantics, or ABI details that portable IR cannot yet
 //! represent exactly.
 
+use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
 
@@ -218,23 +219,30 @@ impl Error for LowerError {}
 /// rather than being erased or approximated.
 pub fn lower_module(module: &hir::Module) -> Result<ir::Module, LowerError> {
     let lowerer = Lowerer { module };
+    // The QB frontend carries a catalog of built-in types and callables in
+    // every module. Declarations that no lowered function references have no
+    // portable-IR semantics, so they must not make an otherwise scalar module
+    // fail merely because their representation is not implemented yet.
+    let required_types = required_type_ids(module);
     let types = module
         .types
         .iter()
+        .filter(|type_| required_types.contains(&type_.id))
         .map(|type_| lowerer.lower_type(type_))
         .collect::<Result<Vec<_>, _>>()?;
 
-    if !module.data.is_empty() {
+    // Empty internal data objects are frontend scaffolding until a place or
+    // initializer gives them observable identity. Nonempty or externally
+    // visible data still requires real global lowering and is refused.
+    if module.data.iter().any(|data| {
+        !data.bytes.is_empty()
+            || !data.relocations.is_empty()
+            || data.linkage != hir::Linkage::Internal
+    }) {
         return Err(LowerError::UnsupportedModule {
             feature: UnsupportedFeature::DataObject,
         });
     }
-    if !module.callables.is_empty() {
-        return Err(LowerError::UnsupportedModule {
-            feature: UnsupportedFeature::Callable,
-        });
-    }
-
     let functions = module
         .functions
         .iter()
@@ -250,6 +258,59 @@ pub fn lower_module(module: &hir::Module) -> Result<ir::Module, LowerError> {
         .verify()
         .map_err(|diagnostics| LowerError::Verification { diagnostics })?;
     Ok(lowered)
+}
+
+fn required_type_ids(module: &hir::Module) -> BTreeSet<hir::TypeId> {
+    let mut required = BTreeSet::new();
+    for function in &module.functions {
+        required.insert(function.result_type);
+        required.extend(function.values.iter().map(|value| value.type_id));
+        required.extend(function.places.iter().map(|place| place.type_id));
+        for block in &function.blocks {
+            for instruction in &block.instructions {
+                for operand in &instruction.operands {
+                    collect_operand_types(operand, &mut required);
+                }
+            }
+            match &block.terminator {
+                hir::Terminator::Branch { condition, .. } => {
+                    collect_operand_types(condition, &mut required);
+                }
+                hir::Terminator::Switch { selector, .. } => {
+                    collect_operand_types(selector, &mut required);
+                }
+                hir::Terminator::Return(Some(value)) => {
+                    collect_operand_types(value, &mut required);
+                }
+                hir::Terminator::Jump(_)
+                | hir::Terminator::Return(None)
+                | hir::Terminator::Unreachable => {}
+            }
+        }
+    }
+    required
+}
+
+fn collect_operand_types(operand: &hir::Operand, required: &mut BTreeSet<hir::TypeId>) {
+    match operand {
+        hir::Operand::Constant { type_id, .. } | hir::Operand::Indirect { type_id, .. } => {
+            required.insert(*type_id);
+        }
+        hir::Operand::Projection {
+            type_id, indices, ..
+        } => {
+            required.insert(*type_id);
+            for index in indices {
+                collect_operand_types(index, required);
+            }
+        }
+        hir::Operand::Element { indices, .. } => {
+            for index in indices {
+                collect_operand_types(index, required);
+            }
+        }
+        hir::Operand::Value(_) | hir::Operand::Place(_) => {}
+    }
 }
 
 struct Lowerer<'module> {
