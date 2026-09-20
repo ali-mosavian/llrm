@@ -86,6 +86,7 @@ enum PassName {
     ConstantFold,
     DeadCodeElimination,
     SimplifyBranches,
+    UnreachableBlockElimination,
 }
 
 fn parse_passes(value: &str) -> Result<Vec<PassName>, String> {
@@ -102,6 +103,7 @@ fn parse_passes(value: &str) -> Result<Vec<PassName>, String> {
             "constant-fold" => Ok(PassName::ConstantFold),
             "dead-code-elimination" => Ok(PassName::DeadCodeElimination),
             "simplify-branches" => Ok(PassName::SimplifyBranches),
+            "unreachable-block-elimination" => Ok(PassName::UnreachableBlockElimination),
             _ => Err(format!("unknown pass `{name}`")),
         })
         .collect()
@@ -161,6 +163,9 @@ fn run_pipeline(
                 llrm::transforms::SimplifyBranches::new(&module)
                     .map_err(PipelineError::BranchSimplify)?,
             ),
+            PassName::UnreachableBlockElimination => {
+                manager.add_pass(llrm::transforms::UnreachableBlockElimination::new())
+            }
         }
     }
     manager.run(&mut module).map_err(PipelineError::Pass)?;
@@ -191,7 +196,11 @@ fn failure(message: String) -> ExitCode {
 }
 
 const fn usage() -> &'static str {
-    "usage: llrm-opt [-o FILE] [--passes PIPELINE] [--verify-each] INPUT.qir"
+    concat!(
+        "usage: llrm-opt [-o FILE] [--passes PIPELINE] [--verify-each] INPUT.qir\n\n",
+        "passes: algebraic-simplify, common-subexpression-elimination, constant-fold, ",
+        "dead-code-elimination, simplify-branches, unreachable-block-elimination"
+    )
 }
 
 #[cfg(test)]
@@ -302,5 +311,34 @@ mod tests {
         assert!(output.contains("inst 0 results [2:0]"));
         assert!(!output.contains("inst 1 results [3:0]"));
         assert!(output.contains("term return some value 2"));
+    }
+
+    #[test]
+    fn removes_unreachable_blocks_deterministically() {
+        let source = concat!(
+            "qir 1\n",
+            "module \"m\"\n",
+            "type 0 void\n",
+            "function 0 \"main\" linkage internal result 0 parameters [] variadic false cc basic attributes []\n",
+            "block 0\n",
+            "term jump 1\n",
+            "endblock\n",
+            "block 1\n",
+            "term return none\n",
+            "endblock\n",
+            "block 2\n",
+            "term return none\n",
+            "endblock\n",
+            "endfunction\n",
+            "end\n",
+        );
+
+        let output = run_pipeline(source, &[PassName::UnreachableBlockElimination], true).unwrap();
+
+        assert!(!output.contains("block 2\n"));
+        assert_eq!(canonicalize(&output).as_deref(), Ok(output.as_str()));
+        let repeated =
+            run_pipeline(&output, &[PassName::UnreachableBlockElimination], true).unwrap();
+        assert_eq!(repeated, output);
     }
 }
