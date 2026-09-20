@@ -82,6 +82,7 @@ impl Invocation {
 #[derive(Clone, Copy)]
 enum PassName {
     AlgebraicSimplify,
+    CommonSubexpressionElimination,
     ConstantFold,
     DeadCodeElimination,
     SimplifyBranches,
@@ -95,6 +96,9 @@ fn parse_passes(value: &str) -> Result<Vec<PassName>, String> {
         .split(',')
         .map(|name| match name {
             "algebraic-simplify" => Ok(PassName::AlgebraicSimplify),
+            "common-subexpression-elimination" => {
+                Ok(PassName::CommonSubexpressionElimination)
+            }
             "constant-fold" => Ok(PassName::ConstantFold),
             "dead-code-elimination" => Ok(PassName::DeadCodeElimination),
             "simplify-branches" => Ok(PassName::SimplifyBranches),
@@ -143,6 +147,9 @@ fn run_pipeline(
             PassName::AlgebraicSimplify => manager.add_pass(
                 llrm::transforms::AlgebraicSimplify::new(&module)
                     .map_err(PipelineError::Algebraic)?,
+            ),
+            PassName::CommonSubexpressionElimination => manager.add_pass(
+                llrm::transforms::CommonSubexpressionElimination::new(),
             ),
             PassName::ConstantFold => manager.add_pass(
                 llrm::transforms::ConstantFold::new(&module).map_err(PipelineError::Fold)?,
@@ -265,5 +272,35 @@ mod tests {
 
         assert!(!output.contains("inst 0"));
         assert!(output.contains("term jump 1"));
+    }
+
+    #[test]
+    fn runs_common_subexpression_elimination() {
+        let source = concat!(
+            "qir 1\n",
+            "module \"m\"\n",
+            "type 0 integer 16\n",
+            "function 0 \"main\" linkage internal result 0 parameters [0,0] variadic false cc basic attributes []\n",
+            "param 0 0\n",
+            "param 1 0\n",
+            "block 0\n",
+            "inst 0 results [2:0] binary add value 0 value 1\n",
+            "inst 1 results [3:0] binary add value 0 value 1\n",
+            "term return some value 3\n",
+            "endblock\n",
+            "endfunction\n",
+            "end\n",
+        );
+
+        let output = run_pipeline(
+            source,
+            &[PassName::CommonSubexpressionElimination],
+            true,
+        )
+        .unwrap();
+
+        assert!(output.contains("inst 0 results [2:0]"));
+        assert!(!output.contains("inst 1 results [3:0]"));
+        assert!(output.contains("term return some value 2"));
     }
 }
