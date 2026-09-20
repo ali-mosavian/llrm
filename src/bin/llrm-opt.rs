@@ -82,6 +82,7 @@ impl Invocation {
 #[derive(Clone, Copy)]
 enum PassName {
     ConstantFold,
+    SimplifyBranches,
 }
 
 fn parse_passes(value: &str) -> Result<Vec<PassName>, String> {
@@ -92,6 +93,7 @@ fn parse_passes(value: &str) -> Result<Vec<PassName>, String> {
         .split(',')
         .map(|name| match name {
             "constant-fold" => Ok(PassName::ConstantFold),
+            "simplify-branches" => Ok(PassName::SimplifyBranches),
             _ => Err(format!("unknown pass `{name}`")),
         })
         .collect()
@@ -100,6 +102,7 @@ fn parse_passes(value: &str) -> Result<Vec<PassName>, String> {
 #[derive(Debug)]
 enum PipelineError {
     Text(llrm::ir::TextError),
+    BranchSimplify(llrm::transforms::BranchSimplifyError),
     Fold(llrm::transforms::FoldError),
     Pass(llrm::transforms::PassError),
     Verification(Vec<llrm::support::diagnostic::Diagnostic>),
@@ -109,6 +112,7 @@ impl fmt::Display for PipelineError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Text(error) => error.fmt(formatter),
+            Self::BranchSimplify(error) => error.fmt(formatter),
             Self::Fold(error) => error.fmt(formatter),
             Self::Pass(error) => error.fmt(formatter),
             Self::Verification(diagnostics) => write!(
@@ -132,6 +136,10 @@ fn run_pipeline(
         match pass {
             PassName::ConstantFold => manager.add_pass(
                 llrm::transforms::ConstantFold::new(&module).map_err(PipelineError::Fold)?,
+            ),
+            PassName::SimplifyBranches => manager.add_pass(
+                llrm::transforms::SimplifyBranches::new(&module)
+                    .map_err(PipelineError::BranchSimplify)?,
             ),
         }
     }
@@ -206,5 +214,38 @@ mod tests {
 
         assert!(!output.contains("inst 0"));
         assert!(output.contains("term return some const type 0 integer 3"));
+    }
+
+    #[test]
+    fn composes_constant_folding_with_branch_simplification() {
+        let source = concat!(
+            "qir 1\n",
+            "module \"m\"\n",
+            "type 0 integer 8\n",
+            "type 1 integer 1\n",
+            "function 0 \"main\" linkage internal result 0 parameters [] variadic false cc basic attributes []\n",
+            "block 0\n",
+            "inst 0 results [0:1] binary add const type 1 integer 0 const type 1 integer 1\n",
+            "term branch value 0 1 2\n",
+            "endblock\n",
+            "block 1\n",
+            "term return some const type 0 integer 1\n",
+            "endblock\n",
+            "block 2\n",
+            "term return some const type 0 integer 0\n",
+            "endblock\n",
+            "endfunction\n",
+            "end\n",
+        );
+
+        let output = run_pipeline(
+            source,
+            &[PassName::ConstantFold, PassName::SimplifyBranches],
+            true,
+        )
+        .unwrap();
+
+        assert!(!output.contains("inst 0"));
+        assert!(output.contains("term jump 1"));
     }
 }
