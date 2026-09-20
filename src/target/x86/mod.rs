@@ -5,9 +5,11 @@ mod encoding;
 mod instructions;
 mod mc;
 mod registers;
+mod selection;
 
 pub use allocation::{X86AllocationError, allocate_registers};
 pub use encoding::{EncodeError, encode, encoded_size};
 pub use instructions::{ComparisonKind, ConditionCode, OperandSize, X86Opcode};
 pub use mc::{McLowerError, UnresolvedOperand, lower_instruction};
 pub use registers::{X86Register, X86RegisterClass};
+pub use selection::{FunctionProperty, SelectionError, select_module};
