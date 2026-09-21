@@ -5,6 +5,7 @@
 //! consumer is migrated.
 
 pub mod floating;
+pub mod lir;
 pub mod memory;
 pub mod mir;
 pub(crate) mod mir_loops;
