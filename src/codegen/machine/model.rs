@@ -32,6 +32,7 @@ macro_rules! entity_id {
 }
 
 entity_id!(MachineFunctionId);
+entity_id!(MachineDataObjectId);
 entity_id!(MachineBlockId);
 entity_id!(MachineInstructionId);
 entity_id!(VirtualRegisterId);
@@ -65,17 +66,31 @@ pub struct MachineModule {
     pub functions: Vec<MachineFunction>,
 }
 
-/// One defined data object with a byte initializer.
-///
-/// Relocations are intentionally not represented here.  Data lowering must
-/// refuse initializers that need one until Machine IR grows that capability.
+/// One defined data object with a byte initializer and symbolic patches.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MachineDataObject {
+    pub id: MachineDataObjectId,
     pub name: String,
     pub bytes: Vec<u8>,
+    pub address_space: MachineAddressSpace,
+    /// Relocations in increasing, non-overlapping offset order.
+    pub relocations: Vec<MachineDataRelocation>,
     pub alignment: u32,
     pub constant: bool,
     pub linkage: MachineLinkage,
+}
+
+/// A target-independent symbolic patch in initialized machine data.
+///
+/// The address space and width retain the portable IR's layout intent.  A
+/// target maps that intent to one of its fixup kinds when lowering to MC.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MachineDataRelocation {
+    pub offset: u64,
+    pub target: MachineDataObjectId,
+    pub addend: i64,
+    pub width: u8,
+    pub address_space: MachineAddressSpace,
 }
 
 /// Visibility of a defined machine symbol.

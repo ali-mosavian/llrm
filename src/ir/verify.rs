@@ -853,6 +853,7 @@ mod tests {
             id: GlobalId::new(0),
             name: "data".into(),
             type_id: TypeId::new(2),
+            address_space: AddressSpace::NearData,
             linkage: Linkage::Internal,
             constant: true,
             initializer: Some(Constant::RelocatableBytes {
@@ -890,6 +891,7 @@ mod tests {
             id: GlobalId::new(0),
             name: "data".into(),
             type_id: TypeId::new(2),
+            address_space: AddressSpace::NearData,
             linkage: Linkage::Internal,
             constant: true,
             initializer: Some(Constant::RelocatableBytes {

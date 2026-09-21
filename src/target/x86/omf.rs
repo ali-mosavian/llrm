@@ -79,6 +79,11 @@ pub enum X86OmfError {
         kind: X86FixupKind,
         actual: bool,
     },
+    SegmentFixupAddend {
+        section: SectionId,
+        fragment: FragmentId,
+        addend: i64,
+    },
     FixupOutsideFragment {
         section: SectionId,
         fragment: FragmentId,
@@ -180,6 +185,14 @@ impl fmt::Display for X86OmfError {
             } => write!(
                 formatter,
                 "section {section} fragment {fragment} x86 fixup {kind:?} has pc_relative={actual}"
+            ),
+            Self::SegmentFixupAddend {
+                section,
+                fragment,
+                addend,
+            } => write!(
+                formatter,
+                "section {section} fragment {fragment} segment fixup has unsupported addend {addend}"
             ),
             Self::FixupOutsideFragment {
                 section,
@@ -483,6 +496,13 @@ fn lower_fixup(
             actual: fixup.pc_relative,
         });
     }
+    if kind == X86FixupKind::Segment16 && fixup.expression.addend != 0 {
+        return Err(X86OmfError::SegmentFixupAddend {
+            section,
+            fragment,
+            addend: fixup.expression.addend,
+        });
+    }
     let symbol =
         symbols
             .get(&fixup.expression.symbol)
@@ -533,7 +553,9 @@ fn lower_fixup(
             }
         };
 
-    let value = if kind.pc_relative() && defined_in_module {
+    let value = if kind == X86FixupKind::Segment16 {
+        0
+    } else if kind.pc_relative() && defined_in_module {
         // A local near-call displacement is invariant under segment placement.
         // Resolve it now, exactly as the established Python writer resolves a
         // `Near` target found in its own label map, and do not leave a needless
@@ -557,6 +579,7 @@ fn lower_fixup(
             Location::Pointer16_16
         }
         X86FixupKind::Absolute16 | X86FixupKind::PcRelative16 => Location::Offset16,
+        X86FixupKind::Segment16 => Location::Base16,
     };
     if kind.pc_relative() && defined_in_module {
         return Ok(None);
@@ -583,6 +606,7 @@ fn decode_kind(
         value if value == X86FixupKind::FarPointer1616 as u32 => Ok(X86FixupKind::FarPointer1616),
         value if value == X86FixupKind::Absolute16 as u32 => Ok(X86FixupKind::Absolute16),
         value if value == X86FixupKind::PcRelative16 as u32 => Ok(X86FixupKind::PcRelative16),
+        value if value == X86FixupKind::Segment16 as u32 => Ok(X86FixupKind::Segment16),
         raw => Err(X86OmfError::UnknownFixupKind {
             section,
             fragment,
@@ -678,6 +702,56 @@ mod tests {
                 target: RelocationTarget::External(1),
             }
         );
+    }
+
+    #[test]
+    fn lowers_segment_fixup_as_a_base16_relocation() {
+        use crate::object::omf::{fixups, write};
+
+        let target = SymbolId::new(0);
+        let source = module(
+            vec![
+                data(
+                    0,
+                    vec![0, 0],
+                    vec![Fixup {
+                        offset: 0,
+                        kind: X86FixupKind::Segment16.into(),
+                        expression: MCExpression {
+                            symbol: target,
+                            addend: 0,
+                        },
+                        pc_relative: false,
+                    }],
+                ),
+                data(1, vec![0], Vec::new()),
+            ],
+            vec![symbol(
+                0,
+                "target",
+                SymbolDefinition::Fragment {
+                    fragment: FragmentId::new(1),
+                    offset: 0,
+                },
+            )],
+        );
+
+        let object = lower_to_omf(b"unit", &source).unwrap();
+
+        assert_eq!(object.segments[0].initialized[0].bytes, [0, 0, 0]);
+        assert_eq!(
+            object.segments[0].relocations[0],
+            ObjectRelocation {
+                offset: 0,
+                location: Location::Base16,
+                mode: FixupMode::SegmentRelative,
+                frame: RelocationFrame::Target,
+                target: RelocationTarget::Segment(1),
+            }
+        );
+        let records = write::records(&object).unwrap();
+        let decoded = fixups::parse(&records).unwrap();
+        assert_eq!(decoded[0].location, Location::Base16);
     }
 
     #[test]

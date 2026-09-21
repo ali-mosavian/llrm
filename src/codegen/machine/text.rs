@@ -9,15 +9,16 @@ use std::fmt;
 
 use super::{
     FrameIndex, FrameObject, FrameObjectKind, InstructionFlags, MachineAddressSpace, MachineBlock,
-    MachineBlockId, MachineCallingConvention, MachineDataObject, MachineFunction,
-    MachineFunctionId, MachineInstruction, MachineInstructionId, MachineLinkage, MachineModule,
-    MachineOperand, MachineOperandKind, MachineRegister, MachineSignature, MachineValueType,
-    OperandIndex, OperandRole, PhysicalRegister, RegisterClass, RegisterConstraint, TargetOpcode,
-    VirtualRegister, VirtualRegisterId,
+    MachineBlockId, MachineCallingConvention, MachineDataObject, MachineDataObjectId,
+    MachineDataRelocation, MachineFunction, MachineFunctionId, MachineInstruction,
+    MachineInstructionId, MachineLinkage, MachineModule, MachineOperand, MachineOperandKind,
+    MachineRegister, MachineSignature, MachineValueType, OperandIndex, OperandRole,
+    PhysicalRegister, RegisterClass, RegisterConstraint, TargetOpcode, VirtualRegister,
+    VirtualRegisterId,
 };
 
 /// Version of the `.qmir` textual format.
-pub const FORMAT_VERSION: u32 = 5;
+pub const FORMAT_VERSION: u32 = 6;
 
 /// A syntax or value error in `.qmir` text.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -50,8 +51,10 @@ pub fn write_text(module: &MachineModule) -> String {
             &mut text,
             &[
                 "data".to_owned(),
+                object.id.get().to_string(),
                 encode_name(&object.name),
                 encode_bytes(&object.bytes),
+                address_space_name(object.address_space).to_owned(),
                 object.alignment.to_string(),
                 if object.constant {
                     "constant"
@@ -60,8 +63,22 @@ pub fn write_text(module: &MachineModule) -> String {
                 }
                 .to_owned(),
                 linkage_name(object.linkage).to_owned(),
+                object.relocations.len().to_string(),
             ],
         );
+        for relocation in &object.relocations {
+            line(
+                &mut text,
+                &[
+                    "data-reloc".to_owned(),
+                    relocation.offset.to_string(),
+                    relocation.target.get().to_string(),
+                    relocation.addend.to_string(),
+                    relocation.width.to_string(),
+                    address_space_name(relocation.address_space).to_owned(),
+                ],
+            );
+        }
     }
     for function in &module.functions {
         let mut fields = vec![
@@ -154,7 +171,7 @@ pub fn parse_text(source: &str) -> Result<MachineModule, TextError> {
         match tokens.first().map(|token| token.value) {
             Some("data") => {
                 let line = parser.next()?;
-                data_objects.push(parse_data(&tokenize(line)?)?);
+                data_objects.push(parser.parse_data(line)?);
             }
             Some("function") => {
                 let line = parser.next()?;
@@ -518,6 +535,33 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn parse_data(&mut self, source: SourceLine<'a>) -> Result<MachineDataObject, TextError> {
+        let tokens = tokenize(source)?;
+        require_len(&tokens, 9)?;
+        expect_value(tokens[0], "data")?;
+        let constant = match tokens[6].value {
+            "constant" => true,
+            "mutable" => false,
+            _ => return Err(unexpected(&tokens[6], "`constant` or `mutable`")),
+        };
+        let relocation_count = number::<usize>(tokens[8])?;
+        let mut relocations = Vec::with_capacity(relocation_count);
+        for _ in 0..relocation_count {
+            let line = self.next()?;
+            relocations.push(parse_data_relocation(&tokenize(line)?)?);
+        }
+        Ok(MachineDataObject {
+            id: MachineDataObjectId::new(number(tokens[1])?),
+            name: decode_name(tokens[2])?,
+            bytes: decode_bytes(tokens[3])?,
+            address_space: parse_address_space(tokens[4])?,
+            relocations,
+            alignment: number(tokens[5])?,
+            constant,
+            linkage: parse_linkage(tokens[7])?,
+        })
+    }
+
     fn parse_block(&mut self, source: SourceLine<'a>) -> Result<MachineBlock, TextError> {
         let tokens = tokenize(source)?;
         require_at_least(&tokens, 3)?;
@@ -627,20 +671,15 @@ fn parse_frame(tokens: &[Token<'_>]) -> Result<FrameObject, TextError> {
     })
 }
 
-fn parse_data(tokens: &[Token<'_>]) -> Result<MachineDataObject, TextError> {
+fn parse_data_relocation(tokens: &[Token<'_>]) -> Result<MachineDataRelocation, TextError> {
     require_len(tokens, 6)?;
-    expect_value(tokens[0], "data")?;
-    let constant = match tokens[4].value {
-        "constant" => true,
-        "mutable" => false,
-        _ => return Err(unexpected(&tokens[4], "`constant` or `mutable`")),
-    };
-    Ok(MachineDataObject {
-        name: decode_name(tokens[1])?,
-        bytes: decode_bytes(tokens[2])?,
-        alignment: number(tokens[3])?,
-        constant,
-        linkage: parse_linkage(tokens[5])?,
+    expect_value(tokens[0], "data-reloc")?;
+    Ok(MachineDataRelocation {
+        offset: number(tokens[1])?,
+        target: MachineDataObjectId::new(number(tokens[2])?),
+        addend: number(tokens[3])?,
+        width: number(tokens[4])?,
+        address_space: parse_address_space(tokens[5])?,
     })
 }
 
@@ -705,7 +744,19 @@ fn parse_value_type(
             "expected an unsigned 16-bit width",
         )
     })?;
-    let address_space = match address_space {
+    let address_space = parse_address_space(Token {
+        line: token.line,
+        column: token.column + token.value.len() - address_space.len(),
+        value: address_space,
+    })?;
+    Ok(Some(MachineValueType::Pointer {
+        bits,
+        address_space,
+    }))
+}
+
+fn parse_address_space(token: Token<'_>) -> Result<MachineAddressSpace, TextError> {
+    Ok(match token.value {
         "generic" => MachineAddressSpace::Generic,
         "near-data" => MachineAddressSpace::NearData,
         "far-data" => MachineAddressSpace::FarData,
@@ -716,14 +767,10 @@ fn parse_value_type(
             return Err(error(
                 token.line,
                 token.column,
-                "unknown pointer address space",
+                "unknown machine address space",
             ));
         }
-    };
-    Ok(Some(MachineValueType::Pointer {
-        bits,
-        address_space,
-    }))
+    })
 }
 
 fn parse_bool(token: Token<'_>) -> Result<bool, TextError> {
@@ -959,8 +1006,17 @@ mod tests {
     fn round_trips_every_machine_ir_field_canonically() {
         let module = MachineModule {
             data_objects: vec![MachineDataObject {
+                id: MachineDataObjectId::new(3),
                 name: "data.å".to_owned(),
                 bytes: vec![0, 17, 255],
+                address_space: MachineAddressSpace::FarData,
+                relocations: vec![MachineDataRelocation {
+                    offset: 1,
+                    target: MachineDataObjectId::new(3),
+                    addend: -4,
+                    width: 2,
+                    address_space: MachineAddressSpace::NearData,
+                }],
                 alignment: 8,
                 constant: true,
                 linkage: MachineLinkage::Internal,
@@ -1129,7 +1185,7 @@ mod tests {
     #[test]
     fn reports_the_malformed_operand_location() {
         let error =
-            parse_text("qmir 5\nfunction 0 0 66 internal c - 0 0\nblock 0 0\ninst 0 0 0 1\noperand use - - wat\n")
+            parse_text("qmir 6\nfunction 0 0 66 internal c - 0 0\nblock 0 0\ninst 0 0 0 1\noperand use - - wat\n")
                 .expect_err("unknown operand kind must be rejected");
         assert_eq!(error.line, 5);
         assert_eq!(error.column, 17);
@@ -1137,13 +1193,13 @@ mod tests {
     }
 
     #[test]
-    fn accepts_only_the_version_five_schema() {
-        let error = parse_text("qmir 4\n").expect_err("qmir version four is not accepted");
+    fn accepts_only_the_version_six_schema() {
+        let error = parse_text("qmir 5\n").expect_err("qmir version five is not accepted");
         assert_eq!(error.line, 1);
         assert!(error.message.contains("invalid qmir format header"));
 
         for obsolete in ["basic", "runtime"] {
-            let source = format!("qmir 5\nfunction 0 0 66 internal {obsolete} - 0 0\n");
+            let source = format!("qmir 6\nfunction 0 0 66 internal {obsolete} - 0 0\n");
             let error = parse_text(&source)
                 .expect_err("source-language ABI labels must not enter Machine IR");
             assert!(error.message.contains("calling convention"));

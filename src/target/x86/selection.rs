@@ -11,11 +11,11 @@ use std::fmt;
 
 use crate::codegen::machine::{
     FrameIndex, FrameObject, FrameObjectKind, InstructionFlags, MachineAddressSpace, MachineBlock,
-    MachineBlockId, MachineCallingConvention, MachineDataObject, MachineFunction,
-    MachineFunctionId, MachineInstruction, MachineInstructionError, MachineInstructionId,
-    MachineLinkage, MachineModule, MachineOperand, MachineOperandKind, MachineRegister,
-    MachineSignature, MachineValueType, OperandRole, RegisterClass, RegisterConstraint,
-    VirtualRegister, VirtualRegisterId,
+    MachineBlockId, MachineCallingConvention, MachineDataObject, MachineDataObjectId,
+    MachineDataRelocation, MachineFunction, MachineFunctionId, MachineInstruction,
+    MachineInstructionError, MachineInstructionId, MachineLinkage, MachineModule, MachineOperand,
+    MachineOperandKind, MachineRegister, MachineSignature, MachineValueType, OperandRole,
+    RegisterClass, RegisterConstraint, VirtualRegister, VirtualRegisterId,
 };
 use crate::ir::{
     AddressSpace, BinaryOp, Block, BlockId, Callee, CallingConvention, CastOp, ComparePredicate,
@@ -47,6 +47,10 @@ pub enum SelectionError {
     },
     UnsupportedGlobalInitializer {
         global: GlobalId,
+    },
+    UnknownDataRelocationTarget {
+        global: GlobalId,
+        target: GlobalId,
     },
     UnknownGlobal {
         function: FunctionId,
@@ -225,6 +229,10 @@ impl fmt::Display for SelectionError {
             Self::UnsupportedGlobalInitializer { global } => {
                 write!(formatter, "global {global} has an unsupported initializer")
             }
+            Self::UnknownDataRelocationTarget { global, target } => write!(
+                formatter,
+                "global {global} has a relocation targeting unknown global {target}"
+            ),
             Self::UnknownGlobal {
                 function,
                 block,
@@ -453,7 +461,7 @@ pub fn select_module(module: &Module) -> Result<MachineModule, SelectionError> {
     let data_objects = module
         .globals
         .iter()
-        .map(|global| select_data_object(global, &types))
+        .map(|global| select_data_object(global, &types, &globals))
         .collect::<Result<Vec<_>, _>>()?;
     let functions_by_id = collect_functions(module)?;
     for function in &module.functions {
@@ -492,9 +500,23 @@ fn collect_globals(module: &Module) -> Result<BTreeMap<GlobalId, &Global>, Selec
 fn select_data_object(
     global: &Global,
     types: &BTreeMap<TypeId, &TypeKind>,
+    globals: &BTreeMap<GlobalId, &Global>,
 ) -> Result<MachineDataObject, SelectionError> {
-    let Some(Constant::Bytes(bytes)) = &global.initializer else {
+    let Some(initializer) = &global.initializer else {
         return Err(SelectionError::UnsupportedGlobalInitializer { global: global.id });
+    };
+    let (bytes, relocations) = match initializer {
+        Constant::Bytes(bytes) => (bytes, Vec::new()),
+        Constant::RelocatableBytes { bytes, relocations } => (
+            bytes,
+            relocations
+                .iter()
+                .map(|relocation| select_data_relocation(global.id, relocation, globals))
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+        _ => {
+            return Err(SelectionError::UnsupportedGlobalInitializer { global: global.id });
+        }
     };
     let TypeKind::Array { element, length } = type_kind(types, global.type_id)? else {
         return Err(SelectionError::UnsupportedGlobal { global: global.id });
@@ -505,12 +527,46 @@ fn select_data_object(
         return Err(SelectionError::UnsupportedGlobal { global: global.id });
     }
     Ok(MachineDataObject {
+        id: MachineDataObjectId::new(global.id.get()),
         name: global.name.clone(),
         bytes: bytes.clone(),
+        relocations,
         alignment: 1,
         constant: global.constant,
         linkage: machine_linkage(global.linkage),
+        address_space: machine_data_address_space(global.address_space),
     })
+}
+
+fn select_data_relocation(
+    global: GlobalId,
+    relocation: &crate::ir::GlobalRelocation,
+    globals: &BTreeMap<GlobalId, &Global>,
+) -> Result<MachineDataRelocation, SelectionError> {
+    if !globals.contains_key(&relocation.target) {
+        return Err(SelectionError::UnknownDataRelocationTarget {
+            global,
+            target: relocation.target,
+        });
+    }
+    Ok(MachineDataRelocation {
+        offset: relocation.offset,
+        target: MachineDataObjectId::new(relocation.target.get()),
+        addend: relocation.addend,
+        width: relocation.width,
+        address_space: machine_data_address_space(relocation.address_space),
+    })
+}
+
+fn machine_data_address_space(address_space: AddressSpace) -> MachineAddressSpace {
+    match address_space {
+        AddressSpace::Generic => MachineAddressSpace::Generic,
+        AddressSpace::NearData => MachineAddressSpace::NearData,
+        AddressSpace::FarData => MachineAddressSpace::FarData,
+        AddressSpace::HugeData => MachineAddressSpace::HugeData,
+        AddressSpace::Code => MachineAddressSpace::Code,
+        AddressSpace::Segment => MachineAddressSpace::Segment,
+    }
 }
 
 fn collect_functions(module: &Module) -> Result<BTreeMap<FunctionId, &Function>, SelectionError> {
@@ -2382,6 +2438,8 @@ mod tests {
     const I32: TypeId = TypeId::new(1);
     const I1: TypeId = TypeId::new(2);
     const I16: TypeId = TypeId::new(4);
+    const I8: TypeId = TypeId::new(5);
+    const BYTES: TypeId = TypeId::new(6);
 
     fn signature(result: TypeId, parameters: Vec<TypeId>) -> crate::ir::Signature {
         Signature {
@@ -2413,6 +2471,15 @@ mod tests {
         }
     }
 
+    fn module_with_globals(types: Vec<Type>, globals: Vec<Global>) -> Module {
+        Module {
+            name: "selection-data".to_owned(),
+            types,
+            globals,
+            functions: Vec::new(),
+        }
+    }
+
     fn basic_types() -> Vec<Type> {
         vec![
             Type {
@@ -2432,6 +2499,152 @@ mod tests {
                 kind: TypeKind::Integer { bits: 16 },
             },
         ]
+    }
+
+    fn byte_array_types(length: u64) -> Vec<Type> {
+        let mut types = basic_types();
+        types.extend([
+            Type {
+                id: I8,
+                kind: TypeKind::Integer { bits: 8 },
+            },
+            Type {
+                id: BYTES,
+                kind: TypeKind::Array {
+                    element: I8,
+                    length,
+                },
+            },
+        ]);
+        types
+    }
+
+    fn data_global(id: u32, name: &str, initializer: Constant) -> Global {
+        Global {
+            id: GlobalId::new(id),
+            name: name.to_owned(),
+            type_id: BYTES,
+            linkage: Linkage::Internal,
+            constant: true,
+            initializer: Some(initializer),
+            address_space: AddressSpace::NearData,
+        }
+    }
+
+    #[test]
+    fn selects_hir_data_bytes_and_relocations_without_losing_layout_intent() {
+        // Python HIR global planning preserves source object order and emits
+        // symbolic patches verbatim. Segment patches and near-data patches
+        // are both 16-bit fields but retain distinct address-space intent.
+        let mut source = data_global(
+            7,
+            "source",
+            Constant::RelocatableBytes {
+                bytes: vec![0, 0, 0, 0],
+                relocations: vec![
+                    crate::ir::GlobalRelocation {
+                        offset: 0,
+                        target: GlobalId::new(9),
+                        addend: -3,
+                        width: 2,
+                        address_space: AddressSpace::Segment,
+                    },
+                    crate::ir::GlobalRelocation {
+                        offset: 2,
+                        target: GlobalId::new(3),
+                        addend: 11,
+                        width: 2,
+                        address_space: AddressSpace::NearData,
+                    },
+                ],
+            },
+        );
+        source.address_space = AddressSpace::FarData;
+        let target = data_global(3, "target", Constant::Bytes(vec![0, 1, 2, 3]));
+        let segment_target = data_global(9, "segment-target", Constant::Bytes(vec![4, 5, 6, 7]));
+
+        let selected = select_module(&module_with_globals(
+            byte_array_types(4),
+            vec![source, target, segment_target],
+        ))
+        .expect("portable data selected");
+
+        assert_eq!(
+            selected.data_objects,
+            vec![
+                MachineDataObject {
+                    id: MachineDataObjectId::new(7),
+                    name: "source".to_owned(),
+                    bytes: vec![0, 0, 0, 0],
+                    relocations: vec![
+                        MachineDataRelocation {
+                            offset: 0,
+                            target: MachineDataObjectId::new(9),
+                            addend: -3,
+                            width: 2,
+                            address_space: MachineAddressSpace::Segment,
+                        },
+                        MachineDataRelocation {
+                            offset: 2,
+                            target: MachineDataObjectId::new(3),
+                            addend: 11,
+                            width: 2,
+                            address_space: MachineAddressSpace::NearData,
+                        },
+                    ],
+                    alignment: 1,
+                    constant: true,
+                    linkage: MachineLinkage::Internal,
+                    address_space: MachineAddressSpace::FarData,
+                },
+                MachineDataObject {
+                    id: MachineDataObjectId::new(3),
+                    name: "target".to_owned(),
+                    bytes: vec![0, 1, 2, 3],
+                    relocations: Vec::new(),
+                    alignment: 1,
+                    constant: true,
+                    linkage: MachineLinkage::Internal,
+                    address_space: MachineAddressSpace::NearData,
+                },
+                MachineDataObject {
+                    id: MachineDataObjectId::new(9),
+                    name: "segment-target".to_owned(),
+                    bytes: vec![4, 5, 6, 7],
+                    relocations: Vec::new(),
+                    alignment: 1,
+                    constant: true,
+                    linkage: MachineLinkage::Internal,
+                    address_space: MachineAddressSpace::NearData,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn refuses_relocatable_data_with_an_unknown_target() {
+        let source = data_global(
+            7,
+            "source",
+            Constant::RelocatableBytes {
+                bytes: vec![0, 0],
+                relocations: vec![crate::ir::GlobalRelocation {
+                    offset: 0,
+                    target: GlobalId::new(8),
+                    addend: 0,
+                    width: 2,
+                    address_space: AddressSpace::NearData,
+                }],
+            },
+        );
+
+        assert_eq!(
+            select_module(&module_with_globals(byte_array_types(2), vec![source])),
+            Err(SelectionError::UnknownDataRelocationTarget {
+                global: GlobalId::new(7),
+                target: GlobalId::new(8),
+            })
+        );
     }
 
     fn runtime_declaration(id: FunctionId, name: &str, parameters: Vec<TypeId>) -> Function {

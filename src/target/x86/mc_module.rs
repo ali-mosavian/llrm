@@ -9,13 +9,14 @@ use std::error::Error;
 use std::fmt;
 
 use crate::codegen::machine::{
-    MachineBlockId, MachineFunction, MachineFunctionId, MachineInstruction, MachineInstructionId,
-    MachineLinkage, MachineModule, MachineOperand, MachineOperandKind,
+    MachineAddressSpace, MachineBlockId, MachineDataObject, MachineDataObjectId, MachineFunction,
+    MachineFunctionId, MachineInstruction, MachineInstructionId, MachineLinkage, MachineModule,
+    MachineOperand, MachineOperandKind,
 };
 use crate::mc::{
-    self, AlignFragment, DataFragment, FragmentId, InstructionFragment, MCExpression, MCFragment,
-    MCInstruction, MCModule, MCOperand, MCSection, MCSymbol, SectionFlags, SectionId, SectionKind,
-    SymbolBinding, SymbolDefinition, SymbolId, SymbolVisibility,
+    self, AlignFragment, DataFragment, Fixup, FragmentId, InstructionFragment, MCExpression,
+    MCFragment, MCInstruction, MCModule, MCOperand, MCSection, MCSymbol, SectionFlags, SectionId,
+    SectionKind, SymbolBinding, SymbolDefinition, SymbolId, SymbolVisibility,
 };
 use crate::support::diagnostic::Diagnostic;
 
@@ -46,6 +47,9 @@ pub enum X86McModuleLowerError {
         name: String,
         first: DefinedSymbolKind,
         second: DefinedSymbolKind,
+    },
+    DuplicateDataObjectId {
+        data: MachineDataObjectId,
     },
     DuplicateFunctionId {
         function: MachineFunctionId,
@@ -87,6 +91,26 @@ pub enum X86McModuleLowerError {
         name: String,
         alignment: u32,
     },
+    UnknownDataRelocationTarget {
+        data: MachineDataObjectId,
+        offset: u64,
+        target: MachineDataObjectId,
+    },
+    UnsupportedDataRelocation {
+        data: MachineDataObjectId,
+        offset: u64,
+        width: u8,
+        address_space: MachineAddressSpace,
+    },
+    SegmentDataRelocationAddend {
+        data: MachineDataObjectId,
+        offset: u64,
+        addend: i64,
+    },
+    DataRelocationOffsetTooLarge {
+        data: MachineDataObjectId,
+        offset: u64,
+    },
     Instruction {
         function: MachineFunctionId,
         block: MachineBlockId,
@@ -112,6 +136,9 @@ impl fmt::Display for X86McModuleLowerError {
                 formatter,
                 "defined name {name:?} is both a {first:?} and a {second:?}"
             ),
+            Self::DuplicateDataObjectId { data } => {
+                write!(formatter, "duplicate Machine data object {data}")
+            }
             Self::DuplicateFunctionId { function } => {
                 write!(formatter, "duplicate Machine function {function}")
             }
@@ -164,6 +191,35 @@ impl fmt::Display for X86McModuleLowerError {
                     "data object {name:?} has invalid alignment {alignment}"
                 )
             }
+            Self::UnknownDataRelocationTarget {
+                data,
+                offset,
+                target,
+            } => write!(
+                formatter,
+                "Machine data object {data} relocation at {offset:#x} targets unknown data object {target}"
+            ),
+            Self::UnsupportedDataRelocation {
+                data,
+                offset,
+                width,
+                address_space,
+            } => write!(
+                formatter,
+                "Machine data object {data} relocation at {offset:#x} has unsupported {width}-byte {address_space:?} address"
+            ),
+            Self::SegmentDataRelocationAddend {
+                data,
+                offset,
+                addend,
+            } => write!(
+                formatter,
+                "Machine data object {data} segment relocation at {offset:#x} has unsupported addend {addend}"
+            ),
+            Self::DataRelocationOffsetTooLarge { data, offset } => write!(
+                formatter,
+                "Machine data object {data} relocation offset {offset:#x} cannot fit an MC fixup"
+            ),
             Self::Instruction {
                 function,
                 block,
@@ -223,6 +279,9 @@ pub fn lower_allocated_module_with_lineage(
         let symbol =
             symbols.declare_defined(&mut ids, &data.name, DefinedSymbolKind::Data, data.linkage)?;
         symbols.data.insert(data.name.clone(), symbol);
+        if symbols.data_ids.insert(data.id, symbol).is_some() {
+            return Err(X86McModuleLowerError::DuplicateDataObjectId { data: data.id });
+        }
     }
     for function in &module.functions {
         if symbols.functions.contains_key(&function.id) {
@@ -285,7 +344,7 @@ pub fn lower_allocated_module_with_lineage(
         fragments.push(MCFragment::Data(DataFragment {
             id: fragment,
             bytes: object.bytes.clone(),
-            fixups: Vec::new(),
+            fixups: lower_data_relocations(object, &symbols.data_ids)?,
         }));
         let symbol = symbols.data[&object.name];
         symbols.define(
@@ -343,6 +402,65 @@ pub fn lower_allocated_module_with_lineage(
         module: lowered,
         instruction_fragments,
     })
+}
+
+fn lower_data_relocations(
+    object: &MachineDataObject,
+    data_symbols: &BTreeMap<MachineDataObjectId, SymbolId>,
+) -> Result<Vec<Fixup>, X86McModuleLowerError> {
+    object
+        .relocations
+        .iter()
+        .map(|relocation| {
+            let kind = data_relocation_kind(object.id, relocation)?;
+            let symbol = data_symbols.get(&relocation.target).copied().ok_or(
+                X86McModuleLowerError::UnknownDataRelocationTarget {
+                    data: object.id,
+                    offset: relocation.offset,
+                    target: relocation.target,
+                },
+            )?;
+            let offset = u32::try_from(relocation.offset).map_err(|_| {
+                X86McModuleLowerError::DataRelocationOffsetTooLarge {
+                    data: object.id,
+                    offset: relocation.offset,
+                }
+            })?;
+            Ok(Fixup {
+                offset,
+                kind: kind.into(),
+                expression: MCExpression {
+                    symbol,
+                    addend: relocation.addend,
+                },
+                pc_relative: false,
+            })
+        })
+        .collect()
+}
+
+fn data_relocation_kind(
+    data: MachineDataObjectId,
+    relocation: &crate::codegen::machine::MachineDataRelocation,
+) -> Result<super::X86FixupKind, X86McModuleLowerError> {
+    use MachineAddressSpace::{Code, FarData, HugeData, NearData, Segment};
+
+    match (relocation.width, relocation.address_space) {
+        (2, NearData) => Ok(super::X86FixupKind::Absolute16),
+        (2, Segment) if relocation.addend == 0 => Ok(super::X86FixupKind::Segment16),
+        (2, Segment) => Err(X86McModuleLowerError::SegmentDataRelocationAddend {
+            data,
+            offset: relocation.offset,
+            addend: relocation.addend,
+        }),
+        (4, FarData | HugeData | Code) => Ok(super::X86FixupKind::FarPointer1616),
+        (width, address_space) => Err(X86McModuleLowerError::UnsupportedDataRelocation {
+            data,
+            offset: relocation.offset,
+            width,
+            address_space,
+        }),
+    }
 }
 
 fn lower_function(
@@ -574,6 +692,7 @@ struct SymbolTable {
     entries: Vec<MCSymbol>,
     defined_names: BTreeMap<String, (SymbolId, DefinedSymbolKind)>,
     data: BTreeMap<String, SymbolId>,
+    data_ids: BTreeMap<MachineDataObjectId, SymbolId>,
     functions: BTreeMap<MachineFunctionId, SymbolId>,
     blocks: BTreeMap<(MachineFunctionId, MachineBlockId), SymbolId>,
     externals: BTreeMap<String, SymbolId>,
@@ -646,7 +765,8 @@ fn linkage_binding(linkage: MachineLinkage) -> SymbolBinding {
 mod tests {
     use super::*;
     use crate::codegen::machine::{
-        InstructionFlags, MachineBlock, MachineDataObject, MachineRegister, MachineSignature,
+        InstructionFlags, MachineAddressSpace, MachineBlock, MachineDataObject,
+        MachineDataObjectId, MachineDataRelocation, MachineRegister, MachineSignature,
         OperandIndex, OperandRole, PhysicalRegister, RegisterConstraint, VirtualRegisterId,
     };
     use crate::target::x86::{X86Opcode, X86Register, X86RegisterClass};
@@ -715,19 +835,159 @@ mod tests {
     }
 
     #[test]
-    fn preserves_deterministic_section_symbol_and_fragment_order() {
+    fn lowers_data_relocations_by_id_and_preserves_their_mc_facts() {
         let input = MachineModule {
             data_objects: vec![
                 MachineDataObject {
-                    name: "constant".to_owned(),
-                    bytes: vec![1],
+                    id: MachineDataObjectId::new(91),
+                    name: "source".to_owned(),
+                    bytes: vec![0; 8],
+                    relocations: vec![
+                        MachineDataRelocation {
+                            offset: 0,
+                            target: MachineDataObjectId::new(12),
+                            addend: -3,
+                            width: 2,
+                            address_space: MachineAddressSpace::NearData,
+                        },
+                        MachineDataRelocation {
+                            offset: 2,
+                            target: MachineDataObjectId::new(12),
+                            addend: 0,
+                            width: 2,
+                            address_space: MachineAddressSpace::Segment,
+                        },
+                        MachineDataRelocation {
+                            offset: 4,
+                            target: MachineDataObjectId::new(12),
+                            addend: 7,
+                            width: 4,
+                            address_space: MachineAddressSpace::FarData,
+                        },
+                    ],
+                    address_space: MachineAddressSpace::Generic,
+                    alignment: 1,
+                    constant: false,
+                    linkage: MachineLinkage::Internal,
+                },
+                MachineDataObject {
+                    id: MachineDataObjectId::new(12),
+                    name: "target".to_owned(),
+                    bytes: vec![0],
+                    relocations: Vec::new(),
+                    address_space: MachineAddressSpace::Generic,
+                    alignment: 1,
+                    constant: false,
+                    linkage: MachineLinkage::Internal,
+                },
+            ],
+            functions: Vec::new(),
+        };
+
+        let lowered = lower_allocated_module(&input).unwrap();
+        let source = match &lowered.sections[2].fragments[1] {
+            MCFragment::Data(data) => data,
+            _ => panic!("source data must follow its alignment fragment"),
+        };
+        let target = symbol(&lowered, "target").id;
+        assert_eq!(
+            source.fixups,
+            vec![
+                Fixup {
+                    offset: 0,
+                    kind: super::super::X86FixupKind::Absolute16.into(),
+                    expression: MCExpression {
+                        symbol: target,
+                        addend: -3,
+                    },
+                    pc_relative: false,
+                },
+                Fixup {
+                    offset: 2,
+                    kind: super::super::X86FixupKind::Segment16.into(),
+                    expression: MCExpression {
+                        symbol: target,
+                        addend: 0,
+                    },
+                    pc_relative: false,
+                },
+                Fixup {
+                    offset: 4,
+                    kind: super::super::X86FixupKind::FarPointer1616.into(),
+                    expression: MCExpression {
+                        symbol: target,
+                        addend: 7,
+                    },
+                    pc_relative: false,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn refuses_a_segment_data_relocation_with_an_addend() {
+        let input = MachineModule {
+            data_objects: vec![
+                MachineDataObject {
+                    id: MachineDataObjectId::new(0),
+                    name: "source".to_owned(),
+                    bytes: vec![0; 2],
+                    relocations: vec![MachineDataRelocation {
+                        offset: 0,
+                        target: MachineDataObjectId::new(1),
+                        addend: 1,
+                        width: 2,
+                        address_space: MachineAddressSpace::Segment,
+                    }],
+                    address_space: MachineAddressSpace::NearData,
                     alignment: 1,
                     constant: true,
                     linkage: MachineLinkage::Internal,
                 },
                 MachineDataObject {
+                    id: MachineDataObjectId::new(1),
+                    name: "target".to_owned(),
+                    bytes: Vec::new(),
+                    relocations: Vec::new(),
+                    address_space: MachineAddressSpace::FarData,
+                    alignment: 1,
+                    constant: true,
+                    linkage: MachineLinkage::Internal,
+                },
+            ],
+            functions: Vec::new(),
+        };
+
+        assert_eq!(
+            lower_allocated_module(&input),
+            Err(X86McModuleLowerError::SegmentDataRelocationAddend {
+                data: MachineDataObjectId::new(0),
+                offset: 0,
+                addend: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn preserves_deterministic_section_symbol_and_fragment_order() {
+        let input = MachineModule {
+            data_objects: vec![
+                MachineDataObject {
+                    id: MachineDataObjectId::new(0),
+                    name: "constant".to_owned(),
+                    bytes: vec![1],
+                    relocations: Vec::new(),
+                    address_space: MachineAddressSpace::Generic,
+                    alignment: 1,
+                    constant: true,
+                    linkage: MachineLinkage::Internal,
+                },
+                MachineDataObject {
+                    id: MachineDataObjectId::new(1),
                     name: "mutable".to_owned(),
                     bytes: vec![2],
+                    relocations: Vec::new(),
+                    address_space: MachineAddressSpace::Generic,
                     alignment: 2,
                     constant: false,
                     linkage: MachineLinkage::External,
@@ -836,15 +1096,21 @@ mod tests {
         let lowered = lower_allocated_module(&MachineModule {
             data_objects: vec![
                 MachineDataObject {
+                    id: MachineDataObjectId::new(0),
                     name: "read_only".to_owned(),
                     bytes: Vec::new(),
+                    relocations: Vec::new(),
+                    address_space: MachineAddressSpace::Generic,
                     alignment: 8,
                     constant: true,
                     linkage: MachineLinkage::Internal,
                 },
                 MachineDataObject {
+                    id: MachineDataObjectId::new(1),
                     name: "writeable".to_owned(),
                     bytes: vec![9],
+                    relocations: Vec::new(),
+                    address_space: MachineAddressSpace::Generic,
                     alignment: 4,
                     constant: false,
                     linkage: MachineLinkage::External,
@@ -903,8 +1169,11 @@ mod tests {
         );
         let lowered = lower_allocated_module(&MachineModule {
             data_objects: vec![MachineDataObject {
+                id: MachineDataObjectId::new(0),
                 name: "object".to_owned(),
                 bytes: vec![0],
+                relocations: Vec::new(),
+                address_space: MachineAddressSpace::Generic,
                 alignment: 1,
                 constant: false,
                 linkage: MachineLinkage::Internal,
@@ -1071,8 +1340,11 @@ mod tests {
     fn reports_duplicate_defined_names_without_selecting_a_kind() {
         let error = lower_allocated_module(&MachineModule {
             data_objects: vec![MachineDataObject {
+                id: MachineDataObjectId::new(0),
                 name: "same".to_owned(),
                 bytes: Vec::new(),
+                relocations: Vec::new(),
+                address_space: MachineAddressSpace::Generic,
                 alignment: 1,
                 constant: true,
                 linkage: MachineLinkage::Internal,

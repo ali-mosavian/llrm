@@ -157,8 +157,9 @@ fn write_global(out: &mut String, global: &Global) {
     push_string(out, &global.name);
     write!(
         out,
-        " {} {} {} ",
+        " {} {} {} {} ",
         global.type_id,
+        address_space_name(global.address_space),
         linkage_name(global.linkage),
         bool_name(global.constant)
     )
@@ -963,6 +964,7 @@ fn parse_global(parser: &mut Parser) -> Result<Global, TextError> {
     let id = GlobalId::new(parser.u32()?);
     let name = parser.string()?;
     let type_id = TypeId::new(parser.u32()?);
+    let address_space = parse_address_space(parser)?;
     let linkage = parse_linkage(parser)?;
     let constant = parser.bool()?;
     let initializer = match parser.word()?.as_str() {
@@ -975,6 +977,7 @@ fn parse_global(parser: &mut Parser) -> Result<Global, TextError> {
         id,
         name,
         type_id,
+        address_space,
         linkage,
         constant,
         initializer,
@@ -1580,6 +1583,7 @@ mod tests {
                     id: GlobalId::new(0),
                     name: "g".to_owned(),
                     type_id: TypeId::new(1),
+                    address_space: AddressSpace::NearData,
                     linkage: Linkage::Internal,
                     constant: true,
                     initializer: Some(Constant::Aggregate(vec![
@@ -1597,6 +1601,7 @@ mod tests {
                     id: GlobalId::new(1),
                     name: "f".to_owned(),
                     type_id: TypeId::new(2),
+                    address_space: AddressSpace::FarData,
                     linkage: Linkage::External,
                     constant: false,
                     initializer: Some(Constant::Float("-0.0e+10".to_owned())),
@@ -1754,6 +1759,7 @@ mod tests {
                     id: GlobalId::new(0),
                     name: "target".to_owned(),
                     type_id: TypeId::new(1),
+                    address_space: AddressSpace::FarData,
                     linkage: Linkage::Internal,
                     constant: true,
                     initializer: Some(Constant::Bytes(vec![0; 8])),
@@ -1762,6 +1768,7 @@ mod tests {
                     id: GlobalId::new(1),
                     name: "data".to_owned(),
                     type_id: TypeId::new(1),
+                    address_space: AddressSpace::NearData,
                     linkage: Linkage::Internal,
                     constant: true,
                     initializer: Some(Constant::RelocatableBytes {
@@ -1864,18 +1871,21 @@ mod tests {
     fn rejects_unknown_and_malformed_input() {
         for obsolete in ["basic", "runtime"] {
             let source = format!(
-                "qir 4\nmodule \"m\"\ntype 0 void\nfunction 0 \"f\" linkage external result 0 parameters [] variadic false cc {obsolete} attributes []\nendfunction\nend\n"
+                "qir 5\nmodule \"m\"\ntype 0 void\nfunction 0 \"f\" linkage external result 0 parameters [] variadic false cc {obsolete} attributes []\nendfunction\nend\n"
             );
             let error = parse(&source).expect_err("source-language ABI labels must not enter IR");
             assert!(error.message.contains("unknown calling convention"));
         }
         assert!(parse("qir 3\nmodule \"m\"\nend\n").is_err());
         assert!(parse("qir 2\nmodule \"m\"\nend\n").is_err());
-        assert!(parse("qir 4\nmodule \"m\"\ntype 0 nope\nend\n").is_err());
+        assert!(parse("qir 5\nmodule \"m\"\ntype 0 nope\nend\n").is_err());
         assert!(
-            parse("qir 4\nmodule \"m\"\nglobal 0 \"g\" 0 internal false some bytes \"f\"\nend\n")
+            parse("qir 5\nmodule \"m\"\nglobal 0 \"g\" 0 neardata internal false some bytes \"f\"\nend\n")
                 .is_err()
         );
-        assert!(parse("qir 4\nmodule \"m\"\nglobal 0 \"g\" 9 external false none\nend\n").is_err());
+        assert!(
+            parse("qir 5\nmodule \"m\"\nglobal 0 \"g\" 9 fardata external false none\nend\n")
+                .is_err()
+        );
     }
 }

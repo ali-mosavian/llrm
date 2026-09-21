@@ -10,8 +10,8 @@ use crate::support::diagnostic::{Diagnostic, Severity};
 
 use super::{
     FrameIndex, FrameObjectKind, MachineBlock, MachineBlockId, MachineCallingConvention,
-    MachineFunction, MachineFunctionId, MachineInstruction, MachineModule, MachineOperandKind,
-    MachineRegister, MachineValueType, OperandRole, VirtualRegisterId,
+    MachineDataObjectId, MachineFunction, MachineFunctionId, MachineInstruction, MachineModule,
+    MachineOperandKind, MachineRegister, MachineValueType, OperandRole, VirtualRegisterId,
 };
 
 /// Validates the structural invariants of a Machine IR module.
@@ -59,8 +59,12 @@ impl<'module> Verifier<'module> {
     }
 
     fn verify_module(&mut self) {
+        let mut data_ids = BTreeSet::new();
         let mut data_names = BTreeSet::new();
         for object in &self.module.data_objects {
+            if !data_ids.insert(object.id) {
+                self.error(format!("duplicate machine data object id {}", object.id));
+            }
             if object.name.is_empty() {
                 self.error("machine data object has an empty name".to_owned());
             } else if !data_names.insert(&object.name) {
@@ -75,6 +79,15 @@ impl<'module> Verifier<'module> {
                     object.name, object.alignment
                 ));
             }
+        }
+        for object in &self.module.data_objects {
+            self.verify_data_relocations(
+                object.id,
+                &object.name,
+                &object.bytes,
+                &object.relocations,
+                &data_ids,
+            );
         }
 
         let mut function_names = BTreeSet::new();
@@ -97,6 +110,60 @@ impl<'module> Verifier<'module> {
 
         for function in &self.module.functions {
             self.verify_function(function);
+        }
+    }
+
+    fn verify_data_relocations(
+        &mut self,
+        object_id: MachineDataObjectId,
+        object_name: &str,
+        bytes: &[u8],
+        relocations: &[super::MachineDataRelocation],
+        data_ids: &BTreeSet<MachineDataObjectId>,
+    ) {
+        let mut previous_offset = None;
+        let mut previous_end = 0_u64;
+        for relocation in relocations {
+            if !data_ids.contains(&relocation.target) {
+                self.error(format!(
+                    "machine data object `{object_name}` ({object_id}) relocation at offset {} targets unknown data object {}",
+                    relocation.offset, relocation.target
+                ));
+            }
+            if relocation.width == 0 {
+                self.error(format!(
+                    "machine data object `{object_name}` ({object_id}) relocation at offset {} has zero width",
+                    relocation.offset
+                ));
+                continue;
+            }
+            let Some(end) = relocation.offset.checked_add(u64::from(relocation.width)) else {
+                self.error(format!(
+                    "machine data object `{object_name}` ({object_id}) relocation at offset {} overflows its field range",
+                    relocation.offset
+                ));
+                continue;
+            };
+            if end > bytes.len() as u64 {
+                self.error(format!(
+                    "machine data object `{object_name}` ({object_id}) relocation range {}..{end} exceeds its {} initializer bytes",
+                    relocation.offset,
+                    bytes.len()
+                ));
+            }
+            if previous_offset.is_some_and(|offset| relocation.offset < offset) {
+                self.error(format!(
+                    "machine data object `{object_name}` ({object_id}) relocations are not in increasing offset order at {}",
+                    relocation.offset
+                ));
+            } else if previous_offset.is_some() && relocation.offset < previous_end {
+                self.error(format!(
+                    "machine data object `{object_name}` ({object_id}) relocation at offset {} overlaps the preceding relocation",
+                    relocation.offset
+                ));
+            }
+            previous_offset = Some(relocation.offset);
+            previous_end = end;
         }
     }
 
@@ -503,10 +570,10 @@ mod tests {
     use super::*;
     use crate::codegen::machine::{
         FrameObject, FrameObjectKind, InstructionFlags, MachineAddressSpace, MachineBlock,
-        MachineDataObject, MachineFunction, MachineInstruction, MachineInstructionId,
-        MachineLinkage, MachineModule, MachineOperand, MachineOperandKind, MachineRegister,
-        MachineSignature, OperandIndex, PhysicalRegister, RegisterClass, RegisterConstraint,
-        TargetOpcode, VirtualRegister,
+        MachineDataObject, MachineDataRelocation, MachineFunction, MachineInstruction,
+        MachineInstructionId, MachineLinkage, MachineModule, MachineOperand, MachineOperandKind,
+        MachineRegister, MachineSignature, OperandIndex, PhysicalRegister, RegisterClass,
+        RegisterConstraint, TargetOpcode, VirtualRegister,
     };
 
     fn register(id: u32, role: OperandRole) -> MachineOperand {
@@ -733,22 +800,31 @@ mod tests {
         let diagnostic_messages = messages(MachineModule {
             data_objects: vec![
                 MachineDataObject {
+                    id: MachineDataObjectId::new(0),
                     name: String::new(),
                     bytes: vec![1],
+                    address_space: MachineAddressSpace::NearData,
+                    relocations: Vec::new(),
                     alignment: 3,
                     constant: true,
                     linkage: MachineLinkage::Internal,
                 },
                 MachineDataObject {
+                    id: MachineDataObjectId::new(1),
                     name: "bytes".to_owned(),
                     bytes: Vec::new(),
+                    address_space: MachineAddressSpace::NearData,
+                    relocations: Vec::new(),
                     alignment: 1,
                     constant: false,
                     linkage: MachineLinkage::External,
                 },
                 MachineDataObject {
+                    id: MachineDataObjectId::new(1),
                     name: "bytes".to_owned(),
                     bytes: vec![2],
+                    address_space: MachineAddressSpace::FarData,
+                    relocations: Vec::new(),
                     alignment: 1,
                     constant: false,
                     linkage: MachineLinkage::Internal,
@@ -774,8 +850,71 @@ mod tests {
         assert!(
             diagnostic_messages
                 .iter()
+                .any(|message| message.contains("duplicate machine data object id 1"))
+        );
+        assert!(
+            diagnostic_messages
+                .iter()
                 .any(|message| message.contains("duplicate machine function name `two_address`"))
         );
+    }
+
+    #[test]
+    fn rejects_invalid_data_relocations() {
+        let diagnostic_messages = messages(MachineModule {
+            data_objects: vec![MachineDataObject {
+                id: MachineDataObjectId::new(4),
+                name: "source".to_owned(),
+                bytes: vec![0; 4],
+                address_space: MachineAddressSpace::NearData,
+                relocations: vec![
+                    MachineDataRelocation {
+                        offset: 3,
+                        target: MachineDataObjectId::new(9),
+                        addend: 0,
+                        width: 2,
+                        address_space: MachineAddressSpace::NearData,
+                    },
+                    MachineDataRelocation {
+                        offset: 2,
+                        target: MachineDataObjectId::new(4),
+                        addend: 0,
+                        width: 0,
+                        address_space: MachineAddressSpace::Segment,
+                    },
+                    MachineDataRelocation {
+                        offset: 1,
+                        target: MachineDataObjectId::new(4),
+                        addend: 0,
+                        width: 1,
+                        address_space: MachineAddressSpace::Generic,
+                    },
+                ],
+                alignment: 1,
+                constant: true,
+                linkage: MachineLinkage::Internal,
+            }],
+            functions: Vec::new(),
+        });
+
+        assert!(
+            diagnostic_messages
+                .iter()
+                .any(|message| { message.contains("targets unknown data object 9") })
+        );
+        assert!(
+            diagnostic_messages
+                .iter()
+                .any(|message| message.contains("range 3..5 exceeds its 4 initializer bytes"))
+        );
+        assert!(
+            diagnostic_messages
+                .iter()
+                .any(|message| message.contains("has zero width"))
+        );
+        assert!(diagnostic_messages.iter().any(|message| {
+            message.contains("relocations are not in increasing offset order at 1")
+        }));
     }
 
     #[test]

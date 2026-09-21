@@ -20,6 +20,8 @@ pub enum X86FixupKind {
     /// separate from an absolute offset ensures object lowering cannot
     /// accidentally emit a segment-relative FIXUPP for a PC-relative call.
     PcRelative16 = 3,
+    /// A sixteen-bit segment selector for the relocation target.
+    Segment16 = 4,
 }
 
 impl X86FixupKind {
@@ -27,14 +29,14 @@ impl X86FixupKind {
     pub const fn width(self) -> u8 {
         match self {
             Self::FarPointer1616 => 4,
-            Self::Absolute16 | Self::PcRelative16 => 2,
+            Self::Absolute16 | Self::PcRelative16 | Self::Segment16 => 2,
         }
     }
 
     /// Whether the relocation is measured from the place being patched.
     pub const fn pc_relative(self) -> bool {
         match self {
-            Self::FarPointer1616 | Self::Absolute16 => false,
+            Self::FarPointer1616 | Self::Absolute16 | Self::Segment16 => false,
             Self::PcRelative16 => true,
         }
     }
@@ -66,5 +68,10 @@ mod tests {
         assert_eq!(FixupKind::from(relative).get(), 3);
         assert_eq!(relative.width(), 2);
         assert!(relative.pc_relative());
+
+        let segment = X86FixupKind::Segment16;
+        assert_eq!(FixupKind::from(segment).get(), 4);
+        assert_eq!(segment.width(), 2);
+        assert!(!segment.pc_relative());
     }
 }

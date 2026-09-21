@@ -372,6 +372,7 @@ pub(super) fn plan_globals(module: &hir::Module) -> Result<GlobalPlan, GlobalPla
             id: ir::GlobalId::new(object.id.get()),
             name: object.name.clone(),
             type_id,
+            address_space: address_space(object.address),
             linkage: linkage(object.linkage),
             constant: object.readonly,
             initializer: Some(initializer),
@@ -771,6 +772,8 @@ mod tests {
         let plan = plan_globals(&module).expect("symbolic data patches are portable IR");
 
         assert_eq!(plan.globals.len(), 2);
+        assert_eq!(plan.globals[0].address_space, ir::AddressSpace::NearData);
+        assert_eq!(plan.globals[1].address_space, ir::AddressSpace::FarData);
         assert_eq!(
             plan.globals[0].initializer,
             Some(ir::Constant::RelocatableBytes {

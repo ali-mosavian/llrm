@@ -1,6 +1,6 @@
 use std::fmt;
 
-pub const FORMAT_VERSION: u32 = 4;
+pub const FORMAT_VERSION: u32 = 5;
 
 macro_rules! entity_id {
     ($name:ident) => {
@@ -78,6 +78,8 @@ pub struct Global {
     pub id: GlobalId,
     pub name: String,
     pub type_id: TypeId,
+    /// Address space in which the global's storage is allocated.
+    pub address_space: AddressSpace,
     pub linkage: Linkage,
     pub constant: bool,
     pub initializer: Option<Constant>,
