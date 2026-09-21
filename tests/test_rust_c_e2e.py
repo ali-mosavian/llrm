@@ -26,6 +26,8 @@ LOOP_SOURCE = ROOT / "fixtures" / "c" / "parity" / "loop.cgs"
 LOOP_HARNESS = ROOT / "fixtures" / "c" / "parity" / "loop-start.asm"
 CONTROL_SOURCE = ROOT / "fixtures" / "c" / "parity" / "control.cgs"
 CONTROL_HARNESS = ROOT / "fixtures" / "c" / "parity" / "control-start.asm"
+QLIGHT_SOURCE = ROOT / "fixtures" / "c" / "parity" / "qlight.cgs"
+QLIGHT_HARNESS = ROOT / "fixtures" / "c" / "parity" / "qlight-start.asm"
 CELLS_SOURCE = ROOT / "fixtures" / "c" / "cells.cgs"
 CELLS_HARNESS = ROOT / "fixtures" / "c" / "cells-start.asm"
 JWASM = shutil.which("jwasm") or str(Path.home() / "work/other/d32x/toolchains/native/bin/jwasm")
@@ -169,3 +171,8 @@ def test_rust_c_control_returns_the_existing_python_oracle(tmp_path: Path) -> No
     loop with the paired long add/sub updates and far-cdecl calls.
     """
     assert _compile_and_run(CONTROL_SOURCE, CONTROL_HARNESS, tmp_path, timeout=20) == 15007
+
+
+def test_rust_c_qlight_returns_the_existing_python_oracle(tmp_path: Path) -> None:
+    """By-value i16 calls and signed LONG division must retain 200100255."""
+    assert _compile_and_run(QLIGHT_SOURCE, QLIGHT_HARNESS, tmp_path, timeout=20) == 200100255
