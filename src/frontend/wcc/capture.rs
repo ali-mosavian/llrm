@@ -7,6 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
+use std::fmt::Write as _;
 
 use super::Record;
 
@@ -279,6 +280,263 @@ impl CaptureUnit {
             .and_then(|segment| self.segments.get(&SegmentId::new(segment)))
             .is_none_or(|segment| segment.attributes & PRIVATE_SEGMENT == 0)
     }
+}
+
+/// Render the WCC capture in the exact stage-dump spelling of
+/// `qbopt.cfront.hir.text`.
+///
+/// This is deliberately not a Rust diagnostic format.  Python's source HIR
+/// dump is the port oracle: preserving its order and its dataclass repr lets
+/// the WCC frontend be compared before a later lowering can obscure a
+/// divergence.
+pub fn text(unit: &CaptureUnit) -> String {
+    let mut output = format!("target 0x{:x}\n", unit.target);
+    for id in &unit.segment_order {
+        let segment = &unit.segments[id];
+        let _ = writeln!(
+            output,
+            "segment {} {} attr=0x{:x} items={}",
+            segment.id,
+            segment.name,
+            segment.attributes,
+            data_items_repr(&segment.items)
+        );
+    }
+    for id in &unit.symbol_order {
+        let symbol = &unit.symbols[id];
+        let convention = symbol.convention.as_ref();
+        let _ = writeln!(
+            output,
+            "symbol Symbol(id={}, name={}, base={}, pattern={}, attr={}, call_class={}, call_target={}, register_parms={}, code={}, segment={})",
+            symbol.id,
+            python_string(&symbol.name),
+            python_string(&symbol.base),
+            python_string(&symbol.pattern),
+            symbol.attributes.bits(),
+            convention.map_or(0, |value| value.class),
+            convention.map_or(0, |value| value.target),
+            python_bool(convention.is_some_and(CallConvention::has_register_parameters)),
+            inline_code_repr(symbol.code.as_ref()),
+            symbol.segment,
+        );
+    }
+    for procedure in &unit.procedures {
+        let symbol = &unit.symbols[&procedure.symbol];
+        let _ = writeln!(
+            output,
+            "proc {} {} parms={} autos={}",
+            symbol.object_name(),
+            procedure.value_type,
+            parameter_list_repr(&procedure.parameters),
+            automatic_list_repr(&procedure.automatics),
+        );
+        for statement in &procedure.body {
+            let _ = writeln!(
+                output,
+                "  {}: {} {}",
+                statement.location.line,
+                statement.call,
+                statement.args.join(" ")
+            );
+        }
+    }
+    output
+}
+
+fn data_items_repr(items: &[DataItem]) -> String {
+    format!(
+        "[{}]",
+        items
+            .iter()
+            .map(|item| format!(
+                "({}, {})",
+                python_string(data_item_name(&item.kind)),
+                string_tuple_repr(&item.args)
+            ))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+fn data_item_name(kind: &DataItemKind) -> &str {
+    match kind {
+        DataItemKind::Label => "DGLabel",
+        DataItemKind::BackPointer => "DGBackPtr",
+        DataItemKind::FrontendPointer => "DGFEPtr",
+        DataItemKind::Integer => "DGInteger",
+        DataItemKind::Integer64 => "DGInteger64",
+        DataItemKind::Float => "DGFloat",
+        DataItemKind::Bytes => "DGBytes",
+        DataItemKind::RepeatedByte => "DGIBytes",
+        DataItemKind::UninitializedBytes => "DGUBytes",
+        DataItemKind::Align => "DGAlign",
+        DataItemKind::Other(name) => name,
+    }
+}
+
+fn inline_code_repr(code: Option<&InlineCode>) -> String {
+    let Some(code) = code else {
+        return "None".to_owned();
+    };
+    format!(
+        "Code(data={}, fixups={})",
+        python_bytes(&code.bytes),
+        fixup_tuple_repr(&code.fixups)
+    )
+}
+
+fn fixup_tuple_repr(fixups: &[InlineFixup]) -> String {
+    tuple_repr(
+        fixups
+            .iter()
+            .map(|fixup| {
+                format!(
+                    "Fixup(at={}, kind={}, symbol={}, offset={})",
+                    fixup.offset,
+                    python_string(inline_fixup_name(fixup.kind)),
+                    fixup.symbol,
+                    fixup.addend
+                )
+            })
+            .collect(),
+    )
+}
+
+fn inline_fixup_name(kind: InlineFixupKind) -> &'static str {
+    match kind {
+        InlineFixupKind::Offset => "offset",
+        InlineFixupKind::Segment => "segment",
+        InlineFixupKind::RelativeOffset => "reloff",
+    }
+}
+
+fn parameter_list_repr(parameters: &[(SymbolId, String)]) -> String {
+    format!(
+        "[{}]",
+        parameters
+            .iter()
+            .map(|(symbol, type_)| format!("({}, {})", symbol, python_string(type_)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+fn automatic_list_repr(automatics: &[(AutomaticId, String)]) -> String {
+    format!(
+        "[{}]",
+        automatics
+            .iter()
+            .map(|(id, type_)| format!(
+                "({}, {})",
+                python_string(&automatic_name(*id)),
+                python_string(type_)
+            ))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+fn automatic_name(id: AutomaticId) -> String {
+    match id {
+        AutomaticId::Symbol(id) => format!("y{id}"),
+        AutomaticId::Temporary(id) => format!("t{id}"),
+    }
+}
+
+fn string_tuple_repr(values: &[String]) -> String {
+    tuple_repr(values.iter().map(|value| python_string(value)).collect())
+}
+
+fn tuple_repr(values: Vec<String>) -> String {
+    match values.as_slice() {
+        [] => "()".to_owned(),
+        [value] => format!("({value},)"),
+        _ => format!("({})", values.join(", ")),
+    }
+}
+
+fn python_bool(value: bool) -> &'static str {
+    if value { "True" } else { "False" }
+}
+
+fn python_bytes(bytes: &[u8]) -> String {
+    let quote = if bytes.contains(&b'\'') && !bytes.contains(&b'\"') {
+        '\"'
+    } else {
+        '\''
+    };
+    let mut output = String::from("b");
+    output.push(quote);
+    for byte in bytes {
+        match *byte {
+            b'\\' => output.push_str("\\\\"),
+            b'\n' => output.push_str("\\n"),
+            b'\r' => output.push_str("\\r"),
+            b'\t' => output.push_str("\\t"),
+            0x08 => output.push_str("\\x08"),
+            0x0c => output.push_str("\\x0c"),
+            0x0b => output.push_str("\\x0b"),
+            0x07 => output.push_str("\\x07"),
+            byte if byte == quote as u8 => {
+                output.push('\\');
+                output.push(quote);
+            }
+            0x20..=0x7e => output.push(*byte as char),
+            byte => {
+                let _ = write!(output, "\\x{byte:02x}");
+            }
+        }
+    }
+    output.push(quote);
+    output
+}
+
+fn python_string(value: &str) -> String {
+    let quote = if value.contains('\'') && !value.contains('\"') {
+        '\"'
+    } else {
+        '\''
+    };
+    let mut output = String::new();
+    output.push(quote);
+    for character in value.chars() {
+        match character {
+            '\\' => output.push_str("\\\\"),
+            '\n' => output.push_str("\\n"),
+            '\r' => output.push_str("\\r"),
+            '\t' => output.push_str("\\t"),
+            '\u{08}' => output.push_str("\\x08"),
+            '\u{0c}' => output.push_str("\\x0c"),
+            '\u{0b}' => output.push_str("\\x0b"),
+            '\u{07}' => output.push_str("\\x07"),
+            character if character == quote => {
+                output.push('\\');
+                output.push(character);
+            }
+            character if !python_is_printable(character) => {
+                let scalar = character as u32;
+                if scalar <= 0xff {
+                    let _ = write!(output, "\\x{scalar:02x}");
+                } else if scalar <= 0xffff {
+                    let _ = write!(output, "\\u{scalar:04x}");
+                } else {
+                    let _ = write!(output, "\\U{scalar:08x}");
+                }
+            }
+            character => output.push(character),
+        }
+    }
+    output.push(quote);
+    output
+}
+
+fn python_is_printable(character: char) -> bool {
+    // Python repr prints Unicode scalars only when their Unicode category is
+    // printable. `escape_debug` uses the equivalent Unicode printability
+    // classification; its escape spelling is deliberately not reused because
+    // Python requires \xNN, \uNNNN, and \UNNNNNNNN instead of Rust braces.
+    matches!(character, '\'' | '\"')
+        || character.escape_debug().to_string() == character.to_string()
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -946,6 +1204,76 @@ mod tests {
 
     fn captured(text: &str) -> Result<CaptureUnit, BuildError> {
         build(&parse(text).unwrap())
+    }
+
+    #[test]
+    fn writes_floats_capture_in_python_hir_stage_spelling() {
+        // Generated once with:
+        // uv run python -c 'from pathlib import Path; from qbopt.cfront import hir, stream; print(hir.text(hir.unit(stream.parse(Path("fixtures/c/floats.cgs").read_text())), end="")'
+        // Python qbopt.cfront.hir.text is the port oracle, not a Rust-designed
+        // diagnostic format.
+        let unit = captured(include_str!("../../../fixtures/c/floats.cgs")).unwrap();
+        assert_eq!(
+            text(&unit),
+            include_str!("../../../fixtures/c/golden/floats.hir")
+        );
+    }
+
+    #[test]
+    fn writes_python_repr_for_data_items_inline_code_and_single_quote_names() {
+        let unit = captured(
+            "INIT target=0xec size=0 rev=0\n\
+             SEG 1 attr=0x7 name=\"_TEXT\" align=1\n\
+             SETSEG 1\n\
+             - DGBytes 3 abc\n\
+             - DGIBytes 2 7\n\
+             SYM y1 name=\"quo\\x27te\" base=\"base\" pattern=\"_*\" attr=0x1 seg=1\n\
+             CALLCONV y1 class=0x80 target=0x4 parms=[]\n\
+             CODE y1 bytes=d900 fix=0:offset:y1:0\n\
+             - CGProcDecl y1 TY_INT_2\n\
+             t2 CGTemp TY_INT_2\n\
+             - CGReturn n1 TY_INT_2\n",
+        )
+        .unwrap();
+        assert_eq!(
+            text(&unit),
+            concat!(
+                "target 0xec\n",
+                "segment 1 _TEXT attr=0x7 items=[('DGBytes', ('3', 'abc')), ('DGIBytes', ('2', '7'))]\n",
+                "symbol Symbol(id=1, name=\"quo'te\", base='base', pattern='_*', attr=1, call_class=128, call_target=4, register_parms=False, code=Code(data=b'\\xd9\\x00', fixups=(Fixup(at=0, kind='offset', symbol=1, offset=0),)), segment=1)\n",
+                "proc _base TY_INT_2 parms=[] autos=[('t2', 'TY_INT_2')]\n",
+                "  0: CGReturn n1 TY_INT_2\n",
+            )
+        );
+    }
+
+    #[test]
+    fn writes_python_latin1_and_bytes_repr_escapes() {
+        // `stream.decode_value` accepts \xHH and materializes it as the
+        // corresponding Unicode scalar, so the non-printable Latin-1 cases
+        // must follow Python repr rather than Rust's display spelling.
+        assert_eq!(python_string("\u{a0}\u{ad}é"), "'\\xa0\\xadé'");
+        assert_eq!(python_string("¡µß"), "'¡µß'");
+        assert_eq!(python_string("\u{200b}\u{e000}"), "'\\u200b\\ue000'");
+        assert_eq!(python_bytes(b"a'b"), "b\"a'b\"");
+        assert_eq!(python_bytes(b"a\"b"), "b'a\"b'");
+        assert_eq!(
+            python_bytes(&[0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0xa0]),
+            "b'\\x07\\x08\\t\\n\\x0b\\x0c\\r\\xa0'"
+        );
+
+        let unit = captured(
+            "INIT target=0xec size=0 rev=0\n\
+             SYM y1 name=\"a\\xa0\\xadé\" base=\"plain\" pattern=\"_*\" attr=0x0 seg=0\n",
+        )
+        .unwrap();
+        assert_eq!(
+            text(&unit),
+            concat!(
+                "target 0xec\n",
+                "symbol Symbol(id=1, name='a\\xa0\\xadé', base='plain', pattern='_*', attr=0, call_class=0, call_target=0, register_parms=False, code=None, segment=0)\n",
+            )
+        );
     }
 
     #[test]
