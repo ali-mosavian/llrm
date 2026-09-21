@@ -9,6 +9,7 @@ pub(crate) mod induction;
 mod loops;
 pub(crate) mod occurrence;
 mod postorder;
+pub(crate) mod regions;
 pub(crate) mod ranges;
 pub(crate) mod ssa;
 
