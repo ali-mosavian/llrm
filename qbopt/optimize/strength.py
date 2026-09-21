@@ -514,13 +514,8 @@ def _replacement_credits(
     facts = consts.known(body)
     blocks = {block.at: block for block in body.blocks}
     made = {value.id: op for block in body.blocks for op in block.ops for value in op.defines}
-    flag_readers = {
-        value: [op for block in body.blocks for op in block.ops if value in op.uses]
-        for block in body.blocks
-        for op in block.ops
-        for value in op.defines
-        if value.flags
-    }
+    flags = {value for block in body.blocks for op in block.ops for value in op.defines if value.flags}
+    flag_readers = ssa.use_index(body, flags)
     nodes: list[_Replacement] = []
 
     for loop, _basics, _derived in found:

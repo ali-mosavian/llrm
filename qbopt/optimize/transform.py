@@ -21,6 +21,9 @@ one is otherwise a bisect through all three.
 """
 
 from dataclasses import replace
+from contextvars import ContextVar
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 from qbopt.model import ir
 from qbopt.model import mir
@@ -1427,6 +1430,21 @@ def _leaving(body: MirBody) -> set:
 LOW, HIGH = 0, 1
 
 
+_halves_reuse: ContextVar[dict[int, tuple[MirBody, frozenset]] | None] = ContextVar(
+    "qbopt_half_liveness_reuse", default=None
+)
+
+
+@contextmanager
+def _reusing_halves() -> Iterator[None]:
+    """Share half-liveness for immutable states in one transaction."""
+    token = _halves_reuse.set({})
+    try:
+        yield
+    finally:
+        _halves_reuse.reset(token)
+
+
 def halves(body: MirBody) -> set:
     """Which half of which value something reads, to a fixed point.
 
@@ -1445,6 +1463,11 @@ def halves(body: MirBody) -> set:
     Both halves of everything reaching an exit are live, because what the
     caller reads is not a fact this body holds.
     """
+    reused = _halves_reuse.get()
+    saved = None if reused is None else reused.get(id(body))
+    if saved is not None and saved[0] is body:
+        return set(saved[1])
+
     out: set = set()
     for value in _leaving(body):
         out.add((value, LOW))
@@ -1506,6 +1529,10 @@ def halves(body: MirBody) -> set:
                     if (phi.result, half) in out:
                         out |= {(one, half) for one in phi.incoming.values()}
         changing = len(out) != before
+    if reused is not None:
+        # Retaining the body alongside the id both validates identity and
+        # prevents id reuse for the lifetime of this optimization transaction.
+        reused[id(body)] = (body, frozenset(out))
     return out
 
 
@@ -3026,6 +3053,7 @@ PASSES_ON = (
 
 
 @consts.reusing()
+@_reusing_halves()
 def applied(
     body: MirBody,
     dgroup: frozenset[int],

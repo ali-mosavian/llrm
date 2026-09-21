@@ -1,11 +1,38 @@
 from dataclasses import replace
 from collections.abc import Iterator
+from collections.abc import Collection
 
 from qbopt.model import ir
 from qbopt.model import mir
 from qbopt.model import memory
 from qbopt.model.mir import Op
 from qbopt.model.mir import MirBody
+
+
+def use_index(
+    body: MirBody,
+    values: Collection[mir.Value] | None = None,
+    *,
+    consumed: bool = False,
+) -> dict[mir.Value, list[Op]]:
+    """Each value's operation users, built in one body traversal.
+
+    ``Op.uses`` includes carried merge inputs; ``mir.consumed`` is the
+    narrower set an operation actually reads.  Callers choose the relation
+    they mean, while construction and ordering stay one shared mechanism.
+    Each operation occurs at most once in a value's list, matching the old
+    per-value membership scans exactly.
+    """
+    wanted = None if values is None else set(values)
+    users: dict[mir.Value, list[Op]] = {}
+    for block in body.blocks:
+        for op in block.ops:
+            read = mir.consumed(op) if consumed else set(op.uses)
+            if wanted is not None:
+                read &= wanted
+            for value in read:
+                users.setdefault(value, []).append(op)
+    return users
 
 
 def pruned_phis(body: MirBody, roots: set[mir.Value]) -> MirBody:

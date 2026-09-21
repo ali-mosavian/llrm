@@ -112,12 +112,7 @@ def _forwarded_zero_tests(body: mir.MirBody) -> mir.MirBody:
     # definitions * operations calls to ``consumed`` (matmul: 4.42 million).
     # Preserve the old one-entry-per-operation shape by intersecting the set
     # each operation consumes with the defined values once.
-    users: dict[mir.Value, list[mir.Op]] = {}
-    defined = definitions.keys()
-    for block in body.blocks:
-        for op in block.ops:
-            for value in mir.consumed(op) & defined:
-                users.setdefault(value, []).append(op)
+    users = ssa.use_index(body, definitions, consumed=True)
     swaps: dict[int, mir.Value] = {}
     for block in body.blocks:
         for op in block.ops:
