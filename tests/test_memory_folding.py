@@ -84,6 +84,69 @@ def test_one_use_memory_comparison_is_selected_before_allocation() -> None:
     assert result[2].uses == (base, selector, other)
 
 
+def test_one_use_zero_extended_byte_test_is_selected_before_allocation() -> None:
+    """C sieve ran 13.4% behind BCC after loading every flag byte into AX.
+
+    The byte has no value use beyond an equality test, so widening it cannot
+    justify a virtual register: ``movzx word,[cell]; cmp word,0`` is exactly
+    ``cmp byte [cell],0`` when the following branch reads only ZF.
+    """
+    index, loaded = 1, 2
+    cell = ir.Mem(
+        Addr(Space.FRAME, -1028),
+        1,
+        Register.BP,
+        -1028,
+        2,
+        index=ir.Held(index, 2),
+    )
+    load = lir.Insn(
+        1,
+        None,
+        ir.Semantics(ir.Operation.EXTEND, "movzx", (ir.Held(loaded, 2),), (cell,)),
+        (loaded,),
+        (index,),
+    )
+    compare = lir.Insn(
+        2,
+        None,
+        ir.Semantics(ir.Operation.COMPARE, "cmp", (), (ir.Held(loaded, 2), ir.Imm(0, 2))),
+        (),
+        (loaded,),
+    )
+    branch = _insn(3, ir.Operation.BRANCH, "je", target=9)
+
+    result = comparefold.selected((load, compare, branch), Counter((index, loaded)), set())
+
+    assert result[0].what.op is ir.Operation.NOTHING
+    assert result[1].what.sources == (cell, ir.Imm(0, 1))
+    assert result[1].uses == (index,)
+
+
+def test_zero_extended_byte_test_keeps_the_load_when_sign_is_observed() -> None:
+    """A narrow memory compare exposes bit 7 as SF; a zero-extended word test does not."""
+    loaded = 1
+    cell = ir.Mem(Addr(Space.FRAME, -4), 1, Register.BP, -4, 1)
+    load = lir.Insn(
+        1,
+        None,
+        ir.Semantics(ir.Operation.EXTEND, "movzx", (ir.Held(loaded, 2),), (cell,)),
+        (loaded,),
+        (),
+    )
+    compare = lir.Insn(
+        2,
+        None,
+        ir.Semantics(ir.Operation.COMPARE, "cmp", (), (ir.Held(loaded, 2), ir.Imm(0, 2))),
+        (),
+        (loaded,),
+    )
+    branch = _insn(3, ir.Operation.BRANCH, "jl", target=9)
+    insns = (load, compare, branch)
+
+    assert comparefold.selected(insns, Counter((loaded,)), set()) == insns
+
+
 def test_memory_round_trip_folds_across_an_independent_operand_load() -> None:
     """C nbody used four instructions where BCC writes ``mov vel; add [pos],reg``.
 

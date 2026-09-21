@@ -11,28 +11,39 @@ point and only the legal machine operand is chosen.
 from collections import Counter
 from dataclasses import replace
 
-from qbopt.model import ir, lir
+from qbopt.model import ir
+from qbopt.model import lir
 
 
 def selected(
     insns: tuple[lir.Insn, ...], users: Counter[int], exposed: set[int] | frozenset[int]
 ) -> tuple[lir.Insn, ...]:
-    """Fold a private ``mov value,[cell]; cmp value,other`` into ``cmp [cell],other``.
+    """Fold a private load followed by its sole comparison into a memory comparison.
 
     Zero-byte anchors may separate the two source operations.  No emitted
     instruction is crossed, so volatile order, faults and flags are unchanged.
     The other comparison operand must not already be memory: x86 has no
-    memory-to-memory comparison form.
+    memory-to-memory comparison form.  A widening load may fold only for an
+    equality test against zero: narrowing that comparison preserves ZF, while
+    a signed condition could observe the narrow cell's top bit through SF.
     """
     out = list(insns)
     for load_at, load in enumerate(insns):
+        extension = False
         match load.what:
             case ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(value, width),), (ir.Mem() as cell,)):
                 pass
+            case ir.Semantics(
+                ir.Operation.EXTEND,
+                "movsx" | "movzx",
+                (ir.Held(value, width),),
+                (ir.Mem() as cell,),
+            ) if cell.width < width:
+                extension = True
             case _:
                 continue
         if (
-            cell.width != width
+            (cell.width != width and not extension)
             or load.defines != (value,)
             or users[value] != 1
             or value in exposed
@@ -60,6 +71,22 @@ def selected(
         other = sources[1 - position]
         if isinstance(other, ir.Mem) or getattr(other, "width", None) != width:
             continue
+        if extension:
+            if not isinstance(other, ir.Imm) or other.value != 0 or other.address is not None:
+                continue
+            branch_at = compare_at + 1
+            while branch_at < len(insns) and _anchor(insns[branch_at]):
+                branch_at += 1
+            if branch_at == len(insns):
+                continue
+            branch = insns[branch_at]
+            if (
+                branch.what is None
+                or branch.what.op is not ir.Operation.BRANCH
+                or branch.what.name not in {"je", "jne"}
+            ):
+                continue
+            other = ir.Imm(0, cell.width)
         # A displacement and immediate can each own a relocation.  LIR's
         # ownership flag names one source operation, so retain the unfused
         # pair rather than silently dropping either fixup.
@@ -68,6 +95,7 @@ def selected(
 
         folded_sources = list(sources)
         folded_sources[position] = cell
+        folded_sources[1 - position] = other
         address_uses = tuple(held.value for held in ir.values(cell))
         compare_uses = tuple(one for one in compare.uses if one != value)
         out[compare_at] = replace(

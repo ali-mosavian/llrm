@@ -1257,7 +1257,7 @@ def _constant_store(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...
     return _pointer_access(op, lowering)
 
 
-def _fill(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...]:
+def _fill(op: mir.Op, lowering: "Lowering", *, preserve_flags: bool = False) -> tuple[ir.Semantics, ...]:
     """`rep stos`: the count in cx, the value in the accumulator, the cells through es:di.
 
     A far cell's selector is an operand the allocation places in ES. Otherwise
@@ -1266,35 +1266,101 @@ def _fill(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...]:
     ordinary near data requires DS.
     """
     value, count, address, *selector = op.args
-    name = {1: "stosb", 2: "stosw", 4: "stosd"}.get(value.width)
-    if name is None:
+    names = {1: "stosb", 2: "stosw", 4: "stosd"}
+    if value.width not in names:
         raise Unlowered(f"fill of {value.width}-byte cells at {op.at:#x}")
-    setup = []
+    setup: list[ir.Semantics] = []
 
-    def held(arg: mir.Arg, width: int) -> ir.Loc:
+    def held(arg: mir.Arg | ir.Loc, width: int, into: list[ir.Semantics] = setup) -> ir.Loc:
+        if isinstance(arg, ir.Held):
+            return arg
         if isinstance(arg, mir.Held):
             return operand(arg)
-        into = ir.Held(lowering.fresh(), width)
-        setup.append(ir.Semantics(ir.Operation.MOVE, "mov", (into,), (operand(arg),)))
-        return into
+        result = ir.Held(lowering.fresh(), width)
+        into.append(ir.Semantics(ir.Operation.MOVE, "mov", (result,), (operand(arg),)))
+        return result
 
-    stored, counted, through = held(value, value.width), held(count, 2), held(address, 2)
-    stepped, emptied = ir.Held(lowering.fresh(), 2), ir.Held(lowering.fresh(), 2)
-    if selector:
-        sources = (stored, counted, through, held(selector[0], 2))
-        return (*setup, ir.Semantics(ir.Operation.FILL, name, (ir.Mem(None, 0), stepped, emptied), sources))
-    from qbopt.objectfile.module import Space
+    def repeated(constant: mir.Const, width: int) -> mir.Const:
+        """The same element replicated across one target-width string store."""
+        bits = constant.n & ((1 << (constant.width * 8)) - 1)
+        packed = sum(bits << shift for shift in range(0, width * 8, constant.width * 8))
+        return mir.Const(packed, width)
 
-    extra = ir.Reg(Register.ES, 2)
-    source_segment = Register.SS if any(ref.space is Space.FRAME for ref in op.stores) else Register.DS
-    return (
-        *setup,
-        ir.Semantics(ir.Operation.PUSH, "push", (), (extra,)),
-        ir.Semantics(ir.Operation.PUSH, "push", (), (ir.Reg(source_segment, 2),)),
-        ir.Semantics(ir.Operation.POP, "pop", (extra,), ()),
-        ir.Semantics(ir.Operation.FILL, name, (ir.Mem(None, 0), stepped, emptied), (stored, counted, through, extra)),
-        ir.Semantics(ir.Operation.POP, "pop", (extra,), ()),
+    # A constant byte or word has one dword pattern regardless of how many
+    # cells follow.  Widen the bulk transfer here, where the target's string
+    # widths belong; MIR continues to say only "count cells of this value".
+    # A dynamic count retains a bounded tail.  A constant count proves which
+    # tails are empty, so no zero-trip STOS instruction is emitted.
+    plan: list[tuple[mir.Arg | ir.Loc, mir.Arg | ir.Loc, int]] = []
+    factor = (
+        4 // value.width if isinstance(value, mir.Const) and (isinstance(count, mir.Const) or not preserve_flags) else 1
     )
+    if factor > 1 and isinstance(count, mir.Const):
+        bulk, tail = divmod(count.n, factor)
+        if bulk:
+            plan.append((repeated(value, 4), mir.Const(bulk, 2), 4))
+        if tail:
+            plan.append((value, mir.Const(tail, 2), value.width))
+    elif factor > 1:
+        counted = held(count, 2)
+        bulk = ir.Held(lowering.fresh(), 2)
+        tail = ir.Held(lowering.fresh(), 2)
+        setup.extend(
+            (
+                ir.Semantics(
+                    ir.Operation.BINARY,
+                    "shr",
+                    (bulk,),
+                    (counted, ir.Imm(factor.bit_length() - 1, 1)),
+                ),
+                ir.Semantics(
+                    ir.Operation.BINARY,
+                    "and",
+                    (tail,),
+                    (counted, ir.Imm(factor - 1, 2)),
+                ),
+            )
+        )
+        plan.extend(((repeated(value, 4), bulk, 4), (value, tail, value.width)))
+    else:
+        plan.append((value, count, value.width))
+
+    if not plan:
+        return (ir.Semantics(ir.Operation.NOTHING, ""),)
+
+    through = held(address, 2)
+    if selector:
+        segment = held(selector[0], 2)
+        before: tuple[ir.Semantics, ...] = ()
+        after: tuple[ir.Semantics, ...] = ()
+    else:
+        from qbopt.objectfile.module import Space
+
+        segment = ir.Reg(Register.ES, 2)
+        source_segment = Register.SS if any(ref.space is Space.FRAME for ref in op.stores) else Register.DS
+        before = (
+            ir.Semantics(ir.Operation.PUSH, "push", (), (segment,)),
+            ir.Semantics(ir.Operation.PUSH, "push", (), (ir.Reg(source_segment, 2),)),
+            ir.Semantics(ir.Operation.POP, "pop", (segment,), ()),
+        )
+        after = (ir.Semantics(ir.Operation.POP, "pop", (segment,), ()),)
+
+    parts = [*setup, *before]
+    current = through
+    for stored_arg, counted_arg, width in plan:
+        stored = held(stored_arg, width, parts)
+        counted = held(counted_arg, 2, parts)
+        stepped, emptied = ir.Held(lowering.fresh(), 2), ir.Held(lowering.fresh(), 2)
+        parts.append(
+            ir.Semantics(
+                ir.Operation.FILL,
+                names[width],
+                (ir.Mem(None, 0), stepped, emptied),
+                (stored, counted, current, segment),
+            )
+        )
+        current = stepped
+    return (*parts, *after)
 
 
 _EXPANDS: dict = {
@@ -1765,7 +1831,12 @@ class Lowering:
                 source_backed=False,
             )
         made = _EXPANDS.get(op.kind)
-        parts = made(op, self) if made is not None else _pointer_access(op, self)
+        if op.kind is mir.Kind.FILL:
+            parts = _fill(op, self, preserve_flags=preserve_flags)
+        elif made is not None:
+            parts = made(op, self)
+        else:
+            parts = _pointer_access(op, self)
         parts = _flag_test(op, self) or parts
         if op.kind is mir.Kind.CONVERT and not preserve_flags:
             parts = _sign_word(op) or parts
