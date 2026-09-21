@@ -2045,7 +2045,7 @@ impl<'types> FunctionSelector<'types> {
                 self.push_instruction(
                     X86Opcode::LowWord,
                     vec![
-                        virtual_operand(low, OperandRole::Def),
+                        fixed_virtual_operand(low, OperandRole::Def, X86Register::Ax),
                         virtual_operand(value, OperandRole::Use),
                     ],
                     InstructionFlags::NONE,
@@ -2054,7 +2054,7 @@ impl<'types> FunctionSelector<'types> {
                 self.push_instruction(
                     X86Opcode::HighWord,
                     vec![
-                        virtual_operand(high, OperandRole::Def),
+                        fixed_virtual_operand(high, OperandRole::Def, X86Register::Dx),
                         virtual_operand(value, OperandRole::Use),
                     ],
                     InstructionFlags::NONE,
@@ -2179,7 +2179,7 @@ impl<'types> FunctionSelector<'types> {
             self.push_instruction(
                 X86Opcode::LowWord,
                 vec![
-                    virtual_operand(low, OperandRole::Def),
+                    fixed_virtual_operand(low, OperandRole::Def, X86Register::Ax),
                     virtual_operand(value, OperandRole::Use),
                 ],
                 InstructionFlags::NONE,
@@ -2188,7 +2188,7 @@ impl<'types> FunctionSelector<'types> {
             self.push_instruction(
                 X86Opcode::HighWord,
                 vec![
-                    virtual_operand(high, OperandRole::Def),
+                    fixed_virtual_operand(high, OperandRole::Def, X86Register::Dx),
                     virtual_operand(value, OperandRole::Use),
                 ],
                 InstructionFlags::NONE,
@@ -5091,6 +5091,16 @@ mod tests {
         assert_eq!(
             instructions[instructions.len() - 2].opcode,
             X86Opcode::HighWord.machine_opcode()
+        );
+        assert_eq!(
+            instructions[instructions.len() - 3].operands[0].constraint,
+            Some(RegisterConstraint::Fixed(X86Register::Ax.physical())),
+            "the low return word is born in AX rather than copied there after frame teardown"
+        );
+        assert_eq!(
+            instructions[instructions.len() - 2].operands[0].constraint,
+            Some(RegisterConstraint::Fixed(X86Register::Dx.physical())),
+            "the high return word is born in DX rather than copied there after frame teardown"
         );
     }
 }
