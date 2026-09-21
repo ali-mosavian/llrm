@@ -19,7 +19,7 @@ mod registers;
 mod selection;
 mod verify;
 
-pub use allocation::{X86AllocationError, allocate_registers};
+pub use allocation::{X86AllocationError, allocate_registers, split_fixed_register_occurrences};
 pub use basic_abi::{BasicAbiError, ExpandedBasicFunction, expand_basic_runtime};
 pub use basic_abi_expand::{BasicAbiExpansionError, expand_allocated_basic_abi};
 pub use c_abi::{
