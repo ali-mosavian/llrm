@@ -2,13 +2,19 @@ use std::collections::BTreeMap;
 
 use crate::error::Diagnostic;
 use crate::hir;
+use crate::syntax::AssignTarget;
 use crate::syntax::BinaryOp;
 use crate::syntax::Expr;
+use crate::syntax::FStringPart;
 use crate::syntax::Function;
+use crate::syntax::IterationMode;
 use crate::syntax::Module;
 use crate::syntax::Span;
 use crate::syntax::Statement;
+use crate::syntax::Struct;
+use crate::syntax::TypeAnnotation;
 use crate::syntax::TypeName;
+use crate::syntax::TypeSpec;
 use crate::syntax::UnaryOp;
 
 const VOID: u32 = 1;
@@ -22,16 +28,18 @@ const I32: u32 = 8;
 const U32: u32 = 9;
 const F32: u32 = 10;
 const F64: u32 = 11;
+const STRING: u32 = 12;
 
 #[derive(Default)]
-struct FloatPool {
-    symbols: BTreeMap<(TypeName, u64), u32>,
+struct LiteralPool {
+    floats: BTreeMap<(TypeName, u64), u32>,
+    strings: BTreeMap<Vec<u8>, u32>,
     data: Vec<hir::DataObject>,
 }
 
-impl FloatPool {
-    fn intern(&mut self, type_name: TypeName, bits: u64) -> u32 {
-        if let Some(symbol) = self.symbols.get(&(type_name, bits)) {
+impl LiteralPool {
+    fn float(&mut self, type_name: TypeName, bits: u64) -> u32 {
+        if let Some(symbol) = self.floats.get(&(type_name, bits)) {
             return *symbol;
         }
         let id = self.data.len() as u32 + 1;
@@ -43,9 +51,226 @@ impl FloatPool {
             TypeName::F64 => (format!("$f64_{bits:016x}"), bits.to_le_bytes().to_vec()),
             _ => unreachable!("only floats enter the constant pool"),
         };
-        self.symbols.insert((type_name, bits), id);
+        self.floats.insert((type_name, bits), id);
         self.data.push(hir::DataObject { id, name, bytes });
         id
+    }
+
+    fn string(&mut self, value: &[u8]) -> u32 {
+        if let Some(symbol) = self.strings.get(value) {
+            return *symbol;
+        }
+        let id = self.data.len() as u32 + 1;
+        let length =
+            u16::try_from(value.len()).expect("string length checked by semantic analysis");
+        let mut bytes = Vec::with_capacity(value.len() + 5);
+        bytes.extend(length.to_le_bytes());
+        bytes.extend(length.to_le_bytes());
+        bytes.extend(value);
+        bytes.push(0);
+        self.strings.insert(value.to_vec(), id);
+        self.data.push(hir::DataObject {
+            id,
+            name: format!("$str{id}"),
+            bytes,
+        });
+        id
+    }
+}
+
+struct TypeRegistry {
+    types: Vec<hir::Type>,
+    arrays: BTreeMap<(u32, u32), u32>,
+    structs: BTreeMap<String, StructLayout>,
+}
+
+#[derive(Clone, Debug)]
+struct StructLayout {
+    id: u32,
+    name: String,
+    fields: BTreeMap<String, FieldLayout>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct FieldLayout {
+    type_: ElementType,
+    offset: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ElementType {
+    Scalar(TypeName),
+    Struct(u32),
+}
+
+impl ElementType {
+    fn id(self) -> u32 {
+        match self {
+            Self::Scalar(type_name) => type_id(type_name),
+            Self::Struct(id) => id,
+        }
+    }
+}
+
+impl TypeRegistry {
+    fn new() -> Self {
+        Self {
+            types: vec![
+                plain_type(VOID, "void", "void", 0, None, "none"),
+                plain_type(BOOL, "bool", "boolean", 1, None, "none"),
+                plain_type(CHAR, "char", "integer", 1, Some(false), "none"),
+                plain_type(I8, "i8", "integer", 1, Some(true), "none"),
+                plain_type(U8, "u8", "integer", 1, Some(false), "none"),
+                plain_type(I16, "i16", "integer", 2, Some(true), "none"),
+                plain_type(U16, "u16", "integer", 2, Some(false), "none"),
+                plain_type(I32, "i32", "integer", 4, Some(true), "none"),
+                plain_type(U32, "u32", "integer", 4, Some(false), "none"),
+                plain_type(F32, "f32", "float", 4, None, "binary32"),
+                plain_type(F64, "f64", "float", 8, None, "binary64"),
+                hir::Type {
+                    id: STRING,
+                    name: "string".into(),
+                    kind: "pointer",
+                    width: 2,
+                    signed: None,
+                    evaluation: "none",
+                    element: Some(CHAR),
+                    rank: 0,
+                    bounds: Vec::new(),
+                    address: "near",
+                },
+            ],
+            arrays: BTreeMap::new(),
+            structs: BTreeMap::new(),
+        }
+    }
+
+    fn register_structs(&mut self, declarations: &[Struct]) -> Result<(), Diagnostic> {
+        for declaration in declarations {
+            if self.structs.contains_key(&declaration.name) {
+                return Err(Diagnostic::new(
+                    declaration.span,
+                    format!("struct {:?} is declared more than once", declaration.name),
+                ));
+            }
+            let mut fields = BTreeMap::new();
+            let mut offset = 0;
+            let mut alignment = 1;
+            for field in &declaration.fields {
+                if fields.contains_key(&field.name) {
+                    return Err(Diagnostic::new(
+                        field.span,
+                        format!("field {:?} is declared more than once", field.name),
+                    ));
+                }
+                let field_type = self.resolve_element(&field.type_spec, field.span)?;
+                let field_width = self.width(field_type.id());
+                let field_alignment = field_width.clamp(1, 2);
+                offset = align_up(offset, field_alignment);
+                fields.insert(
+                    field.name.clone(),
+                    FieldLayout {
+                        type_: field_type,
+                        offset,
+                    },
+                );
+                offset += field_width;
+                alignment = alignment.max(field_alignment);
+            }
+            let width = align_up(offset, alignment);
+            let id = self.types.len() as u32 + 1;
+            self.types.push(hir::Type {
+                id,
+                name: declaration.name.clone(),
+                kind: "opaque",
+                width,
+                signed: None,
+                evaluation: "none",
+                element: None,
+                rank: 0,
+                bounds: Vec::new(),
+                address: "none",
+            });
+            self.structs.insert(
+                declaration.name.clone(),
+                StructLayout {
+                    id,
+                    name: declaration.name.clone(),
+                    fields,
+                },
+            );
+        }
+        Ok(())
+    }
+
+    fn resolve_element(&self, spec: &TypeSpec, span: Span) -> Result<ElementType, Diagnostic> {
+        match spec {
+            TypeSpec::Primitive(type_name) => Ok(ElementType::Scalar(*type_name)),
+            TypeSpec::Named(name) => self
+                .structs
+                .get(name)
+                .map(|one| ElementType::Struct(one.id))
+                .ok_or_else(|| Diagnostic::new(span, format!("unknown struct {name:?}"))),
+        }
+    }
+
+    fn array(&mut self, element: ElementType, length: u32) -> u32 {
+        let element_id = element.id();
+        if let Some(id) = self.arrays.get(&(element_id, length)) {
+            return *id;
+        }
+        let element_type = &self.types[(element_id - 1) as usize];
+        let element_name = element_type.name.clone();
+        let element_width = element_type.width;
+        let id = self.types.len() as u32 + 1;
+        self.types.push(hir::Type {
+            id,
+            name: format!("[{element_name}; {length}]"),
+            kind: "array",
+            width: element_width * length,
+            signed: None,
+            evaluation: "none",
+            element: Some(element_id),
+            rank: 1,
+            bounds: vec![(0, i32::try_from(length - 1).expect("array length checked"))],
+            address: "near",
+        });
+        self.arrays.insert((element_id, length), id);
+        id
+    }
+
+    fn width(&self, id: u32) -> u32 {
+        self.types[(id - 1) as usize].width
+    }
+
+    fn structure(&self, id: u32) -> Option<&StructLayout> {
+        self.structs.values().find(|one| one.id == id)
+    }
+}
+
+fn align_up(value: u32, alignment: u32) -> u32 {
+    value.div_ceil(alignment) * alignment
+}
+
+fn plain_type(
+    id: u32,
+    name: &str,
+    kind: &'static str,
+    width: u32,
+    signed: Option<bool>,
+    evaluation: &'static str,
+) -> hir::Type {
+    hir::Type {
+        id,
+        name: name.into(),
+        kind,
+        width,
+        signed,
+        evaluation,
+        element: None,
+        rank: 0,
+        bounds: Vec::new(),
+        address: "none",
     }
 }
 
@@ -61,13 +286,21 @@ struct Signature {
 enum Storage {
     Parameter(u32),
     Place(u32),
+    ArrayView { place: u32, index: hir::Operand },
 }
 
 #[derive(Clone, Debug)]
 struct Binding {
-    type_name: TypeName,
+    type_: BindingType,
     mutable: bool,
     storage: Storage,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum BindingType {
+    Scalar(TypeName),
+    Array { element: ElementType, length: u32 },
+    Struct(u32),
 }
 
 #[derive(Clone, Debug)]
@@ -116,7 +349,7 @@ pub fn compile(module: &Module, module_name: &str) -> Result<String, Diagnostic>
         );
     }
 
-    let callables = signatures
+    let mut callables: Vec<_> = signatures
         .values()
         .map(|signature| hir::Callable {
             id: signature.id,
@@ -127,95 +360,88 @@ pub fn compile(module: &Module, module_name: &str) -> Result<String, Diagnostic>
                 .iter()
                 .map(|one| type_id(*one))
                 .collect(),
+            defined: true,
         })
         .collect();
+    let mut builtin_ids = BTreeMap::new();
+    for (name, parameter) in print_builtins() {
+        let id = callables.len() as u32 + 1;
+        builtin_ids.insert(name, id);
+        callables.push(hir::Callable {
+            id,
+            name: name.into(),
+            result_type: None,
+            parameter_types: parameter.into_iter().map(type_id).collect(),
+            defined: false,
+        });
+    }
     let mut functions = Vec::new();
-    let mut float_pool = FloatPool::default();
+    let mut literals = LiteralPool::default();
+    let mut types = TypeRegistry::new();
+    types.register_structs(&module.structs)?;
     for function in &module.functions {
         let signature = signatures.get(&function.name).expect("collected function");
         functions.push(
-            FunctionCompiler::new(function, signature, &signatures, &mut float_pool)?
-                .compile(function)?,
+            FunctionCompiler::new(
+                function,
+                signature,
+                &signatures,
+                &builtin_ids,
+                &mut literals,
+                &mut types,
+            )?
+            .compile(function)?,
         );
     }
     let program = hir::Program {
         module_name: module_name.into(),
-        types: vec![
-            hir::Type {
-                id: VOID,
-                name: "void",
-                kind: "void",
-                width: 0,
-                signed: None,
-                evaluation: "none",
-            },
-            hir::Type {
-                id: BOOL,
-                name: "bool",
-                kind: "boolean",
-                width: 1,
-                signed: None,
-                evaluation: "none",
-            },
-            hir::Type {
-                id: CHAR,
-                name: "char",
-                kind: "integer",
-                width: 1,
-                signed: Some(false),
-                evaluation: "none",
-            },
-            hir::Type {
-                id: I8,
-                name: "i8",
-                kind: "integer",
-                width: 1,
-                signed: Some(true),
-                evaluation: "none",
-            },
-            integer_type(U8, "u8", 1, false),
-            integer_type(I16, "i16", 2, true),
-            integer_type(U16, "u16", 2, false),
-            integer_type(I32, "i32", 4, true),
-            integer_type(U32, "u32", 4, false),
-            hir::Type {
-                id: F32,
-                name: "f32",
-                kind: "float",
-                width: 4,
-                signed: None,
-                evaluation: "binary32",
-            },
-            hir::Type {
-                id: F64,
-                name: "f64",
-                kind: "float",
-                width: 8,
-                signed: None,
-                evaluation: "binary64",
-            },
-        ],
+        types: types.types,
         functions,
         callables,
-        data: float_pool.data,
+        data: literals.data,
     };
     Ok(program.json())
 }
 
-fn integer_type(id: u32, name: &'static str, width: u32, signed: bool) -> hir::Type {
-    hir::Type {
-        id,
-        name,
-        kind: "integer",
-        width,
-        signed: Some(signed),
-        evaluation: "none",
+fn print_builtins() -> Vec<(&'static str, Option<TypeName>)> {
+    let mut out = vec![
+        ("__print_newline", None),
+        ("__print_text", Some(TypeName::String)),
+    ];
+    for type_name in [
+        TypeName::Bool,
+        TypeName::Char,
+        TypeName::I8,
+        TypeName::U8,
+        TypeName::I16,
+        TypeName::U16,
+        TypeName::I32,
+        TypeName::U32,
+        TypeName::F32,
+        TypeName::F64,
+    ] {
+        let name = match type_name {
+            TypeName::Bool => "__print_bool",
+            TypeName::Char => "__print_char",
+            TypeName::I8 => "__print_i8",
+            TypeName::U8 => "__print_u8",
+            TypeName::I16 => "__print_i16",
+            TypeName::U16 => "__print_u16",
+            TypeName::I32 => "__print_i32",
+            TypeName::U32 => "__print_u32",
+            TypeName::F32 => "__print_f32",
+            TypeName::F64 => "__print_f64",
+            _ => unreachable!(),
+        };
+        out.push((name, Some(type_name)));
     }
+    out
 }
 
 struct FunctionCompiler<'a> {
     signature: &'a Signature,
     signatures: &'a BTreeMap<String, Signature>,
+    builtin_ids: &'a BTreeMap<&'static str, u32>,
     values: Vec<hir::Value>,
     places: Vec<hir::Place>,
     blocks: Vec<BlockBuilder>,
@@ -228,7 +454,8 @@ struct FunctionCompiler<'a> {
     next_place: u32,
     next_instruction: u32,
     next_frame_offset: i32,
-    float_pool: &'a mut FloatPool,
+    literals: &'a mut LiteralPool,
+    types: &'a mut TypeRegistry,
     constant_places: BTreeMap<u32, u32>,
 }
 
@@ -237,11 +464,14 @@ impl<'a> FunctionCompiler<'a> {
         function: &Function,
         signature: &'a Signature,
         signatures: &'a BTreeMap<String, Signature>,
-        float_pool: &'a mut FloatPool,
+        builtin_ids: &'a BTreeMap<&'static str, u32>,
+        literals: &'a mut LiteralPool,
+        types: &'a mut TypeRegistry,
     ) -> Result<Self, Diagnostic> {
         let mut compiler = Self {
             signature,
             signatures,
+            builtin_ids,
             values: Vec::new(),
             places: Vec::new(),
             blocks: vec![BlockBuilder {
@@ -258,7 +488,8 @@ impl<'a> FunctionCompiler<'a> {
             next_place: 1,
             next_instruction: 1,
             next_frame_offset: 0,
-            float_pool,
+            literals,
+            types,
             constant_places: BTreeMap::new(),
         };
         for parameter in &function.parameters {
@@ -267,7 +498,7 @@ impl<'a> FunctionCompiler<'a> {
             compiler.scopes[0].insert(
                 parameter.name.clone(),
                 Binding {
-                    type_name: parameter.type_name,
+                    type_: BindingType::Scalar(parameter.type_name),
                     mutable: false,
                     storage: Storage::Parameter(value),
                 },
@@ -347,7 +578,67 @@ impl<'a> FunctionCompiler<'a> {
                         format!("binding {name:?} is already declared in this scope"),
                     ));
                 }
-                let value = self.expression(value, *annotation)?;
+                if let Some(TypeAnnotation::Array { element, length }) = annotation {
+                    let Expr::Array(items, _) = value else {
+                        return Err(Diagnostic::new(
+                            *span,
+                            "fixed-array binding requires an array literal",
+                        ));
+                    };
+                    if items.len() != *length as usize {
+                        return Err(Diagnostic::new(
+                            *span,
+                            format!("array expects {length} elements, got {}", items.len()),
+                        ));
+                    }
+                    let element = self.types.resolve_element(element, *span)?;
+                    let type_id = self.types.array(element, *length);
+                    let place = self.array_place(name, type_id, element, *length, *mutable);
+                    for (index, item) in items.iter().enumerate() {
+                        let index = hir::Operand::Constant(U16, index as i64);
+                        match element {
+                            ElementType::Scalar(type_name) => {
+                                let value = self.expression(item, Some(type_name))?;
+                                self.emit(
+                                    "store",
+                                    Vec::new(),
+                                    vec![
+                                        hir::Operand::ArrayElement(place, vec![index]),
+                                        required(value, item.span())?,
+                                    ],
+                                    None,
+                                );
+                            }
+                            ElementType::Struct(struct_id) => {
+                                self.initialize_struct(place, index, struct_id, item)?;
+                            }
+                        }
+                    }
+                    self.scopes.last_mut().expect("scope").insert(
+                        name.clone(),
+                        Binding {
+                            type_: BindingType::Array {
+                                element,
+                                length: *length,
+                            },
+                            mutable: *mutable,
+                            storage: Storage::Place(place),
+                        },
+                    );
+                    return Ok(());
+                }
+                if matches!(value, Expr::Array(..)) {
+                    return Err(Diagnostic::new(
+                        *span,
+                        "array literal requires a fixed-array annotation",
+                    ));
+                }
+                let expected = match annotation {
+                    Some(TypeAnnotation::Scalar(type_name)) => Some(*type_name),
+                    Some(TypeAnnotation::Array { .. }) => unreachable!(),
+                    None => None,
+                };
+                let value = self.expression(value, expected)?;
                 if value.type_name == TypeName::Void {
                     return Err(Diagnostic::new(*span, "cannot bind a void expression"));
                 }
@@ -362,28 +653,23 @@ impl<'a> FunctionCompiler<'a> {
                 self.scopes.last_mut().expect("scope").insert(
                     name.clone(),
                     Binding {
-                        type_name: annotation.unwrap_or(binding_type),
+                        type_: BindingType::Scalar(binding_type),
                         mutable: *mutable,
                         storage: Storage::Place(place),
                     },
                 );
             }
-            Statement::Assign { name, value, span } => {
-                let binding = self.binding(name, *span)?.clone();
-                if !binding.mutable {
-                    return Err(Diagnostic::new(
-                        *span,
-                        format!("binding {name:?} is immutable"),
-                    ));
-                }
-                let Storage::Place(place) = binding.storage else {
-                    return Err(Diagnostic::new(*span, "parameters are immutable"));
-                };
-                let value = self.expression(value, Some(binding.type_name))?;
+            Statement::Assign {
+                target,
+                value,
+                span,
+            } => {
+                let (destination, element) = self.assignment_target(target, *span)?;
+                let value = self.expression(value, Some(element))?;
                 self.emit(
                     "store",
                     Vec::new(),
-                    vec![hir::Operand::Place(place), required(value, *span)?],
+                    vec![destination, required(value, *span)?],
                     None,
                 );
             }
@@ -428,6 +714,13 @@ impl<'a> FunctionCompiler<'a> {
                 body,
                 span,
             } => self.while_statement(condition, body, *span)?,
+            Statement::For {
+                mode,
+                name,
+                iterable,
+                body,
+                span,
+            } => self.for_statement(*mode, name, iterable, body, *span)?,
             Statement::Break(span) => {
                 let Some((target, _)) = self.loops.last().copied() else {
                     return Err(Diagnostic::new(*span, "break is only valid inside a loop"));
@@ -519,11 +812,428 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
+    fn for_statement(
+        &mut self,
+        mode: IterationMode,
+        name: &str,
+        iterable: &Expr,
+        body: &[Statement],
+        span: Span,
+    ) -> Result<(), Diagnostic> {
+        let Expr::Name(array_name, _) = iterable else {
+            return Err(Diagnostic::new(
+                iterable.span(),
+                "for currently iterates a named fixed array",
+            ));
+        };
+        let array = self.binding(array_name, iterable.span())?.clone();
+        let BindingType::Array { element, length } = array.type_ else {
+            return Err(Diagnostic::new(
+                iterable.span(),
+                "for requires a fixed array",
+            ));
+        };
+        let Storage::Place(array_place) = array.storage else {
+            return Err(Diagnostic::new(iterable.span(), "array has no storage"));
+        };
+        if mode == IterationMode::Value {
+            return Err(Diagnostic::new(
+                span,
+                "by-value array iteration awaits aggregate move semantics; use '&' or '&mut'",
+            ));
+        }
+        if mode == IterationMode::Mutable && !array.mutable {
+            return Err(Diagnostic::new(
+                span,
+                format!("cannot take a mutable view of immutable array {array_name:?}"),
+            ));
+        }
+        let length = u16::try_from(length).map_err(|_| {
+            Diagnostic::new(
+                iterable.span(),
+                "for array length exceeds the 16-bit target",
+            )
+        })?;
+
+        let index_place = self.place(&format!("$for{array_place}"), TypeName::U16, true);
+        self.emit(
+            "store",
+            Vec::new(),
+            vec![
+                hir::Operand::Place(index_place),
+                hir::Operand::Constant(U16, 0),
+            ],
+            None,
+        );
+        let condition_block = self.block();
+        let body_block = self.block();
+        let increment_block = self.block();
+        let exit_block = self.block();
+        self.terminate(jump(condition_block));
+
+        self.current = condition_block;
+        let index = self.value(TypeName::U16);
+        self.emit(
+            "load",
+            vec![index],
+            vec![hir::Operand::Place(index_place)],
+            None,
+        );
+        let condition = self.value(TypeName::Bool);
+        self.emit(
+            "below",
+            vec![condition],
+            vec![
+                hir::Operand::Value(index),
+                hir::Operand::Constant(U16, i64::from(length)),
+            ],
+            None,
+        );
+        self.terminate(hir::Terminator {
+            kind: "branch",
+            operands: vec![hir::Operand::Value(condition)],
+            targets: vec![body_block, exit_block],
+        });
+
+        self.current = body_block;
+        self.scopes.push(BTreeMap::new());
+        self.scopes.last_mut().expect("scope").insert(
+            name.into(),
+            Binding {
+                type_: match element {
+                    ElementType::Scalar(type_name) => BindingType::Scalar(type_name),
+                    ElementType::Struct(id) => BindingType::Struct(id),
+                },
+                mutable: mode == IterationMode::Mutable,
+                storage: Storage::ArrayView {
+                    place: array_place,
+                    index: hir::Operand::Value(index),
+                },
+            },
+        );
+        self.loops.push((exit_block, increment_block));
+        let result = self.statements(body);
+        self.loops.pop();
+        self.scopes.pop();
+        result?;
+        if self.open() {
+            self.terminate(jump(increment_block));
+        }
+
+        self.current = increment_block;
+        let old_index = self.value(TypeName::U16);
+        self.emit(
+            "load",
+            vec![old_index],
+            vec![hir::Operand::Place(index_place)],
+            None,
+        );
+        let next_index = self.value(TypeName::U16);
+        self.emit(
+            "add",
+            vec![next_index],
+            vec![
+                hir::Operand::Value(old_index),
+                hir::Operand::Constant(U16, 1),
+            ],
+            None,
+        );
+        self.emit(
+            "store",
+            Vec::new(),
+            vec![
+                hir::Operand::Place(index_place),
+                hir::Operand::Value(next_index),
+            ],
+            None,
+        );
+        self.terminate(jump(condition_block));
+        self.current = exit_block;
+        Ok(())
+    }
+
     fn scoped(&mut self, statements: &[Statement]) -> Result<(), Diagnostic> {
         self.scopes.push(BTreeMap::new());
         let result = self.statements(statements);
         self.scopes.pop();
         result
+    }
+
+    fn initialize_struct(
+        &mut self,
+        place: u32,
+        index: hir::Operand,
+        struct_id: u32,
+        expression: &Expr,
+    ) -> Result<(), Diagnostic> {
+        self.initialize_struct_at(place, index, struct_id, 0, expression)
+    }
+
+    fn initialize_struct_at(
+        &mut self,
+        place: u32,
+        index: hir::Operand,
+        struct_id: u32,
+        base_offset: u32,
+        expression: &Expr,
+    ) -> Result<(), Diagnostic> {
+        let layout = self
+            .types
+            .structure(struct_id)
+            .cloned()
+            .expect("resolved struct type");
+        let Expr::StructLiteral { name, fields, span } = expression else {
+            return Err(Diagnostic::new(
+                expression.span(),
+                format!("array element requires a {} literal", layout.name),
+            ));
+        };
+        if name != &layout.name {
+            return Err(Diagnostic::new(
+                *span,
+                format!("expected {} literal, found {name}", layout.name),
+            ));
+        }
+        let mut seen = BTreeMap::new();
+        for (name, value, field_span) in fields {
+            if seen.insert(name, *field_span).is_some() {
+                return Err(Diagnostic::new(
+                    *field_span,
+                    format!("field {name:?} is initialized more than once"),
+                ));
+            }
+            let field = layout.fields.get(name).ok_or_else(|| {
+                Diagnostic::new(
+                    *field_span,
+                    format!("{} has no field {name:?}", layout.name),
+                )
+            })?;
+            match field.type_ {
+                ElementType::Scalar(type_name) => {
+                    let value = self.expression(value, Some(type_name))?;
+                    self.emit(
+                        "store",
+                        Vec::new(),
+                        vec![
+                            hir::Operand::ProjectedPlace {
+                                place,
+                                indices: vec![index.clone()],
+                                offset: base_offset + field.offset,
+                                type_id: type_id(type_name),
+                            },
+                            required(value, *field_span)?,
+                        ],
+                        None,
+                    );
+                }
+                ElementType::Struct(field_struct) => self.initialize_struct_at(
+                    place,
+                    index.clone(),
+                    field_struct,
+                    base_offset + field.offset,
+                    value,
+                )?,
+            }
+        }
+        let missing: Vec<_> = layout
+            .fields
+            .keys()
+            .filter(|name| !seen.contains_key(*name))
+            .cloned()
+            .collect();
+        if !missing.is_empty() {
+            return Err(Diagnostic::new(
+                *span,
+                format!(
+                    "{} literal is missing fields: {}",
+                    layout.name,
+                    missing.join(", ")
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    fn assignment_target(
+        &mut self,
+        target: &AssignTarget,
+        span: Span,
+    ) -> Result<(hir::Operand, TypeName), Diagnostic> {
+        match target {
+            AssignTarget::Member { base, field } => {
+                let (place, type_name, mutable, owner) = self.member_place(base, field, span)?;
+                if !mutable {
+                    return Err(Diagnostic::new(
+                        span,
+                        format!("binding {owner:?} is immutable"),
+                    ));
+                }
+                Ok((place, type_name))
+            }
+            AssignTarget::Name(name) => {
+                let binding = self.binding(name, span)?.clone();
+                if !binding.mutable {
+                    return Err(Diagnostic::new(
+                        span,
+                        format!("binding {name:?} is immutable"),
+                    ));
+                }
+                let BindingType::Scalar(type_name) = binding.type_ else {
+                    return Err(Diagnostic::new(
+                        span,
+                        "whole aggregate assignment is not supported",
+                    ));
+                };
+                let destination = match binding.storage {
+                    Storage::Place(place) => hir::Operand::Place(place),
+                    Storage::ArrayView { place, index } => {
+                        hir::Operand::ArrayElement(place, vec![index])
+                    }
+                    Storage::Parameter(_) => {
+                        return Err(Diagnostic::new(span, "parameters are immutable"))
+                    }
+                };
+                Ok((destination, type_name))
+            }
+            AssignTarget::Index { base, index } => {
+                let binding = self.binding(base, span)?.clone();
+                if !binding.mutable {
+                    return Err(Diagnostic::new(
+                        span,
+                        format!("binding {base:?} is immutable"),
+                    ));
+                }
+                let BindingType::Array { element, length } = binding.type_ else {
+                    return Err(Diagnostic::new(
+                        span,
+                        format!("binding {base:?} is not an array"),
+                    ));
+                };
+                let ElementType::Scalar(type_name) = element else {
+                    return Err(Diagnostic::new(
+                        span,
+                        "a struct array element must be assigned through one of its fields",
+                    ));
+                };
+                let Storage::Place(place) = binding.storage else {
+                    return Err(Diagnostic::new(span, "array has no storage"));
+                };
+                let index = self.array_index(index, length)?;
+                Ok((hir::Operand::ArrayElement(place, vec![index]), type_name))
+            }
+        }
+    }
+
+    fn member_place(
+        &mut self,
+        base: &Expr,
+        field_name: &str,
+        span: Span,
+    ) -> Result<(hir::Operand, TypeName, bool, String), Diagnostic> {
+        let (struct_id, place, index, base_offset, mutable, owner) =
+            self.struct_view(base, span)?;
+        let layout = self
+            .types
+            .structure(struct_id)
+            .expect("resolved struct type");
+        let field = layout.fields.get(field_name).copied().ok_or_else(|| {
+            Diagnostic::new(span, format!("{} has no field {field_name:?}", layout.name))
+        })?;
+        let ElementType::Scalar(type_name) = field.type_ else {
+            return Err(Diagnostic::new(
+                span,
+                "a nested struct value must be used through one of its fields",
+            ));
+        };
+        Ok((
+            hir::Operand::ProjectedPlace {
+                place,
+                indices: vec![index],
+                offset: base_offset + field.offset,
+                type_id: type_id(type_name),
+            },
+            type_name,
+            mutable,
+            owner,
+        ))
+    }
+
+    fn struct_view(
+        &mut self,
+        expression: &Expr,
+        span: Span,
+    ) -> Result<(u32, u32, hir::Operand, u32, bool, String), Diagnostic> {
+        match expression {
+            Expr::Name(name, _) => {
+                let binding = self.binding(name, span)?.clone();
+                let BindingType::Struct(struct_id) = binding.type_ else {
+                    return Err(Diagnostic::new(
+                        span,
+                        format!("binding {name:?} is not a struct"),
+                    ));
+                };
+                let Storage::ArrayView { place, index } = binding.storage else {
+                    return Err(Diagnostic::new(span, "struct has no addressable storage"));
+                };
+                Ok((struct_id, place, index, 0, binding.mutable, name.clone()))
+            }
+            Expr::Index { base, index, .. } => {
+                let Expr::Name(name, _) = base.as_ref() else {
+                    return Err(Diagnostic::new(span, "array base must be a named binding"));
+                };
+                let binding = self.binding(name, span)?.clone();
+                let BindingType::Array { element, length } = binding.type_ else {
+                    return Err(Diagnostic::new(
+                        span,
+                        format!("binding {name:?} is not an array"),
+                    ));
+                };
+                let ElementType::Struct(struct_id) = element else {
+                    return Err(Diagnostic::new(span, "array element is not a struct"));
+                };
+                let Storage::Place(place) = binding.storage else {
+                    return Err(Diagnostic::new(span, "array has no storage"));
+                };
+                let index = self.array_index(index, length)?;
+                Ok((struct_id, place, index, 0, binding.mutable, name.clone()))
+            }
+            Expr::Member {
+                base,
+                field,
+                span: member_span,
+            } => {
+                let (struct_id, place, index, offset, mutable, owner) =
+                    self.struct_view(base, *member_span)?;
+                let layout = self
+                    .types
+                    .structure(struct_id)
+                    .expect("resolved struct type");
+                let field = layout.fields.get(field).copied().ok_or_else(|| {
+                    Diagnostic::new(
+                        *member_span,
+                        format!("{} has no field {field:?}", layout.name),
+                    )
+                })?;
+                let ElementType::Struct(field_struct) = field.type_ else {
+                    return Err(Diagnostic::new(
+                        *member_span,
+                        "scalar field cannot be used as a struct",
+                    ));
+                };
+                Ok((
+                    field_struct,
+                    place,
+                    index,
+                    offset + field.offset,
+                    mutable,
+                    owner,
+                ))
+            }
+            _ => Err(Diagnostic::new(
+                span,
+                "field base must be a struct array element",
+            )),
+        }
     }
 
     fn expression(
@@ -547,6 +1257,19 @@ impl<'a> FunctionCompiler<'a> {
                     type_name: TypeName::Char,
                 })
             }
+            Expr::String(value, span) => self.string_literal(value, expected, *span),
+            Expr::FString { span, .. } => Err(Diagnostic::new(
+                *span,
+                "an f-string is currently valid only as a direct print argument",
+            )),
+            Expr::Array(_, span) => Err(Diagnostic::new(
+                *span,
+                "an array literal is valid only as a fixed-array initializer",
+            )),
+            Expr::StructLiteral { span, .. } => Err(Diagnostic::new(
+                *span,
+                "a struct literal is currently valid only inside a fixed-array initializer",
+            )),
             Expr::Boolean(value, span) => {
                 if expected.is_some_and(|one| one != TypeName::Bool) {
                     return Err(type_mismatch(
@@ -562,24 +1285,51 @@ impl<'a> FunctionCompiler<'a> {
             }
             Expr::Name(name, span) => {
                 let binding = self.binding(name, *span)?.clone();
-                if expected.is_some_and(|one| one != binding.type_name) {
-                    return Err(type_mismatch(
+                let BindingType::Scalar(type_name) = binding.type_ else {
+                    return Err(Diagnostic::new(
                         *span,
-                        expected.expect("checked"),
-                        binding.type_name,
+                        format!("aggregate {name:?} requires an index or field"),
                     ));
+                };
+                if expected.is_some_and(|one| one != type_name) {
+                    return Err(type_mismatch(*span, expected.expect("checked"), type_name));
                 }
                 let operand = match binding.storage {
                     Storage::Parameter(value) => hir::Operand::Value(value),
                     Storage::Place(place) => {
-                        let value = self.value(binding.type_name);
+                        let value = self.value(type_name);
                         self.emit("load", vec![value], vec![hir::Operand::Place(place)], None);
+                        hir::Operand::Value(value)
+                    }
+                    Storage::ArrayView { place, index } => {
+                        let value = self.value(type_name);
+                        self.emit(
+                            "load",
+                            vec![value],
+                            vec![hir::Operand::ArrayElement(place, vec![index])],
+                            None,
+                        );
                         hir::Operand::Value(value)
                     }
                 };
                 Ok(TypedOperand {
                     operand: Some(operand),
-                    type_name: binding.type_name,
+                    type_name,
+                })
+            }
+            Expr::Index { base, index, span } => {
+                self.index_expression(base, index, expected, *span)
+            }
+            Expr::Member { base, field, span } => {
+                let (place, type_name, _, _) = self.member_place(base, field, *span)?;
+                if expected.is_some_and(|one| one != type_name) {
+                    return Err(type_mismatch(*span, expected.expect("checked"), type_name));
+                }
+                let result = self.value(type_name);
+                self.emit("load", vec![result], vec![place], None);
+                Ok(TypedOperand {
+                    operand: Some(hir::Operand::Value(result)),
+                    type_name,
                 })
             }
             Expr::Unary { op, operand, span } => {
@@ -711,7 +1461,7 @@ impl<'a> FunctionCompiler<'a> {
             }
             _ => unreachable!(),
         };
-        let symbol = self.float_pool.intern(type_name, bits);
+        let symbol = self.literals.float(type_name, bits);
         let place = if let Some(place) = self.constant_places.get(&symbol) {
             *place
         } else {
@@ -727,6 +1477,120 @@ impl<'a> FunctionCompiler<'a> {
         })
     }
 
+    fn string_literal(
+        &mut self,
+        bytes: &[u8],
+        expected: Option<TypeName>,
+        span: Span,
+    ) -> Result<TypedOperand, Diagnostic> {
+        if expected.is_some_and(|one| one != TypeName::String) {
+            return Err(type_mismatch(
+                span,
+                expected.expect("checked"),
+                TypeName::String,
+            ));
+        }
+        if bytes.contains(&0) {
+            return Err(Diagnostic::new(
+                span,
+                "string literals cannot contain an embedded NUL",
+            ));
+        }
+        if bytes.len() > u16::MAX as usize {
+            return Err(Diagnostic::new(
+                span,
+                "string literal exceeds the 16-bit descriptor",
+            ));
+        }
+        let symbol = self.literals.string(bytes);
+        let place = if let Some(place) = self.constant_places.get(&symbol) {
+            *place
+        } else {
+            let place = self.static_string_place(symbol, bytes.len() as u32 + 1);
+            self.constant_places.insert(symbol, place);
+            place
+        };
+        let result = self.value(TypeName::String);
+        self.emit(
+            "address",
+            vec![result],
+            vec![hir::Operand::Place(place)],
+            None,
+        );
+        Ok(TypedOperand {
+            operand: Some(hir::Operand::Value(result)),
+            type_name: TypeName::String,
+        })
+    }
+
+    fn array_index(&mut self, expression: &Expr, length: u32) -> Result<hir::Operand, Diagnostic> {
+        if let Expr::Integer(value, span) = expression {
+            if *value < 0 || *value >= i64::from(length) {
+                return Err(Diagnostic::new(
+                    *span,
+                    format!("array index {value} is outside 0..{length}"),
+                ));
+            }
+        }
+        let index = self.expression(expression, None)?;
+        if !is_integer(index.type_name) {
+            return Err(Diagnostic::new(
+                expression.span(),
+                "array index must be an integer",
+            ));
+        }
+        required(index, expression.span())
+    }
+
+    fn index_expression(
+        &mut self,
+        base: &Expr,
+        index: &Expr,
+        expected: Option<TypeName>,
+        span: Span,
+    ) -> Result<TypedOperand, Diagnostic> {
+        let Expr::Name(name, _) = base else {
+            return Err(Diagnostic::new(span, "array base must be a named binding"));
+        };
+        let binding = self.binding(name, span)?.clone();
+        let BindingType::Array {
+            element, length, ..
+        } = binding.type_
+        else {
+            return Err(Diagnostic::new(
+                span,
+                format!("binding {name:?} is not an array"),
+            ));
+        };
+        let ElementType::Scalar(element) = element else {
+            return Err(Diagnostic::new(
+                span,
+                "a struct array element must be used through one of its fields",
+            ));
+        };
+        if expected.is_some_and(|one| one != element) {
+            return Err(type_mismatch(span, expected.expect("checked"), element));
+        }
+        let Storage::Place(place) = binding.storage else {
+            return Err(Diagnostic::new(
+                span,
+                "array parameter lowering is not implemented",
+            ));
+        };
+        let index = self.array_index(index, length)?;
+        let result = self.value(element);
+        self.emit(
+            "load",
+            vec![result],
+            vec![hir::Operand::ArrayElement(place, vec![index])],
+            None,
+        );
+        Ok(TypedOperand {
+            operand: Some(hir::Operand::Value(result)),
+            type_name: element,
+        })
+    }
+
     fn binary(
         &mut self,
         operation: BinaryOp,
@@ -735,6 +1599,9 @@ impl<'a> FunctionCompiler<'a> {
         expected: Option<TypeName>,
         span: Span,
     ) -> Result<TypedOperand, Diagnostic> {
+        if matches!(operation, BinaryOp::Is | BinaryOp::IsNot) {
+            return self.identity(operation, left, right, expected, span);
+        }
         let comparison = matches!(
             operation,
             BinaryOp::Equal
@@ -762,6 +1629,12 @@ impl<'a> FunctionCompiler<'a> {
             }
         }
         let left = self.expression(left, left_expected)?;
+        if left.type_name == TypeName::String {
+            return Err(Diagnostic::new(
+                span,
+                "string comparison is not in the minimal runtime slice",
+            ));
+        }
         if comparison {
             let equality = matches!(operation, BinaryOp::Equal | BinaryOp::NotEqual);
             if (!equality && !is_ordered(left.type_name)) || left.type_name == TypeName::Void {
@@ -812,6 +1685,7 @@ impl<'a> FunctionCompiler<'a> {
             BinaryOp::LessEqual => "le",
             BinaryOp::Greater => "gt",
             BinaryOp::GreaterEqual => "ge",
+            BinaryOp::Is | BinaryOp::IsNot => unreachable!("identity handled above"),
         };
         self.emit(
             op,
@@ -825,18 +1699,152 @@ impl<'a> FunctionCompiler<'a> {
         })
     }
 
+    fn identity(
+        &mut self,
+        operation: BinaryOp,
+        left: &Expr,
+        right: &Expr,
+        expected: Option<TypeName>,
+        span: Span,
+    ) -> Result<TypedOperand, Diagnostic> {
+        if expected.is_some_and(|one| one != TypeName::Bool) {
+            return Err(type_mismatch(
+                span,
+                expected.expect("checked"),
+                TypeName::Bool,
+            ));
+        }
+        let (left_place, left_index) = self.view_identity(left)?;
+        let (right_place, right_index) = self.view_identity(right)?;
+        if left_place != right_place {
+            return Ok(TypedOperand {
+                operand: Some(hir::Operand::Constant(
+                    BOOL,
+                    if operation == BinaryOp::IsNot { -1 } else { 0 },
+                )),
+                type_name: TypeName::Bool,
+            });
+        }
+        let result = self.value(TypeName::Bool);
+        self.emit(
+            if operation == BinaryOp::Is {
+                "eq"
+            } else {
+                "ne"
+            },
+            vec![result],
+            vec![left_index, right_index],
+            None,
+        );
+        Ok(TypedOperand {
+            operand: Some(hir::Operand::Value(result)),
+            type_name: TypeName::Bool,
+        })
+    }
+
+    fn view_identity(&self, expression: &Expr) -> Result<(u32, hir::Operand), Diagnostic> {
+        let Expr::Name(name, span) = expression else {
+            return Err(Diagnostic::new(
+                expression.span(),
+                "'is' compares scoped struct views",
+            ));
+        };
+        let binding = self.binding(name, *span)?;
+        if !matches!(binding.type_, BindingType::Struct(_)) {
+            return Err(Diagnostic::new(
+                *span,
+                "'is' requires struct views, not scalar values",
+            ));
+        }
+        let Storage::ArrayView { place, index } = &binding.storage else {
+            return Err(Diagnostic::new(
+                *span,
+                "struct value has no reference identity",
+            ));
+        };
+        Ok((*place, index.clone()))
+    }
+
+    fn member_type_hint(&self, base: &Expr, field: &str, span: Span) -> Option<TypeName> {
+        let struct_id = self.struct_type_hint(base, span)?;
+        let field = self.types.structure(struct_id)?.fields.get(field)?;
+        match field.type_ {
+            ElementType::Scalar(type_name) => Some(type_name),
+            ElementType::Struct(_) => None,
+        }
+    }
+
+    fn struct_type_hint(&self, expression: &Expr, span: Span) -> Option<u32> {
+        match expression {
+            Expr::Name(name, _) => match self.binding(name, span).ok()?.type_ {
+                BindingType::Struct(id) => id,
+                _ => return None,
+            },
+            Expr::Index { base, .. } => {
+                let Expr::Name(name, _) = base.as_ref() else {
+                    return None;
+                };
+                match self.binding(name, span).ok()?.type_ {
+                    BindingType::Array {
+                        element: ElementType::Struct(id),
+                        ..
+                    } => id,
+                    _ => return None,
+                }
+            }
+            Expr::Member { base, field, .. } => {
+                let parent = self.struct_type_hint(base, span)?;
+                match self.types.structure(parent)?.fields.get(field)?.type_ {
+                    ElementType::Struct(id) => id,
+                    ElementType::Scalar(_) => return None,
+                }
+            }
+            _ => return None,
+        }
+        .into()
+    }
+
     fn expression_type_hint(&self, expression: &Expr) -> Option<TypeName> {
         match expression {
             Expr::Float(..) => Some(TypeName::F64),
             Expr::Character(..) => Some(TypeName::Char),
+            Expr::String(..) => Some(TypeName::String),
             Expr::Boolean(..) => Some(TypeName::Bool),
-            Expr::Name(name, _) => self
-                .binding(name, expression.span())
-                .ok()
-                .map(|one| one.type_name),
+            Expr::Name(name, _) => {
+                self.binding(name, expression.span())
+                    .ok()
+                    .and_then(|one| match one.type_ {
+                        BindingType::Scalar(type_name) => Some(type_name),
+                        BindingType::Array { .. } | BindingType::Struct(_) => None,
+                    })
+            }
             Expr::Call { name, .. } => self.signatures.get(name).map(|one| one.result),
             Expr::Unary { operand, .. } => self.expression_type_hint(operand),
-            Expr::Integer(..) | Expr::Binary { .. } => None,
+            Expr::Index { base, .. } => {
+                let Expr::Name(name, _) = base.as_ref() else {
+                    return None;
+                };
+                self.binding(name, expression.span())
+                    .ok()
+                    .and_then(|one| match one.type_ {
+                        BindingType::Array {
+                            element: ElementType::Scalar(element),
+                            ..
+                        } => Some(element),
+                        BindingType::Array {
+                            element: ElementType::Struct(_),
+                            ..
+                        }
+                        | BindingType::Scalar(_)
+                        | BindingType::Struct(_) => None,
+                    })
+            }
+            Expr::Member { base, field, span } => self.member_type_hint(base, field, *span),
+            Expr::Integer(..)
+            | Expr::FString { .. }
+            | Expr::Array(..)
+            | Expr::StructLiteral { .. }
+            | Expr::Binary { .. } => None,
         }
     }
 
@@ -847,6 +1855,9 @@ impl<'a> FunctionCompiler<'a> {
         expected: Option<TypeName>,
         span: Span,
     ) -> Result<TypedOperand, Diagnostic> {
+        if name == "print" {
+            return self.print(arguments, expected, span);
+        }
         let signature = self
             .signatures
             .get(name)
@@ -896,6 +1907,92 @@ impl<'a> FunctionCompiler<'a> {
         })
     }
 
+    fn print(
+        &mut self,
+        arguments: &[Expr],
+        expected: Option<TypeName>,
+        span: Span,
+    ) -> Result<TypedOperand, Diagnostic> {
+        if expected.is_some_and(|one| one != TypeName::Void) {
+            return Err(type_mismatch(
+                span,
+                expected.expect("checked"),
+                TypeName::Void,
+            ));
+        }
+        for argument in arguments {
+            if let Expr::FString { parts, .. } = argument {
+                for part in parts {
+                    match part {
+                        FStringPart::Text(bytes) if !bytes.is_empty() => {
+                            let text = self.string_literal(
+                                bytes,
+                                Some(TypeName::String),
+                                argument.span(),
+                            )?;
+                            self.emit_print(TypeName::String, required(text, argument.span())?);
+                        }
+                        FStringPart::Text(_) => {}
+                        FStringPart::Value(expression) => {
+                            let value = self.expression(expression, None)?;
+                            if value.type_name == TypeName::Void {
+                                return Err(Diagnostic::new(
+                                    expression.span(),
+                                    "cannot format void",
+                                ));
+                            }
+                            let type_name = value.type_name;
+                            self.emit_print(type_name, required(value, expression.span())?);
+                        }
+                    }
+                }
+            } else {
+                let value = self.expression(argument, None)?;
+                if value.type_name == TypeName::Void {
+                    return Err(Diagnostic::new(argument.span(), "cannot print void"));
+                }
+                let type_name = value.type_name;
+                self.emit_print(type_name, required(value, argument.span())?);
+            }
+        }
+        self.emit_builtin("__print_newline", Vec::new());
+        Ok(TypedOperand {
+            operand: None,
+            type_name: TypeName::Void,
+        })
+    }
+
+    fn emit_print(&mut self, type_name: TypeName, operand: hir::Operand) {
+        let name = match type_name {
+            TypeName::String => "__print_text",
+            TypeName::Bool => "__print_bool",
+            TypeName::Char => "__print_char",
+            TypeName::I8 => "__print_i8",
+            TypeName::U8 => "__print_u8",
+            TypeName::I16 => "__print_i16",
+            TypeName::U16 => "__print_u16",
+            TypeName::I32 => "__print_i32",
+            TypeName::U32 => "__print_u32",
+            TypeName::F32 => "__print_f32",
+            TypeName::F64 => "__print_f64",
+            TypeName::Void => unreachable!(),
+        };
+        self.emit_builtin(name, vec![operand]);
+    }
+
+    fn emit_builtin(&mut self, name: &'static str, operands: Vec<hir::Operand>) {
+        let count = operands.len();
+        let instruction = self.emit("call", Vec::new(), operands, Some(name.into()));
+        self.calls.push(hir::CallSite {
+            instruction,
+            order: (0..count as u32).collect(),
+            callee: *self
+                .builtin_ids
+                .get(name)
+                .expect("registered print builtin"),
+        });
+    }
+
     fn binding(&self, name: &str, span: Span) -> Result<&Binding, Diagnostic> {
         self.scopes
             .iter()
@@ -932,6 +2029,31 @@ impl<'a> FunctionCompiler<'a> {
         id
     }
 
+    fn array_place(
+        &mut self,
+        name: &str,
+        type_id: u32,
+        element: ElementType,
+        length: u32,
+        mutable: bool,
+    ) -> u32 {
+        let id = self.next_place;
+        self.next_place += 1;
+        let extent = self.types.width(element.id()) * length;
+        self.next_frame_offset -= extent as i32;
+        self.places.push(hir::Place {
+            id,
+            name: name.into(),
+            type_id,
+            mutable,
+            offset: self.next_frame_offset,
+            extent,
+            storage: "local",
+            symbol: 0,
+        });
+        id
+    }
+
     fn static_place(&mut self, symbol: u32, type_name: TypeName) -> u32 {
         let id = self.next_place;
         self.next_place += 1;
@@ -942,6 +2064,24 @@ impl<'a> FunctionCompiler<'a> {
             mutable: false,
             offset: 0,
             extent: width(type_name),
+            storage: "module",
+            symbol,
+        });
+        id
+    }
+
+    fn static_string_place(&mut self, symbol: u32, extent: u32) -> u32 {
+        let id = self.next_place;
+        self.next_place += 1;
+        self.places.push(hir::Place {
+            id,
+            name: format!("$string{symbol}"),
+            type_id: CHAR,
+            mutable: false,
+            // The exported string address is the byte payload. Its length and
+            // capacity words occupy the four bytes immediately before it.
+            offset: 4,
+            extent,
             storage: "module",
             symbol,
         });
@@ -1056,6 +2196,7 @@ fn type_id(type_name: TypeName) -> u32 {
         TypeName::U32 => U32,
         TypeName::F32 => F32,
         TypeName::F64 => F64,
+        TypeName::String => STRING,
     }
 }
 
@@ -1066,6 +2207,7 @@ fn width(type_name: TypeName) -> u32 {
         TypeName::I16 | TypeName::U16 => 2,
         TypeName::I32 | TypeName::U32 | TypeName::F32 => 4,
         TypeName::F64 => 8,
+        TypeName::String => 2,
     }
 }
 
@@ -1082,6 +2224,7 @@ fn type_name_text(type_name: TypeName) -> &'static str {
         TypeName::U32 => "u32",
         TypeName::F32 => "f32",
         TypeName::F64 => "f64",
+        TypeName::String => "string",
     }
 }
 
@@ -1191,5 +2334,67 @@ mod tests {
         assert!(json.contains("\"op\":\"udiv\""));
         assert!(json.contains("\"op\":\"below\""));
         assert!(json.contains("\"op\":\"fmul\""));
+    }
+
+    #[test]
+    fn arrays_and_f_strings_lower_to_structural_hir_and_streaming_calls() {
+        let json = compile_source(
+            "fn show(index: i16) -> void:\n\
+             \x20\x20\x20\x20var values: [i32; 2] = [10, 20]\n\
+             \x20\x20\x20\x20values[index] = values[index] + 1\n\
+             \x20\x20\x20\x20print(f\"value={values[index]}\")\n",
+        )
+        .unwrap();
+        assert!(json.contains("\"kind\":\"array\""));
+        assert!(json.contains("\"tag\":\"array_element\""));
+        assert!(json.contains("\"callee\":\"__print_text\""));
+        assert!(json.contains("\"callee\":\"__print_i32\""));
+        assert!(json.contains("\"callee\":\"__print_newline\""));
+        assert!(json.contains("\"bytes\":[6,0,6,0,118,97,108,117,101,61,0]"));
+    }
+
+    #[test]
+    fn literal_array_bounds_are_checked_before_hir() {
+        let error = compile_source(
+            "fn bad() -> i32:\n\
+             \x20\x20\x20\x20let values: [i32; 2] = [10, 20]\n\
+             \x20\x20\x20\x20return values[2]\n",
+        )
+        .unwrap_err();
+        assert!(error.message.contains("outside 0..2"));
+    }
+
+    #[test]
+    fn struct_array_for_loop_uses_projected_places_without_iterator_calls() {
+        let json = compile_source(
+            "struct pair:\n\
+             \x20\x20\x20\x20left: i32\n\
+             \x20\x20\x20\x20right: i32\n\
+             fn bump() -> i32:\n\
+             \x20\x20\x20\x20var pairs: [pair; 2] = [pair { left: 1, right: 2 }, pair { left: 3, right: 4 }]\n\
+             \x20\x20\x20\x20for item in &mut pairs:\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20item.left = item.left + 1\n\
+             \x20\x20\x20\x20return pairs[1].left\n",
+        )
+        .unwrap();
+        assert!(json.contains("\"kind\":\"opaque\",\"name\":\"pair\""));
+        assert!(json.contains("\"name\":\"[pair; 2]\""));
+        assert!(json.contains("\"tag\":\"projection\""));
+        assert!(json.contains("\"op\":\"below\""));
+        assert!(!json.contains("\"callee\":\"__iter"));
+    }
+
+    #[test]
+    fn plain_for_view_is_immutable() {
+        let error = compile_source(
+            "struct item:\n\
+             \x20\x20\x20\x20value: i16\n\
+             fn bad() -> void:\n\
+             \x20\x20\x20\x20var items: [item; 1] = [item { value: 1 }]\n\
+             \x20\x20\x20\x20for one in &items:\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20one.value = 2\n",
+        )
+        .unwrap_err();
+        assert!(error.message.contains("immutable"));
     }
 }

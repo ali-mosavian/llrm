@@ -1,14 +1,22 @@
 use crate::error::Diagnostic;
+use crate::lexer::lex;
 use crate::lexer::Token;
 use crate::lexer::TokenKind;
+use crate::syntax::AssignTarget;
 use crate::syntax::BinaryOp;
 use crate::syntax::Expr;
+use crate::syntax::FStringPart;
 use crate::syntax::Function;
+use crate::syntax::IterationMode;
 use crate::syntax::Module;
 use crate::syntax::Parameter;
 use crate::syntax::Span;
 use crate::syntax::Statement;
+use crate::syntax::Struct;
+use crate::syntax::StructField;
+use crate::syntax::TypeAnnotation;
 use crate::syntax::TypeName;
+use crate::syntax::TypeSpec;
 use crate::syntax::UnaryOp;
 
 pub fn parse(tokens: Vec<Token>) -> Result<Module, Diagnostic> {
@@ -22,6 +30,7 @@ struct Parser {
 
 impl Parser {
     fn module(&mut self) -> Result<Module, Diagnostic> {
+        let mut structs = Vec::new();
         let mut functions = Vec::new();
         while !matches!(self.peek().kind, TokenKind::Eof) {
             if self
@@ -30,7 +39,11 @@ impl Parser {
             {
                 continue;
             }
-            functions.push(self.function()?);
+            if matches!(self.peek().kind, TokenKind::Struct) {
+                structs.push(self.structure()?);
+            } else {
+                functions.push(self.function()?);
+            }
         }
         if functions.is_empty() {
             return Err(Diagnostic::new(
@@ -38,7 +51,50 @@ impl Parser {
                 "module contains no functions",
             ));
         }
-        Ok(Module { functions })
+        Ok(Module { structs, functions })
+    }
+
+    fn structure(&mut self) -> Result<Struct, Diagnostic> {
+        let span = self.bump().span;
+        let (name, _) = self.identifier("expected struct name")?;
+        self.expect(
+            |kind| matches!(kind, TokenKind::Colon),
+            "expected ':' after struct name",
+        )?;
+        self.expect(
+            |kind| matches!(kind, TokenKind::Newline),
+            "expected newline before struct fields",
+        )?;
+        self.expect(
+            |kind| matches!(kind, TokenKind::Indent),
+            "expected indented struct fields",
+        )?;
+        let mut fields = Vec::new();
+        while !matches!(self.peek().kind, TokenKind::Dedent | TokenKind::Eof) {
+            let (field_name, field_span) = self.identifier("expected field name")?;
+            self.expect(
+                |kind| matches!(kind, TokenKind::Colon),
+                "expected ':' after field name",
+            )?;
+            let type_spec = self.type_spec()?;
+            if type_spec == TypeSpec::Primitive(TypeName::Void) {
+                return Err(Diagnostic::new(field_span, "a struct field cannot be void"));
+            }
+            self.line_end()?;
+            fields.push(StructField {
+                name: field_name,
+                type_spec,
+                span: field_span,
+            });
+        }
+        self.expect(
+            |kind| matches!(kind, TokenKind::Dedent),
+            "unterminated struct",
+        )?;
+        if fields.is_empty() {
+            return Err(Diagnostic::new(span, "struct must have at least one field"));
+        }
+        Ok(Struct { name, fields, span })
     }
 
     fn function(&mut self) -> Result<Function, Diagnostic> {
@@ -124,6 +180,7 @@ impl Parser {
             TokenKind::Return => self.return_statement(),
             TokenKind::If => self.if_statement(),
             TokenKind::While => self.while_statement(),
+            TokenKind::For => self.for_statement(),
             TokenKind::Break => {
                 let span = self.bump().span;
                 self.line_end()?;
@@ -134,17 +191,40 @@ impl Parser {
                 self.line_end()?;
                 Ok(Statement::Continue(span))
             }
-            TokenKind::Identifier(_) if matches!(self.peek_n(1).kind, TokenKind::Equal) => {
-                let (name, span) = self.identifier("expected assignment target")?;
-                self.bump();
-                let value = self.expression(0)?;
-                self.line_end()?;
-                Ok(Statement::Assign { name, value, span })
-            }
             _ => {
                 let expression = self.expression(0)?;
-                self.line_end()?;
-                Ok(Statement::Expr(expression))
+                if self.take(|kind| matches!(kind, TokenKind::Equal)).is_some() {
+                    let span = expression.span();
+                    let target = match expression {
+                        Expr::Name(name, _) => AssignTarget::Name(name),
+                        Expr::Index { base, index, .. } => {
+                            let Expr::Name(base, _) = *base else {
+                                return Err(Diagnostic::new(
+                                    span,
+                                    "assignment target must be a named place",
+                                ));
+                            };
+                            AssignTarget::Index {
+                                base,
+                                index: *index,
+                            }
+                        }
+                        Expr::Member { base, field, .. } => {
+                            AssignTarget::Member { base: *base, field }
+                        }
+                        _ => return Err(Diagnostic::new(span, "expression is not assignable")),
+                    };
+                    let value = self.expression(0)?;
+                    self.line_end()?;
+                    Ok(Statement::Assign {
+                        target,
+                        value,
+                        span,
+                    })
+                } else {
+                    self.line_end()?;
+                    Ok(Statement::Expr(expression))
+                }
             }
         }
     }
@@ -154,14 +234,14 @@ impl Parser {
         let mutable = matches!(token.kind, TokenKind::Var);
         let (name, _) = self.identifier("expected binding name")?;
         let annotation = if self.take(|kind| matches!(kind, TokenKind::Colon)).is_some() {
-            let type_name = self.type_name()?;
-            if type_name == TypeName::Void {
+            let annotation = self.type_annotation()?;
+            if annotation == TypeAnnotation::Scalar(TypeName::Void) {
                 return Err(Diagnostic::new(
                     token.span,
                     "a binding cannot have type void",
                 ));
             }
-            Some(type_name)
+            Some(annotation)
         } else {
             None
         };
@@ -219,6 +299,36 @@ impl Parser {
         })
     }
 
+    fn for_statement(&mut self) -> Result<Statement, Diagnostic> {
+        let span = self.bump().span;
+        let (name, _) = self.identifier("expected loop binding")?;
+        self.expect(
+            |kind| matches!(kind, TokenKind::In),
+            "expected 'in' after loop binding",
+        )?;
+        let mode = if self
+            .take(|kind| matches!(kind, TokenKind::Ampersand))
+            .is_some()
+        {
+            if self.take(|kind| matches!(kind, TokenKind::Mut)).is_some() {
+                IterationMode::Mutable
+            } else {
+                IterationMode::Shared
+            }
+        } else {
+            IterationMode::Value
+        };
+        let iterable = self.expression(0)?;
+        let body = self.suite()?;
+        Ok(Statement::For {
+            mode,
+            name,
+            iterable,
+            body,
+            span,
+        })
+    }
+
     fn expression(&mut self, minimum_binding: u8) -> Result<Expr, Diagnostic> {
         let mut left = self.prefix()?;
         loop {
@@ -227,6 +337,41 @@ impl Parser {
                     break;
                 }
                 left = self.call(left)?;
+                continue;
+            }
+            if matches!(self.peek().kind, TokenKind::LeftBracket) {
+                if 30 < minimum_binding {
+                    break;
+                }
+                left = self.index(left)?;
+                continue;
+            }
+            if matches!(self.peek().kind, TokenKind::Dot) {
+                if 30 < minimum_binding {
+                    break;
+                }
+                left = self.member(left)?;
+                continue;
+            }
+            if matches!(self.peek().kind, TokenKind::Is) {
+                if 5 < minimum_binding {
+                    break;
+                }
+                self.bump();
+                let operation = if self.take(|kind| matches!(kind, TokenKind::Not)).is_some() {
+                    BinaryOp::IsNot
+                } else {
+                    BinaryOp::Is
+                };
+                let right = self.expression(6)?;
+                let left_span = left.span();
+                let right_span = right.span();
+                left = Expr::Binary {
+                    op: operation,
+                    left: Box::new(left),
+                    right: Box::new(right),
+                    span: Span::new(left_span.line, left_span.column, right_span.end_column),
+                };
                 continue;
             }
             let Some((left_binding, right_binding, operation)) = infix(&self.peek().kind) else {
@@ -255,9 +400,39 @@ impl Parser {
             TokenKind::Integer(value) => Ok(Expr::Integer(value, token.span)),
             TokenKind::Float(value) => Ok(Expr::Float(value, token.span)),
             TokenKind::Character(value) => Ok(Expr::Character(value, token.span)),
+            TokenKind::String(value) => Ok(Expr::String(value, token.span)),
+            TokenKind::FString(value) => self.fstring(value, token.span),
             TokenKind::True => Ok(Expr::Boolean(true, token.span)),
             TokenKind::False => Ok(Expr::Boolean(false, token.span)),
-            TokenKind::Identifier(name) => Ok(Expr::Name(name, token.span)),
+            TokenKind::Identifier(name) => {
+                if matches!(self.peek().kind, TokenKind::LeftBrace) {
+                    self.struct_literal(name, token.span)
+                } else {
+                    Ok(Expr::Name(name, token.span))
+                }
+            }
+            TokenKind::LeftBracket => {
+                let mut values = Vec::new();
+                if !matches!(self.peek().kind, TokenKind::RightBracket) {
+                    loop {
+                        values.push(self.expression(0)?);
+                        if self.take(|kind| matches!(kind, TokenKind::Comma)).is_none() {
+                            break;
+                        }
+                        if matches!(self.peek().kind, TokenKind::RightBracket) {
+                            break;
+                        }
+                    }
+                }
+                let close = self.expect(
+                    |kind| matches!(kind, TokenKind::RightBracket),
+                    "expected ']' after array literal",
+                )?;
+                Ok(Expr::Array(
+                    values,
+                    Span::new(token.span.line, token.span.column, close.span.end_column),
+                ))
+            }
             TokenKind::Minus | TokenKind::Not => {
                 let operation = if matches!(token.kind, TokenKind::Minus) {
                     UnaryOp::Negative
@@ -302,6 +477,9 @@ impl Parser {
                 if self.take(|kind| matches!(kind, TokenKind::Comma)).is_none() {
                     break;
                 }
+                if matches!(self.peek().kind, TokenKind::RightParen) {
+                    break;
+                }
             }
         }
         let close = self.expect(
@@ -313,6 +491,155 @@ impl Parser {
             arguments,
             span: Span::new(start.line, start.column, close.span.end_column),
         })
+    }
+
+    fn index(&mut self, base: Expr) -> Result<Expr, Diagnostic> {
+        let start = base.span();
+        self.bump();
+        let index = self.expression(0)?;
+        let close = self.expect(
+            |kind| matches!(kind, TokenKind::RightBracket),
+            "expected ']' after index",
+        )?;
+        Ok(Expr::Index {
+            base: Box::new(base),
+            index: Box::new(index),
+            span: Span::new(start.line, start.column, close.span.end_column),
+        })
+    }
+
+    fn member(&mut self, base: Expr) -> Result<Expr, Diagnostic> {
+        let start = base.span();
+        self.bump();
+        let (field, field_span) = self.identifier("expected field name after '.'")?;
+        Ok(Expr::Member {
+            base: Box::new(base),
+            field,
+            span: Span::new(start.line, start.column, field_span.end_column),
+        })
+    }
+
+    fn struct_literal(&mut self, name: String, start: Span) -> Result<Expr, Diagnostic> {
+        self.bump();
+        let mut fields = Vec::new();
+        if !matches!(self.peek().kind, TokenKind::RightBrace) {
+            loop {
+                let (field, span) = self.identifier("expected field name")?;
+                self.expect(
+                    |kind| matches!(kind, TokenKind::Colon),
+                    "expected ':' after field name",
+                )?;
+                let value = self.expression(0)?;
+                fields.push((field, value, span));
+                if self.take(|kind| matches!(kind, TokenKind::Comma)).is_none() {
+                    break;
+                }
+                if matches!(self.peek().kind, TokenKind::RightBrace) {
+                    break;
+                }
+            }
+        }
+        let close = self.expect(
+            |kind| matches!(kind, TokenKind::RightBrace),
+            "expected '}' after struct literal",
+        )?;
+        Ok(Expr::StructLiteral {
+            name,
+            fields,
+            span: Span::new(start.line, start.column, close.span.end_column),
+        })
+    }
+
+    fn fstring(&self, value: Vec<u8>, span: Span) -> Result<Expr, Diagnostic> {
+        let mut parts = Vec::new();
+        let mut text = Vec::new();
+        let mut at = 0;
+        while at < value.len() {
+            match value[at] {
+                b'{' if value.get(at + 1) == Some(&b'{') => {
+                    text.push(b'{');
+                    at += 2;
+                }
+                b'}' if value.get(at + 1) == Some(&b'}') => {
+                    text.push(b'}');
+                    at += 2;
+                }
+                b'{' => {
+                    if !text.is_empty() {
+                        parts.push(FStringPart::Text(std::mem::take(&mut text)));
+                    }
+                    let Some(close) = value[at + 1..].iter().position(|one| *one == b'}') else {
+                        return Err(Diagnostic::new(
+                            span,
+                            "f-string has an unclosed interpolation",
+                        ));
+                    };
+                    let close = at + 1 + close;
+                    let source = std::str::from_utf8(&value[at + 1..close])
+                        .map_err(|_| Diagnostic::new(span, "f-string interpolation must be ASCII"))?
+                        .trim();
+                    if source.is_empty() {
+                        return Err(Diagnostic::new(
+                            span,
+                            "f-string interpolation cannot be empty",
+                        ));
+                    }
+                    parts.push(FStringPart::Value(parse_inline_expression(source, span)?));
+                    at = close + 1;
+                }
+                b'}' => return Err(Diagnostic::new(span, "f-string has an unmatched '}'")),
+                byte => {
+                    text.push(byte);
+                    at += 1;
+                }
+            }
+        }
+        if !text.is_empty() {
+            parts.push(FStringPart::Text(text));
+        }
+        Ok(Expr::FString { parts, span })
+    }
+
+    fn type_annotation(&mut self) -> Result<TypeAnnotation, Diagnostic> {
+        if self
+            .take(|kind| matches!(kind, TokenKind::LeftBracket))
+            .is_some()
+        {
+            let element = self.type_spec()?;
+            if element == TypeSpec::Primitive(TypeName::Void) {
+                return Err(Diagnostic::new(
+                    self.peek().span,
+                    "an array element cannot be void",
+                ));
+            }
+            self.expect(
+                |kind| matches!(kind, TokenKind::Semicolon),
+                "expected ';' and an array length",
+            )?;
+            let length_token = self.bump().clone();
+            let TokenKind::Integer(length_value) = length_token.kind else {
+                return Err(Diagnostic::new(
+                    length_token.span,
+                    "array length must be an integer literal",
+                ));
+            };
+            let length = u32::try_from(length_value)
+                .ok()
+                .filter(|one| *one > 0)
+                .ok_or_else(|| {
+                    Diagnostic::new(
+                        length_token.span,
+                        "array length must be positive and fit u32",
+                    )
+                })?;
+            self.expect(
+                |kind| matches!(kind, TokenKind::RightBracket),
+                "expected ']' after array type",
+            )?;
+            Ok(TypeAnnotation::Array { element, length })
+        } else {
+            self.type_name().map(TypeAnnotation::Scalar)
+        }
     }
 
     fn type_name(&mut self) -> Result<TypeName, Diagnostic> {
@@ -327,9 +654,20 @@ impl Parser {
             TokenKind::U32 => Ok(TypeName::U32),
             TokenKind::F32 => Ok(TypeName::F32),
             TokenKind::F64 => Ok(TypeName::F64),
+            TokenKind::StringType => Ok(TypeName::String),
             TokenKind::Bool => Ok(TypeName::Bool),
             TokenKind::Void => Ok(TypeName::Void),
             _ => Err(Diagnostic::new(token.span, "expected a type name")),
+        }
+    }
+
+    fn type_spec(&mut self) -> Result<TypeSpec, Diagnostic> {
+        if let TokenKind::Identifier(name) = &self.peek().kind {
+            let name = name.clone();
+            self.bump();
+            Ok(TypeSpec::Named(name))
+        } else {
+            self.type_name().map(TypeSpec::Primitive)
         }
     }
 
@@ -370,12 +708,6 @@ impl Parser {
         &self.tokens[self.at]
     }
 
-    fn peek_n(&self, amount: usize) -> &Token {
-        self.tokens
-            .get(self.at + amount)
-            .unwrap_or_else(|| self.tokens.last().expect("lexer emits EOF"))
-    }
-
     fn bump(&mut self) -> &Token {
         let index = self.at;
         if !matches!(self.tokens[index].kind, TokenKind::Eof) {
@@ -383,6 +715,20 @@ impl Parser {
         }
         &self.tokens[index]
     }
+}
+
+fn parse_inline_expression(source: &str, outer: Span) -> Result<Expr, Diagnostic> {
+    let mut parser = Parser {
+        tokens: lex(source).map_err(|error| Diagnostic::new(outer, error.message))?,
+        at: 0,
+    };
+    let expression = parser
+        .expression(0)
+        .map_err(|error| Diagnostic::new(outer, error.message))?;
+    if !matches!(parser.peek().kind, TokenKind::Newline | TokenKind::Eof) {
+        return Err(Diagnostic::new(outer, "invalid f-string interpolation"));
+    }
+    Ok(expression)
 }
 
 fn infix(kind: &TokenKind) -> Option<(u8, u8, BinaryOp)> {
@@ -439,5 +785,39 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn parses_fixed_array_assignment_and_f_string_interpolation() {
+        let module = parse(
+            lex("fn show() -> void:\n\
+                 \x20\x20\x20\x20var values: [i32; 2] = [10, 20]\n\
+                 \x20\x20\x20\x20values[1] = 30\n\
+                 \x20\x20\x20\x20print(f\"value={values[1]}\")\n")
+            .unwrap(),
+        )
+        .unwrap();
+        let Statement::Bind {
+            annotation:
+                Some(TypeAnnotation::Array {
+                    element: TypeSpec::Primitive(TypeName::I32),
+                    length: 2,
+                }),
+            ..
+        } = &module.functions[0].body[0]
+        else {
+            panic!("expected fixed-array binding")
+        };
+        assert!(matches!(
+            &module.functions[0].body[1],
+            Statement::Assign {
+                target: AssignTarget::Index { .. },
+                ..
+            }
+        ));
+        let Statement::Expr(Expr::Call { arguments, .. }) = &module.functions[0].body[2] else {
+            panic!("expected print call")
+        };
+        assert!(matches!(arguments[0], Expr::FString { .. }));
     }
 }

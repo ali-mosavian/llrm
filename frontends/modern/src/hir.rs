@@ -3,11 +3,15 @@ use std::fmt::Write;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Type {
     pub id: u32,
-    pub name: &'static str,
+    pub name: String,
     pub kind: &'static str,
     pub width: u32,
     pub signed: Option<bool>,
     pub evaluation: &'static str,
+    pub element: Option<u32>,
+    pub rank: u32,
+    pub bounds: Vec<(i32, i32)>,
+    pub address: &'static str,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -40,6 +44,13 @@ pub enum Operand {
     Value(u32),
     Constant(u32, i64),
     Place(u32),
+    ArrayElement(u32, Vec<Operand>),
+    ProjectedPlace {
+        place: u32,
+        indices: Vec<Operand>,
+        offset: u32,
+        type_id: u32,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -91,6 +102,7 @@ pub struct Callable {
     pub name: String,
     pub result_type: Option<u32>,
     pub parameter_types: Vec<u32>,
+    pub defined: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -115,7 +127,12 @@ impl Program {
             booleans(&mut out, callable.parameter_types.len(), false);
             write!(out, "],\"by_value\":[").unwrap();
             booleans(&mut out, callable.parameter_types.len(), true);
-            write!(out, "],\"defined\":true,\"id\":{},\"name\":", callable.id).unwrap();
+            write!(
+                out,
+                "],\"defined\":{},\"id\":{},\"name\":",
+                callable.defined, callable.id
+            )
+            .unwrap();
             string(&mut out, &callable.name);
             out.push_str(",\"parameter_types\":[");
             numbers(&mut out, &callable.parameter_types);
@@ -149,14 +166,21 @@ impl Program {
         out.push_str(",\"types\":[");
         for (index, type_) in self.types.iter().enumerate() {
             comma(&mut out, index);
+            write!(out, "{{\"address\":\"{}\",\"bounds\":[", type_.address).unwrap();
+            for (bound_index, (lower, upper)) in type_.bounds.iter().enumerate() {
+                comma(&mut out, bound_index);
+                write!(out, "[{lower},{upper}]").unwrap();
+            }
+            out.push_str("],\"element\":");
+            optional_number(&mut out, type_.element);
             write!(
                 out,
-                "{{\"address\":\"none\",\"bounds\":[],\"element\":null,\"evaluation\":\"{}\",\"id\":{},\"kind\":\"{}\",\"name\":",
+                ",\"evaluation\":\"{}\",\"id\":{},\"kind\":\"{}\",\"name\":",
                 type_.evaluation, type_.id, type_.kind
             )
             .unwrap();
-            string(&mut out, type_.name);
-            write!(out, ",\"rank\":0,\"signed\":").unwrap();
+            string(&mut out, &type_.name);
+            write!(out, ",\"rank\":{},\"signed\":", type_.rank).unwrap();
             match type_.signed {
                 Some(value) => out.push_str(if value { "true" } else { "false" }),
                 None => out.push_str("null"),
@@ -267,6 +291,25 @@ fn operands(out: &mut String, values: &[Operand]) {
             .unwrap(),
             Operand::Place(place) => {
                 write!(out, "{{\"place\":{place},\"tag\":\"place\"}}").unwrap()
+            }
+            Operand::ArrayElement(place, indices) => {
+                write!(out, "{{\"indices\":[").unwrap();
+                operands(out, indices);
+                write!(out, "],\"place\":{place},\"tag\":\"array_element\"}}").unwrap();
+            }
+            Operand::ProjectedPlace {
+                place,
+                indices,
+                offset,
+                type_id,
+            } => {
+                write!(out, "{{\"indices\":[").unwrap();
+                operands(out, indices);
+                write!(
+                    out,
+                    "],\"offset\":{offset},\"place\":{place},\"tag\":\"projection\",\"type\":{type_id}}}"
+                )
+                .unwrap();
             }
         }
     }

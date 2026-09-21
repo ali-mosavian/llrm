@@ -7,18 +7,25 @@ pub enum TokenKind {
     Integer(i64),
     Float(String),
     Character(u8),
+    String(Vec<u8>),
+    FString(Vec<u8>),
     Fn,
+    Struct,
     Let,
     Var,
+    Mut,
     Return,
     If,
     Else,
     While,
+    For,
+    In,
     Break,
     Continue,
     True,
     False,
     Not,
+    Is,
     Char,
     I8,
     U8,
@@ -28,11 +35,18 @@ pub enum TokenKind {
     U32,
     F32,
     F64,
+    StringType,
     Bool,
     Void,
     LeftParen,
     RightParen,
+    LeftBracket,
+    RightBracket,
+    LeftBrace,
+    RightBrace,
     Comma,
+    Semicolon,
+    Dot,
     Colon,
     Arrow,
     Equal,
@@ -45,6 +59,7 @@ pub enum TokenKind {
     Plus,
     Minus,
     Star,
+    Ampersand,
     Slash,
     Percent,
     Newline,
@@ -69,17 +84,22 @@ fn token(kind: TokenKind, line: usize, start: usize, end: usize) -> Token {
 fn keyword(word: &str) -> Option<TokenKind> {
     Some(match word {
         "fn" => TokenKind::Fn,
+        "struct" => TokenKind::Struct,
         "let" => TokenKind::Let,
         "var" => TokenKind::Var,
+        "mut" => TokenKind::Mut,
         "return" => TokenKind::Return,
         "if" => TokenKind::If,
         "else" => TokenKind::Else,
         "while" => TokenKind::While,
+        "for" => TokenKind::For,
+        "in" => TokenKind::In,
         "break" => TokenKind::Break,
         "continue" => TokenKind::Continue,
         "true" => TokenKind::True,
         "false" => TokenKind::False,
         "not" => TokenKind::Not,
+        "is" => TokenKind::Is,
         "char" => TokenKind::Char,
         "i8" => TokenKind::I8,
         "u8" => TokenKind::U8,
@@ -89,6 +109,7 @@ fn keyword(word: &str) -> Option<TokenKind> {
         "u32" => TokenKind::U32,
         "f32" => TokenKind::F32,
         "f64" => TokenKind::F64,
+        "string" => TokenKind::StringType,
         "bool" => TokenKind::Bool,
         "void" => TokenKind::Void,
         _ => return None,
@@ -155,6 +176,15 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
                     index += 1;
                 }
                 b'#' => break,
+                b'f' if index + 1 < bytes.len() && bytes[index + 1] == b'"' => {
+                    index += 1;
+                    let value = quoted(bytes, line_number, &mut index, start)?;
+                    tokens.push(token(TokenKind::FString(value), line_number, start, index));
+                }
+                b'"' => {
+                    let value = quoted(bytes, line_number, &mut index, start)?;
+                    tokens.push(token(TokenKind::String(value), line_number, start, index));
+                }
                 b'a'..=b'z' | b'A'..=b'Z' | b'_' => {
                     index += 1;
                     while index < bytes.len()
@@ -333,9 +363,48 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
                     index += 1;
                     tokens.push(token(TokenKind::RightParen, line_number, start, index));
                 }
+                b'[' => {
+                    nesting += 1;
+                    index += 1;
+                    tokens.push(token(TokenKind::LeftBracket, line_number, start, index));
+                }
+                b'{' => {
+                    index += 1;
+                    nesting += 1;
+                    tokens.push(token(TokenKind::LeftBrace, line_number, start, index));
+                }
+                b'}' => {
+                    index += 1;
+                    nesting = nesting.checked_sub(1).ok_or_else(|| {
+                        Diagnostic::new(
+                            Span::new(line_number, start + 1, index + 1),
+                            "unmatched '}'",
+                        )
+                    })?;
+                    tokens.push(token(TokenKind::RightBrace, line_number, start, index));
+                }
+                b']' => {
+                    if nesting == 0 {
+                        return Err(Diagnostic::new(
+                            Span::new(line_number, start + 1, start + 2),
+                            "unmatched ']'",
+                        ));
+                    }
+                    nesting -= 1;
+                    index += 1;
+                    tokens.push(token(TokenKind::RightBracket, line_number, start, index));
+                }
                 b',' => {
                     index += 1;
                     tokens.push(token(TokenKind::Comma, line_number, start, index));
+                }
+                b';' => {
+                    index += 1;
+                    tokens.push(token(TokenKind::Semicolon, line_number, start, index));
+                }
+                b'.' => {
+                    index += 1;
+                    tokens.push(token(TokenKind::Dot, line_number, start, index));
                 }
                 b':' => {
                     index += 1;
@@ -358,6 +427,10 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
                 b'*' => {
                     index += 1;
                     tokens.push(token(TokenKind::Star, line_number, start, index));
+                }
+                b'&' => {
+                    index += 1;
+                    tokens.push(token(TokenKind::Ampersand, line_number, start, index));
                 }
                 b'/' => {
                     index += 1;
@@ -440,6 +513,82 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
     Ok(tokens)
 }
 
+fn quoted(
+    bytes: &[u8],
+    line: usize,
+    index: &mut usize,
+    start: usize,
+) -> Result<Vec<u8>, Diagnostic> {
+    debug_assert_eq!(bytes[*index], b'"');
+    *index += 1;
+    let mut value = Vec::new();
+    while *index < bytes.len() && bytes[*index] != b'"' {
+        let at = *index;
+        if bytes[*index] == b'\\' {
+            *index += 1;
+            if *index >= bytes.len() {
+                return Err(Diagnostic::new(
+                    Span::new(line, start + 1, *index + 1),
+                    "unterminated string escape",
+                ));
+            }
+            if bytes[*index] == b'x' {
+                if *index + 2 >= bytes.len() {
+                    return Err(Diagnostic::new(
+                        Span::new(line, *index + 1, bytes.len() + 1),
+                        "byte escape requires two hexadecimal digits",
+                    ));
+                }
+                let high = hex_digit(bytes[*index + 1]);
+                let low = hex_digit(bytes[*index + 2]);
+                let Some((high, low)) = high.zip(low) else {
+                    return Err(Diagnostic::new(
+                        Span::new(line, *index + 1, *index + 4),
+                        "byte escape requires two hexadecimal digits",
+                    ));
+                };
+                value.push((high << 4) | low);
+                *index += 3;
+                continue;
+            }
+            let escaped = match bytes[*index] {
+                b'0' => 0,
+                b'n' => b'\n',
+                b'r' => b'\r',
+                b't' => b'\t',
+                b'\\' => b'\\',
+                b'"' => b'"',
+                b'{' => b'{',
+                b'}' => b'}',
+                _ => {
+                    return Err(Diagnostic::new(
+                        Span::new(line, *index + 1, *index + 2),
+                        "unknown string escape",
+                    ))
+                }
+            };
+            value.push(escaped);
+            *index += 1;
+        } else if bytes[*index].is_ascii() {
+            value.push(bytes[*index]);
+            *index += 1;
+        } else {
+            return Err(Diagnostic::new(
+                Span::new(line, at + 1, at + 2),
+                "string literals contain target-code-page bytes; use a byte escape",
+            ));
+        }
+    }
+    if *index >= bytes.len() {
+        return Err(Diagnostic::new(
+            Span::new(line, start + 1, bytes.len() + 1),
+            "unterminated string literal",
+        ));
+    }
+    *index += 1;
+    Ok(value)
+}
+
 fn hex_digit(byte: u8) -> Option<u8> {
     match byte {
         b'0'..=b'9' => Some(byte - b'0'),
@@ -512,6 +661,27 @@ mod tests {
                 TokenKind::Float("2e3".into()),
                 TokenKind::Character(b'A'),
                 TokenKind::Character(0x80),
+                TokenKind::Newline,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn lexes_byte_strings_f_strings_and_fixed_array_punctuation() {
+        let tokens = lex("string [i32; 2] \"A\\x80\" f\"{value}\"\n").unwrap();
+        let kinds: Vec<_> = tokens.into_iter().map(|one| one.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::StringType,
+                TokenKind::LeftBracket,
+                TokenKind::I32,
+                TokenKind::Semicolon,
+                TokenKind::Integer(2),
+                TokenKind::RightBracket,
+                TokenKind::String(vec![b'A', 0x80]),
+                TokenKind::FString(b"{value}".to_vec()),
                 TokenKind::Newline,
                 TokenKind::Eof,
             ]
