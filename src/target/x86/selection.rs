@@ -1003,8 +1003,10 @@ impl<'types> FunctionSelector<'types> {
                 left,
                 right,
             } => self.select_branch_compare(block, instruction, *predicate, left, right, output)?,
+            InstructionKind::GetElementPointer { base, indices } => {
+                self.select_get_element_pointer(block, instruction, base, indices, output)?
+            }
             InstructionKind::Phi { .. }
-            | InstructionKind::GetElementPointer { .. }
             | InstructionKind::Select { .. }
             | InstructionKind::Intrinsic { .. } => {
                 return Err(SelectionError::UnsupportedInstruction {
@@ -1020,6 +1022,65 @@ impl<'types> FunctionSelector<'types> {
             } => self.select_call(block, instruction, callee, arguments, *effects, output)?,
         }
         Ok(())
+    }
+
+    /// Selects a byte offset from a near address.  The portable instruction's
+    /// index has already been scaled by its producer.
+    fn select_get_element_pointer(
+        &mut self,
+        block: BlockId,
+        instruction: &Instruction,
+        base: &Operand,
+        indices: &[Operand],
+        output: &mut Vec<MachineInstruction>,
+    ) -> Result<(), SelectionError> {
+        let result = self.result_definition(block, instruction)?;
+        let base_type = self.operand_type(block, instruction.id, base)?;
+        self.require_operand_type(block, instruction.id, result.type_id, base_type)?;
+        self.require_near_pointer(result.type_id)?;
+
+        let [index] = indices else {
+            return Err(SelectionError::UnsupportedInstruction {
+                function: self.function.id,
+                block,
+                instruction: instruction.id,
+            });
+        };
+        let index_type = self.operand_type(block, instruction.id, index)?;
+        if self.integer_bits(index_type)? != 16 {
+            return Err(SelectionError::UnsupportedInstruction {
+                function: self.function.id,
+                block,
+                instruction: instruction.id,
+            });
+        }
+
+        let base = self.select_operand(block, instruction.id, base, result.type_id, output)?;
+        let base = self.materialize_register(base, output)?;
+        let result = self.define_register_value(result)?;
+        self.copy(result, base, output)?;
+
+        let offset = match index {
+            Operand::Constant(TypedConstant {
+                type_id,
+                value: Constant::Integer(value),
+            }) => {
+                self.require_operand_type(block, instruction.id, index_type, *type_id)?;
+                immediate_operand(integer_immediate(*value, 16))
+            }
+            _ => {
+                let offset =
+                    self.select_operand(block, instruction.id, index, index_type, output)?;
+                let offset = self.materialize_register(offset, output)?;
+                virtual_operand(offset, OperandRole::Use)
+            }
+        };
+        self.push_instruction(
+            X86Opcode::Add,
+            vec![virtual_operand(result, OperandRole::UseDef), offset],
+            InstructionFlags::NONE,
+            output,
+        )
     }
 
     /// Records a comparison only when its i1 result is later consumed as a
@@ -2525,6 +2586,15 @@ mod tests {
         types
     }
 
+    fn near_pointer_type(id: TypeId) -> Type {
+        Type {
+            id,
+            kind: TypeKind::Pointer {
+                address_space: AddressSpace::NearData,
+            },
+        }
+    }
+
     fn data_global(id: u32, name: &str, initializer: Constant) -> Global {
         Global {
             id: GlobalId::new(id),
@@ -2535,6 +2605,264 @@ mod tests {
             initializer: Some(initializer),
             address_space: AddressSpace::NearData,
         }
+    }
+
+    #[test]
+    fn selects_constant_byte_offset_get_element_pointer() {
+        let near = TypeId::new(7);
+        let base = Value {
+            id: ValueId::new(0),
+            type_id: near,
+        };
+        let result = Value {
+            id: ValueId::new(1),
+            type_id: near,
+        };
+        let function = function(
+            vec![Block {
+                id: BlockId::new(0),
+                instructions: vec![
+                    Instruction {
+                        id: crate::ir::InstructionId::new(0),
+                        results: vec![base.clone()],
+                        kind: InstructionKind::StackAlloc {
+                            size: 8,
+                            alignment: 2,
+                            address_space: AddressSpace::NearData,
+                        },
+                    },
+                    Instruction {
+                        id: crate::ir::InstructionId::new(1),
+                        results: vec![result],
+                        kind: InstructionKind::GetElementPointer {
+                            base: Operand::Value(base.id),
+                            indices: vec![Operand::Constant(TypedConstant {
+                                type_id: I16,
+                                value: Constant::Integer(6),
+                            })],
+                        },
+                    },
+                ],
+                terminator: Terminator::Return(None),
+            }],
+            Vec::new(),
+        );
+        let mut types = basic_types();
+        types.push(near_pointer_type(near));
+
+        let selected = select_module(&module(types, vec![function])).expect("byte offset selects");
+        selected.verify().expect("selected Machine IR verifies");
+        let function = &selected.functions[0];
+        let instructions = &function.blocks[0].instructions;
+        assert_eq!(
+            instructions
+                .iter()
+                .map(|instruction| instruction.opcode)
+                .collect::<Vec<_>>(),
+            vec![
+                X86Opcode::Lea.machine_opcode(),
+                X86Opcode::Copy.machine_opcode(),
+                X86Opcode::Add.machine_opcode(),
+                X86Opcode::ReturnNear.machine_opcode(),
+            ]
+        );
+        assert_eq!(instructions[2].operands[1], immediate_operand(6));
+        let MachineOperandKind::Register(MachineRegister::Virtual(result_register)) =
+            instructions[2].operands[0].kind
+        else {
+            panic!("address addition defines a virtual register");
+        };
+        assert_eq!(instructions[2].operands[0].role, OperandRole::UseDef);
+        assert!(function.virtual_registers.iter().any(|register| {
+            register.id == result_register
+                && register.class == X86RegisterClass::Address16.machine_class()
+        }));
+    }
+
+    #[test]
+    fn selects_dynamic_byte_offset_get_element_pointer() {
+        let near = TypeId::new(7);
+        let offset = Value {
+            id: ValueId::new(0),
+            type_id: I16,
+        };
+        let base = Value {
+            id: ValueId::new(1),
+            type_id: near,
+        };
+        let result = Value {
+            id: ValueId::new(2),
+            type_id: near,
+        };
+        let function = function(
+            vec![Block {
+                id: BlockId::new(0),
+                instructions: vec![
+                    Instruction {
+                        id: crate::ir::InstructionId::new(0),
+                        results: vec![base.clone()],
+                        kind: InstructionKind::StackAlloc {
+                            size: 8,
+                            alignment: 2,
+                            address_space: AddressSpace::NearData,
+                        },
+                    },
+                    Instruction {
+                        id: crate::ir::InstructionId::new(1),
+                        results: vec![result],
+                        kind: InstructionKind::GetElementPointer {
+                            base: Operand::Value(base.id),
+                            indices: vec![Operand::Value(offset.id)],
+                        },
+                    },
+                ],
+                terminator: Terminator::Return(None),
+            }],
+            vec![offset],
+        );
+        let mut types = basic_types();
+        types.push(near_pointer_type(near));
+
+        let selected = select_module(&module(types, vec![function])).expect("byte offset selects");
+        selected.verify().expect("selected Machine IR verifies");
+        let function = &selected.functions[0];
+        let instructions = &function.blocks[0].instructions;
+        assert_eq!(
+            instructions
+                .iter()
+                .map(|instruction| instruction.opcode)
+                .collect::<Vec<_>>(),
+            vec![
+                X86Opcode::Load.machine_opcode(),
+                X86Opcode::Lea.machine_opcode(),
+                X86Opcode::Copy.machine_opcode(),
+                X86Opcode::Add.machine_opcode(),
+                X86Opcode::ReturnNear.machine_opcode(),
+            ]
+        );
+        let [destination, source] = instructions[3].operands.as_slice() else {
+            panic!("address addition has two operands");
+        };
+        let MachineOperandKind::Register(MachineRegister::Virtual(destination_register)) =
+            destination.kind
+        else {
+            panic!("address addition updates a virtual register");
+        };
+        let MachineOperandKind::Register(MachineRegister::Virtual(source_register)) = source.kind
+        else {
+            panic!("dynamic offset uses a virtual register");
+        };
+        assert_eq!(destination.role, OperandRole::UseDef);
+        assert_eq!(source.role, OperandRole::Use);
+        assert!(function.virtual_registers.iter().any(|register| {
+            register.id == destination_register
+                && register.class == X86RegisterClass::Address16.machine_class()
+        }));
+        assert!(function.virtual_registers.iter().any(|register| {
+            register.id == source_register
+                && register.class == X86RegisterClass::Word.machine_class()
+        }));
+    }
+
+    #[test]
+    fn refuses_malformed_get_element_pointer() {
+        let near = TypeId::new(7);
+        let far = TypeId::new(8);
+        let result = Value {
+            id: ValueId::new(0),
+            type_id: near,
+        };
+        let gep = |indices| Function {
+            id: FunctionId::new(4),
+            name: "selected".to_owned(),
+            signature: signature(VOID, Vec::new()),
+            linkage: Linkage::Internal,
+            attributes: Vec::new(),
+            parameters: Vec::new(),
+            blocks: vec![Block {
+                id: BlockId::new(0),
+                instructions: vec![Instruction {
+                    id: crate::ir::InstructionId::new(0),
+                    results: vec![result.clone()],
+                    kind: InstructionKind::GetElementPointer {
+                        base: Operand::Constant(TypedConstant {
+                            type_id: near,
+                            value: Constant::Null,
+                        }),
+                        indices,
+                    },
+                }],
+                terminator: Terminator::Return(None),
+            }],
+        };
+        let mut types = basic_types();
+        types.extend([
+            near_pointer_type(near),
+            Type {
+                id: far,
+                kind: TypeKind::Pointer {
+                    address_space: AddressSpace::FarData,
+                },
+            },
+        ]);
+
+        for indices in [
+            Vec::new(),
+            vec![
+                Operand::Constant(TypedConstant {
+                    type_id: I16,
+                    value: Constant::Integer(0),
+                }),
+                Operand::Constant(TypedConstant {
+                    type_id: I16,
+                    value: Constant::Integer(1),
+                }),
+            ],
+            vec![Operand::Constant(TypedConstant {
+                type_id: I32,
+                value: Constant::Integer(0),
+            })],
+        ] {
+            assert!(matches!(
+                select_module(&module(types.clone(), vec![gep(indices)])),
+                Err(SelectionError::UnsupportedInstruction { .. })
+            ));
+        }
+
+        let far_result = Value {
+            id: ValueId::new(0),
+            type_id: far,
+        };
+        let far_gep = Function {
+            id: FunctionId::new(4),
+            name: "selected".to_owned(),
+            signature: signature(VOID, Vec::new()),
+            linkage: Linkage::Internal,
+            attributes: Vec::new(),
+            parameters: Vec::new(),
+            blocks: vec![Block {
+                id: BlockId::new(0),
+                instructions: vec![Instruction {
+                    id: crate::ir::InstructionId::new(0),
+                    results: vec![far_result],
+                    kind: InstructionKind::GetElementPointer {
+                        base: Operand::Constant(TypedConstant {
+                            type_id: far,
+                            value: Constant::Null,
+                        }),
+                        indices: vec![Operand::Constant(TypedConstant {
+                            type_id: I16,
+                            value: Constant::Integer(0),
+                        })],
+                    },
+                }],
+                terminator: Terminator::Return(None),
+            }],
+        };
+        assert!(matches!(
+            select_module(&module(types, vec![far_gep])),
+            Err(SelectionError::UnsupportedType { type_id }) if type_id == far
+        ));
     }
 
     #[test]
@@ -3270,10 +3598,6 @@ mod tests {
         let i1 = TypeId::new(2);
         let float = TypeId::new(3);
         let mut types = basic_types();
-        types.push(Type {
-            id: i1,
-            kind: TypeKind::Integer { bits: 1 },
-        });
         types.push(Type {
             id: float,
             kind: TypeKind::Float(FloatKind::Binary32),

@@ -14,6 +14,8 @@ from dosbox import dosbox_bin
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "fixtures" / "c" / "parity" / "scalar.cgs"
 HARNESS = ROOT / "fixtures" / "c" / "parity" / "scalar-start.asm"
+CELLS_SOURCE = ROOT / "fixtures" / "c" / "cells.cgs"
+CELLS_HARNESS = ROOT / "fixtures" / "c" / "cells-start.asm"
 JWASM = shutil.which("jwasm") or str(Path.home() / "work/other/d32x/toolchains/native/bin/jwasm")
 CFG = CONFIGS["v-g3"]
 
@@ -77,3 +79,43 @@ def test_rust_c_scalar_returns_the_independent_parity_answer(tmp_path: Path) -> 
     value = dos_file(tmp_path, "VALUE.BIN")
     assert value is not None
     assert int.from_bytes(value.read_bytes(), "little", signed=True) == 1789
+
+
+def test_rust_c_local_short_cells_returns_the_independent_argument(tmp_path: Path) -> None:
+    """Python's WCC capture of local ``short cells[4]`` must return 1234.
+
+    This exercises the newly ported local-aggregate path as a real program:
+    the WCC-derived stream is compiled by ``llrm-c``, linked with a far-cdecl
+    caller, and run on DOS without relying on any optimizer.
+    """
+    object_file = tmp_path / "CELLS.OBJ"
+    compiled = subprocess.run(
+        [str(_llrm_c()), "--emit", "obj", "-o", str(object_file), str(CELLS_SOURCE)],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    assert object_file.is_file()
+
+    harness_file = tmp_path / "START.ASM"
+    harness_file.write_bytes(CELLS_HARNESS.read_bytes())
+    assembled = subprocess.run(
+        [JWASM, "-q", "-c", "-Cp", "-Zg", "-omf", f"-Fo{tmp_path / 'START.OBJ'}", str(harness_file)],
+        capture_output=True,
+        text=True,
+    )
+    assert assembled.returncode == 0, assembled.stdout + assembled.stderr
+
+    run = launch(
+        tmp_path,
+        CFG.mount,
+        [f"{CFG.link} START.OBJ+CELLS.OBJ, CELLS.EXE,,; > LINK.OUT", "CELLS.EXE"],
+        timeout=10,
+    )
+    assert run.finished and not run.timed_out, run
+    link = read_dos(tmp_path, "LINK.OUT").lower()
+    assert "error l" not in link and "unresolved external" not in link, link
+    value = dos_file(tmp_path, "VALUE.BIN")
+    assert value is not None
+    assert int.from_bytes(value.read_bytes(), "little", signed=True) == 1234
