@@ -111,6 +111,10 @@ fn count_instruction_uses(instruction: &Instruction, uses: &mut BTreeMap<ValueId
             count_operand(address, uses);
             count_operand(value, uses);
         }
+        InstructionKind::ComposePointer { segment, offset } => {
+            count_operand(segment, uses);
+            count_operand(offset, uses);
+        }
         InstructionKind::GetElementPointer { base, indices } => {
             count_operand(base, uses);
             for index in indices {

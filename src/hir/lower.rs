@@ -26,7 +26,6 @@ pub enum UnsupportedFeature {
     ExternalEntry,
     Memory,
     PointerExtraction,
-    Concatenation,
     DivideRemainder,
     StringOperation,
     Call,
@@ -985,14 +984,7 @@ impl<'module> Lowerer<'module> {
                     UnsupportedFeature::PointerExtraction,
                 );
             }
-            Opcode::Concat => {
-                return self.unsupported_instruction(
-                    function,
-                    block,
-                    instruction,
-                    UnsupportedFeature::Concatenation,
-                );
-            }
+            Opcode::Concat => self.compose_pointer(function, block, instruction)?,
             Opcode::DivideRemainder => {
                 return self.unsupported_instruction(
                     function,
@@ -1259,6 +1251,70 @@ impl<'module> Lowerer<'module> {
                 1,
                 &instruction.operands[1],
             )?],
+        })
+    }
+
+    fn compose_pointer(
+        &self,
+        function: &hir::Function,
+        block: hir::BlockId,
+        instruction: &hir::Instruction,
+    ) -> Result<ir::InstructionKind, LowerError> {
+        if instruction.operands.len() != 2 {
+            return self.invalid_instruction(
+                function,
+                block,
+                instruction,
+                InvalidProperty::OperandArity,
+            );
+        }
+        let result = self.one_result(function, block, instruction)?;
+        let result_type = self.type_by_id(hir::TypeId::new(result.type_id.get()))?;
+        let segment_type = self.operand_type(
+            function,
+            block,
+            Some(instruction.id),
+            0,
+            &instruction.operands[0],
+        )?;
+        let segment_type = self.type_by_id(segment_type)?;
+        let offset_type = self.operand_type(
+            function,
+            block,
+            Some(instruction.id),
+            1,
+            &instruction.operands[1],
+        )?;
+        let offset_type = self.type_by_id(offset_type)?;
+        if result_type.kind != hir::TypeKind::Pointer
+            || result_type.width != 4
+            || segment_type.kind != hir::TypeKind::Integer
+            || segment_type.width != 2
+            || offset_type.kind != hir::TypeKind::Integer
+            || offset_type.width != 2
+        {
+            return self.invalid_instruction(
+                function,
+                block,
+                instruction,
+                InvalidProperty::OperandTypes,
+            );
+        }
+        Ok(ir::InstructionKind::ComposePointer {
+            segment: self.lower_operand(
+                function,
+                block,
+                Some(instruction.id),
+                0,
+                &instruction.operands[0],
+            )?,
+            offset: self.lower_operand(
+                function,
+                block,
+                Some(instruction.id),
+                1,
+                &instruction.operands[1],
+            )?,
         })
     }
 
@@ -2440,6 +2496,111 @@ mod tests {
                 ..
             }
         ));
+        assert!(lowered.verify().is_ok());
+    }
+
+    #[test]
+    fn lowers_pointer_concat_in_segment_then_offset_order() {
+        let mut module = scalar_module();
+        module.types.extend([
+            hir::Type {
+                id: hir::TypeId::new(6),
+                name: "word".into(),
+                kind: hir::TypeKind::Integer,
+                width: 2,
+                signed: Some(false),
+                evaluation: hir::FloatEvaluation::None,
+                element: None,
+                bounds: Vec::new(),
+                address: hir::AddressKind::None,
+            },
+            hir::Type {
+                id: hir::TypeId::new(7),
+                name: "far-long".into(),
+                kind: hir::TypeKind::Pointer,
+                width: 4,
+                signed: None,
+                evaluation: hir::FloatEvaluation::None,
+                element: Some(hir::TypeId::new(2)),
+                bounds: Vec::new(),
+                address: hir::AddressKind::Far,
+            },
+        ]);
+        module.functions[0].values.extend([
+            hir::Value {
+                id: hir::ValueId::new(5),
+                type_id: hir::TypeId::new(6),
+            },
+            hir::Value {
+                id: hir::ValueId::new(6),
+                type_id: hir::TypeId::new(6),
+            },
+            hir::Value {
+                id: hir::ValueId::new(7),
+                type_id: hir::TypeId::new(7),
+            },
+        ]);
+        module.functions[0].blocks[0].instructions.extend([
+            hir::Instruction {
+                id: hir::InstructionId::new(14),
+                opcode: hir::Opcode::Copy,
+                results: vec![hir::ValueId::new(5)],
+                operands: vec![hir::Operand::Constant {
+                    type_id: hir::TypeId::new(6),
+                    value: hir::ConstantValue::Integer(0x1234),
+                }],
+                callee: None,
+            },
+            hir::Instruction {
+                id: hir::InstructionId::new(15),
+                opcode: hir::Opcode::Copy,
+                results: vec![hir::ValueId::new(6)],
+                operands: vec![hir::Operand::Constant {
+                    type_id: hir::TypeId::new(6),
+                    value: hir::ConstantValue::Integer(0x5678),
+                }],
+                callee: None,
+            },
+            hir::Instruction {
+                id: hir::InstructionId::new(16),
+                opcode: hir::Opcode::Concat,
+                results: vec![hir::ValueId::new(7)],
+                operands: vec![
+                    hir::Operand::Value(hir::ValueId::new(5)),
+                    hir::Operand::Value(hir::ValueId::new(6)),
+                ],
+                callee: None,
+            },
+        ]);
+
+        let lowered = lower_module(&module).expect("pointer concat lowers");
+        let instruction = &lowered.functions[0].blocks[0].instructions[4];
+        assert_eq!(instruction.id, ir::InstructionId::new(16));
+        assert_eq!(
+            instruction.results,
+            vec![ir::Value {
+                id: ir::ValueId::new(7),
+                type_id: ir::TypeId::new(7),
+            }]
+        );
+        assert!(matches!(
+            &instruction.kind,
+            ir::InstructionKind::ComposePointer {
+                segment: ir::Operand::Value(segment),
+                offset: ir::Operand::Value(offset),
+            } if *segment == ir::ValueId::new(5) && *offset == ir::ValueId::new(6)
+        ));
+        assert_eq!(
+            lowered
+                .types
+                .iter()
+                .find(|type_| type_.id == instruction.results[0].type_id)
+                .expect("pointer result type is retained")
+                .kind,
+            ir::TypeKind::Pointer {
+                address_space: ir::AddressSpace::FarData,
+            }
+        );
         assert!(lowered.verify().is_ok());
     }
 

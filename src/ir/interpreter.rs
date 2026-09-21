@@ -631,6 +631,7 @@ fn execute_instruction(
         | InstructionKind::Load { .. }
         | InstructionKind::Store { .. }
         | InstructionKind::GetElementPointer { .. }
+        | InstructionKind::ComposePointer { .. }
         | InstructionKind::Call { .. }
         | InstructionKind::Intrinsic { .. } => {
             Err(InterpretError::UnsupportedInstruction(instruction.id))

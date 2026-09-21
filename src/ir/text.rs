@@ -291,6 +291,12 @@ fn write_instruction(out: &mut String, instruction: &Instruction) {
             out.push(' ');
             push_operands(out, indices);
         }
+        InstructionKind::ComposePointer { segment, offset } => {
+            out.push_str("compose_ptr ");
+            push_operand(out, segment);
+            out.push(' ');
+            push_operand(out, offset);
+        }
         InstructionKind::Select {
             condition,
             then_value,
@@ -1148,6 +1154,10 @@ fn parse_instruction(parser: &mut Parser) -> Result<Instruction, TextError> {
             let indices = parse_operands(parser)?;
             InstructionKind::GetElementPointer { base, indices }
         }
+        "compose_ptr" => InstructionKind::ComposePointer {
+            segment: parse_operand(parser)?,
+            offset: parse_operand(parser)?,
+        },
         "select" => InstructionKind::Select {
             condition: parse_operand(parser)?,
             then_value: parse_operand(parser)?,
@@ -1738,6 +1748,68 @@ mod tests {
     }
 
     #[test]
+    fn compose_pointer_round_trips_in_segment_then_offset_order() {
+        let module = Module {
+            name: "compose-pointer".into(),
+            types: vec![
+                Type {
+                    id: TypeId::new(0),
+                    kind: TypeKind::Void,
+                },
+                Type {
+                    id: TypeId::new(1),
+                    kind: TypeKind::Integer { bits: 16 },
+                },
+                Type {
+                    id: TypeId::new(2),
+                    kind: TypeKind::Pointer {
+                        address_space: AddressSpace::FarData,
+                    },
+                },
+            ],
+            globals: Vec::new(),
+            functions: vec![Function {
+                id: FunctionId::new(0),
+                name: "main".into(),
+                linkage: Linkage::Internal,
+                signature: Signature {
+                    result: TypeId::new(0),
+                    parameters: Vec::new(),
+                    variadic: false,
+                    calling_convention: CallingConvention::FarPascal,
+                },
+                attributes: Vec::new(),
+                parameters: Vec::new(),
+                blocks: vec![Block {
+                    id: BlockId::new(0),
+                    instructions: vec![Instruction {
+                        id: InstructionId::new(0),
+                        results: vec![Value {
+                            id: ValueId::new(0),
+                            type_id: TypeId::new(2),
+                        }],
+                        kind: InstructionKind::ComposePointer {
+                            segment: Operand::Constant(TypedConstant {
+                                type_id: TypeId::new(1),
+                                value: Constant::Integer(0x1234),
+                            }),
+                            offset: Operand::Constant(TypedConstant {
+                                type_id: TypeId::new(1),
+                                value: Constant::Integer(0x5678),
+                            }),
+                        },
+                    }],
+                    terminator: Terminator::Return(None),
+                }],
+            }],
+        };
+
+        let text = write(&module);
+        assert!(text.contains("compose_ptr const type 1 integer 4660 const type 1 integer 22136"));
+        assert_eq!(parse(&text), Ok(module));
+    }
+
+    #[test]
     fn relocatable_bytes_round_trip_preserves_patch_order() {
         let module = Module {
             name: "relocations".to_owned(),
@@ -1871,20 +1943,20 @@ mod tests {
     fn rejects_unknown_and_malformed_input() {
         for obsolete in ["basic", "runtime"] {
             let source = format!(
-                "qir 5\nmodule \"m\"\ntype 0 void\nfunction 0 \"f\" linkage external result 0 parameters [] variadic false cc {obsolete} attributes []\nendfunction\nend\n"
+                "qir 6\nmodule \"m\"\ntype 0 void\nfunction 0 \"f\" linkage external result 0 parameters [] variadic false cc {obsolete} attributes []\nendfunction\nend\n"
             );
             let error = parse(&source).expect_err("source-language ABI labels must not enter IR");
             assert!(error.message.contains("unknown calling convention"));
         }
         assert!(parse("qir 3\nmodule \"m\"\nend\n").is_err());
         assert!(parse("qir 2\nmodule \"m\"\nend\n").is_err());
-        assert!(parse("qir 5\nmodule \"m\"\ntype 0 nope\nend\n").is_err());
+        assert!(parse("qir 6\nmodule \"m\"\ntype 0 nope\nend\n").is_err());
         assert!(
-            parse("qir 5\nmodule \"m\"\nglobal 0 \"g\" 0 neardata internal false some bytes \"f\"\nend\n")
+            parse("qir 6\nmodule \"m\"\nglobal 0 \"g\" 0 neardata internal false some bytes \"f\"\nend\n")
                 .is_err()
         );
         assert!(
-            parse("qir 5\nmodule \"m\"\nglobal 0 \"g\" 9 fardata external false none\nend\n")
+            parse("qir 6\nmodule \"m\"\nglobal 0 \"g\" 9 fardata external false none\nend\n")
                 .is_err()
         );
     }

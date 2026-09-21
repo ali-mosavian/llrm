@@ -1006,7 +1006,8 @@ impl<'types> FunctionSelector<'types> {
             InstructionKind::GetElementPointer { base, indices } => {
                 self.select_get_element_pointer(block, instruction, base, indices, output)?
             }
-            InstructionKind::Phi { .. }
+            InstructionKind::ComposePointer { .. }
+            | InstructionKind::Phi { .. }
             | InstructionKind::Select { .. }
             | InstructionKind::Intrinsic { .. } => {
                 return Err(SelectionError::UnsupportedInstruction {

@@ -140,6 +140,7 @@ fn is_memory_barrier(instruction: &Instruction) -> bool {
         | InstructionKind::Binary { .. }
         | InstructionKind::Compare { .. }
         | InstructionKind::Cast { .. }
+        | InstructionKind::ComposePointer { .. }
         | InstructionKind::GetElementPointer { .. }
         | InstructionKind::Select { .. } => false,
     }

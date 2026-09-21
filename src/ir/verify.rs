@@ -279,6 +279,7 @@ impl<'module> Verifier<'module> {
             | InstructionKind::Cast { .. }
             | InstructionKind::Load { .. }
             | InstructionKind::GetElementPointer { .. }
+            | InstructionKind::ComposePointer { .. }
             | InstructionKind::Select { .. } => Some(1),
             InstructionKind::Call { .. } | InstructionKind::Intrinsic { .. } => None,
         };
@@ -452,6 +453,18 @@ impl<'module> Verifier<'module> {
                         format!(
                             "function {} instruction {} index {}",
                             function.id, instruction.id, index
+                        ),
+                    );
+                }
+            }
+            InstructionKind::ComposePointer { segment, offset } => {
+                for (name, operand) in [("segment", segment), ("offset", offset)] {
+                    self.verify_operand(
+                        operand,
+                        values,
+                        format!(
+                            "function {} instruction {} compose pointer {name}",
+                            function.id, instruction.id
                         ),
                     );
                 }
@@ -831,6 +844,37 @@ mod tests {
         assert!(messages.iter().any(|message| {
             message.contains("stack allocation alignment must be a nonzero power of two")
         }));
+    }
+
+    #[test]
+    fn compose_pointer_requires_one_result_and_defined_operands() {
+        let mut module = minimal_module();
+        module.functions[0].blocks[0]
+            .instructions
+            .push(Instruction {
+                id: InstructionId::new(0),
+                results: Vec::new(),
+                kind: InstructionKind::ComposePointer {
+                    segment: super::super::Operand::Value(ValueId::new(4)),
+                    offset: super::super::Operand::Value(ValueId::new(5)),
+                },
+            });
+
+        let diagnostics = verify(&module).expect_err("malformed compose pointer must be rejected");
+        let messages = diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.message.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(messages
+            .iter()
+            .any(|message| message.contains("has 0 results, expected 1")));
+        assert!(messages
+            .iter()
+            .any(|message| message.contains("compose pointer segment references unknown value 4")));
+        assert!(messages
+            .iter()
+            .any(|message| message.contains("compose pointer offset references unknown value 5")));
     }
 
     #[test]

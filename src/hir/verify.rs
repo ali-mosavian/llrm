@@ -1,10 +1,10 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::support::diagnostic::{Diagnostic, Severity};
 
 use super::{
-    BlockId, CallableId, DataId, FORMAT_VERSION, Function, InstructionId, Module, Operand, Program,
-    Terminator, TypeId, ValueId,
+    BlockId, CallableId, DataId, Function, Instruction, InstructionId, Module, Opcode, Operand,
+    Program, Terminator, Type, TypeId, TypeKind, ValueId, FORMAT_VERSION,
 };
 
 pub fn verify(program: &Program) -> Result<(), Vec<Diagnostic>> {
@@ -75,6 +75,11 @@ impl Verifier {
             "type",
             &mut self.diagnostics,
         );
+        let types = module
+            .types
+            .iter()
+            .map(|type_| (type_.id, type_))
+            .collect::<BTreeMap<_, _>>();
         let data_ids = collect_ids(
             module.data.iter().map(|data| data.id),
             "data object",
@@ -132,7 +137,7 @@ impl Verifier {
         }
 
         for function in &module.functions {
-            self.function(function, &type_ids, &data_ids, &callable_ids);
+            self.function(function, &type_ids, &types, &data_ids, &callable_ids);
         }
     }
 
@@ -140,6 +145,7 @@ impl Verifier {
         &mut self,
         function: &Function,
         type_ids: &BTreeSet<TypeId>,
+        types: &BTreeMap<TypeId, &Type>,
         data_ids: &BTreeSet<DataId>,
         callable_ids: &BTreeSet<CallableId>,
     ) {
@@ -201,6 +207,7 @@ impl Verifier {
                 for operand in &instruction.operands {
                     self.operand(operand, type_ids, &value_ids, &place_ids);
                 }
+                self.concat_types(function, instruction, types);
             }
             self.terminator(
                 &block.terminator,
@@ -218,6 +225,74 @@ impl Verifier {
                     self.error(format!("call ABI refers to unknown callable {callee}"));
                 }
             }
+        }
+    }
+
+    fn concat_types(
+        &mut self,
+        function: &Function,
+        instruction: &Instruction,
+        types: &BTreeMap<TypeId, &Type>,
+    ) {
+        if instruction.opcode != Opcode::Concat {
+            return;
+        }
+        let [segment, offset] = instruction.operands.as_slice() else {
+            self.error(format!(
+                "instruction {} pointer concat has the wrong arity",
+                instruction.id
+            ));
+            return;
+        };
+        let [result] = instruction.results.as_slice() else {
+            self.error(format!(
+                "instruction {} pointer concat has the wrong arity",
+                instruction.id
+            ));
+            return;
+        };
+        let values = function
+            .values
+            .iter()
+            .map(|value| (value.id, value.type_id))
+            .collect::<BTreeMap<_, _>>();
+        let places = function
+            .places
+            .iter()
+            .map(|place| (place.id, place.type_id))
+            .collect::<BTreeMap<_, _>>();
+        let Some(segment_type) = operand_type(segment, &values, &places) else {
+            return;
+        };
+        let Some(offset_type) = operand_type(offset, &values, &places) else {
+            return;
+        };
+        let Some(result_type) = values.get(result) else {
+            return;
+        };
+        let valid_half = |type_id| {
+            matches!(
+                types.get(&type_id),
+                Some(Type {
+                    kind: TypeKind::Integer,
+                    width: 2,
+                    ..
+                })
+            )
+        };
+        let valid_result = matches!(
+            types.get(result_type),
+            Some(Type {
+                kind: TypeKind::Pointer,
+                width: 4,
+                ..
+            })
+        );
+        if !valid_half(segment_type) || !valid_half(offset_type) || !valid_result {
+            self.error(format!(
+                "instruction {} pointer concat is not INTEGER:INTEGER to 16:16",
+                instruction.id
+            ));
         }
     }
 
@@ -341,6 +416,19 @@ impl Verifier {
     }
 }
 
+fn operand_type(
+    operand: &Operand,
+    values: &BTreeMap<ValueId, TypeId>,
+    places: &BTreeMap<super::PlaceId, TypeId>,
+) -> Option<TypeId> {
+    match operand {
+        Operand::Value(value) => values.get(value).copied(),
+        Operand::Constant { type_id, .. } | Operand::Projection { type_id, .. } => Some(*type_id),
+        Operand::Place(place) | Operand::Element { place, .. } => places.get(place).copied(),
+        Operand::Indirect { type_id, .. } => Some(*type_id),
+    }
+}
+
 fn collect_ids<I, T>(ids: I, kind: &str, diagnostics: &mut Vec<Diagnostic>) -> BTreeSet<T>
 where
     I: IntoIterator<Item = T>,
@@ -356,4 +444,166 @@ where
         }
     }
     collected
+}
+
+#[cfg(test)]
+mod tests {
+    use super::verify_module;
+    use crate::hir::{
+        AddressKind, Block, BlockId, CallDistance, ConstantValue, FloatEvaluation, Function,
+        FunctionId, Instruction, InstructionId, Linkage, Module, ModuleId, Opcode, Operand,
+        ProcedureAbi, StackCleanup, Terminator, Type, TypeId, TypeKind, Value, ValueId,
+    };
+
+    #[test]
+    fn rejects_concat_with_wrong_arity_non_i16_half_or_non_pointer_result() {
+        let module = Module {
+            id: ModuleId::new(0),
+            name: "concat".into(),
+            types: vec![
+                Type {
+                    id: TypeId::new(0),
+                    name: "void".into(),
+                    kind: TypeKind::Void,
+                    width: 0,
+                    signed: None,
+                    evaluation: FloatEvaluation::None,
+                    element: None,
+                    bounds: Vec::new(),
+                    address: AddressKind::None,
+                },
+                Type {
+                    id: TypeId::new(1),
+                    name: "byte".into(),
+                    kind: TypeKind::Integer,
+                    width: 1,
+                    signed: Some(false),
+                    evaluation: FloatEvaluation::None,
+                    element: None,
+                    bounds: Vec::new(),
+                    address: AddressKind::None,
+                },
+                Type {
+                    id: TypeId::new(2),
+                    name: "word".into(),
+                    kind: TypeKind::Integer,
+                    width: 2,
+                    signed: Some(false),
+                    evaluation: FloatEvaluation::None,
+                    element: None,
+                    bounds: Vec::new(),
+                    address: AddressKind::None,
+                },
+                Type {
+                    id: TypeId::new(3),
+                    name: "pointer".into(),
+                    kind: TypeKind::Pointer,
+                    width: 4,
+                    signed: None,
+                    evaluation: FloatEvaluation::None,
+                    element: Some(TypeId::new(0)),
+                    bounds: Vec::new(),
+                    address: AddressKind::None,
+                },
+            ],
+            functions: vec![Function {
+                id: FunctionId::new(0),
+                name: "main".into(),
+                result_type: TypeId::new(0),
+                values: vec![
+                    Value {
+                        id: ValueId::new(0),
+                        type_id: TypeId::new(1),
+                    },
+                    Value {
+                        id: ValueId::new(1),
+                        type_id: TypeId::new(2),
+                    },
+                    Value {
+                        id: ValueId::new(2),
+                        type_id: TypeId::new(3),
+                    },
+                ],
+                places: Vec::new(),
+                blocks: vec![Block {
+                    id: BlockId::new(0),
+                    instructions: vec![Instruction {
+                        id: InstructionId::new(0),
+                        opcode: Opcode::Concat,
+                        results: vec![ValueId::new(2)],
+                        operands: vec![
+                            Operand::Value(ValueId::new(0)),
+                            Operand::Constant {
+                                type_id: TypeId::new(2),
+                                value: ConstantValue::Integer(0),
+                            },
+                        ],
+                        callee: None,
+                    }],
+                    terminator: Terminator::Return(None),
+                }],
+                entry: BlockId::new(0),
+                parameters: Vec::new(),
+                abi: ProcedureAbi {
+                    cleanup: StackCleanup::Callee,
+                    distance: CallDistance::Far,
+                    parameter_bytes: 0,
+                },
+                calls: Vec::new(),
+                error_handler: None,
+                error_handler_local: false,
+                external_entries: Vec::new(),
+                linkage: Linkage::Internal,
+            }],
+            data: Vec::new(),
+            callables: Vec::new(),
+        };
+
+        let diagnostics = verify_module(&module).expect_err("invalid concat must be rejected");
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("pointer concat is not INTEGER:INTEGER to 16:16")
+        }));
+
+        let mut wrong_arity = module.clone();
+        wrong_arity.functions[0].blocks[0].instructions[0]
+            .operands
+            .pop();
+        assert!(verify_module(&wrong_arity)
+            .expect_err("wrong concat arity must be rejected")
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("pointer concat has the wrong arity")));
+
+        let mut wrong_result_arity = module.clone();
+        wrong_result_arity.functions[0].blocks[0].instructions[0]
+            .results
+            .clear();
+        assert!(verify_module(&wrong_result_arity)
+            .expect_err("wrong concat result arity must be rejected")
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("pointer concat has the wrong arity")));
+
+        let mut narrow_pointer_result = module.clone();
+        narrow_pointer_result.types[3].width = 2;
+        assert!(verify_module(&narrow_pointer_result)
+            .expect_err("two-byte concat pointer result must be rejected")
+            .iter()
+            .any(|diagnostic| {
+                diagnostic
+                    .message
+                    .contains("pointer concat is not INTEGER:INTEGER to 16:16")
+            }));
+
+        let mut non_pointer_result = module;
+        non_pointer_result.functions[0].values[2].type_id = TypeId::new(2);
+        assert!(verify_module(&non_pointer_result)
+            .expect_err("non-pointer concat result must be rejected")
+            .iter()
+            .any(|diagnostic| {
+                diagnostic
+                    .message
+                    .contains("pointer concat is not INTEGER:INTEGER to 16:16")
+            }));
+    }
 }

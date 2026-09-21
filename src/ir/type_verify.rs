@@ -114,6 +114,10 @@ impl<'module> TypeVerifier<'module> {
                     self.verify_operand_constant(index);
                 }
             }
+            InstructionKind::ComposePointer { segment, offset } => {
+                self.verify_operand_constant(segment);
+                self.verify_operand_constant(offset);
+            }
             InstructionKind::Select {
                 condition,
                 then_value,
@@ -396,6 +400,34 @@ impl<'module> TypeVerifier<'module> {
                         ),
                     );
                 }
+            }
+            InstructionKind::ComposePointer { segment, offset } => {
+                let Some(result) = self.single_result_type(instruction) else {
+                    return;
+                };
+                self.require_pointer(
+                    result,
+                    format!(
+                        "function {} instruction {} compose pointer result",
+                        function.id, instruction.id
+                    ),
+                );
+                self.require_operand_i16(
+                    segment,
+                    values,
+                    format!(
+                        "function {} instruction {} compose pointer segment",
+                        function.id, instruction.id
+                    ),
+                );
+                self.require_operand_i16(
+                    offset,
+                    values,
+                    format!(
+                        "function {} instruction {} compose pointer offset",
+                        function.id, instruction.id
+                    ),
+                );
             }
             InstructionKind::Select {
                 condition,
@@ -825,6 +857,20 @@ impl<'module> TypeVerifier<'module> {
     fn require_operand_integer(&mut self, operand: &Operand, values: &ValueTypes, context: String) {
         if let Some(type_id) = self.operand_type(operand, values) {
             self.require_integer(type_id, context);
+        }
+    }
+
+    fn require_operand_i16(&mut self, operand: &Operand, values: &ValueTypes, context: String) {
+        let Some(type_id) = self.operand_type(operand, values) else {
+            return;
+        };
+        if self.known_type(type_id)
+            && !matches!(
+                self.types.get(type_id),
+                Some(TypeKind::Integer { bits: 16 })
+            )
+        {
+            self.error(format!("{context} has type {type_id}, expected i16"));
         }
     }
 
@@ -1360,5 +1406,60 @@ mod tests {
                 .message
                 .contains("stack allocation result has address space FarData, expected NearData")
         }));
+    }
+
+    #[test]
+    fn rejects_compose_pointer_with_non_i16_halves_or_non_pointer_result() {
+        let module = module(
+            VOID,
+            vec![Instruction {
+                id: InstructionId::new(0),
+                results: vec![value(0, I16)],
+                kind: InstructionKind::ComposePointer {
+                    segment: integer(I8, 0x1234),
+                    offset: integer(I16, 0x5678),
+                },
+            }],
+            Terminator::Return(None),
+        );
+        let diagnostics = verify_types(&module);
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("compose pointer result has type 3, expected pointer")
+        }));
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("compose pointer segment has type 2, expected i16")
+        }));
+    }
+
+    #[test]
+    fn accepts_compose_pointer_with_every_pointer_address_space() {
+        let mut module = module(
+            VOID,
+            vec![Instruction {
+                id: InstructionId::new(0),
+                results: vec![value(0, TypeId::new(4))],
+                kind: InstructionKind::ComposePointer {
+                    segment: integer(I16, 0x1234),
+                    offset: integer(I16, 0x5678),
+                },
+            }],
+            Terminator::Return(None),
+        );
+        module.types.push(Type {
+            id: TypeId::new(4),
+            kind: TypeKind::Pointer {
+                address_space: AddressSpace::Generic,
+            },
+        });
+
+        assert!(verify_types(&module).is_empty());
+        for address_space in [AddressSpace::NearData, AddressSpace::Segment] {
+            module.types[4].kind = TypeKind::Pointer { address_space };
+            assert!(verify_types(&module).is_empty());
+        }
     }
 }

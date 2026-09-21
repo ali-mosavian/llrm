@@ -189,7 +189,7 @@ mod tests {
                 .unwrap();
         let text = llrm::ir::write_text(&module);
 
-        assert!(text.starts_with("qir 5\nmodule \"iparg\"\n"));
+        assert!(text.starts_with("qir 6\nmodule \"iparg\"\n"));
         assert!(text.contains("function 0 \"_twice\""));
         assert!(text.contains("function 1 \"_answer_from_argument\""));
         assert!(text.contains("cc c"));

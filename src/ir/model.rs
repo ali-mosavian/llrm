@@ -1,6 +1,6 @@
 use std::fmt;
 
-pub const FORMAT_VERSION: u32 = 5;
+pub const FORMAT_VERSION: u32 = 6;
 
 macro_rules! entity_id {
     ($name:ident) => {
@@ -226,6 +226,7 @@ impl Instruction {
             | InstructionKind::Compare { .. }
             | InstructionKind::Cast { .. }
             | InstructionKind::GetElementPointer { .. }
+            | InstructionKind::ComposePointer { .. }
             | InstructionKind::Select { .. } => Effects::NONE,
         }
     }
@@ -279,6 +280,11 @@ pub enum InstructionKind {
     GetElementPointer {
         base: Operand,
         indices: Vec<Operand>,
+    },
+    /// Forms a 16:16 pointer from its segment/high and offset/low halves.
+    ComposePointer {
+        segment: Operand,
+        offset: Operand,
     },
     Select {
         condition: Operand,

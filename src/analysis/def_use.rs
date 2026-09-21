@@ -163,6 +163,7 @@ fn instruction_operands(kind: &InstructionKind) -> Vec<&Operand> {
         InstructionKind::Binary { left, right, .. }
         | InstructionKind::Compare { left, right, .. } => vec![left, right],
         InstructionKind::Store { address, value, .. } => vec![address, value],
+        InstructionKind::ComposePointer { segment, offset } => vec![segment, offset],
         InstructionKind::GetElementPointer { base, indices } => {
             let mut operands = Vec::with_capacity(indices.len() + 1);
             operands.push(base);
@@ -285,6 +286,65 @@ mod tests {
             [Use::TerminatorOperand {
                 block: BlockId::new(0),
                 operand_index: 0,
+            }]
+        );
+    }
+
+    #[test]
+    fn indexes_compose_pointer_segment_before_offset() {
+        let function = Function {
+            id: FunctionId::new(0),
+            name: "compose".into(),
+            signature: Signature {
+                result: TypeId::new(0),
+                parameters: vec![TypeId::new(0), TypeId::new(0)],
+                variadic: false,
+                calling_convention: CallingConvention::FarPascal,
+            },
+            linkage: Linkage::Internal,
+            attributes: Vec::new(),
+            parameters: vec![
+                Value {
+                    id: ValueId::new(0),
+                    type_id: TypeId::new(0),
+                },
+                Value {
+                    id: ValueId::new(1),
+                    type_id: TypeId::new(0),
+                },
+            ],
+            blocks: vec![Block {
+                id: BlockId::new(0),
+                instructions: vec![Instruction {
+                    id: InstructionId::new(0),
+                    results: vec![Value {
+                        id: ValueId::new(2),
+                        type_id: TypeId::new(0),
+                    }],
+                    kind: InstructionKind::ComposePointer {
+                        segment: Operand::Value(ValueId::new(0)),
+                        offset: Operand::Value(ValueId::new(1)),
+                    },
+                }],
+                terminator: Terminator::Return(None),
+            }],
+        };
+
+        let analysis = DefUse::analyze(&function).unwrap();
+        assert_eq!(
+            analysis.uses(ValueId::new(0)),
+            [Use::InstructionOperand {
+                block: BlockId::new(0),
+                instruction: InstructionId::new(0),
+                operand_index: 0,
+            }]
+        );
+        assert_eq!(
+            analysis.uses(ValueId::new(1)),
+            [Use::InstructionOperand {
+                block: BlockId::new(0),
+                instruction: InstructionId::new(0),
+                operand_index: 1,
             }]
         );
     }

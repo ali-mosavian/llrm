@@ -49,6 +49,10 @@ fn rewrite_instruction(
             changed |= rewrite_operand(address, replacements);
             changed |= rewrite_operand(value, replacements);
         }
+        InstructionKind::ComposePointer { segment, offset } => {
+            changed |= rewrite_operand(segment, replacements);
+            changed |= rewrite_operand(offset, replacements);
+        }
         InstructionKind::GetElementPointer { base, indices } => {
             changed |= rewrite_operand(base, replacements);
             for index in indices {

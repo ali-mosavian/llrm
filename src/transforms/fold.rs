@@ -108,6 +108,7 @@ impl ConstantFold {
             | InstructionKind::StackAlloc { .. }
             | InstructionKind::Load { .. }
             | InstructionKind::Store { .. }
+            | InstructionKind::ComposePointer { .. }
             | InstructionKind::GetElementPointer { .. }
             | InstructionKind::Call { .. }
             | InstructionKind::Intrinsic { .. } => None,
