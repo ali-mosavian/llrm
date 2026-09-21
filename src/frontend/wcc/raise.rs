@@ -883,16 +883,6 @@ impl<'a> FunctionRaiser<'a> {
             self.node_argument(id, node, 3)?,
             self.location,
         )?;
-        if self.is_near_pointer_type(capture_type) {
-            return self.aggregate_pointer_add(id, node);
-        }
-        let opcode = match self.node_argument(id, node, 0)? {
-            "O_TIMES" => hir::Opcode::Multiply,
-            "O_PLUS" => hir::Opcode::Add,
-            "O_MINUS" => hir::Opcode::Subtract,
-            "O_DIV" => hir::Opcode::Divide,
-            _ => return Err(self.invalid_node(id, "unsupported binary operation")),
-        };
         let left_id = NodeId::new(parse_node_id(
             self.node_argument(id, node, 1)?,
             self.location,
@@ -901,6 +891,16 @@ impl<'a> FunctionRaiser<'a> {
             self.node_argument(id, node, 2)?,
             self.location,
         )?);
+        if self.is_near_pointer_type(capture_type) {
+            return self.near_pointer_arithmetic(id, node, left_id, right_id);
+        }
+        let opcode = match self.node_argument(id, node, 0)? {
+            "O_TIMES" => hir::Opcode::Multiply,
+            "O_PLUS" => hir::Opcode::Add,
+            "O_MINUS" => hir::Opcode::Subtract,
+            "O_DIV" => hir::Opcode::Divide,
+            _ => return Err(self.invalid_node(id, "unsupported binary operation")),
+        };
         let left = self.node(left_id)?;
         let right = self.node(right_id)?;
         let type_id = capture_type;
@@ -911,44 +911,56 @@ impl<'a> FunctionRaiser<'a> {
         Ok(hir::Operand::Value(result))
     }
 
-    fn aggregate_pointer_add(
+    fn near_pointer_arithmetic(
         &mut self,
         id: NodeId,
         node: &Node,
+        left_id: NodeId,
+        right_id: NodeId,
     ) -> Result<hir::Operand, RaiseError> {
-        if self.node_argument(id, node, 0)? != "O_PLUS" {
+        let operation = self.node_argument(id, node, 0)?;
+        if !matches!(operation, "O_PLUS" | "O_MINUS") {
             return Err(self.invalid_node(id, "unsupported near-pointer operation"));
         }
-        let aggregate = NodeId::new(parse_node_id(
-            self.node_argument(id, node, 1)?,
-            self.location,
-        )?);
-        let offset = NodeId::new(parse_node_id(
-            self.node_argument(id, node, 2)?,
-            self.location,
-        )?);
-        let aggregate = self.node(aggregate)?;
-        let hir::Operand::Place(place) = aggregate else {
-            return Err(self.invalid_node(id, "near-pointer base is not an aggregate place"));
+        // CGBinary evaluates its left expression before its right expression,
+        // as Python _Raise.binary does.  O_PLUS may select the right address
+        // only after both expressions have run.
+        let left = self.node(left_id)?;
+        let right = self.node(right_id)?;
+        let left_type = self.node_type(left_id)?;
+        let right_type = self.node_type(right_id)?;
+        let left_is_address = self.is_near_pointer_base(&left)?;
+        let right_is_address = self.is_near_pointer_base(&right)?;
+        let (base, offset, offset_type) = match operation {
+            "O_PLUS" if left_is_address => (left, right, right_type),
+            "O_PLUS" if right_is_address => (right, left, left_type),
+            "O_MINUS" if left_is_address => (left, right, right_type),
+            "O_MINUS" if right_is_address => {
+                return Err(self.invalid_node(
+                    id,
+                    "near-pointer subtraction requires the address on the left",
+                ));
+            }
+            _ => {
+                return Err(self.invalid_node(
+                    id,
+                    "near-pointer arithmetic requires an aggregate place or supported pointer value",
+                ));
+            }
         };
-        let aggregate_type = self.place_type(place)?;
-        if !self.is_aggregate_type(aggregate_type) {
-            return Err(self.invalid_node(id, "near-pointer base is not an aggregate type"));
-        }
-        let offset_type = self.node_type(offset)?;
-        let offset = self.node(offset)?;
         require_operand_type(offset_type, &offset, &self.values, self.location)?;
         if !is_integer_type(offset_type) {
             return Err(self.invalid_node(id, "near-pointer byte offset is not an integer"));
         }
         let pointer_type = self.near_pointer_type()?;
-        let base = self.new_value(pointer_type)?;
-        self.push_instruction(
-            hir::Opcode::Address,
-            vec![base],
-            vec![hir::Operand::Place(place)],
-            None,
-        )?;
+        let base = self.materialize_near_pointer_base(id, base, pointer_type)?;
+        let offset = if operation == "O_MINUS" {
+            let negated = self.new_value(offset_type)?;
+            self.push_instruction(hir::Opcode::Negate, vec![negated], vec![offset], None)?;
+            hir::Operand::Value(negated)
+        } else {
+            offset
+        };
         let result = self.new_value(pointer_type)?;
         self.push_instruction(
             hir::Opcode::OffsetPointer,
@@ -957,6 +969,54 @@ impl<'a> FunctionRaiser<'a> {
             None,
         )?;
         Ok(hir::Operand::Value(result))
+    }
+
+    fn is_near_pointer_base(&self, operand: &hir::Operand) -> Result<bool, RaiseError> {
+        match operand {
+            hir::Operand::Place(place) => Ok(self.is_aggregate_type(self.place_type(*place)?)),
+            hir::Operand::Value(value) => self.is_pointer_value(*value),
+            _ => Ok(false),
+        }
+    }
+
+    fn materialize_near_pointer_base(
+        &mut self,
+        id: NodeId,
+        base: hir::Operand,
+        pointer_type: hir::TypeId,
+    ) -> Result<hir::ValueId, RaiseError> {
+        match base {
+            hir::Operand::Place(place) => {
+                let aggregate_type = self.place_type(place)?;
+                if !self.is_aggregate_type(aggregate_type) {
+                    return Err(
+                        self.invalid_node(id, "near-pointer place base is not an aggregate")
+                    );
+                }
+                let address = self.new_value(pointer_type)?;
+                self.push_instruction(
+                    hir::Opcode::Address,
+                    vec![address],
+                    vec![hir::Operand::Place(place)],
+                    None,
+                )?;
+                Ok(address)
+            }
+            hir::Operand::Value(value) => {
+                if !self.is_pointer_value(value)? {
+                    return Err(
+                        self.invalid_node(id, "near-pointer value base is not a supported pointer")
+                    );
+                }
+                Ok(value)
+            }
+            _ => {
+                return Err(self.invalid_node(
+                    id,
+                    "near-pointer base is neither an aggregate place nor a supported pointer value",
+                ));
+            }
+        }
     }
 
     fn compare(&mut self, id: NodeId, node: &Node) -> Result<hir::Operand, RaiseError> {
@@ -1609,6 +1669,8 @@ fn error_default(kind: RaiseErrorKind) -> RaiseError {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::{RaiseError, RaiseErrorKind, U16_TYPE, U32_TYPE, WCC_BIG_DATA, raise_module};
     use crate::frontend::wcc::{capture, parse};
     use crate::hir;
@@ -1629,6 +1691,54 @@ mod tests {
 
     fn cells() -> capture::CaptureUnit {
         capture::build(&parse(include_str!("../../../fixtures/c/cells.cgs")).unwrap()).unwrap()
+    }
+
+    fn parity() -> capture::CaptureUnit {
+        capture::build(&parse(include_str!("../../../fixtures/c/parity/parity.cgs")).unwrap())
+            .unwrap()
+    }
+
+    fn near_pointer_arithmetic(first_operation: &str) -> capture::CaptureUnit {
+        // Minimal WCC records for `index + cells` followed by
+        // `(cells + 6) - index`.  They isolate the pointer forms WCC emits
+        // while retaining the same CGBinary/CGUnary capture representation as
+        // the recorded C fixtures.
+        let capture = format!(
+            r#"INIT sw=0x808000 target=0xec size=50 rev=0x23
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=2
+SEG 3 attr=0xc name="CONST2" align=2
+SEG 4 attr=0x6 name="_DATA" align=2
+START
+f1 DBSrcFile "near_pointer_arithmetic.c"
+SYM y1 name="near_pointer_arithmetic" base="near_pointer_arithmetic" pattern="_*" attr=0x7 seg=1
+CALLCONV y1 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y1 TY_INTEGER
+l2 CGLastParm
+TYPE T25 size=8 align=2
+SYM y3 name="cells" base="cells" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y3 T25
+SYM y4 name="index" base="index" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y4 TY_INTEGER
+n6 CGFEName y3 T25
+n7 CGFEName y4 TY_INTEGER
+n8 CGUnary O_POINTS n7 TY_INTEGER
+n9 CGBinary {first_operation} n8 n6 TY_POINTER
+- CGDone n9
+n10 CGFEName y3 T25
+n11 CGInteger 6 TY_INTEGER
+n12 CGBinary O_PLUS n10 n11 TY_POINTER
+n13 CGFEName y4 TY_INTEGER
+n14 CGUnary O_POINTS n13 TY_INTEGER
+n15 CGBinary O_MINUS n12 n14 TY_POINTER
+- CGDone n15
+n16 CGInteger 0 TY_INTEGER
+- CGReturn n16 TY_INTEGER
+STOP
+FINI
+"#
+        );
+        capture::build(&parse(&capture).unwrap()).unwrap()
     }
 
     #[test]
@@ -1784,6 +1894,174 @@ mod tests {
                     } if matches!(results.as_slice(), [ir::Value { type_id, .. }] if *type_id == ir::TypeId::new(1))
                 ))
         );
+    }
+
+    #[test]
+    fn raises_real_pair_array_fields_through_chained_near_offsets() {
+        // Python _Raise.binary/_Raise.offset treat the second O_PLUS in
+        // points[index].x and .y as another byte offset of the first pointer.
+        let module = raise_module(&parity(), "parity").unwrap();
+        let function = &module.functions[0];
+        let points = function
+            .places
+            .iter()
+            .find(|place| place.name == "points")
+            .expect("captured points place");
+        assert!(matches!(
+            &module.types[points.type_id.get() as usize],
+            hir::Type {
+                kind: hir::TypeKind::Opaque,
+                width: 32,
+                element: None,
+                bounds,
+                ..
+            } if bounds.is_empty()
+        ));
+        assert_eq!(points.extent, 32);
+
+        let instructions = function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .collect::<Vec<_>>();
+        let indexed = instructions
+            .iter()
+            .filter_map(|instruction| match instruction {
+                hir::Instruction {
+                    opcode: hir::Opcode::OffsetPointer,
+                    results,
+                    operands,
+                    ..
+                } if matches!(operands.as_slice(), [hir::Operand::Value(_), hir::Operand::Value(offset)] if instructions.iter().any(|candidate| matches!(
+                    candidate,
+                    hir::Instruction {
+                        opcode: hir::Opcode::Multiply,
+                        results,
+                        operands,
+                        ..
+                    } if results == &vec![*offset]
+                        && matches!(operands.as_slice(), [hir::Operand::Value(_), hir::Operand::Constant {
+                            type_id,
+                            value: hir::ConstantValue::Integer(4),
+                        }] if *type_id == hir::TypeId::new(1))
+                ))) => results.first().copied(),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        assert!(
+            !indexed.is_empty(),
+            "index * 4 must feed an aggregate byte offset"
+        );
+        for field_offset in [0, 2] {
+            assert!(instructions.iter().any(|instruction| matches!(
+                instruction,
+                hir::Instruction {
+                    opcode: hir::Opcode::OffsetPointer,
+                    operands,
+                    ..
+                } if matches!(operands.as_slice(), [hir::Operand::Value(base), hir::Operand::Constant {
+                    value: hir::ConstantValue::Integer(offset),
+                    ..
+                }] if *offset == field_offset && indexed.contains(base))
+            )));
+        }
+        assert!(instructions.iter().any(|instruction| matches!(
+            instruction,
+            hir::Instruction {
+                opcode: hir::Opcode::Store,
+                operands,
+                ..
+            } if matches!(operands.first(), Some(hir::Operand::Indirect { type_id, offset: 0, .. }) if *type_id == hir::TypeId::new(1))
+        )));
+        assert!(instructions.iter().any(|instruction| matches!(
+            instruction,
+            hir::Instruction {
+                opcode: hir::Opcode::Load,
+                operands,
+                ..
+            } if matches!(operands.as_slice(), [hir::Operand::Indirect { type_id, offset: 0, .. }] if *type_id == hir::TypeId::new(1))
+        )));
+        assert!(module.verify().is_ok());
+
+        let lowered = hir::lower_to_ir(&module).unwrap();
+        let ir_instructions = lowered.functions[0]
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .collect::<Vec<_>>();
+        let indexed = ir_instructions
+            .iter()
+            .filter_map(|instruction| match &instruction.kind {
+                ir::InstructionKind::GetElementPointer { indices, .. }
+                    if matches!(indices.as_slice(), [ir::Operand::Value(_)]) =>
+                {
+                    instruction.results.first().map(|result| result.id)
+                }
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        for field_offset in [0, 2] {
+            assert!(ir_instructions.iter().any(|instruction| matches!(
+                &instruction.kind,
+                ir::InstructionKind::GetElementPointer {
+                    base: ir::Operand::Value(base),
+                    indices,
+                } if indexed.contains(base)
+                    && matches!(indices.as_slice(), [ir::Operand::Constant(ir::TypedConstant {
+                        value: ir::Constant::Integer(offset),
+                        ..
+                    })] if *offset == field_offset)
+            )));
+        }
+    }
+
+    #[test]
+    fn raises_commuted_near_add_and_left_near_subtract_in_source_order() {
+        // Python _Raise.binary first evaluates both operands, then swaps only
+        // O_PLUS with an address on the right; _Raise.offset negates a dynamic
+        // byte offset for address-left O_MINUS.
+        let module = raise_module(&near_pointer_arithmetic("O_PLUS"), "near-arithmetic").unwrap();
+        let instructions = &module.functions[0].blocks[0].instructions;
+        let opcodes = instructions
+            .iter()
+            .map(|instruction| instruction.opcode)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            opcodes,
+            vec![
+                hir::Opcode::Load,
+                hir::Opcode::Address,
+                hir::Opcode::OffsetPointer,
+                hir::Opcode::Address,
+                hir::Opcode::OffsetPointer,
+                hir::Opcode::Load,
+                hir::Opcode::Negate,
+                hir::Opcode::OffsetPointer,
+            ]
+        );
+        assert!(module.verify().is_ok());
+
+        let lowered = hir::lower_to_ir(&module).unwrap();
+        assert_eq!(
+            lowered.functions[0].blocks[0]
+                .instructions
+                .iter()
+                .filter(|instruction| {
+                    matches!(
+                        instruction.kind,
+                        ir::InstructionKind::GetElementPointer { .. }
+                    )
+                })
+                .count(),
+            3
+        );
+
+        let error =
+            raise_module(&near_pointer_arithmetic("O_MINUS"), "near-arithmetic").unwrap_err();
+        assert!(matches!(
+            error.kind,
+            RaiseErrorKind::InvalidNode { node, .. } if node == capture::NodeId::new(9)
+        ));
     }
 
     #[test]
