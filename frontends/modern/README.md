@@ -19,6 +19,11 @@ stored once in read-only module data. There are no implicit numeric
 conversions: literals may acquire a type from context, while nonliteral
 operands must already have the same type.
 
+Canonical language code uses lowercase `snake_case` for functions, variables,
+parameters, fields, and user-defined types. This is the language and standard
+library convention, not a lexical restriction; interop and generated code may
+retain another system's spelling when needed.
+
 The frontend performs name resolution and strict type checking, constructs an
 explicit control-flow graph, and writes qbopt's versioned common-HIR JSON. It
 does not emit bytecode, p-code, machine instructions, or target registers.

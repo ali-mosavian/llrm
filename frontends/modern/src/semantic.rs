@@ -1163,7 +1163,7 @@ mod tests {
     #[test]
     fn integer_literals_are_checked_against_their_primitive_width() {
         let error = compile_source(
-            "fn tooLarge() -> u8:\n\
+            "fn too_large() -> u8:\n\
              \x20\x20\x20\x20return 256\n",
         )
         .unwrap_err();

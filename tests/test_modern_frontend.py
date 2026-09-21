@@ -77,14 +77,14 @@ def test_unsigned_and_floating_operations_keep_their_semantics_in_mir() -> None:
     def kinds(name: str) -> set[mir.Kind]:
         return {operation.kind for block in lowered[f"primitives.{name}"].blocks for operation in block.ops}
 
-    assert mir.Kind.UDIVMOD in kinds("unsignedDivide")
-    assert mir.Kind.DIVMOD not in kinds("unsignedDivide")
-    assert mir.Kind.UDIVMOD in kinds("unsignedRemainder")
-    assert mir.Kind.FMUL in kinds("floatProduct")
+    assert mir.Kind.UDIVMOD in kinds("unsigned_divide")
+    assert mir.Kind.DIVMOD not in kinds("unsigned_divide")
+    assert mir.Kind.UDIVMOD in kinds("unsigned_remainder")
+    assert mir.Kind.FMUL in kinds("float_product")
 
     branch = next(
         operation
-        for block in lowered["primitives.unsignedLess"].blocks
+        for block in lowered["primitives.unsigned_less"].blocks
         for operation in block.ops
         if operation.kind is mir.Kind.BRANCH
     )
