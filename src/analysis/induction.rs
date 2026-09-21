@@ -7,13 +7,13 @@
 //! is the current stage contract.
 
 use std::cmp::max;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use num_bigint::BigInt;
 
 use super::constants::{self, masked, Known};
 use super::occurrence::{operations, phis, OpOccurrence, PhiOccurrence};
-use crate::model::mir::{Arg, Const, Held, Kind, MirBody, Op, OrderedMap, Value};
+use crate::model::mir::{Arg, Const, Held, Kind, MemRef, MirBody, Op, OrderedMap, Value};
 use crate::model::mir_loops::{predecessors, Loop};
 
 /// The canonical pre-tested, single-latch loop CFG.
@@ -442,6 +442,305 @@ fn _extended(
         BigInt::from(1_u8),
         Vec::new(),
     ))
+}
+
+/// Python's `_composed(body, loop, found, made, settled)`.
+///
+/// This is deliberately a fixed-point scan over the original immutable body
+/// order.  `forms` models Python's insertion-ordered local dictionary, while
+/// `out` models its `id(op)`-keyed result dictionary: recalculating one
+/// operation overwrites its formula without moving that operation's output
+/// position.  [`OpOccurrence`] is the corresponding snapshot-local identity.
+fn _composed<F>(
+    body: &MirBody,
+    loop_: &Loop,
+    found: &OrderedMap<u32, Affine>,
+    made: &BTreeMap<u32, &Op>,
+    settled: F,
+) -> Vec<Derived>
+where
+    F: Fn(&MemRef) -> bool,
+{
+    let inside = loop_.body.clone();
+    let known = constants::known(body);
+    let still = invariant(body, &inside);
+    let mut forms = OrderedMap::new();
+    for (value, recurrence) in found.iter() {
+        if matches!(
+            recurrence.start,
+            AffineOperand::Held(_) | AffineOperand::Const(_)
+        ) && matches!(recurrence.start.width(), 2 | 4)
+        {
+            forms.insert(*value, (recurrence.clone(), BigInt::from(1_u8), Vec::new()));
+        }
+    }
+    let mut out = OrderedMap::<OpOccurrence, Derived>::new();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for (occurrence, block, operation) in operations(body) {
+            if !inside.contains(&block.at) {
+                continue;
+            }
+            if block.at != loop_.header
+                && matches!(operation.kind, Kind::SignExtend | Kind::ZeroExtend)
+                && !operation.results.is_empty()
+                && matches!(operation.results[0], Arg::Held(_))
+                && !matches!(&operation.results[0], Arg::Held(result) if forms.contains_key(&result.value.id))
+            {
+                if let Some(extended) = _extended(body, loop_, operation, &forms, &known) {
+                    let Arg::Held(result) = &operation.results[0] else {
+                        unreachable!("checked above");
+                    };
+                    forms.insert(result.value.id, extended);
+                    changed = true;
+                }
+            }
+            if operation.kind == Kind::PtrOffset
+                && operation.loads.is_empty()
+                && operation.stores.is_empty()
+                && !operation.barrier()
+                && operation.merges.is_empty()
+                && operation.args.len() == 2
+                && operation.results.len() == 1
+            {
+                let pointer = &operation.args[0];
+                let offset = &operation.args[1];
+                let result = &operation.results[0];
+                let form = match offset {
+                    Arg::Held(offset) => forms.get(&offset.value.id),
+                    _ => None,
+                };
+                if let (
+                    Arg::Held(pointer),
+                    Arg::Held(offset),
+                    Arg::Held(result),
+                    Some((counter, scale, offsets)),
+                ) = (pointer, offset, result, form)
+                {
+                    if still.contains(&pointer.value.id)
+                        && pointer.width == offset.width
+                        && offset.width == result.width
+                        && counter.start.width() == result.width
+                    {
+                        out.insert(
+                            occurrence,
+                            Derived {
+                                op: occurrence,
+                                of: counter.clone(),
+                                by: Arg::Const(Const::new(
+                                    masked(scale, result.width),
+                                    result.width,
+                                )),
+                                offsets: offsets.clone(),
+                                pointer: Some(Arg::Held(*pointer)),
+                            },
+                        );
+                    }
+                }
+                // A pointer offset is never a numeric composed formula too.
+                continue;
+            }
+            if !operation.stores.is_empty()
+                || operation.barrier()
+                || operation.args.len() != 2
+                || operation.results.is_empty()
+            {
+                continue;
+            }
+            let loads = operation.loads.iter().collect::<HashSet<_>>();
+            let argument_loads = operation
+                .args
+                .iter()
+                .filter_map(|argument| match argument {
+                    Arg::Cell(cell) => Some(&cell.r#ref),
+                    _ => None,
+                })
+                .collect::<HashSet<_>>();
+            if loads != argument_loads {
+                continue;
+            }
+            let Arg::Held(result) = &operation.results[0] else {
+                continue;
+            };
+            if !matches!(result.width, 2 | 4) || forms.contains_key(&result.value.id) {
+                continue;
+            }
+            let width = result.width;
+            let mut arguments = operation
+                .args
+                .iter()
+                .map(|argument| match argument {
+                    Arg::Held(held) => Arg::Held(_copied(*held, made)),
+                    _ => argument.clone(),
+                })
+                .collect::<Vec<_>>();
+            for argument in &mut arguments {
+                let Arg::Held(held) = argument else {
+                    continue;
+                };
+                let Some(fact) = known.get(&held.value) else {
+                    continue;
+                };
+                if held.width == width && !forms.contains_key(&held.value.id) && fact.width >= width
+                {
+                    *argument = Arg::Const(Const::new(masked(&fact.n, width), width));
+                }
+            }
+            let left = &arguments[0];
+            let right = &arguments[1];
+            let first = match left {
+                Arg::Held(held) if held.width == width => forms.get(&held.value.id),
+                _ => None,
+            };
+            let second = match right {
+                Arg::Held(held) if held.width == width => forms.get(&held.value.id),
+                _ => None,
+            };
+            if [first, second]
+                .into_iter()
+                .flatten()
+                .any(|(counter, _, _)| counter.start.width() != width)
+            {
+                continue;
+            }
+            if matches!(operation.kind, Kind::And | Kind::Or) && left == right && first.is_some() {
+                forms.insert(result.value.id, first.expect("checked above").clone());
+                changed = true;
+                continue;
+            }
+            let (base, scale, offsets) = if matches!(operation.kind, Kind::Add | Kind::Sub)
+                && first.is_some()
+                && second.is_some()
+            {
+                let (first_base, first_scale, first_offsets) = first.expect("checked above");
+                let (second_base, second_scale, second_offsets) = second.expect("checked above");
+                if first_base != second_base {
+                    continue;
+                }
+                let scale = if operation.kind == Kind::Add {
+                    first_scale + second_scale
+                } else {
+                    first_scale - second_scale
+                };
+                let sign = if operation.kind == Kind::Add { 1 } else { -1 };
+                let offsets = first_offsets
+                    .iter()
+                    .cloned()
+                    .chain(
+                        second_offsets
+                            .iter()
+                            .map(|(argument, coefficient)| (argument.clone(), coefficient * sign)),
+                    )
+                    .collect();
+                (first_base.clone(), scale, offsets)
+            } else if (operation.kind == Kind::Add && (first.is_some() || second.is_some()))
+                || (operation.kind == Kind::Sub && first.is_some() && second.is_none())
+            {
+                let (recurrence, offset) = if first.is_some() {
+                    (first.expect("checked above"), right)
+                } else {
+                    (second.expect("add has one recurrence"), left)
+                };
+                match offset {
+                    Arg::Cell(cell) => {
+                        let reference = &cell.r#ref;
+                        if reference.addr.is_none()
+                            || reference.base.is_some_and(|base| !still.contains(&base.id))
+                            || reference.segment.is_some()
+                            || reference.width != width
+                            || !settled(reference)
+                        {
+                            continue;
+                        }
+                    }
+                    Arg::Const(constant) if constant.width == width => {}
+                    Arg::Held(held) if held.width == width && still.contains(&held.value.id) => {}
+                    _ => continue,
+                }
+                let (base, scale, prior_offsets) = recurrence;
+                let mut offsets = prior_offsets.clone();
+                offsets.push((
+                    offset.clone(),
+                    BigInt::from(if operation.kind == Kind::Sub { -1 } else { 1 }),
+                ));
+                (base.clone(), scale.clone(), offsets)
+            } else if operation.kind == Kind::Mul {
+                if let (Some((base, scale, offsets)), Arg::Const(constant)) = (first, right) {
+                    if constant.width != width {
+                        continue;
+                    }
+                    (
+                        base.clone(),
+                        scale * &constant.n,
+                        offsets
+                            .iter()
+                            .map(|(argument, coefficient)| {
+                                (argument.clone(), coefficient * &constant.n)
+                            })
+                            .collect(),
+                    )
+                } else if let (Some((base, scale, offsets)), Arg::Const(constant)) = (second, left)
+                {
+                    if constant.width != width {
+                        continue;
+                    }
+                    (
+                        base.clone(),
+                        scale * &constant.n,
+                        offsets
+                            .iter()
+                            .map(|(argument, coefficient)| {
+                                (argument.clone(), coefficient * &constant.n)
+                            })
+                            .collect(),
+                    )
+                } else {
+                    continue;
+                }
+            } else if operation.kind == Kind::Shl && first.is_some() {
+                let (base, scale, offsets) = first.expect("checked above");
+                let Arg::Const(amount) = right else {
+                    continue;
+                };
+                if amount.n < BigInt::from(0_u8) || amount.n >= BigInt::from(width * 8) {
+                    continue;
+                }
+                let shift: usize = amount
+                    .n
+                    .clone()
+                    .try_into()
+                    .expect("bounded non-negative shift count");
+                (
+                    base.clone(),
+                    scale << shift,
+                    offsets
+                        .iter()
+                        .map(|(argument, coefficient)| (argument.clone(), coefficient << shift))
+                        .collect(),
+                )
+            } else {
+                continue;
+            };
+            let scale = masked(&scale, width);
+            forms.insert(
+                result.value.id,
+                (base.clone(), scale.clone(), offsets.clone()),
+            );
+            out.insert(
+                occurrence,
+                Derived {
+                    op: occurrence,
+                    of: base,
+                    by: Arg::Const(Const::new(scale, width)),
+                    offsets,
+                    pointer: None,
+                },
+            );
+            changed = true;
+        }
+    }
+    out.values().cloned().collect()
 }
 
 /// Python's default `counted(body, loop)` invocation.
@@ -1718,10 +2017,10 @@ mod tests {
     use crate::analysis::occurrence::{operations, OpOccurrence};
 
     use super::{
-        Affine, AffineMap, AffineOperand, Derived, LoopShape, _as_signed, _constant, _copied,
-        _counter_bound, _extended, _quotients, _signed, basics, canonical, control_replacement,
-        counted, counted_with_facts, derived_map, domain, invariant, nonempty, relation, test_only,
-        transparent_aliases, trip_count, zero_terminating_control,
+        Affine, AffineMap, AffineOperand, Derived, LoopShape, _as_signed, _composed, _constant,
+        _copied, _counter_bound, _extended, _quotients, _signed, basics, canonical,
+        control_replacement, counted, counted_with_facts, derived_map, domain, invariant, nonempty,
+        relation, test_only, transparent_aliases, trip_count, zero_terminating_control,
     };
 
     fn value(id: u32, at: i64) -> Value {
@@ -2818,6 +3117,294 @@ mod tests {
             offsets,
             pointer,
         }
+    }
+
+    #[test]
+    fn direct_induction_composed_word_address_has_one_recurrence() {
+        // Direct port of
+        // tests/test_induction_identity.py:test_composed_word_address_has_one_recurrence.
+        // Matrix's `(i * factor + i) << 1` is one recurrence, including the
+        // modular zero produced by the 32767 factor case.
+        for (factor, expected) in [(20, 42), (32767, 0)] {
+            let counter = value(1, 1);
+            let factor_value = value(2, 0);
+            let product = value(3, 1);
+            let summed = value(4, 1);
+            let address = value(5, 1);
+            let mut constant_op = op(0, Kind::Copy, vec![factor_value], vec![]);
+            constant_op.args = vec![Arg::Const(Const::new(factor, 2))];
+            constant_op.results = vec![Arg::Held(Held {
+                value: factor_value,
+                width: 2,
+            })];
+            let mut multiply = op(1, Kind::Mul, vec![product], vec![counter, factor_value]);
+            multiply.args = vec![
+                Arg::Held(Held {
+                    value: counter,
+                    width: 2,
+                }),
+                Arg::Held(Held {
+                    value: factor_value,
+                    width: 2,
+                }),
+            ];
+            multiply.results = vec![Arg::Held(Held {
+                value: product,
+                width: 2,
+            })];
+            let mut add = op(1, Kind::Add, vec![summed], vec![product, counter]);
+            add.args = vec![
+                Arg::Held(Held {
+                    value: product,
+                    width: 2,
+                }),
+                Arg::Held(Held {
+                    value: counter,
+                    width: 2,
+                }),
+            ];
+            add.results = vec![Arg::Held(Held {
+                value: summed,
+                width: 2,
+            })];
+            let mut shift = op(1, Kind::Shl, vec![address], vec![summed]);
+            shift.args = vec![
+                Arg::Held(Held {
+                    value: summed,
+                    width: 2,
+                }),
+                Arg::Const(Const::new(1, 2)),
+            ];
+            shift.results = vec![Arg::Held(Held {
+                value: address,
+                width: 2,
+            })];
+            let body = MirBody::new(
+                0,
+                vec![
+                    MirBlock::new(0, vec![], vec![constant_op], vec![1]),
+                    MirBlock::new(1, vec![], vec![multiply, add, shift], vec![1]),
+                ],
+            );
+            let loop_ = Loop {
+                header: 1,
+                latches: BTreeSet::from([1]),
+                body: BTreeSet::from([1]),
+            };
+            let recurrence = affine(counter.id, constant(0, 2), constant(1, 2), 1);
+            let mut found = OrderedMap::new();
+            found.insert(counter.id, recurrence.clone());
+            let made = BTreeMap::new();
+            let occurrences = operations(&body)
+                .map(|(occurrence, _, _)| occurrence)
+                .collect::<Vec<_>>();
+
+            assert_eq!(
+                _composed(&body, &loop_, &found, &made, |_| true),
+                vec![
+                    Derived {
+                        op: occurrences[1],
+                        of: recurrence.clone(),
+                        by: Arg::Const(Const::new(factor, 2)),
+                        offsets: vec![],
+                        pointer: None,
+                    },
+                    Derived {
+                        op: occurrences[2],
+                        of: recurrence.clone(),
+                        by: Arg::Const(Const::new(factor + 1, 2)),
+                        offsets: vec![],
+                        pointer: None,
+                    },
+                    Derived {
+                        op: occurrences[3],
+                        of: recurrence,
+                        by: Arg::Const(Const::new(expected, 2)),
+                        offsets: vec![],
+                        pointer: None,
+                    },
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn direct_induction_composed_offset_carries_an_invariant_pointer() {
+        // Direct port of the analysis assertions in
+        // tests/test_induction_identity.py:test_composed_offset_can_carry_an_invariant_pointer.
+        let counter = value(10, 1);
+        let offset = value(11, 1);
+        let displaced = value(12, 1);
+        let base = value(13, 0);
+        let pointer = value(14, 1);
+        let mut multiply = op(1, Kind::Mul, vec![offset], vec![counter]);
+        multiply.args = vec![
+            Arg::Held(Held {
+                value: counter,
+                width: 4,
+            }),
+            Arg::Const(Const::new(2, 4)),
+        ];
+        multiply.results = vec![Arg::Held(Held {
+            value: offset,
+            width: 4,
+        })];
+        let mut add = op(1, Kind::Add, vec![displaced], vec![offset]);
+        add.args = vec![
+            Arg::Held(Held {
+                value: offset,
+                width: 4,
+            }),
+            Arg::Const(Const::new(6, 4)),
+        ];
+        add.results = vec![Arg::Held(Held {
+            value: displaced,
+            width: 4,
+        })];
+        let mut address = op(1, Kind::PtrOffset, vec![pointer], vec![base, displaced]);
+        address.args = vec![
+            Arg::Held(Held {
+                value: base,
+                width: 4,
+            }),
+            Arg::Held(Held {
+                value: displaced,
+                width: 4,
+            }),
+        ];
+        address.results = vec![Arg::Held(Held {
+            value: pointer,
+            width: 4,
+        })];
+        let body = MirBody::new(
+            0,
+            vec![
+                MirBlock::new(0, vec![], vec![], vec![1]),
+                MirBlock::new(1, vec![], vec![multiply, add, address], vec![1]),
+            ],
+        );
+        let loop_ = Loop {
+            header: 1,
+            latches: BTreeSet::from([1]),
+            body: BTreeSet::from([1]),
+        };
+        let recurrence = affine(counter.id, constant(0, 4), constant(1, 4), 1);
+        let mut found = OrderedMap::new();
+        found.insert(counter.id, recurrence.clone());
+        let made = BTreeMap::new();
+        let occurrences = operations(&body)
+            .map(|(occurrence, _, _)| occurrence)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            _composed(&body, &loop_, &found, &made, |_| true),
+            vec![
+                Derived {
+                    op: occurrences[0],
+                    of: recurrence.clone(),
+                    by: Arg::Const(Const::new(2, 4)),
+                    offsets: vec![],
+                    pointer: None,
+                },
+                Derived {
+                    op: occurrences[1],
+                    of: recurrence.clone(),
+                    by: Arg::Const(Const::new(2, 4)),
+                    offsets: vec![(Arg::Const(Const::new(6, 4)), BigInt::from(1))],
+                    pointer: None,
+                },
+                Derived {
+                    op: occurrences[2],
+                    of: recurrence,
+                    by: Arg::Const(Const::new(2, 4)),
+                    offsets: vec![(Arg::Const(Const::new(6, 4)), BigInt::from(1))],
+                    pointer: Some(Arg::Held(Held {
+                        value: base,
+                        width: 4,
+                    })),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn direct_induction_composed_rescans_an_out_of_order_pointer() {
+        // The pointer precedes its offset formula. Python must rescan the
+        // immutable body to discover it, while retaining the multiply that
+        // was emitted during the first scan ahead of the later pointer.
+        let counter = value(20, 1);
+        let offset = value(21, 1);
+        let base = value(22, 0);
+        let pointer = value(23, 1);
+        let mut address = op(1, Kind::PtrOffset, vec![pointer], vec![base, offset]);
+        address.args = vec![
+            Arg::Held(Held {
+                value: base,
+                width: 2,
+            }),
+            Arg::Held(Held {
+                value: offset,
+                width: 2,
+            }),
+        ];
+        address.results = vec![Arg::Held(Held {
+            value: pointer,
+            width: 2,
+        })];
+        let mut multiply = op(1, Kind::Mul, vec![offset], vec![counter]);
+        multiply.args = vec![
+            Arg::Held(Held {
+                value: counter,
+                width: 2,
+            }),
+            Arg::Const(Const::new(3, 2)),
+        ];
+        multiply.results = vec![Arg::Held(Held {
+            value: offset,
+            width: 2,
+        })];
+        let body = MirBody::new(
+            0,
+            vec![
+                MirBlock::new(0, vec![], vec![], vec![1]),
+                MirBlock::new(1, vec![], vec![address, multiply], vec![1]),
+            ],
+        );
+        let loop_ = Loop {
+            header: 1,
+            latches: BTreeSet::from([1]),
+            body: BTreeSet::from([1]),
+        };
+        let recurrence = affine(counter.id, constant(0, 2), constant(1, 2), 1);
+        let mut found = OrderedMap::new();
+        found.insert(counter.id, recurrence.clone());
+        let made = BTreeMap::new();
+        let occurrences = operations(&body)
+            .map(|(occurrence, _, _)| occurrence)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            _composed(&body, &loop_, &found, &made, |_| true),
+            vec![
+                Derived {
+                    op: occurrences[1],
+                    of: recurrence.clone(),
+                    by: Arg::Const(Const::new(3, 2)),
+                    offsets: vec![],
+                    pointer: None,
+                },
+                Derived {
+                    op: occurrences[0],
+                    of: recurrence,
+                    by: Arg::Const(Const::new(3, 2)),
+                    offsets: vec![],
+                    pointer: Some(Arg::Held(Held {
+                        value: base,
+                        width: 2,
+                    })),
+                },
+            ]
+        );
     }
 
     #[test]
