@@ -10,9 +10,11 @@ use crate::analysis::induction::AffineOperand;
 use crate::analysis::ssa::SubstitutionError;
 use crate::analysis::{constants, induction, occurrence, ssa};
 use crate::model::mir::{
-    self, Arg, Const, Held, Kind, MirBlock, MirBody, Op, OrderedMap, Phi, Value,
+    self, Arg, Const, Held, Kind, MirBlock, MirBody, Op, OpCode, OrderedMap, Phi, Value,
 };
 use crate::model::mir_loops::{self, Loop};
+
+use super::{cfg, loop_utils};
 
 /// Rotate a dead `0..bound-1` counter into a guarded countdown.
 ///
@@ -281,6 +283,328 @@ pub(crate) fn counted_down(body: &MirBody) -> Result<MirBody, SubstitutionError>
     Ok(body.clone())
 }
 
+/// Enter every proven loop at its body, then merge its old test into the latch.
+///
+/// Direct port of `qbopt/optimize/rotate.py:entered`.  This is intentionally
+/// the final composition: after rotation the loop no longer has the pretested
+/// shape the central induction proofs consume.
+pub(crate) fn entered(body: &MirBody) -> Result<MirBody, SubstitutionError> {
+    cfg::merged(&rotated(&counted_down(body)?)?)
+}
+
+/// Rotate a loop whose initial test has already been proven to pass.
+///
+/// Direct port of `qbopt/optimize/rotate.py:rotated`.  This function only
+/// consumes induction facts; it does not establish an independent legality
+/// proof.
+pub(crate) fn rotated(body: &MirBody) -> Result<MirBody, SubstitutionError> {
+    // Python's address dictionary retains the last duplicate occurrence.
+    let blocks = body
+        .blocks
+        .iter()
+        .enumerate()
+        .map(|(index, block)| (block.at, index))
+        .collect::<BTreeMap<_, _>>();
+    let predecessors = mir_loops::predecessors(&body.blocks);
+
+    for loop_ in mir_loops::loops(&body.blocks, Some(body.entry)) {
+        if loop_.latches.len() != 1 {
+            continue;
+        }
+        let Some(preheader) = loop_utils::preheader(body, &loop_) else {
+            continue;
+        };
+        let preheader_block = &body.blocks[blocks[&preheader]];
+        if preheader_block.succ.as_slice() != [loop_.header] {
+            continue;
+        }
+        let header = &body.blocks[blocks[&loop_.header]];
+        let inside = header
+            .succ
+            .iter()
+            .copied()
+            .filter(|at| loop_.body.contains(at))
+            .collect::<Vec<_>>();
+        if header.succ.len() != 2 || inside.len() != 1 || inside[0] == header.at {
+            continue;
+        }
+        let first = &body.blocks[blocks[&inside[0]]];
+        if !first.phis.is_empty()
+            || predecessors.get(&first.at) != Some(&BTreeSet::from([header.at]))
+        {
+            continue;
+        }
+        if header.ops.is_empty() || header.ops.last().is_none_or(|op| op.kind != Kind::Branch) {
+            continue;
+        }
+        if !header.ops[..header.ops.len() - 1]
+            .iter()
+            .all(induction::test_only)
+            || !induction::nonempty(body, &loop_)
+        {
+            continue;
+        }
+
+        let entry = &body.blocks[blocks[&preheader]];
+        let mut ops = entry.ops.clone();
+        if let Some(last) = ops.last_mut() {
+            if last.kind == Kind::Branch {
+                continue;
+            }
+            if last.kind == Kind::Jump {
+                last.target = Some(first.at);
+            } else {
+                let mut jump = Op::new(last.at, OpCode::jump(), "", Vec::new(), Vec::new());
+                jump.kind = Kind::Jump;
+                jump.target = Some(first.at);
+                jump.symbol = Some(false);
+                ops.push(jump);
+            }
+        } else {
+            let mut jump = Op::new(entry.at, OpCode::jump(), "", Vec::new(), Vec::new());
+            jump.kind = Kind::Jump;
+            jump.target = Some(first.at);
+            jump.symbol = Some(false);
+            ops.push(jump);
+        }
+
+        let stepped = step_test(body, &loop_, header);
+        // Python's `MirBody.block` is a first-match scan after `_step_test`,
+        // unlike the earlier last-wins address map.
+        let stepped_header = stepped
+            .block(header.at)
+            .expect("rotation header remains in reconstructed body");
+        let stepped_first = stepped
+            .block(first.at)
+            .expect("rotation first block remains in reconstructed body");
+        return rotated(&at_body(
+            &stepped,
+            &loop_,
+            preheader,
+            stepped_header,
+            stepped_first,
+            &ops,
+            None,
+        )?);
+    }
+
+    Ok(body.clone())
+}
+
+/// Replace a zero comparison with the flags from its latch step.
+///
+/// Direct port of `qbopt/optimize/rotate.py:_step_test`.  The exact trip
+/// proof stays in `analysis::induction`; this only makes the proven control
+/// shape explicit in MIR.
+fn step_test(body: &MirBody, loop_: &Loop, header: &MirBlock) -> MirBody {
+    if loop_.latches.len() != 1
+        || header.ops.is_empty()
+        || header.ops.last().is_none_or(|op| op.kind != Kind::Branch)
+    {
+        return body.clone();
+    }
+    let latch_at = *loop_.latches.iter().next().expect("one latch exists");
+    // Python `body.block`, not an address dictionary.
+    let latch = body
+        .block(latch_at)
+        .expect("sole loop latch is a MIR block");
+    let branch = header.ops.last().expect("checked nonempty");
+    if !matches!(branch.test, Some(Kind::Eq | Kind::Ne)) {
+        return body.clone();
+    }
+
+    // Both maps are Python's last-wins `{value.id: op ...}` relation.  The
+    // occurrence map preserves `is` for the later reconstruction.
+    let made = body
+        .blocks
+        .iter()
+        .flat_map(|block| block.ops.iter())
+        .flat_map(|operation| {
+            operation
+                .defines
+                .iter()
+                .map(move |value| (value.id, operation))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let made_occurrences = occurrence::operations(body)
+        .flat_map(|(occurrence, _, operation)| {
+            operation
+                .defines
+                .iter()
+                .map(move |value| (value.id, occurrence))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut readers = BTreeMap::<Value, Vec<occurrence::OpOccurrence>>::new();
+    for (occurrence, _, operation) in occurrence::operations(body) {
+        for value in &operation.defines {
+            readers.entry(*value).or_default();
+        }
+        for value in &operation.uses {
+            readers.entry(*value).or_default().push(occurrence);
+        }
+    }
+    let facts = constants::known(body);
+    let header_index = body
+        .blocks
+        .iter()
+        .position(|block| std::ptr::eq(block, header))
+        .expect("rotation header belongs to this MIR snapshot");
+
+    for counter in induction::basics(body, loop_).values() {
+        let Some(phi) = header
+            .phis
+            .iter()
+            .find(|one| one.result.id == counter.value)
+        else {
+            continue;
+        };
+        let Some(update) = phi.incoming.get(&latch_at).copied() else {
+            continue;
+        };
+        let width = match &counter.start {
+            AffineOperand::Held(held) => held.width,
+            AffineOperand::Const(constant) => constant.width,
+        };
+        let comparisons = header.ops[..header.ops.len() - 1]
+            .iter()
+            .enumerate()
+            .filter(|(_, operation)| {
+                induction::_counter_bound(operation, branch, counter, width, Some(&made))
+                    == Some(Arg::Const(Const::new(0, width)))
+            })
+            .collect::<Vec<_>>();
+        if comparisons.len() != 1 {
+            continue;
+        }
+        let (compare_index, compare) = comparisons[0];
+        let flags = compare
+            .defines
+            .iter()
+            .copied()
+            .filter(|value| value.flags)
+            .collect::<Vec<_>>();
+        // Python's `[branch]` comparison is dataclass structural equality,
+        // not identity.  Keep the reader occurrence for the later `is` edit.
+        if flags.len() != 1
+            || !readers.get(&flags[0]).is_some_and(|users| {
+                users.len() == 1
+                    && body.blocks[users[0].block_index()].ops[users[0].operation_index()]
+                        == *branch
+            })
+        {
+            continue;
+        }
+        let Some(stepping) = made.get(&update.id).copied() else {
+            continue;
+        };
+        let stepping_occurrence = made_occurrences
+            .get(&update.id)
+            .copied()
+            .expect("last-wins stepping definition has an occurrence");
+        let Some(stepped) = mir::stepping(stepping) else {
+            continue;
+        };
+        if stepped.0
+            != Arg::Held(Held {
+                value: phi.result,
+                width,
+            })
+            || stepping.results
+                != vec![Arg::Held(Held {
+                    value: update,
+                    width,
+                })]
+            || !stepping.loads.is_empty()
+            || !stepping.stores.is_empty()
+            || stepping.barrier()
+            || !stepping.merges.is_empty()
+        {
+            continue;
+        }
+        // Python list.index uses structural equality and selects the first
+        // equal operation, even if `made` selected a later equal occurrence.
+        let step_index = latch
+            .ops
+            .iter()
+            .position(|operation| operation == stepping)
+            .expect("proof-selected stepping operation belongs to the loop latch");
+        if latch.ops[step_index + 1..]
+            .iter()
+            .any(|operation| !matches!(operation.kind, Kind::Nothing | Kind::Jump))
+        {
+            continue;
+        }
+        if stepping
+            .defines
+            .iter()
+            .any(|value| value.flags && readers.get(value).is_some_and(|users| !users.is_empty()))
+        {
+            continue;
+        }
+        if induction::trip_count(body, loop_, &facts).is_none() {
+            continue;
+        }
+
+        let serial = ssa::values(body).map(|value| value.id).max().unwrap_or(0) + 1;
+        let variable = ssa::values(body)
+            .map(|value| value.variable)
+            .max()
+            .unwrap_or(0)
+            + 1;
+        let step_flags = Value {
+            id: serial,
+            at: stepping.at,
+            flags: true,
+            variable,
+            version: 1,
+        };
+        let blocks = body
+            .blocks
+            .iter()
+            .enumerate()
+            .map(|(block_index, block)| MirBlock {
+                at: block.at,
+                phis: block.phis.clone(),
+                ops: block
+                    .ops
+                    .iter()
+                    .enumerate()
+                    .map(|(operation_index, operation)| {
+                        if block_index == stepping_occurrence.block_index()
+                            && operation_index == stepping_occurrence.operation_index()
+                        {
+                            let mut rewritten = operation.clone();
+                            rewritten.defines.push(step_flags);
+                            rewritten.source_backed = false;
+                            rewritten.raised = None;
+                            rewritten
+                        } else if block_index == header_index && operation_index == compare_index {
+                            mir::cleared(operation)
+                        } else if block_index == header_index
+                            && operation_index == header.ops.len() - 1
+                        {
+                            let mut rewritten = operation.clone();
+                            rewritten.uses = vec![step_flags];
+                            rewritten.source_backed = false;
+                            rewritten.raised = None;
+                            rewritten
+                        } else {
+                            operation.clone()
+                        }
+                    })
+                    .collect(),
+                succ: block.succ.clone(),
+            })
+            .collect();
+        return MirBody {
+            blocks,
+            ..body.clone()
+        };
+    }
+
+    body.clone()
+}
+
 /// Enter `loop` at `first`, moving its header phis there by hand.
 ///
 /// Direct port of `qbopt/optimize/rotate.py:at_body`.  Python raises from
@@ -501,7 +825,7 @@ mod tests {
 
     use num_bigint::BigInt;
 
-    use super::{at_body, counted_down, swapped};
+    use super::{at_body, entered, rotated, swapped};
     use crate::model::mir::{
         Arg, Cell, Const, Held, IntegerRange, Kind, MemRef, MirBlock, MirBody, Op, Phi, Value,
     };
@@ -640,7 +964,7 @@ mod tests {
         // `tests/test_countdown.py:test_dead_dynamic_counter_counts_down_on_the_step_flags_after_a_zero_trip_guard`.
         // C floats retained add/cmp/jb through a ten-trip hot path until the
         // dynamic zero-trip guard made the countdown form exact.
-        let body = counted_down(&counted_loop(false)).unwrap();
+        let body = entered(&counted_loop(false)).unwrap();
         let loops = mir_loops::loops(&body.blocks, Some(body.entry));
         let [loop_] = loops.as_slice() else {
             panic!("the transformed body retains exactly one natural loop");
@@ -703,7 +1027,208 @@ mod tests {
         // `tests/test_countdown.py:test_countdown_refuses_an_observed_source_counter`.
         // Replacing an index the body stores would change the program.
         let body = counted_loop(true);
-        assert_eq!(counted_down(&body).unwrap(), body);
+        assert_eq!(entered(&body).unwrap(), body);
+    }
+
+    /// Direct port of the pretested `FOR` shape covered by
+    /// `tests/test_rotate.py:test_entering_mains_first_loop_at_its_body_keeps_the_code_after_it`.
+    #[test]
+    fn rotated_enters_a_proven_pretested_loop_at_its_body_and_moves_header_phis() {
+        let initial = Value {
+            variable: 1,
+            version: 1,
+            ..value(1, 0)
+        };
+        let counter = Value {
+            variable: 1,
+            version: 2,
+            ..value(2, 1)
+        };
+        let next = Value {
+            variable: 1,
+            version: 3,
+            ..value(3, 2)
+        };
+        let flags = Value {
+            flags: true,
+            variable: 2,
+            version: 1,
+            ..value(4, 1)
+        };
+        let mut compare = operation(1, Kind::Sub, vec![flags], vec![counter]);
+        compare.args = vec![
+            Arg::Held(Held {
+                value: counter,
+                width: 2,
+            }),
+            Arg::Const(Const::new(4, 2)),
+        ];
+        let mut branch = operation(1, Kind::Branch, Vec::new(), vec![flags]);
+        branch.test = Some(Kind::Below);
+        branch.target = Some(3);
+        let mut update = operation(2, Kind::Increment, vec![next], vec![counter]);
+        update.args = vec![Arg::Held(Held {
+            value: counter,
+            width: 2,
+        })];
+        update.results = vec![Arg::Held(Held {
+            value: next,
+            width: 2,
+        })];
+        let mut backedge = operation(2, Kind::Jump, Vec::new(), Vec::new());
+        backedge.target = Some(1);
+        let body = MirBody {
+            loop_trip_counts: vec![(1, 4)],
+            ..MirBody::new(
+                0,
+                vec![
+                    MirBlock::new(0, vec![], vec![], vec![1]),
+                    MirBlock::new(
+                        1,
+                        vec![phi(counter, &[(0, initial), (2, next)])],
+                        vec![compare, branch],
+                        vec![2, 3],
+                    ),
+                    MirBlock::new(2, vec![], vec![update, backedge], vec![1]),
+                    MirBlock::new(
+                        3,
+                        vec![],
+                        vec![operation(3, Kind::Return, vec![], vec![])],
+                        vec![],
+                    ),
+                ],
+            )
+        };
+
+        let changed = rotated(&body).unwrap();
+        assert_eq!(changed.block(0).expect("preheader").succ, vec![2]);
+        assert_eq!(changed.block(1).expect("old header").phis, Vec::new());
+        let entered = changed.block(2).expect("body entry");
+        assert_eq!(entered.phis.len(), 1);
+        assert_eq!(entered.phis[0].incoming.get(&0), Some(&initial));
+        assert_eq!(entered.phis[0].incoming.get(&1), Some(&next));
+        assert!(changed
+            .block(0)
+            .expect("preheader")
+            .ops
+            .last()
+            .is_some_and(|operation| operation.kind == Kind::Jump && operation.target == Some(2)));
+    }
+
+    /// A zero-ending countdown needs no second compare after rotation: the
+    /// latch decrement's flags are exactly the branch question.
+    #[test]
+    fn rotated_reuses_a_zero_ending_step_flags_for_the_latch_test() {
+        let seed = Value {
+            variable: 1,
+            version: 1,
+            ..value(1, 0)
+        };
+        let counter = Value {
+            variable: 1,
+            version: 2,
+            ..value(2, 1)
+        };
+        let next = Value {
+            variable: 1,
+            version: 3,
+            ..value(3, 2)
+        };
+        let compare_flags = Value {
+            flags: true,
+            variable: 2,
+            version: 1,
+            ..value(4, 1)
+        };
+        let mut seed_op = operation(0, Kind::Copy, vec![seed], vec![]);
+        seed_op.args = vec![Arg::Const(Const::new(3, 2))];
+        seed_op.results = vec![Arg::Held(Held {
+            value: seed,
+            width: 2,
+        })];
+        let mut compare = operation(1, Kind::Sub, vec![compare_flags], vec![counter]);
+        compare.args = vec![
+            Arg::Held(Held {
+                value: counter,
+                width: 2,
+            }),
+            Arg::Const(Const::new(0, 2)),
+        ];
+        let mut branch = operation(1, Kind::Branch, Vec::new(), vec![compare_flags]);
+        branch.test = Some(Kind::Ne);
+        branch.target = Some(2);
+        let mut decrement = operation(2, Kind::Decrement, vec![next], vec![counter]);
+        decrement.args = vec![Arg::Held(Held {
+            value: counter,
+            width: 2,
+        })];
+        decrement.results = vec![Arg::Held(Held {
+            value: next,
+            width: 2,
+        })];
+        let mut backedge = operation(2, Kind::Jump, Vec::new(), Vec::new());
+        backedge.target = Some(1);
+        let body = MirBody {
+            loop_trip_counts: vec![(1, 3)],
+            ..MirBody::new(
+                0,
+                vec![
+                    MirBlock::new(0, vec![], vec![seed_op], vec![1]),
+                    MirBlock::new(
+                        1,
+                        vec![phi(counter, &[(0, seed), (2, next)])],
+                        vec![compare, branch],
+                        vec![2, 3],
+                    ),
+                    MirBlock::new(2, vec![], vec![decrement, backedge], vec![1]),
+                    MirBlock::new(
+                        3,
+                        vec![],
+                        vec![operation(3, Kind::Return, vec![], vec![])],
+                        vec![],
+                    ),
+                ],
+            )
+        };
+
+        let changed = rotated(&body).unwrap();
+        assert_eq!(changed.block(0).expect("preheader").succ, vec![2]);
+        let old_test = changed.block(1).expect("old test");
+        assert_eq!(old_test.ops[0].kind, Kind::Nothing);
+        let branch = old_test.ops.last().expect("latch test remains");
+        let decrement = changed
+            .blocks
+            .iter()
+            .flat_map(|block| &block.ops)
+            .find(|operation| operation.kind == Kind::Decrement)
+            .expect("decrement remains");
+        let step_flags = decrement
+            .defines
+            .iter()
+            .copied()
+            .find(|value| value.flags)
+            .expect("step acquires its flags");
+        assert_eq!(branch.uses, vec![step_flags]);
+    }
+
+    #[test]
+    fn rotated_refuses_unknown_trip_counts_and_non_test_header_work() {
+        let body = counted_loop(false);
+        assert_eq!(rotated(&body).unwrap(), body);
+
+        let mut with_work = counted_loop(false);
+        with_work.loop_trip_counts = vec![(1, 2)];
+        with_work.blocks[1]
+            .ops
+            .insert(0, operation(1, Kind::Copy, vec![], vec![]));
+        assert_eq!(rotated(&with_work).unwrap(), with_work);
+
+        let mut branch_ended_entry = counted_loop(false);
+        branch_ended_entry.loop_trip_counts = vec![(1, 2)];
+        let mut branch = operation(0, Kind::Branch, Vec::new(), Vec::new());
+        branch.target = Some(1);
+        branch_ended_entry.blocks[0].ops.push(branch);
+        assert_eq!(rotated(&branch_ended_entry).unwrap(), branch_ended_entry);
     }
 
     /// Header phi rotation must distinguish split values of one variable:

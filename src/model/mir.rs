@@ -820,6 +820,11 @@ impl OpCode {
     pub(crate) const fn nothing() -> Self {
         Self::Operation(Operation::Nothing)
     }
+
+    /// The synthetic control transfer introduced by MIR transforms.
+    pub(crate) const fn jump() -> Self {
+        Self::Operation(Operation::Jump)
+    }
 }
 
 /// Lowering's identity baseline while general floating allocation is
