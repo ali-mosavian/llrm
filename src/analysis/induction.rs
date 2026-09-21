@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use num_bigint::BigInt;
 
-use super::constants::{masked, Known};
+use super::constants::{self, masked, Known};
 use super::occurrence::{operations, phis, OpOccurrence, PhiOccurrence};
 use crate::model::mir::{Arg, Const, Held, Kind, MirBody, Op, OrderedMap, Value};
 use crate::model::mir_loops::{predecessors, Loop};
@@ -177,9 +177,17 @@ pub(crate) fn relation(
     })
 }
 
-/// Python's `counted(body, loop, facts)` with its known-value analysis made
-/// explicit until `consts.known` itself is ported.
-pub(crate) fn counted(
+/// Python's default `counted(body, loop)` invocation.
+pub(crate) fn counted(body: &MirBody, loop_: &Loop) -> Vec<CountedLoop> {
+    let facts = constants::known(body);
+    counted_with_facts(body, loop_, &facts)
+}
+
+/// Python's explicit-facts `counted(body, loop, facts)` form.
+///
+/// Pipeline consumers which already computed the immutable body's facts use
+/// this form so several induction questions share one analysis result.
+pub(crate) fn counted_with_facts(
     body: &MirBody,
     loop_: &Loop,
     facts: &BTreeMap<Value, Known>,
@@ -838,11 +846,19 @@ pub(crate) fn control_replacement<'a>(
     })
 }
 
-/// Python's `zero_terminating_control(body, loop, proof, candidate, facts)`.
-///
-/// The explicit known-value map replaces Python's default `consts.known(body)`
-/// until that analysis is ported.
+/// Python's default `zero_terminating_control(body, loop, proof, candidate)`.
 pub(crate) fn zero_terminating_control<'a>(
+    body: &MirBody,
+    loop_: &Loop,
+    proof: &'a CountedLoop,
+    candidate: &Affine,
+) -> Option<ZeroTerminatingControl<'a>> {
+    let facts = constants::known(body);
+    zero_terminating_control_with_facts(body, loop_, proof, candidate, &facts)
+}
+
+/// Python's explicit-facts form, for consumers sharing one fact analysis.
+pub(crate) fn zero_terminating_control_with_facts<'a>(
     body: &MirBody,
     loop_: &Loop,
     proof: &'a CountedLoop,
@@ -903,12 +919,14 @@ mod tests {
     };
     use crate::model::mir_loops::Loop;
 
+    use crate::analysis::constants;
     use crate::analysis::occurrence::operations;
 
     use super::{
         Affine, AffineMap, AffineOperand, LoopShape, _as_signed, _constant, _copied,
-        _counter_bound, _signed, basics, canonical, control_replacement, counted, invariant,
-        relation, test_only, transparent_aliases, zero_terminating_control,
+        _counter_bound, _signed, basics, canonical, control_replacement, counted,
+        counted_with_facts, invariant, relation, test_only, transparent_aliases,
+        zero_terminating_control,
     };
 
     fn value(id: u32, at: i64) -> Value {
@@ -1079,9 +1097,7 @@ mod tests {
     }
 
     /// Direct Rust form of `tests/test_indvars.py:_symbolic_control_body`.
-    fn symbolic_counted_body(
-        candidate_start: i64,
-    ) -> (MirBody, Loop, BTreeMap<Value, Known>, Value, Value) {
+    fn symbolic_counted_body(candidate_start: i64) -> (MirBody, Loop, Value, Value) {
         let bound = Value {
             variable: 1,
             version: 1,
@@ -1247,10 +1263,6 @@ mod tests {
                 latches: BTreeSet::from([2]),
                 body: BTreeSet::from([1, 2]),
             },
-            BTreeMap::from([
-                (control_seed, Known::new(0, 2)),
-                (candidate_seed, Known::new(candidate_start, 2)),
-            ]),
             bound,
             control_seed,
         )
@@ -2218,8 +2230,8 @@ mod tests {
     #[test]
     fn direct_induction_counted_symbolic_control_proves_bound_and_maximum() {
         // Direct Rust fixture of tests/test_indvars.py:_symbolic_control_body.
-        let (body, loop_, facts, bound, _) = symbolic_counted_body(0);
-        let proven = counted(&body, &loop_, &facts);
+        let (body, loop_, bound, _) = symbolic_counted_body(0);
+        let proven = counted(&body, &loop_);
         assert_eq!(basics(&body, &loop_).len(), 2);
         assert_eq!(proven.len(), 1);
         assert_eq!(
@@ -2250,19 +2262,19 @@ mod tests {
 
     #[test]
     fn direct_induction_counted_refuses_nonzero_or_nonunit_control() {
-        let (body, loop_, facts, _, seed) = symbolic_counted_body(0);
-        let mut nonzero = facts.clone();
+        let (body, loop_, _, seed) = symbolic_counted_body(0);
+        let mut nonzero = constants::known(&body);
         nonzero.insert(seed, Known::new(1, 2));
-        assert!(counted(&body, &loop_, &nonzero).is_empty());
+        assert!(counted_with_facts(&body, &loop_, &nonzero).is_empty());
 
         let mut nonunit = body;
         nonunit.blocks[2].ops[1].args[1] = Arg::Const(Const::new(2, 2));
-        assert!(counted(&nonunit, &loop_, &facts).is_empty());
+        assert!(counted(&nonunit, &loop_).is_empty());
     }
 
     #[test]
     fn direct_induction_counted_refuses_missing_or_noninvariant_bound() {
-        let (body, loop_, facts, bound, _) = symbolic_counted_body(0);
+        let (body, loop_, bound, _) = symbolic_counted_body(0);
         let mut missing = body.clone();
         missing.blocks[1].ops[0].args[1] = Arg::Symbol(crate::model::mir::Symbol::new(
             crate::object::omf::module::Space::Segment,
@@ -2270,25 +2282,25 @@ mod tests {
             0,
             2,
         ));
-        assert!(counted(&missing, &loop_, &facts).is_empty());
+        assert!(counted(&missing, &loop_).is_empty());
 
         let mut noninvariant = body;
         noninvariant.blocks[2]
             .ops
             .push(op(2, Kind::Copy, vec![bound], vec![]));
-        assert!(counted(&noninvariant, &loop_, &facts).is_empty());
+        assert!(counted(&noninvariant, &loop_).is_empty());
     }
 
     #[test]
     fn direct_induction_counted_refuses_wrong_branch_direction_and_impure_update() {
-        let (body, loop_, facts, _, _) = symbolic_counted_body(0);
+        let (body, loop_, _, _) = symbolic_counted_body(0);
         let mut wrong_direction = body.clone();
         wrong_direction.blocks[1].ops[1].test = Some(Kind::Below);
-        assert!(counted(&wrong_direction, &loop_, &facts).is_empty());
+        assert!(counted(&wrong_direction, &loop_).is_empty());
 
         let mut impure = body;
         impure.blocks[2].ops[1].stores.push(MemRef::new(None, 2));
-        assert!(counted(&impure, &loop_, &facts).is_empty());
+        assert!(counted(&impure, &loop_).is_empty());
     }
 
     #[test]
@@ -2297,8 +2309,8 @@ mod tests {
         // recurrence is removable only when the two-block counted control is
         // its sole observer.  The returned proof retains the exact counted
         // proof supplied by its caller, as Python stores that object itself.
-        let (body, loop_, facts, _, _) = symbolic_counted_body(0);
-        let proofs = counted(&body, &loop_, &facts);
+        let (body, loop_, _, _) = symbolic_counted_body(0);
+        let proofs = counted(&body, &loop_);
         let proof = &proofs[0];
 
         let replacement = control_replacement(&body, &loop_, proof, &BTreeSet::new())
@@ -2317,8 +2329,8 @@ mod tests {
     fn direct_induction_zero_terminating_control_refuses_nonzero_terminal_recurrence() {
         // Direct Rust regression for
         // tests/test_indvars.py:test_symbolic_control_refuses_a_nonzero_terminal_recurrence.
-        let (body, loop_, facts, _, _) = symbolic_counted_body(5);
-        let proofs = counted(&body, &loop_, &facts);
+        let (body, loop_, _, _) = symbolic_counted_body(5);
+        let proofs = counted(&body, &loop_);
         let proof = &proofs[0];
         let candidates = basics(&body, &loop_);
         let candidate = candidates
@@ -2326,15 +2338,15 @@ mod tests {
             .find(|one| *one != &proof.counter)
             .expect("the fixture has a non-control affine recurrence");
 
-        assert!(zero_terminating_control(&body, &loop_, proof, candidate, &facts).is_none());
+        assert!(zero_terminating_control(&body, &loop_, proof, candidate).is_none());
     }
 
     #[test]
     fn direct_induction_zero_terminating_control_proves_zero_terminal_recurrence() {
         // Direct Rust regression for
         // tests/test_indvars.py:test_symbolic_control_proves_a_zero_terminal_recurrence.
-        let (body, loop_, facts, _, _) = symbolic_counted_body(0);
-        let proofs = counted(&body, &loop_, &facts);
+        let (body, loop_, _, _) = symbolic_counted_body(0);
+        let proofs = counted(&body, &loop_);
         let proof = &proofs[0];
         let candidates = basics(&body, &loop_);
         let candidate = candidates
@@ -2342,7 +2354,7 @@ mod tests {
             .find(|one| *one != &proof.counter)
             .expect("the fixture has a non-control affine recurrence");
 
-        let proven = zero_terminating_control(&body, &loop_, proof, candidate, &facts)
+        let proven = zero_terminating_control(&body, &loop_, proof, candidate)
             .expect("the zero-terminal recurrence supplies the terminating flags");
 
         assert!(std::ptr::eq(proven.replacement.counted, proof));
@@ -2357,8 +2369,8 @@ mod tests {
         // Direct port of the first compound refusal in
         // `induction.control_replacement`: each case is a different failure
         // of the normalized two-block, one-predecessor control shape.
-        let (body, loop_, facts, _, _) = symbolic_counted_body(0);
-        let proofs = counted(&body, &loop_, &facts);
+        let (body, loop_, _, _) = symbolic_counted_body(0);
+        let proofs = counted(&body, &loop_);
         let proof = &proofs[0];
 
         let one_block = Loop {
@@ -2409,8 +2421,8 @@ mod tests {
         // Two equal source observers prove that covering one cannot authorize
         // the other.  Likewise, an equal phi distinct from the proven phi is
         // a forbidden incoming use.
-        let (body, loop_, facts, _, _) = symbolic_counted_body(0);
-        let proofs = counted(&body, &loop_, &facts);
+        let (body, loop_, _, _) = symbolic_counted_body(0);
+        let proofs = counted(&body, &loop_);
         let proof = &proofs[0];
         let counter = body.blocks[1].phis[0].result;
         let observer = op(2, Kind::Nothing, vec![], vec![counter]);
@@ -2466,8 +2478,8 @@ mod tests {
         // Direct port of the remaining use checks: transparent copies are
         // allowed themselves, but no alias, phi edge, compare flag, or step
         // flag may introduce another observer of removed control.
-        let (body, loop_, facts, _, _) = symbolic_counted_body(0);
-        let proofs = counted(&body, &loop_, &facts);
+        let (body, loop_, _, _) = symbolic_counted_body(0);
+        let proofs = counted(&body, &loop_);
         let proof = &proofs[0];
         let counter = body.blocks[1].phis[0].result;
 

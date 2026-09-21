@@ -1,6 +1,7 @@
 //! Side-effect-free analyses over portable IR and source-neutral MIR.
 
 mod cfg;
+mod constant_cycles;
 pub(crate) mod constants;
 mod def_use;
 mod dominators;

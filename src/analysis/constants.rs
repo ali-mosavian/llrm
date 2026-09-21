@@ -2,7 +2,7 @@
 //!
 //! Direct port of the pure, no-memory paths in `qbopt.analysis.consts`:
 //! `Known`, `masked`, `_read`, `_operand`, `_defined`, `_result`, and
-//! `_carry`.  `known`, its solver, cells, aliases, calls, and division remain
+//! `_carry`, `_solved`, and `known`.  Cells, aliases, calls, and division remain
 //! separate ports.  Python's `FIXED_MUL` and `FIXED_DIV` have no Rust
 //! [`Kind`] counterpart; Python `_result` does not evaluate either, so this
 //! slice deliberately defers them rather than inventing semantics.
@@ -315,13 +315,78 @@ fn _carry(op: &Op, facts: &BTreeMap<Value, Known>) -> Option<u8> {
     Some(u8::from(sum >= (BigInt::from(1_u8) << (width * 8))))
 }
 
+/// Python's no-memory `_solved(body, None, None, ...)`.
+///
+/// This is deliberately the first, optimistic walk from the Python source:
+/// acyclic facts and carry bits are collected before `constant_cycles`
+/// resolves the remaining phi/operation graph.  No value changes after this
+/// walk; the cycle solver distinguishes its pending values from values that
+/// are genuinely overdefined.
+fn _solved(body: &mir::MirBody) -> BTreeMap<Value, Known> {
+    let mut facts = BTreeMap::<Value, Known>::new();
+    let mut carries = BTreeMap::<Value, u8>::new();
+    let mut changing = true;
+    while changing {
+        changing = false;
+        for block in &body.blocks {
+            for phi in &block.phis {
+                if facts.contains_key(&phi.result) || phi.incoming.is_empty() {
+                    continue;
+                }
+                let seen = phi
+                    .incoming
+                    .values()
+                    .map(|value| facts.get(value))
+                    .collect::<Vec<_>>();
+                let Some(first) = seen.first().and_then(|fact| *fact) else {
+                    continue;
+                };
+                if seen.iter().all(|fact| *fact == Some(first)) {
+                    facts.insert(phi.result, first.clone());
+                    changing = true;
+                }
+            }
+            for op in &block.ops {
+                if let Some(carry) = _carry(op, &facts) {
+                    for value in &op.defines {
+                        if value.flags && !carries.contains_key(value) {
+                            carries.insert(*value, carry);
+                            changing = true;
+                        }
+                    }
+                }
+                let Some(target) = _defined(op) else {
+                    continue;
+                };
+                if facts.contains_key(&target) {
+                    continue;
+                }
+                if let Some(found) = _result(op, &facts, Some(&carries)) {
+                    facts.insert(target, found);
+                    changing = true;
+                }
+            }
+        }
+    }
+    super::constant_cycles::propagated(body, facts)
+}
+
+/// Every value this body computes that is a number, to a fixed point.
+///
+/// Direct port of the default, value-only invocation of
+/// `qbopt.analysis.consts:known`.  Memory, call, edge, and initial-cell
+/// arguments are intentionally outside this slice.
+pub(crate) fn known(body: &mir::MirBody) -> BTreeMap<Value, Known> {
+    _solved(body)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
     use num_bigint::BigInt;
 
-    use super::{_carry, _defined, _result, Known, masked};
+    use super::{Known, _carry, _defined, _result, masked};
     use crate::model::mir::{Arg, Const, Held, Kind, Op, Value};
 
     fn value(id: u32) -> Value {
