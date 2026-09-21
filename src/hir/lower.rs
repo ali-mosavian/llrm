@@ -53,7 +53,8 @@ pub enum InvalidProperty {
     MissingGlobalPlan,
     MissingPointerType,
     DuplicatePlace,
-    NonZeroIndirectOffset,
+    MissingIndirectOffsetType,
+    UnsupportedIndirectOffsetAddress,
     ReadOnlyStore,
     ZeroExtent,
     ExtentOverflow,
@@ -316,6 +317,7 @@ pub fn lower_module(module: &hir::Module) -> Result<ir::Module, LowerError> {
     // portable-IR semantics, so they must not make an otherwise scalar module
     // fail merely because their representation is not implemented yet.
     let mut required_types = required_type_ids(module);
+    required_types.extend(indirect_offset_type_ids(module)?);
     required_types.extend(globals.source_types.iter().copied());
     let mut types = module
         .types
@@ -393,6 +395,65 @@ fn collect_operand_types(operand: &hir::Operand, required: &mut BTreeSet<hir::Ty
         }
         hir::Operand::Value(_) | hir::Operand::Place(_) => {}
     }
+}
+
+fn indirect_offset_type_ids(module: &hir::Module) -> Result<BTreeSet<hir::TypeId>, LowerError> {
+    let mut required = BTreeSet::new();
+    for function in &module.functions {
+        for block in &function.blocks {
+            for instruction in &block.instructions {
+                if !matches!(instruction.opcode, hir::Opcode::Load | hir::Opcode::Store) {
+                    continue;
+                }
+                let Some(hir::Operand::Indirect { base, offset, .. }) =
+                    instruction.operands.first()
+                else {
+                    continue;
+                };
+                if *offset == 0 {
+                    continue;
+                }
+                let Some(base) = function.values.iter().find(|value| value.id == *base) else {
+                    continue;
+                };
+                let Some(pointer) = module.types.iter().find(|type_| type_.id == base.type_id)
+                else {
+                    continue;
+                };
+                if pointer.kind != hir::TypeKind::Pointer {
+                    continue;
+                }
+                let offset_type = indirect_offset_type(module, pointer).map_err(|property| {
+                    LowerError::InvalidInstruction {
+                        function: function.id,
+                        block: block.id,
+                        instruction: instruction.id,
+                        property,
+                    }
+                })?;
+                required.insert(offset_type.id);
+            }
+        }
+    }
+    Ok(required)
+}
+
+fn indirect_offset_type<'module>(
+    module: &'module hir::Module,
+    pointer: &hir::Type,
+) -> Result<&'module hir::Type, InvalidProperty> {
+    let width = match pointer.address {
+        hir::AddressKind::Near | hir::AddressKind::Far => 2,
+        hir::AddressKind::Huge => pointer.width,
+        hir::AddressKind::None | hir::AddressKind::Code | hir::AddressKind::Segment => {
+            return Err(InvalidProperty::UnsupportedIndirectOffsetAddress);
+        }
+    };
+    module
+        .types
+        .iter()
+        .find(|type_| type_.kind == hir::TypeKind::Integer && type_.width == width)
+        .ok_or(InvalidProperty::MissingIndirectOffsetType)
 }
 
 #[derive(Default)]
@@ -508,6 +569,71 @@ struct Lowerer<'module> {
     stack: &'module StackPlan,
 }
 
+struct GeneratedIds {
+    next_value: Option<u32>,
+    next_instruction: Option<u32>,
+}
+
+impl GeneratedIds {
+    fn for_function(function: &hir::Function, stack: &StackPlan) -> Self {
+        let next_value = function
+            .values
+            .iter()
+            .map(|value| value.id.get())
+            .chain(
+                stack
+                    .allocations
+                    .get(&function.id)
+                    .into_iter()
+                    .flatten()
+                    .flat_map(|instruction| instruction.results.iter().map(|value| value.id.get())),
+            )
+            .max()
+            .map_or(Some(0), |maximum| maximum.checked_add(1));
+        let next_instruction = function
+            .blocks
+            .iter()
+            .flat_map(|block| {
+                block
+                    .instructions
+                    .iter()
+                    .map(|instruction| instruction.id.get())
+            })
+            .chain(
+                stack
+                    .allocations
+                    .get(&function.id)
+                    .into_iter()
+                    .flatten()
+                    .map(|instruction| instruction.id.get()),
+            )
+            .max()
+            .map_or(Some(0), |maximum| maximum.checked_add(1));
+        Self {
+            next_value,
+            next_instruction,
+        }
+    }
+
+    fn value(&mut self, function: hir::FunctionId) -> Result<ir::ValueId, LowerError> {
+        let id = self.next_value.ok_or(LowerError::InvalidFunction {
+            function,
+            property: InvalidProperty::ValueIdOverflow,
+        })?;
+        self.next_value = id.checked_add(1);
+        Ok(ir::ValueId::new(id))
+    }
+
+    fn instruction(&mut self, function: hir::FunctionId) -> Result<ir::InstructionId, LowerError> {
+        let id = self.next_instruction.ok_or(LowerError::InvalidFunction {
+            function,
+            property: InvalidProperty::InstructionIdOverflow,
+        })?;
+        self.next_instruction = id.checked_add(1);
+        Ok(ir::InstructionId::new(id))
+    }
+}
+
 impl<'module> Lowerer<'module> {
     fn lower_type(&self, type_: &hir::Type) -> Result<ir::Type, LowerError> {
         let kind = match type_.kind {
@@ -612,10 +738,11 @@ impl<'module> Lowerer<'module> {
             variadic: false,
             calling_convention,
         };
+        let mut generated = GeneratedIds::for_function(function, self.stack);
         let mut blocks = function
             .blocks
             .iter()
-            .map(|block| self.lower_block(function, block))
+            .map(|block| self.lower_block(function, block, &mut generated))
             .collect::<Result<Vec<_>, _>>()?;
         if let Some(allocations) = self.stack.allocations.get(&function.id) {
             let entry = blocks.first_mut().expect("entry block was checked above");
@@ -646,16 +773,84 @@ impl<'module> Lowerer<'module> {
         &self,
         function: &hir::Function,
         block: &hir::Block,
+        generated: &mut GeneratedIds,
     ) -> Result<ir::Block, LowerError> {
+        let mut instructions = Vec::with_capacity(block.instructions.len());
+        for instruction in &block.instructions {
+            if let Some(prefix) =
+                self.indirect_offset_prefix(function, block.id, instruction, generated)?
+            {
+                let address = ir::Operand::Value(prefix.results[0].id);
+                let mut access = self.lower_instruction(function, block.id, instruction)?;
+                match &mut access.kind {
+                    ir::InstructionKind::Load {
+                        address: access, ..
+                    }
+                    | ir::InstructionKind::Store {
+                        address: access, ..
+                    } => *access = address,
+                    _ => unreachable!("only load/store can have an indirect-offset prefix"),
+                }
+                instructions.push(prefix);
+                instructions.push(access);
+            } else {
+                instructions.push(self.lower_instruction(function, block.id, instruction)?);
+            }
+        }
         Ok(ir::Block {
             id: block_id(block.id),
-            instructions: block
-                .instructions
-                .iter()
-                .map(|instruction| self.lower_instruction(function, block.id, instruction))
-                .collect::<Result<Vec<_>, _>>()?,
+            instructions,
             terminator: self.lower_terminator(function, block)?,
         })
+    }
+
+    fn indirect_offset_prefix(
+        &self,
+        function: &hir::Function,
+        block: hir::BlockId,
+        instruction: &hir::Instruction,
+        generated: &mut GeneratedIds,
+    ) -> Result<Option<ir::Instruction>, LowerError> {
+        if !matches!(instruction.opcode, hir::Opcode::Load | hir::Opcode::Store) {
+            return Ok(None);
+        }
+        let Some(hir::Operand::Indirect { base, offset, .. }) = instruction.operands.first() else {
+            return Ok(None);
+        };
+        if *offset == 0 {
+            return Ok(None);
+        }
+        let base = self.value_by_id(function, *base, block, Some(instruction.id))?;
+        let pointer = self.type_by_id(base.type_id)?;
+        if pointer.kind != hir::TypeKind::Pointer {
+            return self.invalid_instruction(
+                function,
+                block,
+                instruction,
+                InvalidProperty::OperandTypes,
+            );
+        }
+        let offset_type = match indirect_offset_type(self.module, pointer) {
+            Ok(offset_type) => offset_type,
+            Err(property) => {
+                return self.invalid_instruction(function, block, instruction, property);
+            }
+        };
+        let value = ir::Value {
+            id: generated.value(function.id)?,
+            type_id: type_id(base.type_id),
+        };
+        Ok(Some(ir::Instruction {
+            id: generated.instruction(function.id)?,
+            results: vec![value],
+            kind: ir::InstructionKind::GetElementPointer {
+                base: ir::Operand::Value(value_id(base.id)),
+                indices: vec![ir::Operand::Constant(ir::TypedConstant {
+                    type_id: type_id(offset_type.id),
+                    value: ir::Constant::Integer(*offset as i128),
+                })],
+            },
+        }))
     }
 
     fn lower_instruction(
@@ -944,18 +1139,10 @@ impl<'module> Lowerer<'module> {
             }
             hir::Operand::Indirect {
                 base,
-                offset,
+                offset: _,
                 type_id,
                 volatile,
             } => {
-                if *offset != 0 {
-                    return self.invalid_instruction(
-                        function,
-                        block,
-                        instruction,
-                        InvalidProperty::NonZeroIndirectOffset,
-                    );
-                }
                 let base = self.value_by_id(function, *base, block, Some(instruction.id))?;
                 let base_type = self.type_by_id(base.type_id)?;
                 if base_type.kind != hir::TypeKind::Pointer {
@@ -2412,7 +2599,160 @@ mod tests {
     }
 
     #[test]
-    fn refuses_an_indirect_byte_offset_until_pointer_arithmetic_is_lowered() {
+    fn lowers_an_indirect_byte_offset_through_a_typed_gep_prefix() {
+        let mut module = scalar_module();
+        module.types.push(hir::Type {
+            id: hir::TypeId::new(6),
+            name: "offset".into(),
+            kind: hir::TypeKind::Integer,
+            width: 2,
+            signed: Some(true),
+            evaluation: hir::FloatEvaluation::None,
+            element: None,
+            bounds: Vec::new(),
+            address: hir::AddressKind::None,
+        });
+        module.functions[0].places.push(hir::Place {
+            id: hir::PlaceId::new(0),
+            name: "stack".into(),
+            type_id: hir::TypeId::new(2),
+            storage: hir::Storage::Local,
+            offset: 0,
+            symbol: hir::DataId::new(0),
+            extent: 4,
+            address: hir::AddressKind::Near,
+        });
+        module.functions[0].values.extend([
+            hir::Value {
+                id: hir::ValueId::new(5),
+                type_id: hir::TypeId::new(4),
+            },
+            hir::Value {
+                id: hir::ValueId::new(6),
+                type_id: hir::TypeId::new(2),
+            },
+        ]);
+        module.functions[0].blocks[0].instructions.extend([
+            hir::Instruction {
+                id: hir::InstructionId::new(14),
+                opcode: hir::Opcode::Address,
+                results: vec![hir::ValueId::new(5)],
+                operands: vec![hir::Operand::Place(hir::PlaceId::new(0))],
+                callee: None,
+            },
+            hir::Instruction {
+                id: hir::InstructionId::new(15),
+                opcode: hir::Opcode::Load,
+                results: vec![hir::ValueId::new(6)],
+                operands: vec![hir::Operand::Indirect {
+                    base: hir::ValueId::new(5),
+                    offset: 1,
+                    type_id: hir::TypeId::new(2),
+                    volatile: true,
+                }],
+                callee: None,
+            },
+            hir::Instruction {
+                id: hir::InstructionId::new(18),
+                opcode: hir::Opcode::Store,
+                results: Vec::new(),
+                operands: vec![
+                    hir::Operand::Indirect {
+                        base: hir::ValueId::new(5),
+                        offset: 2,
+                        type_id: hir::TypeId::new(2),
+                        volatile: true,
+                    },
+                    hir::Operand::Value(hir::ValueId::new(0)),
+                ],
+                callee: None,
+            },
+        ]);
+
+        let lowered = lower_module(&module).expect("indirect byte offset lowers through GEP");
+        let instructions = &lowered.functions[0].blocks[0].instructions;
+        assert!(matches!(
+            &instructions[0],
+            ir::Instruction {
+                id,
+                results,
+                kind: ir::InstructionKind::StackAlloc { .. },
+            } if *id == ir::InstructionId::new(19)
+                && results == &vec![ir::Value {
+                    id: ir::ValueId::new(7),
+                    type_id: ir::TypeId::new(4),
+                }]
+        ));
+        assert!(matches!(
+            &instructions[4],
+            ir::Instruction {
+                id,
+                results,
+                kind: ir::InstructionKind::GetElementPointer { base, indices },
+            } if *id == ir::InstructionId::new(20)
+                && results == &vec![ir::Value {
+                    id: ir::ValueId::new(8),
+                    type_id: ir::TypeId::new(4),
+                }]
+                && base == &ir::Operand::Value(ir::ValueId::new(5))
+                && indices == &vec![ir::Operand::Constant(ir::TypedConstant {
+                    type_id: ir::TypeId::new(6),
+                    value: ir::Constant::Integer(1),
+                })]
+        ));
+        assert!(matches!(
+            &instructions[5],
+            ir::Instruction {
+                id,
+                results,
+                kind: ir::InstructionKind::Load {
+                    address,
+                    volatile: true,
+                    ..
+                },
+            } if *id == ir::InstructionId::new(15)
+                && results == &vec![ir::Value {
+                    id: ir::ValueId::new(6),
+                    type_id: ir::TypeId::new(2),
+                }]
+                && address == &ir::Operand::Value(ir::ValueId::new(8))
+        ));
+        assert!(matches!(
+            &instructions[6],
+            ir::Instruction {
+                id,
+                results,
+                kind: ir::InstructionKind::GetElementPointer { base, indices },
+            } if *id == ir::InstructionId::new(21)
+                && results == &vec![ir::Value {
+                    id: ir::ValueId::new(9),
+                    type_id: ir::TypeId::new(4),
+                }]
+                && base == &ir::Operand::Value(ir::ValueId::new(5))
+                && indices == &vec![ir::Operand::Constant(ir::TypedConstant {
+                    type_id: ir::TypeId::new(6),
+                    value: ir::Constant::Integer(2),
+                })]
+        ));
+        assert!(matches!(
+            &instructions[7],
+            ir::Instruction {
+                id,
+                results,
+                kind: ir::InstructionKind::Store {
+                    address,
+                    volatile: true,
+                    ..
+                },
+            } if *id == ir::InstructionId::new(18)
+                && results.is_empty()
+                && address == &ir::Operand::Value(ir::ValueId::new(9))
+        ));
+        assert!(lowered.verify().is_ok());
+    }
+
+    #[test]
+    fn refuses_an_indirect_byte_offset_without_a_matching_integer_type() {
         let mut module = scalar_module();
         module.functions[0].values.extend([
             hir::Value {
@@ -2443,10 +2783,127 @@ mod tests {
             lower_module(&module),
             Err(LowerError::InvalidInstruction {
                 instruction,
-                property: InvalidProperty::NonZeroIndirectOffset,
+                property: InvalidProperty::MissingIndirectOffsetType,
                 ..
             }) if instruction == hir::InstructionId::new(14)
         ));
+    }
+
+    #[test]
+    fn lowers_a_far_indirect_byte_offset_with_a_16_bit_index() {
+        let mut module = scalar_module();
+        module.types.extend([
+            hir::Type {
+                id: hir::TypeId::new(6),
+                name: "offset".into(),
+                kind: hir::TypeKind::Integer,
+                width: 2,
+                signed: Some(true),
+                evaluation: hir::FloatEvaluation::None,
+                element: None,
+                bounds: Vec::new(),
+                address: hir::AddressKind::None,
+            },
+            hir::Type {
+                id: hir::TypeId::new(7),
+                name: "far-long".into(),
+                kind: hir::TypeKind::Pointer,
+                width: 4,
+                signed: None,
+                evaluation: hir::FloatEvaluation::None,
+                element: Some(hir::TypeId::new(2)),
+                bounds: Vec::new(),
+                address: hir::AddressKind::Far,
+            },
+        ]);
+        module.data.push(hir::DataObject {
+            id: hir::DataId::new(77),
+            name: "far-slot".into(),
+            bytes: vec![0; 4],
+            readonly: false,
+            relocations: Vec::new(),
+            linkage: hir::Linkage::Internal,
+            address: hir::AddressKind::Far,
+        });
+        module.functions[0].places.push(hir::Place {
+            id: hir::PlaceId::new(0),
+            name: "far-slot".into(),
+            type_id: hir::TypeId::new(2),
+            storage: hir::Storage::Module,
+            offset: 0,
+            symbol: hir::DataId::new(77),
+            extent: 4,
+            address: hir::AddressKind::Far,
+        });
+        module.functions[0].values.extend([
+            hir::Value {
+                id: hir::ValueId::new(5),
+                type_id: hir::TypeId::new(7),
+            },
+            hir::Value {
+                id: hir::ValueId::new(6),
+                type_id: hir::TypeId::new(2),
+            },
+        ]);
+        module.functions[0].blocks[0].instructions.extend([
+            hir::Instruction {
+                id: hir::InstructionId::new(14),
+                opcode: hir::Opcode::Address,
+                results: vec![hir::ValueId::new(5)],
+                operands: vec![hir::Operand::Place(hir::PlaceId::new(0))],
+                callee: None,
+            },
+            hir::Instruction {
+                id: hir::InstructionId::new(15),
+                opcode: hir::Opcode::Load,
+                results: vec![hir::ValueId::new(6)],
+                operands: vec![hir::Operand::Indirect {
+                    base: hir::ValueId::new(5),
+                    offset: 2,
+                    type_id: hir::TypeId::new(2),
+                    volatile: false,
+                }],
+                callee: None,
+            },
+        ]);
+
+        let lowered = lower_module(&module).expect("far indirect byte offset lowers through GEP");
+        let instructions = &lowered.functions[0].blocks[0].instructions;
+        assert!(matches!(
+            lowered.types.iter().find(|type_| type_.id == ir::TypeId::new(7)),
+            Some(ir::Type {
+                kind: ir::TypeKind::Pointer {
+                    address_space: ir::AddressSpace::FarData,
+                },
+                ..
+            })
+        ));
+        assert!(matches!(
+            &instructions[3],
+            ir::Instruction {
+                id,
+                results,
+                kind: ir::InstructionKind::GetElementPointer { indices, .. },
+            } if *id == ir::InstructionId::new(16)
+                && results == &vec![ir::Value {
+                    id: ir::ValueId::new(7),
+                    type_id: ir::TypeId::new(7),
+                }]
+                && indices == &vec![ir::Operand::Constant(ir::TypedConstant {
+                    type_id: ir::TypeId::new(6),
+                    value: ir::Constant::Integer(2),
+                })]
+        ));
+        assert!(matches!(
+            &instructions[4],
+            ir::Instruction {
+                id,
+                kind: ir::InstructionKind::Load { address, .. },
+                ..
+            } if *id == ir::InstructionId::new(15)
+                && address == &ir::Operand::Value(ir::ValueId::new(7))
+        ));
+        assert!(lowered.verify().is_ok());
     }
 
     #[test]
