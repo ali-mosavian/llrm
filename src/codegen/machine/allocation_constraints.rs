@@ -1,13 +1,12 @@
 //! Splits fixed-register constraints into one-instruction virtual lifetimes.
 //!
-//! A fixed register is a property of an operand occurrence, not of the value's
-//! whole live range.  The target supplies copies because only it knows the
-//! opcode that moves one register class to another; this module decides where
-//! those copies belong and never names a target opcode.
-//!
-//! This is occurrence splitting only, not complete parity with Python's
-//! `constrain.py`: the caller must still decide which ABI-delivered values are
-//! already valid whole-range pins and therefore do not need a split.
+//! A fixed register is normally a property of an operand occurrence, not of a
+//! value's whole live range.  The one exception is a value whose every
+//! occurrence requires the same physical register: that value is already a
+//! valid whole-range pin and needs no copies.  The target supplies copies
+//! because only it knows the opcode that moves one register class to another;
+//! this module decides where those copies belong and never names a target
+//! opcode.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
@@ -82,7 +81,8 @@ impl fmt::Display for ConstraintError {
 
 impl Error for ConstraintError {}
 
-/// Splits every non-short fixed-register occurrence into a fresh short value.
+/// Splits every fixed-register occurrence not covered by a whole-range pin
+/// into a fresh short value.
 ///
 /// A read gets `fresh <- original` immediately before its constrained
 /// instruction; a write gets `original <- fresh` immediately after it.  All
@@ -98,7 +98,7 @@ where
 {
     let classes = declared_classes(function);
     validate_fixed_occurrences(function, &classes)?;
-    let short = already_short(function);
+    let whole_range_pins = whole_range_pins(function);
     let mut fresh = FreshIds::new(function)?;
     let mut virtual_registers = function.virtual_registers.clone();
     let mut blocks = Vec::with_capacity(function.blocks.len());
@@ -114,7 +114,7 @@ where
 
             let mut replacements = BTreeMap::new();
             for (original, _) in constrained {
-                if short.contains(&original) {
+                if whole_range_pins.contains(&original) {
                     continue;
                 }
                 let class = classes
@@ -241,12 +241,11 @@ fn fixed_at(instruction: &MachineInstruction) -> BTreeMap<VirtualRegisterId, Phy
         .collect()
 }
 
-/// Values whose complete lifetime is one instruction already satisfy the rule
-/// without copies.  This keeps synthetic call-clobber definitions short.
-fn already_short(function: &MachineFunction) -> BTreeSet<VirtualRegisterId> {
-    let mut sites =
-        BTreeMap::<VirtualRegisterId, BTreeSet<(MachineBlockId, MachineInstructionId)>>::new();
-    let mut fixed = BTreeMap::<VirtualRegisterId, BTreeSet<PhysicalRegister>>::new();
+/// Values whose every occurrence requires one physical register already
+/// satisfy that requirement over their complete lifetime.  Repeated operands
+/// are examined too, so every one must carry the same fixed requirement.
+fn whole_range_pins(function: &MachineFunction) -> BTreeSet<VirtualRegisterId> {
+    let mut pins = BTreeMap::<VirtualRegisterId, Option<PhysicalRegister>>::new();
     for block in &function.blocks {
         for instruction in &block.instructions {
             for operand in &instruction.operands {
@@ -255,22 +254,25 @@ fn already_short(function: &MachineFunction) -> BTreeSet<VirtualRegisterId> {
                 else {
                     continue;
                 };
-                sites
-                    .entry(*register)
-                    .or_default()
-                    .insert((block.id, instruction.id));
-                if let Some(RegisterConstraint::Fixed(physical)) = operand.constraint {
-                    fixed.entry(*register).or_default().insert(physical);
+                match operand.constraint {
+                    Some(RegisterConstraint::Fixed(physical)) => {
+                        pins.entry(*register)
+                            .and_modify(|pin| {
+                                if *pin != Some(physical) {
+                                    *pin = None;
+                                }
+                            })
+                            .or_insert(Some(physical));
+                    }
+                    _ => {
+                        pins.insert(*register, None);
+                    }
                 }
             }
         }
     }
-    fixed
-        .into_iter()
-        .filter_map(|(register, registers)| {
-            (registers.len() == 1 && sites.get(&register).is_some_and(|sites| sites.len() == 1))
-                .then_some(register)
-        })
+    pins.into_iter()
+        .filter_map(|(register, pin)| pin.map(|_| register))
         .collect()
 }
 
@@ -592,5 +594,93 @@ mod tests {
         let result = split_fixed_occurrences(&original, &TestTarget).unwrap();
 
         assert_eq!(result, original);
+    }
+
+    #[test]
+    fn leaves_a_single_physical_register_pin_unsplit_across_its_full_range() {
+        // A value whose definition and every later use require the same
+        // physical register is already valid for its complete lifetime.
+        let original = function(
+            vec![
+                instruction(0, vec![fixed(0, OperandRole::Def, FIRST)]),
+                instruction(1, vec![fixed(0, OperandRole::Use, FIRST)]),
+                instruction(2, vec![fixed(0, OperandRole::Use, FIRST)]),
+            ],
+            &[0],
+        );
+
+        let result = split_fixed_occurrences(&original, &TestTarget).unwrap();
+
+        assert_eq!(result, original);
+    }
+
+    #[test]
+    fn splits_a_pin_when_one_occurrence_is_unconstrained() {
+        // One unconstrained use means the value is no longer a whole-range
+        // pin, so each fixed occurrence still gets its own short lifetime.
+        let original = function(
+            vec![
+                instruction(0, vec![fixed(0, OperandRole::Def, FIRST)]),
+                instruction(
+                    1,
+                    vec![virtual_operand(VirtualRegisterId::new(0), OperandRole::Use)],
+                ),
+                instruction(2, vec![fixed(0, OperandRole::Use, FIRST)]),
+            ],
+            &[0],
+        );
+
+        let result = split_fixed_occurrences(&original, &TestTarget).unwrap();
+        let instructions = &result.blocks[0].instructions;
+
+        assert_eq!(instructions.len(), 5);
+        assert_eq!(
+            instructions
+                .iter()
+                .map(|instruction| instruction.id)
+                .collect::<Vec<_>>(),
+            vec![
+                MachineInstructionId::new(0),
+                MachineInstructionId::new(3),
+                MachineInstructionId::new(1),
+                MachineInstructionId::new(4),
+                MachineInstructionId::new(2),
+            ]
+        );
+        assert_eq!(instructions[1].opcode, TEST_COPY);
+        assert_eq!(instructions[3].opcode, TEST_COPY);
+        assert_ne!(register_at(&instructions[0], 0), VirtualRegisterId::new(0));
+        assert_eq!(register_at(&instructions[1], 0), VirtualRegisterId::new(0));
+        assert_eq!(register_at(&instructions[2], 0), VirtualRegisterId::new(0));
+        assert_ne!(register_at(&instructions[4], 0), VirtualRegisterId::new(0));
+    }
+
+    #[test]
+    fn splits_occurrences_with_different_fixed_requirements() {
+        // Different fixed requirements cannot describe one whole-range pin.
+        let original = function(
+            vec![
+                instruction(0, vec![fixed(0, OperandRole::Def, FIRST)]),
+                instruction(1, vec![fixed(0, OperandRole::Use, SECOND)]),
+            ],
+            &[0],
+        );
+
+        let result = split_fixed_occurrences(&original, &TestTarget).unwrap();
+        let instructions = &result.blocks[0].instructions;
+
+        assert_eq!(instructions.len(), 4);
+        assert_eq!(instructions[1].opcode, TEST_COPY);
+        assert_eq!(instructions[2].opcode, TEST_COPY);
+        assert_ne!(register_at(&instructions[0], 0), VirtualRegisterId::new(0));
+        assert_ne!(register_at(&instructions[3], 0), VirtualRegisterId::new(0));
+        assert_eq!(
+            instructions[0].operands[0].constraint,
+            Some(RegisterConstraint::Fixed(FIRST))
+        );
+        assert_eq!(
+            instructions[3].operands[0].constraint,
+            Some(RegisterConstraint::Fixed(SECOND))
+        );
     }
 }
