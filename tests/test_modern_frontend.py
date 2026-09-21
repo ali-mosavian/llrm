@@ -1,3 +1,4 @@
+import re
 import json
 from pathlib import Path
 
@@ -295,3 +296,85 @@ def test_nbody_native_loops_eliminate_redundant_index_arithmetic() -> None:
     assert "sub di, 0" not in assembly
     scaled_indices = assembly.count("shl si, 4") + assembly.count("shl di, 4")
     assert scaled_indices <= 2
+
+
+def test_nbody_position_loop_uses_one_end_relative_byte_offset() -> None:
+    """nbody updated six bodies with an index, `index << 4`, two address
+    temporaries, and a separate compare.  One -96,+16 byte recurrence can
+    address the fields and terminate on the step's own zero flag.
+    """
+    assembly = masm.text(modern_compile.assembled(driver.parsed(NBODY), entry="main"))
+    loop = assembly.split("L0_18:\n", 1)[1].split("    jne L0_18\n", 1)[0]
+
+    assert "mov si, ax" not in loop
+    assert "shl si, 4" not in loop
+    assert "lea di" not in loop
+    assert "cmp ax, 6" not in loop
+    assert "mov si, 65440\nL0_18:" in assembly  # -96 in a word
+    assert "mov ebx, dword ptr [bp+si+8]" in loop
+    assert "add dword ptr [bp+si], ebx" in loop
+    assert "mov ebx, dword ptr [bp+si+12]" in loop
+    assert "add dword ptr [bp+si+4], ebx" in loop
+    assert "add si, 16\nL0_17:\n" in loop
+    assert "or si, si" not in loop
+    assert "cmp si" not in loop
+
+
+def test_nbody_identity_uses_the_paired_byte_recurrences() -> None:
+    """nbody carried scalar current/other indices beside two `index * 16`
+    address chains because their identity comparison hid that both byte
+    offsets are the same injective encoding of those indices.
+    """
+    assembly = masm.text(modern_compile.assembled(driver.parsed(NBODY), entry="main"))
+    interaction = assembly.split("L0_7:\n", 1)[1].split("L0_2:\n", 1)[0]
+
+    assert re.search(r"    shl (?:[sd]i|word ptr \[[^]]+\]), 4\n", interaction) is None
+    assert ", 96\n" not in interaction
+    assert len(re.findall(r"    add word ptr \[[^]]+\], 16\nL\d+_\d+:\n    jne L\d+_\d+\n", interaction)) == 2
+    assert len(re.findall(r"    mov word ptr \[[^]]+\], 65440\n", assembly.split("L0_2:\n", 1)[0])) == 2
+
+
+def test_counted_struct_loop_uses_its_record_width_as_the_byte_stride(tmp_path: Path) -> None:
+    """The end-relative recurrence is an affine-loop rule, not a body/16 rule."""
+    source = tmp_path / "stride.mod"
+    source.write_text(
+        """\
+struct sample:
+    tag: i16
+    value: i32
+    delta: i32
+
+fn update() -> i32:
+    var samples: [sample; 5] = [
+        sample { tag: 0, value: 1, delta: 2 },
+        sample { tag: 0, value: 2, delta: 3 },
+        sample { tag: 0, value: 3, delta: 4 },
+        sample { tag: 0, value: 4, delta: 5 },
+        sample { tag: 0, value: 5, delta: 6 },
+    ]
+    for current in &mut samples:
+        current.value += current.delta
+    return samples[0].value + samples[4].value
+
+fn main() -> i16:
+    update()
+    return 0
+"""
+    )
+
+    assembly = masm.text(modern_compile.assembled(driver.parsed(source), entry="main"))
+
+    loop = re.search(
+        r"    mov (?P<offset>[sd]i), 65486\n"
+        r"(?P<label>L\d+_\d+):\n"
+        r"(?P<body>(?:    .*\n)+?)"
+        r"    add (?P=offset), 10\n"
+        r"L\d+_\d+:\n"
+        r"    jne (?P=label)\n",
+        assembly,
+    )
+    assert loop is not None  # -5 * sizeof(sample), with sizeof(sample) == 10
+    offset = loop.group("offset")
+    assert f"dword ptr [bp+{offset}+2]" in loop.group("body")
+    assert f"dword ptr [bp+{offset}+6]" in loop.group("body")
+    assert f"shl {offset}" not in assembly

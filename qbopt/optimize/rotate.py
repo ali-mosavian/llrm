@@ -15,7 +15,7 @@ from qbopt.analysis import consts
 from qbopt.analysis import induction
 
 
-def entered(body: mir.MirBody) -> mir.MirBody:
+def entered(body: mir.MirBody, *, step_tests: bool = False) -> mir.MirBody:
     """Every proven loop entered at its body, each test merged into its latch.
 
     After the passes, not among them: a rotated loop is no longer the
@@ -24,7 +24,7 @@ def entered(body: mir.MirBody) -> mir.MirBody:
     """
     from qbopt.optimize import cfg
 
-    return cfg.merged(rotated(_counted_down(body)))
+    return cfg.merged(rotated(_counted_down(body), step_tests=step_tests))
 
 
 def _counted_down(body: mir.MirBody) -> mir.MirBody:
@@ -131,8 +131,7 @@ def _counted_down(body: mir.MirBody) -> mir.MirBody:
         # an exit use hidden in either representation must reject the change.
         allowed = {id(compare), id(stepping)}
         if any(
-            phi.result in op.uses and id(op) not in allowed
-            or update in op.uses
+            phi.result in op.uses and id(op) not in allowed or update in op.uses
             for block in body.blocks
             for op in block.ops
         ):
@@ -192,13 +191,12 @@ def _counted_down(body: mir.MirBody) -> mir.MirBody:
 
         start = phi.incoming[preheader]
         start_definition = made.get(start.id)
-        start_is_private = start_definition is not None and not any(
-            start in op.uses for block in body.blocks for op in block.ops
-        ) and not any(
-            start in other.incoming.values()
-            for block in body.blocks
-            for other in block.phis
-            if other is not phi
+        start_is_private = (
+            start_definition is not None
+            and not any(start in op.uses for block in body.blocks for op in block.ops)
+            and not any(
+                start in other.incoming.values() for block in body.blocks for other in block.phis if other is not phi
+            )
         )
         if start_is_private:
             entry_ops = [_cleared(op) if op is start_definition else op for op in entry_ops]
@@ -250,7 +248,7 @@ def _counted_down(body: mir.MirBody) -> mir.MirBody:
     return body
 
 
-def rotated(body: mir.MirBody) -> mir.MirBody:
+def rotated(body: mir.MirBody, *, step_tests: bool = False) -> mir.MirBody:
     from qbopt.optimize import transform
 
     blocks = {block.at: block for block in body.blocks}
@@ -280,10 +278,97 @@ def rotated(body: mir.MirBody) -> mir.MirBody:
             ops[-1] = replace(ops[-1], target=first.at)
         else:
             at = ops[-1].at if ops else entry.at
-            ops.append(
-                mir.Op(at, ir.Operation.JUMP, "", (), (), kind=mir.Kind.JUMP, target=first.at, symbol=False)
-            )
-        return rotated(_entered(body, loop, preheader, header, first, ops))
+            ops.append(mir.Op(at, ir.Operation.JUMP, "", (), (), kind=mir.Kind.JUMP, target=first.at, symbol=False))
+        if step_tests:
+            body = _step_test(body, loop, header)
+        header = body.block(header.at)
+        first = body.block(first.at)
+        return rotated(
+            _entered(body, loop, preheader, header, first, ops),
+            step_tests=step_tests,
+        )
+    return body
+
+
+def _step_test(body: mir.MirBody, loop: loops.Loop, header: mir.MirBlock) -> mir.MirBody:
+    """Let a zero-ending recurrence's latch step provide the branch flags.
+
+    ``rotated`` has proved that the preheader will bypass this test, so the
+    header is reached only after the latch update.  When its sole question is
+    whether that updated recurrence is zero, a second compare computes the
+    flags the update already produced.  Keep this in MIR: the relationship is
+    a loop fact, not a post-allocation instruction coincidence.
+    """
+    if len(loop.latches) != 1 or not header.ops or header.ops[-1].kind is not mir.Kind.BRANCH:
+        return body
+    latch_at = next(iter(loop.latches))
+    latch = body.block(latch_at)
+    branch = header.ops[-1]
+    if branch.test not in (mir.Kind.EQ, mir.Kind.NE):
+        return body
+    made = {value.id: op for block in body.blocks for op in block.ops for value in op.defines}
+    readers = {value: [] for block in body.blocks for op in block.ops for value in op.defines}
+    for block in body.blocks:
+        for op in block.ops:
+            for value in op.uses:
+                readers.setdefault(value, []).append(op)
+    facts = consts.known(body)
+
+    for counter in induction.basics(body, loop).values():
+        phi = next((one for one in header.phis if one.result.id == counter.value), None)
+        if phi is None or latch_at not in phi.incoming:
+            continue
+        comparisons = [
+            op
+            for op in header.ops[:-1]
+            if induction._counter_bound(op, branch, counter, counter.start.width, made)
+            == mir.Const(0, counter.start.width)
+        ]
+        if len(comparisons) != 1:
+            continue
+        compare = comparisons[0]
+        flags = [value for value in compare.defines if value.flags]
+        if len(flags) != 1 or readers.get(flags[0]) != [branch]:
+            continue
+        update = phi.incoming[latch_at]
+        stepping = made.get(update.id)
+        stepped = mir.stepping(stepping) if stepping is not None else None
+        if (
+            stepping is None
+            or stepped is None
+            or stepped[0] != mir.Held(phi.result, counter.start.width)
+            or stepping.results != (mir.Held(update, counter.start.width),)
+            or stepping.loads
+            or stepping.stores
+            or stepping.barrier
+            or stepping.merges
+        ):
+            continue
+        step_index = latch.ops.index(stepping)
+        if any(op.kind not in (mir.Kind.NOTHING, mir.Kind.JUMP) for op in latch.ops[step_index + 1 :]):
+            continue
+        if any(value.flags and readers.get(value) for value in stepping.defines):
+            continue
+        # The modular recurrence must reach zero exactly at the proven exit;
+        # nonempty() established a finite positive trip count before rotation.
+        if induction.trip_count(body, loop, facts) is None:
+            continue
+        serial = max((value.id for value in ssa.values(body)), default=0) + 1
+        variable = max((value.variable for value in ssa.values(body)), default=0) + 1
+        step_flags = mir.Value(serial, stepping.at, flags=True, variable=variable, version=1)
+        rewritten = []
+        for block in body.blocks:
+            ops = []
+            for op in block.ops:
+                if op is stepping:
+                    op = replace(op, defines=(*op.defines, step_flags), source_backed=False, raised=None)
+                elif op is compare:
+                    op = _cleared(op)
+                elif op is branch:
+                    op = replace(op, uses=(step_flags,), source_backed=False, raised=None)
+                ops.append(op)
+            rewritten.append(replace(block, ops=tuple(ops)))
+        return replace(body, blocks=tuple(rewritten))
     return body
 
 
@@ -310,8 +395,7 @@ def _entered(
     latch = next(iter(loop.latches))
     serial = max(value.id for value in ssa.values(body)) + 1
     moved = {
-        phi.result.id: replace(phi.result, id=serial + index, at=first.at)
-        for index, phi in enumerate(header.phis)
+        phi.result.id: replace(phi.result, id=serial + index, at=first.at) for index, phi in enumerate(header.phis)
     }
 
     def latest(value: mir.Value) -> mir.Value:

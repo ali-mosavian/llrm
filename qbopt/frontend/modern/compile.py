@@ -10,6 +10,7 @@ from qbopt.backend import masm
 from qbopt.backend import jumps
 from qbopt.backend import lower
 from qbopt.backend import phielim
+from qbopt.optimize import rotate
 from qbopt.backend import omfwrite
 from qbopt.backend import prologue
 from qbopt.optimize import transform
@@ -57,6 +58,7 @@ def optimized(
         # recurrence, and address-strength passes remain enabled.
         unroll_=False,
         peel_=False,
+        control_recurrences=True,
     )
     return replace(lowered, body=body)
 
@@ -94,6 +96,17 @@ def assembled(
         physical = replace(
             physical,
             lowered=optimized(program, function, physical.lowered, target, physical.calls),
+        )
+        # Rotation is deliberately after the scalar fixed point: counted-loop
+        # analyses need the canonical pre-tested form, while final machine
+        # lowering wants a proven nonempty loop entered at its body so the
+        # latch step can provide the branch flags.
+        physical = replace(
+            physical,
+            lowered=replace(
+                physical.lowered,
+                body=rotate.entered(physical.lowered.body, step_tests=True),
+            ),
         )
         legalized = lower_int64.expanded(
             physical.lowered.body,

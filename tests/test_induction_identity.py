@@ -6,14 +6,14 @@ import pytest
 from qbopt.model import ir
 from qbopt.model import mir
 from qbopt.analysis import ssa
+from qbopt.backend import lower
 from qbopt.analysis import loops
+from qbopt.analysis import consts
 from qbopt.optimize import rotate
 from qbopt.optimize import unroll
 from qbopt.optimize import indvars
 from qbopt.optimize import strength
 from qbopt.analysis import induction
-from qbopt.analysis import consts
-from qbopt.backend import lower
 from qbopt.optimize import transform
 from qbopt.objectfile.module import Addr
 from qbopt.objectfile.module import Space
@@ -24,18 +24,31 @@ def _keep_loops(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(unroll, "expanded", lambda body, *args: body)
 
 
-@pytest.mark.parametrize("kind,same,accepted", [
-    (mir.Kind.OR, True, True), (mir.Kind.AND, True, True),
-    (mir.Kind.XOR, True, False), (mir.Kind.OR, False, False),
-    (mir.Kind.AND, False, False),
-])
+@pytest.mark.parametrize(
+    "kind,same,accepted",
+    [
+        (mir.Kind.OR, True, True),
+        (mir.Kind.AND, True, True),
+        (mir.Kind.XOR, True, False),
+        (mir.Kind.OR, False, False),
+        (mir.Kind.AND, False, False),
+    ],
+)
 def test_counter_zero_test_requires_an_unchanged_counter(kind, same, accepted):
     """NDARR's zero-test bound applies to i OR i, not i XOR i or masked i."""
     value, result = mir.Value(900, 0), mir.Value(901, 0)
     flags = mir.Value(902, 0, flags=True)
     source = mir.Held(value, 2)
-    op = mir.Op(0, ir.Operation.BINARY, "", (result, flags), (value,), kind=kind,
-                args=(source, source if same else mir.Const(1, 2)), results=(mir.Held(result, 2),))
+    op = mir.Op(
+        0,
+        ir.Operation.BINARY,
+        "",
+        (result, flags),
+        (value,),
+        kind=kind,
+        args=(source, source if same else mir.Const(1, 2)),
+        results=(mir.Held(result, 2),),
+    )
     branch = mir.Op(1, ir.Operation.BRANCH, "", (), (flags,), kind=mir.Kind.BRANCH)
     counter = induction.Affine(value.id, mir.Const(-1, 2), mir.Const(1, 2), 0)
     assert induction._counter_bound(op, branch, counter, 2) == (mir.Const(0, 2) if accepted else None)
@@ -60,6 +73,18 @@ def test_counter_zero_test_keeps_its_flags_across_a_partial_result():
     branch = mir.Op(1, ir.Operation.BRANCH, "", (), (flags,), kind=mir.Kind.BRANCH)
     counter = induction.Affine(value.id, mir.Const(-1, 2), mir.Const(1, 2), 0)
     assert induction._counter_bound(op, branch, counter, 2) == mir.Const(0, 2)
+
+
+def test_affine_map_carries_the_modular_injectivity_proof() -> None:
+    """Scaled identities are valid only inside the map's modular period."""
+    source = induction.Affine(1, mir.Const(0, 2), mir.Const(1, 2), 1)
+    byte_offset = induction.Affine(2, mir.Const(0, 2), mir.Const(16, 2), 1)
+
+    mapping = induction.relation(source, byte_offset, {})
+
+    assert mapping == induction.AffineMap(scale=16, offset=0, width=2)
+    assert mapping.injective(0, 5)
+    assert not mapping.injective(0, 4096)
 
 
 def test_posttested_counter_has_an_exact_fixed_trip_count():
@@ -97,8 +122,7 @@ def test_posttested_counter_has_an_exact_fixed_trip_count():
         kind=mir.Kind.SUB,
         args=(mir.Held(following, 2), mir.Const(4, 2)),
     )
-    branch = mir.Op(3, ir.Operation.BRANCH, "", (), (flags,), kind=mir.Kind.BRANCH,
-                    test=mir.Kind.ABOVE_EQ, target=3)
+    branch = mir.Op(3, ir.Operation.BRANCH, "", (), (flags,), kind=mir.Kind.BRANCH, test=mir.Kind.ABOVE_EQ, target=3)
     body = mir.MirBody(
         0,
         (
@@ -184,7 +208,9 @@ def test_posttested_symbolic_sentinel_keeps_its_exact_trip_count():
 def test_nine_dimensional_loop_carries_its_pointer(tag):
     """NDARR printed 1,12,2 correctly but rebuilt its nine-dimensional pointer each iteration."""
     from qbopt import wholeseg
+
     states = []
+
     def watch(stage, name, state):
         # `r02-strength` is the first pass that has both the promoted
         # counter and its exact logical-test bound.  Later exact unrolling
@@ -192,6 +218,7 @@ def test_nine_dimensional_loop_carries_its_pointer(tag):
         # address was rebuilt.
         if stage == "mir-r02-strength":
             states.append(state)
+
     result = wholeseg.emitted(Path(f"fixtures/regressions/ndarr-{tag}.obj").read_bytes(), watch=watch)
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     body = states[0]
@@ -204,55 +231,79 @@ def test_nine_dimensional_loop_carries_its_pointer(tag):
 def test_native_array_helper_does_not_block_frame_forwarding(tag, monkeypatch):
     """HUGELP retained frame reloads because removed HARY addresses still looked like calls."""
     from qbopt import wholeseg
+
     _keep_loops(monkeypatch)
     states = []
+
     def watch(stage, name, state):
         if stage == "mir-widen":
             states.append(state)
+
     result = wholeseg.emitted(Path(f"fixtures/regressions/hugelp-{tag}.obj").read_bytes(), watch=watch)
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     body = states[0]
     loop = loops.loops(body.blocks, body.entry)[0]
-    assert not any(ref.addr is not None and ref.addr.space is Space.FRAME
-                   for block in body.blocks if block.at in loop.body for op in block.ops for ref in op.loads)
+    assert not any(
+        ref.addr is not None and ref.addr.space is Space.FRAME
+        for block in body.blocks
+        if block.at in loop.body
+        for op in block.ops
+        for ref in op.loads
+    )
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_huge_loop_byte_offsets_are_induction_variables(tag, monkeypatch):
     """HUGELP recomputed 32-bit array strides after every narrow index extension."""
     from qbopt import wholeseg
+
     _keep_loops(monkeypatch)
     states = []
+
     def watch(stage, name, state):
         if stage == "mir-widen":
             states.append(state)
+
     result = wholeseg.emitted(Path(f"fixtures/regressions/hugelp-{tag}.obj").read_bytes(), watch=watch)
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     body = states[0]
     loop = loops.loops(body.blocks, body.entry)[0]
-    offsets = [op.args[1] for block in body.blocks if block.at in loop.body
-               for op in block.ops if op.kind is mir.Kind.PTR_OFFSET]
+    offsets = [
+        op.args[1]
+        for block in body.blocks
+        if block.at in loop.body
+        for op in block.ops
+        if op.kind is mir.Kind.PTR_OFFSET
+    ]
     assert len(offsets) == 2
-    assert not any(op.kind in (mir.Kind.MUL, mir.Kind.SIGN_EXTEND)
-                   for block in body.blocks if block.at in loop.body for op in block.ops)
+    assert not any(
+        op.kind in (mir.Kind.MUL, mir.Kind.SIGN_EXTEND)
+        for block in body.blocks
+        if block.at in loop.body
+        for op in block.ops
+    )
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_huge_loop_carries_whole_pointers(tag, monkeypatch):
     """HUGELP rebuilt two pointers from a spilled base and byte offsets on every iteration."""
     from qbopt import wholeseg
+
     _keep_loops(monkeypatch)
     states = []
+
     def watch(stage, name, state):
         if stage == "mir-widen":
             states.append(state)
+
     result = wholeseg.emitted(Path(f"fixtures/regressions/hugelp-{tag}.obj").read_bytes(), watch=watch)
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     body = states[0]
     loop = loops.loops(body.blocks, body.entry)[0]
     carried = {phi.result for block in body.blocks for phi in block.phis}
-    stores = [ref for block in body.blocks if block.at in loop.body for op in block.ops
-              for ref in op.stores if ref.pointer]
+    stores = [
+        ref for block in body.blocks if block.at in loop.body for op in block.ops for ref in op.stores if ref.pointer
+    ]
     assert len(stores) == 2 and all(ref.base in carried for ref in stores)
 
 
@@ -261,14 +312,17 @@ def test_sign_extended_recurrence_requires_no_narrow_wrap(offset, accepted, monk
     """A 16-bit index crossing 32767 must not become a steadily increasing 32-bit stride."""
     from qbopt import wholeseg
     from qbopt.analysis import consts
+
     monkeypatch.setattr(strength, "reduced", lambda body, *args: body)
     monkeypatch.setattr(indvars, "zeroed", lambda body: body)
     monkeypatch.setattr(rotate, "entered", lambda body: body)
     _keep_loops(monkeypatch)
     states = []
+
     def watch(stage, name, state):
         if stage == "mir-widen":
             states.append(state)
+
     wholeseg.emitted(Path("fixtures/regressions/hugelp-p-g2.obj").read_bytes(), watch=watch)
     built = states[0]
     loop = loops.loops(built.blocks, built.entry)[0]
@@ -277,8 +331,16 @@ def test_sign_extended_recurrence_requires_no_narrow_wrap(offset, accepted, monk
     facts = consts.known(built)
     assert induction._last_counter(built, loop, counter, facts, 2) == 1
     source, result = mir.Value(9000, 0), mir.Value(9001, 0)
-    extension = mir.Op(0, ir.Operation.EXTEND, "", (result,), (source,), kind=mir.Kind.SIGN_EXTEND,
-                       args=(mir.Held(source, 2),), results=(mir.Held(result, 4),))
+    extension = mir.Op(
+        0,
+        ir.Operation.EXTEND,
+        "",
+        (result,),
+        (source,),
+        kind=mir.Kind.SIGN_EXTEND,
+        args=(mir.Held(source, 2),),
+        results=(mir.Held(result, 4),),
+    )
     form = (counter, 1, ((mir.Const(offset, 2), 1),))
     # -32769 has the valid 16-bit spelling 32767 and crosses the upper bound too.
     got = induction._extended(built, loop, extension, {source.id: form}, facts)
@@ -428,7 +490,7 @@ def test_matrix_reduced_stride_keeps_its_multiplier_address(tag):
     found = module.of(omf.parse(result.data))
     for one in blocks.instructions(found):
         if one.disp_at is not None and one.disp_len == 2:
-            assert found.code[one.disp_at:one.disp_at + 2] != b"\0\0" or one.disp_at in found.fixup_at
+            assert found.code[one.disp_at : one.disp_at + 2] != b"\0\0" or one.disp_at in found.fixup_at
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
@@ -442,10 +504,14 @@ def test_harr_hoisted_descriptor_read_keeps_its_address(tag):
     result = wholeseg.emitted(Path(f"fixtures/omf/harr-{tag}.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
-    bad = [one.at for one in blocks.instructions(found)
-           if one.disp_at is not None and one.disp_len == 2
-           and found.code[one.disp_at:one.disp_at + 2] == b"\0\0"
-           and one.disp_at not in found.fixup_at]
+    bad = [
+        one.at
+        for one in blocks.instructions(found)
+        if one.disp_at is not None
+        and one.disp_len == 2
+        and found.code[one.disp_at : one.disp_at + 2] == b"\0\0"
+        and one.disp_at not in found.fixup_at
+    ]
     assert not bad, f"unrelocated zero displacements: {bad}"
 
 
@@ -453,15 +519,18 @@ def test_nbody_inner_counter_has_a_proven_upper_bound() -> None:
     """Nbody's conditional interaction body hid the 0..5 counter range from the two-block proof."""
     import corpus
     from qbopt.analysis import consts
+
     path = Path("fixtures/regressions/nbody-stack-p-g2.obj")
     found = corpus.loaded(path)
     body = mir.bodies(found, corpus.partitioned(path))[0][1]
     body = transform.applied(body, found.dgroup, found.calls, blocks=corpus.partitioned(path), found=found)
-    loop = next(loop for loop in loops.loops(body.blocks, body.entry) if loop.header == 0x21c)
+    loop = next(loop for loop in loops.loops(body.blocks, body.entry) if loop.header == 0x21C)
     counters = induction.basics(body, loop)
     assert len(counters) == 1
     assert induction._last_counter(body, loop, next(iter(counters.values())), consts.known(body), 2) == 5
-    escaping = replace(body, blocks=tuple(replace(block, succ=(0x227,)) if block.at == 0x117 else block for block in body.blocks))
+    escaping = replace(
+        body, blocks=tuple(replace(block, succ=(0x227,)) if block.at == 0x117 else block for block in body.blocks)
+    )
     assert induction._last_counter(escaping, loop, next(iter(counters.values())), consts.known(body), 2) is None
 
 
@@ -510,9 +579,15 @@ def test_harr_descriptor_offset_is_read_before_inner_loop_unless_written(changed
     assert any(mir.same_bytes(ref, field) for op in inner.ops for ref in op.loads) is changed
     if not changed:
         from qbopt.analysis import loops
+
         dominators = loops.dominators(list(result.blocks), result.entry)
-        reads = [(block, op, ref) for block in result.blocks for op in block.ops for ref in op.loads
-                 if mir.same_bytes(ref, field)]
+        reads = [
+            (block, op, ref)
+            for block in result.blocks
+            for op in block.ops
+            for ref in op.loads
+            if mir.same_bytes(ref, field)
+        ]
         assert reads
         assert all(block.at in dominators[0x52] for block, op, ref in reads)
         assert all(ref.base in op.uses for block, op, ref in reads if ref.base is not None)
@@ -625,8 +700,16 @@ def test_long_recurrence_keeps_its_width(copied: bool) -> None:
         temporary = mir.Value(100, 1)
         original = update.defines[0]
         update = replace(update, defines=(temporary,), results=(mir.Held(temporary, 4),))
-        copy = mir.Op(3, ir.Operation.MOVE, "", (original,), (temporary,), kind=mir.Kind.COPY,
-                      args=(mir.Held(temporary, 4),), results=(mir.Held(original, 4),))
+        copy = mir.Op(
+            3,
+            ir.Operation.MOVE,
+            "",
+            (original,),
+            (temporary,),
+            kind=mir.Kind.COPY,
+            args=(mir.Held(temporary, 4),),
+            results=(mir.Held(original, 4),),
+        )
         ops = (update, copy)
     built = replace(built, blocks=(built.blocks[0], replace(header, ops=ops), built.blocks[2]))
     recurrence = induction.basics(built, loop)[header.phis[0].result.id]
@@ -649,9 +732,12 @@ def test_lngmxx_accumulator_has_a_whole_long_start(tag: str, monkeypatch) -> Non
     partition = corpus.partitioned(path)
     built = mir.bodies(found, partition)[0][1]
     result = transform.applied(built, found.dgroup, found.calls, blocks=partition, found=found)
-    recurrences = [counter for loop in loops.loops(result.blocks, result.entry)
-                   for counter in induction.basics(result, loop).values()]
-    accumulator, = [counter for counter in recurrences if isinstance(counter.step, mir.Held)]
+    recurrences = [
+        counter
+        for loop in loops.loops(result.blocks, result.entry)
+        for counter in induction.basics(result, loop).values()
+    ]
+    (accumulator,) = [counter for counter in recurrences if isinstance(counter.step, mir.Held)]
     assert accumulator.start.width == accumulator.step.width == 4
 
 
@@ -946,12 +1032,8 @@ def test_reduction_does_not_speculate_on_a_loop_bypass(bypass: bool) -> None:
     counter = header.phis[0].result
     answer = header.ops[1].defines[0]
     memory = mir.MemRef(Addr(Space.SEGMENT, 0x20, 1), 2)
-    product = replace(
-        header.ops[1], uses=(counter,), args=(mir.Held(counter, 2), mir.Cell(memory)), loads=(memory,)
-    )
-    consume = mir.Op(
-        4, ir.Operation.PUSH, "", (), (answer,), kind=mir.Kind.ARG, args=(mir.Held(answer, 2),)
-    )
+    product = replace(header.ops[1], uses=(counter,), args=(mir.Held(counter, 2), mir.Cell(memory)), loads=(memory,))
+    consume = mir.Op(4, ir.Operation.PUSH, "", (), (answer,), kind=mir.Kind.ARG, args=(mir.Held(answer, 2),))
     built = replace(
         built,
         blocks=(
@@ -1035,9 +1117,7 @@ def test_inserted_counter_operations_own_their_insertion_location() -> None:
     counter = header.phis[0].result
     product = replace(header.ops[1], uses=(counter,), args=(mir.Held(counter, 2), mir.Const(3, 2)))
     answer = product.defines[0]
-    consume = mir.Op(
-        4, ir.Operation.PUSH, "", (), (answer,), kind=mir.Kind.ARG, args=(mir.Held(answer, 2),)
-    )
+    consume = mir.Op(4, ir.Operation.PUSH, "", (), (answer,), kind=mir.Kind.ARG, args=(mir.Held(answer, 2),))
     built = replace(
         built,
         blocks=(
@@ -1152,6 +1232,7 @@ def test_nested_row_recurrences_remove_repeated_multiplication(tag):
     from qbopt.objectfile import omf
     from qbopt.frontend import blocks
     from qbopt.objectfile import module
+
     result = wholeseg.emitted(Path(f"fixtures/omf/nested-{tag}.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))

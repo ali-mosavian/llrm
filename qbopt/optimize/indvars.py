@@ -36,11 +36,7 @@ def rewound(
 
     if costs is None:
         costs = OperationCosts()
-    if (
-        not registers
-        or costs.add > costs.move
-        or costs.memory_update > costs.load + costs.store
-    ):
+    if not registers or costs.add > costs.move or costs.memory_update > costs.load + costs.store:
         return body
 
     found = loops.loops(body.blocks, body.entry)
@@ -52,19 +48,10 @@ def rewound(
     facts = consts.known(body)
     live = liveness.live(body)
     values = tuple(ssa.values(body))
-    definitions = {
-        value: (block.at, op)
-        for block in body.blocks
-        for op in block.ops
-        for value in op.defines
-    }
+    definitions = {value: (block.at, op) for block in body.blocks for op in block.ops for value in op.defines}
 
     for inner in found:
-        parents = [
-            loop
-            for loop in found
-            if inner.body < loop.body and inner.header in loop.body
-        ]
+        parents = [loop for loop in found if inner.body < loop.body and inner.header in loop.body]
         if not parents or len(inner.latches) != 1:
             continue
         parent = min(parents, key=lambda loop: len(loop.body))
@@ -143,12 +130,7 @@ def rewound(
             # The saved start must become dead in the enclosing loop.  Other
             # uses would keep its live range and turn an equal-cost register
             # rewrite into a pure code-size loss.
-            if any(
-                start in op.uses
-                for block in body.blocks
-                if block.at in parent.body
-                for op in block.ops
-            ) or any(
+            if any(start in op.uses for block in body.blocks if block.at in parent.body for op in block.ops) or any(
                 value == start and other is not phi
                 for block in body.blocks
                 if block.at in parent.body
@@ -163,10 +145,13 @@ def rewound(
                 continue
             next_id = max((value.id for value in values), default=-1) + 1
             next_variable = max((value.variable for value in values), default=-1) + 1
-            next_version = max(
-                (value.version for value in values if value.variable == exit_value.variable),
-                default=0,
-            ) + 1
+            next_version = (
+                max(
+                    (value.version for value in values if value.variable == exit_value.variable),
+                    default=0,
+                )
+                + 1
+            )
             seed = mir.Value(next_id, parent_preheader, variable=next_variable, version=1)
             closed = mir.Value(next_id + 1, exit_at, variable=exit_value.variable, version=next_version)
             reset = mir.Value(next_id + 2, exit_at, variable=next_variable, version=2)
@@ -245,9 +230,7 @@ def simplified(body: mir.MirBody) -> mir.MirBody:
             update = phi.incoming[next(iter(loop.latches))]
             branch = header.ops[-1]
             compare = next(
-                op
-                for op in header.ops[:-1]
-                if induction._counter_bound(op, branch, counter, width, made) is not None
+                op for op in header.ops[:-1] if induction._counter_bound(op, branch, counter, width, made) is not None
             )
             (exit_at,) = [at for at in header.succ if at not in loop.body]
             if set(predecessors.get(exit_at, ())) != {header.at} or not blocks[exit_at].ops:
@@ -284,11 +267,7 @@ def simplified(body: mir.MirBody) -> mir.MirBody:
                 alternative_width = alternative.start.width
                 stride = induction._signed(alternative.step, facts, alternative_width)
                 modulus = 1 << (8 * alternative_width)
-                if (
-                    alternative.value == counter.value
-                    or not stride
-                    or count >= modulus // gcd(abs(stride), modulus)
-                ):
+                if alternative.value == counter.value or not stride or count >= modulus // gcd(abs(stride), modulus):
                     continue
                 alternative_phi = next(phi for phi in header.phis if phi.result.id == alternative.value)
                 value = alternative_phi.result
@@ -386,36 +365,9 @@ def _recurrences(body: mir.MirBody, facts: dict) -> dict[int, tuple[induction.Af
     for loop in loops.loops(body.blocks, body.entry):
         for affine in induction.basics(body, loop).values():
             width = affine.start.width
-            start = induction._signed(affine.start, facts, width)
-            last = induction._last_counter(body, loop, affine, facts, width)
-            domain = (min(start, last), max(start, last)) if start is not None and last is not None else (None, None)
+            domain = induction.domain(body, loop, affine, facts) or (None, None)
             out[affine.value] = (affine, width, *domain)
     return out
-
-
-def _relation(
-    source: tuple[induction.Affine, int, int | None, int | None],
-    target: tuple[induction.Affine, int, int | None, int | None],
-    facts: dict,
-) -> tuple[int, int] | None:
-    """The constant affine map from one recurrence to the other."""
-    source_affine, width, _, _ = source
-    target_affine, target_width, _, _ = target
-    if target_width != width:
-        return None
-    source_start = induction._signed(source_affine.start, facts, width)
-    source_step = induction._signed(source_affine.step, facts, width)
-    target_start = induction._signed(target_affine.start, facts, width)
-    target_step = induction._signed(target_affine.step, facts, width)
-    if None in (source_start, source_step, target_start, target_step) or not source_step:
-        return None
-    if target_step % source_step:
-        return None
-    scale = target_step // source_step
-    if not scale:
-        return None
-    mask = (1 << (width * 8)) - 1
-    return scale, (target_start - scale * source_start) & mask
 
 
 def _rebased_equalities(
@@ -455,13 +407,10 @@ def _rebased_equalities(
         or target is None
         or source[2] is None
         or source[3] is None
-        or (relation := _relation(source, target, facts)) is None
+        or (relation := induction.relation(source[0], target[0], facts)) is None
     ):
         return None
-    scale, offset = relation
     width = source[1]
-    modulus = 1 << (width * 8)
-    period = modulus // gcd(abs(scale), modulus)
     flags_readers = {
         value: [op for block in body.blocks for op in block.ops if value in op.uses]
         for block in body.blocks
@@ -513,7 +462,7 @@ def _rebased_equalities(
                     for value, candidate in recurrences.items()
                     if value != other.value.id
                     and candidate[0].header == other_source[0].header
-                    and _relation(other_source, candidate, facts) == (scale, offset)
+                    and induction.relation(other_source[0], candidate[0], facts) == relation
                 ),
                 None,
             )
@@ -521,7 +470,7 @@ def _rebased_equalities(
                 return None
             low = min(source[2], other_source[2])
             high = max(source[3], other_source[3])
-            if high - low >= period:
+            if not relation.injective(low, high):
                 return None
             actual = next(
                 value
@@ -550,7 +499,7 @@ def _before_leaving(ops: list, inserted: list) -> None:
     ops[cut:cut] = inserted
 
 
-def zeroed(body: mir.MirBody) -> mir.MirBody:
+def zeroed(body: mir.MirBody, *, address_offsets: bool = False) -> mir.MirBody:
     """A counter counted up to zero, so the loop can end on its step's flags.
 
     `c` from `start` to `last` by `step` becomes `c - final`, `final` being
@@ -630,7 +579,15 @@ def zeroed(body: mir.MirBody) -> mir.MirBody:
             if last is None:
                 continue
             final = last + step
-            offsets = _offsets(phi.result, readers, placed, home, inside, {id(compare), id(stepping)})
+            offsets = _offsets(
+                phi.result,
+                readers,
+                placed,
+                home,
+                inside,
+                {id(compare), id(stepping)},
+                address_offsets=address_offsets,
+            )
             if offsets is None:
                 continue
             read = {value for block in body.blocks for op in block.ops for value in op.uses}
@@ -673,8 +630,28 @@ def zeroed(body: mir.MirBody) -> mir.MirBody:
             variable = max(value.variable for value in ssa.values(body)) + 1
             ending = blocks[preheader].ops[-1]
             seeds, rebased = [], {}
-            for op, position, multiplier in offsets:
+            for op, position, multiplier, address, extra in offsets:
+                if position is None:
+                    assert address is not None
+                    source, replacement = address
+                    rebased[id(op)] = _rebased_cells(
+                        op,
+                        source,
+                        final * multiplier + extra,
+                        replacement,
+                    )
+                    continue
                 base = op.args[position]
+                if isinstance(base, mir.Const):
+                    args = tuple(
+                        mir.Const(consts.masked(base.n + final * multiplier, base.width), base.width)
+                        if index == position
+                        else arg
+                        for index, arg in enumerate(op.args)
+                    )
+                    rebased[id(op)] = replace(op, args=args, source_backed=False, raised=None)
+                    continue
+                assert isinstance(base, mir.Held)
                 moved = mir.Value(serial, ending.at, variable=variable)
                 serial, variable = serial + 1, variable + 1
                 seeds.append(
@@ -756,11 +733,11 @@ def zeroed(body: mir.MirBody) -> mir.MirBody:
                         ),
                     )
                 )
-            return zeroed(replace(changed, blocks=tuple(out)))
+            return zeroed(replace(changed, blocks=tuple(out)), address_offsets=address_offsets)
     return body
 
 
-def _offsets(counter, readers, placed, home, inside, own):
+def _offsets(counter, readers, placed, home, inside, own, *, address_offsets: bool = False):
     """Every add of an invariant to the counter, as (add, invariant's position, multiplier).
 
     Also through a shift of the counter read only by such adds. None where
@@ -783,25 +760,145 @@ def _offsets(counter, readers, placed, home, inside, own):
     def added(op, value, multiplier):
         if not plain(op, mir.Kind.ADD) or len(op.args) != 2:
             return None
-        if not all(isinstance(arg, mir.Held) and arg.width == op.results[0].width for arg in op.args):
+        accepted = (mir.Held, mir.Const) if address_offsets else (mir.Held,)
+        if not all(isinstance(arg, accepted) and arg.width == op.results[0].width for arg in op.args):
             return None
-        positions = [index for index, arg in enumerate(op.args) if arg.value != value]
-        if len(positions) != 1 or home.get(op.args[positions[0]].value) in inside:
+        counted = [index for index, arg in enumerate(op.args) if isinstance(arg, mir.Held) and arg.value == value]
+        if len(counted) != 1:
             return None
-        return (op, positions[0], multiplier)
+        position = 1 - counted[0]
+        invariant = op.args[position]
+        if isinstance(invariant, mir.Held) and home.get(invariant.value) in inside:
+            return None
+        return (op, position, multiplier, None, 0)
+
+    def addressed(op, value, multiplier, replacement=None, extra=0):
+        refs = (*op.loads, *op.stores, *(ref for ref, _known in op.memory_values))
+        found = [ref for ref in refs if ref.base == value]
+        if (
+            not found
+            or any(ref.addr is None or ref.symbolic is not None for ref in found)
+            or any(isinstance(arg, mir.Held) and arg.value == value for arg in op.args)
+            or any(ref.segment == value for ref in refs)
+            or any(ref.base == value for ref in refs if ref not in found)
+        ):
+            return None
+        return (op, None, multiplier, (value, replacement or value), extra)
+
+    def derived(op, value, multiplier):
+        form = added(op, value, multiplier)
+        if form is not None or not address_offsets:
+            return form
+        return addressed(op, value, multiplier)
+
+    def equality(op, value):
+        """The invariant side of an equality, shifted with the counter.
+
+        Replacing ``counter`` by ``counter - final`` preserves identity only
+        when the other side becomes ``other - final`` too.  This is safe for
+        equality and inequality flags; ordered comparisons would change.
+        """
+        if (
+            not address_offsets
+            or op.kind is not mir.Kind.SUB
+            or op.results
+            or op.loads
+            or op.stores
+            or op.barrier
+            or op.merges
+            or len(op.args) != 2
+            or len(op.defines) != 1
+            or not op.defines[0].flags
+            or not readers.get(op.defines[0])
+            or any(
+                reader.kind is not mir.Kind.BRANCH or reader.test not in (mir.Kind.EQ, mir.Kind.NE)
+                for reader in readers[op.defines[0]]
+            )
+        ):
+            return None
+        positions = [index for index, arg in enumerate(op.args) if isinstance(arg, mir.Held) and arg.value == value]
+        if len(positions) != 1:
+            return None
+        position = 1 - positions[0]
+        other = op.args[position]
+        if (
+            not isinstance(other, (mir.Held, mir.Const))
+            or other.width != op.args[positions[0]].width
+            or isinstance(other, mir.Held)
+            and home.get(other.value) in inside
+        ):
+            return None
+        return (op, position, -1, None, 0)
 
     out = []
     for op in readers.get(counter, []):
         if id(op) in own or placed[id(op)] not in inside:
             continue
-        form = added(op, counter, 1)
-        if form is None and plain(op, mir.Kind.SHL) and len(op.args) == 2 and isinstance(op.args[1], mir.Const):
+        form = addressed(op, counter, 1) if address_offsets else None
+        added_form = added(op, counter, 1)
+        if address_offsets and added_form is not None:
+            position = added_form[1]
+            invariant = op.args[position]
+            if isinstance(invariant, mir.Const):
+                result = op.results[0].value
+                constant = induction._signed(invariant, {}, invariant.width)
+                forms = [
+                    addressed(reader, result, 1, replacement=counter, extra=constant)
+                    for reader in readers.get(result, [])
+                ]
+                if forms and all(forms):
+                    out.extend(forms)
+                    continue
+        if form is None:
+            form = added_form
+        if form is None:
+            form = equality(op, counter)
+        scale = None
+        if plain(op, mir.Kind.SHL) and len(op.args) == 2 and isinstance(op.args[1], mir.Const):
+            if op.args[0] == mir.Held(counter, op.results[0].width):
+                scale = 1 << op.args[1].n
+        elif address_offsets and plain(op, mir.Kind.MUL) and len(op.args) == 2:
+            constants = [arg for arg in op.args if isinstance(arg, mir.Const)]
+            held = [arg for arg in op.args if isinstance(arg, mir.Held) and arg.value == counter]
+            if len(constants) == len(held) == 1 and constants[0].width == held[0].width == op.results[0].width:
+                scale = induction._signed(constants[0], {}, constants[0].width)
+        if form is None and scale is not None:
             shifted = op.results[0].value
-            forms = [added(reader, shifted, 1 << op.args[1].n) for reader in readers.get(shifted, [])]
-            if forms and all(forms) and op.args[0] == mir.Held(counter, op.results[0].width):
+            forms = [derived(reader, shifted, scale) for reader in readers.get(shifted, [])]
+            if forms and all(forms):
                 out.extend(forms)
                 continue
         if form is None:
             return None
         out.append(form)
     return out
+
+
+def _rebased_cells(
+    op: mir.Op,
+    base: mir.Value,
+    displacement: int,
+    replacement: mir.Value,
+) -> mir.Op:
+    """Move the fixed part of every address using ``base`` by displacement."""
+
+    def reference(ref: mir.MemRef) -> mir.MemRef:
+        if ref.base != base:
+            return ref
+        assert ref.addr is not None and ref.symbolic is None
+        return replace(ref, addr=ref.addr.plus(displacement), base=replacement)
+
+    def operand(arg):
+        return replace(arg, ref=reference(arg.ref)) if isinstance(arg, mir.Cell) else arg
+
+    return replace(
+        op,
+        args=tuple(operand(arg) for arg in op.args),
+        results=tuple(operand(arg) if isinstance(arg, mir.Cell) else arg for arg in op.results),
+        loads=tuple(reference(ref) for ref in op.loads),
+        stores=tuple(reference(ref) for ref in op.stores),
+        memory_values=tuple((reference(ref), known) for ref, known in op.memory_values),
+        uses=tuple(replacement if value == base else value for value in op.uses),
+        source_backed=False,
+        raised=None,
+    )

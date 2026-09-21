@@ -19,8 +19,8 @@ segment loads". BC recomputes an element's address from the index every
 time round, because it compiles a statement at a time.
 """
 
-from dataclasses import dataclass
 from math import gcd
+from dataclasses import dataclass
 
 from qbopt.model import mir
 from qbopt.analysis import consts
@@ -62,6 +62,73 @@ class Derived:
     by: "mir.Arg"
     offsets: tuple[tuple[mir.Arg, int], ...] = ()
     pointer: mir.Arg | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AffineMap:
+    """A width-limited ``scale * source + offset`` relation.
+
+    Equality may be transferred through the map only while it is injective
+    over the complete source domain.  Keeping the modular period with the
+    relation prevents formula selection and induction simplification from
+    growing separate, subtly different overflow proofs.
+    """
+
+    scale: int
+    offset: int
+    width: int
+
+    @property
+    def period(self) -> int:
+        return (1 << (self.width * 8)) // gcd(abs(self.scale), 1 << (self.width * 8))
+
+    def injective(self, low: int, high: int) -> bool:
+        return self.scale != 0 and high - low < self.period
+
+
+def relation(source: Affine, target: Affine, facts: dict) -> AffineMap | None:
+    """The constant modular affine map from ``source`` to ``target``."""
+    width = source.start.width
+    if target.start.width != width:
+        return None
+    source_start = _signed(source.start, facts, width)
+    source_step = _signed(source.step, facts, width)
+    target_start = _signed(target.start, facts, width)
+    target_step = _signed(target.step, facts, width)
+    if None in (source_start, source_step, target_start, target_step) or not source_step:
+        return None
+    assert source_start is not None and source_step is not None and target_start is not None and target_step is not None
+    if target_step % source_step:
+        return None
+    scale = target_step // source_step
+    if not scale:
+        return None
+    mask = (1 << (width * 8)) - 1
+    return AffineMap(scale, (target_start - scale * source_start) & mask, width)
+
+
+def derived_map(formula: Derived, facts: dict) -> AffineMap | None:
+    """The constant affine map represented by a derived formula."""
+    width = formula.of.start.width
+    scale = _signed(formula.by, facts, width)
+    if scale in (None, 0) or formula.pointer is not None:
+        return None
+    modulus = 1 << (width * 8)
+    offset = 0
+    for value, coefficient in formula.offsets:
+        constant = _constant(value, facts, width)
+        if constant is None:
+            return None
+        offset = (offset + constant * coefficient) % modulus
+    return AffineMap(scale, offset, width)
+
+
+def domain(body: mir.MirBody, loop: loopy.Loop, affine: Affine, facts: dict) -> tuple[int, int] | None:
+    """The finite inclusive integer domain visited by ``affine``."""
+    width = affine.start.width
+    start = _signed(affine.start, facts, width)
+    last = _last_counter(body, loop, affine, facts, width)
+    return None if start is None or last is None else (min(start, last), max(start, last))
 
 
 def invariant(body: mir.MirBody, inside: set[int]) -> set[int]:
@@ -191,9 +258,7 @@ def unwritten(body: mir.MirBody, inside: set[int], dgroup: frozenset[int], bound
     known = ranges.constants(body, dgroup) if wrote else {}
 
     def settled(cell: "mir.MemRef") -> bool:
-        return not any(
-            mir.overlapping(cell, one, dgroup, bounds, known=known, other_known=known) for one in wrote
-        )
+        return not any(mir.overlapping(cell, one, dgroup, bounds, known=known, other_known=known) for one in wrote)
 
     return settled
 
@@ -304,9 +369,7 @@ def _last_counter(body: mir.MirBody, loop, counter: Affine, facts: dict, width: 
         return None
     made = {value.id: op for block in body.blocks for op in block.ops for value in op.defines}
     comparisons = [
-        bound
-        for op in header.ops[:-1]
-        if (bound := _counter_bound(op, branch, counter, width, made)) is not None
+        bound for op in header.ops[:-1] if (bound := _counter_bound(op, branch, counter, width, made)) is not None
     ]
     if len(comparisons) != 1:
         return None
@@ -440,20 +503,14 @@ def _posttested_last(body: mir.MirBody, loop, counter: Affine, facts: dict, widt
     branch = latch.ops[-1]
     if branch.kind is not mir.Kind.BRANCH or branch.target not in latch.succ:
         return None
-    if any(
-        any(to not in inside for to in blocks[at].succ)
-        for at in inside
-        if at != latch.at
-    ):
+    if any(any(to not in inside for to in blocks[at].succ) for at in inside if at != latch.at):
         return None
     test = _continuing_test(branch, inside)
     if test is None:
         return None
     made = {value.id: op for block in body.blocks for op in block.ops for value in op.defines}
     comparisons = [
-        bound
-        for op in latch.ops[:-1]
-        if (bound := _posttested_bound(op, branch, counter, width, made)) is not None
+        bound for op in latch.ops[:-1] if (bound := _posttested_bound(op, branch, counter, width, made)) is not None
     ]
     if len(comparisons) != 1:
         return None
@@ -554,11 +611,7 @@ def _sentinel_trip_count(body: mir.MirBody, loop: loopy.Loop, counter: Affine, f
     branch = control.ops[-1]
     if branch.kind is not mir.Kind.BRANCH or branch.target not in control.succ:
         return None
-    if any(
-        not blocks[at].succ or any(to not in inside for to in blocks[at].succ)
-        for at in inside
-        if at != control.at
-    ):
+    if any(not blocks[at].succ or any(to not in inside for to in blocks[at].succ) for at in inside if at != control.at):
         return None
     test = _continuing_test(branch, inside)
     if test is not mir.Kind.NE:
@@ -940,7 +993,7 @@ def _multiplier(op: "mir.Op", by: "mir.Arg") -> "mir.Arg":
 
 def of(
     body: mir.MirBody, dgroup: frozenset[int] = frozenset(), bounds: dict | None = None
-) -> list[tuple[object, dict[int, Affine], list[Derived]]]:
+) -> list[tuple[loopy.Loop, dict[int, Affine], list[Derived]]]:
     """Every loop in this body, with its counters and what they derive."""
     out = []
     for loop in loopy.loops(list(body.blocks), body.entry):

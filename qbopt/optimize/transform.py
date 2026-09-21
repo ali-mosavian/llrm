@@ -225,9 +225,7 @@ def subexpressions(
             ):
                 candidates.append((order[block.at], index, op))
                 continue
-            if op.loads and avoid_store_crossing and any(
-                crossed.stores for crossed in block.ops[where + 1 : index]
-            ):
+            if op.loads and avoid_store_crossing and any(crossed.stores for crossed in block.ops[where + 1 : index]):
                 candidates.append((order[block.at], index, op))
                 continue
             if len(earlier.defines) != len(op.defines):
@@ -861,11 +859,7 @@ def forwarded(
         return body
     served = {id(one.op): one.value for one in avail.forwardable(body, dgroup, calls, want) if one.value is not None}
     if avoid_store_crossing:
-        locations = {
-            id(op): (block.at, index)
-            for block in body.blocks
-            for index, op in enumerate(block.ops)
-        }
+        locations = {id(op): (block.at, index) for block in body.blocks for index, op in enumerate(block.ops)}
         definitions = {
             value: (block.at, index)
             for block in body.blocks
@@ -918,9 +912,7 @@ def forwarded(
             return not arrived
 
         served = {
-            identity: holder
-            for identity, holder in served.items()
-            if not crosses_store(op_by_id[identity], holder)
+            identity: holder for identity, holder in served.items() if not crosses_store(op_by_id[identity], holder)
         }
     if not served:
         return body
@@ -2984,6 +2976,7 @@ def pipeline(where: Where, **wanted) -> list[MIRTransform]:
     Order is the list's own. A pass that is off is not in it, rather than in
     it and skipped, so what runs is what this returns.
     """
+    control_recurrences = wanted.pop("control_recurrences", False)
     every: list[MIRTransform] = [
         # Pointer identity is a solved program fact, not a frontend code-shape
         # requirement.  Resolve it before a packed pointer becomes independent
@@ -3008,7 +3001,7 @@ def pipeline(where: Where, **wanted) -> list[MIRTransform]:
         # moving all of mem2reg ahead of loop normalization inflated matmul
         # from 165 to 226 instructions by creating loop phis too early.
         promote.Promote(where),
-        strength.Strength(where),
+        strength.Strength(where, control_recurrences=control_recurrences),
         Algebraic(),
         Dead(),
         Place(where),
@@ -3049,6 +3042,7 @@ def applied(
     drop_stores: bool = True,
     promote_: bool = True,
     strength_: bool = True,
+    control_recurrences: bool = False,
     floatloop_: bool = True,
     unroll_: bool = True,
     peel_: bool = True,
@@ -3097,6 +3091,7 @@ def applied(
         "sroa": promote_,
         "promote": promote_,
         "strength": strength_,
+        "control_recurrences": control_recurrences,
         "unroll": unroll_,
         "peel": peel_,
         "fill": fill_,
