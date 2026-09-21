@@ -1037,3 +1037,43 @@ adjacent-stage object/QMIR probes consumed 4.32 seconds; and the single new
 external runtime gate took 13.11 seconds wall time.  Verification stayed below
 ten percent of the iteration's elapsed work, and no broad suite or qrender run
 was used.
+
+The paired algebra rung now compiles through both Rust drivers without an
+optimization pass.  `llrm-qb` and `llrm-c` independently emit fresh OMF, link
+with the existing Microsoft toolchains, run under DOSBox-X, and return the
+established Python-era result `702774`.  The port keeps Python's actual ABI
+construction: 32-bit integer results are born in `DX:AX`, C calls clobber
+`AX`, `BX`, `CX`, and `DX`, C callees preserve the low `SI` and `DI` words,
+and spill rewriting replans each frontend's existing frame rather than
+inventing a calling convention.  Commits `351e2540`, `64bfe912`, `1562d4c7`,
+and `4aa503ce` separate those target-independent allocation and x86 ABI
+responsibilities; commit `aade437` integrates the reviewed vertical slice.
+
+The first C executable linked but overwrote its own final `retf`: live DOSBox
+inspection found `DS:0006` aliasing the code byte at linear `08366h`.  The
+Rust object had target-framed member offsets `6` and `8`, while Python's OMF
+writer and the medium memory model require DGROUP offsets `0416h` and `0418h`.
+Primary review rejected both a WCC class-name rewrite and a delegated split of
+near data into extra MC sections: the former lost near-external provenance,
+and the latter broke QB's existing data placer and far-data path.  Commit
+`859c5aa1` instead adds the target-owned `NearData16` relocation fact and an
+opt-in x86 DGROUP OMF policy.  Generic and QB OMF lowering remain group-free;
+only the C medium-model driver selects DGROUP.
+
+Delegated target verification took about 10.2 seconds.  Primary verification
+for this continuation used 7.25 seconds for the discarded envelope unit,
+13.39 seconds for one accidentally deselected invocation, 8.02 seconds for
+the interim C runtime gate, 6.94 seconds for the accepted DGROUP units, 22.14
+seconds for the final QB runtime gate, and 2.49 seconds for the final C runtime
+gate.  A commit hook unexpectedly spent another 19.05 seconds reproducing the
+known unrelated Python type errors and stale `frontends/qb/Cargo.lock`
+compatibility failures; those two broad hooks were not rerun.  The roughly
+89.5 seconds of verification stayed below ten percent of 1,267 seconds of
+elapsed implementation and review.  No qrender or optimizer gate ran.
+
+A read-only paired-program audit selected `branch` as the next rung.  Its
+checked-in BASIC and C sources share the existing `-87904` oracle and add one
+two-arm signed conditional while reusing algebra's calls, globals, and return
+ABI.  The next work is to capture its real WCC stream, add the independent C
+caller, and run the two existing Rust runtime helpers before considering
+sieve, nbody, or any optimization pass.
