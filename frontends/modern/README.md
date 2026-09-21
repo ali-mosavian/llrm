@@ -19,7 +19,7 @@ This crate implements the first source-language slice:
 - source-ordered, nested `struct` layouts, local struct values, struct literals
   and copies, plus allocation-free array iteration through explicit references;
 - scoped `&T` and `&mut T` parameters, including direct payload pointers for
-  arrays of primitives or structs; and
+  arrays of primitives or structs written `&[T]` and `&mut [T]`; and
 - byte strings, allocation-free f-strings, and `print`.
 
 `char` is one target-code-page byte; `\xNN` spells any code unit without
@@ -79,12 +79,19 @@ array can recover its metadata at pointer offsets `-4` and `-2`. The descriptor
 is part of the ABI and is initialized even when the current source never asks
 for it.
 
+An array parameter is an unsized borrowed view, written `values: &[T]` or
+`values: &mut [T]`. A call passes exactly one far payload pointer; it does not
+pass a second length argument and the parameter type does not repeat the
+caller's fixed length. Indexing uses that pointer directly. Iteration and
+metadata methods recover `length` or `capacity` from the descriptor at negative
+offsets, so the same function accepts every fixed `[T; N]` array.
+
 Fixed arrays have a zero lower bound. `array.len()`, `array.capacity()`, and
 `array.dim(0)` are intrinsic operations. For a fixed array the compiler knows
 all three values and folds them without emitting a helper or descriptor load;
-the physical descriptor remains available to interop and to later resizable
-array types. Only rank one is implemented, so any other dimension is currently
-rejected.
+the physical descriptor remains available to interop. On a borrowed `[T]`
+view the same operations load the descriptor through the payload pointer. Only
+rank one is implemented, so any other dimension is currently rejected.
 
 Struct fields stay in source order, with at most two-byte alignment for the
 16-bit target. Indexing and field selection are structural HIR and lower to
@@ -131,7 +138,7 @@ element.
 The same borrow syntax is used at a function boundary:
 
 ```text
-fn translate(points: &mut [vec2i; 6], delta: &vec2i) -> void:
+fn translate(points: &mut [vec2i], delta: &vec2i) -> void:
     for point in &mut points:
         point.x += delta.x
         point.y += delta.y

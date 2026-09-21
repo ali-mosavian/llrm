@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "frontends" / "modern" / "fixtures" / "control.mod"
 PRIMITIVES = ROOT / "frontends" / "modern" / "fixtures" / "primitives.mod"
 NBODY = ROOT / "frontends" / "modern" / "fixtures" / "nbody.mod"
+SUM = ROOT / "frontends" / "modern" / "fixtures" / "sum.mod"
 FIXED = ROOT / "frontends" / "modern" / "fixtures" / "fixed.mod"
 STARTUP = ROOT / "runtime" / "modern" / "start.asm"
 RUNTIME = ROOT / "runtime" / "modern" / "rt.c"
@@ -424,7 +425,7 @@ def test_borrowed_array_call_passes_element_zero_not_its_descriptor(tmp_path: Pa
     """The systems ABI exposes a direct payload pointer while metadata stays at negative offsets."""
     source = tmp_path / "array_borrow.mod"
     source.write_text(
-        "fn bump(values: &mut [u16; 3]) -> void:\n"
+        "fn bump(values: &mut [u16]) -> void:\n"
         "    values[1] += 3\n"
         "fn main() -> i16:\n"
         "    var values: [u16; 3] = [10, 20, 30]\n"
@@ -457,13 +458,13 @@ def test_borrowed_array_call_passes_element_zero_not_its_descriptor(tmp_path: Pa
 
 def test_borrow_rules_reject_shared_mutation_and_aliasing_mutable_arguments(tmp_path: Path) -> None:
     shared = tmp_path / "shared.mod"
-    shared.write_text("fn bad(values: &[u16; 1]) -> void:\n    values[0] = 2\n")
+    shared.write_text("fn bad(values: &[u16]) -> void:\n    values[0] = 2\n")
     with pytest.raises(driver.FrontendError, match="immutable"):
         driver.parsed(shared)
 
     aliased = tmp_path / "aliased.mod"
     aliased.write_text(
-        "fn use(left: &mut [u16; 1], right: &[u16; 1]) -> void:\n"
+        "fn use(left: &mut [u16], right: &[u16]) -> void:\n"
         "    left[0] += right[0]\n"
         "fn bad() -> void:\n"
         "    var values: [u16; 1] = [1]\n"
@@ -471,3 +472,40 @@ def test_borrow_rules_reject_shared_mutation_and_aliasing_mutable_arguments(tmp_
     )
     with pytest.raises(driver.FrontendError, match="aliases a mutable argument"):
         driver.parsed(aliased)
+
+
+def test_readonly_array_borrow_keeps_payload_initialization_visible_to_callee() -> None:
+    """sum returned stack garbage after DSE erased every payload store before its read-only call."""
+    assembly = masm.text(modern_compile.assembled(driver.parsed(SUM), entry="main"))
+    main = assembly.split("_main proc far", 1)[1].split("_main endp", 1)[0]
+
+    assert all(f", {value}" in main for value in range(1, 7))
+
+
+def test_array_parameter_is_one_unsized_payload_pointer() -> None:
+    """sum used to repeat `[i16; 6]` even though the prefix is the runtime extent."""
+    program = driver.parsed(SUM)
+    module = program.modules[0]
+    function = next(one for one in module.functions if one.name == "sum")
+    pointer = next(one for one in module.types if one.id == function.values[0].type)
+    element = next(one for one in module.types if one.id == pointer.element)
+    metadata = next(one for one in module.types if one.name == "u16")
+    descriptor_loads = [
+        instruction.operands[0]
+        for block in function.blocks
+        for instruction in block.instructions
+        if instruction.op is hir.Op.LOAD and isinstance(instruction.operands[0], hir.DescriptorPlace)
+    ]
+
+    assert len(function.parameters) == 1
+    assert pointer.kind is hir.TypeKind.POINTER
+    assert element.name == "i16"
+    assert descriptor_loads == [hir.DescriptorPlace(function.parameters[0], hir.DescriptorField.LENGTH, metadata.id)]
+
+
+def test_borrowed_array_parameter_rejects_a_repeated_fixed_length(tmp_path: Path) -> None:
+    source = tmp_path / "sized_parameter.mod"
+    source.write_text("fn old(values: &[u16; 3]) -> void:\n    return\n")
+
+    with pytest.raises(driver.FrontendError, match="omit the length"):
+        driver.parsed(source)

@@ -57,6 +57,11 @@ pub enum Operand {
         offset: u32,
         type_id: u32,
     },
+    DescriptorPlace {
+        base: u32,
+        field: &'static str,
+        type_id: u32,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -324,6 +329,15 @@ fn operands(out: &mut String, values: &[Operand]) {
             } => write!(
                 out,
                 "{{\"base\":{base},\"offset\":{offset},\"tag\":\"indirect\",\"type\":{type_id},\"volatile\":false}}"
+            )
+            .unwrap(),
+            Operand::DescriptorPlace {
+                base,
+                field,
+                type_id,
+            } => write!(
+                out,
+                "{{\"base\":{base},\"field\":\"{field}\",\"tag\":\"descriptor\",\"type\":{type_id}}}"
             )
             .unwrap(),
         }

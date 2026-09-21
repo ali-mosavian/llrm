@@ -104,11 +104,25 @@ def test_fixed_array_descriptor_methods_are_intrinsic_values(tmp_path: Path) -> 
     assert execute.run(driver.parsed(source), "describe").value == 9
 
 
+def test_borrowed_array_metadata_comes_from_its_prefix_descriptor(tmp_path: Path) -> None:
+    """An unsized `[i16]` view must recover all dimensions from its one pointer."""
+    source = tmp_path / "borrowed_descriptor.mod"
+    source.write_text(
+        "fn describe(values: &[i16]) -> u16:\n"
+        "    return values.len() + values.capacity() + values.dim(0)\n"
+        "fn calculate() -> u16:\n"
+        "    let values: [i16; 3] = [10, 20, 30]\n"
+        "    return describe(&values)\n"
+    )
+
+    assert execute.run(driver.parsed(source), "calculate").value == 9
+
+
 def test_borrowed_fixed_array_parameters_point_at_and_mutate_payload(tmp_path: Path) -> None:
     """Array arguments must be direct data pointers, not copied payloads or descriptor pointers."""
     source = tmp_path / "array_borrow.mod"
     source.write_text(
-        "fn bump(values: &mut [u16; 3]) -> void:\n"
+        "fn bump(values: &mut [u16]) -> void:\n"
         "    values[1] += values.len()\n"
         "fn calculate() -> u16:\n"
         "    var values: [u16; 3] = [10, 20, 30]\n"
@@ -128,7 +142,7 @@ def test_borrowed_struct_arrays_and_reborrows_keep_scoped_mutation(tmp_path: Pat
         "    y: i16\n"
         "fn nudge(point: &mut point) -> void:\n"
         "    point.x += point.y\n"
-        "fn update(points: &mut [point; 2]) -> void:\n"
+        "fn update(points: &mut [point]) -> void:\n"
         "    for point in &mut points:\n"
         "        nudge(&mut point)\n"
         "fn calculate() -> i16:\n"

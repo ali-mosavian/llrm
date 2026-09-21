@@ -14,6 +14,7 @@ from qbopt.frontend.modern import driver
 
 ROOT = Path(__file__).resolve().parents[1]
 NBODY = ROOT / "frontends" / "modern" / "fixtures" / "nbody.mod"
+SUM = ROOT / "frontends" / "modern" / "fixtures" / "sum.mod"
 
 pytestmark = [
     pytest.mark.e2e,
@@ -71,7 +72,7 @@ def test_native_borrowed_array_uses_a_direct_mutable_payload_pointer(tmp_path: P
     """The real-mode call ABI must not pass or mutate the descriptor address."""
     source = tmp_path / "array_borrow.mod"
     source.write_text(
-        "fn bump(values: &mut [i16; 3]) -> void:\n"
+        "fn bump(values: &mut [i16]) -> void:\n"
         "    values[1] += 3\n"
         "fn main() -> i16:\n"
         "    var values: [i16; 3] = [10, 20, 30]\n"
@@ -87,5 +88,15 @@ def test_native_borrowed_array_uses_a_direct_mutable_payload_pointer(tmp_path: P
     assert expected == "ok\n"
 
     made = build(source, tmp_path / "BORROW.EXE", run=True)
+
+    assert made.output == expected
+
+
+def test_native_sum_reads_length_from_the_prefix_descriptor(tmp_path: Path) -> None:
+    """The one-pointer sum ABI must preserve initialized payload stores and return 21."""
+    expected = execute.run(driver.parsed(SUM), "main").output
+    assert expected == "ok\n"
+
+    made = build(SUM, tmp_path / "SUM.EXE", run=True)
 
     assert made.output == expected

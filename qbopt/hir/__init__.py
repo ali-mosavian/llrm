@@ -40,6 +40,8 @@ from qbopt.hir.model import DataRelocation
 from qbopt.hir.model import ProjectedPlace
 from qbopt.hir.model import RuntimeProfile
 from qbopt.hir.model import TerminatorKind
+from qbopt.hir.model import DescriptorField
+from qbopt.hir.model import DescriptorPlace
 from qbopt.hir.model import FloatEvaluation
 from qbopt.hir.model import FunctionLinkage
 
@@ -61,6 +63,8 @@ __all__ = [
     "FunctionLinkage",
     "Instruction",
     "IndirectPlace",
+    "DescriptorField",
+    "DescriptorPlace",
     "InvalidHIR",
     "Lowered",
     "Module",

@@ -33,7 +33,7 @@ def dumped(source: Path, output: Path) -> Path:
     """Write source, lexical, syntax, HIR, and semantic-MIR snapshots."""
     output.mkdir(parents=True, exist_ok=True)
     program = driver.parsed(source)
-    lowered = hir.lower(program)
+    lowered = modern.semantic_lowered(program)
     target = targets.profile("386")
 
     (output / "00-input.mod").write_text(source.read_text())

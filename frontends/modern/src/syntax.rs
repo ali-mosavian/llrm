@@ -46,6 +46,7 @@ pub enum FixedStorage {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TypeAnnotation {
     Value(TypeSpec),
+    Slice { element: TypeSpec },
     Array { element: TypeSpec, length: u32 },
 }
 

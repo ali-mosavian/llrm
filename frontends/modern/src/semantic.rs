@@ -348,6 +348,10 @@ impl TypeRegistry {
                     element.id(),
                 ))
             }
+            TypeAnnotation::Slice { element } => {
+                let element = self.resolve_element(element, span)?;
+                Ok((BindingType::Slice { element }, element.id()))
+            }
             TypeAnnotation::Array { element, length } => {
                 let element = self.resolve_element(element, span)?;
                 let id = self.array(element, *length);
@@ -455,8 +459,19 @@ enum AssignmentPlace {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BindingType {
     Scalar(TypeName),
+    Slice { element: ElementType },
     Array { element: ElementType, length: u32 },
     Struct(u32),
+}
+
+impl BindingType {
+    fn array(self) -> Option<(ElementType, Option<u32>)> {
+        match self {
+            Self::Slice { element } => Some((element, None)),
+            Self::Array { element, length } => Some((element, Some(length))),
+            Self::Scalar(_) | Self::Struct(_) => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -834,6 +849,12 @@ impl<'a> FunctionCompiler<'a> {
                     Some(TypeAnnotation::Value(spec)) => {
                         Some(self.types.resolve_element(spec, *span)?)
                     }
+                    Some(TypeAnnotation::Slice { .. }) => {
+                        return Err(Diagnostic::new(
+                            *span,
+                            "an owned array needs a fixed length: '[T; N]'",
+                        ));
+                    }
                     Some(TypeAnnotation::Array { .. }) => unreachable!(),
                     None => None,
                 };
@@ -1094,15 +1115,12 @@ impl<'a> FunctionCompiler<'a> {
         let Expr::Name(array_name, _) = iterable else {
             return Err(Diagnostic::new(
                 iterable.span(),
-                "for currently iterates a named fixed array",
+                "for currently iterates a named array",
             ));
         };
         let array = self.binding(array_name, iterable.span())?.clone();
-        let BindingType::Array { element, length } = array.type_ else {
-            return Err(Diagnostic::new(
-                iterable.span(),
-                "for requires a fixed array",
-            ));
+        let Some((element, length)) = array.type_.array() else {
+            return Err(Diagnostic::new(iterable.span(), "for requires an array"));
         };
         if !matches!(array.storage, Storage::Place(_) | Storage::Reference(_)) {
             return Err(Diagnostic::new(iterable.span(), "array has no storage"));
@@ -1119,12 +1137,34 @@ impl<'a> FunctionCompiler<'a> {
                 format!("cannot take a mutable view of immutable array {array_name:?}"),
             ));
         }
-        let length = u16::try_from(length).map_err(|_| {
-            Diagnostic::new(
-                iterable.span(),
-                "for array length exceeds the 16-bit target",
-            )
-        })?;
+        let length = match length {
+            Some(length) => hir::Operand::Constant(
+                U16,
+                i64::from(u16::try_from(length).map_err(|_| {
+                    Diagnostic::new(
+                        iterable.span(),
+                        "for array length exceeds the 16-bit target",
+                    )
+                })?),
+            ),
+            None => {
+                let Storage::Reference(pointer) = &array.storage else {
+                    return Err(Diagnostic::new(iterable.span(), "slice has no descriptor"));
+                };
+                let value = self.value(TypeName::U16);
+                self.emit(
+                    "load",
+                    vec![value],
+                    vec![hir::Operand::DescriptorPlace {
+                        base: *pointer,
+                        field: "length",
+                        type_id: U16,
+                    }],
+                    None,
+                );
+                hir::Operand::Value(value)
+            }
+        };
 
         let index_place = self.place(&format!("$for_{array_name}"), TypeName::U16, true);
         self.emit(
@@ -1154,10 +1194,7 @@ impl<'a> FunctionCompiler<'a> {
         self.emit(
             "below",
             vec![condition],
-            vec![
-                hir::Operand::Value(index),
-                hir::Operand::Constant(U16, i64::from(length)),
-            ],
+            vec![hir::Operand::Value(index), length],
             None,
         );
         self.terminate(hir::Terminator {
@@ -1621,6 +1658,9 @@ impl<'a> FunctionCompiler<'a> {
                     BindingType::Array {
                         element: ElementType::Struct(struct_id),
                         ..
+                    }
+                    | BindingType::Slice {
+                        element: ElementType::Struct(struct_id),
                     } => Some(struct_id),
                     _ => None,
                 })
@@ -1727,7 +1767,7 @@ impl<'a> FunctionCompiler<'a> {
                             owner: name.clone(),
                         }))
                     }
-                    BindingType::Array { .. } => Err(Diagnostic::new(
+                    BindingType::Array { .. } | BindingType::Slice { .. } => Err(Diagnostic::new(
                         span,
                         "whole array assignment is not supported",
                     )),
@@ -1741,7 +1781,7 @@ impl<'a> FunctionCompiler<'a> {
                         format!("binding {base:?} is immutable"),
                     ));
                 }
-                let BindingType::Array { element, length } = binding.type_ else {
+                let Some((element, length)) = binding.type_.array() else {
                     return Err(Diagnostic::new(
                         span,
                         format!("binding {base:?} is not an array"),
@@ -1847,7 +1887,7 @@ impl<'a> FunctionCompiler<'a> {
                     return Err(Diagnostic::new(span, "array base must be a named binding"));
                 };
                 let binding = self.binding(name, span)?.clone();
-                let BindingType::Array { element, length } = binding.type_ else {
+                let Some((element, length)) = binding.type_.array() else {
                     return Err(Diagnostic::new(
                         span,
                         format!("binding {name:?} is not an array"),
@@ -2244,8 +2284,12 @@ impl<'a> FunctionCompiler<'a> {
         })
     }
 
-    fn array_index(&mut self, expression: &Expr, length: u32) -> Result<hir::Operand, Diagnostic> {
-        if let Expr::Integer(value, span) = expression {
+    fn array_index(
+        &mut self,
+        expression: &Expr,
+        length: Option<u32>,
+    ) -> Result<hir::Operand, Diagnostic> {
+        if let (Some(length), Expr::Integer(value, span)) = (length, expression) {
             if *value < 0 || *value >= i64::from(length) {
                 return Err(Diagnostic::new(
                     *span,
@@ -2274,10 +2318,7 @@ impl<'a> FunctionCompiler<'a> {
             return Err(Diagnostic::new(span, "array base must be a named binding"));
         };
         let binding = self.binding(name, span)?.clone();
-        let BindingType::Array {
-            element, length, ..
-        } = binding.type_
-        else {
+        let Some((element, length)) = binding.type_.array() else {
             return Err(Diagnostic::new(
                 span,
                 format!("binding {name:?} is not an array"),
@@ -2754,6 +2795,9 @@ impl<'a> FunctionCompiler<'a> {
                     BindingType::Array {
                         element: ElementType::Struct(id),
                         ..
+                    }
+                    | BindingType::Slice {
+                        element: ElementType::Struct(id),
                     } => id,
                     _ => return None,
                 }
@@ -2781,7 +2825,9 @@ impl<'a> FunctionCompiler<'a> {
                     .ok()
                     .and_then(|one| match one.type_ {
                         BindingType::Scalar(type_name) => Some(type_name),
-                        BindingType::Array { .. } | BindingType::Struct(_) => None,
+                        BindingType::Array { .. }
+                        | BindingType::Slice { .. }
+                        | BindingType::Struct(_) => None,
                     })
             }
             Expr::Call { name, .. } => self.signatures.get(name).map(|one| one.result),
@@ -2797,10 +2843,16 @@ impl<'a> FunctionCompiler<'a> {
                         BindingType::Array {
                             element: ElementType::Scalar(element),
                             ..
+                        }
+                        | BindingType::Slice {
+                            element: ElementType::Scalar(element),
                         } => Some(element),
                         BindingType::Array {
                             element: ElementType::Struct(_),
                             ..
+                        }
+                        | BindingType::Slice {
+                            element: ElementType::Struct(_),
                         }
                         | BindingType::Scalar(_)
                         | BindingType::Struct(_) => None,
@@ -2854,8 +2906,8 @@ impl<'a> FunctionCompiler<'a> {
                 "array methods currently require a named array",
             ));
         };
-        let binding = self.binding(array_name, *receiver_span)?;
-        let BindingType::Array { length, .. } = binding.type_ else {
+        let binding = self.binding(array_name, *receiver_span)?.clone();
+        let Some((_element, length)) = binding.type_.array() else {
             return Err(Diagnostic::new(
                 receiver.span(),
                 format!("{array_name:?} is not an array"),
@@ -2868,8 +2920,9 @@ impl<'a> FunctionCompiler<'a> {
                 TypeName::U16,
             ));
         }
-        let value = match name {
-            "len" | "capacity" if arguments.is_empty() => length,
+        let field = match name {
+            "len" if arguments.is_empty() => "length",
+            "capacity" if arguments.is_empty() => "capacity",
             "dim" if arguments.len() == 1 => {
                 let Expr::Integer(axis, axis_span) = arguments[0] else {
                     return Err(Diagnostic::new(
@@ -2883,7 +2936,7 @@ impl<'a> FunctionCompiler<'a> {
                         "one-dimensional array has only dimension 0",
                     ));
                 }
-                length
+                "length"
             }
             "len" | "capacity" => {
                 return Err(Diagnostic::new(
@@ -2899,8 +2952,27 @@ impl<'a> FunctionCompiler<'a> {
                 ))
             }
         };
+        let operand = if let Some(length) = length {
+            hir::Operand::Constant(U16, i64::from(length))
+        } else {
+            let Storage::Reference(pointer) = binding.storage else {
+                return Err(Diagnostic::new(receiver.span(), "slice has no descriptor"));
+            };
+            let value = self.value(TypeName::U16);
+            self.emit(
+                "load",
+                vec![value],
+                vec![hir::Operand::DescriptorPlace {
+                    base: pointer,
+                    field,
+                    type_id: U16,
+                }],
+                None,
+            );
+            hir::Operand::Value(value)
+        };
         Ok(TypedOperand {
-            operand: Some(hir::Operand::Constant(U16, i64::from(value))),
+            operand: Some(operand),
             type_name: TypeName::U16,
         })
     }
@@ -3014,7 +3086,15 @@ impl<'a> FunctionCompiler<'a> {
             ));
         };
         let binding = self.binding(name, *name_span)?.clone();
-        if binding.type_ != target {
+        let compatible = binding.type_ == target
+            || matches!(
+                (binding.type_, target),
+                (
+                    BindingType::Array { element: actual, .. },
+                    BindingType::Slice { element: expected }
+                ) if actual == expected
+            );
+        if !compatible {
             return Err(Diagnostic::new(
                 *span,
                 format!("borrow of {name:?} has the wrong type"),

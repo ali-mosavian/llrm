@@ -16,6 +16,7 @@ from qbopt.hir.verify import InvalidHIR
 _TAGS = {
     "array_element": model.ArrayElement,
     "constant": model.Constant,
+    "descriptor": model.DescriptorPlace,
     "indirect": model.IndirectPlace,
     "place": model.PlaceRef,
     "projection": model.ProjectedPlace,
@@ -46,6 +47,8 @@ def _plain(value: object) -> JSON:
             out["tag"] = "projection"
         elif isinstance(value, model.IndirectPlace):
             out["tag"] = "indirect"
+        elif isinstance(value, model.DescriptorPlace):
+            out["tag"] = "descriptor"
         elif isinstance(value, model.ValueRef):
             out["tag"] = "value"
         return out

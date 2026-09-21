@@ -147,6 +147,8 @@ def _materialized_booleans(function: model.Function, types: dict[int, model.Type
             return tuple(value for index in operand.indices for value in referenced(index))
         if isinstance(operand, model.IndirectPlace):
             return (operand.base,)
+        if isinstance(operand, model.DescriptorPlace):
+            return (operand.base,)
         return ()
 
     values = list(function.values)
@@ -294,6 +296,8 @@ def _function(
         if isinstance(one, (model.ArrayElement, model.ProjectedPlace)):
             return tuple(value for index in one.indices for value in referenced(index))
         if isinstance(one, model.IndirectPlace):
+            return (one.base,)
+        if isinstance(one, model.DescriptorPlace):
             return (one.base,)
         return ()
 
@@ -596,6 +600,9 @@ def _function(
                         volatile=volatile,
                     )
                 )
+            case model.DescriptorPlace(base, field, type_id):
+                offset = -4 if field is model.DescriptorField.LENGTH else -2
+                return operand(model.IndirectPlace(base, offset, type_id), before)
 
     def operation(instruction: model.Instruction) -> tuple[mir.Op, ...]:
         nonlocal at, next_value, next_frame_offset

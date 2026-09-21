@@ -9,6 +9,7 @@ from qbopt.model import mir
 from qbopt.backend import masm
 from qbopt.backend import jumps
 from qbopt.backend import lower
+from qbopt.hir import callmemory
 from qbopt.backend import phielim
 from qbopt.optimize import rotate
 from qbopt.backend import omfwrite
@@ -20,6 +21,15 @@ from qbopt.backend import cpu as targets
 from qbopt.backend import frame as frames
 from qbopt.frontend.qb import physicalize
 from qbopt.objectfile.module import Space
+
+
+def semantic_lowered(program: hir.Program) -> tuple[hir.Lowered, ...]:
+    """Lower HIR and attach whole-module call memory effects."""
+    if len(program.modules) != 1:
+        raise ValueError("native modern compilation currently accepts one module")
+    module = program.modules[0]
+    functions = tuple(module.functions)
+    return callmemory.annotated(module, functions, hir.lower(program))
 
 
 def optimized(
@@ -80,7 +90,7 @@ def assembled(
         raise ValueError("native modern compilation currently accepts one module")
     module = program.modules[0]
     target = targets.profile(cpu)
-    semantic = hir.lower(program)
+    semantic = semantic_lowered(program)
     procedures: list[masm.Procedure] = []
     referenced: dict[str, str] = {}
     source_names = {function.name for function in module.functions}

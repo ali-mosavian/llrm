@@ -167,7 +167,19 @@ class IndirectPlace:
     volatile: bool = False
 
 
-type Operand = ValueRef | Constant | PlaceRef | ArrayElement | ProjectedPlace | IndirectPlace
+class DescriptorField(StrEnum):
+    LENGTH = "length"
+    CAPACITY = "capacity"
+
+
+@dataclass(frozen=True, slots=True)
+class DescriptorPlace:
+    base: int
+    field: DescriptorField
+    type: int
+
+
+type Operand = ValueRef | Constant | PlaceRef | ArrayElement | ProjectedPlace | IndirectPlace | DescriptorPlace
 
 
 class Op(StrEnum):

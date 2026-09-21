@@ -223,6 +223,12 @@ impl Parser {
                     if target == TypeAnnotation::Value(TypeSpec::Primitive(TypeName::Void)) {
                         return Err(Diagnostic::new(span, "a parameter cannot borrow void"));
                     }
+                    if matches!(target, TypeAnnotation::Array { .. }) {
+                        return Err(Diagnostic::new(
+                            span,
+                            "borrowed array parameters omit the length; use '&[T]'",
+                        ));
+                    }
                     ParameterType::Borrowed { mutable, target }
                 } else {
                     let type_name = self.type_name()?;
@@ -799,6 +805,12 @@ impl Parser {
                     self.peek().span,
                     "an array element cannot be void",
                 ));
+            }
+            if self
+                .take(|kind| matches!(kind, TokenKind::RightBracket))
+                .is_some()
+            {
+                return Ok(TypeAnnotation::Slice { element });
             }
             self.expect(
                 |kind| matches!(kind, TokenKind::Semicolon),

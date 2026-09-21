@@ -111,6 +111,10 @@ def _operand_type(operand: model.Operand, values: dict[int, model.Value], places
             if base not in values:
                 raise InvalidHIR(f"unknown pointer value {base}")
             return type_
+        case model.DescriptorPlace(base, _, type_):
+            if base not in values:
+                raise InvalidHIR(f"unknown pointer value {base}")
+            return type_
 
 
 def verify(program: model.Program) -> None:
@@ -268,7 +272,13 @@ def _function(module: model.Module, function: model.Function, types: dict[int, m
                     raise InvalidHIR(f"{prefix}: load result type does not match its place")
                 if not isinstance(
                     instruction.operands[0],
-                    (model.PlaceRef, model.ArrayElement, model.ProjectedPlace, model.IndirectPlace),
+                    (
+                        model.PlaceRef,
+                        model.ArrayElement,
+                        model.ProjectedPlace,
+                        model.IndirectPlace,
+                        model.DescriptorPlace,
+                    ),
                 ):
                     raise InvalidHIR(f"{prefix}: load operand is not a place")
             if instruction.op is model.Op.STORE:
@@ -386,6 +396,13 @@ def _function(module: model.Module, function: model.Function, types: dict[int, m
                         raise InvalidHIR(f"{prefix}: indirect place disagrees with pointer type")
                     if operand.offset + types[operand.type].width > types[pointer.element].width:
                         raise InvalidHIR(f"{prefix}: indirect place exceeds its pointee")
+                if isinstance(operand, model.DescriptorPlace):
+                    pointer = types[values[operand.base].type]
+                    field = types[operand.type]
+                    if pointer.kind is not model.TypeKind.POINTER or pointer.element not in types:
+                        raise InvalidHIR(f"{prefix}: descriptor place needs a pointer")
+                    if field.kind is not model.TypeKind.INTEGER or field.width != 2 or field.signed is not False:
+                        raise InvalidHIR(f"{prefix}: descriptor field is not u16")
         term = block.terminator
         if any(target not in blocks for target in (*term.targets, *(target for _, target in term.cases))):
             raise InvalidHIR(f"{prefix}: block {block.id} has an unknown target")

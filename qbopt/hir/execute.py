@@ -27,6 +27,8 @@ class Result:
 class _Address:
     memory: bytearray
     offset: int
+    length: int | None = None
+    capacity: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,6 +135,14 @@ class _Machine:
                     return values[operand.value]
                 except KeyError as error:
                     raise ExecutionError(f"{name}: value {operand.value} used before definition") from error
+            if isinstance(operand, model.DescriptorPlace):
+                address = values.get(operand.base)
+                if not isinstance(address, _Address):
+                    raise ExecutionError("descriptor place has no address value")
+                value = address.length if operand.field is model.DescriptorField.LENGTH else address.capacity
+                if value is None:
+                    raise ExecutionError("pointer has no array descriptor")
+                return _normalized(value, self.types[operand.type])
             return load(location(operand))
 
         def index_value(operand: model.ValueRef | model.Constant) -> int:
@@ -228,21 +238,31 @@ class _Machine:
         def execute(instruction: model.Instruction) -> None:
             op = instruction.op
             if op is model.Op.LOAD:
-                define(instruction, (load(location(instruction.operands[0])),))
+                define(instruction, (scalar(instruction.operands[0]),))
                 return
             if op is model.Op.STORE:
                 store(location(instruction.operands[0]), scalar(instruction.operands[1]))
                 return
             if op is model.Op.ADDRESS:
                 where = location(instruction.operands[0])
-                define(instruction, (_Address(where.memory, where.offset),))
+                length = capacity = None
+                addressed = instruction.operands[0]
+                if isinstance(addressed, model.PlaceRef):
+                    place_type = self.types[places[addressed.place].type]
+                    if place_type.kind is model.TypeKind.ARRAY and len(place_type.bounds) == 1:
+                        low, high = place_type.bounds[0]
+                        length = capacity = high - low + 1
+                define(instruction, (_Address(where.memory, where.offset, length, capacity),))
                 return
             args = tuple(scalar(one) for one in instruction.operands)
             if op is model.Op.PTR_OFFSET:
                 address, displacement = args
                 if not isinstance(address, _Address) or not isinstance(displacement, int):
                     raise ExecutionError("pointer offset requires an address and an integer")
-                define(instruction, (_Address(address.memory, address.offset + displacement),))
+                define(
+                    instruction,
+                    (_Address(address.memory, address.offset + displacement, address.length, address.capacity),),
+                )
                 return
             if op is model.Op.CALL:
                 returned = self._call(instruction.callee, args)
