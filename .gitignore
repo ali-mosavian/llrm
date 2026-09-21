@@ -3,5 +3,6 @@ __pycache__/
 .venv/
 build/
 frontends/qb/**/target/
+frontends/*/target/
 owshim/bin/
 .DS_Store

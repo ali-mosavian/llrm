@@ -9,8 +9,10 @@ from qbopt import hir
 
 ROOT = Path(__file__).resolve().parents[3]
 MANIFEST = ROOT / "frontends" / "qb" / "Cargo.toml"
-DIALECTS = frozenset(one.value for one in hir.Dialect)
-RUNTIMES = frozenset(one.value for one in hir.RuntimeProfile)
+DIALECTS = frozenset(
+    one.value for one in (hir.Dialect.QBASIC11, hir.Dialect.QB45, hir.Dialect.PDS71, hir.Dialect.VBDOS)
+)
+RUNTIMES = frozenset(one.value for one in (hir.RuntimeProfile.QB45, hir.RuntimeProfile.PDS71, hir.RuntimeProfile.VBDOS))
 ARRAY_ORDERS = frozenset(one.value for one in hir.ArrayOrder)
 
 

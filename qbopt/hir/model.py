@@ -15,6 +15,7 @@ class RuntimeProfile(StrEnum):
     QB45 = "qb45"
     PDS71 = "pds71"
     VBDOS = "vbdos"
+    FREESTANDING = "freestanding"
 
 
 class Dialect(StrEnum):
@@ -22,6 +23,7 @@ class Dialect(StrEnum):
     QB45 = "qb45"
     PDS71 = "pds71"
     VBDOS = "vbdos"
+    MODERN = "modern"
 
 
 class TargetProfile(StrEnum):

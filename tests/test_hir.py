@@ -1882,11 +1882,11 @@ def test_string_builders_have_descriptor_stack_contracts() -> None:
     assert contracts["B$STRS"].cleanup == 4
 
 
-def test_classic_string_stack_abis_are_measured_for_every_runtime_family() -> None:
+def test_classic_string_stack_abis_are_measured_for_every_qb_runtime_family() -> None:
     """Q45LE71 reached B$LEFT but emission refused the previously VBDOS-only cleanup."""
     from qbopt.frontend.qb.abi import _contract
 
-    for family in hir.RuntimeProfile:
+    for family in (hir.RuntimeProfile.QB45, hir.RuntimeProfile.PDS71, hir.RuntimeProfile.VBDOS):
         for name, pushed in {
             "B$LEFT": 4,
             "B$RGHT": 4,
