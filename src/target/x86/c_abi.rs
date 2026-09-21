@@ -470,20 +470,28 @@ pub fn expand_allocated_c_abi(
     function: &MachineFunction,
     plan: &CFramePlan,
 ) -> Result<MachineFunction, CAbiExpansionError> {
-    preflight(function, plan)?;
+    let saved = callee_saved_registers(function);
+    preflight(function, plan, &saved)?;
     let return_count = function
         .blocks
         .iter()
         .flat_map(|block| &block.instructions)
         .filter(|instruction| is_return(instruction))
         .count();
-    let entry_instructions = if plan.framed() {
+    let frame_entry_instructions = if plan.framed() {
         2 + usize::from(plan.local_bytes() != 0)
     } else {
         0
     };
+    let entry_instructions = frame_entry_instructions
+        .checked_add(saved.len())
+        .ok_or(CAbiExpansionError::InstructionIdExhausted)?;
+    let return_instructions_each = saved
+        .len()
+        .checked_add(usize::from(plan.framed()))
+        .ok_or(CAbiExpansionError::InstructionIdExhausted)?;
     let return_instructions = return_count
-        .checked_mul(usize::from(plan.framed()))
+        .checked_mul(return_instructions_each)
         .ok_or(CAbiExpansionError::InstructionIdExhausted)?;
     let added = entry_instructions
         .checked_add(return_instructions)
@@ -491,22 +499,25 @@ pub fn expand_allocated_c_abi(
     let mut fresh_ids = reserve_ids(function, added)?.into_iter();
     let mut expanded = function.clone();
     for block in &mut expanded.blocks {
-        if plan.framed() && block.id == function.entry {
-            let mut prefix = vec![
-                instruction(
-                    next_id(&mut fresh_ids),
-                    X86Opcode::Push,
-                    vec![physical(X86Register::Bp, OperandRole::Use)],
-                ),
-                instruction(
-                    next_id(&mut fresh_ids),
-                    X86Opcode::Mov,
-                    vec![
-                        physical(X86Register::Bp, OperandRole::Def),
-                        physical(X86Register::Sp, OperandRole::Use),
-                    ],
-                ),
-            ];
+        if block.id == function.entry && (plan.framed() || !saved.is_empty()) {
+            let mut prefix = Vec::new();
+            if plan.framed() {
+                prefix.extend([
+                    instruction(
+                        next_id(&mut fresh_ids),
+                        X86Opcode::Push,
+                        vec![physical(X86Register::Bp, OperandRole::Use)],
+                    ),
+                    instruction(
+                        next_id(&mut fresh_ids),
+                        X86Opcode::Mov,
+                        vec![
+                            physical(X86Register::Bp, OperandRole::Def),
+                            physical(X86Register::Sp, OperandRole::Use),
+                        ],
+                    ),
+                ]);
+            }
             if plan.local_bytes() != 0 {
                 prefix.push(instruction(
                     next_id(&mut fresh_ids),
@@ -517,6 +528,13 @@ pub fn expand_allocated_c_abi(
                     ],
                 ));
             }
+            prefix.extend(saved.iter().copied().map(|register| {
+                instruction(
+                    next_id(&mut fresh_ids),
+                    X86Opcode::Push,
+                    vec![physical(register, OperandRole::Use)],
+                )
+            }));
             block.instructions.splice(0..0, prefix);
         }
         let mut instructions = Vec::with_capacity(block.instructions.len() + 1);
@@ -552,12 +570,26 @@ pub fn expand_allocated_c_abi(
                     original.operands.truncate(1);
                 }
                 Some(X86Opcode::ReturnNear) => {
+                    instructions.extend(saved.iter().rev().copied().map(|register| {
+                        instruction(
+                            next_id(&mut fresh_ids),
+                            X86Opcode::Pop,
+                            vec![physical(register, OperandRole::Def)],
+                        )
+                    }));
                     if plan.framed() {
                         instructions.push(frame_exit(next_id(&mut fresh_ids), plan));
                     }
                     original.operands.clear();
                 }
                 Some(X86Opcode::ReturnFar) => {
+                    instructions.extend(saved.iter().rev().copied().map(|register| {
+                        instruction(
+                            next_id(&mut fresh_ids),
+                            X86Opcode::Pop,
+                            vec![physical(register, OperandRole::Def)],
+                        )
+                    }));
                     if plan.framed() {
                         instructions.push(frame_exit(next_id(&mut fresh_ids), plan));
                     }
@@ -572,7 +604,11 @@ pub fn expand_allocated_c_abi(
     Ok(expanded)
 }
 
-fn preflight(function: &MachineFunction, plan: &CFramePlan) -> Result<(), CAbiExpansionError> {
+fn preflight(
+    function: &MachineFunction,
+    plan: &CFramePlan,
+    saved: &[X86Register],
+) -> Result<(), CAbiExpansionError> {
     if plan.function() != function.id {
         return Err(CAbiExpansionError::MismatchedFramePlan {
             function: function.id,
@@ -604,7 +640,7 @@ fn preflight(function: &MachineFunction, plan: &CFramePlan) -> Result<(), CAbiEx
         MachineCallingConvention::FarPascal => unreachable!("plan validated convention"),
     };
     for block in &function.blocks {
-        if starts_expanded(block) {
+        if block.id == function.entry && starts_expanded(block, saved) {
             return Err(CAbiExpansionError::AlreadyExpanded { block: block.id });
         }
         for instruction in &block.instructions {
@@ -819,9 +855,49 @@ fn malformed_return<T>(
     })
 }
 
-fn starts_expanded(block: &crate::codegen::machine::MachineBlock) -> bool {
-    matches!(block.instructions.get(0), Some(instruction) if instruction.opcode == X86Opcode::Push.machine_opcode() && instruction.operands.as_slice() == [physical(X86Register::Bp, OperandRole::Use)])
-        && matches!(block.instructions.get(1), Some(instruction) if instruction.opcode == X86Opcode::Mov.machine_opcode() && instruction.operands.as_slice() == [physical(X86Register::Bp, OperandRole::Def), physical(X86Register::Sp, OperandRole::Use)])
+fn callee_saved_registers(function: &MachineFunction) -> Vec<X86Register> {
+    // Borland's C ABI saves only the low word of SI and DI.  Python masm
+    // selects those saves from the ESI/EDI roots, so either physical view in
+    // allocated Machine IR asks for the same low-word preservation.
+    let roots = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .flat_map(|instruction| &instruction.operands)
+        .filter_map(|operand| match operand.kind {
+            MachineOperandKind::Register(MachineRegister::Physical(register)) => {
+                X86Register::from_physical(register)
+            }
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    [
+        (X86Register::Esi, X86Register::Si),
+        (X86Register::Edi, X86Register::Di),
+    ]
+    .into_iter()
+    .filter_map(|(whole, low)| (roots.contains(&whole) || roots.contains(&low)).then_some(low))
+    .collect()
+}
+
+fn starts_expanded(block: &crate::codegen::machine::MachineBlock, saved: &[X86Register]) -> bool {
+    let framed = matches!(block.instructions.get(0), Some(instruction) if instruction.opcode == X86Opcode::Push.machine_opcode() && instruction.operands.as_slice() == [physical(X86Register::Bp, OperandRole::Use)])
+        && matches!(block.instructions.get(1), Some(instruction) if instruction.opcode == X86Opcode::Mov.machine_opcode() && instruction.operands.as_slice() == [physical(X86Register::Bp, OperandRole::Def), physical(X86Register::Sp, OperandRole::Use)]);
+    let start = usize::from(framed) * 2;
+    let saves = !saved.is_empty()
+        && block
+            .instructions
+            .get(start..start + saved.len())
+            .is_some_and(|instructions| {
+                instructions
+                    .iter()
+                    .zip(saved)
+                    .all(|(instruction, register)| {
+                        instruction.opcode == X86Opcode::Push.machine_opcode()
+                            && instruction.operands == [physical(*register, OperandRole::Use)]
+                    })
+            });
+    framed || saves
 }
 
 fn validate_return(
@@ -1324,5 +1400,197 @@ mod tests {
                 immediate(16),
             ]
         );
+    }
+
+    #[test]
+    fn saves_si_and_di_after_a_framed_reservation_and_restores_each_return() {
+        // Python masm._frame_parts saves the low 16-bit callee views after
+        // the BP/local shell, in SI then DI order. Both exits unwind that
+        // pair in reverse before their normal frame teardown.
+        let mut input = function(
+            MachineCallingConvention::FarCdecl,
+            vec![],
+            vec![local(0, 2)],
+            false,
+        );
+        input.blocks[0].instructions.insert(
+            0,
+            instruction(
+                MachineInstructionId::new(6),
+                X86Opcode::Mov,
+                vec![
+                    physical(X86Register::Esi, OperandRole::Def),
+                    physical(X86Register::Eax, OperandRole::Use),
+                ],
+            ),
+        );
+        input.blocks[0].instructions.insert(
+            1,
+            instruction(
+                MachineInstructionId::new(7),
+                X86Opcode::Mov,
+                vec![
+                    physical(X86Register::Edi, OperandRole::Def),
+                    physical(X86Register::Ecx, OperandRole::Use),
+                ],
+            ),
+        );
+        input.blocks.push(MachineBlock {
+            id: MachineBlockId::new(5),
+            instructions: vec![MachineInstruction {
+                id: MachineInstructionId::new(9),
+                opcode: X86Opcode::ReturnFar.machine_opcode(),
+                operands: vec![immediate(0)],
+                flags: InstructionFlags {
+                    terminator: true,
+                    ..InstructionFlags::NONE
+                },
+            }],
+            successors: Vec::new(),
+        });
+
+        let plan = plan_c_frame(&input).unwrap();
+        let expanded = expand_allocated_c_abi(&input, &plan).unwrap();
+        let entry = &expanded.blocks[0].instructions;
+        assert_eq!(
+            entry
+                .iter()
+                .map(|one| X86Opcode::from_machine_opcode(one.opcode))
+                .collect::<Vec<_>>(),
+            vec![
+                Some(X86Opcode::Push),
+                Some(X86Opcode::Mov),
+                Some(X86Opcode::Sub),
+                Some(X86Opcode::Push),
+                Some(X86Opcode::Push),
+                Some(X86Opcode::Mov),
+                Some(X86Opcode::Mov),
+                Some(X86Opcode::Pop),
+                Some(X86Opcode::Pop),
+                Some(X86Opcode::Leave),
+                Some(X86Opcode::ReturnFar),
+            ]
+        );
+        assert_eq!(
+            entry[3].operands,
+            vec![physical(X86Register::Si, OperandRole::Use)]
+        );
+        assert_eq!(
+            entry[4].operands,
+            vec![physical(X86Register::Di, OperandRole::Use)]
+        );
+        assert_eq!(
+            entry[7].operands,
+            vec![physical(X86Register::Di, OperandRole::Def)]
+        );
+        assert_eq!(
+            entry[8].operands,
+            vec![physical(X86Register::Si, OperandRole::Def)]
+        );
+        assert_eq!(
+            entry.iter().map(|one| one.id.get()).collect::<Vec<_>>(),
+            vec![10, 11, 12, 13, 14, 6, 7, 15, 16, 17, 8]
+        );
+
+        let second = &expanded.blocks[1].instructions;
+        assert_eq!(
+            second
+                .iter()
+                .map(|one| X86Opcode::from_machine_opcode(one.opcode))
+                .collect::<Vec<_>>(),
+            vec![
+                Some(X86Opcode::Pop),
+                Some(X86Opcode::Pop),
+                Some(X86Opcode::Leave),
+                Some(X86Opcode::ReturnFar),
+            ]
+        );
+        assert_eq!(
+            second[0].operands,
+            vec![physical(X86Register::Di, OperandRole::Def)]
+        );
+        assert_eq!(
+            second[1].operands,
+            vec![physical(X86Register::Si, OperandRole::Def)]
+        );
+        assert_eq!(
+            second.iter().map(|one| one.id.get()).collect::<Vec<_>>(),
+            vec![18, 19, 20, 9]
+        );
+    }
+
+    #[test]
+    fn saves_only_the_low_si_view_for_an_unframed_esi_user() {
+        let mut input = function(MachineCallingConvention::C, vec![], vec![], false);
+        input.blocks[0].instructions.insert(
+            0,
+            instruction(
+                MachineInstructionId::new(7),
+                X86Opcode::Mov,
+                vec![
+                    physical(X86Register::Esi, OperandRole::Def),
+                    physical(X86Register::Eax, OperandRole::Use),
+                ],
+            ),
+        );
+
+        let plan = plan_c_frame(&input).unwrap();
+        let expanded = expand_allocated_c_abi(&input, &plan).unwrap();
+        let instructions = &expanded.blocks[0].instructions;
+        assert!(!plan.framed());
+        assert_eq!(
+            instructions
+                .iter()
+                .map(|one| X86Opcode::from_machine_opcode(one.opcode))
+                .collect::<Vec<_>>(),
+            vec![
+                Some(X86Opcode::Push),
+                Some(X86Opcode::Mov),
+                Some(X86Opcode::Pop),
+                Some(X86Opcode::ReturnNear),
+            ]
+        );
+        assert_eq!(
+            instructions[0].operands,
+            vec![physical(X86Register::Si, OperandRole::Use)]
+        );
+        assert_eq!(
+            instructions[2].operands,
+            vec![physical(X86Register::Si, OperandRole::Def)]
+        );
+    }
+
+    #[test]
+    fn unused_callee_saved_roots_add_no_save_restore_traffic() {
+        let input = function(MachineCallingConvention::C, vec![], vec![], false);
+        let plan = plan_c_frame(&input).unwrap();
+        let expanded = expand_allocated_c_abi(&input, &plan).unwrap();
+
+        assert_eq!(expanded, input);
+    }
+
+    #[test]
+    fn callee_save_id_exhaustion_refuses_without_mutating_input() {
+        let mut input = function(MachineCallingConvention::C, vec![], vec![], false);
+        input.blocks[0].instructions.insert(
+            0,
+            instruction(
+                MachineInstructionId::new(7),
+                X86Opcode::Mov,
+                vec![
+                    physical(X86Register::Esi, OperandRole::Def),
+                    physical(X86Register::Eax, OperandRole::Use),
+                ],
+            ),
+        );
+        input.blocks[0].instructions[1].id = MachineInstructionId::new(u32::MAX);
+        let baseline = input.clone();
+        let plan = plan_c_frame(&input).unwrap();
+
+        assert_eq!(
+            expand_allocated_c_abi(&input, &plan),
+            Err(CAbiExpansionError::InstructionIdExhausted)
+        );
+        assert_eq!(input, baseline);
     }
 }
