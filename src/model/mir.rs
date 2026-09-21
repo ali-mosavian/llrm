@@ -936,6 +936,28 @@ impl Op {
     }
 }
 
+/// Retains an occurrence's source ownership while deleting its meaning.
+///
+/// Direct port of `qbopt/model/mir.py:cleared`.
+pub fn cleared(op: &Op) -> Op {
+    let mut result = op.clone();
+    result.kind = Kind::Nothing;
+    result.name.clear();
+    result.defines.clear();
+    result.uses.clear();
+    result.loads.clear();
+    result.stores.clear();
+    result.args.clear();
+    result.results.clear();
+    result.merges = OrderedMap::new();
+    result.raised = None;
+    result.target = None;
+    result.test = None;
+    result.stack = None;
+    result.symbol = Some(false);
+    result
+}
+
 /// Where definitions meet on CFG edges.  Direct port of `qbopt.model.mir:Phi`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Phi {
@@ -1922,7 +1944,7 @@ mod tests {
     use super::{
         AllocationHints, AllocationHintsError, Arg, ArrayRequest, Cell, Const, FloatingOrigin,
         Held, IntegerRange, Kind, MemRef, MirBlock, MirBody, Op, OpCode, Opaque, OrderedMap, Phi,
-        RaisedBody, Symbol, Synth, Value, consumed, exit_values, exposed, kind_of, ordinary_uses,
+        RaisedBody, Symbol, Synth, Value, cleared, consumed, exit_values, exposed, kind_of, ordinary_uses,
         partial, python_padded_hex, resolved, rewritten, same_bytes, stepping, unheld, verify,
     };
 
@@ -2676,6 +2698,113 @@ mod tests {
         assert_ne!(op, all_resources);
         assert_eq!(all_resources.symbol, Some(false));
         assert_eq!(all_resources.opaque_defs, None);
+    }
+
+    #[test]
+    fn cleared_deletes_only_the_meaning_fields_from_python_mir_cleared() {
+        // Direct port of qbopt/model/mir.py:cleared.  `replace()` retains
+        // source occurrence ownership and every field not named there.
+        let defined = Value::new(1, 7);
+        let used = Value::new(2, 7);
+        let memory = MemRef::new(None, 2);
+        let held = Arg::Held(Held {
+            value: used,
+            width: 2,
+        });
+        let semantics = FloatingSemantics::new(
+            vec![Format::Binary32],
+            Format::Binary32,
+            Precision::Exact,
+            Rounding::None,
+        );
+        let floating_origin = FloatingOrigin {
+            block: 3,
+            sequence: vec![3, 7],
+            at: 7,
+            kind: Kind::Fadd,
+            semantics: semantics.clone(),
+            inputs: vec![held.clone()],
+            outputs: vec![Arg::Held(Held {
+                value: defined,
+                width: 2,
+            })],
+            machine_inputs: vec![Arg::Const(Const::new(3, 2))],
+            machine_outputs: vec![Arg::Const(Const::new(4, 2))],
+        };
+        let symbol = Symbol::new(Space::Segment, 2, 9, 2);
+        let mut op = Op::new(
+            7,
+            OpCode::Synth(Synth::ConcatLow),
+            "source spelling",
+            vec![defined],
+            vec![used],
+        );
+        op.array = Some(ArrayRequest::new(symbol, 2, vec![(0, 3)]));
+        op.memory_values = vec![(memory.clone(), Const::new(5, 2))];
+        op.floating = Some(semantics);
+        op.floating_origin = Some(floating_origin);
+        op.loads = vec![memory.clone()];
+        op.stores = vec![memory.clone()];
+        op.source_backed = true;
+        op.kind = Kind::Add;
+        op.stack = Some(-1);
+        op.test = Some(Kind::Le);
+        op.merges.insert(used, defined);
+        op.args = vec![held.clone()];
+        op.results = vec![Arg::Held(Held {
+            value: defined,
+            width: 2,
+        })];
+        op.raised = Some((op.args.clone(), op.results.clone()));
+        op.target = Some(11);
+        op.cases = vec![(1, 12)];
+        op.id = Some(13);
+        op.symbol = Some(true);
+        op.args_known = false;
+        op.memory_complete = true;
+        op.reads_complete = true;
+        op.volatile = true;
+        op.opaque_defs = Some(BTreeSet::from(["es".to_owned()]));
+        op.opaque_uses = None;
+        op.absorbed = vec![14];
+        op.indirect = true;
+        op.exits = vec![defined];
+
+        let result = cleared(&op);
+
+        assert_eq!(result.kind, Kind::Nothing);
+        assert!(result.name.is_empty());
+        assert!(result.defines.is_empty());
+        assert!(result.uses.is_empty());
+        assert!(result.loads.is_empty());
+        assert!(result.stores.is_empty());
+        assert!(result.args.is_empty());
+        assert!(result.results.is_empty());
+        assert!(result.merges.is_empty());
+        assert_eq!(result.raised, None);
+        assert_eq!(result.target, None);
+        assert_eq!(result.test, None);
+        assert_eq!(result.stack, None);
+        assert_eq!(result.symbol, Some(false));
+
+        assert_eq!(result.at, op.at);
+        assert_eq!(result.op, op.op);
+        assert_eq!(result.array, op.array);
+        assert_eq!(result.memory_values, op.memory_values);
+        assert_eq!(result.floating, op.floating);
+        assert_eq!(result.floating_origin, op.floating_origin);
+        assert_eq!(result.source_backed, op.source_backed);
+        assert_eq!(result.cases, op.cases);
+        assert_eq!(result.id, op.id);
+        assert_eq!(result.args_known, op.args_known);
+        assert_eq!(result.memory_complete, op.memory_complete);
+        assert_eq!(result.reads_complete, op.reads_complete);
+        assert_eq!(result.volatile, op.volatile);
+        assert_eq!(result.opaque_defs, op.opaque_defs);
+        assert_eq!(result.opaque_uses, op.opaque_uses);
+        assert_eq!(result.absorbed, op.absorbed);
+        assert_eq!(result.indirect, op.indirect);
+        assert_eq!(result.exits, op.exits);
     }
 
     #[test]
