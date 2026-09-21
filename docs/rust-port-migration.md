@@ -1088,3 +1088,14 @@ paired `IF/ELSE`; both fresh objects linked and returned the established
 and primary review reproduced both together in 4.05 seconds.  The 8.88 seconds
 of verification remained below ten percent of the iteration's elapsed work;
 no broad suite, optimizer, or qrender gate ran.
+
+Commit `89aa900e` adds the next paired rung, `memory`, again without compiler
+changes.  Its 3,755-byte WCC stream was independently captured twice with the
+production command and compared byte-for-byte.  The C path stores an `i16`
+through an incoming near pointer, reloads it twice, sign-extends both values,
+and returns their LONG square; the BASIC path performs the corresponding
+by-reference `INTEGER` update.  Both fresh objects linked and returned the
+existing `361001` oracle.  Delegated runtime gates took 1.61 and 1.84 seconds;
+primary review reproduced both together in 3.79 seconds.  The 7.24 seconds of
+verification remained below ten percent of elapsed work, with no broad suite,
+optimizer, or qrender gate.
