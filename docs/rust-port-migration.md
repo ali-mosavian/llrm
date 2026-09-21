@@ -1109,3 +1109,21 @@ the existing `130991` oracle.  Delegated runtime gates took 1.77 and 1.96
 seconds, and primary review reproduced both together in 3.85 seconds.  The
 7.58 seconds of verification stayed below ten percent of elapsed work; no
 broad suite, optimizer, or qrender gate ran.
+
+Commit `6e2bbcd8` adds the paired `control` rung and closes two reduced WCC
+raiser tables against Python `cfront/raise_hir.py`.  The real capture first
+failed at `O_EQ`, then advanced to `O_AND`; Rust had retained only `O_LT` from
+Python's six comparisons and only four of Python's ten integer binary forms.
+The port now preserves every comparison and integer binary spelling, including
+remainder, bitwise operations, shifts, and signedness-selected right shift, as
+existing source-neutral HIR operations.  No C operation or type fact entered
+generic HIR, IR, Machine IR, MC, or a pass.
+
+The 4,923-byte production capture was regenerated twice and matched both copies
+and the checked-in fixture byte-for-byte.  `llrm-c` and `llrm-qb` then emitted
+fresh objects, linked, ran under DOSBox-X, and returned the established `15007`
+oracle.  The two fail-first adjacent-stage runs, delegated table checks,
+primary focused unit checks, final paired runtime gate, and capture comparison
+used about 45 seconds of command execution, below ten percent of the elapsed
+implementation and review interval.  No broad suite, optimizer, or qrender
+gate ran.
