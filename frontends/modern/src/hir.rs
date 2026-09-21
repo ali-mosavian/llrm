@@ -30,6 +30,7 @@ pub struct Place {
     pub extent: u32,
     pub storage: &'static str,
     pub symbol: u32,
+    pub volatile: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -48,6 +49,11 @@ pub enum Operand {
     ProjectedPlace {
         place: u32,
         indices: Vec<Operand>,
+        offset: u32,
+        type_id: u32,
+    },
+    IndirectPlace {
+        base: u32,
         offset: u32,
         type_id: u32,
     },
@@ -259,8 +265,8 @@ fn function_json(out: &mut String, function: &Function) {
         string(out, &place.name);
         write!(
             out,
-            ",\"offset\":{},\"storage\":\"{}\",\"symbol\":{},\"type\":{}}}",
-            place.offset, place.storage, place.symbol, place.type_id
+            ",\"offset\":{},\"storage\":\"{}\",\"symbol\":{},\"type\":{},\"volatile\":{}}}",
+            place.offset, place.storage, place.symbol, place.type_id, place.volatile
         )
         .unwrap();
     }
@@ -311,6 +317,15 @@ fn operands(out: &mut String, values: &[Operand]) {
                 )
                 .unwrap();
             }
+            Operand::IndirectPlace {
+                base,
+                offset,
+                type_id,
+            } => write!(
+                out,
+                "{{\"base\":{base},\"offset\":{offset},\"tag\":\"indirect\",\"type\":{type_id},\"volatile\":false}}"
+            )
+            .unwrap(),
         }
     }
 }

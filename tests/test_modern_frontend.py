@@ -398,3 +398,76 @@ fn main() -> i16:
     assert f"dword ptr [bp+{offset}+2]" in loop.group("body")
     assert f"dword ptr [bp+{offset}+6]" in loop.group("body")
     assert f"shl {offset}" not in assembly
+
+
+def test_fixed_array_storage_has_a_prefix_descriptor(tmp_path: Path) -> None:
+    """A local fixed array must reserve and initialize length/capacity before its payload."""
+    source = tmp_path / "array_descriptor.mod"
+    source.write_text(
+        "fn main() -> i16:\n    var values: [i16; 3] = [10, 20, 30]\n    print(values.len())\n    return values[0]\n"
+    )
+
+    function = driver.parsed(source).modules[0].functions[0]
+    values = next(place for place in function.places if place.name == "values")
+    descriptor = {place.name: place for place in function.places if place.name.startswith("$values.")}
+    assert values.offset == -6
+    assert values.extent == 6
+    assert descriptor["$values.length"].offset == values.offset - 4
+    assert descriptor["$values.capacity"].offset == values.offset - 2
+
+    assembly = masm.text(modern_compile.assembled(driver.parsed(source), entry="main"))
+    assert "mov word ptr [bp-10], 3" in assembly
+    assert "mov word ptr [bp-8], 3" in assembly
+
+
+def test_borrowed_array_call_passes_element_zero_not_its_descriptor(tmp_path: Path) -> None:
+    """The systems ABI exposes a direct payload pointer while metadata stays at negative offsets."""
+    source = tmp_path / "array_borrow.mod"
+    source.write_text(
+        "fn bump(values: &mut [u16; 3]) -> void:\n"
+        "    values[1] += 3\n"
+        "fn main() -> i16:\n"
+        "    var values: [u16; 3] = [10, 20, 30]\n"
+        "    bump(&mut values)\n"
+        "    return 0\n"
+    )
+
+    program = driver.parsed(source)
+    caller = next(function for function in program.modules[0].functions if function.name == "main")
+    values = next(place for place in caller.places if place.name == "values")
+    address = next(
+        instruction for block in caller.blocks for instruction in block.instructions if instruction.op is hir.Op.ADDRESS
+    )
+    assert address.operands == (hir.PlaceRef(values.id),)
+    pointer = next(value for value in caller.values if value.id == address.results[0])
+    pointer_type = next(type_ for type_ in program.modules[0].types if type_.id == pointer.type)
+    assert pointer_type.width == 4
+    assert pointer_type.address is hir.AddressKind.FAR
+
+    assembly = masm.text(modern_compile.assembled(program, entry="main"))
+    bump = assembly.split("_bump proc far", 1)[1].split("_bump endp", 1)[0]
+    main = assembly.split("_main proc far", 1)[1].split("_main endp", 1)[0]
+    assert re.search(r"    lea [a-z]+, (?:word ptr )?\[bp-6\]\n", main)
+    assert re.search(r"    mov [a-z]+, ss\n", main)
+    assert "call far ptr _bump" in main
+    assert "add sp, 4" in main
+    assert "es:[" in bump
+    assert modern_compile.written(program, entry="main", source=source)
+
+
+def test_borrow_rules_reject_shared_mutation_and_aliasing_mutable_arguments(tmp_path: Path) -> None:
+    shared = tmp_path / "shared.mod"
+    shared.write_text("fn bad(values: &[u16; 1]) -> void:\n    values[0] = 2\n")
+    with pytest.raises(driver.FrontendError, match="immutable"):
+        driver.parsed(shared)
+
+    aliased = tmp_path / "aliased.mod"
+    aliased.write_text(
+        "fn use(left: &mut [u16; 1], right: &[u16; 1]) -> void:\n"
+        "    left[0] += right[0]\n"
+        "fn bad() -> void:\n"
+        "    var values: [u16; 1] = [1]\n"
+        "    use(&mut values, &values)\n"
+    )
+    with pytest.raises(driver.FrontendError, match="aliases a mutable argument"):
+        driver.parsed(aliased)

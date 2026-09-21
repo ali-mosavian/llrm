@@ -14,6 +14,7 @@ use crate::syntax::Function;
 use crate::syntax::IterationMode;
 use crate::syntax::Module;
 use crate::syntax::Parameter;
+use crate::syntax::ParameterType;
 use crate::syntax::Span;
 use crate::syntax::Statement;
 use crate::syntax::Struct;
@@ -213,13 +214,26 @@ impl Parser {
                     |kind| matches!(kind, TokenKind::Colon),
                     "expected ':' after parameter name",
                 )?;
-                let type_name = self.type_name()?;
-                if type_name == TypeName::Void {
-                    return Err(Diagnostic::new(span, "a parameter cannot have type void"));
-                }
+                let type_ = if self
+                    .take(|kind| matches!(kind, TokenKind::Ampersand))
+                    .is_some()
+                {
+                    let mutable = self.take(|kind| matches!(kind, TokenKind::Mut)).is_some();
+                    let target = self.type_annotation()?;
+                    if target == TypeAnnotation::Value(TypeSpec::Primitive(TypeName::Void)) {
+                        return Err(Diagnostic::new(span, "a parameter cannot borrow void"));
+                    }
+                    ParameterType::Borrowed { mutable, target }
+                } else {
+                    let type_name = self.type_name()?;
+                    if type_name == TypeName::Void {
+                        return Err(Diagnostic::new(span, "a parameter cannot have type void"));
+                    }
+                    ParameterType::Scalar(type_name)
+                };
                 parameters.push(Parameter {
                     name: parameter_name,
-                    type_name,
+                    type_,
                     span,
                 });
                 if self.take(|kind| matches!(kind, TokenKind::Comma)).is_none() {
@@ -536,6 +550,16 @@ impl Parser {
                 }
             }
             TokenKind::LeftBrace => self.struct_literal(None, token.span),
+            TokenKind::Ampersand => {
+                let mutable = self.take(|kind| matches!(kind, TokenKind::Mut)).is_some();
+                let operand = self.expression(25)?;
+                let end = operand.span().end_column;
+                Ok(Expr::Borrow {
+                    mutable,
+                    operand: Box::new(operand),
+                    span: Span::new(token.span.line, token.span.column, end),
+                })
+            }
             TokenKind::LeftBracket => {
                 let mut values = Vec::new();
                 if !matches!(self.peek().kind, TokenKind::RightBracket) {
@@ -585,15 +609,7 @@ impl Parser {
     }
 
     fn call(&mut self, callee: Expr) -> Result<Expr, Diagnostic> {
-        let (name, start) = match callee {
-            Expr::Name(name, span) => (name, span),
-            other => {
-                return Err(Diagnostic::new(
-                    other.span(),
-                    "only named functions can be called",
-                ))
-            }
-        };
+        let start = callee.span();
         self.bump();
         let mut arguments = Vec::new();
         if !matches!(self.peek().kind, TokenKind::RightParen) {
@@ -611,11 +627,24 @@ impl Parser {
             |kind| matches!(kind, TokenKind::RightParen),
             "expected ')' after arguments",
         )?;
-        Ok(Expr::Call {
-            name,
-            arguments,
-            span: Span::new(start.line, start.column, close.span.end_column),
-        })
+        let span = Span::new(start.line, start.column, close.span.end_column);
+        match callee {
+            Expr::Name(name, _) => Ok(Expr::Call {
+                name,
+                arguments,
+                span,
+            }),
+            Expr::Member { base, field, .. } => Ok(Expr::MethodCall {
+                receiver: base,
+                name: field,
+                arguments,
+                span,
+            }),
+            other => Err(Diagnostic::new(
+                other.span(),
+                "only named functions and methods can be called",
+            )),
+        }
     }
 
     fn index(&mut self, base: Expr) -> Result<Expr, Diagnostic> {
@@ -1037,8 +1066,8 @@ mod tests {
             }
         ));
         assert_eq!(
-            module.functions[0].parameters[0].type_name,
-            module.fixed_types[0].type_name
+            module.functions[0].parameters[0].type_,
+            ParameterType::Scalar(module.fixed_types[0].type_name)
         );
         assert_eq!(module.functions[0].result, module.fixed_types[0].type_name);
     }

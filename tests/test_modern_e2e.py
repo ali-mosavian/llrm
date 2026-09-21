@@ -65,3 +65,27 @@ def test_native_dynamic_fixed_i32_arithmetic_preserves_wrapping_results(tmp_path
     made = build(source, tmp_path / "FIXED32.EXE", run=True)
 
     assert made.output == expected
+
+
+def test_native_borrowed_array_uses_a_direct_mutable_payload_pointer(tmp_path: Path) -> None:
+    """The real-mode call ABI must not pass or mutate the descriptor address."""
+    source = tmp_path / "array_borrow.mod"
+    source.write_text(
+        "fn bump(values: &mut [i16; 3]) -> void:\n"
+        "    values[1] += 3\n"
+        "fn main() -> i16:\n"
+        "    var values: [i16; 3] = [10, 20, 30]\n"
+        "    bump(&mut values)\n"
+        "    if values[1] == 23:\n"
+        '        print("ok")\n'
+        "    else:\n"
+        '        print("bad")\n'
+        "    return 0\n"
+    )
+
+    expected = execute.run(driver.parsed(source), "main").output
+    assert expected == "ok\n"
+
+    made = build(source, tmp_path / "BORROW.EXE", run=True)
+
+    assert made.output == expected

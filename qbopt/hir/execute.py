@@ -100,7 +100,7 @@ class _Machine:
         self.output: list[str] = []
         self.remaining = limit
 
-    def invoke(self, name: str, arguments: tuple[int | float, ...]) -> int | float | None:
+    def invoke(self, name: str, arguments: tuple[_Scalar, ...]) -> int | float | None:
         function = self.functions.get(name)
         if function is None:
             raise ExecutionError(f"unknown entry function {name!r}")
@@ -377,7 +377,7 @@ class _Machine:
         if name is None:
             raise ExecutionError("call has no resolved callee")
         if name in self.functions:
-            return self.invoke(name, tuple(_number(one) for one in arguments))
+            return self.invoke(name, arguments)
         if name == "_pn":
             self.output.append("\n")
         elif name == "_pt":

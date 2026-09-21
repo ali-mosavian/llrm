@@ -95,8 +95,17 @@ pub struct Function {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Parameter {
     pub name: String,
-    pub type_name: TypeName,
+    pub type_: ParameterType,
     pub span: Span,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ParameterType {
+    Scalar(TypeName),
+    Borrowed {
+        mutable: bool,
+        target: TypeAnnotation,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -230,6 +239,11 @@ pub enum Expr {
         fields: StructLiteralFields,
         span: Span,
     },
+    Borrow {
+        mutable: bool,
+        operand: Box<Expr>,
+        span: Span,
+    },
     Unary {
         op: UnaryOp,
         operand: Box<Expr>,
@@ -242,6 +256,12 @@ pub enum Expr {
         span: Span,
     },
     Call {
+        name: String,
+        arguments: Vec<Expr>,
+        span: Span,
+    },
+    MethodCall {
+        receiver: Box<Expr>,
         name: String,
         arguments: Vec<Expr>,
         span: Span,
@@ -274,9 +294,11 @@ impl Expr {
             | Self::Index { span, .. }
             | Self::Member { span, .. }
             | Self::StructLiteral { span, .. }
+            | Self::Borrow { span, .. }
             | Self::Unary { span, .. }
             | Self::Binary { span, .. }
-            | Self::Call { span, .. } => *span,
+            | Self::Call { span, .. }
+            | Self::MethodCall { span, .. } => *span,
         }
     }
 }

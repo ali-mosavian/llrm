@@ -14,11 +14,12 @@ This crate implements the first source-language slice:
   calls, `return`, `if`/`else`, `while`, and typed half-open integer ranges;
 - `break` and `continue`;
 - strictly typed integer and floating arithmetic and comparisons;
-- fixed one-dimensional arrays, written `[T; length]`, with literals and
-  indexed loads and stores;
+- fixed one-dimensional arrays, written `[T; length]`, with prefix descriptors,
+  literals, indexed loads and stores, and intrinsic metadata methods;
 - source-ordered, nested `struct` layouts, local struct values, struct literals
   and copies, plus allocation-free array iteration through explicit references;
-  and
+- scoped `&T` and `&mut T` parameters, including direct payload pointers for
+  arrays of primitives or structs; and
 - byte strings, allocation-free f-strings, and `print`.
 
 `char` is one target-code-page byte; `\xNN` spells any code unit without
@@ -69,10 +70,26 @@ valid only as a direct `print` argument; it streams literal and interpolated
 pieces to short typed runtime calls (`_pt`, `_pi2`, `_pf4`, and so on), so
 formatting introduces no allocation or hidden general-purpose runtime.
 
-Fixed arrays are contiguous local objects with a zero lower bound. Struct
-fields stay in source order, with at most two-byte alignment for the 16-bit
-target. Indexing and field selection are structural HIR and lower to ordinary
-address arithmetic; no array, field-access, or iterator helper is emitted.
+Every array object has the same prefix representation as a string: two
+little-endian 16-bit words, `length` and `capacity`, immediately before the
+payload. A fixed `[T; N]` array has `length == capacity == N`; its value and its
+systems ABI address both point at element zero, not at the descriptor. Thus C
+and assembly receive a conventional direct `T *`, while code that owns an
+array can recover its metadata at pointer offsets `-4` and `-2`. The descriptor
+is part of the ABI and is initialized even when the current source never asks
+for it.
+
+Fixed arrays have a zero lower bound. `array.len()`, `array.capacity()`, and
+`array.dim(0)` are intrinsic operations. For a fixed array the compiler knows
+all three values and folds them without emitting a helper or descriptor load;
+the physical descriptor remains available to interop and to later resizable
+array types. Only rank one is implemented, so any other dimension is currently
+rejected.
+
+Struct fields stay in source order, with at most two-byte alignment for the
+16-bit target. Indexing and field selection are structural HIR and lower to
+ordinary address arithmetic; no array, field-access, metadata, or iterator
+helper is emitted.
 Structs may be bound with an explicit type or inferred from a literal or copy:
 
 ```text
@@ -110,6 +127,28 @@ There is no operator overloading.
 immutable array. By-value array iteration is reserved until aggregate move
 semantics are implemented. A mutable view's field stores update the original
 element.
+
+The same borrow syntax is used at a function boundary:
+
+```text
+fn translate(points: &mut [vec2i; 6], delta: &vec2i) -> void:
+    for point in &mut points:
+        point.x += delta.x
+        point.y += delta.y
+
+translate(&mut bodies, &offset)
+```
+
+A borrowed parameter is a 32-bit real-mode far pointer—one 16-bit segment and
+one 16-bit payload offset—so it can refer uniformly to stack, static, or far
+storage. The borrow is explicit at the call, mutable access requires `&mut`,
+and an immutable binding cannot be mutably borrowed. A call may not give the
+same named object to two parameters when either access is mutable. References
+are non-owning and confined to the call or loop scope: they cannot be stored,
+returned, or outlive the referenced local. These rules require no reference
+counting, garbage collector, lifetime table, stack unwinder, or runtime borrow
+check.
+
 `is` and `is not` compare the identity of scoped views, while `==` and `!=`
 remain value comparisons (struct value equality is not in this slice).
 `for index in start..end` evaluates both bounds once and visits `start` through
@@ -125,9 +164,9 @@ strings, f-strings, and printing.
 In the implemented slice, primitive and struct expressions have value
 semantics; `let` creates an immutable place and `var` a mutable place. Struct
 copies are explicit in HIR as leaf loads and stores, while arrays remain
-non-copyable aggregates. Array iteration creates explicit, non-owning views
-confined to the loop body. General first-class references, owning moves, and
-explicit cloning remain future work.
+non-copyable aggregates. Borrows are explicit, non-owning views with no
+runtime representation beyond the far pointer. Escaping references, owning
+moves, and explicit cloning remain future work.
 
 Canonical language code uses lowercase `snake_case` for functions, variables,
 parameters, fields, and user-defined types. This is the language and standard
@@ -156,15 +195,16 @@ uv run python tools/modernrun.py frontends/modern/fixtures/nbody.mod --entry nbo
 This runs source through lexing, parsing, strict semantic analysis, common-HIR
 verification, and HIR execution. It is deliberately not called target
 code-generation: it emits no OMF or executable and supplies no real-mode ABI.
-Its captured output is the known answer that the future freestanding real-mode
-backend must reproduce exactly.
+Its captured output is the known answer that the freestanding real-mode backend
+must reproduce exactly.
 
-The current stopping point is semantic MIR. The frontend document is accepted
-by `qbopt.hir.decode`, `qbopt.hir.verify`, and `qbopt.hir.lower`; a
-freestanding ABI adapter and final object writer have not been added yet.
+The frontend document is accepted by `qbopt.hir.decode`, `qbopt.hir.verify`,
+and `qbopt.hir.lower`, then follows qbopt's shared optimization, lowering,
+allocation, and OMF object-writing path. The minimal real-mode bootstrap and
+freestanding runtime can link that object into a DOS executable.
 
 Not implemented in this slice are explicit numeric conversions, imports,
-resizable collections, general ownership and borrowing, patterns,
+resizable collections, escaping or owning references, patterns,
 comprehensions, lambdas, or generators. General string construction is also
 absent: f-strings are currently a print facility, not heap values. Those
 features should extend semantic analysis and elaborate to the same small HIR

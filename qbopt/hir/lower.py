@@ -79,6 +79,7 @@ def _ref(place: model.Place, type_: model.Type) -> mir.MemRef:
         type_.width,
         space=space,
         provenance=provenance,
+        volatile=place.volatile,
     )
 
 
@@ -391,6 +392,7 @@ def _function(
                     space=space,
                     base_width=offset.width,
                     provenance=provenance,
+                    volatile=place.volatile,
                 )
                 return mir.Cell(ref)
             case model.ProjectedPlace(place_id, indices, field_offset, type_id):
@@ -409,6 +411,7 @@ def _function(
                             field_type.width,
                             space=space,
                             provenance=provenance,
+                            volatile=place.volatile,
                         )
                     )
                 assert root.element is not None
@@ -453,6 +456,7 @@ def _function(
                         space=space,
                         base_width=offset.width,
                         provenance=provenance,
+                        volatile=place.volatile,
                     )
                 )
             case model.IndirectPlace(base, offset, type_id, volatile):
@@ -751,6 +755,9 @@ def _function(
             segment = mir.Value(next_value, at + 1, variable=next_value, version=1)
             next_value += 1
             at += 1
+            selector_source = (
+                mir.FrameSelector() if reference.space is Space.FRAME else mir.Symbol(Space.GROUP, 0, 0, 2)
+            )
             selector = mir.Op(
                 at,
                 ir.Operation.MOVE,
@@ -758,7 +765,7 @@ def _function(
                 (segment,),
                 (),
                 kind=mir.Kind.COPY,
-                args=(mir.Symbol(Space.GROUP, 0, 0, 2),),
+                args=(selector_source,),
                 results=(mir.Held(segment, 2),),
                 id=at,
                 reads_complete=True,
@@ -780,6 +787,85 @@ def _function(
                 memory_complete=True,
             )
             return (*before, *offset_ops, selector, joined)
+        if (
+            instruction.op is model.Op.PTR_OFFSET
+            and value_types[instruction.results[0]].address is model.AddressKind.FAR
+        ):
+            if (
+                len(args) != 2
+                or not isinstance(args[0], mir.Held)
+                or args[0].width != 4
+                or not isinstance(args[1], (mir.Held, mir.Const))
+                or args[1].width not in (1, 2, 4)
+            ):
+                raise InvalidHIR(
+                    f"{module}.{function.name}: far pointer offset needs a pointer and integer displacement"
+                )
+            pointer, displacement = args
+            if displacement.width != 2:
+                displacement = (
+                    mir.Held(displacement.value, 2)
+                    if isinstance(displacement, mir.Held)
+                    else mir.Const(displacement.n, 2)
+                )
+            halves = []
+            for bit in (0, 16):
+                half = mir.Value(next_value, at + 1, variable=next_value, version=1)
+                next_value += 1
+                at += 1
+                before.append(
+                    mir.Op(
+                        at,
+                        ir.Operation.MOVE,
+                        "extract",
+                        (half,),
+                        (pointer.value,),
+                        kind=mir.Kind.EXTRACT,
+                        args=(pointer, mir.Const(bit, 1)),
+                        results=(mir.Held(half, 2),),
+                        id=at,
+                        reads_complete=True,
+                        memory_complete=True,
+                    )
+                )
+                halves.append(half)
+            offset, segment = halves
+            adjusted = mir.Value(next_value, at + 1, variable=next_value, version=1)
+            next_value += 1
+            at += 1
+            before.append(
+                mir.Op(
+                    at,
+                    ir.Operation.BINARY,
+                    "add",
+                    (adjusted,),
+                    tuple(one.value for one in (mir.Held(offset, 2), displacement) if isinstance(one, mir.Held)),
+                    kind=mir.Kind.ADD,
+                    args=(mir.Held(offset, 2), displacement),
+                    results=(mir.Held(adjusted, 2),),
+                    id=at,
+                    reads_complete=True,
+                    memory_complete=True,
+                )
+            )
+            at += 1
+            result = values[instruction.results[0]]
+            before.append(
+                mir.Op(
+                    at,
+                    ir.Operation.MOVE,
+                    "",
+                    (result,),
+                    (segment, adjusted),
+                    kind=mir.Kind.CONCAT,
+                    args=(mir.Held(segment, 2), mir.Held(adjusted, 2)),
+                    results=(mir.Held(result, 4),),
+                    id=instruction.id,
+                    reads_complete=True,
+                    memory_complete=True,
+                )
+            )
+            return tuple(before)
         if instruction.op in (model.Op.POINTER_SEGMENT, model.Op.POINTER_OFFSET):
             if len(args) != 1 or not isinstance(args[0], mir.Held):
                 raise InvalidHIR(f"{module}.{function.name}: pointer projection needs one pointer")

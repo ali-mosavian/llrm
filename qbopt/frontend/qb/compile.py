@@ -29,6 +29,7 @@ from qbopt.optimize import rotate
 from qbopt.backend import omfwrite
 from qbopt.backend import prologue
 from qbopt.optimize import transform
+from qbopt.backend import addressvalues
 from qbopt.backend import cpu as targets
 from qbopt.objectfile.module import Addr
 from qbopt.objectfile.module import Space
@@ -801,51 +802,6 @@ def _temporary_string_slots(module: hir.Module, function: hir.Function) -> int:
     return sum(place.storage is hir.Storage.LOCAL and types[place.type].name == "string" for place in function.places)
 
 
-def _address_values(body: lir.LirBody) -> lir.LirBody:
-    """Turn allocated ADDRESS cells into LEA's non-memory operand spelling."""
-
-    def instruction(one: lir.Insn) -> lir.Insn:
-        what = one.what
-        if what is None or what.op is not ir.Operation.ADDRESS:
-            return one
-        sources = []
-        for source in what.sources:
-            if not isinstance(source, ir.Mem):
-                sources.append(source)
-                continue
-            addr = source.addr
-            if addr is not None and addr.space is Space.FRAME and source.base is not None:
-                sources.append(
-                    ir.Address(
-                        None,
-                        through=Register.BP,
-                        index=source.through,
-                        scale=source.scale,
-                        offset=addr.disp,
-                        disp_width=source.disp_width,
-                    )
-                )
-                continue
-            if addr is not None and source.base is not None and source.through != Register.NONE:
-                addr = replace(addr, base=source.through)
-            sources.append(
-                ir.Address(
-                    addr,
-                    through=source.through,
-                    index=source.index_through,
-                    scale=source.scale,
-                    offset=source.offset,
-                    disp_width=source.disp_width,
-                )
-            )
-        return replace(one, what=replace(what, sources=tuple(sources)))
-
-    return replace(
-        body,
-        blocks=tuple(replace(block, insns=tuple(instruction(one) for one in block.insns)) for block in body.blocks),
-    )
-
-
 def _source_instructions(body: lir.LirBody) -> lir.LirBody:
     """Drop source-generated ESCAPE markers, which own no legacy bytes."""
     return replace(
@@ -1481,7 +1437,7 @@ def assembled(program: hir.Program, *, observer: StageObserver | None = None) ->
             else:
                 final_body, initialize = _initialize_frame(final_body, reserve)
             callees.update(initialize)
-        final_body = _address_values(final_body)
+        final_body = addressvalues.converted(final_body)
         final_body, registrations = _materialize_error_registrations(final_body, error_registrations)
         callees.update(registrations)
         referenced_calls.update(callee.name for callee in registrations.values())

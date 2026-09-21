@@ -15,6 +15,7 @@ from qbopt.backend import omfwrite
 from qbopt.backend import prologue
 from qbopt.optimize import transform
 from qbopt.backend import lower_int64
+from qbopt.backend import addressvalues
 from qbopt.backend import cpu as targets
 from qbopt.backend import frame as frames
 from qbopt.frontend.qb import physicalize
@@ -136,6 +137,8 @@ def assembled(
             if isinstance(phase, phielim.PhiElimination):
                 in_ssa = False
             body = flow.checked(body, phase, in_ssa=in_ssa)
+
+        body = addressvalues.converted(body)
 
         reserve = -min(min(owned_frame.slots.values(), default=0), owned_frame.floor)
         callees: dict[int, masm.Callee] = {}

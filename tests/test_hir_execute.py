@@ -4,7 +4,9 @@ from pathlib import Path
 
 from qbopt import hir
 from qbopt.hir import execute
+from qbopt.backend import masm
 from qbopt.frontend.modern import driver
+from qbopt.frontend.modern import compile as modern_compile
 
 ROOT = Path(__file__).resolve().parents[1]
 NBODY = ROOT / "frontends" / "modern" / "fixtures" / "nbody.mod"
@@ -88,6 +90,58 @@ def test_context_typed_struct_literals_support_named_and_positional_fields(tmp_p
     )
 
     assert execute.run(driver.parsed(source), "calculate").value == 87_654_321
+
+
+def test_fixed_array_descriptor_methods_are_intrinsic_values(tmp_path: Path) -> None:
+    """Fixed arrays once had payload storage but no language-visible descriptor ABI."""
+    source = tmp_path / "array_descriptor.mod"
+    source.write_text(
+        "fn describe() -> u16:\n"
+        "    let values: [i16; 3] = [10, 20, 30]\n"
+        "    return values.len() + values.capacity() + values.dim(0)\n"
+    )
+
+    assert execute.run(driver.parsed(source), "describe").value == 9
+
+
+def test_borrowed_fixed_array_parameters_point_at_and_mutate_payload(tmp_path: Path) -> None:
+    """Array arguments must be direct data pointers, not copied payloads or descriptor pointers."""
+    source = tmp_path / "array_borrow.mod"
+    source.write_text(
+        "fn bump(values: &mut [u16; 3]) -> void:\n"
+        "    values[1] += values.len()\n"
+        "fn calculate() -> u16:\n"
+        "    var values: [u16; 3] = [10, 20, 30]\n"
+        "    bump(&mut values)\n"
+        "    return values[0] + values[1] + values[2]\n"
+    )
+
+    assert execute.run(driver.parsed(source), "calculate").value == 63
+
+
+def test_borrowed_struct_arrays_and_reborrows_keep_scoped_mutation(tmp_path: Path) -> None:
+    """A borrowed struct-array element must remain a direct view through nested calls."""
+    source = tmp_path / "struct_array_borrow.mod"
+    source.write_text(
+        "struct point:\n"
+        "    x: i16\n"
+        "    y: i16\n"
+        "fn nudge(point: &mut point) -> void:\n"
+        "    point.x += point.y\n"
+        "fn update(points: &mut [point; 2]) -> void:\n"
+        "    for point in &mut points:\n"
+        "        nudge(&mut point)\n"
+        "fn calculate() -> i16:\n"
+        "    var points: [point; 2] = [{1, 2}, {10, 20}]\n"
+        "    update(&mut points)\n"
+        "    return points[0].x + points[1].x\n"
+    )
+
+    program = driver.parsed(source)
+    assert execute.run(program, "calculate").value == 33
+    assembly = masm.text(modern_compile.assembled(program, entry="calculate"))
+    assert "call far ptr _update" in assembly
+    assert "call far ptr _nudge" in assembly
 
 
 def test_address_of_aggregate_does_not_read_the_aggregate() -> None:

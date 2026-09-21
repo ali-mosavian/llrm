@@ -11,6 +11,7 @@ use crate::syntax::FixedType;
 use crate::syntax::Function;
 use crate::syntax::IterationMode;
 use crate::syntax::Module;
+use crate::syntax::ParameterType;
 use crate::syntax::Span;
 use crate::syntax::Statement;
 use crate::syntax::Struct;
@@ -88,6 +89,7 @@ struct TypeRegistry {
     arrays: BTreeMap<(u32, u32), u32>,
     structs: BTreeMap<String, StructLayout>,
     fixed_names: BTreeMap<String, TypeName>,
+    pointers: BTreeMap<u32, u32>,
 }
 
 #[derive(Clone, Debug)]
@@ -104,7 +106,7 @@ struct FieldLayout {
     offset: u32,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ElementType {
     Scalar(TypeName),
     Struct(u32),
@@ -150,6 +152,7 @@ impl TypeRegistry {
             arrays: BTreeMap::new(),
             structs: BTreeMap::new(),
             fixed_names: BTreeMap::new(),
+            pointers: BTreeMap::new(),
         }
     }
 
@@ -307,6 +310,58 @@ impl TypeRegistry {
         self.types[(id - 1) as usize].width
     }
 
+    fn pointer(&mut self, target: u32) -> u32 {
+        if let Some(id) = self.pointers.get(&target) {
+            return *id;
+        }
+        let id = self.types.len() as u32 + 1;
+        let name = format!("&{}", self.types[(target - 1) as usize].name);
+        self.types.push(hir::Type {
+            id,
+            name,
+            kind: "pointer",
+            width: 4,
+            signed: None,
+            evaluation: "none",
+            element: Some(target),
+            rank: 0,
+            bounds: Vec::new(),
+            address: "far",
+        });
+        self.pointers.insert(target, id);
+        id
+    }
+
+    fn parameter_target(
+        &mut self,
+        annotation: &TypeAnnotation,
+        span: Span,
+    ) -> Result<(BindingType, u32), Diagnostic> {
+        match annotation {
+            TypeAnnotation::Value(spec) => {
+                let element = self.resolve_element(spec, span)?;
+                Ok((
+                    match element {
+                        ElementType::Scalar(type_name) => BindingType::Scalar(type_name),
+                        ElementType::Struct(id) => BindingType::Struct(id),
+                    },
+                    element.id(),
+                ))
+            }
+            TypeAnnotation::Array { element, length } => {
+                let element = self.resolve_element(element, span)?;
+                let id = self.array(element, *length);
+                Ok((
+                    BindingType::Array {
+                        element,
+                        length: *length,
+                    },
+                    id,
+                ))
+            }
+        }
+    }
+
     fn structure(&self, id: u32) -> Option<&StructLayout> {
         self.structs.values().find(|one| one.id == id)
     }
@@ -342,13 +397,33 @@ fn plain_type(
 struct Signature {
     id: u32,
     name: String,
-    parameters: Vec<TypeName>,
+    parameters: Vec<SignatureParameter>,
     result: TypeName,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum SignatureParameter {
+    Scalar(TypeName),
+    Borrowed {
+        mutable: bool,
+        target: BindingType,
+        pointer: u32,
+    },
+}
+
+impl SignatureParameter {
+    fn hir_type(self) -> u32 {
+        match self {
+            Self::Scalar(type_name) => type_id(type_name),
+            Self::Borrowed { pointer, .. } => pointer,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
 enum Storage {
     Parameter(u32),
+    Reference(u32),
     Place(u32),
     ArrayView { place: u32, index: hir::Operand },
 }
@@ -364,6 +439,7 @@ struct Binding {
 struct StructView {
     struct_id: u32,
     place: u32,
+    pointer: Option<u32>,
     indices: Vec<hir::Operand>,
     offset: u32,
     mutable: bool,
@@ -376,7 +452,7 @@ enum AssignmentPlace {
     Struct(StructView),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BindingType {
     Scalar(TypeName),
     Array { element: ElementType, length: u32 },
@@ -397,6 +473,9 @@ struct BlockBuilder {
 }
 
 pub fn compile(module: &Module, module_name: &str) -> Result<String, Diagnostic> {
+    let mut types = TypeRegistry::new();
+    types.register_fixed_types(&module.fixed_types)?;
+    types.register_structs(&module.structs)?;
     let mut signatures = BTreeMap::new();
     for (index, function) in module.functions.iter().enumerate() {
         if signatures.contains_key(&function.name) {
@@ -414,16 +493,28 @@ pub fn compile(module: &Module, module_name: &str) -> Result<String, Diagnostic>
                 ));
             }
         }
+        let resolved_parameters = function
+            .parameters
+            .iter()
+            .map(|parameter| match &parameter.type_ {
+                ParameterType::Scalar(type_name) => Ok(SignatureParameter::Scalar(*type_name)),
+                ParameterType::Borrowed { mutable, target } => {
+                    let (target, target_id) = types.parameter_target(target, parameter.span)?;
+                    let pointer = types.pointer(target_id);
+                    Ok(SignatureParameter::Borrowed {
+                        mutable: *mutable,
+                        target,
+                        pointer,
+                    })
+                }
+            })
+            .collect::<Result<Vec<_>, Diagnostic>>()?;
         signatures.insert(
             function.name.clone(),
             Signature {
                 id: index as u32 + 1,
                 name: function.name.clone(),
-                parameters: function
-                    .parameters
-                    .iter()
-                    .map(|one| one.type_name)
-                    .collect(),
+                parameters: resolved_parameters,
                 result: function.result,
             },
         );
@@ -438,7 +529,7 @@ pub fn compile(module: &Module, module_name: &str) -> Result<String, Diagnostic>
             parameter_types: signature
                 .parameters
                 .iter()
-                .map(|one| type_id(*one))
+                .map(|one| one.hir_type())
                 .collect(),
             defined: true,
         })
@@ -457,9 +548,6 @@ pub fn compile(module: &Module, module_name: &str) -> Result<String, Diagnostic>
     }
     let mut functions = Vec::new();
     let mut literals = LiteralPool::default();
-    let mut types = TypeRegistry::new();
-    types.register_fixed_types(&module.fixed_types)?;
-    types.register_structs(&module.structs)?;
     for function in &module.functions {
         let signature = signatures.get(&function.name).expect("collected function");
         functions.push(
@@ -591,15 +679,25 @@ impl<'a> FunctionCompiler<'a> {
             types,
             constant_places: BTreeMap::new(),
         };
-        for parameter in &function.parameters {
-            let value = compiler.value(parameter.type_name);
+        for (parameter, resolved) in function.parameters.iter().zip(&signature.parameters) {
+            let value = compiler.value_type(resolved.hir_type());
             compiler.parameters.push(value);
+            let (type_, mutable, storage) = match resolved {
+                SignatureParameter::Scalar(type_name) => (
+                    BindingType::Scalar(*type_name),
+                    false,
+                    Storage::Parameter(value),
+                ),
+                SignatureParameter::Borrowed {
+                    mutable, target, ..
+                } => (*target, *mutable, Storage::Reference(value)),
+            };
             compiler.scopes[0].insert(
                 parameter.name.clone(),
                 Binding {
-                    type_: BindingType::Scalar(parameter.type_name),
-                    mutable: false,
-                    storage: Storage::Parameter(value),
+                    type_,
+                    mutable,
+                    storage,
                 },
             );
         }
@@ -755,6 +853,7 @@ impl<'a> FunctionCompiler<'a> {
                     let destination = StructView {
                         struct_id,
                         place,
+                        pointer: None,
                         indices: Vec::new(),
                         offset: 0,
                         mutable: *mutable,
@@ -839,7 +938,7 @@ impl<'a> FunctionCompiler<'a> {
                 }
             },
             Statement::Expr(expression) => {
-                if !matches!(expression, Expr::Call { .. }) {
+                if !matches!(expression, Expr::Call { .. } | Expr::MethodCall { .. }) {
                     return Err(Diagnostic::new(
                         expression.span(),
                         "only a function call may be used as an expression statement",
@@ -1005,9 +1104,9 @@ impl<'a> FunctionCompiler<'a> {
                 "for requires a fixed array",
             ));
         };
-        let Storage::Place(array_place) = array.storage else {
+        if !matches!(array.storage, Storage::Place(_) | Storage::Reference(_)) {
             return Err(Diagnostic::new(iterable.span(), "array has no storage"));
-        };
+        }
         if mode == IterationMode::Value {
             return Err(Diagnostic::new(
                 span,
@@ -1027,7 +1126,7 @@ impl<'a> FunctionCompiler<'a> {
             )
         })?;
 
-        let index_place = self.place(&format!("$for{array_place}"), TypeName::U16, true);
+        let index_place = self.place(&format!("$for_{array_name}"), TypeName::U16, true);
         self.emit(
             "store",
             Vec::new(),
@@ -1068,6 +1167,20 @@ impl<'a> FunctionCompiler<'a> {
         });
 
         self.current = body_block;
+        let element_width = self.types.width(element.id());
+        let view_storage = match array.storage {
+            Storage::Place(place) => Storage::ArrayView {
+                place,
+                index: hir::Operand::Value(index),
+            },
+            Storage::Reference(pointer) => Storage::Reference(self.indexed_pointer(
+                pointer,
+                hir::Operand::Value(index),
+                element_width,
+                span,
+            )?),
+            Storage::Parameter(_) | Storage::ArrayView { .. } => unreachable!("checked above"),
+        };
         self.scopes.push(BTreeMap::new());
         self.scopes.last_mut().expect("scope").insert(
             name.into(),
@@ -1077,10 +1190,7 @@ impl<'a> FunctionCompiler<'a> {
                     ElementType::Struct(id) => BindingType::Struct(id),
                 },
                 mutable: mode == IterationMode::Mutable,
-                storage: Storage::ArrayView {
-                    place: array_place,
-                    index: hir::Operand::Value(index),
-                },
+                storage: view_storage,
             },
         );
         self.loops.push((exit_block, increment_block));
@@ -1273,6 +1383,7 @@ impl<'a> FunctionCompiler<'a> {
             &StructView {
                 struct_id,
                 place,
+                pointer: None,
                 indices: vec![index],
                 offset: 0,
                 mutable: true,
@@ -1377,6 +1488,7 @@ impl<'a> FunctionCompiler<'a> {
                     let nested = StructView {
                         struct_id: field_struct,
                         place: destination.place,
+                        pointer: destination.pointer,
                         indices: destination.indices.clone(),
                         offset: destination.offset + field.offset,
                         mutable: destination.mutable,
@@ -1435,6 +1547,7 @@ impl<'a> FunctionCompiler<'a> {
                     let destination = StructView {
                         struct_id,
                         place: destination.place,
+                        pointer: destination.pointer,
                         indices: destination.indices.clone(),
                         offset: destination.offset + field.offset,
                         mutable: destination.mutable,
@@ -1443,6 +1556,7 @@ impl<'a> FunctionCompiler<'a> {
                     let source = StructView {
                         struct_id,
                         place: source.place,
+                        pointer: source.pointer,
                         indices: source.indices.clone(),
                         offset: source.offset + field.offset,
                         mutable: source.mutable,
@@ -1461,11 +1575,19 @@ impl<'a> FunctionCompiler<'a> {
         field_offset: u32,
         type_name: TypeName,
     ) -> hir::Operand {
-        hir::Operand::ProjectedPlace {
-            place: view.place,
-            indices: view.indices.clone(),
-            offset: view.offset + field_offset,
-            type_id: type_id(type_name),
+        if let Some(pointer) = view.pointer {
+            hir::Operand::IndirectPlace {
+                base: pointer,
+                offset: view.offset + field_offset,
+                type_id: type_id(type_name),
+            }
+        } else {
+            hir::Operand::ProjectedPlace {
+                place: view.place,
+                indices: view.indices.clone(),
+                offset: view.offset + field_offset,
+                type_id: type_id(type_name),
+            }
         }
     }
 
@@ -1552,6 +1674,7 @@ impl<'a> FunctionCompiler<'a> {
                     ElementType::Struct(struct_id) => AssignmentPlace::Struct(StructView {
                         struct_id,
                         place: parent.place,
+                        pointer: parent.pointer,
                         indices: parent.indices,
                         offset: parent.offset + member.offset,
                         mutable: true,
@@ -1577,20 +1700,27 @@ impl<'a> FunctionCompiler<'a> {
                             Storage::Parameter(_) => {
                                 return Err(Diagnostic::new(span, "parameters are immutable"))
                             }
+                            Storage::Reference(pointer) => hir::Operand::IndirectPlace {
+                                base: pointer,
+                                offset: 0,
+                                type_id: type_id(type_name),
+                            },
                         };
                         Ok(AssignmentPlace::Scalar(destination, type_name))
                     }
                     BindingType::Struct(struct_id) => {
-                        let (place, indices) = match binding.storage {
-                            Storage::Place(place) => (place, Vec::new()),
-                            Storage::ArrayView { place, index } => (place, vec![index]),
+                        let (place, pointer, indices) = match binding.storage {
+                            Storage::Place(place) => (place, None, Vec::new()),
+                            Storage::ArrayView { place, index } => (place, None, vec![index]),
                             Storage::Parameter(_) => {
                                 return Err(Diagnostic::new(span, "parameters are immutable"))
                             }
+                            Storage::Reference(pointer) => (0, Some(pointer), Vec::new()),
                         };
                         Ok(AssignmentPlace::Struct(StructView {
                             struct_id,
                             place,
+                            pointer,
                             indices,
                             offset: 0,
                             mutable: true,
@@ -1617,23 +1747,40 @@ impl<'a> FunctionCompiler<'a> {
                         format!("binding {base:?} is not an array"),
                     ));
                 };
-                let Storage::Place(place) = binding.storage else {
-                    return Err(Diagnostic::new(span, "array has no storage"));
-                };
                 let index = self.array_index(index, length)?;
                 Ok(match element {
                     ElementType::Scalar(type_name) => AssignmentPlace::Scalar(
-                        hir::Operand::ArrayElement(place, vec![index]),
+                        self.indexed_place(
+                            &binding.storage,
+                            index,
+                            type_id(type_name),
+                            width(type_name),
+                            span,
+                        )?,
                         type_name,
                     ),
-                    ElementType::Struct(struct_id) => AssignmentPlace::Struct(StructView {
-                        struct_id,
-                        place,
-                        indices: vec![index],
-                        offset: 0,
-                        mutable: true,
-                        owner: base.clone(),
-                    }),
+                    ElementType::Struct(struct_id) => {
+                        let (place, pointer, indices) = match binding.storage {
+                            Storage::Place(place) => (place, None, vec![index]),
+                            Storage::Reference(pointer) => {
+                                let width = self.types.width(struct_id);
+                                let pointer = self.indexed_pointer(pointer, index, width, span)?;
+                                (0, Some(pointer), Vec::new())
+                            }
+                            Storage::Parameter(_) | Storage::ArrayView { .. } => {
+                                return Err(Diagnostic::new(span, "array has no storage"))
+                            }
+                        };
+                        AssignmentPlace::Struct(StructView {
+                            struct_id,
+                            place,
+                            pointer,
+                            indices,
+                            offset: 0,
+                            mutable: true,
+                            owner: base.clone(),
+                        })
+                    }
                 })
             }
         }
@@ -1677,16 +1824,18 @@ impl<'a> FunctionCompiler<'a> {
                         format!("binding {name:?} is not a struct"),
                     ));
                 };
-                let (place, indices) = match binding.storage {
-                    Storage::Place(place) => (place, Vec::new()),
-                    Storage::ArrayView { place, index } => (place, vec![index]),
+                let (place, pointer, indices) = match binding.storage {
+                    Storage::Place(place) => (place, None, Vec::new()),
+                    Storage::ArrayView { place, index } => (place, None, vec![index]),
                     Storage::Parameter(_) => {
                         return Err(Diagnostic::new(span, "struct has no addressable storage"))
                     }
+                    Storage::Reference(pointer) => (0, Some(pointer), Vec::new()),
                 };
                 Ok(StructView {
                     struct_id,
                     place,
+                    pointer,
                     indices,
                     offset: 0,
                     mutable: binding.mutable,
@@ -1707,14 +1856,23 @@ impl<'a> FunctionCompiler<'a> {
                 let ElementType::Struct(struct_id) = element else {
                     return Err(Diagnostic::new(span, "array element is not a struct"));
                 };
-                let Storage::Place(place) = binding.storage else {
-                    return Err(Diagnostic::new(span, "array has no storage"));
-                };
                 let index = self.array_index(index, length)?;
+                let (place, pointer, indices) = match binding.storage {
+                    Storage::Place(place) => (place, None, vec![index]),
+                    Storage::Reference(pointer) => {
+                        let width = self.types.width(struct_id);
+                        let pointer = self.indexed_pointer(pointer, index, width, span)?;
+                        (0, Some(pointer), Vec::new())
+                    }
+                    Storage::Parameter(_) | Storage::ArrayView { .. } => {
+                        return Err(Diagnostic::new(span, "array has no storage"))
+                    }
+                };
                 Ok(StructView {
                     struct_id,
                     place,
-                    indices: vec![index],
+                    pointer,
+                    indices,
                     offset: 0,
                     mutable: binding.mutable,
                     owner: name.clone(),
@@ -1745,6 +1903,7 @@ impl<'a> FunctionCompiler<'a> {
                 Ok(StructView {
                     struct_id: field_struct,
                     place: parent.place,
+                    pointer: parent.pointer,
                     indices: parent.indices,
                     offset: parent.offset + field.offset,
                     mutable: parent.mutable,
@@ -1792,6 +1951,10 @@ impl<'a> FunctionCompiler<'a> {
                 *span,
                 "a struct literal requires an expected struct type",
             )),
+            Expr::Borrow { span, .. } => Err(Diagnostic::new(
+                *span,
+                "a borrow is valid only as a borrowed function argument",
+            )),
             Expr::Boolean(value, span) => {
                 if expected.is_some_and(|one| one != TypeName::Bool) {
                     return Err(type_mismatch(
@@ -1829,6 +1992,20 @@ impl<'a> FunctionCompiler<'a> {
                             "load",
                             vec![value],
                             vec![hir::Operand::ArrayElement(place, vec![index])],
+                            None,
+                        );
+                        hir::Operand::Value(value)
+                    }
+                    Storage::Reference(pointer) => {
+                        let value = self.value(type_name);
+                        self.emit(
+                            "load",
+                            vec![value],
+                            vec![hir::Operand::IndirectPlace {
+                                base: pointer,
+                                offset: 0,
+                                type_id: type_id(type_name),
+                            }],
                             None,
                         );
                         hir::Operand::Value(value)
@@ -1913,6 +2090,12 @@ impl<'a> FunctionCompiler<'a> {
                 arguments,
                 span,
             } => self.call(name, arguments, expected, *span),
+            Expr::MethodCall {
+                receiver,
+                name,
+                arguments,
+                span,
+            } => self.array_method(receiver, name, arguments, expected, *span),
         }
     }
 
@@ -2109,24 +2292,93 @@ impl<'a> FunctionCompiler<'a> {
         if expected.is_some_and(|one| one != element) {
             return Err(type_mismatch(span, expected.expect("checked"), element));
         }
-        let Storage::Place(place) = binding.storage else {
-            return Err(Diagnostic::new(
-                span,
-                "array parameter lowering is not implemented",
-            ));
-        };
         let index = self.array_index(index, length)?;
+        let place = self.indexed_place(
+            &binding.storage,
+            index,
+            type_id(element),
+            width(element),
+            span,
+        )?;
         let result = self.value(element);
-        self.emit(
-            "load",
-            vec![result],
-            vec![hir::Operand::ArrayElement(place, vec![index])],
-            None,
-        );
+        self.emit("load", vec![result], vec![place], None);
         Ok(TypedOperand {
             operand: Some(hir::Operand::Value(result)),
             type_name: element,
         })
+    }
+
+    fn indexed_place(
+        &mut self,
+        storage: &Storage,
+        index: hir::Operand,
+        element_type: u32,
+        element_width: u32,
+        span: Span,
+    ) -> Result<hir::Operand, Diagnostic> {
+        match storage {
+            Storage::Place(place) => Ok(hir::Operand::ArrayElement(*place, vec![index])),
+            Storage::Reference(pointer) => {
+                let address = self.indexed_pointer(*pointer, index, element_width, span)?;
+                Ok(hir::Operand::IndirectPlace {
+                    base: address,
+                    offset: 0,
+                    type_id: element_type,
+                })
+            }
+            Storage::Parameter(_) | Storage::ArrayView { .. } => {
+                Err(Diagnostic::new(span, "array has no indexable storage"))
+            }
+        }
+    }
+
+    fn indexed_pointer(
+        &mut self,
+        pointer: u32,
+        index: hir::Operand,
+        element_width: u32,
+        span: Span,
+    ) -> Result<u32, Diagnostic> {
+        let byte_offset = match index {
+            hir::Operand::Constant(_, value) => {
+                hir::Operand::Constant(U16, value * i64::from(element_width))
+            }
+            hir::Operand::Value(value) if element_width == 1 => hir::Operand::Value(value),
+            hir::Operand::Value(value) => {
+                let index_type = self
+                    .values
+                    .iter()
+                    .find(|one| one.id == value)
+                    .map(|one| one.type_id)
+                    .ok_or_else(|| Diagnostic::new(span, "array index has no type"))?;
+                let scaled = self.value_type(index_type);
+                self.emit(
+                    "mul",
+                    vec![scaled],
+                    vec![
+                        hir::Operand::Value(value),
+                        hir::Operand::Constant(index_type, i64::from(element_width)),
+                    ],
+                    None,
+                );
+                hir::Operand::Value(scaled)
+            }
+            _ => return Err(Diagnostic::new(span, "invalid array index operand")),
+        };
+        let pointer_type = self
+            .values
+            .iter()
+            .find(|one| one.id == pointer)
+            .map(|one| one.type_id)
+            .ok_or_else(|| Diagnostic::new(span, "array reference has no type"))?;
+        let address = self.value_type(pointer_type);
+        self.emit(
+            "ptr_offset",
+            vec![address],
+            vec![hir::Operand::Value(pointer), byte_offset],
+            None,
+        );
+        Ok(address)
     }
 
     fn binary(
@@ -2533,6 +2785,7 @@ impl<'a> FunctionCompiler<'a> {
                     })
             }
             Expr::Call { name, .. } => self.signatures.get(name).map(|one| one.result),
+            Expr::MethodCall { .. } => Some(TypeName::U16),
             Expr::Unary { operand, .. } => self.expression_type_hint(operand),
             Expr::Index { base, .. } => {
                 let Expr::Name(name, _) = base.as_ref() else {
@@ -2582,8 +2835,74 @@ impl<'a> FunctionCompiler<'a> {
             Expr::Integer(..)
             | Expr::FString { .. }
             | Expr::Array(..)
-            | Expr::StructLiteral { .. } => None,
+            | Expr::StructLiteral { .. }
+            | Expr::Borrow { .. } => None,
         }
+    }
+
+    fn array_method(
+        &mut self,
+        receiver: &Expr,
+        name: &str,
+        arguments: &[Expr],
+        expected: Option<TypeName>,
+        span: Span,
+    ) -> Result<TypedOperand, Diagnostic> {
+        let Expr::Name(array_name, receiver_span) = receiver else {
+            return Err(Diagnostic::new(
+                receiver.span(),
+                "array methods currently require a named array",
+            ));
+        };
+        let binding = self.binding(array_name, *receiver_span)?;
+        let BindingType::Array { length, .. } = binding.type_ else {
+            return Err(Diagnostic::new(
+                receiver.span(),
+                format!("{array_name:?} is not an array"),
+            ));
+        };
+        if expected.is_some_and(|one| one != TypeName::U16) {
+            return Err(type_mismatch(
+                span,
+                expected.expect("checked"),
+                TypeName::U16,
+            ));
+        }
+        let value = match name {
+            "len" | "capacity" if arguments.is_empty() => length,
+            "dim" if arguments.len() == 1 => {
+                let Expr::Integer(axis, axis_span) = arguments[0] else {
+                    return Err(Diagnostic::new(
+                        arguments[0].span(),
+                        "dimension index must be an integer literal",
+                    ));
+                };
+                if axis != 0 {
+                    return Err(Diagnostic::new(
+                        axis_span,
+                        "one-dimensional array has only dimension 0",
+                    ));
+                }
+                length
+            }
+            "len" | "capacity" => {
+                return Err(Diagnostic::new(
+                    span,
+                    format!("{name}() takes no arguments"),
+                ))
+            }
+            "dim" => return Err(Diagnostic::new(span, "dim() takes one dimension index")),
+            _ => {
+                return Err(Diagnostic::new(
+                    span,
+                    format!("array has no method {name:?}"),
+                ))
+            }
+        };
+        Ok(TypedOperand {
+            operand: Some(hir::Operand::Constant(U16, i64::from(value))),
+            type_name: TypeName::U16,
+        })
     }
 
     fn call(
@@ -2619,9 +2938,31 @@ impl<'a> FunctionCompiler<'a> {
             ));
         }
         let mut operands = Vec::new();
-        for (argument, type_name) in arguments.iter().zip(&signature.parameters) {
-            let value = self.expression(argument, Some(*type_name))?;
-            operands.push(required(value, argument.span())?);
+        let mut borrowed = BTreeMap::new();
+        for (argument, parameter) in arguments.iter().zip(&signature.parameters) {
+            match parameter {
+                SignatureParameter::Scalar(type_name) => {
+                    let value = self.expression(argument, Some(*type_name))?;
+                    operands.push(required(value, argument.span())?);
+                }
+                SignatureParameter::Borrowed {
+                    mutable,
+                    target,
+                    pointer,
+                } => {
+                    let (operand, owner) =
+                        self.borrow_argument(argument, *mutable, *target, *pointer)?;
+                    if let Some(previously_mutable) = borrowed.insert(owner.clone(), *mutable) {
+                        if *mutable || previously_mutable {
+                            return Err(Diagnostic::new(
+                                argument.span(),
+                                format!("borrow of {owner:?} aliases a mutable argument"),
+                            ));
+                        }
+                    }
+                    operands.push(operand);
+                }
+            }
         }
         let results = if signature.result == TypeName::Void {
             Vec::new()
@@ -2643,6 +2984,62 @@ impl<'a> FunctionCompiler<'a> {
             operand: results.first().copied().map(hir::Operand::Value),
             type_name: signature.result,
         })
+    }
+
+    fn borrow_argument(
+        &mut self,
+        argument: &Expr,
+        required_mutable: bool,
+        target: BindingType,
+        pointer_type: u32,
+    ) -> Result<(hir::Operand, String), Diagnostic> {
+        let Expr::Borrow {
+            mutable,
+            operand,
+            span,
+        } = argument
+        else {
+            return Err(Diagnostic::new(
+                argument.span(),
+                "borrowed parameter requires an explicit '&' argument",
+            ));
+        };
+        if required_mutable && !mutable {
+            return Err(Diagnostic::new(*span, "mutable parameter requires '&mut'"));
+        }
+        let Expr::Name(name, name_span) = operand.as_ref() else {
+            return Err(Diagnostic::new(
+                operand.span(),
+                "borrow currently requires a named binding",
+            ));
+        };
+        let binding = self.binding(name, *name_span)?.clone();
+        if binding.type_ != target {
+            return Err(Diagnostic::new(
+                *span,
+                format!("borrow of {name:?} has the wrong type"),
+            ));
+        }
+        if *mutable && !binding.mutable {
+            return Err(Diagnostic::new(
+                *span,
+                format!("cannot mutably borrow immutable binding {name:?}"),
+            ));
+        }
+        let place = match binding.storage {
+            Storage::Place(place) => hir::Operand::Place(place),
+            Storage::ArrayView { place, index } => hir::Operand::ArrayElement(place, vec![index]),
+            Storage::Reference(pointer) => return Ok((hir::Operand::Value(pointer), name.clone())),
+            Storage::Parameter(_) => {
+                return Err(Diagnostic::new(
+                    *span,
+                    "a by-value parameter has no borrowable storage",
+                ))
+            }
+        };
+        let result = self.value_type(pointer_type);
+        self.emit("address", vec![result], vec![place], None);
+        Ok((hir::Operand::Value(result), name.clone()))
     }
 
     fn print(
@@ -2745,12 +3142,13 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn value(&mut self, type_name: TypeName) -> u32 {
+        self.value_type(type_id(type_name))
+    }
+
+    fn value_type(&mut self, type_id: u32) -> u32 {
         let id = self.next_value;
         self.next_value += 1;
-        self.values.push(hir::Value {
-            id,
-            type_id: type_id(type_name),
-        });
+        self.values.push(hir::Value { id, type_id });
         id
     }
 
@@ -2771,6 +3169,7 @@ impl<'a> FunctionCompiler<'a> {
             extent,
             storage: "local",
             symbol: 0,
+            volatile: false,
         });
         id
     }
@@ -2784,7 +3183,60 @@ impl<'a> FunctionCompiler<'a> {
         mutable: bool,
     ) -> u32 {
         let extent = self.types.width(element.id()) * length;
-        self.local_place(name, type_id, extent, mutable)
+        self.next_frame_offset -= extent as i32 + 4;
+        let descriptor_offset = self.next_frame_offset;
+
+        let length_place = self.next_place;
+        self.next_place += 1;
+        self.places.push(hir::Place {
+            id: length_place,
+            name: format!("${name}.length"),
+            type_id: U16,
+            mutable: false,
+            offset: descriptor_offset,
+            extent: 2,
+            storage: "local",
+            symbol: 0,
+            volatile: true,
+        });
+        let capacity_place = self.next_place;
+        self.next_place += 1;
+        self.places.push(hir::Place {
+            id: capacity_place,
+            name: format!("${name}.capacity"),
+            type_id: U16,
+            mutable: false,
+            offset: descriptor_offset + 2,
+            extent: 2,
+            storage: "local",
+            symbol: 0,
+            volatile: true,
+        });
+        let id = self.next_place;
+        self.next_place += 1;
+        self.places.push(hir::Place {
+            id,
+            name: name.into(),
+            type_id,
+            mutable,
+            offset: descriptor_offset + 4,
+            extent,
+            storage: "local",
+            symbol: 0,
+            volatile: false,
+        });
+        for descriptor in [length_place, capacity_place] {
+            self.emit(
+                "store",
+                Vec::new(),
+                vec![
+                    hir::Operand::Place(descriptor),
+                    hir::Operand::Constant(U16, i64::from(length)),
+                ],
+                None,
+            );
+        }
+        id
     }
 
     fn static_place(&mut self, symbol: u32, type_name: TypeName) -> u32 {
@@ -2799,6 +3251,7 @@ impl<'a> FunctionCompiler<'a> {
             extent: width(type_name),
             storage: "module",
             symbol,
+            volatile: false,
         });
         id
     }
@@ -2817,6 +3270,7 @@ impl<'a> FunctionCompiler<'a> {
             extent,
             storage: "module",
             symbol,
+            volatile: false,
         });
         id
     }

@@ -314,6 +314,13 @@ class FrameAddress:
 
 
 @dataclass(frozen=True, slots=True)
+class FrameSelector:
+    """The run-time selector of the current activation's frame segment."""
+
+    width: int = 2
+
+
+@dataclass(frozen=True, slots=True)
 class ArrayRequest:
     descriptor: Symbol
     element_width: int
@@ -346,7 +353,7 @@ class Opaque:
     name: str = ""
 
 
-type Arg = Held | Const | Symbol | FrameAddress | Cell | Opaque
+type Arg = Held | Const | Symbol | FrameAddress | FrameSelector | Cell | Opaque
 
 
 class Kind(StrEnum):

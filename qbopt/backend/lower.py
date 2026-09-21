@@ -50,6 +50,8 @@ def operand(arg: mir.Arg) -> ir.Loc:
             offset=arg.offset,
             disp_width=1 if -128 <= arg.offset <= 127 else 2,
         )
+    if isinstance(arg, mir.FrameSelector):
+        return ir.Reg(Register.SS, arg.width)
     if isinstance(arg, mir.Cell):
         return arg.ref
     return arg.what  # the x87 stack, which has no MIR form

@@ -120,6 +120,7 @@ class Place:
     symbol: int = 0
     extent: int | None = None
     address: AddressKind = AddressKind.NEAR
+    volatile: bool = False
 
 
 @dataclass(frozen=True, slots=True)
