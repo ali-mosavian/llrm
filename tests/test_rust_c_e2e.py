@@ -20,6 +20,8 @@ ALGEBRA_SOURCE = ROOT / "fixtures" / "c" / "parity" / "algebra.cgs"
 ALGEBRA_HARNESS = ROOT / "fixtures" / "c" / "parity" / "algebra-start.asm"
 BRANCH_SOURCE = ROOT / "fixtures" / "c" / "parity" / "branch.cgs"
 BRANCH_HARNESS = ROOT / "fixtures" / "c" / "parity" / "branch-start.asm"
+MEMORY_SOURCE = ROOT / "fixtures" / "c" / "parity" / "memory.cgs"
+MEMORY_HARNESS = ROOT / "fixtures" / "c" / "parity" / "memory-start.asm"
 CELLS_SOURCE = ROOT / "fixtures" / "c" / "cells.cgs"
 CELLS_HARNESS = ROOT / "fixtures" / "c" / "cells-start.asm"
 JWASM = shutil.which("jwasm") or str(Path.home() / "work/other/d32x/toolchains/native/bin/jwasm")
@@ -136,3 +138,12 @@ def test_rust_c_branch_returns_the_existing_python_oracle(tmp_path: Path) -> Non
     independent caller and check the Python-era program oracle on DOS.
     """
     assert _compile_and_run(BRANCH_SOURCE, BRANCH_HARNESS, tmp_path, timeout=20) == -87904
+
+
+def test_rust_c_memory_returns_the_existing_python_oracle(tmp_path: Path) -> None:
+    """By-reference i16 mutation and LONG square must retain 361001.
+
+    The real WCC capture stores through an incoming near pointer, reloads that
+    cell twice as a LONG, and keeps the two far-cdecl calls on the DOS path.
+    """
+    assert _compile_and_run(MEMORY_SOURCE, MEMORY_HARNESS, tmp_path, timeout=20) == 361001

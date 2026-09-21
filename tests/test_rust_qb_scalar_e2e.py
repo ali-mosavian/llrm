@@ -19,6 +19,8 @@ ALGEBRA_SOURCE = ROOT / "bench" / "parity" / "algebra.bas"
 ALGEBRA_GOLDEN = ROOT / "bench" / "parity" / "golden" / "algebra.txt"
 BRANCH_SOURCE = ROOT / "bench" / "parity" / "branch.bas"
 BRANCH_GOLDEN = ROOT / "bench" / "parity" / "golden" / "branch.txt"
+MEMORY_SOURCE = ROOT / "bench" / "parity" / "memory.bas"
+MEMORY_GOLDEN = ROOT / "bench" / "parity" / "golden" / "memory.txt"
 CFG = CONFIGS["v-g3"]
 
 pytestmark = [
@@ -125,3 +127,8 @@ def test_rust_qb_branch_matches_its_program_level_oracle(tmp_path: Path) -> None
     arms, and their join on the real VBDOS object/runtime path.
     """
     _assert_program_matches_oracle(tmp_path, BRANCH_SOURCE, BRANCH_GOLDEN, "BRANCH")
+
+
+def test_rust_qb_memory_matches_its_program_level_oracle(tmp_path: Path) -> None:
+    """The by-reference INTEGER update must print memory's 361001/DONE oracle."""
+    _assert_program_matches_oracle(tmp_path, MEMORY_SOURCE, MEMORY_GOLDEN, "MEMORY")
