@@ -15,9 +15,9 @@ use crate::object::omf::write::WriteError as OmfWriteError;
 use crate::support::diagnostic::Diagnostic;
 use crate::target::x86::{
     BasicAbiError, BasicAbiExpansionError, BasicFramePlan, BasicRuntime, CAbiExpansionError,
-    CFramePlan, CFramePlanError, CallClobberError, FrameIndexMaterializationError, SelectionError,
-    SegmentedMemoryExpansionError, X86AllocationError, X86JumpLayoutError,
-    X86McModuleLowerError, X86OmfError,
+    CFramePlan, CFramePlanError, CallClobberError, FrameIndexMaterializationError,
+    SegmentedMemoryExpansionError, SelectionError, WordMergeExpansionError, X86AllocationError,
+    X86JumpLayoutError, X86McModuleLowerError, X86OmfError,
 };
 
 /// Configuration that affects QB source semantics.
@@ -116,6 +116,10 @@ pub enum Error {
     SegmentedMemoryExpansion {
         function: String,
         error: SegmentedMemoryExpansionError,
+    },
+    WordMergeExpansion {
+        function: String,
+        error: WordMergeExpansionError,
     },
     BasicAbiExpansion {
         function: String,
@@ -216,6 +220,10 @@ impl fmt::Display for Error {
             Self::SegmentedMemoryExpansion { function, error } => write!(
                 formatter,
                 "cannot finalize allocated x86 segmented memory for {function}: {error}"
+            ),
+            Self::WordMergeExpansion { function, error } => write!(
+                formatter,
+                "cannot finalize allocated x86 word composition for {function}: {error}"
             ),
             Self::BasicAbiExpansion { function, error } => write!(
                 formatter,
@@ -378,17 +386,33 @@ pub fn lower_qb_to_machine(program: &Program) -> Result<QbMachine, Error> {
 pub fn allocate_qb_machine(selected: &QbMachine) -> Result<QbMachine, Error> {
     let mut allocated = selected.clone();
     for function in &mut allocated.module.functions {
-        let assignment = crate::target::x86::allocate_registers(function).map_err(|error| {
-            Error::Allocation {
-                function: function.name.clone(),
+        let allocation =
+            crate::target::x86::allocate_registers_with_spills(function).map_err(|error| {
+                Error::Allocation {
+                    function: function.name.clone(),
+                    error,
+                }
+            })?;
+        let mut rewritten = allocation.function;
+
+        if let Some(previous) = allocated.frames.get(&rewritten.id) {
+            let refreshed = crate::target::x86::refresh_basic_runtime_frame(&rewritten, previous)
+                .map_err(|error| {
+                    Error::BasicAbi {
+                        function: rewritten.name.clone(),
+                        error,
+                    }
+                })?;
+            allocated.frames.insert(rewritten.id, refreshed.frame);
+            rewritten = refreshed.function;
+        }
+
+        *function = apply_assignment(&rewritten, &allocation.assignment).map_err(|error| {
+            Error::AllocationRewrite {
+                function: rewritten.name.clone(),
                 error,
             }
         })?;
-        *function =
-            apply_assignment(function, &assignment).map_err(|error| Error::AllocationRewrite {
-                function: function.name.clone(),
-                error,
-            })?;
 
         if let Some(frame) = allocated.frames.get(&function.id) {
             *function = crate::target::x86::materialize_frame_indices(function, frame).map_err(
@@ -418,12 +442,20 @@ pub fn allocate_qb_machine(selected: &QbMachine) -> Result<QbMachine, Error> {
 pub fn lower_qb_machine_to_mc(selected: &QbMachine) -> Result<crate::mc::MCModule, Error> {
     let mut allocated = allocate_qb_machine(selected)?;
     for function in &mut allocated.module.functions {
-        *function = crate::target::x86::expand_allocated_segmented_memory(function).map_err(
-            |error| Error::SegmentedMemoryExpansion {
-                function: function.name.clone(),
-                error,
-            },
-        )?;
+        *function =
+            crate::target::x86::expand_allocated_segmented_memory(function).map_err(|error| {
+                Error::SegmentedMemoryExpansion {
+                    function: function.name.clone(),
+                    error,
+                }
+            })?;
+        *function =
+            crate::target::x86::expand_allocated_word_merges(function).map_err(|error| {
+                Error::WordMergeExpansion {
+                    function: function.name.clone(),
+                    error,
+                }
+            })?;
         *function = crate::target::x86::expand_allocated_basic_abi(function).map_err(|error| {
             Error::BasicAbiExpansion {
                 function: function.name.clone(),
@@ -440,9 +472,16 @@ pub fn lower_qb_machine_to_mc(selected: &QbMachine) -> Result<crate::mc::MCModul
 /// WCC capture is one producer of this input, but C ABI selection intentionally
 /// depends only on generic IR calling conventions and Machine IR facts.
 pub fn lower_c_to_machine(module: &ir::Module) -> Result<CMachine, Error> {
-    let machine = lower_ir_to_machine(module)?;
+    let mut machine = lower_ir_to_machine(module)?;
     let mut frames = BTreeMap::new();
-    for function in &machine.functions {
+    for function in &mut machine.functions {
+        *function =
+            crate::target::x86::materialize_c_call_clobbers(function).map_err(|error| {
+                Error::CallClobber {
+                    function: function.name.clone(),
+                    error,
+                }
+            })?;
         let plan = crate::target::x86::plan_c_frame(function).map_err(|error| Error::CFrame {
             function: function.name.clone(),
             error,
@@ -459,17 +498,26 @@ pub fn lower_c_to_machine(module: &ir::Module) -> Result<CMachine, Error> {
 pub fn allocate_c_machine(selected: &CMachine) -> Result<CMachine, Error> {
     let mut allocated = selected.clone();
     for function in &mut allocated.module.functions {
-        let assignment = crate::target::x86::allocate_registers(function).map_err(|error| {
-            Error::Allocation {
-                function: function.name.clone(),
+        let allocation =
+            crate::target::x86::allocate_registers_with_spills(function).map_err(|error| {
+                Error::Allocation {
+                    function: function.name.clone(),
+                    error,
+                }
+            })?;
+        let rewritten = allocation.function;
+        let frame =
+            crate::target::x86::plan_c_frame(&rewritten).map_err(|error| Error::CFrame {
+                function: rewritten.name.clone(),
+                error,
+            })?;
+        allocated.frames.insert(rewritten.id, frame);
+        *function = apply_assignment(&rewritten, &allocation.assignment).map_err(|error| {
+            Error::AllocationRewrite {
+                function: rewritten.name.clone(),
                 error,
             }
         })?;
-        *function =
-            apply_assignment(function, &assignment).map_err(|error| Error::AllocationRewrite {
-                function: function.name.clone(),
-                error,
-            })?;
 
         if let Some(frame) = allocated.frames.get(&function.id) {
             *function =
@@ -500,12 +548,20 @@ pub fn allocate_c_machine(selected: &CMachine) -> Result<CMachine, Error> {
 pub fn lower_c_machine_to_mc(selected: &CMachine) -> Result<crate::mc::MCModule, Error> {
     let mut allocated = allocate_c_machine(selected)?;
     for function in &mut allocated.module.functions {
-        *function = crate::target::x86::expand_allocated_segmented_memory(function).map_err(
-            |error| Error::SegmentedMemoryExpansion {
-                function: function.name.clone(),
-                error,
-            },
-        )?;
+        *function =
+            crate::target::x86::expand_allocated_segmented_memory(function).map_err(|error| {
+                Error::SegmentedMemoryExpansion {
+                    function: function.name.clone(),
+                    error,
+                }
+            })?;
+        *function =
+            crate::target::x86::expand_allocated_word_merges(function).map_err(|error| {
+                Error::WordMergeExpansion {
+                    function: function.name.clone(),
+                    error,
+                }
+            })?;
         let frame = allocated
             .frames
             .get(&function.id)
@@ -535,6 +591,13 @@ pub fn encode_x86_mc(module: &crate::mc::MCModule) -> Result<crate::mc::MCModule
 /// adapter must add any runtime-owned header or entry convention before MC.
 pub fn write_x86_omf(module_name: &[u8], module: &crate::mc::MCModule) -> Result<Vec<u8>, Error> {
     let object = crate::target::x86::lower_to_omf(module_name, module).map_err(Error::X86Omf)?;
+    crate::object::omf::write::to_bytes(&object).map_err(Error::OmfWrite)
+}
+
+/// Writes encoded C MC with Open Watcom's medium-model object envelope.
+pub fn write_c_omf(module_name: &[u8], module: &crate::mc::MCModule) -> Result<Vec<u8>, Error> {
+    let object = crate::target::x86::lower_to_omf_with_dgroup(module_name, module)
+        .map_err(Error::X86Omf)?;
     crate::object::omf::write::to_bytes(&object).map_err(Error::OmfWrite)
 }
 
@@ -689,6 +752,29 @@ mod tests {
                 .iter()
                 .any(|symbol| symbol.name == "_answer_from_argument")
         );
+    }
+
+    #[test]
+    fn c_algebra_capture_reaches_mc_with_i32_calls_and_spills() {
+        // The Python C path keeps the first DX:AX result live across the
+        // second far-cdecl call in parity_algebra_demo.  This real capture
+        // therefore exercises call results, register pressure, spill-frame
+        // replanning, generic word composition, and the terminal i32 return
+        // shape together rather than testing a synthetic allocator fragment.
+        let ir = compile_wcc_capture(
+            include_str!("../../fixtures/c/parity/algebra.cgs"),
+            "algebra",
+        )
+        .expect("real WCC algebra capture lowers to portable IR");
+        let selected = lower_c_to_machine(&ir).expect("C algebra selects and plans frames");
+
+        let mc = lower_c_machine_to_mc(&selected)
+            .expect("C algebra allocates, finalizes its ABI, and reaches MC");
+
+        mc.verify().expect("C algebra MC verifies");
+        for function in ["_parity_algebra", "_parity_algebra_demo"] {
+            assert!(mc.symbols.iter().any(|symbol| symbol.name == function));
+        }
     }
 
     #[test]
@@ -892,6 +978,38 @@ mod tests {
         assert_eq!(
             returned.operands[1].constraint,
             Some(RegisterConstraint::Fixed(X86Register::Dx.physical()))
+        );
+        let returned_low = &returned.operands[0].kind;
+        let returned_high = &returned.operands[1].kind;
+        let low = return_block.instructions[..return_position]
+            .iter()
+            .find(|instruction| {
+                instruction.opcode == X86Opcode::LowWord.machine_opcode()
+                    && instruction
+                        .operands
+                        .first()
+                        .is_some_and(|operand| &operand.kind == returned_low)
+            })
+            .expect("the BASIC LONG return exposes its low word");
+        let high = return_block.instructions[..return_position]
+            .iter()
+            .find(|instruction| {
+                instruction.opcode == X86Opcode::HighWord.machine_opcode()
+                    && instruction
+                        .operands
+                        .first()
+                        .is_some_and(|operand| &operand.kind == returned_high)
+            })
+            .expect("the BASIC LONG return exposes its high word");
+        assert_eq!(
+            low.operands[0].constraint,
+            Some(RegisterConstraint::Fixed(X86Register::Ax.physical())),
+            "the low return word must occupy AX before B$EXSA tears down the frame"
+        );
+        assert_eq!(
+            high.operands[0].constraint,
+            Some(RegisterConstraint::Fixed(X86Register::Dx.physical())),
+            "the high return word must occupy DX before B$EXSA tears down the frame"
         );
         assert!(matches!(
             returned.operands[2].kind,

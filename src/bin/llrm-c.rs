@@ -110,7 +110,7 @@ fn compile_output(
             let machine = driver::lower_c_to_machine(&module)?;
             let mc = driver::lower_c_machine_to_mc(&machine)?;
             let encoded = driver::encode_x86_mc(&mc)?;
-            driver::write_x86_omf(module_name.as_bytes(), &encoded)
+            driver::write_c_omf(module_name.as_bytes(), &encoded)
         }
     }
 }

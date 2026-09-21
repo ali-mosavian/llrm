@@ -16,6 +16,8 @@ SOURCE = ROOT / "fixtures" / "c" / "parity" / "scalar.cgs"
 HARNESS = ROOT / "fixtures" / "c" / "parity" / "scalar-start.asm"
 PARITY_SOURCE = ROOT / "fixtures" / "c" / "parity" / "parity.cgs"
 PARITY_HARNESS = ROOT / "fixtures" / "c" / "parity" / "parity-start.asm"
+ALGEBRA_SOURCE = ROOT / "fixtures" / "c" / "parity" / "algebra.cgs"
+ALGEBRA_HARNESS = ROOT / "fixtures" / "c" / "parity" / "algebra-start.asm"
 CELLS_SOURCE = ROOT / "fixtures" / "c" / "cells.cgs"
 CELLS_HARNESS = ROOT / "fixtures" / "c" / "cells-start.asm"
 JWASM = shutil.which("jwasm") or str(Path.home() / "work/other/d32x/toolchains/native/bin/jwasm")
@@ -111,3 +113,14 @@ def test_rust_c_aggregate_parity_returns_the_existing_python_oracle(tmp_path: Pa
     caller, Microsoft linker, and DOS execution oracle for ``llrm-c``.
     """
     assert _compile_and_run(PARITY_SOURCE, PARITY_HARNESS, tmp_path) == 1789
+
+
+def test_rust_c_algebra_returns_the_existing_python_oracle(tmp_path: Path) -> None:
+    """Two far-cdecl i32 calls must retain algebra's established 702774.
+
+    This ports the existing paired-program regression through llrm-c, the
+    independent assembly caller, Microsoft LINK, and DOS execution.  It keeps
+    the call-result, caller-cleanup, spill, and C callee-save work tied to the
+    actual Python-era oracle rather than a Rust-only instruction pattern.
+    """
+    assert _compile_and_run(ALGEBRA_SOURCE, ALGEBRA_HARNESS, tmp_path, timeout=20) == 702774

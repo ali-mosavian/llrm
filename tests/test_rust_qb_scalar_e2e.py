@@ -15,6 +15,8 @@ SOURCE = ROOT / "bench" / "parity" / "scalar.bas"
 GOLDEN = ROOT / "bench" / "parity" / "golden" / "scalar.txt"
 PARITY_SOURCE = ROOT / "bench" / "parity" / "parity.bas"
 PARITY_GOLDEN = ROOT / "bench" / "parity" / "golden" / "parity.txt"
+ALGEBRA_SOURCE = ROOT / "bench" / "parity" / "algebra.bas"
+ALGEBRA_GOLDEN = ROOT / "bench" / "parity" / "golden" / "algebra.txt"
 CFG = CONFIGS["v-g3"]
 
 pytestmark = [
@@ -101,3 +103,14 @@ def test_rust_qb_aggregate_parity_matches_its_program_level_oracle(tmp_path: Pat
     than accepting an object that only passes host-side validation.
     """
     _assert_program_matches_oracle(tmp_path, PARITY_SOURCE, PARITY_GOLDEN, "PARITY")
+
+
+def test_rust_qb_algebra_matches_its_program_level_oracle(tmp_path: Path) -> None:
+    """Spill-capable Rust CodeGen must preserve algebra's 702774 result.
+
+    The two LONG-returning procedure calls create the first paired-program
+    pressure case that the old no-spill Rust allocator refused.  Compile it
+    through fresh OMF and compare the DOS execution with the established
+    Python-era program oracle rather than accepting allocation in isolation.
+    """
+    _assert_program_matches_oracle(tmp_path, ALGEBRA_SOURCE, ALGEBRA_GOLDEN, "ALGEBRA")
