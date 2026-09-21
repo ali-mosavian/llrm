@@ -257,7 +257,10 @@ fn encode_lea(
                 reason: "a relocatable near address requires a word destination",
             });
         }
-        let kind = X86FixupKind::Absolute16;
+        // A symbolic LEA materializes a word offset in the x86 near-data
+        // address space.  It is not an ordinary target-segment offset: OMF
+        // needs that distinction to select the DGROUP frame.
+        let kind = X86FixupKind::NearData16;
         let mut bytes = vec![0x8d, (destination.code << 3) | 0b110];
         let offset = bytes.len() as u32;
         bytes.extend(vec![0; usize::from(kind.width())]);
@@ -1497,7 +1500,7 @@ mod tests {
     }
 
     #[test]
-    fn encodes_a_relocatable_near_address_with_one_absolute_fixup() {
+    fn encodes_a_relocatable_near_address_with_one_near_data_fixup() {
         let expression = MCExpression {
             symbol: SymbolId::new(5),
             addend: 12,
@@ -1514,7 +1517,7 @@ mod tests {
             encoded.fixups,
             vec![Fixup {
                 offset: 2,
-                kind: X86FixupKind::Absolute16.into(),
+                kind: X86FixupKind::NearData16.into(),
                 expression,
                 pc_relative: false,
             }]

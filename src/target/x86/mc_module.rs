@@ -446,7 +446,7 @@ fn data_relocation_kind(
     use MachineAddressSpace::{Code, FarData, HugeData, NearData, Segment};
 
     match (relocation.width, relocation.address_space) {
-        (2, NearData) => Ok(super::X86FixupKind::Absolute16),
+        (2, NearData) => Ok(super::X86FixupKind::NearData16),
         (2, Segment) if relocation.addend == 0 => Ok(super::X86FixupKind::Segment16),
         (2, Segment) => Err(X86McModuleLowerError::SegmentDataRelocationAddend {
             data,
@@ -895,7 +895,7 @@ mod tests {
             vec![
                 Fixup {
                     offset: 0,
-                    kind: super::super::X86FixupKind::Absolute16.into(),
+                    kind: super::super::X86FixupKind::NearData16.into(),
                     expression: MCExpression {
                         symbol: target,
                         addend: -3,

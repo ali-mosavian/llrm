@@ -22,6 +22,14 @@ pub enum X86FixupKind {
     PcRelative16 = 3,
     /// A sixteen-bit segment selector for the relocation target.
     Segment16 = 4,
+    /// A sixteen-bit offset through the 16-bit x86 near-data group.
+    ///
+    /// This is deliberately distinct from [`Self::Absolute16`]: both fields
+    /// occupy two bytes, but a near-data address is relative to DGROUP rather
+    /// than to the target segment.  Keeping that ABI fact in the target
+    /// fixup prevents object lowering from having to infer it from a source
+    /// language's segment names or OMF classes.
+    NearData16 = 5,
 }
 
 impl X86FixupKind {
@@ -29,14 +37,14 @@ impl X86FixupKind {
     pub const fn width(self) -> u8 {
         match self {
             Self::FarPointer1616 => 4,
-            Self::Absolute16 | Self::PcRelative16 | Self::Segment16 => 2,
+            Self::Absolute16 | Self::PcRelative16 | Self::Segment16 | Self::NearData16 => 2,
         }
     }
 
     /// Whether the relocation is measured from the place being patched.
     pub const fn pc_relative(self) -> bool {
         match self {
-            Self::FarPointer1616 | Self::Absolute16 | Self::Segment16 => false,
+            Self::FarPointer1616 | Self::Absolute16 | Self::Segment16 | Self::NearData16 => false,
             Self::PcRelative16 => true,
         }
     }
@@ -73,5 +81,10 @@ mod tests {
         assert_eq!(FixupKind::from(segment).get(), 4);
         assert_eq!(segment.width(), 2);
         assert!(!segment.pc_relative());
+
+        let near_data = X86FixupKind::NearData16;
+        assert_eq!(FixupKind::from(near_data).get(), 5);
+        assert_eq!(near_data.width(), 2);
+        assert!(!near_data.pc_relative());
     }
 }

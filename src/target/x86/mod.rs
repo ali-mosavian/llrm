@@ -50,7 +50,7 @@ pub use mc_module::{
     DefinedSymbolKind, LoweredMcModule, McModuleIdKind, X86McModuleLowerError,
     lower_allocated_module, lower_allocated_module_with_lineage,
 };
-pub use omf::{X86OmfError, lower_to_omf};
+pub use omf::{X86OmfError, lower_to_omf, lower_to_omf_with_dgroup};
 pub use registers::{X86Register, X86RegisterClass};
 pub use segmented_memory::{SegmentedMemoryExpansionError, expand_allocated_segmented_memory};
 pub use selection::{FunctionProperty, SelectionError, select_module};

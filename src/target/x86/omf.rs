@@ -15,12 +15,18 @@ use crate::mc::{
 use crate::object::omf::fixups::{FixupMode, Location};
 use crate::object::omf::segments::{Alignment, Combine};
 use crate::object::omf::write::{
-    ExternalSymbol, InitializedSpan, ObjectModule, ObjectRelocation, ObjectSegment, PublicSymbol,
-    RelocationFrame, RelocationTarget,
+    ExternalSymbol, InitializedSpan, ObjectGroup, ObjectModule, ObjectRelocation, ObjectSegment,
+    PublicSymbol, RelocationFrame, RelocationTarget,
 };
 use crate::support::diagnostic::Diagnostic;
 
 use super::X86FixupKind;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum X86OmfPolicy {
+    Generic,
+    Dgroup,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum X86OmfError {
@@ -83,6 +89,17 @@ pub enum X86OmfError {
         section: SectionId,
         fragment: FragmentId,
         addend: i64,
+    },
+    NearDataFixupWithoutDgroup {
+        section: SectionId,
+        fragment: FragmentId,
+        symbol: SymbolId,
+    },
+    NearDataTargetOutsideDgroup {
+        section: SectionId,
+        fragment: FragmentId,
+        symbol: SymbolId,
+        target_section: SectionId,
     },
     FixupOutsideFragment {
         section: SectionId,
@@ -194,6 +211,23 @@ impl fmt::Display for X86OmfError {
                 formatter,
                 "section {section} fragment {fragment} segment fixup has unsupported addend {addend}"
             ),
+            Self::NearDataFixupWithoutDgroup {
+                section,
+                fragment,
+                symbol,
+            } => write!(
+                formatter,
+                "section {section} fragment {fragment} near-data fixup names {symbol}, but no conventional data section defines DGROUP"
+            ),
+            Self::NearDataTargetOutsideDgroup {
+                section,
+                fragment,
+                symbol,
+                target_section,
+            } => write!(
+                formatter,
+                "section {section} fragment {fragment} near-data fixup names {symbol} in non-DGROUP section {target_section}"
+            ),
             Self::FixupOutsideFragment {
                 section,
                 fragment,
@@ -233,6 +267,30 @@ pub fn lower_to_omf(
     module_name: impl AsRef<[u8]>,
     module: &MCModule,
 ) -> Result<ObjectModule, X86OmfError> {
+    lower_to_omf_with_policy(module_name, module, X86OmfPolicy::Generic)
+}
+
+/// Lowers an x86 MC module under the conventional 16-bit DGROUP near-data
+/// policy.
+///
+/// The x86 MC layer's conventional `.rodata` and `.data` sections participate
+/// in DGROUP. Callers select this policy only for a memory model in which
+/// those sections are near; a near-data fixup targeting any other defined
+/// section is rejected instead of silently extending the group.
+pub fn lower_to_omf_with_dgroup(
+    module_name: impl AsRef<[u8]>,
+    module: &MCModule,
+) -> Result<ObjectModule, X86OmfError> {
+    lower_to_omf_with_policy(module_name, module, X86OmfPolicy::Dgroup)
+}
+
+/// Converts a fully encoded x86 MC module according to one explicit object
+/// lowering policy.
+fn lower_to_omf_with_policy(
+    module_name: impl AsRef<[u8]>,
+    module: &MCModule,
+    policy: X86OmfPolicy,
+) -> Result<ObjectModule, X86OmfError> {
     module.verify().map_err(X86OmfError::Verification)?;
     for section in &module.sections {
         for fragment in &section.fragments {
@@ -257,6 +315,8 @@ pub fn lower_to_omf(
         .enumerate()
         .map(|(position, section)| (section.id, (position + 1) as u16))
         .collect::<BTreeMap<_, _>>();
+    let near_data_sections = near_data_sections(module, policy);
+    let dgroup_index = (!near_data_sections.is_empty()).then_some(1);
     let symbols = module
         .symbols
         .iter()
@@ -296,7 +356,11 @@ pub fn lower_to_omf(
         match (symbol.binding, symbol.visibility) {
             (SymbolBinding::Global, SymbolVisibility::Default) => publics.push(PublicSymbol {
                 name: symbol.name.as_bytes().to_vec(),
-                group_index: 0,
+                group_index: if near_data_sections.contains(&section) {
+                    1
+                } else {
+                    0
+                },
                 segment_index: section_indices[&section],
                 offset: offset as u32,
             }),
@@ -344,6 +408,9 @@ pub fn lower_to_omf(
                             &layout.symbols,
                             &section_indices,
                             &external_indices,
+                            &near_data_sections,
+                            dgroup_index,
+                            policy,
                         )? {
                             relocations.push(lowered);
                         }
@@ -376,10 +443,38 @@ pub fn lower_to_omf(
     Ok(ObjectModule {
         name: module_name.as_ref().to_vec(),
         segments,
-        groups: Vec::new(),
+        groups: dgroup_index
+            .map(|_| ObjectGroup {
+                name: b"DGROUP".to_vec(),
+                members: module
+                    .sections
+                    .iter()
+                    .filter(|section| near_data_sections.contains(&section.id))
+                    .map(|section| section_indices[&section.id])
+                    .collect(),
+            })
+            .into_iter()
+            .collect(),
         externals,
         publics,
     })
+}
+
+fn near_data_sections(module: &MCModule, policy: X86OmfPolicy) -> BTreeSet<SectionId> {
+    if policy != X86OmfPolicy::Dgroup {
+        return BTreeSet::new();
+    }
+    module
+        .sections
+        .iter()
+        .filter(|section| {
+            matches!(
+                (section.name.as_str(), section.kind),
+                (".rodata", SectionKind::ReadOnlyData) | (".data", SectionKind::Data)
+            )
+        })
+        .map(|section| section.id)
+        .collect()
 }
 
 fn referenced_symbols(module: &MCModule) -> BTreeSet<SymbolId> {
@@ -486,6 +581,9 @@ fn lower_fixup(
     layouts: &BTreeMap<SymbolId, SymbolLayout>,
     section_indices: &BTreeMap<SectionId, u16>,
     external_indices: &BTreeMap<SymbolId, u16>,
+    near_data_sections: &BTreeSet<SectionId>,
+    dgroup_index: Option<u16>,
+    policy: X86OmfPolicy,
 ) -> Result<Option<ObjectRelocation>, X86OmfError> {
     let kind = decode_kind(section, fragment, fixup.kind.get())?;
     if fixup.pc_relative != kind.pc_relative() {
@@ -520,7 +618,7 @@ fn lower_fixup(
             fragment,
             symbol: symbol.id,
         })?;
-    let (target, symbol_offset, defined_in_module) =
+    let (target, symbol_offset, defined_in_module, target_section) =
         match layout {
             SymbolLayout::Undefined => {
                 require_external(symbol)?;
@@ -531,7 +629,7 @@ fn lower_fixup(
                         symbol: symbol.id,
                     },
                 )?;
-                (RelocationTarget::External(index), 0, false)
+                (RelocationTarget::External(index), 0, false, None)
             }
             SymbolLayout::Defined {
                 section: target_section,
@@ -549,9 +647,38 @@ fn lower_fixup(
                     RelocationTarget::Segment(section_indices[&target_section]),
                     offset,
                     true,
+                    Some(target_section),
                 )
             }
         };
+
+    let frame = if kind == X86FixupKind::NearData16 {
+        match dgroup_index {
+            Some(group) => {
+                if let Some(target_section) = target_section {
+                    if !near_data_sections.contains(&target_section) {
+                        return Err(X86OmfError::NearDataTargetOutsideDgroup {
+                            section,
+                            fragment,
+                            symbol: symbol.id,
+                            target_section,
+                        });
+                    }
+                }
+                RelocationFrame::Group(group)
+            }
+            None if policy == X86OmfPolicy::Dgroup => {
+                return Err(X86OmfError::NearDataFixupWithoutDgroup {
+                    section,
+                    fragment,
+                    symbol: symbol.id,
+                });
+            }
+            None => RelocationFrame::Target,
+        }
+    } else {
+        RelocationFrame::Target
+    };
 
     let value = if kind == X86FixupKind::Segment16 {
         0
@@ -578,7 +705,9 @@ fn lower_fixup(
             bytes[start + 2..start + 4].fill(0);
             Location::Pointer16_16
         }
-        X86FixupKind::Absolute16 | X86FixupKind::PcRelative16 => Location::Offset16,
+        X86FixupKind::Absolute16 | X86FixupKind::NearData16 | X86FixupKind::PcRelative16 => {
+            Location::Offset16
+        }
         X86FixupKind::Segment16 => Location::Base16,
     };
     if kind.pc_relative() && defined_in_module {
@@ -592,7 +721,7 @@ fn lower_fixup(
         } else {
             FixupMode::SegmentRelative
         },
-        frame: RelocationFrame::Target,
+        frame,
         target,
     }))
 }
@@ -607,6 +736,7 @@ fn decode_kind(
         value if value == X86FixupKind::Absolute16 as u32 => Ok(X86FixupKind::Absolute16),
         value if value == X86FixupKind::PcRelative16 as u32 => Ok(X86FixupKind::PcRelative16),
         value if value == X86FixupKind::Segment16 as u32 => Ok(X86FixupKind::Segment16),
+        value if value == X86FixupKind::NearData16 as u32 => Ok(X86FixupKind::NearData16),
         raw => Err(X86OmfError::UnknownFixupKind {
             section,
             fragment,
@@ -933,6 +1063,241 @@ mod tests {
             object.segments[0].relocations[0].target,
             RelocationTarget::Segment(1)
         );
+    }
+
+    #[test]
+    fn dgroup_policy_frames_only_conventional_data_sections() {
+        let target = SymbolId::new(0);
+        let source = MCModule {
+            sections: vec![
+                MCSection {
+                    id: SectionId::new(0),
+                    name: ".text".into(),
+                    kind: SectionKind::Text,
+                    flags: SectionFlags::ALLOC.union(SectionFlags::EXECUTABLE),
+                    alignment: 1,
+                    fragments: vec![data(
+                        0,
+                        vec![0, 0],
+                        vec![Fixup {
+                            offset: 0,
+                            kind: X86FixupKind::NearData16.into(),
+                            expression: MCExpression {
+                                symbol: target,
+                                addend: 0,
+                            },
+                            pc_relative: false,
+                        }],
+                    )],
+                },
+                MCSection {
+                    id: SectionId::new(1),
+                    name: ".data".into(),
+                    kind: SectionKind::Data,
+                    flags: SectionFlags::ALLOC.union(SectionFlags::WRITABLE),
+                    alignment: 1,
+                    fragments: vec![data(1, vec![7], Vec::new())],
+                },
+            ],
+            symbols: vec![symbol(
+                0,
+                "near_item",
+                SymbolDefinition::Fragment {
+                    fragment: FragmentId::new(1),
+                    offset: 0,
+                },
+            )],
+        };
+
+        // The existing generic lowering remains group-free, including for a
+        // target-owned near-data relocation.
+        let generic = lower_to_omf(b"unit", &source).unwrap();
+        assert!(generic.groups.is_empty());
+        assert_eq!(generic.publics[0].group_index, 0);
+        assert_eq!(
+            generic.segments[0].relocations[0].frame,
+            RelocationFrame::Target
+        );
+
+        let grouped = lower_to_omf_with_dgroup(b"unit", &source).unwrap();
+        assert_eq!(
+            grouped.groups,
+            vec![ObjectGroup {
+                name: b"DGROUP".to_vec(),
+                members: vec![2],
+            }]
+        );
+        assert_eq!(grouped.publics[0].group_index, 1);
+        assert_eq!(
+            grouped.segments[0].relocations,
+            vec![ObjectRelocation {
+                offset: 0,
+                location: Location::Offset16,
+                mode: FixupMode::SegmentRelative,
+                frame: RelocationFrame::Group(1),
+                target: RelocationTarget::Segment(2),
+            }]
+        );
+    }
+
+    #[test]
+    fn dgroup_policy_frames_external_near_data_when_a_member_defines_dgroup() {
+        let external = SymbolId::new(0);
+        let mut member = symbol(
+            1,
+            "private_near_data",
+            SymbolDefinition::Fragment {
+                fragment: FragmentId::new(1),
+                offset: 0,
+            },
+        );
+        member.binding = SymbolBinding::Local;
+        let source = MCModule {
+            sections: vec![
+                MCSection {
+                    id: SectionId::new(0),
+                    name: ".text".into(),
+                    kind: SectionKind::Text,
+                    flags: SectionFlags::ALLOC.union(SectionFlags::EXECUTABLE),
+                    alignment: 1,
+                    fragments: vec![data(
+                        0,
+                        vec![0, 0],
+                        vec![Fixup {
+                            offset: 0,
+                            kind: X86FixupKind::NearData16.into(),
+                            expression: MCExpression {
+                                symbol: external,
+                                addend: 4,
+                            },
+                            pc_relative: false,
+                        }],
+                    )],
+                },
+                MCSection {
+                    id: SectionId::new(1),
+                    name: ".data".into(),
+                    kind: SectionKind::Data,
+                    flags: SectionFlags::ALLOC.union(SectionFlags::WRITABLE),
+                    alignment: 1,
+                    fragments: vec![data(1, vec![0], Vec::new())],
+                },
+            ],
+            symbols: vec![
+                symbol(0, "external_near", SymbolDefinition::Undefined),
+                member,
+            ],
+        };
+
+        let grouped = lower_to_omf_with_dgroup(b"unit", &source).unwrap();
+        assert_eq!(grouped.externals[0].name, b"external_near");
+        assert_eq!(
+            grouped.segments[0].relocations[0],
+            ObjectRelocation {
+                offset: 0,
+                location: Location::Offset16,
+                mode: FixupMode::SegmentRelative,
+                frame: RelocationFrame::Group(1),
+                target: RelocationTarget::External(1),
+            }
+        );
+    }
+
+    #[test]
+    fn dgroup_policy_reports_external_near_data_without_a_group_member() {
+        let external = SymbolId::new(0);
+        let source = module(
+            vec![data(
+                0,
+                vec![0, 0],
+                vec![Fixup {
+                    offset: 0,
+                    kind: X86FixupKind::NearData16.into(),
+                    expression: MCExpression {
+                        symbol: external,
+                        addend: 0,
+                    },
+                    pc_relative: false,
+                }],
+            )],
+            vec![symbol(0, "external_near", SymbolDefinition::Undefined)],
+        );
+
+        assert!(matches!(
+            lower_to_omf_with_dgroup(b"unit", &source),
+            Err(X86OmfError::NearDataFixupWithoutDgroup {
+                section,
+                fragment,
+                symbol,
+            }) if section == SectionId::new(0)
+                && fragment == FragmentId::new(0)
+                && symbol == external
+        ));
+    }
+
+    #[test]
+    fn dgroup_policy_refuses_a_near_data_fixup_to_an_ordinary_section() {
+        let target = SymbolId::new(0);
+        let source = MCModule {
+            sections: vec![
+                MCSection {
+                    id: SectionId::new(0),
+                    name: ".text".into(),
+                    kind: SectionKind::Text,
+                    flags: SectionFlags::ALLOC.union(SectionFlags::EXECUTABLE),
+                    alignment: 1,
+                    fragments: vec![data(
+                        0,
+                        vec![0, 0],
+                        vec![Fixup {
+                            offset: 0,
+                            kind: X86FixupKind::NearData16.into(),
+                            expression: MCExpression {
+                                symbol: target,
+                                addend: 0,
+                            },
+                            pc_relative: false,
+                        }],
+                    )],
+                },
+                MCSection {
+                    id: SectionId::new(1),
+                    name: ".other.data".into(),
+                    kind: SectionKind::Data,
+                    flags: SectionFlags::ALLOC.union(SectionFlags::WRITABLE),
+                    alignment: 1,
+                    fragments: vec![data(1, vec![0], Vec::new())],
+                },
+                MCSection {
+                    id: SectionId::new(2),
+                    name: ".data".into(),
+                    kind: SectionKind::Data,
+                    flags: SectionFlags::ALLOC.union(SectionFlags::WRITABLE),
+                    alignment: 1,
+                    fragments: vec![data(2, vec![0], Vec::new())],
+                },
+            ],
+            symbols: vec![symbol(
+                0,
+                "not_near",
+                SymbolDefinition::Fragment {
+                    fragment: FragmentId::new(1),
+                    offset: 0,
+                },
+            )],
+        };
+
+        assert!(matches!(
+            lower_to_omf_with_dgroup(b"unit", &source),
+            Err(X86OmfError::NearDataTargetOutsideDgroup {
+                section,
+                target_section,
+                symbol,
+                ..
+            }) if section == SectionId::new(0)
+                && target_section == SectionId::new(1)
+                && symbol == target
+        ));
     }
 
     #[test]
