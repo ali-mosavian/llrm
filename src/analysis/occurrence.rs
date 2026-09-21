@@ -20,6 +20,13 @@ pub(crate) struct OpOccurrence {
     operation_index: usize,
 }
 
+impl OpOccurrence {
+    /// The immutable body ordinal this operation occurrence belongs to.
+    pub(crate) const fn block_index(self) -> usize {
+        self.block_index
+    }
+}
+
 /// One phi occurrence in an immutable MIR body snapshot.
 ///
 /// Python's `control_replacement` also compares its proven phi by object
@@ -28,6 +35,13 @@ pub(crate) struct OpOccurrence {
 pub(crate) struct PhiOccurrence {
     block_index: usize,
     phi_index: usize,
+}
+
+impl PhiOccurrence {
+    /// The immutable body ordinal this phi occurrence belongs to.
+    pub(crate) const fn block_index(self) -> usize {
+        self.block_index
+    }
 }
 
 /// Enumerate every operation in Python body/block/operation order.

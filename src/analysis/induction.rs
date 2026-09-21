@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use num_bigint::BigInt;
 
 use super::constants::{masked, Known};
-use super::occurrence::{operations, OpOccurrence};
+use super::occurrence::{operations, phis, OpOccurrence, PhiOccurrence};
 use crate::model::mir::{Arg, Const, Held, Kind, MirBody, Op, OrderedMap, Value};
 use crate::model::mir_loops::{predecessors, Loop};
 
@@ -73,6 +73,32 @@ pub(crate) struct AffineMap {
     pub width: u32,
 }
 
+/// A canonical zero-or-more loop with an exact symbolic trip-count bound.
+///
+/// Direct port of `qbopt.analysis.induction:CountedLoop`.  Python stores the
+/// proven phi and operations by object identity; Rust stores snapshot-local
+/// occurrence keys for the same exact body instead.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CountedLoop {
+    pub counter: Affine,
+    pub phi: PhiOccurrence,
+    pub compare: OpOccurrence,
+    pub branch: OpOccurrence,
+    pub bound: AffineOperand,
+    pub preheader: i64,
+    pub latch: i64,
+    pub entered: i64,
+    pub exit: i64,
+    pub maximum: Option<BigInt>,
+}
+
+impl CountedLoop {
+    /// Python's `CountedLoop.trips` property.
+    pub(crate) const fn trips(&self) -> &AffineOperand {
+        &self.bound
+    }
+}
+
 impl AffineMap {
     /// Python's `AffineMap.period` property.
     pub(crate) fn period(&self) -> BigInt {
@@ -120,6 +146,195 @@ pub(crate) fn relation(
         offset,
         width,
     })
+}
+
+/// Python's `counted(body, loop, facts)` with its known-value analysis made
+/// explicit until `consts.known` itself is ported.
+pub(crate) fn counted(
+    body: &MirBody,
+    loop_: &Loop,
+    facts: &BTreeMap<Value, Known>,
+) -> Vec<CountedLoop> {
+    // Python's `{block.at: block for block in body.blocks}` keeps the last
+    // duplicate address; `canonical` and this semantic phase share it.
+    let blocks = body
+        .blocks
+        .iter()
+        .enumerate()
+        .map(|(index, block)| (block.at, (index, block)))
+        .collect::<BTreeMap<_, _>>();
+    let Some(shape) = canonical(body, loop_) else {
+        return Vec::new();
+    };
+    let (header_index, _) = blocks[&loop_.header];
+    let header_operations = operations(body)
+        .filter(|(occurrence, _, _)| occurrence.block_index() == header_index)
+        .map(|(occurrence, _, operation)| (occurrence, operation))
+        .collect::<Vec<_>>();
+    let Some((branch_occurrence, branch)) = header_operations.last().copied() else {
+        return Vec::new();
+    };
+    let inside = &loop_.body;
+    if _continuing_test(branch, inside) != Some(Kind::Below) {
+        return Vec::new();
+    }
+    let still = invariant(body, inside);
+    let mut made = BTreeMap::<u32, &Op>::new();
+    for block in &body.blocks {
+        for operation in &block.ops {
+            for value in &operation.defines {
+                made.insert(value.id, operation);
+            }
+        }
+    }
+    let header_phis = phis(body)
+        .filter(|(occurrence, _, _)| occurrence.block_index() == header_index)
+        .map(|(occurrence, _, phi)| (occurrence, phi))
+        .collect::<Vec<_>>();
+
+    let mut proven = Vec::new();
+    for counter in basics(body, loop_).values() {
+        let width = counter.start.width();
+        if _signed(&counter.start.as_arg(), facts, width) != Some(BigInt::from(0_u8))
+            || _signed(&counter.step.as_arg(), facts, width) != Some(BigInt::from(1_u8))
+        {
+            continue;
+        }
+        let Some((phi_occurrence, phi)) = header_phis
+            .iter()
+            .find(|(_, phi)| phi.result.id == counter.value)
+            .copied()
+        else {
+            continue;
+        };
+        if phi.incoming.keys().copied().collect::<BTreeSet<_>>()
+            != BTreeSet::from([shape.preheader, shape.latch])
+        {
+            continue;
+        }
+        let comparisons = header_operations[..header_operations.len() - 1]
+            .iter()
+            .filter_map(|(occurrence, operation)| {
+                _counter_bound(operation, branch, counter, width, Some(&made))
+                    .map(|bound| (*occurrence, bound))
+            })
+            .collect::<Vec<_>>();
+        if comparisons.len() != 1 {
+            continue;
+        }
+        let (compare_occurrence, bound) = comparisons[0].clone();
+        let bound = match bound {
+            Arg::Held(held) if held.width == width => AffineOperand::Held(held),
+            Arg::Const(constant) if constant.width == width => AffineOperand::Const(constant),
+            _ => continue,
+        };
+        if matches!(&bound, AffineOperand::Held(held) if !still.contains(&held.value.id)) {
+            continue;
+        }
+        let Some(update) = phi.incoming.get(&shape.latch).copied() else {
+            continue;
+        };
+        let Some(stepping) = made.get(&update.id).copied() else {
+            continue;
+        };
+        if crate::model::mir::stepping(stepping)
+            != Some((
+                Arg::Held(Held {
+                    value: phi.result,
+                    width,
+                }),
+                Arg::Const(Const::new(1, width)),
+            ))
+            || stepping.results
+                != vec![Arg::Held(Held {
+                    value: update,
+                    width,
+                })]
+            || !stepping.loads.is_empty()
+            || !stepping.stores.is_empty()
+            || stepping.barrier()
+            || !stepping.merges.is_empty()
+        {
+            continue;
+        }
+        let maximum = match &bound {
+            AffineOperand::Const(constant) => Some(masked(&constant.n, constant.width)),
+            AffineOperand::Held(held) => body.integer_ranges.get(&held.value).and_then(|range| {
+                (range.width == held.width && range.low >= BigInt::from(0_u8))
+                    .then(|| range.high.clone())
+            }),
+        };
+        proven.push(CountedLoop {
+            counter: counter.clone(),
+            phi: phi_occurrence,
+            compare: compare_occurrence,
+            branch: branch_occurrence,
+            bound,
+            preheader: shape.preheader,
+            latch: shape.latch,
+            entered: shape.entered,
+            exit: shape.exit,
+            maximum,
+        });
+    }
+    proven
+}
+
+/// Python's `_continuing_test(branch, inside)`.
+fn _continuing_test(branch: &Op, inside: &BTreeSet<i64>) -> Option<Kind> {
+    if branch.target.is_some_and(|target| inside.contains(&target)) {
+        return branch.test;
+    }
+    match branch.test {
+        Some(Kind::Le) => Some(Kind::Gt),
+        Some(Kind::Lt) => Some(Kind::Ge),
+        Some(Kind::Ge) => Some(Kind::Lt),
+        Some(Kind::Gt) => Some(Kind::Le),
+        Some(Kind::Below) => Some(Kind::AboveEq),
+        Some(Kind::BelowEq) => Some(Kind::Above),
+        Some(Kind::Above) => Some(Kind::BelowEq),
+        Some(Kind::AboveEq) => Some(Kind::Below),
+        Some(Kind::Eq) => Some(Kind::Ne),
+        Some(Kind::Ne) => Some(Kind::Eq),
+        _ => None,
+    }
+}
+
+/// Python's `_counter_bound(op, branch, counter, width, made=None)`.
+fn _counter_bound(
+    op: &Op,
+    branch: &Op,
+    counter: &Affine,
+    width: u32,
+    made: Option<&BTreeMap<u32, &Op>>,
+) -> Option<Arg> {
+    let first = match op.args.first() {
+        Some(Arg::Held(held)) if op.args.len() == 2 && held.width == width => *held,
+        _ => return None,
+    };
+    if !op.loads.is_empty() || !op.stores.is_empty() || op.barrier() {
+        return None;
+    }
+    let compared = made.map_or(first, |made| _copied(first, made));
+    if compared.value.id != counter.value {
+        return None;
+    }
+    let flags = op
+        .defines
+        .iter()
+        .filter(|value| value.flags)
+        .copied()
+        .collect::<Vec<_>>();
+    if flags.len() != 1 || !branch.uses.contains(&flags[0]) {
+        return None;
+    }
+    if op.kind == Kind::Sub && op.results.is_empty() && op.defines.len() == 1 {
+        return Some(op.args[1].clone());
+    }
+    if matches!(op.kind, Kind::And | Kind::Or) && op.args[0] == op.args[1] {
+        return Some(Arg::Const(Const::new(0, width)));
+    }
+    None
 }
 
 /// Python's `_constant(arg, facts, width)`.
@@ -498,14 +713,15 @@ mod tests {
     use crate::codegen::machine::Operation;
     use crate::model::floating::{Format, Precision, Rounding, Semantics as FloatingSemantics};
     use crate::model::mir::{
-        Arg, Cell, Const, FloatingOrigin, Held, Kind, MemRef, MirBlock, MirBody, Op, OpCode, Phi,
-        Value,
+        Arg, Cell, Const, FloatingOrigin, Held, IntegerRange, Kind, MemRef, MirBlock, MirBody, Op,
+        OpCode, Phi, Value,
     };
     use crate::model::mir_loops::Loop;
 
     use super::{
-        Affine, AffineMap, AffineOperand, LoopShape, _as_signed, _constant, _copied, _signed,
-        basics, canonical, invariant, relation, test_only, transparent_aliases,
+        Affine, AffineMap, AffineOperand, LoopShape, _as_signed, _constant, _copied,
+        _counter_bound, _signed, basics, canonical, counted, invariant, relation, test_only,
+        transparent_aliases,
     };
 
     fn value(id: u32, at: i64) -> Value {
@@ -673,6 +889,184 @@ mod tests {
             body: BTreeSet::from([1, 2]),
         };
         (body, loop_)
+    }
+
+    /// Direct Rust form of `tests/test_indvars.py:_symbolic_control_body`.
+    fn symbolic_counted_body(
+        candidate_start: i64,
+    ) -> (MirBody, Loop, BTreeMap<Value, Known>, Value, Value) {
+        let bound = Value {
+            variable: 1,
+            version: 1,
+            ..value(1, 0)
+        };
+        let control_seed = Value {
+            variable: 2,
+            version: 1,
+            ..value(2, 0)
+        };
+        let candidate_seed = Value {
+            variable: 3,
+            version: 1,
+            ..value(3, 0)
+        };
+        let control = Value {
+            variable: 2,
+            version: 2,
+            ..value(4, 1)
+        };
+        let candidate = Value {
+            variable: 3,
+            version: 2,
+            ..value(5, 1)
+        };
+        let flags = Value {
+            flags: true,
+            variable: 4,
+            version: 1,
+            ..value(6, 1)
+        };
+        let control_next = Value {
+            variable: 2,
+            version: 3,
+            ..value(7, 2)
+        };
+        let candidate_next = Value {
+            variable: 3,
+            version: 3,
+            ..value(8, 2)
+        };
+        let offset = Value {
+            variable: 5,
+            version: 1,
+            ..value(9, 2)
+        };
+        let mut source = MemRef::new(None, 2);
+        source.space = Some(crate::object::omf::module::Space::Frame);
+
+        let constant_copy = |at, result, number| {
+            let mut operation = op(at, Kind::Copy, vec![result], vec![]);
+            operation.op = Some(OpCode::Operation(Operation::Nothing));
+            operation.args = vec![Arg::Const(Const::new(number, 2))];
+            operation.results = vec![Arg::Held(Held {
+                value: result,
+                width: 2,
+            })];
+            operation
+        };
+        let add = |at, result, left, right| {
+            let mut operation = op(at, Kind::Add, vec![result], vec![left]);
+            operation.op = Some(OpCode::Operation(Operation::Nothing));
+            operation.args = vec![
+                Arg::Held(Held {
+                    value: left,
+                    width: 2,
+                }),
+                Arg::Const(Const::new(right, 2)),
+            ];
+            operation.results = vec![Arg::Held(Held {
+                value: result,
+                width: 2,
+            })];
+            operation
+        };
+
+        let mut load = op(0, Kind::Load, vec![bound], vec![]);
+        load.op = Some(OpCode::Operation(Operation::Move));
+        load.loads = vec![source.clone()];
+        load.args = vec![Arg::Cell(Cell {
+            r#ref: source.clone(),
+        })];
+        load.results = vec![Arg::Held(Held {
+            value: bound,
+            width: 2,
+        })];
+        let mut compare = op(1, Kind::Sub, vec![flags], vec![control, bound]);
+        compare.op = Some(OpCode::Operation(Operation::Compare));
+        compare.name = "cmp".to_owned();
+        compare.args = vec![
+            Arg::Held(Held {
+                value: control,
+                width: 2,
+            }),
+            Arg::Held(Held {
+                value: bound,
+                width: 2,
+            }),
+        ];
+        let mut branch = op(1, Kind::Branch, vec![], vec![flags]);
+        branch.op = Some(OpCode::Operation(Operation::Branch));
+        branch.test = Some(Kind::AboveEq);
+        branch.target = Some(3);
+        let mut jump = op(2, Kind::Jump, vec![], vec![]);
+        jump.op = Some(OpCode::Operation(Operation::Jump));
+        jump.target = Some(1);
+        let mut returned = op(3, Kind::Return, vec![], vec![]);
+        returned.op = Some(OpCode::Operation(Operation::Return));
+        let mut control_incoming = crate::model::mir::OrderedMap::new();
+        control_incoming.insert(0, control_seed);
+        control_incoming.insert(2, control_next);
+        let mut candidate_incoming = crate::model::mir::OrderedMap::new();
+        candidate_incoming.insert(0, candidate_seed);
+        candidate_incoming.insert(2, candidate_next);
+        let mut body = MirBody::new(
+            0,
+            vec![
+                MirBlock::new(
+                    0,
+                    vec![],
+                    vec![
+                        load,
+                        constant_copy(0, control_seed, 0),
+                        constant_copy(0, candidate_seed, candidate_start),
+                    ],
+                    vec![1],
+                ),
+                MirBlock::new(
+                    1,
+                    vec![
+                        Phi {
+                            result: control,
+                            incoming: control_incoming,
+                        },
+                        Phi {
+                            result: candidate,
+                            incoming: candidate_incoming,
+                        },
+                    ],
+                    vec![compare, branch],
+                    vec![2, 3],
+                ),
+                MirBlock::new(
+                    2,
+                    vec![],
+                    vec![
+                        add(2, offset, candidate, 100),
+                        add(2, control_next, control, 1),
+                        add(2, candidate_next, candidate, 1),
+                        jump,
+                    ],
+                    vec![1],
+                ),
+                MirBlock::new(3, vec![], vec![returned], vec![]),
+            ],
+        );
+        body.integer_ranges
+            .insert(bound, IntegerRange::new(0, 7, 2));
+        (
+            body,
+            Loop {
+                header: 1,
+                latches: BTreeSet::from([2]),
+                body: BTreeSet::from([1, 2]),
+            },
+            BTreeMap::from([
+                (control_seed, Known::new(0, 2)),
+                (candidate_seed, Known::new(candidate_start, 2)),
+            ]),
+            bound,
+            control_seed,
+        )
     }
 
     #[test]
@@ -1556,5 +1950,157 @@ mod tests {
         }
         let target_step_width = affine(2, constant(0, 2), constant(16, 4), 1);
         assert_eq!(relation(&source, &target_step_width, &facts), None);
+    }
+
+    #[test]
+    fn direct_induction_counted_counter_zero_test_requires_an_unchanged_counter() {
+        // Direct port of
+        // tests/test_induction_identity.py:test_counter_zero_test_requires_an_unchanged_counter.
+        for (kind, same, accepted) in [
+            (Kind::Or, true, true),
+            (Kind::And, true, true),
+            (Kind::Xor, true, false),
+            (Kind::Or, false, false),
+            (Kind::And, false, false),
+        ] {
+            let value = Value::new(900, 0);
+            let result = Value::new(901, 0);
+            let flags = Value {
+                flags: true,
+                ..Value::new(902, 0)
+            };
+            let source = Arg::Held(Held { value, width: 2 });
+            let mut compare = op(0, kind, vec![result, flags], vec![value]);
+            compare.args = vec![
+                source.clone(),
+                if same {
+                    source.clone()
+                } else {
+                    Arg::Const(Const::new(1, 2))
+                },
+            ];
+            compare.results = vec![Arg::Held(Held {
+                value: result,
+                width: 2,
+            })];
+            let branch = op(1, Kind::Branch, vec![], vec![flags]);
+            let counter = Affine {
+                value: value.id,
+                start: AffineOperand::Const(Const::new(-1, 2)),
+                step: AffineOperand::Const(Const::new(1, 2)),
+                header: 0,
+            };
+            assert_eq!(
+                _counter_bound(&compare, &branch, &counter, 2, None),
+                accepted.then_some(Arg::Const(Const::new(0, 2)))
+            );
+        }
+    }
+
+    #[test]
+    fn direct_induction_counted_counter_zero_test_keeps_partial_result_flags() {
+        // Direct port of
+        // tests/test_induction_identity.py:test_counter_zero_test_keeps_its_flags_across_a_partial_result.
+        let value = Value::new(910, 0);
+        let result = Value::new(911, 0);
+        let flags = Value {
+            flags: true,
+            ..Value::new(912, 0)
+        };
+        let source = Arg::Held(Held { value, width: 2 });
+        let mut compare = op(0, Kind::Or, vec![result, flags], vec![value]);
+        compare.merges.insert(value, result);
+        compare.args = vec![source.clone(), source];
+        compare.results = vec![Arg::Held(Held {
+            value: result,
+            width: 2,
+        })];
+        let branch = op(1, Kind::Branch, vec![], vec![flags]);
+        let counter = Affine {
+            value: value.id,
+            start: AffineOperand::Const(Const::new(-1, 2)),
+            step: AffineOperand::Const(Const::new(1, 2)),
+            header: 0,
+        };
+        assert_eq!(
+            _counter_bound(&compare, &branch, &counter, 2, None),
+            Some(Arg::Const(Const::new(0, 2)))
+        );
+    }
+
+    #[test]
+    fn direct_induction_counted_symbolic_control_proves_bound_and_maximum() {
+        // Direct Rust fixture of tests/test_indvars.py:_symbolic_control_body.
+        let (body, loop_, facts, bound, _) = symbolic_counted_body(0);
+        let proven = counted(&body, &loop_, &facts);
+        assert_eq!(basics(&body, &loop_).len(), 2);
+        assert_eq!(proven.len(), 1);
+        assert_eq!(
+            proven[0].bound,
+            AffineOperand::Held(Held {
+                value: bound,
+                width: 2
+            })
+        );
+        assert_eq!(
+            proven[0].trips(),
+            &AffineOperand::Held(Held {
+                value: bound,
+                width: 2
+            })
+        );
+        assert_eq!(proven[0].maximum, Some(BigInt::from(7)));
+        assert_eq!(
+            (
+                proven[0].preheader,
+                proven[0].latch,
+                proven[0].entered,
+                proven[0].exit
+            ),
+            (0, 2, 2, 3)
+        );
+    }
+
+    #[test]
+    fn direct_induction_counted_refuses_nonzero_or_nonunit_control() {
+        let (body, loop_, facts, _, seed) = symbolic_counted_body(0);
+        let mut nonzero = facts.clone();
+        nonzero.insert(seed, Known::new(1, 2));
+        assert!(counted(&body, &loop_, &nonzero).is_empty());
+
+        let mut nonunit = body;
+        nonunit.blocks[2].ops[1].args[1] = Arg::Const(Const::new(2, 2));
+        assert!(counted(&nonunit, &loop_, &facts).is_empty());
+    }
+
+    #[test]
+    fn direct_induction_counted_refuses_missing_or_noninvariant_bound() {
+        let (body, loop_, facts, bound, _) = symbolic_counted_body(0);
+        let mut missing = body.clone();
+        missing.blocks[1].ops[0].args[1] = Arg::Symbol(crate::model::mir::Symbol::new(
+            crate::object::omf::module::Space::Segment,
+            0,
+            0,
+            2,
+        ));
+        assert!(counted(&missing, &loop_, &facts).is_empty());
+
+        let mut noninvariant = body;
+        noninvariant.blocks[2]
+            .ops
+            .push(op(2, Kind::Copy, vec![bound], vec![]));
+        assert!(counted(&noninvariant, &loop_, &facts).is_empty());
+    }
+
+    #[test]
+    fn direct_induction_counted_refuses_wrong_branch_direction_and_impure_update() {
+        let (body, loop_, facts, _, _) = symbolic_counted_body(0);
+        let mut wrong_direction = body.clone();
+        wrong_direction.blocks[1].ops[1].test = Some(Kind::Below);
+        assert!(counted(&wrong_direction, &loop_, &facts).is_empty());
+
+        let mut impure = body;
+        impure.blocks[2].ops[1].stores.push(MemRef::new(None, 2));
+        assert!(counted(&impure, &loop_, &facts).is_empty());
     }
 }
