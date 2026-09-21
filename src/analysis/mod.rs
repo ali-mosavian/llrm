@@ -6,6 +6,7 @@ mod def_use;
 mod dominators;
 pub(crate) mod induction;
 mod loops;
+pub(crate) mod occurrence;
 mod postorder;
 
 pub use cfg::{CfgError, ControlFlowGraph};

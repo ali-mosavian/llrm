@@ -10,9 +10,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use num_bigint::BigInt;
 
-use super::constants::{Known, masked};
-use crate::model::mir::{Arg, Const, Held, Kind, MirBody, Op, OrderedMap};
-use crate::model::mir_loops::{Loop, predecessors};
+use super::constants::{masked, Known};
+use super::occurrence::{operations, OpOccurrence};
+use crate::model::mir::{Arg, Const, Held, Kind, MirBody, Op, OrderedMap, Value};
+use crate::model::mir_loops::{predecessors, Loop};
 
 /// The canonical pre-tested, single-latch loop CFG.
 ///
@@ -449,13 +450,51 @@ fn _stepped(
     }
 }
 
+/// Python's `transparent_aliases(body, loop, source)`.
+///
+/// The returned occurrence keys are valid only for this exact immutable body
+/// snapshot.  A transform constructs a new body after consuming them and
+/// must rerun this analysis before asking about that successor body.
+pub(crate) fn transparent_aliases(
+    body: &MirBody,
+    loop_: &Loop,
+    source: Value,
+) -> (BTreeSet<Value>, BTreeSet<OpOccurrence>) {
+    let mut aliases = BTreeSet::from([source]);
+    let mut copies = BTreeSet::new();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for (occurrence, block, operation) in operations(body) {
+            if !loop_.body.contains(&block.at)
+                || operation.kind != Kind::Copy
+                || operation.args.len() != 1
+                || operation.results.len() != 1
+            {
+                continue;
+            }
+            let (Arg::Held(argument), Arg::Held(result)) =
+                (&operation.args[0], &operation.results[0])
+            else {
+                continue;
+            };
+            if !aliases.contains(&argument.value) || result.width != argument.width {
+                continue;
+            }
+            copies.insert(occurrence);
+            changed |= aliases.insert(result.value);
+        }
+    }
+    (aliases, copies)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use num_bigint::BigInt;
 
-    use crate::analysis::constants::{Known, masked};
+    use crate::analysis::constants::{masked, Known};
     use crate::codegen::machine::Operation;
     use crate::model::floating::{Format, Precision, Rounding, Semantics as FloatingSemantics};
     use crate::model::mir::{
@@ -465,8 +504,8 @@ mod tests {
     use crate::model::mir_loops::Loop;
 
     use super::{
-        _as_signed, _constant, _copied, _signed, Affine, AffineMap, AffineOperand, LoopShape,
-        basics, canonical, invariant, relation, test_only,
+        Affine, AffineMap, AffineOperand, LoopShape, _as_signed, _constant, _copied, _signed,
+        basics, canonical, invariant, relation, test_only, transparent_aliases,
     };
 
     fn value(id: u32, at: i64) -> Value {
@@ -477,6 +516,19 @@ mod tests {
         let mut op = Op::new(at, None, "", defines, uses);
         op.kind = kind;
         op
+    }
+
+    fn copy(at: i64, source: Value, result: Value, source_width: u32, result_width: u32) -> Op {
+        let mut operation = op(at, Kind::Copy, vec![result], vec![source]);
+        operation.args = vec![Arg::Held(Held {
+            value: source,
+            width: source_width,
+        })];
+        operation.results = vec![Arg::Held(Held {
+            value: result,
+            width: result_width,
+        })];
+        operation
     }
 
     fn floating() -> FloatingSemantics {
@@ -1215,6 +1267,141 @@ mod tests {
         let mut cycle = copy;
         cycle.args = vec![Arg::Held(operand)];
         assert_eq!(follows(&cycle), operand);
+    }
+
+    #[test]
+    fn direct_induction_transparent_aliases_follows_width_preserving_copy_closure() {
+        // Direct port of `induction.transparent_aliases`: the second COPY
+        // becomes visible only after the first has extended `aliases`.
+        let source = value(1, 0);
+        let first = value(2, 1);
+        let second = value(3, 1);
+        let body = MirBody::new(
+            0,
+            vec![MirBlock::new(
+                1,
+                vec![],
+                vec![copy(1, source, first, 2, 2), copy(1, first, second, 2, 2)],
+                vec![],
+            )],
+        );
+        let loop_ = Loop {
+            header: 1,
+            latches: BTreeSet::new(),
+            body: BTreeSet::from([1]),
+        };
+
+        let (aliases, copies) = transparent_aliases(&body, &loop_, source);
+
+        assert_eq!(aliases, BTreeSet::from([source, first, second]));
+        assert_eq!(copies.len(), 2);
+    }
+
+    #[test]
+    fn direct_induction_transparent_aliases_refuses_every_python_copy_boundary() {
+        let source = value(1, 0);
+        let body = MirBody::new(
+            0,
+            vec![
+                MirBlock::new(
+                    1,
+                    vec![],
+                    vec![
+                        copy(1, source, value(2, 1), 2, 4),
+                        {
+                            let mut operation = copy(1, source, value(3, 1), 2, 2);
+                            operation.args = vec![Arg::Const(Const::new(0, 2))];
+                            operation
+                        },
+                        {
+                            let mut operation = copy(1, source, value(4, 1), 2, 2);
+                            operation.kind = Kind::Add;
+                            operation
+                        },
+                        {
+                            let mut operation = copy(1, source, value(5, 1), 2, 2);
+                            operation.args = vec![];
+                            operation
+                        },
+                        {
+                            let mut operation = copy(1, source, value(6, 1), 2, 2);
+                            operation.results = vec![];
+                            operation
+                        },
+                        {
+                            let mut operation = copy(1, source, value(7, 1), 2, 2);
+                            operation.results = vec![Arg::Const(Const::new(0, 2))];
+                            operation
+                        },
+                        copy(1, value(8, 0), value(9, 1), 2, 2),
+                    ],
+                    vec![],
+                ),
+                MirBlock::new(2, vec![], vec![copy(2, source, value(10, 2), 2, 2)], vec![]),
+            ],
+        );
+        let loop_ = Loop {
+            header: 1,
+            latches: BTreeSet::new(),
+            body: BTreeSet::from([1]),
+        };
+
+        let (aliases, copies) = transparent_aliases(&body, &loop_, source);
+
+        assert_eq!(aliases, BTreeSet::from([source]));
+        assert!(copies.is_empty());
+    }
+
+    #[test]
+    fn direct_induction_transparent_aliases_keeps_equal_operations_distinct() {
+        // Python's `id(op)`, not dataclass equality, records both copies.
+        let source = value(1, 0);
+        let result = value(2, 1);
+        let operation = copy(1, source, result, 2, 2);
+        let body = MirBody::new(
+            0,
+            vec![MirBlock::new(
+                1,
+                vec![],
+                vec![operation.clone(), operation],
+                vec![],
+            )],
+        );
+        assert_eq!(body.blocks[0].ops[0], body.blocks[0].ops[1]);
+        let loop_ = Loop {
+            header: 1,
+            latches: BTreeSet::new(),
+            body: BTreeSet::from([1]),
+        };
+
+        let (_aliases, copies) = transparent_aliases(&body, &loop_, source);
+
+        assert_eq!(copies.len(), 2);
+    }
+
+    #[test]
+    fn direct_induction_transparent_aliases_does_not_use_source_operation_id() {
+        // `Op.id` is source provenance and may collide; Python `id(op)` does
+        // not.  Two equal source IDs must therefore remain two occurrences.
+        let source = value(1, 0);
+        let result = value(2, 1);
+        let mut first = copy(1, source, result, 2, 2);
+        first.id = Some(9);
+        let mut second = first.clone();
+        second.id = Some(9);
+        let body = MirBody::new(
+            0,
+            vec![MirBlock::new(1, vec![], vec![first, second], vec![])],
+        );
+        let loop_ = Loop {
+            header: 1,
+            latches: BTreeSet::new(),
+            body: BTreeSet::from([1]),
+        };
+
+        let (_aliases, copies) = transparent_aliases(&body, &loop_, source);
+
+        assert_eq!(copies.len(), 2);
     }
 
     fn constant(value: i64, width: u32) -> AffineOperand {
