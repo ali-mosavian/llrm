@@ -1099,3 +1099,13 @@ existing `361001` oracle.  Delegated runtime gates took 1.61 and 1.84 seconds;
 primary review reproduced both together in 3.79 seconds.  The 7.24 seconds of
 verification remained below ten percent of elapsed work, with no broad suite,
 optimizer, or qrender gate.
+
+Commit `e409e63b` adds the paired `loop` rung without compiler changes.  Its
+4,386-byte production WCC stream was captured twice and matched byte-for-byte.
+The C path preserves a real backedge, local `INTEGER` induction value, signed
+exit comparison, loop-carried LONG total, and pointer loads; the BASIC path
+preserves the corresponding `DO WHILE`.  Both fresh objects linked and returned
+the existing `130991` oracle.  Delegated runtime gates took 1.77 and 1.96
+seconds, and primary review reproduced both together in 3.85 seconds.  The
+7.58 seconds of verification stayed below ten percent of elapsed work; no
+broad suite, optimizer, or qrender gate ran.
