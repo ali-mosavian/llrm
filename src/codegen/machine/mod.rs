@@ -1,6 +1,7 @@
 //! Machine IR and target-independent register allocation.
 
 mod allocation;
+mod allocation_constraints;
 mod allocation_rewrite;
 mod interference;
 mod liveness;
@@ -9,6 +10,7 @@ mod text;
 mod verify;
 
 pub use allocation::{AllocationError, RegisterAssignment, allocate};
+pub use allocation_constraints::{ConstraintError, ConstraintTarget, split_fixed_occurrences};
 pub use allocation_rewrite::{AllocationRewriteError, apply_assignment};
 pub use interference::{InterferenceError, InterferenceGraph, compute_interference};
 pub use liveness::{
