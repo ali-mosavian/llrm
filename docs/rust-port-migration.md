@@ -1127,3 +1127,39 @@ primary focused unit checks, final paired runtime gate, and capture comparison
 used about 45 seconds of command execution, below ten percent of the elapsed
 implementation and review interval.  No broad suite, optimizer, or qrender
 gate ran.
+
+Commits `864f9862`, `57b5b429`, and `4173b0ec` complete the paired `qlight`
+rung.  The target port preserves Python's ordinary integer mechanisms rather
+than adding a program-shaped route: signed and unsigned quotient/remainder at
+word and dword widths, explicit `DX:AX`/`EDX:EAX` Machine IR effects, all
+dword comparisons, word/dword casts, and word results at both far-Pascal and
+far-cdecl call boundaries.  Division leaves the divisor as a flexible live
+operand while constraining only the short architectural occurrences.  The
+encoder emits the exact `cwd`, `cdq`, `div`, `idiv`, and `movzx` forms.  BASIC
+and C facts remain confined to their x86 ABI finalizers; no language fact was
+added to generic IR, Machine IR, MC, or a pass.
+
+After those target mechanisms were in place, `llrm-c` returned the established
+`200100255` oracle while `llrm-qb` returned `3492255`.  Adjacent QIR, QMachine
+IR, and assembly dumps located the first divergence before CodeGen: QB had
+typed the unsuffixed decimal `1000000` as INTEGER, emitted `mov ax,4240h`, and
+then sign-extended the already-truncated value.  The lexer now applies the
+measured QB decimal rule generally: magnitudes through `32767` are INTEGER,
+larger values through `2147483647` are LONG, and explicit `%`/`&` suffixes
+retain their range contracts.  Based literals keep their distinct bit-pattern
+rules.  The regression was observed failing first at the lexer boundary and
+then proves the LONG type through HIR as well as the original program symptom.
+
+The 3,646-byte production `qlight.cgs` capture was generated twice with
+byte-identical SHA-256
+`36708cc5419bb91ceb3502b40149b4fa5ec606af39345e2278b2817991b3eec8`.
+The final exact two-test gate built fresh objects through `llrm-c` and
+`llrm-qb`, linked and ran both under DOSBox-X, and returned `200100255` in
+5.94 seconds.  Focused fail-first, unit, adjacent-stage, and runtime commands
+used about 145 seconds across the multi-hour implementation and primary-review
+interval, remaining below ten percent.  Two attempted exact pytest commands
+were deselected by the repository's default full-test filter; one still spent
+14.33 seconds in setup before that was diagnosed, and neither was counted as a
+passing gate.  Two delegated cached target-wide invocations also exposed the
+same pre-existing `Copy`/`Mov` expectation failure and were not repeated.  No
+optimizer, complete host, matrix, or qrender gate ran.
