@@ -13,6 +13,8 @@ from dosbox import dosbox_bin
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "bench" / "parity" / "scalar.bas"
 GOLDEN = ROOT / "bench" / "parity" / "golden" / "scalar.txt"
+PARITY_SOURCE = ROOT / "bench" / "parity" / "parity.bas"
+PARITY_GOLDEN = ROOT / "bench" / "parity" / "golden" / "parity.txt"
 CFG = CONFIGS["v-g3"]
 
 pytestmark = [
@@ -41,15 +43,8 @@ def _normalized_dos(text: str) -> str:
     return "\n".join(line.rstrip() for line in text.replace("\r\n", "\n").split("\n") if line.strip())
 
 
-def test_rust_qb_scalar_matches_its_program_level_oracle(tmp_path: Path) -> None:
-    """The emitted scalar program must print the checked-in 1789/DONE oracle.
-
-    This is the end-to-end gate for the paired BASIC program: VBDOS's LINK
-    resolves the Rust-produced OMF first, its own runtime executes it on a
-    real DOS 386, and the program-level answer is compared to the established
-    golden output rather than to an object-internal representation.
-    """
-    object_file = tmp_path / "SCALAR.OBJ"
+def _assert_program_matches_oracle(tmp_path: Path, source: Path, golden: Path, stem: str) -> None:
+    object_file = tmp_path / f"{stem}.OBJ"
     compiled = subprocess.run(
         [
             str(_llrm_qb()),
@@ -61,7 +56,7 @@ def test_rust_qb_scalar_matches_its_program_level_oracle(tmp_path: Path) -> None
             "vbdos",
             "-o",
             str(object_file),
-            str(SOURCE),
+            str(source),
         ],
         cwd=ROOT,
         capture_output=True,
@@ -74,8 +69,8 @@ def test_rust_qb_scalar_matches_its_program_level_oracle(tmp_path: Path) -> None
         tmp_path,
         CFG.mount,
         [
-            f"{CFG.link} SCALAR.OBJ, SCALAR.EXE,, {CFG.runtime}; > LINK.OUT",
-            "SCALAR.EXE > ACTUAL.TXT",
+            f"{CFG.link} {stem}.OBJ, {stem}.EXE,, {CFG.runtime}; > LINK.OUT",
+            f"{stem}.EXE > ACTUAL.TXT",
         ],
         timeout=20,
         env={"LIB": r"V:\LIB"},
@@ -83,4 +78,26 @@ def test_rust_qb_scalar_matches_its_program_level_oracle(tmp_path: Path) -> None
     assert run.finished and not run.timed_out, run
     link = read_dos(tmp_path, "LINK.OUT").lower()
     assert "error l" not in link and "unresolved external" not in link, link
-    assert _normalized_dos(read_dos(tmp_path, "ACTUAL.TXT")) == _normalized_dos(GOLDEN.read_text())
+    assert _normalized_dos(read_dos(tmp_path, "ACTUAL.TXT")) == _normalized_dos(golden.read_text())
+
+
+def test_rust_qb_scalar_matches_its_program_level_oracle(tmp_path: Path) -> None:
+    """The emitted scalar program must print the checked-in 1789/DONE oracle.
+
+    This is the end-to-end gate for the paired BASIC program: VBDOS's LINK
+    resolves the Rust-produced OMF first, its own runtime executes it on a
+    real DOS 386, and the program-level answer is compared to the established
+    golden output rather than to an object-internal representation.
+    """
+    _assert_program_matches_oracle(tmp_path, SOURCE, GOLDEN, "SCALAR")
+
+
+def test_rust_qb_aggregate_parity_matches_its_program_level_oracle(tmp_path: Path) -> None:
+    """The ported aggregate path must preserve Python PARITY's 1789 result.
+
+    PARITYKERNEL owns a dynamic local UDT array, erases it before returning,
+    and reloads its LONG result afterwards. This catches the established exit
+    lifetime through Rust OMF, Microsoft LINK, and the VBDOS runtime rather
+    than accepting an object that only passes host-side validation.
+    """
+    _assert_program_matches_oracle(tmp_path, PARITY_SOURCE, PARITY_GOLDEN, "PARITY")
