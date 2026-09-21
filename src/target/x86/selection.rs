@@ -1006,8 +1006,10 @@ impl<'types> FunctionSelector<'types> {
             InstructionKind::GetElementPointer { base, indices } => {
                 self.select_get_element_pointer(block, instruction, base, indices, output)?
             }
-            InstructionKind::ComposePointer { .. }
-            | InstructionKind::Phi { .. }
+            InstructionKind::ComposePointer { segment, offset } => {
+                self.select_compose_pointer(block, instruction, segment, offset, output)?
+            }
+            InstructionKind::Phi { .. }
             | InstructionKind::Select { .. }
             | InstructionKind::Intrinsic { .. } => {
                 return Err(SelectionError::UnsupportedInstruction {
@@ -1079,6 +1081,51 @@ impl<'types> FunctionSelector<'types> {
         self.push_instruction(
             X86Opcode::Add,
             vec![virtual_operand(result, OperandRole::UseDef), offset],
+            InstructionFlags::NONE,
+            output,
+        )
+    }
+
+    /// Forms a 16:16 pointer as a dword, with the offset in the low word.
+    fn select_compose_pointer(
+        &mut self,
+        block: BlockId,
+        instruction: &Instruction,
+        segment: &Operand,
+        offset: &Operand,
+        output: &mut Vec<MachineInstruction>,
+    ) -> Result<(), SelectionError> {
+        let result_definition = self.result_definition(block, instruction)?;
+        self.require_1616_pointer(result_definition.type_id)?;
+
+        let segment_type = self.operand_type(block, instruction.id, segment)?;
+        let offset_type = self.operand_type(block, instruction.id, offset)?;
+        if self.integer_bits(segment_type)? != 16 || self.integer_bits(offset_type)? != 16 {
+            return Err(SelectionError::UnsupportedInstruction {
+                function: self.function.id,
+                block,
+                instruction: instruction.id,
+            });
+        }
+        let segment = self.select_operand(
+            block,
+            instruction.id,
+            segment,
+            segment_type,
+            output,
+        )?;
+        let offset = self.select_operand(block, instruction.id, offset, offset_type, output)?;
+        let segment = self.materialize_register(segment, output)?;
+        let offset = self.materialize_register(offset, output)?;
+        let result = self.fresh_virtual_register(X86RegisterClass::Dword.machine_class())?;
+        self.insert_value(result_definition, SelectedLocation::Register(result))?;
+        self.push_instruction(
+            X86Opcode::MergeWords,
+            vec![
+                virtual_operand(result, OperandRole::Def),
+                virtual_operand(offset, OperandRole::Use),
+                virtual_operand(segment, OperandRole::Use),
+            ],
             InstructionFlags::NONE,
             output,
         )
@@ -2169,6 +2216,23 @@ impl<'types> FunctionSelector<'types> {
         self.require_pointer_type(type_id, AddressSpace::NearData)
     }
 
+    fn require_1616_pointer(&self, type_id: TypeId) -> Result<(), SelectionError> {
+        match self.type_kind(type_id)? {
+            TypeKind::Pointer {
+                address_space:
+                    AddressSpace::Generic
+                    | AddressSpace::FarData
+                    | AddressSpace::HugeData
+                    | AddressSpace::Code,
+            } => Ok(()),
+            TypeKind::Pointer { address_space } => Err(SelectionError::UnsupportedAddressSpace {
+                type_id,
+                address_space: *address_space,
+            }),
+            _ => Err(SelectionError::UnsupportedType { type_id }),
+        }
+    }
+
     fn value_class(&self, type_id: TypeId) -> Result<RegisterClass, SelectionError> {
         match self.type_kind(type_id)? {
             TypeKind::Pointer {
@@ -2596,6 +2660,43 @@ mod tests {
         }
     }
 
+    fn compose_pointer_module(address_space: AddressSpace) -> Module {
+        let pointer = TypeId::new(7);
+        let segment = Value {
+            id: ValueId::new(0),
+            type_id: I16,
+        };
+        let offset = Value {
+            id: ValueId::new(1),
+            type_id: I16,
+        };
+        let result = Value {
+            id: ValueId::new(2),
+            type_id: pointer,
+        };
+        let function = function(
+            vec![Block {
+                id: BlockId::new(0),
+                instructions: vec![Instruction {
+                    id: crate::ir::InstructionId::new(0),
+                    results: vec![result],
+                    kind: InstructionKind::ComposePointer {
+                        segment: Operand::Value(segment.id),
+                        offset: Operand::Value(offset.id),
+                    },
+                }],
+                terminator: Terminator::Return(None),
+            }],
+            vec![segment, offset],
+        );
+        let mut types = basic_types();
+        types.push(Type {
+            id: pointer,
+            kind: TypeKind::Pointer { address_space },
+        });
+        module(types, vec![function])
+    }
+
     fn data_global(id: u32, name: &str, initializer: Constant) -> Global {
         Global {
             id: GlobalId::new(id),
@@ -2606,6 +2707,65 @@ mod tests {
             initializer: Some(initializer),
             address_space: AddressSpace::NearData,
         }
+    }
+
+    #[test]
+    fn selects_compose_pointer_as_offset_low_and_segment_high() {
+        let input = compose_pointer_module(AddressSpace::FarData);
+        input.verify().expect("compose pointer IR verifies");
+
+        let selected = select_module(&input).expect("far 16:16 pointer selects");
+        selected.verify().expect("selected Machine IR verifies");
+        let function = &selected.functions[0];
+        let instructions = &function.blocks[0].instructions;
+        let merge = instructions
+            .iter()
+            .find(|instruction| instruction.opcode == X86Opcode::MergeWords.machine_opcode())
+            .expect("compose pointer selects to MergeWords");
+        let [destination, low, high] = merge.operands.as_slice() else {
+            panic!("MergeWords has destination, low, and high operands");
+        };
+        let virtual_register = |operand: &MachineOperand| match operand.kind {
+            MachineOperandKind::Register(MachineRegister::Virtual(register)) => register,
+            _ => panic!("MergeWords operands are virtual registers"),
+        };
+        let segment = virtual_register(&instructions[0].operands[0]);
+        let offset = virtual_register(&instructions[1].operands[0]);
+        let destination = virtual_register(destination);
+        let low = virtual_register(low);
+        let high = virtual_register(high);
+
+        assert_eq!(destination, VirtualRegisterId::new(2));
+        assert_eq!(low, offset, "offset is the low word");
+        assert_eq!(high, segment, "segment is the high word");
+        assert_eq!(merge.operands[0].role, OperandRole::Def);
+        assert_eq!(merge.operands[1].role, OperandRole::Use);
+        assert_eq!(merge.operands[2].role, OperandRole::Use);
+        let class = |register| {
+            function
+                .virtual_registers
+                .iter()
+                .find(|candidate| candidate.id == register)
+                .expect("MergeWords register is declared")
+                .class
+        };
+        assert_eq!(class(destination), X86RegisterClass::Dword.machine_class());
+        assert_eq!(class(low), X86RegisterClass::Word.machine_class());
+        assert_eq!(class(high), X86RegisterClass::Word.machine_class());
+    }
+
+    #[test]
+    fn compose_pointer_refuses_near_result() {
+        let input = compose_pointer_module(AddressSpace::NearData);
+        input.verify().expect("compose pointer IR verifies");
+
+        assert!(matches!(
+            select_module(&input),
+            Err(SelectionError::UnsupportedAddressSpace {
+                type_id,
+                address_space: AddressSpace::NearData,
+            }) if type_id == TypeId::new(7)
+        ));
     }
 
     #[test]
