@@ -293,13 +293,34 @@ fn encode_frame_load(opcode: X86Opcode, operands: &[MCOperand]) -> Result<Vec<u8
 }
 
 fn encode_load(opcode: X86Opcode, operands: &[MCOperand]) -> Result<Vec<u8>, EncodeError> {
-    if operands.len() == 3 {
+    if operands.len() == 3 && matches!(operands.get(2), Some(MCOperand::Immediate(_))) {
         return encode_frame_load(opcode, operands);
+    }
+    if operands.len() == 3 {
+        return encode_segmented_load(opcode, operands);
     }
     expect_arity(opcode, operands, 2)?;
     let destination = register_operand(opcode, operands, 0)?;
     let address = address16_operand(opcode, operands, 1)?;
     let mut bytes = prefix_for(destination.size);
+    bytes.push(match destination.size {
+        OperandSize::Byte => 0x8a,
+        OperandSize::Word | OperandSize::Dword => 0x8b,
+    });
+    bytes.extend(address.with_register(destination.code));
+    Ok(bytes)
+}
+
+fn encode_segmented_load(
+    opcode: X86Opcode,
+    operands: &[MCOperand],
+) -> Result<Vec<u8>, EncodeError> {
+    expect_arity(opcode, operands, 3)?;
+    require_es_override(opcode, operands, 2)?;
+    let destination = register_operand(opcode, operands, 0)?;
+    let address = address16_operand(opcode, operands, 1)?;
+    let mut bytes = vec![0x26];
+    bytes.extend(prefix_for(destination.size));
     bytes.push(match destination.size {
         OperandSize::Byte => 0x8a,
         OperandSize::Word | OperandSize::Dword => 0x8b,
@@ -322,8 +343,11 @@ fn encode_frame_store(opcode: X86Opcode, operands: &[MCOperand]) -> Result<Vec<u
 }
 
 fn encode_store(opcode: X86Opcode, operands: &[MCOperand]) -> Result<Vec<u8>, EncodeError> {
-    if operands.len() == 3 {
+    if operands.len() == 3 && matches!(operands.get(1), Some(MCOperand::Immediate(_))) {
         return encode_frame_store(opcode, operands);
+    }
+    if operands.len() == 3 {
+        return encode_segmented_store(opcode, operands);
     }
     expect_arity(opcode, operands, 2)?;
     let address = address16_operand(opcode, operands, 0)?;
@@ -335,6 +359,45 @@ fn encode_store(opcode: X86Opcode, operands: &[MCOperand]) -> Result<Vec<u8>, En
     });
     bytes.extend(address.with_register(source.code));
     Ok(bytes)
+}
+
+fn encode_segmented_store(
+    opcode: X86Opcode,
+    operands: &[MCOperand],
+) -> Result<Vec<u8>, EncodeError> {
+    expect_arity(opcode, operands, 3)?;
+    require_es_override(opcode, operands, 2)?;
+    let address = address16_operand(opcode, operands, 0)?;
+    let source = register_operand(opcode, operands, 1)?;
+    let mut bytes = vec![0x26];
+    bytes.extend(prefix_for(source.size));
+    bytes.push(match source.size {
+        OperandSize::Byte => 0x88,
+        OperandSize::Word | OperandSize::Dword => 0x89,
+    });
+    bytes.extend(address.with_register(source.code));
+    Ok(bytes)
+}
+
+fn require_es_override(
+    opcode: X86Opcode,
+    operands: &[MCOperand],
+    index: usize,
+) -> Result<(), EncodeError> {
+    let Some(MCOperand::Register(register)) = operands.get(index) else {
+        return Err(EncodeError::OperandKind {
+            opcode,
+            index,
+            expected: "the ES segment register",
+        });
+    };
+    if decode_register(register.get())? != X86Register::Es {
+        return Err(EncodeError::UnsupportedForm {
+            opcode,
+            reason: "the selected segment override must be ES",
+        });
+    }
+    Ok(())
 }
 
 fn address16_operand(
@@ -616,6 +679,10 @@ fn encode_push_pop(
     base_opcode: u8,
 ) -> Result<Vec<u8>, EncodeError> {
     expect_arity(opcode, operands, 1)?;
+    if matches!(operands.first(), Some(MCOperand::Register(register)) if decode_register(register.get())? == X86Register::Es)
+    {
+        return Ok(vec![if base_opcode == 0x50 { 0x06 } else { 0x07 }]);
+    }
     let register = register_operand(opcode, operands, 0)?;
     if register.size == OperandSize::Byte {
         return Err(EncodeError::UnsupportedForm {
@@ -1217,6 +1284,82 @@ mod tests {
                 vec![register(X86Register::Ax), register(X86Register::Cx)],
             )),
             Err(EncodeError::UnsupportedRegister { .. })
+        ));
+    }
+
+    #[test]
+    fn encodes_the_exact_balanced_es_pointer_access_sequences() {
+        let load = [
+            instruction(X86Opcode::Push, vec![register(X86Register::Es)]),
+            instruction(X86Opcode::Push, vec![register(X86Register::Eax)]),
+            instruction(X86Opcode::Pop, vec![register(X86Register::Bx)]),
+            instruction(X86Opcode::Pop, vec![register(X86Register::Es)]),
+            instruction(
+                X86Opcode::Load,
+                vec![
+                    register(X86Register::Cx),
+                    register(X86Register::Bx),
+                    register(X86Register::Es),
+                ],
+            ),
+            instruction(X86Opcode::Pop, vec![register(X86Register::Es)]),
+        ];
+        let store = [
+            instruction(X86Opcode::Push, vec![register(X86Register::Es)]),
+            instruction(X86Opcode::Push, vec![register(X86Register::Eax)]),
+            instruction(X86Opcode::Pop, vec![register(X86Register::Bx)]),
+            instruction(X86Opcode::Pop, vec![register(X86Register::Es)]),
+            instruction(
+                X86Opcode::Store,
+                vec![
+                    register(X86Register::Bx),
+                    register(X86Register::Cx),
+                    register(X86Register::Es),
+                ],
+            ),
+            instruction(X86Opcode::Pop, vec![register(X86Register::Es)]),
+        ];
+
+        let bytes = |sequence: &[MCInstruction]| {
+            sequence
+                .iter()
+                .flat_map(|instruction| encode(instruction).unwrap())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            bytes(&load),
+            vec![0x06, 0x66, 0x50, 0x5b, 0x07, 0x26, 0x8b, 0x0f, 0x07]
+        );
+        assert_eq!(
+            bytes(&store),
+            vec![0x06, 0x66, 0x50, 0x5b, 0x07, 0x26, 0x89, 0x0f, 0x07]
+        );
+
+        assert_eq!(
+            encode(&instruction(
+                X86Opcode::Load,
+                vec![
+                    register(X86Register::Eax),
+                    register(X86Register::Bx),
+                    register(X86Register::Es),
+                ],
+            ))
+            .unwrap(),
+            vec![0x26, 0x66, 0x8b, 0x07]
+        );
+        assert!(matches!(
+            encode(&instruction(
+                X86Opcode::Load,
+                vec![
+                    register(X86Register::Ax),
+                    register(X86Register::Bx),
+                    register(X86Register::Ds),
+                ],
+            )),
+            Err(EncodeError::UnsupportedForm {
+                opcode: X86Opcode::Load,
+                ..
+            })
         ));
     }
 

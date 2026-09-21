@@ -16,7 +16,8 @@ use crate::support::diagnostic::Diagnostic;
 use crate::target::x86::{
     BasicAbiError, BasicAbiExpansionError, BasicFramePlan, BasicRuntime, CAbiExpansionError,
     CFramePlan, CFramePlanError, CallClobberError, FrameIndexMaterializationError, SelectionError,
-    X86AllocationError, X86JumpLayoutError, X86McModuleLowerError, X86OmfError,
+    SegmentedMemoryExpansionError, X86AllocationError, X86JumpLayoutError,
+    X86McModuleLowerError, X86OmfError,
 };
 
 /// Configuration that affects QB source semantics.
@@ -111,6 +112,10 @@ pub enum Error {
     FrameIndices {
         function: String,
         error: FrameIndexMaterializationError,
+    },
+    SegmentedMemoryExpansion {
+        function: String,
+        error: SegmentedMemoryExpansionError,
     },
     BasicAbiExpansion {
         function: String,
@@ -207,6 +212,10 @@ impl fmt::Display for Error {
             Self::FrameIndices { function, error } => write!(
                 formatter,
                 "cannot materialize x86 frame indices for {function}: {error}"
+            ),
+            Self::SegmentedMemoryExpansion { function, error } => write!(
+                formatter,
+                "cannot finalize allocated x86 segmented memory for {function}: {error}"
             ),
             Self::BasicAbiExpansion { function, error } => write!(
                 formatter,
@@ -409,6 +418,12 @@ pub fn allocate_qb_machine(selected: &QbMachine) -> Result<QbMachine, Error> {
 pub fn lower_qb_machine_to_mc(selected: &QbMachine) -> Result<crate::mc::MCModule, Error> {
     let mut allocated = allocate_qb_machine(selected)?;
     for function in &mut allocated.module.functions {
+        *function = crate::target::x86::expand_allocated_segmented_memory(function).map_err(
+            |error| Error::SegmentedMemoryExpansion {
+                function: function.name.clone(),
+                error,
+            },
+        )?;
         *function = crate::target::x86::expand_allocated_basic_abi(function).map_err(|error| {
             Error::BasicAbiExpansion {
                 function: function.name.clone(),
@@ -485,6 +500,12 @@ pub fn allocate_c_machine(selected: &CMachine) -> Result<CMachine, Error> {
 pub fn lower_c_machine_to_mc(selected: &CMachine) -> Result<crate::mc::MCModule, Error> {
     let mut allocated = allocate_c_machine(selected)?;
     for function in &mut allocated.module.functions {
+        *function = crate::target::x86::expand_allocated_segmented_memory(function).map_err(
+            |error| Error::SegmentedMemoryExpansion {
+                function: function.name.clone(),
+                error,
+            },
+        )?;
         let frame = allocated
             .frames
             .get(&function.id)

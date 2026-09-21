@@ -16,6 +16,7 @@ mod mc_encode;
 mod mc_module;
 mod omf;
 mod registers;
+mod segmented_memory;
 mod selection;
 mod verify;
 
@@ -43,5 +44,6 @@ pub use mc_module::{
 };
 pub use omf::{X86OmfError, lower_to_omf};
 pub use registers::{X86Register, X86RegisterClass};
+pub use segmented_memory::{SegmentedMemoryExpansionError, expand_allocated_segmented_memory};
 pub use selection::{FunctionProperty, SelectionError, select_module};
 pub use verify::verify_machine;

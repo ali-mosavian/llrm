@@ -93,9 +93,20 @@ impl Verifier {
             X86Opcode::Store => self.verify_store(function, block, instruction, classes, frames),
             X86Opcode::Lea => self.verify_lea(function, block, instruction, classes),
             X86Opcode::MergeWords => self.verify_word_merge(function, block, instruction, classes),
-            X86Opcode::LowWord | X86Opcode::HighWord => {
-                self.verify_word_extract(function, block, instruction, classes)
-            }
+            X86Opcode::LowWord => self.verify_word_extract(
+                function,
+                block,
+                instruction,
+                classes,
+                &[X86RegisterClass::Word, X86RegisterClass::Address16],
+            ),
+            X86Opcode::HighWord => self.verify_word_extract(
+                function,
+                block,
+                instruction,
+                classes,
+                &[X86RegisterClass::Word],
+            ),
             X86Opcode::SignExtendWordToDword => {
                 self.verify_sign_extend_word_to_dword(function, block, instruction, classes)
             }
@@ -119,6 +130,11 @@ impl Verifier {
     ) {
         let (destination, address) = match instruction.operands.as_slice() {
             [destination, address] => (destination, (address, None)),
+            [destination, base, selector]
+                if matches!(selector.kind, MachineOperandKind::Register(_)) =>
+            {
+                (destination, (base, Some(selector)))
+            }
             [destination, base, displacement] => (destination, (base, Some(displacement))),
             _ => {
                 self.instruction_error(
@@ -150,6 +166,17 @@ impl Verifier {
                 frames,
                 width,
             ),
+            (base, Some(third)) if matches!(third.kind, MachineOperandKind::Register(_)) => self
+                .verify_segmented_memory_address(
+                    function,
+                    block,
+                    instruction,
+                    1,
+                    2,
+                    base,
+                    third,
+                    classes,
+                ),
             (base, Some(displacement)) => self.verify_materialized_frame_address(
                 function,
                 block,
@@ -179,6 +206,11 @@ impl Verifier {
     ) {
         let (address, source) = match instruction.operands.as_slice() {
             [address, source] => ((address, None), source),
+            [base, source, selector]
+                if matches!(selector.kind, MachineOperandKind::Register(_)) =>
+            {
+                ((base, Some(selector)), source)
+            }
             [base, displacement, source] => ((base, Some(displacement)), source),
             _ => {
                 self.instruction_error(
@@ -210,6 +242,17 @@ impl Verifier {
                 frames,
                 width,
             ),
+            (base, Some(third)) if matches!(third.kind, MachineOperandKind::Register(_)) => self
+                .verify_segmented_memory_address(
+                    function,
+                    block,
+                    instruction,
+                    0,
+                    2,
+                    base,
+                    third,
+                    classes,
+                ),
             (base, Some(displacement)) => self.verify_materialized_frame_address(
                 function,
                 block,
@@ -352,6 +395,46 @@ impl Verifier {
         }
     }
 
+    fn verify_segmented_memory_address(
+        &mut self,
+        function: &MachineFunction,
+        block: &MachineBlock,
+        instruction: &MachineInstruction,
+        base_position: usize,
+        selector_position: usize,
+        base: &MachineOperand,
+        selector: &MachineOperand,
+        classes: &BTreeMap<VirtualRegisterId, RegisterClass>,
+    ) {
+        self.require_register_class(
+            function,
+            block,
+            instruction,
+            base_position,
+            base,
+            OperandRole::Use,
+            X86RegisterClass::Address16,
+            classes,
+        );
+        if !matches!(
+            selector,
+            MachineOperand {
+                kind: MachineOperandKind::Register(MachineRegister::Physical(register)),
+                role: OperandRole::Use,
+                constraint: None,
+                tied_to: None,
+            } if *register == X86Register::Es.physical()
+        ) {
+            self.operand_error(
+                function,
+                block,
+                instruction,
+                selector_position,
+                "segmented memory selector must be an unconstrained physical ES use",
+            );
+        }
+    }
+
     fn verify_lea(
         &mut self,
         function: &MachineFunction,
@@ -462,6 +545,7 @@ impl Verifier {
         block: &MachineBlock,
         instruction: &MachineInstruction,
         classes: &BTreeMap<VirtualRegisterId, RegisterClass>,
+        destination_classes: &[X86RegisterClass],
     ) {
         let [destination, source] = instruction.operands.as_slice() else {
             self.instruction_error(
@@ -472,14 +556,14 @@ impl Verifier {
             );
             return;
         };
-        self.require_register_class(
+        self.require_one_of_register_classes(
             function,
             block,
             instruction,
             0,
             destination,
             OperandRole::Def,
-            X86RegisterClass::Word,
+            destination_classes,
             classes,
         );
         if instruction.flags != InstructionFlags::NONE {
@@ -855,6 +939,52 @@ impl Verifier {
                 position,
                 format!("must be a {} x86 register", class_name(expected)),
             );
+        }
+    }
+
+    fn require_one_of_register_classes(
+        &mut self,
+        function: &MachineFunction,
+        block: &MachineBlock,
+        instruction: &MachineInstruction,
+        position: usize,
+        operand: &MachineOperand,
+        role: OperandRole,
+        expected: &[X86RegisterClass],
+        classes: &BTreeMap<VirtualRegisterId, RegisterClass>,
+    ) {
+        if operand.role != role {
+            self.operand_error(
+                function,
+                block,
+                instruction,
+                position,
+                format!("must have {:?} role", role),
+            );
+        }
+        let valid = match operand.kind {
+            MachineOperandKind::Register(MachineRegister::Virtual(id)) => classes
+                .get(&id)
+                .and_then(|class| X86RegisterClass::from_machine_class(*class))
+                .is_some_and(|class| expected.contains(&class)),
+            MachineOperandKind::Register(MachineRegister::Physical(register))
+                if operand.constraint.is_none() && operand.tied_to.is_none() =>
+            {
+                X86Register::from_physical(register).is_some_and(|register| {
+                    expected
+                        .iter()
+                        .any(|class| class.members().contains(&register))
+                })
+            }
+            _ => false,
+        };
+        if !valid {
+            let description = if expected.len() == 1 && expected[0] == X86RegisterClass::Word {
+                "must be a word x86 register"
+            } else {
+                "must be a word or address16 x86 register"
+            };
+            self.operand_error(function, block, instruction, position, description);
         }
     }
 
@@ -1532,6 +1662,67 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(messages.iter().any(|message| {
             message.contains("materialized frame base must be an unconstrained physical BP use")
+        }));
+    }
+
+    #[test]
+    fn far_memory_accepts_segmented_forms_and_rejects_wrong_base_or_selector() {
+        let accepted = module(vec![
+            instruction(
+                0,
+                X86Opcode::Load,
+                vec![
+                    virtual_register(1, OperandRole::Def),
+                    virtual_register(3, OperandRole::Use),
+                    physical(X86Register::Es, OperandRole::Use),
+                ],
+                InstructionFlags {
+                    may_load: true,
+                    ..InstructionFlags::NONE
+                },
+            ),
+            instruction(
+                1,
+                X86Opcode::Store,
+                vec![
+                    virtual_register(3, OperandRole::Use),
+                    virtual_register(1, OperandRole::Use),
+                    physical(X86Register::Es, OperandRole::Use),
+                ],
+                InstructionFlags {
+                    side_effects: true,
+                    may_store: true,
+                    ..InstructionFlags::NONE
+                },
+            ),
+        ]);
+        assert_eq!(verify_machine(&accepted), Ok(()));
+
+        let invalid = module(vec![instruction(
+            0,
+            X86Opcode::Load,
+            vec![
+                virtual_register(1, OperandRole::Def),
+                virtual_register(1, OperandRole::Use),
+                physical(X86Register::Ds, OperandRole::Use),
+            ],
+            InstructionFlags {
+                may_load: true,
+                ..InstructionFlags::NONE
+            },
+        )]);
+        let messages = verify_machine(&invalid)
+            .unwrap_err()
+            .into_iter()
+            .map(|diagnostic| diagnostic.message)
+            .collect::<Vec<_>>();
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("must be a address16 x86 register"))
+        );
+        assert!(messages.iter().any(|message| {
+            message.contains("segmented memory selector must be an unconstrained physical ES use")
         }));
     }
 

@@ -1027,7 +1027,7 @@ impl<'types> FunctionSelector<'types> {
         Ok(())
     }
 
-    /// Selects a byte offset from a near address.  The portable instruction's
+    /// Selects a byte offset from a pointer.  The portable instruction's
     /// index has already been scaled by its producer.
     fn select_get_element_pointer(
         &mut self,
@@ -1040,7 +1040,6 @@ impl<'types> FunctionSelector<'types> {
         let result = self.result_definition(block, instruction)?;
         let base_type = self.operand_type(block, instruction.id, base)?;
         self.require_operand_type(block, instruction.id, result.type_id, base_type)?;
-        self.require_near_pointer(result.type_id)?;
 
         let [index] = indices else {
             return Err(SelectionError::UnsupportedInstruction {
@@ -1056,6 +1055,27 @@ impl<'types> FunctionSelector<'types> {
                 block,
                 instruction: instruction.id,
             });
+        }
+
+        match self.pointer_address_space(result.type_id)? {
+            AddressSpace::NearData => {}
+            AddressSpace::FarData => {
+                return self.select_far_get_element_pointer(
+                    block,
+                    instruction,
+                    result,
+                    base,
+                    index,
+                    index_type,
+                    output,
+                );
+            }
+            address_space => {
+                return Err(SelectionError::UnsupportedAddressSpace {
+                    type_id: result.type_id,
+                    address_space,
+                });
+            }
         }
 
         let base = self.select_operand(block, instruction.id, base, result.type_id, output)?;
@@ -1086,6 +1106,81 @@ impl<'types> FunctionSelector<'types> {
         )
     }
 
+    /// Advances only the low offset word of a far 16:16 pointer.  Huge
+    /// pointers require selector normalization and are deliberately refused
+    /// by the caller rather than approximated as far pointers.
+    fn select_far_get_element_pointer(
+        &mut self,
+        block: BlockId,
+        instruction: &Instruction,
+        result_definition: &Value,
+        base: &Operand,
+        index: &Operand,
+        index_type: TypeId,
+        output: &mut Vec<MachineInstruction>,
+    ) -> Result<(), SelectionError> {
+        let base = self.select_operand(
+            block,
+            instruction.id,
+            base,
+            result_definition.type_id,
+            output,
+        )?;
+        let base = self.materialize_register(base, output)?;
+        let low = self.fresh_virtual_register(X86RegisterClass::Word.machine_class())?;
+        self.push_instruction(
+            X86Opcode::LowWord,
+            vec![
+                virtual_operand(low, OperandRole::Def),
+                virtual_operand(base, OperandRole::Use),
+            ],
+            InstructionFlags::NONE,
+            output,
+        )?;
+        let offset = match index {
+            Operand::Constant(TypedConstant {
+                type_id,
+                value: Constant::Integer(value),
+            }) => {
+                self.require_operand_type(block, instruction.id, index_type, *type_id)?;
+                immediate_operand(integer_immediate(*value, 16))
+            }
+            _ => {
+                let offset = self.select_operand(block, instruction.id, index, index_type, output)?;
+                let offset = self.materialize_register(offset, output)?;
+                virtual_operand(offset, OperandRole::Use)
+            }
+        };
+        self.push_instruction(
+            X86Opcode::Add,
+            vec![virtual_operand(low, OperandRole::UseDef), offset],
+            InstructionFlags::NONE,
+            output,
+        )?;
+        let high = self.fresh_virtual_register(X86RegisterClass::Word.machine_class())?;
+        self.push_instruction(
+            X86Opcode::HighWord,
+            vec![
+                virtual_operand(high, OperandRole::Def),
+                virtual_operand(base, OperandRole::Use),
+            ],
+            InstructionFlags::NONE,
+            output,
+        )?;
+        let result = self.fresh_virtual_register(X86RegisterClass::Dword.machine_class())?;
+        self.insert_value(result_definition, SelectedLocation::Register(result))?;
+        self.push_instruction(
+            X86Opcode::MergeWords,
+            vec![
+                virtual_operand(result, OperandRole::Def),
+                virtual_operand(low, OperandRole::Use),
+                virtual_operand(high, OperandRole::Use),
+            ],
+            InstructionFlags::NONE,
+            output,
+        )
+    }
+
     /// Forms a 16:16 pointer as a dword, with the offset in the low word.
     fn select_compose_pointer(
         &mut self,
@@ -1107,13 +1202,7 @@ impl<'types> FunctionSelector<'types> {
                 instruction: instruction.id,
             });
         }
-        let segment = self.select_operand(
-            block,
-            instruction.id,
-            segment,
-            segment_type,
-            output,
-        )?;
+        let segment = self.select_operand(block, instruction.id, segment, segment_type, output)?;
         let offset = self.select_operand(block, instruction.id, offset, offset_type, output)?;
         let segment = self.materialize_register(segment, output)?;
         let offset = self.materialize_register(offset, output)?;
@@ -1321,16 +1410,39 @@ impl<'types> FunctionSelector<'types> {
     ) -> Result<(), SelectionError> {
         let result = self.result_definition(block, instruction)?;
         let address_type = self.operand_type(block, instruction.id, address)?;
-        self.require_near_pointer(address_type)?;
         let selected = self.select_operand(block, instruction.id, address, address_type, output)?;
         let destination = self.define_register_value(result)?;
-        let address = self.memory_address_operand(selected, output)?;
-        self.push_instruction(
-            X86Opcode::Load,
-            vec![virtual_operand(destination, OperandRole::Def), address],
-            load_flags(volatile),
-            output,
-        )
+        match self.pointer_address_space(address_type)? {
+            AddressSpace::NearData => {
+                let address = self.memory_address_operand(selected, output)?;
+                self.push_instruction(
+                    X86Opcode::Load,
+                    vec![virtual_operand(destination, OperandRole::Def), address],
+                    load_flags(volatile),
+                    output,
+                )
+            }
+            AddressSpace::FarData => {
+                let offset = self.extract_far_address(selected, output)?;
+                self.push_instruction(
+                    X86Opcode::Load,
+                    vec![
+                        virtual_operand(destination, OperandRole::Def),
+                        virtual_operand(offset, OperandRole::Use),
+                        physical_operand(X86Register::Es, OperandRole::Use),
+                    ],
+                    load_flags(volatile),
+                    output,
+                )?;
+                self.restore_es(output)
+            }
+            address_space => {
+                return Err(SelectionError::UnsupportedAddressSpace {
+                    type_id: address_type,
+                    address_space,
+                });
+            }
+        }
     }
 
     fn select_store(
@@ -1351,18 +1463,50 @@ impl<'types> FunctionSelector<'types> {
             });
         }
         let address_type = self.operand_type(block, instruction.id, address)?;
-        self.require_near_pointer(address_type)?;
         let value_type = self.operand_type(block, instruction.id, value)?;
-        let address = self.select_operand(block, instruction.id, address, address_type, output)?;
-        let value = self.select_operand(block, instruction.id, value, value_type, output)?;
-        let value = self.materialize_register(value, output)?;
-        let address = self.memory_address_operand(address, output)?;
-        self.push_instruction(
-            X86Opcode::Store,
-            vec![address, virtual_operand(value, OperandRole::Use)],
-            store_flags(volatile),
-            output,
-        )
+        match self.pointer_address_space(address_type)? {
+            AddressSpace::NearData => {
+                let address =
+                    self.select_operand(block, instruction.id, address, address_type, output)?;
+                let value =
+                    self.select_operand(block, instruction.id, value, value_type, output)?;
+                let value = self.materialize_register(value, output)?;
+                let address = self.memory_address_operand(address, output)?;
+                self.push_instruction(
+                    X86Opcode::Store,
+                    vec![address, virtual_operand(value, OperandRole::Use)],
+                    store_flags(volatile),
+                    output,
+                )
+            }
+            AddressSpace::FarData => {
+                // Keep the stored value live before the far-address scratch
+                // definitions, so allocation cannot coalesce it with them.
+                let value =
+                    self.select_operand(block, instruction.id, value, value_type, output)?;
+                let value = self.materialize_register(value, output)?;
+                let address =
+                    self.select_operand(block, instruction.id, address, address_type, output)?;
+                let offset = self.extract_far_address(address, output)?;
+                self.push_instruction(
+                    X86Opcode::Store,
+                    vec![
+                        virtual_operand(offset, OperandRole::Use),
+                        virtual_operand(value, OperandRole::Use),
+                        physical_operand(X86Register::Es, OperandRole::Use),
+                    ],
+                    store_flags(volatile),
+                    output,
+                )?;
+                self.restore_es(output)
+            }
+            address_space => {
+                return Err(SelectionError::UnsupportedAddressSpace {
+                    type_id: address_type,
+                    address_space,
+                });
+            }
+        }
     }
 
     fn select_call(
@@ -2160,6 +2304,64 @@ impl<'types> FunctionSelector<'types> {
         }
     }
 
+    /// Splits one far 16:16 dword immediately before its ES-relative use.
+    ///
+    /// The selection sequence owns the offset and selector scratch values; ES itself is
+    /// occurrence-local so allocation never has to preserve a far pointer in a
+    /// pinned register across unrelated instructions.
+    fn extract_far_address(
+        &mut self,
+        pointer: SelectedValue,
+        output: &mut Vec<MachineInstruction>,
+    ) -> Result<VirtualRegisterId, SelectionError> {
+        let pointer = self.materialize_register(pointer, output)?;
+        let offset = self.fresh_virtual_register(X86RegisterClass::Address16.machine_class())?;
+        let selector = self.fresh_virtual_register(X86RegisterClass::Word.machine_class())?;
+        self.push_instruction(
+            X86Opcode::Push,
+            vec![physical_operand(X86Register::Es, OperandRole::Use)],
+            InstructionFlags::NONE,
+            output,
+        )?;
+        self.push_instruction(
+            X86Opcode::LowWord,
+            vec![
+                virtual_operand(offset, OperandRole::Def),
+                virtual_operand(pointer, OperandRole::Use),
+            ],
+            InstructionFlags::NONE,
+            output,
+        )?;
+        self.push_instruction(
+            X86Opcode::HighWord,
+            vec![
+                virtual_operand(selector, OperandRole::Def),
+                virtual_operand(pointer, OperandRole::Use),
+            ],
+            InstructionFlags::NONE,
+            output,
+        )?;
+        self.push_instruction(
+            X86Opcode::Mov,
+            vec![
+                physical_operand(X86Register::Es, OperandRole::Def),
+                virtual_operand(selector, OperandRole::Use),
+            ],
+            InstructionFlags::NONE,
+            output,
+        )?;
+        Ok(offset)
+    }
+
+    fn restore_es(&mut self, output: &mut Vec<MachineInstruction>) -> Result<(), SelectionError> {
+        self.push_instruction(
+            X86Opcode::Pop,
+            vec![physical_operand(X86Register::Es, OperandRole::Def)],
+            InstructionFlags::NONE,
+            output,
+        )
+    }
+
     fn fresh_frame_object(
         &mut self,
         size: u32,
@@ -2214,6 +2416,13 @@ impl<'types> FunctionSelector<'types> {
 
     fn require_near_pointer(&self, type_id: TypeId) -> Result<(), SelectionError> {
         self.require_pointer_type(type_id, AddressSpace::NearData)
+    }
+
+    fn pointer_address_space(&self, type_id: TypeId) -> Result<AddressSpace, SelectionError> {
+        match self.type_kind(type_id)? {
+            TypeKind::Pointer { address_space } => Ok(*address_space),
+            _ => Err(SelectionError::UnsupportedType { type_id }),
+        }
     }
 
     fn require_1616_pointer(&self, type_id: TypeId) -> Result<(), SelectionError> {
@@ -2768,6 +2977,274 @@ mod tests {
         ));
     }
 
+    fn far_memory_module(address_space: AddressSpace, store: bool) -> Module {
+        let pointer = TypeId::new(7);
+        let segment = Value {
+            id: ValueId::new(0),
+            type_id: I16,
+        };
+        let offset = Value {
+            id: ValueId::new(1),
+            type_id: I16,
+        };
+        let address = Value {
+            id: ValueId::new(2),
+            type_id: pointer,
+        };
+        let mut instructions = vec![Instruction {
+            id: crate::ir::InstructionId::new(0),
+            results: vec![address.clone()],
+            kind: InstructionKind::ComposePointer {
+                segment: Operand::Value(segment.id),
+                offset: Operand::Value(offset.id),
+            },
+        }];
+        if store {
+            instructions.push(Instruction {
+                id: crate::ir::InstructionId::new(1),
+                results: Vec::new(),
+                kind: InstructionKind::Store {
+                    address: Operand::Value(address.id),
+                    value: Operand::Constant(TypedConstant {
+                        type_id: I16,
+                        value: Constant::Integer(29),
+                    }),
+                    alignment: 2,
+                    volatile: false,
+                },
+            });
+        } else {
+            instructions.push(Instruction {
+                id: crate::ir::InstructionId::new(1),
+                results: vec![Value {
+                    id: ValueId::new(3),
+                    type_id: I16,
+                }],
+                kind: InstructionKind::Load {
+                    address: Operand::Value(address.id),
+                    alignment: 2,
+                    volatile: false,
+                },
+            });
+        }
+        let function = function(
+            vec![Block {
+                id: BlockId::new(0),
+                instructions,
+                terminator: Terminator::Return(None),
+            }],
+            vec![segment, offset],
+        );
+        let mut types = basic_types();
+        types.push(Type {
+            id: pointer,
+            kind: TypeKind::Pointer { address_space },
+        });
+        module(types, vec![function])
+    }
+
+    fn virtual_register_id(operand: &MachineOperand) -> VirtualRegisterId {
+        match operand.kind {
+            MachineOperandKind::Register(MachineRegister::Virtual(register)) => register,
+            _ => panic!("operand is a virtual register"),
+        }
+    }
+
+    #[test]
+    fn far_memory_selects_word_load_through_occurrence_local_es() {
+        let input = far_memory_module(AddressSpace::FarData, false);
+        input.verify().expect("far load IR verifies");
+
+        let selected = select_module(&input).expect("far word load selects");
+        crate::target::x86::verify_machine(&selected).expect("far word load Machine IR verifies");
+        let function = &selected.functions[0];
+        let instructions = &function.blocks[0].instructions;
+        let extract = instructions
+            .iter()
+            .position(|instruction| instruction.opcode == X86Opcode::LowWord.machine_opcode())
+            .expect("far load extracts the offset");
+        let [low, pointer] = instructions[extract].operands.as_slice() else {
+            panic!("LowWord has destination and pointer operands");
+        };
+        let [high, high_pointer] = instructions[extract + 1].operands.as_slice() else {
+            panic!("HighWord has destination and pointer operands");
+        };
+        let [es, selector] = instructions[extract + 2].operands.as_slice() else {
+            panic!("Mov has ES and selector operands");
+        };
+        let [destination, offset, load_es] = instructions[extract + 3].operands.as_slice() else {
+            panic!("segmented Load has destination, offset, and ES operands");
+        };
+
+        assert_eq!(
+            instructions[extract - 1].opcode,
+            X86Opcode::Push.machine_opcode()
+        );
+        assert_eq!(
+            instructions[extract + 1].opcode,
+            X86Opcode::HighWord.machine_opcode()
+        );
+        assert_eq!(
+            instructions[extract + 2].opcode,
+            X86Opcode::Mov.machine_opcode()
+        );
+        assert_eq!(
+            instructions[extract + 3].opcode,
+            X86Opcode::Load.machine_opcode()
+        );
+        assert_eq!(
+            instructions[extract + 4].opcode,
+            X86Opcode::Pop.machine_opcode()
+        );
+        assert_eq!(low.role, OperandRole::Def);
+        assert_eq!(pointer.role, OperandRole::Use);
+        assert_eq!(high.role, OperandRole::Def);
+        assert_eq!(high_pointer.role, OperandRole::Use);
+        assert_eq!(
+            virtual_register_id(pointer),
+            virtual_register_id(high_pointer)
+        );
+        assert_eq!(virtual_register_id(low), virtual_register_id(offset));
+        assert_eq!(virtual_register_id(high), virtual_register_id(selector));
+        assert_eq!(destination.role, OperandRole::Def);
+        assert_eq!(offset.role, OperandRole::Use);
+        assert_eq!(es, &physical_operand(X86Register::Es, OperandRole::Def));
+        assert_eq!(
+            load_es,
+            &physical_operand(X86Register::Es, OperandRole::Use)
+        );
+        assert_eq!(
+            instructions[extract - 1].operands,
+            vec![physical_operand(X86Register::Es, OperandRole::Use)]
+        );
+        assert_eq!(
+            instructions[extract + 4].operands,
+            vec![physical_operand(X86Register::Es, OperandRole::Def)]
+        );
+        let class = |operand: &MachineOperand| {
+            let register = virtual_register_id(operand);
+            function
+                .virtual_registers
+                .iter()
+                .find(|candidate| candidate.id == register)
+                .expect("virtual register is declared")
+                .class
+        };
+        assert_eq!(class(low), X86RegisterClass::Address16.machine_class());
+        assert_eq!(class(high), X86RegisterClass::Word.machine_class());
+        assert_eq!(class(destination), X86RegisterClass::Word.machine_class());
+    }
+
+    #[test]
+    fn far_memory_selects_word_store_after_materializing_source() {
+        let input = far_memory_module(AddressSpace::FarData, true);
+        input.verify().expect("far store IR verifies");
+
+        let selected = select_module(&input).expect("far word store selects");
+        crate::target::x86::verify_machine(&selected).expect("far word store Machine IR verifies");
+        let function = &selected.functions[0];
+        let instructions = &function.blocks[0].instructions;
+        let extract = instructions
+            .iter()
+            .position(|instruction| instruction.opcode == X86Opcode::LowWord.machine_opcode())
+            .expect("far store extracts the offset");
+        let [low, pointer] = instructions[extract].operands.as_slice() else {
+            panic!("LowWord has destination and pointer operands");
+        };
+        let [high, high_pointer] = instructions[extract + 1].operands.as_slice() else {
+            panic!("HighWord has destination and pointer operands");
+        };
+        let [es, selector] = instructions[extract + 2].operands.as_slice() else {
+            panic!("Mov has ES and selector operands");
+        };
+        let [offset, source, store_es] = instructions[extract + 3].operands.as_slice() else {
+            panic!("segmented Store has offset, source, and ES operands");
+        };
+        let [materialized, _constant] = instructions[extract - 2].operands.as_slice() else {
+            panic!("stored constant materializes into one register");
+        };
+
+        assert_eq!(
+            instructions[extract - 2].opcode,
+            X86Opcode::Mov.machine_opcode()
+        );
+        assert_eq!(
+            instructions[extract - 1].opcode,
+            X86Opcode::Push.machine_opcode()
+        );
+        assert_eq!(
+            instructions[extract + 1].opcode,
+            X86Opcode::HighWord.machine_opcode()
+        );
+        assert_eq!(
+            instructions[extract + 2].opcode,
+            X86Opcode::Mov.machine_opcode()
+        );
+        assert_eq!(
+            instructions[extract + 3].opcode,
+            X86Opcode::Store.machine_opcode()
+        );
+        assert_eq!(
+            instructions[extract + 4].opcode,
+            X86Opcode::Pop.machine_opcode()
+        );
+        assert_eq!(low.role, OperandRole::Def);
+        assert_eq!(pointer.role, OperandRole::Use);
+        assert_eq!(high.role, OperandRole::Def);
+        assert_eq!(high_pointer.role, OperandRole::Use);
+        assert_eq!(
+            virtual_register_id(pointer),
+            virtual_register_id(high_pointer)
+        );
+        assert_eq!(virtual_register_id(low), virtual_register_id(offset));
+        assert_eq!(virtual_register_id(high), virtual_register_id(selector));
+        assert_eq!(
+            virtual_register_id(materialized),
+            virtual_register_id(source)
+        );
+        assert_eq!(offset.role, OperandRole::Use);
+        assert_eq!(source.role, OperandRole::Use);
+        assert_eq!(es, &physical_operand(X86Register::Es, OperandRole::Def));
+        assert_eq!(
+            store_es,
+            &physical_operand(X86Register::Es, OperandRole::Use)
+        );
+        assert_eq!(
+            instructions[extract - 1].operands,
+            vec![physical_operand(X86Register::Es, OperandRole::Use)]
+        );
+        assert_eq!(
+            instructions[extract + 4].operands,
+            vec![physical_operand(X86Register::Es, OperandRole::Def)]
+        );
+        let class = |operand: &MachineOperand| {
+            let register = virtual_register_id(operand);
+            function
+                .virtual_registers
+                .iter()
+                .find(|candidate| candidate.id == register)
+                .expect("virtual register is declared")
+                .class
+        };
+        assert_eq!(class(low), X86RegisterClass::Address16.machine_class());
+        assert_eq!(class(high), X86RegisterClass::Word.machine_class());
+        assert_eq!(class(source), X86RegisterClass::Word.machine_class());
+    }
+
+    #[test]
+    fn far_memory_refuses_huge_data() {
+        let input = far_memory_module(AddressSpace::HugeData, false);
+        input.verify().expect("huge load IR verifies");
+
+        assert!(matches!(
+            select_module(&input),
+            Err(SelectionError::UnsupportedAddressSpace {
+                type_id,
+                address_space: AddressSpace::HugeData,
+            }) if type_id == TypeId::new(7)
+        ));
+    }
+
     #[test]
     fn selects_constant_byte_offset_get_element_pointer() {
         let near = TypeId::new(7);
@@ -2926,9 +3403,128 @@ mod tests {
     }
 
     #[test]
+    fn selects_far_byte_offset_without_changing_the_selector() {
+        let far = TypeId::new(7);
+        let segment = Value {
+            id: ValueId::new(0),
+            type_id: I16,
+        };
+        let offset = Value {
+            id: ValueId::new(1),
+            type_id: I16,
+        };
+        let base = Value {
+            id: ValueId::new(2),
+            type_id: far,
+        };
+        let result = Value {
+            id: ValueId::new(3),
+            type_id: far,
+        };
+        let function = function(
+            vec![Block {
+                id: BlockId::new(0),
+                instructions: vec![
+                    Instruction {
+                        id: crate::ir::InstructionId::new(0),
+                        results: vec![base.clone()],
+                        kind: InstructionKind::ComposePointer {
+                            segment: Operand::Value(segment.id),
+                            offset: Operand::Value(offset.id),
+                        },
+                    },
+                    Instruction {
+                        id: crate::ir::InstructionId::new(1),
+                        results: vec![result],
+                        kind: InstructionKind::GetElementPointer {
+                            base: Operand::Value(base.id),
+                            indices: vec![Operand::Constant(TypedConstant {
+                                type_id: I16,
+                                value: Constant::Integer(6),
+                            })],
+                        },
+                    },
+                ],
+                terminator: Terminator::Return(None),
+            }],
+            vec![segment, offset],
+        );
+        let mut types = basic_types();
+        types.push(Type {
+            id: far,
+            kind: TypeKind::Pointer {
+                address_space: AddressSpace::FarData,
+            },
+        });
+        let input = module(types, vec![function]);
+        input.verify().expect("far byte offset IR verifies");
+
+        let selected = select_module(&input).expect("far byte offset selects");
+        selected.verify().expect("selected Machine IR verifies");
+        let function = &selected.functions[0];
+        let instructions = &function.blocks[0].instructions;
+        assert_eq!(
+            instructions[2..]
+                .iter()
+                .map(|instruction| instruction.opcode)
+                .collect::<Vec<_>>(),
+            vec![
+                X86Opcode::MergeWords.machine_opcode(),
+                X86Opcode::LowWord.machine_opcode(),
+                X86Opcode::Add.machine_opcode(),
+                X86Opcode::HighWord.machine_opcode(),
+                X86Opcode::MergeWords.machine_opcode(),
+                X86Opcode::ReturnNear.machine_opcode(),
+            ]
+        );
+        let virtual_register = |operand: &MachineOperand| match operand.kind {
+            MachineOperandKind::Register(MachineRegister::Virtual(register)) => register,
+            _ => panic!("far byte offset uses virtual registers"),
+        };
+        let [low, base_low] = instructions[3].operands.as_slice() else {
+            panic!("LowWord has destination and base");
+        };
+        let [added, immediate] = instructions[4].operands.as_slice() else {
+            panic!("Add has destination and offset");
+        };
+        let [high, base_high] = instructions[5].operands.as_slice() else {
+            panic!("HighWord has destination and base");
+        };
+        let [merged, merged_low, merged_high] = instructions[6].operands.as_slice() else {
+            panic!("MergeWords has destination, low, and high");
+        };
+        let low = virtual_register(low);
+        let base_low = virtual_register(base_low);
+        let added = virtual_register(added);
+        let high = virtual_register(high);
+        let base_high = virtual_register(base_high);
+        let merged = virtual_register(merged);
+        assert_eq!(base_low, base_high, "both halves come from the same packed pointer");
+        assert_eq!(low, added, "only the low word is advanced");
+        assert_eq!(virtual_register(merged_low), low);
+        assert_eq!(virtual_register(merged_high), high, "high word is unchanged");
+        assert_eq!(immediate, &immediate_operand(6));
+        assert_eq!(instructions[3].operands[0].role, OperandRole::Def);
+        assert_eq!(instructions[4].operands[0].role, OperandRole::UseDef);
+        assert_eq!(instructions[5].operands[0].role, OperandRole::Def);
+        assert_eq!(instructions[6].operands[0].role, OperandRole::Def);
+        let class = |register| {
+            function
+                .virtual_registers
+                .iter()
+                .find(|candidate| candidate.id == register)
+                .expect("selected register is declared")
+                .class
+        };
+        assert_eq!(class(low), X86RegisterClass::Word.machine_class());
+        assert_eq!(class(high), X86RegisterClass::Word.machine_class());
+        assert_eq!(class(merged), X86RegisterClass::Dword.machine_class());
+    }
+
+    #[test]
     fn refuses_malformed_get_element_pointer() {
         let near = TypeId::new(7);
-        let far = TypeId::new(8);
+        let huge = TypeId::new(8);
         let result = Value {
             id: ValueId::new(0),
             type_id: near,
@@ -2960,9 +3556,9 @@ mod tests {
         types.extend([
             near_pointer_type(near),
             Type {
-                id: far,
+                id: huge,
                 kind: TypeKind::Pointer {
-                    address_space: AddressSpace::FarData,
+                    address_space: AddressSpace::HugeData,
                 },
             },
         ]);
@@ -2990,11 +3586,11 @@ mod tests {
             ));
         }
 
-        let far_result = Value {
+        let huge_result = Value {
             id: ValueId::new(0),
-            type_id: far,
+            type_id: huge,
         };
-        let far_gep = Function {
+        let huge_gep = Function {
             id: FunctionId::new(4),
             name: "selected".to_owned(),
             signature: signature(VOID, Vec::new()),
@@ -3005,10 +3601,10 @@ mod tests {
                 id: BlockId::new(0),
                 instructions: vec![Instruction {
                     id: crate::ir::InstructionId::new(0),
-                    results: vec![far_result],
+                    results: vec![huge_result],
                     kind: InstructionKind::GetElementPointer {
                         base: Operand::Constant(TypedConstant {
-                            type_id: far,
+                            type_id: huge,
                             value: Constant::Null,
                         }),
                         indices: vec![Operand::Constant(TypedConstant {
@@ -3021,8 +3617,11 @@ mod tests {
             }],
         };
         assert!(matches!(
-            select_module(&module(types, vec![far_gep])),
-            Err(SelectionError::UnsupportedType { type_id }) if type_id == far
+            select_module(&module(types, vec![huge_gep])),
+            Err(SelectionError::UnsupportedAddressSpace {
+                type_id,
+                address_space: AddressSpace::HugeData,
+            }) if type_id == huge
         ));
     }
 
