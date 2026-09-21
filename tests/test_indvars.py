@@ -8,6 +8,145 @@ import corpus
 from qbopt import wholeseg
 from qbopt.analysis import loops
 from qbopt.model import ir, mir
+from qbopt.objectfile.module import Space
+
+
+def _symbolic_control_body(candidate_start: int) -> mir.MirBody:
+    """One dynamic counted loop with a second affine recurrence.
+
+    The second value is an address-like offset: it is eligible to replace
+    control only when its update reaches zero on the final trip.
+    """
+    bound = mir.Value(1, 0, variable=1, version=1)
+    control_seed = mir.Value(2, 0, variable=2, version=1)
+    candidate_seed = mir.Value(3, 0, variable=3, version=1)
+    control = mir.Value(4, 1, variable=2, version=2)
+    candidate = mir.Value(5, 1, variable=3, version=2)
+    flags = mir.Value(6, 1, flags=True, variable=4, version=1)
+    control_next = mir.Value(7, 2, variable=2, version=3)
+    candidate_next = mir.Value(8, 2, variable=3, version=3)
+    offset = mir.Value(9, 2, variable=5, version=1)
+    source = mir.MemRef(None, 2, space=Space.FRAME)
+
+    def copy(at: int, result: mir.Value, number: int) -> mir.Op:
+        return mir.Op(
+            at,
+            ir.Operation.NOTHING,
+            "",
+            (result,),
+            (),
+            kind=mir.Kind.COPY,
+            args=(mir.Const(number, 2),),
+            results=(mir.Held(result, 2),),
+        )
+
+    def add(at: int, result: mir.Value, left: mir.Value, right: int) -> mir.Op:
+        return mir.Op(
+            at,
+            ir.Operation.NOTHING,
+            "",
+            (result,),
+            (left,),
+            kind=mir.Kind.ADD,
+            args=(mir.Held(left, 2), mir.Const(right, 2)),
+            results=(mir.Held(result, 2),),
+        )
+
+    load = mir.Op(
+        0,
+        ir.Operation.MOVE,
+        "",
+        (bound,),
+        (),
+        loads=(source,),
+        kind=mir.Kind.LOAD,
+        args=(mir.Cell(source),),
+        results=(mir.Held(bound, 2),),
+    )
+    compare = mir.Op(
+        1,
+        ir.Operation.COMPARE,
+        "cmp",
+        (flags,),
+        (control, bound),
+        kind=mir.Kind.SUB,
+        args=(mir.Held(control, 2), mir.Held(bound, 2)),
+    )
+    branch = mir.Op(
+        1,
+        ir.Operation.BRANCH,
+        "",
+        (),
+        (flags,),
+        kind=mir.Kind.BRANCH,
+        test=mir.Kind.ABOVE_EQ,
+        target=3,
+    )
+    jump = mir.Op(2, ir.Operation.JUMP, "", (), (), kind=mir.Kind.JUMP, target=1)
+    returned = mir.Op(3, ir.Operation.RETURN, "", (), (), kind=mir.Kind.RETURN)
+    return mir.MirBody(
+        0,
+        (
+            mir.MirBlock(
+                0,
+                (),
+                (load, copy(0, control_seed, 0), copy(0, candidate_seed, candidate_start)),
+                (1,),
+            ),
+            mir.MirBlock(
+                1,
+                (
+                    mir.Phi(control, {0: control_seed, 2: control_next}),
+                    mir.Phi(candidate, {0: candidate_seed, 2: candidate_next}),
+                ),
+                (compare, branch),
+                (2, 3),
+            ),
+            mir.MirBlock(
+                2,
+                (),
+                (
+                    add(2, offset, candidate, 100),
+                    add(2, control_next, control, 1),
+                    add(2, candidate_next, candidate, 1),
+                    jump,
+                ),
+                (1,),
+            ),
+            mir.MirBlock(3, (), (returned,), ()),
+        ),
+        integer_ranges={bound: mir.IntegerRange(0, 7, 2)},
+    )
+
+
+def test_symbolic_control_refuses_a_nonzero_terminal_recurrence() -> None:
+    """A recurrence seeded at 5 would make the replacement ``jne`` run until wraparound."""
+    from qbopt.analysis import induction
+    from qbopt.optimize import indvars
+
+    body = _symbolic_control_body(5)
+    (loop,) = loops.loops(body.blocks, body.entry)
+    (proof,) = induction.counted(body, loop)
+    candidate = next(one for one in induction.basics(body, loop).values() if one != proof.counter)
+
+    assert induction.zero_terminating_control(body, loop, proof, candidate) is None
+    assert indvars.symbolically_zeroed(body) is body
+
+
+def test_symbolic_control_proves_a_zero_terminal_recurrence() -> None:
+    """The same bounded recurrence is usable when its final update is zero."""
+    from qbopt.analysis import induction
+
+    body = _symbolic_control_body(0)
+    (loop,) = loops.loops(body.blocks, body.entry)
+    (proof,) = induction.counted(body, loop)
+    candidate = next(one for one in induction.basics(body, loop).values() if one != proof.counter)
+
+    got = induction.zero_terminating_control(body, loop, proof, candidate)
+
+    assert got is not None
+    assert got.replacement.counted is proof
+    assert (got.candidate, got.step, got.maximum, got.period) == (candidate, 1, 7, 65536)
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O"])

@@ -150,6 +150,23 @@ class ControlReplacement:
     copies: frozenset[int]
 
 
+@dataclass(frozen=True, slots=True)
+class ZeroTerminatingControl:
+    """Proof that an affine recurrence's update flags end counted control.
+
+    The replacement recurrence starts at ``-trips * step`` and is tested for
+    zero after each update.  Its original value must therefore be zero, and
+    the complete dynamic trip domain must not reach that recurrence's modular
+    period before the intended final update.
+    """
+
+    replacement: ControlReplacement
+    candidate: Affine
+    step: int
+    maximum: int
+    period: int
+
+
 def canonical(body: mir.MirBody, loop: loopy.Loop) -> LoopShape | None:
     """The one normalized loop shape consumed by induction transforms."""
     blocks = {block.at: block for block in body.blocks}
@@ -330,6 +347,40 @@ def control_replacement(
     ):
         return None
     return ControlReplacement(proof, stepping, update, aliases, copies)
+
+
+def zero_terminating_control(
+    body: mir.MirBody,
+    loop: loopy.Loop,
+    proof: CountedLoop,
+    candidate: Affine,
+    facts: dict | None = None,
+) -> ZeroTerminatingControl | None:
+    """Prove that ``candidate`` can supply a counted loop's terminating flags.
+
+    Replacing ``0 .. bound`` control with an existing affine recurrence seeds
+    that recurrence at ``start - bound * step``.  The final update is
+    therefore ``start``.  A branch on zero is equivalent only when that
+    original start is exactly zero; bounded period safety also excludes an
+    earlier modular zero.  This proof belongs here because it is independent
+    of the transform's choice of which address expressions to rebase.
+    """
+    replacement = control_replacement(body, loop, proof)
+    if replacement is None or proof.maximum is None or candidate == proof.counter:
+        return None
+    width = proof.counter.start.width
+    if candidate.start.width != width or candidate.step.width != width or proof.maximum < 0:
+        return None
+    facts = consts.known(body) if facts is None else facts
+    start = _signed(candidate.start, facts, width)
+    step = _signed(candidate.step, facts, width)
+    if start != 0 or step in (None, 0):
+        return None
+    assert step is not None
+    period = AffineMap(step, 0, width).period
+    if proof.maximum > period:
+        return None
+    return ZeroTerminatingControl(replacement, candidate, step, proof.maximum, period)
 
 
 def test_only(op: mir.Op) -> bool:
