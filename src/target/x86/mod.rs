@@ -19,9 +19,15 @@ mod registers;
 mod segmented_memory;
 mod selection;
 mod verify;
+mod word_merge;
 
-pub use allocation::{X86AllocationError, allocate_registers, split_fixed_register_occurrences};
-pub use basic_abi::{BasicAbiError, ExpandedBasicFunction, expand_basic_runtime};
+pub use allocation::{
+    X86AllocationError, X86AllocationResult, allocate_registers, allocate_registers_with_spills,
+    split_fixed_register_occurrences,
+};
+pub use basic_abi::{
+    BasicAbiError, ExpandedBasicFunction, expand_basic_runtime, refresh_basic_runtime_frame,
+};
 pub use basic_abi_expand::{BasicAbiExpansionError, expand_allocated_basic_abi};
 pub use c_abi::{
     CAbiExpansionError, CFramePlan, CFramePlanError, expand_allocated_c_abi, plan_c_frame,
@@ -47,3 +53,4 @@ pub use registers::{X86Register, X86RegisterClass};
 pub use segmented_memory::{SegmentedMemoryExpansionError, expand_allocated_segmented_memory};
 pub use selection::{FunctionProperty, SelectionError, select_module};
 pub use verify::verify_machine;
+pub use word_merge::{expand_allocated_word_merges, WordMergeExpansionError};

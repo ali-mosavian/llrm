@@ -1,10 +1,11 @@
-//! Final lowering of allocated Microsoft BASIC LONG ABI pseudos.
+//! Final lowering of allocated Microsoft BASIC ABI pseudos.
 //!
 //! Selection keeps a LONG as one dword virtual value and exposes the measured
 //! `DX:AX` calling convention with word pseudos.  Those pseudos must remain
 //! visible until allocation: their fixed uses, definitions, and artificial
 //! far-call clobbers are allocation facts, not encoded operands.  This module
-//! is the one target-owned boundary that consumes them afterwards.
+//! consumes the ABI-specific word extraction and call/return facts afterwards.
+//! General word composition belongs to `word_merge`.
 //!
 //! The expansion is deliberately mechanical and flag-preserving.  In
 //! particular, extracting a high word uses a balanced push/pop sequence
@@ -216,32 +217,6 @@ pub fn expand_allocated_basic_abi(
         for original in std::mem::take(&mut block.instructions) {
             let opcode = X86Opcode::from_machine_opcode(original.opcode);
             match opcode {
-                Some(X86Opcode::MergeWords) => {
-                    let [destination, low, high] = original.operands.as_slice() else {
-                        unreachable!("preflight validated mergewords arity");
-                    };
-                    let destination = register(destination, block.id, &original, 0)?;
-                    let low = register(low, block.id, &original, 1)?;
-                    let high = register(high, block.id, &original, 2)?;
-                    instructions.push(instruction(
-                        original.id,
-                        X86Opcode::Push,
-                        vec![physical_operand(high, OperandRole::Use)],
-                        InstructionFlags::NONE,
-                    ));
-                    instructions.push(instruction(
-                        next_id(&mut fresh_ids),
-                        X86Opcode::Push,
-                        vec![physical_operand(low, OperandRole::Use)],
-                        InstructionFlags::NONE,
-                    ));
-                    instructions.push(instruction(
-                        next_id(&mut fresh_ids),
-                        X86Opcode::Pop,
-                        vec![physical_operand(destination, OperandRole::Def)],
-                        InstructionFlags::NONE,
-                    ));
-                }
                 Some(X86Opcode::LowWord) => {
                     let [destination, source] = original.operands.as_slice() else {
                         unreachable!("preflight validated lowword arity");
@@ -328,12 +303,6 @@ fn preflight(function: &MachineFunction) -> Result<usize, BasicAbiExpansionError
         for instruction in &block.instructions {
             validate_allocated_operands(block.id, instruction)?;
             match X86Opcode::from_machine_opcode(instruction.opcode) {
-                Some(X86Opcode::MergeWords) => {
-                    validate_merge(block.id, instruction)?;
-                    extra = extra
-                        .checked_add(2)
-                        .ok_or(BasicAbiExpansionError::InstructionIdExhausted)?;
-                }
                 Some(X86Opcode::LowWord) => validate_low(block.id, instruction)?,
                 Some(X86Opcode::HighWord) => {
                     validate_high(block.id, instruction)?;
@@ -394,44 +363,6 @@ fn validate_allocated_operands(
         }
     }
     Ok(())
-}
-
-fn validate_merge(
-    block: MachineBlockId,
-    instruction: &MachineInstruction,
-) -> Result<(), BasicAbiExpansionError> {
-    let [destination, low, high] = instruction.operands.as_slice() else {
-        return malformed(
-            block,
-            instruction,
-            "expected [dword def, word low use, word high use]",
-        );
-    };
-    require_flags_none(block, instruction)?;
-    require_register(
-        block,
-        instruction,
-        0,
-        destination,
-        OperandRole::Def,
-        X86RegisterClass::Dword,
-    )?;
-    require_register(
-        block,
-        instruction,
-        1,
-        low,
-        OperandRole::Use,
-        X86RegisterClass::Word,
-    )?;
-    require_register(
-        block,
-        instruction,
-        2,
-        high,
-        OperandRole::Use,
-        X86RegisterClass::Word,
-    )
 }
 
 fn validate_low(
@@ -797,7 +728,7 @@ mod tests {
     use crate::codegen::machine::{
         MachineBlock, MachineCallingConvention, MachineFunctionId, MachineLinkage, MachineSignature,
     };
-    use crate::target::x86::{encode, lower_instruction};
+    use crate::target::x86::{encode, expand_allocated_word_merges, lower_instruction};
 
     fn function(instructions: Vec<MachineInstruction>) -> MachineFunction {
         MachineFunction {
@@ -872,86 +803,6 @@ mod tests {
                 encode(&lowered).expect("expanded instruction encodes")
             })
             .collect()
-    }
-
-    #[test]
-    fn merges_dx_ax_in_high_low_stack_order_with_fresh_ids() {
-        let input = function(vec![pseudo(
-            7,
-            X86Opcode::MergeWords,
-            vec![
-                register_operand(X86Register::Eax, OperandRole::Def),
-                register_operand(X86Register::Ax, OperandRole::Use),
-                register_operand(X86Register::Dx, OperandRole::Use),
-            ],
-        )]);
-
-        let expanded = expand_allocated_basic_abi(&input).unwrap();
-        assert_eq!(
-            opcodes(&expanded),
-            vec![X86Opcode::Push, X86Opcode::Push, X86Opcode::Pop]
-        );
-        let instructions = &expanded.blocks[0].instructions;
-        assert_eq!(
-            instructions
-                .iter()
-                .map(|one| one.id.get())
-                .collect::<Vec<_>>(),
-            vec![7, 8, 9]
-        );
-        assert_eq!(
-            register(
-                &instructions[0].operands[0],
-                MachineBlockId::new(0),
-                &instructions[0],
-                0
-            )
-            .unwrap(),
-            X86Register::Dx
-        );
-        assert_eq!(
-            register(
-                &instructions[1].operands[0],
-                MachineBlockId::new(0),
-                &instructions[1],
-                0
-            )
-            .unwrap(),
-            X86Register::Ax
-        );
-        assert_eq!(
-            register(
-                &instructions[2].operands[0],
-                MachineBlockId::new(0),
-                &instructions[2],
-                0
-            )
-            .unwrap(),
-            X86Register::Eax
-        );
-        assert_eq!(encoded_bytes(&expanded), vec![0x52, 0x50, 0x66, 0x58]);
-    }
-
-    #[test]
-    fn merge_allows_physical_aliases_after_both_words_are_pushed() {
-        let input = function(vec![pseudo(
-            0,
-            X86Opcode::MergeWords,
-            vec![
-                register_operand(X86Register::Edx, OperandRole::Def),
-                register_operand(X86Register::Dx, OperandRole::Use),
-                register_operand(X86Register::Ax, OperandRole::Use),
-            ],
-        )]);
-        let expanded = expand_allocated_basic_abi(&input).unwrap();
-        assert_eq!(
-            opcodes(&expanded),
-            vec![X86Opcode::Push, X86Opcode::Push, X86Opcode::Pop]
-        );
-        assert_eq!(
-            expanded.blocks[0].instructions[2].operands[0],
-            register_operand(X86Register::Edx, OperandRole::Def)
-        );
     }
 
     #[test]
@@ -1062,7 +913,7 @@ mod tests {
     }
 
     #[test]
-    fn leaves_input_unchanged_and_uses_stable_ids_across_multiple_pseudos() {
+    fn applies_the_generic_word_merge_phase_before_basic_word_extraction() {
         let input = function(vec![
             pseudo(
                 2,
@@ -1083,8 +934,10 @@ mod tests {
             ),
         ]);
         let baseline = input.clone();
-        let first = expand_allocated_basic_abi(&input).unwrap();
-        let second = expand_allocated_basic_abi(&input).unwrap();
+        let first =
+            expand_allocated_basic_abi(&expand_allocated_word_merges(&input).unwrap()).unwrap();
+        let second =
+            expand_allocated_basic_abi(&expand_allocated_word_merges(&input).unwrap()).unwrap();
         assert_eq!(input, baseline);
         assert_eq!(first, second);
         assert_eq!(
@@ -1237,19 +1090,5 @@ mod tests {
             expand_allocated_basic_abi(&aliasing_definitions),
             Err(BasicAbiExpansionError::FarCallAliasingDefinitions { .. })
         ));
-
-        let exhausted = function(vec![pseudo(
-            u32::MAX,
-            X86Opcode::MergeWords,
-            vec![
-                register_operand(X86Register::Eax, OperandRole::Def),
-                register_operand(X86Register::Ax, OperandRole::Use),
-                register_operand(X86Register::Dx, OperandRole::Use),
-            ],
-        )]);
-        assert_eq!(
-            expand_allocated_basic_abi(&exhausted),
-            Err(BasicAbiExpansionError::InstructionIdExhausted)
-        );
     }
 }
