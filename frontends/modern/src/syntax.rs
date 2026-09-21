@@ -45,7 +45,7 @@ pub enum FixedStorage {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TypeAnnotation {
-    Scalar(TypeName),
+    Value(TypeSpec),
     Array { element: TypeSpec, length: u32 },
 }
 
@@ -110,6 +110,7 @@ pub enum Statement {
     },
     Assign {
         target: AssignTarget,
+        operation: Option<BinaryOp>,
         value: Expr,
         span: Span,
     },

@@ -10,14 +10,15 @@ This crate implements the first source-language slice:
 - named signed fixed-point types backed by `i16` or `i32` storage;
 - typed parameters and return values;
 - `let` and `var` bindings;
-- assignment, calls, `return`, `if`/`else`, `while`, and typed half-open
-  integer ranges;
+- assignment, built-in numeric `+=`, `-=`, `*=`, `/=`, and `%=` operators,
+  calls, `return`, `if`/`else`, `while`, and typed half-open integer ranges;
 - `break` and `continue`;
 - strictly typed integer and floating arithmetic and comparisons;
 - fixed one-dimensional arrays, written `[T; length]`, with literals and
   indexed loads and stores;
-- source-ordered, nested `struct` layouts and literals in fixed arrays, plus
-  allocation-free array iteration through explicit references; and
+- source-ordered, nested `struct` layouts, local struct values, struct literals
+  and copies, plus allocation-free array iteration through explicit references;
+  and
 - byte strings, allocation-free f-strings, and `print`.
 
 `char` is one target-code-page byte; `\xNN` spells any code unit without
@@ -68,6 +69,21 @@ Fixed arrays are contiguous local objects with a zero lower bound. Struct
 fields stay in source order, with at most two-byte alignment for the 16-bit
 target. Indexing and field selection are structural HIR and lower to ordinary
 address arithmetic; no array, field-access, or iterator helper is emitted.
+Structs may be bound with an explicit type or inferred from a literal or copy:
+
+```text
+var acc: vec2i = vec2i { x: 0, y: 0 }
+let delta = vec2i { x: other.x - current.x, y: other.y - current.y }
+acc.x += delta.x
+```
+
+Whole-struct assignment is a structural field copy. All source leaves are
+evaluated and loaded before any destination leaf is stored, so overlapping
+copies and literals which read their destination have value semantics. This
+does not introduce a general aggregate runtime operation. Compound assignment
+is defined only for the existing numeric operators; it resolves its destination
+once, applies the corresponding built-in operation, and stores the result.
+There is no operator overloading.
 `for item in &array` gives `item` an immutable scoped view of the element;
 `for item in &mut array` requests a mutable view and is rejected for an
 immutable array. By-value array iteration is reserved until aggregate move
@@ -85,12 +101,12 @@ an array of six `body` structs—is
 the current end-to-end feature gate for structs, arrays, nested loops,
 strings, f-strings, and printing.
 
-In the implemented slice, primitive expressions are copied values; `let`
-creates an immutable place and `var` a mutable place. Whole-aggregate
-assignment is deliberately absent until move semantics are specified. Array
-iteration creates explicit, non-owning views confined to the loop body.
-General first-class references, owning moves, and explicit cloning remain
-future work.
+In the implemented slice, primitive and struct expressions have value
+semantics; `let` creates an immutable place and `var` a mutable place. Struct
+copies are explicit in HIR as leaf loads and stores, while arrays remain
+non-copyable aggregates. Array iteration creates explicit, non-owning views
+confined to the loop body. General first-class references, owning moves, and
+explicit cloning remain future work.
 
 Canonical language code uses lowercase `snake_case` for functions, variables,
 parameters, fields, and user-defined types. This is the language and standard

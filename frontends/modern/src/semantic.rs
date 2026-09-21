@@ -355,6 +355,22 @@ struct Binding {
     storage: Storage,
 }
 
+#[derive(Clone, Debug)]
+struct StructView {
+    struct_id: u32,
+    place: u32,
+    indices: Vec<hir::Operand>,
+    offset: u32,
+    mutable: bool,
+    owner: String,
+}
+
+#[derive(Clone, Debug)]
+enum AssignmentPlace {
+    Scalar(hir::Operand, TypeName),
+    Struct(StructView),
+}
+
 #[derive(Clone, Copy, Debug)]
 enum BindingType {
     Scalar(TypeName),
@@ -699,9 +715,48 @@ impl<'a> FunctionCompiler<'a> {
                         "array literal requires a fixed-array annotation",
                     ));
                 }
-                let expected = match annotation {
-                    Some(TypeAnnotation::Scalar(type_name)) => Some(*type_name),
+                let annotated = match annotation {
+                    Some(TypeAnnotation::Value(spec)) => {
+                        Some(self.types.resolve_element(spec, *span)?)
+                    }
                     Some(TypeAnnotation::Array { .. }) => unreachable!(),
+                    None => None,
+                };
+                let struct_id = match annotated {
+                    Some(ElementType::Struct(struct_id)) => Some(struct_id),
+                    Some(ElementType::Scalar(_)) => None,
+                    None => self.struct_expression_type(value, *span)?,
+                };
+                if let Some(struct_id) = struct_id {
+                    let type_id = self
+                        .types
+                        .structure(struct_id)
+                        .expect("resolved struct type")
+                        .id;
+                    let extent = self.types.width(type_id);
+                    let place = self.local_place(name, type_id, extent, *mutable);
+                    let destination = StructView {
+                        struct_id,
+                        place,
+                        indices: Vec::new(),
+                        offset: 0,
+                        mutable: *mutable,
+                        owner: name.clone(),
+                    };
+                    self.store_struct_expression(&destination, value)?;
+                    self.scopes.last_mut().expect("scope").insert(
+                        name.clone(),
+                        Binding {
+                            type_: BindingType::Struct(struct_id),
+                            mutable: *mutable,
+                            storage: Storage::Place(place),
+                        },
+                    );
+                    return Ok(());
+                }
+                let expected = match annotated {
+                    Some(ElementType::Scalar(type_name)) => Some(type_name),
+                    Some(ElementType::Struct(_)) => unreachable!(),
                     None => None,
                 };
                 let value = self.expression(value, expected)?;
@@ -727,18 +782,45 @@ impl<'a> FunctionCompiler<'a> {
             }
             Statement::Assign {
                 target,
+                operation,
                 value,
                 span,
-            } => {
-                let (destination, element) = self.assignment_target(target, *span)?;
-                let value = self.expression(value, Some(element))?;
-                self.emit(
-                    "store",
-                    Vec::new(),
-                    vec![destination, required(value, *span)?],
-                    None,
-                );
-            }
+            } => match self.assignment_target(target, *span)? {
+                AssignmentPlace::Scalar(destination, element) => {
+                    let value = if let Some(operation) = operation {
+                        let current = self.value(element);
+                        self.emit("load", vec![current], vec![destination.clone()], None);
+                        let right = self.expression(value, Some(element))?;
+                        self.binary_operands(
+                            *operation,
+                            TypedOperand {
+                                operand: Some(hir::Operand::Value(current)),
+                                type_name: element,
+                            },
+                            right,
+                            Some(element),
+                            *span,
+                        )?
+                    } else {
+                        self.expression(value, Some(element))?
+                    };
+                    self.emit(
+                        "store",
+                        Vec::new(),
+                        vec![destination, required(value, *span)?],
+                        None,
+                    );
+                }
+                AssignmentPlace::Struct(destination) => {
+                    if operation.is_some() {
+                        return Err(Diagnostic::new(
+                            *span,
+                            "compound assignment requires a numeric scalar",
+                        ));
+                    }
+                    self.store_struct_expression(&destination, value)?;
+                }
+            },
             Statement::Expr(expression) => {
                 if !matches!(expression, Expr::Call { .. }) {
                     return Err(Diagnostic::new(
@@ -1170,27 +1252,57 @@ impl<'a> FunctionCompiler<'a> {
         struct_id: u32,
         expression: &Expr,
     ) -> Result<(), Diagnostic> {
-        self.initialize_struct_at(place, index, struct_id, 0, expression)
+        self.store_struct_expression(
+            &StructView {
+                struct_id,
+                place,
+                indices: vec![index],
+                offset: 0,
+                mutable: true,
+                owner: "array initializer".into(),
+            },
+            expression,
+        )
     }
 
-    fn initialize_struct_at(
+    fn store_struct_expression(
         &mut self,
-        place: u32,
-        index: hir::Operand,
-        struct_id: u32,
-        base_offset: u32,
+        destination: &StructView,
         expression: &Expr,
+    ) -> Result<(), Diagnostic> {
+        let mut stores = Vec::new();
+        self.prepare_struct_stores(destination, expression, &mut stores)?;
+        for (place, value) in stores {
+            self.emit("store", Vec::new(), vec![place, value], None);
+        }
+        Ok(())
+    }
+
+    fn prepare_struct_stores(
+        &mut self,
+        destination: &StructView,
+        expression: &Expr,
+        stores: &mut Vec<(hir::Operand, hir::Operand)>,
     ) -> Result<(), Diagnostic> {
         let layout = self
             .types
-            .structure(struct_id)
+            .structure(destination.struct_id)
             .cloned()
             .expect("resolved struct type");
         let Expr::StructLiteral { name, fields, span } = expression else {
-            return Err(Diagnostic::new(
-                expression.span(),
-                format!("array element requires a {} literal", layout.name),
-            ));
+            let source = self.struct_view(expression, expression.span())?;
+            if source.struct_id != destination.struct_id {
+                let found = &self
+                    .types
+                    .structure(source.struct_id)
+                    .expect("resolved struct type")
+                    .name;
+                return Err(Diagnostic::new(
+                    expression.span(),
+                    format!("expected {}, found {found}", layout.name),
+                ));
+            }
+            return self.prepare_struct_copy(destination, &source, stores);
         };
         if name != &layout.name {
             return Err(Diagnostic::new(
@@ -1215,28 +1327,22 @@ impl<'a> FunctionCompiler<'a> {
             match field.type_ {
                 ElementType::Scalar(type_name) => {
                     let value = self.expression(value, Some(type_name))?;
-                    self.emit(
-                        "store",
-                        Vec::new(),
-                        vec![
-                            hir::Operand::ProjectedPlace {
-                                place,
-                                indices: vec![index.clone()],
-                                offset: base_offset + field.offset,
-                                type_id: type_id(type_name),
-                            },
-                            required(value, *field_span)?,
-                        ],
-                        None,
-                    );
+                    stores.push((
+                        self.projected_place(destination, field.offset, type_name),
+                        required(value, *field_span)?,
+                    ));
                 }
-                ElementType::Struct(field_struct) => self.initialize_struct_at(
-                    place,
-                    index.clone(),
-                    field_struct,
-                    base_offset + field.offset,
-                    value,
-                )?,
+                ElementType::Struct(field_struct) => {
+                    let nested = StructView {
+                        struct_id: field_struct,
+                        place: destination.place,
+                        indices: destination.indices.clone(),
+                        offset: destination.offset + field.offset,
+                        mutable: destination.mutable,
+                        owner: destination.owner.clone(),
+                    };
+                    self.prepare_struct_stores(&nested, value, stores)?;
+                }
             }
         }
         let missing: Vec<_> = layout
@@ -1258,21 +1364,153 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
+    fn prepare_struct_copy(
+        &mut self,
+        destination: &StructView,
+        source: &StructView,
+        stores: &mut Vec<(hir::Operand, hir::Operand)>,
+    ) -> Result<(), Diagnostic> {
+        let layout = self
+            .types
+            .structure(destination.struct_id)
+            .cloned()
+            .expect("resolved struct type");
+        for field in layout.fields.values() {
+            match field.type_ {
+                ElementType::Scalar(type_name) => {
+                    let value = self.value(type_name);
+                    self.emit(
+                        "load",
+                        vec![value],
+                        vec![self.projected_place(source, field.offset, type_name)],
+                        None,
+                    );
+                    stores.push((
+                        self.projected_place(destination, field.offset, type_name),
+                        hir::Operand::Value(value),
+                    ));
+                }
+                ElementType::Struct(struct_id) => {
+                    let destination = StructView {
+                        struct_id,
+                        place: destination.place,
+                        indices: destination.indices.clone(),
+                        offset: destination.offset + field.offset,
+                        mutable: destination.mutable,
+                        owner: destination.owner.clone(),
+                    };
+                    let source = StructView {
+                        struct_id,
+                        place: source.place,
+                        indices: source.indices.clone(),
+                        offset: source.offset + field.offset,
+                        mutable: source.mutable,
+                        owner: source.owner.clone(),
+                    };
+                    self.prepare_struct_copy(&destination, &source, stores)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn projected_place(
+        &self,
+        view: &StructView,
+        field_offset: u32,
+        type_name: TypeName,
+    ) -> hir::Operand {
+        hir::Operand::ProjectedPlace {
+            place: view.place,
+            indices: view.indices.clone(),
+            offset: view.offset + field_offset,
+            type_id: type_id(type_name),
+        }
+    }
+
+    fn struct_expression_type(
+        &self,
+        expression: &Expr,
+        span: Span,
+    ) -> Result<Option<u32>, Diagnostic> {
+        match expression {
+            Expr::StructLiteral { name, .. } => self
+                .types
+                .structs
+                .get(name)
+                .map(|one| Some(one.id))
+                .ok_or_else(|| Diagnostic::new(span, format!("unknown struct {name:?}"))),
+            Expr::Name(name, _) => Ok(match self.binding(name, span)?.type_ {
+                BindingType::Struct(struct_id) => Some(struct_id),
+                _ => None,
+            }),
+            Expr::Index { base, .. } => {
+                let Expr::Name(name, _) = base.as_ref() else {
+                    return Ok(None);
+                };
+                Ok(match self.binding(name, span)?.type_ {
+                    BindingType::Array {
+                        element: ElementType::Struct(struct_id),
+                        ..
+                    } => Some(struct_id),
+                    _ => None,
+                })
+            }
+            Expr::Member { base, field, .. } => {
+                let Some(struct_id) = self.struct_expression_type(base, span)? else {
+                    return Ok(None);
+                };
+                let layout = self
+                    .types
+                    .structure(struct_id)
+                    .expect("resolved struct type");
+                let field = layout.fields.get(field).ok_or_else(|| {
+                    Diagnostic::new(span, format!("{} has no field {field:?}", layout.name))
+                })?;
+                Ok(match field.type_ {
+                    ElementType::Struct(struct_id) => Some(struct_id),
+                    ElementType::Scalar(_) => None,
+                })
+            }
+            _ => Ok(None),
+        }
+    }
+
     fn assignment_target(
         &mut self,
         target: &AssignTarget,
         span: Span,
-    ) -> Result<(hir::Operand, TypeName), Diagnostic> {
+    ) -> Result<AssignmentPlace, Diagnostic> {
         match target {
             AssignTarget::Member { base, field } => {
-                let (place, type_name, mutable, owner) = self.member_place(base, field, span)?;
-                if !mutable {
+                let parent = self.struct_view(base, span)?;
+                if !parent.mutable {
                     return Err(Diagnostic::new(
                         span,
-                        format!("binding {owner:?} is immutable"),
+                        format!("binding {:?} is immutable", parent.owner),
                     ));
                 }
-                Ok((place, type_name))
+                let layout = self
+                    .types
+                    .structure(parent.struct_id)
+                    .expect("resolved struct type");
+                let member = layout.fields.get(field).copied().ok_or_else(|| {
+                    Diagnostic::new(span, format!("{} has no field {field:?}", layout.name))
+                })?;
+                Ok(match member.type_ {
+                    ElementType::Scalar(type_name) => AssignmentPlace::Scalar(
+                        self.projected_place(&parent, member.offset, type_name),
+                        type_name,
+                    ),
+                    ElementType::Struct(struct_id) => AssignmentPlace::Struct(StructView {
+                        struct_id,
+                        place: parent.place,
+                        indices: parent.indices,
+                        offset: parent.offset + member.offset,
+                        mutable: true,
+                        owner: parent.owner,
+                    }),
+                })
             }
             AssignTarget::Name(name) => {
                 let binding = self.binding(name, span)?.clone();
@@ -1282,22 +1520,41 @@ impl<'a> FunctionCompiler<'a> {
                         format!("binding {name:?} is immutable"),
                     ));
                 }
-                let BindingType::Scalar(type_name) = binding.type_ else {
-                    return Err(Diagnostic::new(
+                match binding.type_ {
+                    BindingType::Scalar(type_name) => {
+                        let destination = match binding.storage {
+                            Storage::Place(place) => hir::Operand::Place(place),
+                            Storage::ArrayView { place, index } => {
+                                hir::Operand::ArrayElement(place, vec![index])
+                            }
+                            Storage::Parameter(_) => {
+                                return Err(Diagnostic::new(span, "parameters are immutable"))
+                            }
+                        };
+                        Ok(AssignmentPlace::Scalar(destination, type_name))
+                    }
+                    BindingType::Struct(struct_id) => {
+                        let (place, indices) = match binding.storage {
+                            Storage::Place(place) => (place, Vec::new()),
+                            Storage::ArrayView { place, index } => (place, vec![index]),
+                            Storage::Parameter(_) => {
+                                return Err(Diagnostic::new(span, "parameters are immutable"))
+                            }
+                        };
+                        Ok(AssignmentPlace::Struct(StructView {
+                            struct_id,
+                            place,
+                            indices,
+                            offset: 0,
+                            mutable: true,
+                            owner: name.clone(),
+                        }))
+                    }
+                    BindingType::Array { .. } => Err(Diagnostic::new(
                         span,
-                        "whole aggregate assignment is not supported",
-                    ));
-                };
-                let destination = match binding.storage {
-                    Storage::Place(place) => hir::Operand::Place(place),
-                    Storage::ArrayView { place, index } => {
-                        hir::Operand::ArrayElement(place, vec![index])
-                    }
-                    Storage::Parameter(_) => {
-                        return Err(Diagnostic::new(span, "parameters are immutable"))
-                    }
-                };
-                Ok((destination, type_name))
+                        "whole array assignment is not supported",
+                    )),
+                }
             }
             AssignTarget::Index { base, index } => {
                 let binding = self.binding(base, span)?.clone();
@@ -1313,17 +1570,24 @@ impl<'a> FunctionCompiler<'a> {
                         format!("binding {base:?} is not an array"),
                     ));
                 };
-                let ElementType::Scalar(type_name) = element else {
-                    return Err(Diagnostic::new(
-                        span,
-                        "a struct array element must be assigned through one of its fields",
-                    ));
-                };
                 let Storage::Place(place) = binding.storage else {
                     return Err(Diagnostic::new(span, "array has no storage"));
                 };
                 let index = self.array_index(index, length)?;
-                Ok((hir::Operand::ArrayElement(place, vec![index]), type_name))
+                Ok(match element {
+                    ElementType::Scalar(type_name) => AssignmentPlace::Scalar(
+                        hir::Operand::ArrayElement(place, vec![index]),
+                        type_name,
+                    ),
+                    ElementType::Struct(struct_id) => AssignmentPlace::Struct(StructView {
+                        struct_id,
+                        place,
+                        indices: vec![index],
+                        offset: 0,
+                        mutable: true,
+                        owner: base.clone(),
+                    }),
+                })
             }
         }
     }
@@ -1334,11 +1598,10 @@ impl<'a> FunctionCompiler<'a> {
         field_name: &str,
         span: Span,
     ) -> Result<(hir::Operand, TypeName, bool, String), Diagnostic> {
-        let (struct_id, place, index, base_offset, mutable, owner) =
-            self.struct_view(base, span)?;
+        let view = self.struct_view(base, span)?;
         let layout = self
             .types
-            .structure(struct_id)
+            .structure(view.struct_id)
             .expect("resolved struct type");
         let field = layout.fields.get(field_name).copied().ok_or_else(|| {
             Diagnostic::new(span, format!("{} has no field {field_name:?}", layout.name))
@@ -1350,23 +1613,14 @@ impl<'a> FunctionCompiler<'a> {
             ));
         };
         Ok((
-            hir::Operand::ProjectedPlace {
-                place,
-                indices: vec![index],
-                offset: base_offset + field.offset,
-                type_id: type_id(type_name),
-            },
+            self.projected_place(&view, field.offset, type_name),
             type_name,
-            mutable,
-            owner,
+            view.mutable,
+            view.owner,
         ))
     }
 
-    fn struct_view(
-        &mut self,
-        expression: &Expr,
-        span: Span,
-    ) -> Result<(u32, u32, hir::Operand, u32, bool, String), Diagnostic> {
+    fn struct_view(&mut self, expression: &Expr, span: Span) -> Result<StructView, Diagnostic> {
         match expression {
             Expr::Name(name, _) => {
                 let binding = self.binding(name, span)?.clone();
@@ -1376,10 +1630,21 @@ impl<'a> FunctionCompiler<'a> {
                         format!("binding {name:?} is not a struct"),
                     ));
                 };
-                let Storage::ArrayView { place, index } = binding.storage else {
-                    return Err(Diagnostic::new(span, "struct has no addressable storage"));
+                let (place, indices) = match binding.storage {
+                    Storage::Place(place) => (place, Vec::new()),
+                    Storage::ArrayView { place, index } => (place, vec![index]),
+                    Storage::Parameter(_) => {
+                        return Err(Diagnostic::new(span, "struct has no addressable storage"))
+                    }
                 };
-                Ok((struct_id, place, index, 0, binding.mutable, name.clone()))
+                Ok(StructView {
+                    struct_id,
+                    place,
+                    indices,
+                    offset: 0,
+                    mutable: binding.mutable,
+                    owner: name.clone(),
+                })
             }
             Expr::Index { base, index, .. } => {
                 let Expr::Name(name, _) = base.as_ref() else {
@@ -1399,18 +1664,24 @@ impl<'a> FunctionCompiler<'a> {
                     return Err(Diagnostic::new(span, "array has no storage"));
                 };
                 let index = self.array_index(index, length)?;
-                Ok((struct_id, place, index, 0, binding.mutable, name.clone()))
+                Ok(StructView {
+                    struct_id,
+                    place,
+                    indices: vec![index],
+                    offset: 0,
+                    mutable: binding.mutable,
+                    owner: name.clone(),
+                })
             }
             Expr::Member {
                 base,
                 field,
                 span: member_span,
             } => {
-                let (struct_id, place, index, offset, mutable, owner) =
-                    self.struct_view(base, *member_span)?;
+                let parent = self.struct_view(base, *member_span)?;
                 let layout = self
                     .types
-                    .structure(struct_id)
+                    .structure(parent.struct_id)
                     .expect("resolved struct type");
                 let field = layout.fields.get(field).copied().ok_or_else(|| {
                     Diagnostic::new(
@@ -1424,18 +1695,18 @@ impl<'a> FunctionCompiler<'a> {
                         "scalar field cannot be used as a struct",
                     ));
                 };
-                Ok((
-                    field_struct,
-                    place,
-                    index,
-                    offset + field.offset,
-                    mutable,
-                    owner,
-                ))
+                Ok(StructView {
+                    struct_id: field_struct,
+                    place: parent.place,
+                    indices: parent.indices,
+                    offset: parent.offset + field.offset,
+                    mutable: parent.mutable,
+                    owner: parent.owner,
+                })
             }
             _ => Err(Diagnostic::new(
                 span,
-                "field base must be a struct array element",
+                "expression is not an addressable struct",
             )),
         }
     }
@@ -1876,6 +2147,60 @@ impl<'a> FunctionCompiler<'a> {
             ));
         }
         let right = self.expression(right, Some(left.type_name))?;
+        self.binary_operands(operation, left, right, expected, span)
+    }
+
+    fn binary_operands(
+        &mut self,
+        operation: BinaryOp,
+        left: TypedOperand,
+        right: TypedOperand,
+        expected: Option<TypeName>,
+        span: Span,
+    ) -> Result<TypedOperand, Diagnostic> {
+        if matches!(operation, BinaryOp::Is | BinaryOp::IsNot) {
+            return Err(Diagnostic::new(
+                span,
+                "identity is not a numeric assignment operator",
+            ));
+        }
+        let comparison = matches!(
+            operation,
+            BinaryOp::Equal
+                | BinaryOp::NotEqual
+                | BinaryOp::Less
+                | BinaryOp::LessEqual
+                | BinaryOp::Greater
+                | BinaryOp::GreaterEqual
+        );
+        if comparison && expected.is_some_and(|one| one != TypeName::Bool) {
+            return Err(type_mismatch(
+                span,
+                expected.expect("checked"),
+                TypeName::Bool,
+            ));
+        }
+        if left.type_name != right.type_name {
+            return Err(type_mismatch(span, left.type_name, right.type_name));
+        }
+        if comparison {
+            let equality = matches!(operation, BinaryOp::Equal | BinaryOp::NotEqual);
+            if (!equality && !is_ordered(left.type_name)) || left.type_name == TypeName::Void {
+                return Err(Diagnostic::new(
+                    span,
+                    if equality {
+                        "equality requires scalar operands"
+                    } else {
+                        "ordering requires numeric or char operands"
+                    },
+                ));
+            }
+        } else if !is_numeric(left.type_name) {
+            return Err(Diagnostic::new(
+                span,
+                "arithmetic requires numeric operands",
+            ));
+        }
         if is_fixed(left.type_name)
             && matches!(
                 operation,
@@ -2372,14 +2697,17 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn place(&mut self, name: &str, type_name: TypeName, mutable: bool) -> u32 {
+        self.local_place(name, type_id(type_name), width(type_name), mutable)
+    }
+
+    fn local_place(&mut self, name: &str, type_id: u32, extent: u32, mutable: bool) -> u32 {
         let id = self.next_place;
         self.next_place += 1;
-        let extent = width(type_name);
         self.next_frame_offset -= extent as i32;
         self.places.push(hir::Place {
             id,
             name: name.into(),
-            type_id: type_id(type_name),
+            type_id,
             mutable,
             offset: self.next_frame_offset,
             extent,
@@ -2397,21 +2725,8 @@ impl<'a> FunctionCompiler<'a> {
         length: u32,
         mutable: bool,
     ) -> u32 {
-        let id = self.next_place;
-        self.next_place += 1;
         let extent = self.types.width(element.id()) * length;
-        self.next_frame_offset -= extent as i32;
-        self.places.push(hir::Place {
-            id,
-            name: name.into(),
-            type_id,
-            mutable,
-            offset: self.next_frame_offset,
-            extent,
-            storage: "local",
-            symbol: 0,
-        });
-        id
+        self.local_place(name, type_id, extent, mutable)
     }
 
     fn static_place(&mut self, symbol: u32, type_name: TypeName) -> u32 {
@@ -2935,5 +3250,44 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.message.contains("immutable"));
+    }
+
+    #[test]
+    fn local_structs_initialize_copy_and_update_through_projected_places() {
+        let json = compile_source(
+            "struct point:\n\
+             \x20\x20\x20\x20x: i16\n\
+             \x20\x20\x20\x20y: i16\n\
+             struct body:\n\
+             \x20\x20\x20\x20pos: point\n\
+             \x20\x20\x20\x20mass: i16\n\
+             fn move() -> i16:\n\
+             \x20\x20\x20\x20var current: body = body { pos: point { x: 1, y: 2 }, mass: 3 }\n\
+             \x20\x20\x20\x20let snapshot = current\n\
+             \x20\x20\x20\x20current.pos = point { x: snapshot.pos.y, y: snapshot.pos.x }\n\
+             \x20\x20\x20\x20current.mass += 4\n\
+             \x20\x20\x20\x20return current.pos.x + current.pos.y + current.mass\n",
+        )
+        .unwrap();
+        assert!(json.contains("\"name\":\"current\""));
+        assert!(json.contains("\"name\":\"snapshot\""));
+        assert!(json.matches("\"tag\":\"projection\"").count() >= 10);
+        assert!(json.contains("\"op\":\"add\""));
+    }
+
+    #[test]
+    fn compound_assignment_evaluates_an_index_once() {
+        let json = compile_source(
+            "struct item:\n\
+             \x20\x20\x20\x20value: i16\n\
+             fn next() -> i16:\n\
+             \x20\x20\x20\x20return 0\n\
+             fn bump() -> i16:\n\
+             \x20\x20\x20\x20var items: [item; 1] = [item { value: 1 }]\n\
+             \x20\x20\x20\x20items[next()].value += 2\n\
+             \x20\x20\x20\x20return items[0].value\n",
+        )
+        .unwrap();
+        assert_eq!(json.matches("\"callee\":\"next\"").count(), 1);
     }
 }

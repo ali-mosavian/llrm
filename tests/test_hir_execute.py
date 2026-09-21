@@ -12,7 +12,7 @@ CONTROL = ROOT / "frontends" / "modern" / "fixtures" / "control.mod"
 
 
 def test_nbody_runs_from_source_through_hir_and_prints_fixed_values() -> None:
-    """One nbody step must execute loops, identity, mutation, Q23.9 arithmetic, and output."""
+    """Local vec2i acc once failed as an indexed non-array before nbody could run."""
     result = execute.run(driver.parsed(NBODY), "nbody", (1,))
 
     assert result.output == (
@@ -47,6 +47,24 @@ def test_nbody_runs_from_source_through_hir_and_prints_fixed_values() -> None:
 
 def test_internal_calls_run_through_the_same_hir_executor() -> None:
     assert execute.run(driver.parsed(CONTROL), "count", (12,)).value == 11
+
+
+def test_local_struct_copy_and_compound_assignment_have_value_semantics(tmp_path: Path) -> None:
+    """A fieldwise store used to overwrite the source before a swapped field read."""
+    source = tmp_path / "struct_values.mod"
+    source.write_text(
+        "struct point:\n"
+        "    x: i16\n"
+        "    y: i16\n"
+        "fn calculate() -> i16:\n"
+        "    var current: point = point { x: 1, y: 2 }\n"
+        "    let snapshot = current\n"
+        "    current = point { x: current.y, y: current.x }\n"
+        "    current.x += snapshot.x\n"
+        "    return current.x * 10 + current.y\n"
+    )
+
+    assert execute.run(driver.parsed(source), "calculate").value == 31
 
 
 def test_address_of_aggregate_does_not_read_the_aggregate() -> None:

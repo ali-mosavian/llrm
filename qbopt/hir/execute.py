@@ -163,6 +163,13 @@ class _Machine:
                 return _Location(memory, offset, self.types[place.type])
 
             array = self.types[place.type]
+            if isinstance(operand, model.ProjectedPlace) and array.kind is not model.TypeKind.ARRAY:
+                if operand.indices:
+                    raise ExecutionError(f"{place.name}: non-array projection has indices")
+                type_ = self.types[operand.type]
+                if operand.offset + type_.width > array.width:
+                    raise ExecutionError(f"{place.name}: projection exceeds its place")
+                return _Location(memory, offset + operand.offset, type_)
             if array.kind is not model.TypeKind.ARRAY or array.element is None:
                 raise ExecutionError(f"{place.name}: indexed place is not an array")
             indices = tuple(index_value(one) for one in operand.indices)

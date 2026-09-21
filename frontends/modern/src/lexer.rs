@@ -61,11 +61,16 @@ pub enum TokenKind {
     Greater,
     GreaterEqual,
     Plus,
+    PlusEqual,
     Minus,
+    MinusEqual,
     Star,
+    StarEqual,
     Ampersand,
     Slash,
+    SlashEqual,
     Percent,
+    PercentEqual,
     Newline,
     Indent,
     Dedent,
@@ -428,13 +433,22 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
                 }
                 b'+' => {
                     index += 1;
-                    tokens.push(token(TokenKind::Plus, line_number, start, index));
+                    let kind = if index < bytes.len() && bytes[index] == b'=' {
+                        index += 1;
+                        TokenKind::PlusEqual
+                    } else {
+                        TokenKind::Plus
+                    };
+                    tokens.push(token(kind, line_number, start, index));
                 }
                 b'-' => {
                     index += 1;
                     let kind = if index < bytes.len() && bytes[index] == b'>' {
                         index += 1;
                         TokenKind::Arrow
+                    } else if index < bytes.len() && bytes[index] == b'=' {
+                        index += 1;
+                        TokenKind::MinusEqual
                     } else {
                         TokenKind::Minus
                     };
@@ -442,7 +456,13 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
                 }
                 b'*' => {
                     index += 1;
-                    tokens.push(token(TokenKind::Star, line_number, start, index));
+                    let kind = if index < bytes.len() && bytes[index] == b'=' {
+                        index += 1;
+                        TokenKind::StarEqual
+                    } else {
+                        TokenKind::Star
+                    };
+                    tokens.push(token(kind, line_number, start, index));
                 }
                 b'&' => {
                     index += 1;
@@ -450,11 +470,23 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
                 }
                 b'/' => {
                     index += 1;
-                    tokens.push(token(TokenKind::Slash, line_number, start, index));
+                    let kind = if index < bytes.len() && bytes[index] == b'=' {
+                        index += 1;
+                        TokenKind::SlashEqual
+                    } else {
+                        TokenKind::Slash
+                    };
+                    tokens.push(token(kind, line_number, start, index));
                 }
                 b'%' => {
                     index += 1;
-                    tokens.push(token(TokenKind::Percent, line_number, start, index));
+                    let kind = if index < bytes.len() && bytes[index] == b'=' {
+                        index += 1;
+                        TokenKind::PercentEqual
+                    } else {
+                        TokenKind::Percent
+                    };
+                    tokens.push(token(kind, line_number, start, index));
                 }
                 b'=' => {
                     index += 1;
@@ -720,5 +752,16 @@ mod tests {
                 TokenKind::Eof,
             ]
         );
+    }
+
+    #[test]
+    fn lexes_compound_assignment_as_one_operator() {
+        let tokens = lex("a += 1\nb -= 2\nc *= 3\nd /= 4\ne %= 5\n").unwrap();
+        let kinds: Vec<_> = tokens.into_iter().map(|one| one.kind).collect();
+        assert!(kinds.contains(&TokenKind::PlusEqual));
+        assert!(kinds.contains(&TokenKind::MinusEqual));
+        assert!(kinds.contains(&TokenKind::StarEqual));
+        assert!(kinds.contains(&TokenKind::SlashEqual));
+        assert!(kinds.contains(&TokenKind::PercentEqual));
     }
 }

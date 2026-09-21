@@ -291,7 +291,17 @@ impl Parser {
             }
             _ => {
                 let expression = self.expression(0)?;
-                if self.take(|kind| matches!(kind, TokenKind::Equal)).is_some() {
+                let operation = match self.peek().kind {
+                    TokenKind::Equal => Some(None),
+                    TokenKind::PlusEqual => Some(Some(BinaryOp::Add)),
+                    TokenKind::MinusEqual => Some(Some(BinaryOp::Subtract)),
+                    TokenKind::StarEqual => Some(Some(BinaryOp::Multiply)),
+                    TokenKind::SlashEqual => Some(Some(BinaryOp::Divide)),
+                    TokenKind::PercentEqual => Some(Some(BinaryOp::Remainder)),
+                    _ => None,
+                };
+                if let Some(operation) = operation {
+                    self.bump();
                     let span = expression.span();
                     let target = match expression {
                         Expr::Name(name, _) => AssignTarget::Name(name),
@@ -316,6 +326,7 @@ impl Parser {
                     self.line_end()?;
                     Ok(Statement::Assign {
                         target,
+                        operation,
                         value,
                         span,
                     })
@@ -333,7 +344,7 @@ impl Parser {
         let (name, _) = self.identifier("expected binding name")?;
         let annotation = if self.take(|kind| matches!(kind, TokenKind::Colon)).is_some() {
             let annotation = self.type_annotation()?;
-            if annotation == TypeAnnotation::Scalar(TypeName::Void) {
+            if annotation == TypeAnnotation::Value(TypeSpec::Primitive(TypeName::Void)) {
                 return Err(Diagnostic::new(
                     token.span,
                     "a binding cannot have type void",
@@ -749,7 +760,7 @@ impl Parser {
             )?;
             Ok(TypeAnnotation::Array { element, length })
         } else {
-            self.type_name().map(TypeAnnotation::Scalar)
+            self.type_spec().map(TypeAnnotation::Value)
         }
     }
 
