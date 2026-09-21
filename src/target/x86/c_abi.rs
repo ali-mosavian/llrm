@@ -10,9 +10,10 @@ use std::error::Error;
 use std::fmt;
 
 use crate::codegen::machine::{
-    FrameIndex, FrameObjectKind, InstructionFlags, MachineBlockId, MachineCallingConvention,
-    MachineFunction, MachineFunctionId, MachineInstruction, MachineInstructionId, MachineOperand,
-    MachineOperandKind, MachineRegister, MachineValueType, OperandRole, VirtualRegisterId,
+    FrameIndex, FrameObjectKind, InstructionFlags, MachineAddressSpace, MachineBlockId,
+    MachineCallingConvention, MachineFunction, MachineFunctionId, MachineInstruction,
+    MachineInstructionId, MachineOperand, MachineOperandKind, MachineRegister, MachineValueType,
+    OperandRole, VirtualRegisterId,
 };
 
 use super::{X86FrameLayout, X86Opcode, X86Register, X86RegisterClass};
@@ -323,9 +324,18 @@ pub fn plan_c_frame(function: &MachineFunction) -> Result<CFramePlan, CFramePlan
 }
 
 fn require_word_value(value_type: MachineValueType) -> Result<(), ()> {
-    matches!(value_type, MachineValueType::Integer { bits: 16 })
-        .then_some(())
-        .ok_or(())
+    // In the 16-bit C data model, a near data pointer is passed as its
+    // offset word. Other pointer representations are not one-word ABI values.
+    matches!(
+        value_type,
+        MachineValueType::Integer { bits: 16 }
+            | MachineValueType::Pointer {
+                bits: 16,
+                address_space: MachineAddressSpace::NearData,
+            }
+    )
+    .then_some(())
+    .ok_or(())
 }
 
 fn require_c_result_value(value_type: MachineValueType) -> Result<(), ()> {
@@ -1063,6 +1073,43 @@ mod tests {
         assert_eq!(near.offset(FrameIndex::new(1)), Some(6));
         assert_eq!(far.offset(FrameIndex::new(0)), Some(6));
         assert_eq!(far.offset(FrameIndex::new(1)), Some(8));
+    }
+
+    #[test]
+    fn plans_near_data_pointer_parameters_as_words_and_refuses_far_pointers() {
+        // A far-cdecl return address occupies BP+2 and BP+4. Each near data
+        // pointer is its one-word offset, so the two formals occupy BP+6/+8.
+        let near_data_pointer = MachineValueType::Pointer {
+            bits: 16,
+            address_space: MachineAddressSpace::NearData,
+        };
+        let input = function(
+            MachineCallingConvention::FarCdecl,
+            vec![near_data_pointer; 2],
+            vec![incoming(0, 0), incoming(1, 1)],
+            false,
+        );
+        let plan = plan_c_frame(&input).unwrap();
+        assert_eq!(plan.offset(FrameIndex::new(0)), Some(6));
+        assert_eq!(plan.offset(FrameIndex::new(1)), Some(8));
+
+        let far_data_pointer = MachineValueType::Pointer {
+            bits: 16,
+            address_space: MachineAddressSpace::FarData,
+        };
+        let unsupported = function(
+            MachineCallingConvention::FarCdecl,
+            vec![far_data_pointer],
+            vec![incoming(0, 0)],
+            false,
+        );
+        assert_eq!(
+            plan_c_frame(&unsupported),
+            Err(CFramePlanError::UnsupportedParameter {
+                parameter: 0,
+                value_type: far_data_pointer,
+            })
+        );
     }
 
     #[test]
