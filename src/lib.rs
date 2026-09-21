@@ -7,6 +7,7 @@ pub mod frontend;
 pub mod hir;
 pub mod ir;
 pub mod mc;
+pub mod model;
 pub mod object;
 pub mod support;
 pub mod target;
