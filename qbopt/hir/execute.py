@@ -373,27 +373,27 @@ class _Machine:
             raise ExecutionError("call has no resolved callee")
         if name in self.functions:
             return self.invoke(name, tuple(_number(one) for one in arguments))
-        if name == "__print_newline":
+        if name == "_pn":
             self.output.append("\n")
-        elif name == "__print_text":
+        elif name == "_pt":
             [address] = arguments
             if not isinstance(address, _Address):
-                raise ExecutionError("__print_text requires an address")
+                raise ExecutionError("_pt requires an address")
             try:
                 end = address.memory.index(0, address.offset)
             except ValueError as error:
-                raise ExecutionError("__print_text received a non-NUL-terminated string") from error
+                raise ExecutionError("_pt received a non-NUL-terminated string") from error
             self.output.append(bytes(address.memory[address.offset : end]).decode("cp437"))
-        elif name in ("__print_fixed_i16", "__print_fixed_i32"):
+        elif name in ("_pf2", "_pf4"):
             raw, fraction = arguments
             self.output.append(_fixed_text(_whole(raw), _whole(fraction)))
-        elif name == "__print_bool":
+        elif name == "_pb":
             self.output.append("true" if arguments[0] else "false")
-        elif name == "__print_char":
+        elif name == "_pc":
             self.output.append(bytes([_whole(arguments[0])]).decode("cp437"))
-        elif name.startswith("__print_i") or name.startswith("__print_u"):
+        elif name in ("_pi1", "_pu1", "_pi2", "_pu2", "_pi4", "_pu4"):
             self.output.append(str(_whole(arguments[0])))
-        elif name.startswith("__print_f"):
+        elif name in ("_pr4", "_pr8"):
             self.output.append(str(float(_number(arguments[0]))))
         else:
             raise ExecutionError(f"no reference implementation for external {name!r}")

@@ -22,12 +22,12 @@ static u16 text_length(const char *text)
     return length;
 }
 
-void _print_text(const char *text)
+void pt(const char *text)
 {
     rt_write(text, text_length(text));
 }
 
-void _print_newline(void)
+void pn(void)
 {
     rt_write("\r\n", 2);
 }
@@ -41,7 +41,7 @@ static char *unsigned_decimal(char *after, u32 value)
     return after;
 }
 
-void _print_fixed_i32(i32 raw, u8 fraction)
+void pf4(i32 raw, u8 fraction)
 {
     char *out = fixed_buffer;
     char *integer_after = fixed_buffer + 16;

@@ -144,7 +144,7 @@ def test_fixed_point_types_scale_literals_and_lower_through_wide_integer_mir() -
         instruction
         for block in fixed_literals.blocks
         for instruction in block.instructions
-        if instruction.callee == "__print_fixed_i32"
+        if instruction.callee == "_pf4"
     ]
     assert len(decimal_prints) == 2
     value_types = {one.id: one.type for one in fixed_literals.values}
@@ -241,12 +241,12 @@ def test_nbody_arrays_strings_and_print_cross_hir_and_verify_in_mir() -> None:
         assert literal.bytes[-1] == 0
 
     callables = {one.name: one for one in module.callables}
-    assert callables["__print_text"].defined is False
-    assert callables["__print_fixed_i32"].defined is False
-    assert callables["__print_fixed_i32"].parameter_types == (types["i32"].id, types["u8"].id)
-    assert callables["__print_newline"].defined is False
+    assert callables["_pt"].defined is False
+    assert callables["_pf4"].defined is False
+    assert callables["_pf4"].parameter_types == (types["i32"].id, types["u8"].id)
+    assert callables["_pn"].defined is False
     assert all(call.distance is hir.CallDistance.FAR for call in module.functions[0].calls)
-    fixed_id = callables["__print_fixed_i32"].id
+    fixed_id = callables["_pf4"].id
     assert all(call.order == (1, 0) for call in module.functions[0].calls if call.callee == fixed_id)
 
     lowered = next(one for one in hir.lower(program) if one.name == "nbody.nbody")

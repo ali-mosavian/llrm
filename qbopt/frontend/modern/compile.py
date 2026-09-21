@@ -40,8 +40,8 @@ def assembled(
     source_names = {function.name for function in module.functions}
 
     def object_name(name: str) -> str:
-        # DOS C symbols carry one leading underscore. Runtime builtins name
-        # their ABI symbols explicitly (``__print_text``) and already have it.
+        # DOS C symbols carry one leading underscore. Runtime builtins already
+        # use their compact, mangled ABI names (for example ``_pt``).
         return name if name.startswith("__") else f"_{name}"
 
     for function, lowered in zip(module.functions, semantic, strict=True):

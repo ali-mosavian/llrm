@@ -62,8 +62,8 @@ a 16-bit near pointer to NUL-terminated payload bytes. Two little-endian
 16-bit words immediately precede the payload: `length`, then `capacity`.
 String literals are read-only module objects. In this slice an f-string is
 valid only as a direct `print` argument; it streams literal and interpolated
-pieces to typed `__print_*` calls, so formatting introduces no allocation or
-hidden general-purpose runtime.
+pieces to short typed runtime calls (`_pt`, `_pi2`, `_pf4`, and so on), so
+formatting introduces no allocation or hidden general-purpose runtime.
 
 Fixed arrays are contiguous local objects with a zero lower bound. Struct
 fields stay in source order, with at most two-byte alignment for the 16-bit

@@ -481,8 +481,8 @@ pub fn compile(module: &Module, module_name: &str) -> Result<String, Diagnostic>
 
 fn print_builtins() -> Vec<(&'static str, Vec<TypeName>)> {
     let mut out = vec![
-        ("__print_newline", Vec::new()),
-        ("__print_text", vec![TypeName::String]),
+        ("_pn", Vec::new()),
+        (print_name(TypeName::String), vec![TypeName::String]),
     ];
     for type_name in [
         TypeName::Bool,
@@ -496,28 +496,40 @@ fn print_builtins() -> Vec<(&'static str, Vec<TypeName>)> {
         TypeName::F32,
         TypeName::F64,
     ] {
-        let name = match type_name {
-            TypeName::Bool => "__print_bool",
-            TypeName::Char => "__print_char",
-            TypeName::I8 => "__print_i8",
-            TypeName::U8 => "__print_u8",
-            TypeName::I16 => "__print_i16",
-            TypeName::U16 => "__print_u16",
-            TypeName::I32 => "__print_i32",
-            TypeName::U32 => "__print_u32",
-            TypeName::F32 => "__print_f32",
-            TypeName::F64 => "__print_f64",
-            _ => unreachable!(),
-        };
-        out.push((name, vec![type_name]));
+        out.push((print_name(type_name), vec![type_name]));
     }
     // These are formatting boundaries, not arithmetic helpers. They receive
     // the signed raw storage value followed by its fractional-bit count and
     // write canonical base-10 integer.fraction text. The formatter keeps one
     // digit after the point and trims any further trailing zeroes.
-    out.push(("__print_fixed_i16", vec![TypeName::I16, TypeName::U8]));
-    out.push(("__print_fixed_i32", vec![TypeName::I32, TypeName::U8]));
+    out.push(("_pf2", vec![TypeName::I16, TypeName::U8]));
+    out.push(("_pf4", vec![TypeName::I32, TypeName::U8]));
     out
+}
+
+fn print_name(type_name: TypeName) -> &'static str {
+    match type_name {
+        TypeName::String => "_pt",
+        TypeName::Bool => "_pb",
+        TypeName::Char => "_pc",
+        TypeName::I8 => "_pi1",
+        TypeName::U8 => "_pu1",
+        TypeName::I16 => "_pi2",
+        TypeName::U16 => "_pu2",
+        TypeName::I32 => "_pi4",
+        TypeName::U32 => "_pu4",
+        TypeName::F32 => "_pr4",
+        TypeName::F64 => "_pr8",
+        TypeName::Fixed {
+            storage: FixedStorage::I16,
+            ..
+        } => "_pf2",
+        TypeName::Fixed {
+            storage: FixedStorage::I32,
+            ..
+        } => "_pf4",
+        TypeName::Void | TypeName::I64 => unreachable!(),
+    }
 }
 
 struct FunctionCompiler<'a> {
@@ -2618,7 +2630,7 @@ impl<'a> FunctionCompiler<'a> {
                 self.emit_print(type_name, required(value, argument.span())?);
             }
         }
-        self.emit_builtin("__print_newline", Vec::new());
+        self.emit_builtin("_pn", Vec::new());
         Ok(TypedOperand {
             operand: None,
             type_name: TypeName::Void,
@@ -2637,10 +2649,7 @@ impl<'a> FunctionCompiler<'a> {
             let raw = self.value(storage_type);
             self.emit("convert", vec![raw], vec![operand], None);
             self.emit_builtin(
-                match storage {
-                    FixedStorage::I16 => "__print_fixed_i16",
-                    FixedStorage::I32 => "__print_fixed_i32",
-                },
+                print_name(type_name),
                 vec![
                     hir::Operand::Value(raw),
                     hir::Operand::Constant(U8, i64::from(fraction)),
@@ -2648,21 +2657,7 @@ impl<'a> FunctionCompiler<'a> {
             );
             return;
         }
-        let name = match type_name {
-            TypeName::String => "__print_text",
-            TypeName::Bool => "__print_bool",
-            TypeName::Char => "__print_char",
-            TypeName::I8 => "__print_i8",
-            TypeName::U8 => "__print_u8",
-            TypeName::I16 => "__print_i16",
-            TypeName::U16 => "__print_u16",
-            TypeName::I32 => "__print_i32",
-            TypeName::U32 => "__print_u32",
-            TypeName::F32 => "__print_f32",
-            TypeName::F64 => "__print_f64",
-            TypeName::Void | TypeName::I64 | TypeName::Fixed { .. } => unreachable!(),
-        };
-        self.emit_builtin(name, vec![operand]);
+        self.emit_builtin(print_name(type_name), vec![operand]);
     }
 
     fn emit_builtin(&mut self, name: &'static str, operands: Vec<hir::Operand>) {
@@ -3121,9 +3116,9 @@ mod tests {
         .unwrap();
         assert!(json.contains("\"kind\":\"array\""));
         assert!(json.contains("\"tag\":\"array_element\""));
-        assert!(json.contains("\"callee\":\"__print_text\""));
-        assert!(json.contains("\"callee\":\"__print_i32\""));
-        assert!(json.contains("\"callee\":\"__print_newline\""));
+        assert!(json.contains("\"callee\":\"_pt\""));
+        assert!(json.contains("\"callee\":\"_pi4\""));
+        assert!(json.contains("\"callee\":\"_pn\""));
         assert!(json.contains("\"bytes\":[6,0,6,0,118,97,108,117,101,61,0]"));
     }
 
@@ -3289,5 +3284,17 @@ mod tests {
         )
         .unwrap();
         assert_eq!(json.matches("\"callee\":\"next\"").count(), 1);
+    }
+
+    #[test]
+    fn print_runtime_variants_use_short_byte_width_names() {
+        let names: Vec<_> = print_builtins().into_iter().map(|(name, _)| name).collect();
+        assert_eq!(
+            names,
+            [
+                "_pn", "_pt", "_pb", "_pc", "_pi1", "_pu1", "_pi2", "_pu2", "_pi4", "_pu4", "_pr4",
+                "_pr8", "_pf2", "_pf4",
+            ]
+        );
     }
 }

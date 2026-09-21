@@ -30,5 +30,5 @@ def test_nbody_stage_dumps_cover_every_implemented_boundary(tmp_path: Path) -> N
     assert json.loads(output.joinpath("03-hir.json").read_text())["schema"] == 1
     mir = output.joinpath("04-nbody-nbody-mir.txt").read_text()
     assert "function nbody.nbody" in mir
-    assert "call __print_fixed_i32" in mir
+    assert "call _pf4" in mir
     assert "mul" in mir
