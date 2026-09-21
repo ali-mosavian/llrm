@@ -136,7 +136,11 @@ def _tests(natural: list, entry: int, by_at: dict) -> dict[int, tuple[int, froze
     found = {}
     for loop in natural:
         block = by_at[loop.header]
-        real = [one.what for one in block.insns if one.what.op is not ir.Operation.NOTHING]
+        real = [
+            one.what
+            for one in block.insns
+            if one.what is not None and one.what.op is not ir.Operation.NOTHING
+        ]
         inner = [at for at in block.succ if at in loop.body and at != loop.header]
         if (
             loop.header != entry
