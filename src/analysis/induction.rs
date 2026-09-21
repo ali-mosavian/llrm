@@ -415,7 +415,7 @@ fn _as_signed(value: &BigInt, width: u32) -> BigInt {
 }
 
 /// Python's `_signed(arg, facts, width)`.
-fn _signed(
+pub(crate) fn _signed(
     argument: &Arg,
     facts: &BTreeMap<crate::model::mir::Value, Known>,
     width: u32,
