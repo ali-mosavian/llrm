@@ -225,6 +225,86 @@ pub(crate) fn derived_map(
     })
 }
 
+/// Python's `_quotients(body, loop, found)`.
+///
+/// Exact division of a non-wrapping recurrence is another recurrence.  The
+/// operation occurrence comes from this immutable body snapshot, preserving
+/// Python's exact `mir.Op` identity rather than source operation provenance.
+fn _quotients(body: &MirBody, loop_: &Loop, found: &OrderedMap<u32, Affine>) -> Vec<Derived> {
+    let facts = constants::known(body);
+    let mut out = Vec::new();
+    for (occurrence, block, operation) in operations(body) {
+        if !loop_.body.contains(&block.at) || block.at == loop_.header {
+            continue;
+        }
+        if operation.kind != Kind::Divmod
+            || operation.args.len() != 2
+            || operation.results.len() != 2
+        {
+            continue;
+        }
+        if !operation.loads.is_empty()
+            || !operation.stores.is_empty()
+            || operation.barrier()
+            || !operation
+                .results
+                .iter()
+                .all(|result| matches!(result, Arg::Held(held) if held.width == 2))
+        {
+            continue;
+        }
+        let Arg::Held(dividend) = &operation.args[0] else {
+            continue;
+        };
+        if dividend.width != 2 {
+            continue;
+        }
+        let Some(counter) = found.get(&dividend.value.id) else {
+            continue;
+        };
+        let Some(start) = _signed(&counter.start.as_arg(), &facts, 2) else {
+            continue;
+        };
+        let Some(step) = _signed(&counter.step.as_arg(), &facts, 2) else {
+            continue;
+        };
+        let Some(denominator) = _signed(&operation.args[1], &facts, 2) else {
+            continue;
+        };
+        if denominator == BigInt::from(0_u8)
+            || &start % &denominator != BigInt::from(0_u8)
+            || &step % &denominator != BigInt::from(0_u8)
+        {
+            continue;
+        }
+        let Some(last) = _last_counter(body, loop_, counter, &facts, 2) else {
+            continue;
+        };
+        let quotient_start = &start / &denominator;
+        let quotient_last = &last / &denominator;
+        if quotient_start < BigInt::from(-32768_i32)
+            || quotient_start > BigInt::from(32767_i32)
+            || quotient_last < BigInt::from(-32768_i32)
+            || quotient_last > BigInt::from(32767_i32)
+        {
+            continue;
+        }
+        out.push(Derived {
+            op: occurrence,
+            of: Affine {
+                value: counter.value,
+                start: AffineOperand::Const(Const::new(quotient_start, 2)),
+                step: AffineOperand::Const(Const::new(&step / &denominator, 2)),
+                header: loop_.header,
+            },
+            by: Arg::Const(Const::new(1, 2)),
+            offsets: Vec::new(),
+            pointer: None,
+        });
+    }
+    out
+}
+
 /// Python's `domain(body, loop, affine, facts)`.
 ///
 /// `_signed` establishes the initial integer interpretation and
@@ -1521,7 +1601,7 @@ mod tests {
 
     use super::{
         Affine, AffineMap, AffineOperand, Derived, LoopShape, _as_signed, _constant, _copied,
-        _counter_bound, _signed, basics, canonical, control_replacement, counted,
+        _counter_bound, _quotients, _signed, basics, canonical, control_replacement, counted,
         counted_with_facts, derived_map, domain, invariant, nonempty, relation, test_only,
         transparent_aliases, trip_count, zero_terminating_control,
     };
@@ -2619,6 +2699,106 @@ mod tests {
             by,
             offsets,
             pointer,
+        }
+    }
+
+    #[test]
+    fn direct_induction_quotients_requires_exact_nonwrapping_division() {
+        // Direct port of
+        // tests/test_quotient_recurrence.py:test_quotient_recurrence_requires_exact_nonwrapping_division.
+        // STRIDE's division is an affine recurrence only if start and step
+        // divide exactly and both endpoint quotients stay representable.
+        for (start, step, bound, divisor, accepted) in [
+            (0, 5, 100, 5, true),
+            (-100, 5, 0, 5, true),
+            (100, -5, 0, 5, true),
+            (0, 5, 100, -5, true),
+            (1, 5, 101, 5, false),
+            (0, 3, 100, 5, false),
+            (32760, 5, 32767, 5, false),
+            (-32760, -5, -32768, 5, false),
+            (-32768, 1, -32760, -1, false),
+            (0, 5, 100, 0, false),
+        ] {
+            let counter = value(1, 10);
+            let flags = Value {
+                flags: true,
+                ..value(2, 10)
+            };
+            let quotient = value(3, 20);
+            let remainder = value(4, 20);
+            let mut compare = op(10, Kind::Sub, vec![flags], vec![counter]);
+            compare.args = vec![
+                Arg::Held(Held {
+                    value: counter,
+                    width: 2,
+                }),
+                Arg::Const(Const::new(bound, 2)),
+            ];
+            let mut branch = op(11, Kind::Branch, vec![], vec![flags]);
+            branch.target = Some(20);
+            branch.test = Some(if step > 0 { Kind::Le } else { Kind::Ge });
+            let mut divide = op(20, Kind::Divmod, vec![quotient, remainder], vec![counter]);
+            divide.args = vec![
+                Arg::Held(Held {
+                    value: counter,
+                    width: 2,
+                }),
+                Arg::Const(Const::new(divisor, 2)),
+            ];
+            divide.results = vec![
+                Arg::Held(Held {
+                    value: quotient,
+                    width: 2,
+                }),
+                Arg::Held(Held {
+                    value: remainder,
+                    width: 2,
+                }),
+            ];
+            let body = MirBody::new(
+                10,
+                vec![
+                    MirBlock::new(10, vec![], vec![compare, branch], vec![20, 30]),
+                    MirBlock::new(20, vec![], vec![divide], vec![10]),
+                    MirBlock::new(30, vec![], vec![], vec![]),
+                ],
+            );
+            let loop_ = Loop {
+                header: 10,
+                latches: BTreeSet::from([20]),
+                body: BTreeSet::from([10, 20]),
+            };
+            let mut found = OrderedMap::new();
+            found.insert(
+                counter.id,
+                affine(counter.id, constant(start, 2), constant(step, 2), 10),
+            );
+
+            let result = _quotients(&body, &loop_, &found);
+            assert_eq!(!result.is_empty(), accepted);
+            if accepted {
+                let occurrence = operations(&body)
+                    .find_map(|(occurrence, block, operation)| {
+                        (block.at == 20 && operation.kind == Kind::Divmod).then_some(occurrence)
+                    })
+                    .expect("fixture has one divide occurrence");
+                assert_eq!(
+                    result,
+                    vec![Derived {
+                        op: occurrence,
+                        of: affine(
+                            counter.id,
+                            constant(start / divisor, 2),
+                            constant(step / divisor, 2),
+                            10,
+                        ),
+                        by: Arg::Const(Const::new(1, 2)),
+                        offsets: vec![],
+                        pointer: None,
+                    }]
+                );
+            }
         }
     }
 
