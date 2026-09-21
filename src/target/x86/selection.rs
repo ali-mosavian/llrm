@@ -697,15 +697,21 @@ fn far_pascal_argument_type(
 ) -> Result<(), SelectionError> {
     match type_kind(types, type_id)? {
         TypeKind::Integer { bits: 16 | 32 } => Ok(()),
+        TypeKind::Pointer {
+            address_space: AddressSpace::NearData,
+        } => Ok(()),
         TypeKind::Integer { bits } => Err(SelectionError::UnsupportedIntegerWidth {
             type_id,
             bits: *bits,
         }),
         TypeKind::Void
         | TypeKind::Float(_)
-        | TypeKind::Pointer { .. }
         | TypeKind::Array { .. }
         | TypeKind::Structure { .. } => Err(SelectionError::UnsupportedType { type_id }),
+        TypeKind::Pointer { address_space } => Err(SelectionError::UnsupportedAddressSpace {
+            type_id,
+            address_space: *address_space,
+        }),
     }
 }
 
@@ -3439,6 +3445,82 @@ mod tests {
                 ..InstructionFlags::NONE
             }
         );
+    }
+
+    #[test]
+    fn selects_near_descriptor_argument_before_a_far_external_call() {
+        let pointer = TypeId::new(7);
+        let mut types = byte_array_types(4);
+        types.push(Type {
+            id: pointer,
+            kind: TypeKind::Pointer {
+                address_space: AddressSpace::NearData,
+            },
+        });
+        let descriptor = data_global(3, "descriptor", Constant::Bytes(vec![0; 4]));
+        let runtime = runtime_declaration(FunctionId::new(5), "B$PSSD", vec![pointer]);
+        let address = Value {
+            id: ValueId::new(0),
+            type_id: pointer,
+        };
+        let caller = function(
+            vec![Block {
+                id: BlockId::new(0),
+                instructions: vec![
+                    Instruction {
+                        id: crate::ir::InstructionId::new(0),
+                        results: vec![address.clone()],
+                        kind: InstructionKind::Cast {
+                            op: CastOp::Bitcast,
+                            operand: Operand::Constant(TypedConstant {
+                                type_id: pointer,
+                                value: Constant::GlobalAddress {
+                                    global: descriptor.id,
+                                    addend: 0,
+                                },
+                            }),
+                            to: pointer,
+                        },
+                    },
+                    Instruction {
+                        id: crate::ir::InstructionId::new(1),
+                        results: Vec::new(),
+                        kind: InstructionKind::Call {
+                            callee: Callee::Direct(runtime.id),
+                            arguments: vec![Operand::Value(address.id)],
+                            effects: Effects {
+                                memory: MemoryEffects::Unknown,
+                                may_trap: true,
+                                observable: true,
+                            },
+                        },
+                    },
+                ],
+                terminator: Terminator::Unreachable,
+            }],
+            Vec::new(),
+        );
+        let input = Module {
+            name: "runtime-descriptor".to_owned(),
+            types,
+            globals: vec![descriptor],
+            functions: vec![caller, runtime],
+        };
+
+        let selected = select_module(&input).expect("near descriptor ABI is supported");
+        selected.verify().expect("selected Machine IR verifies");
+        let instructions = &selected.functions[0].blocks[0].instructions;
+        assert_eq!(
+            instructions
+                .iter()
+                .map(|instruction| X86Opcode::from_raw(instruction.opcode.get()).unwrap())
+                .collect::<Vec<_>>(),
+            vec![X86Opcode::Lea, X86Opcode::Push, X86Opcode::CallFar]
+        );
+        assert!(matches!(
+            &instructions[0].operands[1].kind,
+            MachineOperandKind::Global { name, addend: 0 } if name == "descriptor"
+        ));
     }
 
     #[test]
