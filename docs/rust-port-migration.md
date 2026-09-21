@@ -1077,3 +1077,14 @@ two-arm signed conditional while reusing algebra's calls, globals, and return
 ABI.  The next work is to capture its real WCC stream, add the independent C
 caller, and run the two existing Rust runtime helpers before considering
 sieve, nbody, or any optimization pass.
+
+Commit `d994ecf9` completes that branch rung without changing compiler code.
+The checked-in `branch.cgs` was generated twice with the production WCC medium
+model, 386, floating-point, packing, include, and capture flags; the two 3,330
+byte streams matched exactly before one was retained.  `llrm-c` compiled the
+real signed-short comparison and explicit join, and `llrm-qb` compiled the
+paired `IF/ELSE`; both fresh objects linked and returned the established
+`-87904` result in DOS.  The delegated focused runs took 2.84 and 1.99 seconds,
+and primary review reproduced both together in 4.05 seconds.  The 8.88 seconds
+of verification remained below ten percent of the iteration's elapsed work;
+no broad suite, optimizer, or qrender gate ran.
