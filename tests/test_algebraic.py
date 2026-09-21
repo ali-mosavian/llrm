@@ -20,6 +20,40 @@ def test_nbody_reuses_the_whole_signed_initialization_value():
         assert not any(op.at == at and op.kind is mir.Kind.CONCAT for block in done.blocks for op in block.ops)
 
 
+def test_zero_test_forwarding_indexes_each_operation_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Matmul's 2,692-op candidate asked for every operation once per value.
+
+    The zero-test rewrite needs the same value-to-users relation as before,
+    but constructing it is a whole-body analysis: its cost must scale with
+    operations and their operands, not definitions times operations.
+    """
+    values = tuple(mir.Value(index, 0, variable=index) for index in range(1, 65))
+    ops = tuple(
+        mir.Op(
+            index,
+            ir.Operation.MOVE,
+            "mov",
+            (value,),
+            (mir.Held(values[index - 2], 2),) if index > 1 else (mir.Const(0, 2),),
+            kind=mir.Kind.COPY,
+        )
+        for index, value in enumerate(values, 1)
+    )
+    body = mir.MirBody(0, (mir.MirBlock(0, (), ops, ()),))
+    consumed = algebraic.mir.consumed
+    calls = 0
+
+    def counted(op):
+        nonlocal calls
+        calls += 1
+        return consumed(op)
+
+    monkeypatch.setattr(algebraic.mir, "consumed", counted)
+    algebraic._forwarded_zero_tests(body)
+
+    assert calls == len(ops)
+
+
 @pytest.mark.parametrize("mismatch", ["source", "width", "kind", "offset"])
 def test_signed_recombination_requires_the_exact_extension(mismatch):
     """Reusing NBODY's signed value must not join a sign word to an unrelated low word."""

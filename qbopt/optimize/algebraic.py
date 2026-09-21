@@ -107,9 +107,17 @@ def _forwarded_zero_tests(body: mir.MirBody) -> mir.MirBody:
     definitions = {value: op for block in body.blocks for op in block.ops for value in op.defines}
     phi_inputs = {value for block in body.blocks for phi in block.phis for value in phi.incoming.values()}
     exposed = set(mir.exposed(body))
-    users = {
-        value: [op for block in body.blocks for op in block.ops if value in mir.consumed(op)] for value in definitions
-    }
+    # This is one relation over the body, not one whole-body search per
+    # definition.  Large speculative loop candidates used to turn this into
+    # definitions * operations calls to ``consumed`` (matmul: 4.42 million).
+    # Preserve the old one-entry-per-operation shape by intersecting the set
+    # each operation consumes with the defined values once.
+    users: dict[mir.Value, list[mir.Op]] = {}
+    defined = definitions.keys()
+    for block in body.blocks:
+        for op in block.ops:
+            for value in mir.consumed(op) & defined:
+                users.setdefault(value, []).append(op)
     swaps: dict[int, mir.Value] = {}
     for block in body.blocks:
         for op in block.ops:
