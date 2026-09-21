@@ -99,6 +99,21 @@ impl CountedLoop {
     }
 }
 
+/// Proof that a counted loop's source recurrence may be removed.
+///
+/// Direct port of `qbopt.analysis.induction:ControlReplacement`.  The
+/// counted-loop proof is borrowed, retaining Python's `is` relationship for
+/// the consumer.  Operations and phis use snapshot-local occurrences rather
+/// than `Op.id` or structural equality.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ControlReplacement<'a> {
+    pub counted: &'a CountedLoop,
+    pub stepping: OpOccurrence,
+    pub update: Value,
+    pub aliases: BTreeSet<Value>,
+    pub copies: BTreeSet<OpOccurrence>,
+}
+
 impl AffineMap {
     /// Python's `AffineMap.period` property.
     pub(crate) fn period(&self) -> BigInt {
@@ -703,6 +718,112 @@ pub(crate) fn transparent_aliases(
     (aliases, copies)
 }
 
+/// Python's `control_replacement(body, loop, proof, covered=frozenset())`.
+///
+/// This is a proof, not a transform: the caller supplies precisely the
+/// operation occurrences it will replace, and this analysis establishes that
+/// those, canonical control, and transparent copies are every observation of
+/// the control recurrence.  Occurrences belong to `body`'s immutable
+/// snapshot, just as Python's `id(op)` values belong to its object graph.
+pub(crate) fn control_replacement<'a>(
+    body: &MirBody,
+    loop_: &Loop,
+    proof: &'a CountedLoop,
+    covered: &BTreeSet<OpOccurrence>,
+) -> Option<ControlReplacement<'a>> {
+    // Python's address map retains its last duplicate.  Occurrence keys made
+    // by `counted` identify that same snapshot occurrence.
+    let blocks = body
+        .blocks
+        .iter()
+        .enumerate()
+        .map(|(index, block)| (block.at, (index, block)))
+        .collect::<BTreeMap<_, _>>();
+    let predecessors = predecessors(&body.blocks);
+    let (header_index, header) = blocks.get(&loop_.header).copied()?;
+    let (_, latch) = blocks.get(&proof.latch).copied()?;
+    if loop_.body.len() != 2
+        || proof.entered != proof.latch
+        || !latch.phis.is_empty()
+        || predecessors.get(&latch.at) != Some(&BTreeSet::from([header.at]))
+        || operations(body).any(|(occurrence, _, operation)| {
+            occurrence.block_index() == header_index
+                && occurrence != proof.compare
+                && occurrence != proof.branch
+                && !test_only(operation)
+        })
+    {
+        return None;
+    }
+
+    let mut made = BTreeMap::<u32, OpOccurrence>::new();
+    for (occurrence, _, operation) in operations(body) {
+        for value in &operation.defines {
+            made.insert(value.id, occurrence);
+        }
+    }
+    let phi =
+        phis(body).find_map(|(occurrence, _, phi)| (occurrence == proof.phi).then_some(phi))?;
+    let update = *phi.incoming.get(&proof.latch)?;
+    let stepping = *made.get(&update.id)?;
+    let (aliases, copies) = transparent_aliases(body, loop_, phi.result);
+    let mut allowed = covered.clone();
+    allowed.extend(copies.iter().copied());
+    allowed.insert(proof.compare);
+    allowed.insert(stepping);
+    if operations(body).any(|(occurrence, _, operation)| {
+        (operation.uses.iter().any(|value| aliases.contains(value))
+            && !allowed.contains(&occurrence))
+            || operation.uses.contains(&update)
+    }) {
+        return None;
+    }
+    if phis(body).any(|(occurrence, _, other)| {
+        occurrence != proof.phi
+            && other
+                .incoming
+                .values()
+                .any(|value| aliases.contains(value) || *value == update)
+    }) {
+        return None;
+    }
+
+    let compare_flags = operations(body)
+        .find_map(|(occurrence, _, operation)| (occurrence == proof.compare).then_some(operation))?
+        .defines
+        .iter()
+        .copied()
+        .filter(|value| value.flags)
+        .collect::<BTreeSet<_>>();
+    let step_flags = operations(body)
+        .find_map(|(occurrence, _, operation)| (occurrence == stepping).then_some(operation))?
+        .defines
+        .iter()
+        .copied()
+        .filter(|value| value.flags)
+        .collect::<BTreeSet<_>>();
+    if operations(body).any(|(occurrence, _, operation)| {
+        (operation
+            .uses
+            .iter()
+            .any(|value| compare_flags.contains(value))
+            && occurrence != proof.branch)
+            || operation
+                .uses
+                .iter()
+                .any(|value| step_flags.contains(value))
+    }) {
+        return None;
+    }
+    Some(ControlReplacement {
+        counted: proof,
+        stepping,
+        update,
+        aliases,
+        copies,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
@@ -718,10 +839,12 @@ mod tests {
     };
     use crate::model::mir_loops::Loop;
 
+    use crate::analysis::occurrence::operations;
+
     use super::{
         Affine, AffineMap, AffineOperand, LoopShape, _as_signed, _constant, _copied,
-        _counter_bound, _signed, basics, canonical, counted, invariant, relation, test_only,
-        transparent_aliases,
+        _counter_bound, _signed, basics, canonical, control_replacement, counted, invariant,
+        relation, test_only, transparent_aliases,
     };
 
     fn value(id: u32, at: i64) -> Value {
@@ -2102,5 +2225,196 @@ mod tests {
         let mut impure = body;
         impure.blocks[2].ops[1].stores.push(MemRef::new(None, 2));
         assert!(counted(&impure, &loop_, &facts).is_empty());
+    }
+
+    #[test]
+    fn direct_induction_control_replacement_proves_only_canonical_control() {
+        // Direct port of `induction.control_replacement`: the source
+        // recurrence is removable only when the two-block counted control is
+        // its sole observer.  The returned proof retains the exact counted
+        // proof supplied by its caller, as Python stores that object itself.
+        let (body, loop_, facts, _, _) = symbolic_counted_body(0);
+        let proofs = counted(&body, &loop_, &facts);
+        let proof = &proofs[0];
+
+        let replacement = control_replacement(&body, &loop_, proof, &BTreeSet::new())
+            .expect("the symbolic loop has no source-counter observer besides control");
+
+        assert!(std::ptr::eq(replacement.counted, proof));
+        assert_eq!(replacement.update, body.blocks[2].ops[1].defines[0]);
+        assert_eq!(
+            replacement.aliases,
+            BTreeSet::from([body.blocks[1].phis[0].result])
+        );
+        assert!(replacement.copies.is_empty());
+    }
+
+    #[test]
+    fn direct_induction_control_replacement_refuses_each_structural_exception() {
+        // Direct port of the first compound refusal in
+        // `induction.control_replacement`: each case is a different failure
+        // of the normalized two-block, one-predecessor control shape.
+        let (body, loop_, facts, _, _) = symbolic_counted_body(0);
+        let proofs = counted(&body, &loop_, &facts);
+        let proof = &proofs[0];
+
+        let one_block = Loop {
+            body: BTreeSet::from([1]),
+            ..loop_.clone()
+        };
+        assert_eq!(
+            control_replacement(&body, &one_block, proof, &BTreeSet::new()),
+            None
+        );
+
+        let mut wrong_entry = proof.clone();
+        wrong_entry.entered = proof.entered + 1;
+        assert_eq!(
+            control_replacement(&body, &loop_, &wrong_entry, &BTreeSet::new()),
+            None
+        );
+
+        let mut latch_phi = body.clone();
+        latch_phi.blocks[2].phis.push(Phi::new(value(200, 2)));
+        assert_eq!(
+            control_replacement(&latch_phi, &loop_, proof, &BTreeSet::new()),
+            None
+        );
+
+        let mut extra_predecessor = body.clone();
+        extra_predecessor
+            .blocks
+            .push(MirBlock::new(4, vec![], vec![], vec![2]));
+        assert_eq!(
+            control_replacement(&extra_predecessor, &loop_, proof, &BTreeSet::new()),
+            None
+        );
+
+        let mut header_work = body;
+        header_work.blocks[1]
+            .ops
+            .push(op(1, Kind::Add, vec![], vec![]));
+        assert_eq!(
+            control_replacement(&header_work, &loop_, proof, &BTreeSet::new()),
+            None
+        );
+    }
+
+    #[test]
+    fn direct_induction_control_replacement_tracks_exact_occurrences_and_uses() {
+        // `covered` is Python's `frozenset(id(op))`, not structural equality.
+        // Two equal source observers prove that covering one cannot authorize
+        // the other.  Likewise, an equal phi distinct from the proven phi is
+        // a forbidden incoming use.
+        let (body, loop_, facts, _, _) = symbolic_counted_body(0);
+        let proofs = counted(&body, &loop_, &facts);
+        let proof = &proofs[0];
+        let counter = body.blocks[1].phis[0].result;
+        let observer = op(2, Kind::Nothing, vec![], vec![counter]);
+
+        let mut covered_once = body.clone();
+        covered_once.blocks[2].ops.push(observer.clone());
+        let covered_occurrence = operations(&covered_once)
+            .find_map(|(occurrence, _, operation)| (operation == &observer).then_some(occurrence))
+            .expect("the covered observer belongs to this body snapshot");
+        assert!(control_replacement(
+            &covered_once,
+            &loop_,
+            proof,
+            &BTreeSet::from([covered_occurrence])
+        )
+        .is_some());
+
+        let mut equal_observers = covered_once;
+        equal_observers.blocks[2].ops.push(observer);
+        assert_eq!(
+            control_replacement(
+                &equal_observers,
+                &loop_,
+                proof,
+                &BTreeSet::from([covered_occurrence])
+            ),
+            None
+        );
+
+        let mut equal_phi = body.clone();
+        let duplicate = equal_phi.blocks[1].phis[0].clone();
+        equal_phi.blocks[1].phis.push(duplicate);
+        assert_eq!(
+            control_replacement(&equal_phi, &loop_, proof, &BTreeSet::new()),
+            None
+        );
+
+        let mut update_user = body.clone();
+        update_user.blocks[2].ops.push(op(
+            2,
+            Kind::Nothing,
+            vec![],
+            vec![body.blocks[2].ops[1].defines[0]],
+        ));
+        assert_eq!(
+            control_replacement(&update_user, &loop_, proof, &BTreeSet::new()),
+            None
+        );
+    }
+
+    #[test]
+    fn direct_induction_control_replacement_refuses_alias_phi_and_flag_observers() {
+        // Direct port of the remaining use checks: transparent copies are
+        // allowed themselves, but no alias, phi edge, compare flag, or step
+        // flag may introduce another observer of removed control.
+        let (body, loop_, facts, _, _) = symbolic_counted_body(0);
+        let proofs = counted(&body, &loop_, &facts);
+        let proof = &proofs[0];
+        let counter = body.blocks[1].phis[0].result;
+
+        let alias = value(201, 2);
+        let mut alias_user = body.clone();
+        alias_user.blocks[2].ops.push(copy(2, counter, alias, 2, 2));
+        alias_user.blocks[2]
+            .ops
+            .push(op(2, Kind::Nothing, vec![], vec![alias]));
+        assert_eq!(
+            control_replacement(&alias_user, &loop_, proof, &BTreeSet::new()),
+            None
+        );
+
+        let mut phi_user = body.clone();
+        let mut incoming = crate::model::mir::OrderedMap::new();
+        incoming.insert(0, counter);
+        phi_user.blocks[3].phis.push(Phi {
+            result: value(202, 3),
+            incoming,
+        });
+        assert_eq!(
+            control_replacement(&phi_user, &loop_, proof, &BTreeSet::new()),
+            None
+        );
+
+        let mut compare_flags = body.clone();
+        compare_flags.blocks[2].ops.push(op(
+            2,
+            Kind::Nothing,
+            vec![],
+            vec![body.blocks[1].ops[0].defines[0]],
+        ));
+        assert_eq!(
+            control_replacement(&compare_flags, &loop_, proof, &BTreeSet::new()),
+            None
+        );
+
+        let mut step_flags = body;
+        let flags = Value {
+            flags: true,
+            ..value(203, 2)
+        };
+        step_flags.blocks[2].ops[1].defines.push(flags);
+        step_flags.blocks[2]
+            .ops
+            .push(op(2, Kind::Nothing, vec![], vec![flags]));
+        assert_eq!(
+            control_replacement(&step_flags, &loop_, proof, &BTreeSet::new()),
+            None
+        );
     }
 }
