@@ -6,11 +6,15 @@ import pytest
 
 from qbopt import hir
 from qbopt.model import mir
+from qbopt.analysis import induction
+from qbopt.analysis import loops
 from qbopt.backend import masm
+from qbopt.backend import cpu as targets
 from qbopt.backend import lower_int64
 from qbopt.frontend.modern import driver
 from qbopt.frontend.qb import physicalize
 from qbopt.frontend.modern import compile as modern_compile
+from qbopt.optimize import rotate
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "frontends" / "modern" / "fixtures" / "control.mod"
@@ -501,6 +505,35 @@ def test_array_parameter_is_one_unsized_payload_pointer() -> None:
     assert pointer.kind is hir.TypeKind.POINTER
     assert element.name == "i16"
     assert descriptor_loads == [hir.DescriptorPlace(function.parameters[0], hir.DescriptorField.LENGTH, metadata.id)]
+
+
+def test_runtime_bounded_array_loop_advances_its_payload_address() -> None:
+    """sum rebuilt ``payload + index * 2`` on every trip despite its invariant runtime bound."""
+    assembly = masm.text(modern_compile.assembled(driver.parsed(SUM), entry="main"))
+    function = assembly.split("_sum proc far", 1)[1].split("_sum endp", 1)[0]
+
+    assert not re.search(r"\b(?:imul|shl|lea)\b[^\n]*(?:ecx|cx).*(?:ecx|cx)", function)
+    assert re.search(r"\badd\s+(?:si|di|bx),\s*2\b", function)
+
+
+def test_runtime_bounded_array_loop_has_a_symbolic_count_proof() -> None:
+    """A runtime descriptor extent is an exact trip count, not an unknown loop."""
+    program = driver.parsed(SUM)
+    function = next(one for one in program.modules[0].functions if one.name == "sum")
+    semantic = next(one for one in modern_compile.semantic_lowered(program) if one.name == "sum.sum")
+    target = targets.profile("386")
+    optimized = modern_compile.optimized(program, function, semantic, target)
+    physical = physicalize(program, function, optimized)
+    body = modern_compile.optimized(program, function, physical.lowered, target, physical.calls).body
+    loop = next(one for one in loops.loops(body.blocks, body.entry) if one.header == 2)
+    (proof,) = induction.counted(body, loop)
+
+    assert isinstance(proof.trips, mir.Held)
+    assert proof.counter.start.width == proof.trips.width == 2
+
+    rotated = rotate.entered(body)
+    predecessors = loops.predecessors(rotated.blocks)
+    assert all(set(phi.incoming) == set(predecessors[block.at]) for block in rotated.blocks for phi in block.phis)
 
 
 def test_borrowed_array_parameter_rejects_a_repeated_fixed_length(tmp_path: Path) -> None:

@@ -86,6 +86,111 @@ class AffineMap:
         return self.scale != 0 and high - low < self.period
 
 
+@dataclass(frozen=True, slots=True)
+class CountedLoop:
+    """A canonical zero-or-more loop with an exact symbolic trip count.
+
+    This is deliberately a proof object rather than another recognizer in a
+    transform.  ``trip_count`` answers the narrower question "is the count a
+    positive host integer?"; this object retains the useful answer when the
+    count is an invariant MIR value:
+
+        i = 0; while i < bound: ...; i += 1
+
+    The unsigned comparison proves exactly ``bound`` trips, including zero,
+    without assuming a value for ``bound``.  Consumers may turn the control
+    recurrence into a guarded countdown, but may not infer that an unrelated
+    scaled recurrence is injective over that unknown domain.
+    """
+
+    counter: Affine
+    phi: mir.Phi
+    compare: mir.Op
+    branch: mir.Op
+    bound: mir.Held | mir.Const
+    preheader: int
+    latch: int
+    entered: int
+    exit: int
+
+    @property
+    def trips(self) -> mir.Held | mir.Const:
+        return self.bound
+
+
+def counted(body: mir.MirBody, loop: loopy.Loop, facts: dict | None = None) -> tuple[CountedLoop, ...]:
+    """Prove every canonical unsigned ``0..<bound`` control recurrence.
+
+    Loop normalization gives analyses one structural spelling: a dedicated
+    preheader, a pre-tested header, one latch, and no side exit.  This proof
+    adds the semantic facts which shape alone cannot supply.  It is shared by
+    strength reduction and loop rotation so neither pass grows a subtly
+    different interpretation of the same branch.
+    """
+    facts = consts.known(body) if facts is None else facts
+    blocks = {block.at: block for block in body.blocks}
+    if len(loop.latches) != 1 or loop.header not in blocks:
+        return ()
+    latch_at = next(iter(loop.latches))
+    latch = blocks.get(latch_at)
+    header = blocks[loop.header]
+    inside = set(loop.body)
+    outside = [at for at in loopy.predecessors(body.blocks).get(header.at, ()) if at not in inside]
+    entered = [at for at in header.succ if at in inside and at != header.at]
+    exits = [at for at in header.succ if at not in inside]
+    if (
+        latch is None
+        or len(outside) != 1
+        or blocks[outside[0]].succ != (header.at,)
+        or latch.succ != (header.at,)
+        or len(entered) != 1
+        or len(exits) != 1
+        or not header.ops
+        or header.ops[-1].kind is not mir.Kind.BRANCH
+        or any(any(to not in inside for to in blocks[at].succ) for at in inside if at != header.at)
+    ):
+        return ()
+    branch = header.ops[-1]
+    if _continuing_test(branch, inside) is not mir.Kind.BELOW:
+        return ()
+    still = invariant(body, inside)
+    made = {value.id: op for block in body.blocks for op in block.ops for value in op.defines}
+    proven = []
+    for counter in basics(body, loop).values():
+        width = counter.start.width
+        if _signed(counter.start, facts, width) != 0 or _signed(counter.step, facts, width) != 1:
+            continue
+        phi = next((one for one in header.phis if one.result.id == counter.value), None)
+        if phi is None or set(phi.incoming) != {outside[0], latch_at}:
+            continue
+        comparisons = [
+            (op, bound)
+            for op in header.ops[:-1]
+            if (bound := _counter_bound(op, branch, counter, width, made)) is not None
+        ]
+        if len(comparisons) != 1:
+            continue
+        compare, bound = comparisons[0]
+        if not isinstance(bound, (mir.Held, mir.Const)) or bound.width != width:
+            continue
+        if isinstance(bound, mir.Held) and bound.value.id not in still:
+            continue
+        update = phi.incoming[latch_at]
+        stepping = made.get(update.id)
+        if (
+            stepping is None
+            or mir.stepping(stepping) != (mir.Held(phi.result, width), mir.Const(1, width))
+            or stepping.results != (mir.Held(update, width),)
+            or stepping.loads
+            or stepping.stores
+            or stepping.barrier
+            or stepping.merges
+        ):
+            continue
+        proven.append(CountedLoop(counter, phi, compare, branch, bound, outside[0], latch_at, entered[0], exits[0]))
+    return tuple(proven)
+
+
 def relation(source: Affine, target: Affine, facts: dict) -> AffineMap | None:
     """The constant modular affine map from ``source`` to ``target``."""
     width = source.start.width

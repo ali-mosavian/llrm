@@ -72,39 +72,29 @@ def _counted_down(body: mir.MirBody) -> mir.MirBody:
             or latch.succ != (header.at,)
             or latch.phis
             or set(predecessors.get(latch.at, ())) != {header.at}
-            or len(header.phis) != 1
             or not header.ops
             or header.ops[-1].kind is not mir.Kind.BRANCH
             or not all(_tests(op) for op in header.ops[:-1])
-            or blocks[exits[0]].phis
         ):
             continue
-        branch = header.ops[-1]
-        counter = next(iter(induction.basics(body, loop).values()), None)
+        proofs = induction.counted(body, loop, facts)
+        if len(proofs) != 1:
+            continue
+        proof = proofs[0]
         if (
-            counter is None
-            or induction._signed(counter.start, facts, counter.start.width) != 0
-            or induction._signed(counter.step, facts, counter.step.width) != 1
-            or induction._continuing_test(branch, inside) is not mir.Kind.BELOW
+            proof.preheader != preheader
+            or proof.latch != latch_at
+            or proof.entered != latch.at
+            or proof.exit != exits[0]
         ):
             continue
-        phi = header.phis[0]
-        if phi.result.id != counter.value or set(phi.incoming) != {preheader, latch_at}:
-            continue
+        counter, phi = proof.counter, proof.phi
+        compare, branch, bound = proof.compare, proof.branch, proof.bound
         width = counter.start.width
-        comparisons = [
-            (op, bound)
-            for op in header.ops[:-1]
-            if (bound := induction._counter_bound(op, branch, counter, width, made)) is not None
-        ]
-        if len(comparisons) != 1:
-            continue
-        compare, bound = comparisons[0]
-        if (
-            not isinstance(bound, mir.Held)
-            or bound.width != width
-            or bound.value.id not in induction.invariant(body, inside)
-        ):
+        # A constant count is handled more profitably by the ordinary
+        # finite-domain induction transforms.  This rewrite exists for a
+        # symbolic value which may be zero at run time.
+        if not isinstance(bound, mir.Held):
             continue
         update = phi.incoming[latch_at]
         stepping = made.get(update.id)
@@ -205,7 +195,11 @@ def _counted_down(body: mir.MirBody) -> mir.MirBody:
             ops = []
             for op in block.ops:
                 if op is stepping:
-                    op = decrement
+                    # Canonicalize the control update after every data
+                    # recurrence.  The rotated branch consumes its flags;
+                    # leaving a strength-reduced address update after it
+                    # would silently make those flags describe the address.
+                    continue
                 elif op is compare:
                     op = _cleared(op)
                 elif op is branch:
@@ -222,11 +216,17 @@ def _counted_down(body: mir.MirBody) -> mir.MirBody:
                 elif start_is_private and op is start_definition:
                     op = _cleared(op)
                 ops.append(op)
+            if block.at == latch_at:
+                cut = len(ops) - bool(ops and ops[-1].kind is mir.Kind.JUMP)
+                ops.insert(cut, decrement)
             rewritten.append(
                 replace(
                     block,
                     ops=tuple(ops),
-                    phis=(replace(phi, incoming={preheader: bound.value, latch_at: update}),)
+                    phis=tuple(
+                        replace(other, incoming={preheader: bound.value, latch_at: update}) if other is phi else other
+                        for other in block.phis
+                    )
                     if block.at == header.at
                     else block.phis,
                 )
@@ -399,6 +399,7 @@ def _entered(
         return moved.get(value.id, value)
 
     ending = {phi.result.id: latest(phi.incoming[latch]) for phi in header.phis}
+    initial = {phi.result.id: phi.incoming[preheader] for phi in header.phis}
     inside = {at for at in loop.body if at != header.at}
     entry = tuple(
         mir.Phi(moved[phi.result.id], {preheader: phi.incoming[preheader], header.at: ending[phi.result.id]})
@@ -407,16 +408,21 @@ def _entered(
 
     def rewired(block: mir.MirBlock) -> mir.MirBlock:
         swap = moved if block.at in inside else ending
-        phis = tuple(
-            replace(
-                phi,
-                incoming={
-                    at: (moved if at in inside else ending).get(value.id, value) for at, value in phi.incoming.items()
-                },
-            )
-            for phi in block.phis
-        )
-        changed = replace(block, phis=phis, ops=tuple(_swapped(op, swap) for op in block.ops))
+        phis = []
+        for phi in block.phis:
+            incoming = {
+                at: (moved if at in inside else ending).get(value.id, value) for at, value in phi.incoming.items()
+            }
+            # A guarded countdown adds a direct zero-trip edge from the
+            # preheader to the old exit.  Values which used to arrive there
+            # from the header must then be their pre-loop versions, not the
+            # latch versions used by the nonzero path.
+            if entry_succ is not None and block.at in entry_succ and block.at != first.at:
+                zero = phi.incoming.get(header.at)
+                if zero is not None:
+                    incoming[preheader] = initial.get(zero.id, zero)
+            phis.append(replace(phi, incoming=incoming))
+        changed = replace(block, phis=tuple(phis), ops=tuple(_swapped(op, swap) for op in block.ops))
         if block.at == preheader:
             return replace(changed, ops=tuple(ops), succ=entry_succ or (first.at,))
         if block.at == header.at:
