@@ -948,6 +948,51 @@ impl Op {
     }
 }
 
+/// A source-free MIR computation invented by a semantic transform.
+///
+/// Direct port of `qbopt.model.mir:computed`.  The operation names only its
+/// MIR computation and operands; target selection remains below this layer.
+pub(crate) fn computed(at: i64, kind: Kind, result: Value, args: Vec<Arg>, width: u32) -> Op {
+    let loads = args
+        .iter()
+        .filter_map(|argument| match argument {
+            Arg::Cell(cell) => Some(cell.r#ref.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let mut uses = Vec::new();
+    for value in args.iter().filter_map(|argument| match argument {
+        Arg::Held(held) => Some(held.value),
+        _ => None,
+    }) {
+        if !uses.contains(&value) {
+            uses.push(value);
+        }
+    }
+    for value in loads
+        .iter()
+        .flat_map(|reference| [reference.base, reference.segment])
+        .flatten()
+    {
+        if !uses.contains(&value) {
+            uses.push(value);
+        }
+    }
+
+    let mut operation = Op::new(at, OpCode::nothing(), "", vec![result], uses);
+    operation.loads = loads;
+    operation.kind = kind;
+    operation.args = args;
+    operation.results = vec![Arg::Held(Held {
+        value: result,
+        width,
+    })];
+    operation.symbol = Some(false);
+    operation.memory_complete = true;
+    operation.reads_complete = true;
+    operation
+}
+
 /// Retains an occurrence's source ownership while deleting its meaning.
 ///
 /// Direct port of `qbopt/model/mir.py:cleared`.
@@ -1956,8 +2001,9 @@ mod tests {
     use super::{
         AllocationHints, AllocationHintsError, Arg, ArrayRequest, Cell, Const, FloatingOrigin,
         Held, IntegerRange, Kind, MemRef, MirBlock, MirBody, Op, OpCode, Opaque, OrderedMap, Phi,
-        RaisedBody, Symbol, Synth, Value, cleared, consumed, exit_values, exposed, kind_of, ordinary_uses,
-        partial, python_padded_hex, resolved, rewritten, same_bytes, stepping, unheld, verify,
+        RaisedBody, Symbol, Synth, Value, cleared, computed, consumed, exit_values, exposed,
+        kind_of, ordinary_uses, partial, python_padded_hex, resolved, rewritten, same_bytes,
+        stepping, unheld, verify,
     };
 
     #[test]
@@ -2710,6 +2756,52 @@ mod tests {
         assert_ne!(op, all_resources);
         assert_eq!(all_resources.symbol, Some(false));
         assert_eq!(all_resources.opaque_defs, None);
+    }
+
+    #[test]
+    fn computed_builds_a_source_free_mir_operation_with_ordered_unique_uses() {
+        let first = Value::new(1, 7);
+        let base = Value::new(2, 7);
+        let segment = Value::new(3, 7);
+        let result = Value::new(4, 7);
+        let mut reference = MemRef::new(None, 2);
+        reference.base = Some(base);
+        reference.segment = Some(segment);
+        let arguments = vec![
+            Arg::Held(Held {
+                value: first,
+                width: 2,
+            }),
+            Arg::Held(Held {
+                value: first,
+                width: 2,
+            }),
+            Arg::Cell(Cell {
+                r#ref: reference.clone(),
+            }),
+        ];
+
+        let operation = computed(7, Kind::Add, result, arguments.clone(), 4);
+
+        assert_eq!(operation.op, Some(OpCode::nothing()));
+        assert_eq!(operation.name, "");
+        assert_eq!(operation.defines, vec![result]);
+        assert_eq!(operation.uses, vec![first, base, segment]);
+        assert_eq!(operation.loads, vec![reference]);
+        assert!(!operation.source_backed);
+        assert_eq!(operation.kind, Kind::Add);
+        assert_eq!(operation.args, arguments);
+        assert_eq!(
+            operation.results,
+            vec![Arg::Held(Held {
+                value: result,
+                width: 4,
+            })]
+        );
+        assert_eq!(operation.id, None);
+        assert_eq!(operation.symbol, Some(false));
+        assert!(operation.memory_complete);
+        assert!(operation.reads_complete);
     }
 
     #[test]
