@@ -46,48 +46,21 @@ def _counted_down(body: mir.MirBody) -> mir.MirBody:
     form produced by loop simplification.  More involved loops remain on the
     original representation rather than acquiring a partially repaired CFG.
     """
-    from qbopt.optimize import transform
-
     blocks = {block.at: block for block in body.blocks}
-    predecessors = loops.predecessors(body.blocks)
     facts = consts.known(body)
     made = {value.id: op for block in body.blocks for op in block.ops for value in op.defines}
     all_values = tuple(ssa.values(body))
 
     for loop in loops.loops(body.blocks, body.entry):
-        if len(loop.body) != 2 or len(loop.latches) != 1:
-            continue
-        preheader = transform._preheader(body, loop)
-        if preheader is None or blocks[preheader].succ != (loop.header,):
-            continue
-        header = blocks[loop.header]
-        latch_at = next(iter(loop.latches))
-        latch = blocks[latch_at]
-        inside = set(loop.body)
-        entered_at = [at for at in header.succ if at in inside and at != header.at]
-        exits = [at for at in header.succ if at not in inside]
-        if (
-            entered_at != [latch_at]
-            or len(exits) != 1
-            or latch.succ != (header.at,)
-            or latch.phis
-            or set(predecessors.get(latch.at, ())) != {header.at}
-            or not header.ops
-            or header.ops[-1].kind is not mir.Kind.BRANCH
-            or not all(_tests(op) for op in header.ops[:-1])
-        ):
-            continue
         proofs = induction.counted(body, loop, facts)
         if len(proofs) != 1:
             continue
         proof = proofs[0]
-        if (
-            proof.preheader != preheader
-            or proof.latch != latch_at
-            or proof.entered != latch.at
-            or proof.exit != exits[0]
-        ):
+        replacement = induction.control_replacement(body, loop, proof)
+        if replacement is None:
             continue
+        preheader, latch_at = proof.preheader, proof.latch
+        header, latch = blocks[loop.header], blocks[latch_at]
         counter, phi = proof.counter, proof.phi
         compare, branch, bound = proof.compare, proof.branch, proof.bound
         width = counter.start.width
@@ -96,42 +69,7 @@ def _counted_down(body: mir.MirBody) -> mir.MirBody:
         # symbolic value which may be zero at run time.
         if not isinstance(bound, mir.Held):
             continue
-        update = phi.incoming[latch_at]
-        stepping = made.get(update.id)
-        stepped = mir.stepping(stepping) if stepping is not None else None
-        if (
-            stepping is None
-            or stepped != (mir.Held(phi.result, width), mir.Const(1, width))
-            or stepping.results != (mir.Held(update, width),)
-            or stepping.loads
-            or stepping.stores
-            or stepping.barrier
-            or stepping.merges
-        ):
-            continue
-        if any(
-            (set(compare.defines) & set(op.uses) and op is not branch)
-            or {value for value in stepping.defines if value.flags} & set(op.uses)
-            for block in body.blocks
-            for op in block.ops
-        ):
-            continue
-        # The recurrence may be replaced only when it is control, not a
-        # source-language value.  Count operation reads and phi edges alike;
-        # an exit use hidden in either representation must reject the change.
-        allowed = {id(compare), id(stepping)}
-        if any(
-            phi.result in op.uses and id(op) not in allowed or update in op.uses
-            for block in body.blocks
-            for op in block.ops
-        ):
-            continue
-        if any(
-            other is not phi and {phi.result, update} & set(other.incoming.values())
-            for block in body.blocks
-            for other in block.phis
-        ):
-            continue
+        update, stepping = replacement.update, replacement.stepping
 
         serial = max((value.id for value in all_values), default=0) + 1
         variable = max((value.variable for value in all_values), default=0) + 1
@@ -167,14 +105,14 @@ def _counted_down(body: mir.MirBody) -> mir.MirBody:
             uses=(guard_flags,),
             source_backed=False,
             test=mir.Kind.EQ,
-            target=exits[0],
+            target=proof.exit,
             raised=None,
             absorbed=(),
             symbol=False,
         )
         entry_ops = list(blocks[preheader].ops)
         if entry_ops and entry_ops[-1].kind is mir.Kind.JUMP:
-            entry_ops[-1] = _cleared(entry_ops[-1])
+            entry_ops[-1] = mir.cleared(entry_ops[-1])
         elif entry_ops and entry_ops[-1].kind is mir.Kind.BRANCH:
             continue
         entry_ops += [guard_compare, guard_branch]
@@ -189,7 +127,7 @@ def _counted_down(body: mir.MirBody) -> mir.MirBody:
             )
         )
         if start_is_private:
-            entry_ops = [_cleared(op) if op is start_definition else op for op in entry_ops]
+            entry_ops = [mir.cleared(op) if op is start_definition else op for op in entry_ops]
         rewritten = []
         for block in body.blocks:
             ops = []
@@ -201,7 +139,7 @@ def _counted_down(body: mir.MirBody) -> mir.MirBody:
                     # would silently make those flags describe the address.
                     continue
                 elif op is compare:
-                    op = _cleared(op)
+                    op = mir.cleared(op)
                 elif op is branch:
                     op = replace(
                         op,
@@ -214,7 +152,7 @@ def _counted_down(body: mir.MirBody) -> mir.MirBody:
                         symbol=False,
                     )
                 elif start_is_private and op is start_definition:
-                    op = _cleared(op)
+                    op = mir.cleared(op)
                 ops.append(op)
             if block.at == latch_at:
                 cut = len(ops) - bool(ops and ops[-1].kind is mir.Kind.JUMP)
@@ -235,14 +173,14 @@ def _counted_down(body: mir.MirBody) -> mir.MirBody:
         changed_header = changed.block(header.at)
         changed_latch = changed.block(latch.at)
         return _counted_down(
-            _entered(
+            at_body(
                 changed,
                 loop,
                 preheader,
                 changed_header,
                 changed_latch,
                 entry_ops,
-                entry_succ=(changed_latch.at, exits[0]),
+                entry_succ=(changed_latch.at, proof.exit),
             )
         )
     return body
@@ -268,7 +206,7 @@ def rotated(body: mir.MirBody) -> mir.MirBody:
             continue
         if not header.ops or header.ops[-1].kind is not mir.Kind.BRANCH:
             continue
-        if not all(_tests(op) for op in header.ops[:-1]) or not induction.nonempty(body, loop):
+        if not all(induction.test_only(op) for op in header.ops[:-1]) or not induction.nonempty(body, loop):
             continue
         entry = blocks[preheader]
         ops = list(entry.ops)
@@ -282,7 +220,7 @@ def rotated(body: mir.MirBody) -> mir.MirBody:
         body = _step_test(body, loop, header)
         header = body.block(header.at)
         first = body.block(first.at)
-        return rotated(_entered(body, loop, preheader, header, first, ops))
+        return rotated(at_body(body, loop, preheader, header, first, ops))
     return body
 
 
@@ -359,7 +297,7 @@ def _step_test(body: mir.MirBody, loop: loops.Loop, header: mir.MirBlock) -> mir
                 if op is stepping:
                     op = replace(op, defines=(*op.defines, step_flags), source_backed=False, raised=None)
                 elif op is compare:
-                    op = _cleared(op)
+                    op = mir.cleared(op)
                 elif op is branch:
                     op = replace(op, uses=(step_flags,), source_backed=False, raised=None)
                 ops.append(op)
@@ -368,7 +306,7 @@ def _step_test(body: mir.MirBody, loop: loops.Loop, header: mir.MirBlock) -> mir
     return body
 
 
-def _entered(
+def at_body(
     body: mir.MirBody,
     loop: loops.Loop,
     preheader: int,
@@ -389,7 +327,16 @@ def _entered(
     from the latch, and everything after the loop read `b`.
     """
     latch = next(iter(loop.latches))
-    serial = max(value.id for value in ssa.values(body)) + 1
+    # ``ops`` may contain values the caller has just constructed for the new
+    # preheader and which are not in ``body`` yet.  Allocate moved phis after
+    # both sets.  Looking only at the old body reused a guard flag's id for an
+    # accumulator phi; dead-code elimination then erased the accumulator's
+    # zero seed and sum read an uninitialized register.
+    existing = (
+        *ssa.values(body),
+        *(value for op in ops for value in (*op.defines, *op.uses, *op.exits)),
+    )
+    serial = max(value.id for value in existing) + 1
     moved = {
         phi.result.id: replace(phi.result, id=serial + index, at=first.at) for index, phi in enumerate(header.phis)
     }
@@ -439,31 +386,16 @@ def _entered(
         # losing a measurement is preferable to attaching the wrong count.
         if first.at not in counts or counts[first.at] == count:
             counts[first.at] = count
+    integer_ranges = dict(body.integer_ranges)
+    for phi in header.phis:
+        interval = integer_ranges.pop(phi.result, None)
+        if interval is not None:
+            integer_ranges[moved[phi.result.id]] = interval
     return replace(
         body,
         blocks=tuple(rewired(block) for block in body.blocks),
+        integer_ranges=integer_ranges,
         loop_trip_counts=tuple(sorted(counts.items())),
-    )
-
-
-def _cleared(op: mir.Op) -> mir.Op:
-    """Retain an occurrence's ownership while deleting its computation."""
-    return replace(
-        op,
-        kind=mir.Kind.NOTHING,
-        name="",
-        defines=(),
-        uses=(),
-        loads=(),
-        stores=(),
-        args=(),
-        results=(),
-        merges={},
-        raised=None,
-        target=None,
-        test=None,
-        stack=None,
-        symbol=False,
     )
 
 
@@ -472,23 +404,3 @@ def _swapped(op: mir.Op, swap: dict[int, mir.Value]) -> mir.Op:
     if not swap or not any(value.id in swap for value in op.uses):
         return op
     return ssa.substituted(op, {key: value for key, value in swap.items() if value.id not in swap or value.id == key})
-
-
-def _tests(op: mir.Op) -> bool:
-    """A comparison or nothing: the entry skips it, so it may compute nothing else.
-
-    A floating check computes no value and still moves the x87 stack.
-    """
-    from qbopt.optimize import cfg
-
-    if cfg._empty(op):
-        return True
-    return (
-        op.kind in (mir.Kind.SUB, mir.Kind.AND, mir.Kind.OR)
-        and not (op.results or op.loads or op.stores or op.merges or op.barrier)
-        and op.floating is None
-        and op.stack is None
-        and op.floating_origin is None
-        and bool(op.defines)
-        and all(value.flags for value in op.defines)
-    )

@@ -87,6 +87,21 @@ class AffineMap:
 
 
 @dataclass(frozen=True, slots=True)
+class LoopShape:
+    """The canonical pre-tested, single-latch loop CFG.
+
+    This is control-flow structure only.  Keeping it separate from counted
+    loop semantics prevents every consumer from spelling its own subtly
+    different preheader, latch, entry, and exit recognizer.
+    """
+
+    preheader: int
+    latch: int
+    entered: int
+    exit: int
+
+
+@dataclass(frozen=True, slots=True)
 class CountedLoop:
     """A canonical zero-or-more loop with an exact symbolic trip count.
 
@@ -112,25 +127,34 @@ class CountedLoop:
     latch: int
     entered: int
     exit: int
+    maximum: int | None = None
 
     @property
     def trips(self) -> mir.Held | mir.Const:
         return self.bound
 
 
-def counted(body: mir.MirBody, loop: loopy.Loop, facts: dict | None = None) -> tuple[CountedLoop, ...]:
-    """Prove every canonical unsigned ``0..<bound`` control recurrence.
+@dataclass(frozen=True, slots=True)
+class ControlReplacement:
+    """Proof that a counted loop's source recurrence may be removed.
 
-    Loop normalization gives analyses one structural spelling: a dedicated
-    preheader, a pre-tested header, one latch, and no side exit.  This proof
-    adds the semantic facts which shape alone cannot supply.  It is shared by
-    strength reduction and loop rotation so neither pass grows a subtly
-    different interpretation of the same branch.
+    ``covered`` operations may be replaced by the caller's chosen affine
+    formula.  Everything else that observes the counter is rejected here,
+    once, including phi edges and flag readers.
     """
-    facts = consts.known(body) if facts is None else facts
+
+    counted: CountedLoop
+    stepping: mir.Op
+    update: mir.Value
+    aliases: frozenset[mir.Value]
+    copies: frozenset[int]
+
+
+def canonical(body: mir.MirBody, loop: loopy.Loop) -> LoopShape | None:
+    """The one normalized loop shape consumed by induction transforms."""
     blocks = {block.at: block for block in body.blocks}
     if len(loop.latches) != 1 or loop.header not in blocks:
-        return ()
+        return None
     latch_at = next(iter(loop.latches))
     latch = blocks.get(latch_at)
     header = blocks[loop.header]
@@ -149,7 +173,26 @@ def counted(body: mir.MirBody, loop: loopy.Loop, facts: dict | None = None) -> t
         or header.ops[-1].kind is not mir.Kind.BRANCH
         or any(any(to not in inside for to in blocks[at].succ) for at in inside if at != header.at)
     ):
+        return None
+    return LoopShape(outside[0], latch_at, entered[0], exits[0])
+
+
+def counted(body: mir.MirBody, loop: loopy.Loop, facts: dict | None = None) -> tuple[CountedLoop, ...]:
+    """Prove every canonical unsigned ``0..<bound`` control recurrence.
+
+    Loop normalization gives analyses one structural spelling: a dedicated
+    preheader, a pre-tested header, one latch, and no side exit.  This proof
+    adds the semantic facts which shape alone cannot supply.  It is shared by
+    strength reduction and loop rotation so neither pass grows a subtly
+    different interpretation of the same branch.
+    """
+    facts = consts.known(body) if facts is None else facts
+    blocks = {block.at: block for block in body.blocks}
+    shape = canonical(body, loop)
+    if shape is None:
         return ()
+    header = blocks[loop.header]
+    inside = set(loop.body)
     branch = header.ops[-1]
     if _continuing_test(branch, inside) is not mir.Kind.BELOW:
         return ()
@@ -161,7 +204,7 @@ def counted(body: mir.MirBody, loop: loopy.Loop, facts: dict | None = None) -> t
         if _signed(counter.start, facts, width) != 0 or _signed(counter.step, facts, width) != 1:
             continue
         phi = next((one for one in header.phis if one.result.id == counter.value), None)
-        if phi is None or set(phi.incoming) != {outside[0], latch_at}:
+        if phi is None or set(phi.incoming) != {shape.preheader, shape.latch}:
             continue
         comparisons = [
             (op, bound)
@@ -175,7 +218,7 @@ def counted(body: mir.MirBody, loop: loopy.Loop, facts: dict | None = None) -> t
             continue
         if isinstance(bound, mir.Held) and bound.value.id not in still:
             continue
-        update = phi.incoming[latch_at]
+        update = phi.incoming[shape.latch]
         stepping = made.get(update.id)
         if (
             stepping is None
@@ -187,8 +230,128 @@ def counted(body: mir.MirBody, loop: loopy.Loop, facts: dict | None = None) -> t
             or stepping.merges
         ):
             continue
-        proven.append(CountedLoop(counter, phi, compare, branch, bound, outside[0], latch_at, entered[0], exits[0]))
+        if isinstance(bound, mir.Const):
+            maximum = consts.masked(bound.n, bound.width)
+        else:
+            interval = body.integer_ranges.get(bound.value)
+            maximum = (
+                interval.high if interval is not None and interval.width == bound.width and interval.low >= 0 else None
+            )
+        proven.append(
+            CountedLoop(
+                counter,
+                phi,
+                compare,
+                branch,
+                bound,
+                shape.preheader,
+                shape.latch,
+                shape.entered,
+                shape.exit,
+                maximum,
+            )
+        )
     return tuple(proven)
+
+
+def transparent_aliases(
+    body: mir.MirBody,
+    loop: loopy.Loop,
+    source: mir.Value,
+) -> tuple[frozenset[mir.Value], frozenset[int]]:
+    """Values and operations in a width-preserving copy chain."""
+    aliases = {source}
+    copies: set[int] = set()
+    changed = True
+    while changed:
+        changed = False
+        for block in body.blocks:
+            if block.at not in loop.body:
+                continue
+            for op in block.ops:
+                if (
+                    op.kind is mir.Kind.COPY
+                    and len(op.args) == len(op.results) == 1
+                    and isinstance(op.args[0], mir.Held)
+                    and isinstance(op.results[0], mir.Held)
+                    and op.args[0].value in aliases
+                    and op.results[0].width == op.args[0].width
+                ):
+                    copies.add(id(op))
+                    if op.results[0].value not in aliases:
+                        aliases.add(op.results[0].value)
+                        changed = True
+    return frozenset(aliases), frozenset(copies)
+
+
+def control_replacement(
+    body: mir.MirBody,
+    loop: loopy.Loop,
+    proof: CountedLoop,
+    covered: frozenset[int] = frozenset(),
+) -> ControlReplacement | None:
+    """Prove that ``covered`` plus loop control are every counter use."""
+    blocks = {block.at: block for block in body.blocks}
+    predecessors = loopy.predecessors(body.blocks)
+    header, latch = blocks[loop.header], blocks[proof.latch]
+    if (
+        len(loop.body) != 2
+        or proof.entered != proof.latch
+        or latch.phis
+        or set(predecessors.get(latch.at, ())) != {header.at}
+        or any(op is not proof.compare and op is not proof.branch and not test_only(op) for op in header.ops)
+    ):
+        return None
+    made = {value.id: op for block in body.blocks for op in block.ops for value in op.defines}
+    update = proof.phi.incoming[proof.latch]
+    stepping = made.get(update.id)
+    if stepping is None:
+        return None
+    aliases, copies = transparent_aliases(body, loop, proof.phi.result)
+    allowed = covered | copies | {id(proof.compare), id(stepping)}
+    if any(
+        (aliases.intersection(op.uses) and id(op) not in allowed) or update in op.uses
+        for block in body.blocks
+        for op in block.ops
+    ):
+        return None
+    if any(
+        other is not proof.phi and ({*aliases, update} & set(other.incoming.values()))
+        for block in body.blocks
+        for other in block.phis
+    ):
+        return None
+    compare_flags = {value for value in proof.compare.defines if value.flags}
+    step_flags = {value for value in stepping.defines if value.flags}
+    if any(
+        (compare_flags.intersection(op.uses) and op is not proof.branch) or step_flags.intersection(op.uses)
+        for block in body.blocks
+        for op in block.ops
+    ):
+        return None
+    return ControlReplacement(proof, stepping, update, aliases, copies)
+
+
+def test_only(op: mir.Op) -> bool:
+    """Whether skipping ``op`` skips no value or side effect."""
+    if (
+        op.kind is mir.Kind.NOTHING
+        and not op.name
+        and not (op.defines or op.uses or op.args or op.results or op.loads or op.stores or op.merges or op.barrier)
+        and op.floating is None
+        and op.stack is None
+        and op.floating_origin is None
+    ):
+        return True
+    return (
+        op.kind in (mir.Kind.SUB, mir.Kind.AND, mir.Kind.OR)
+        and not (op.results or op.loads or op.stores or op.merges or op.barrier)
+        and op.floating is None
+        and op.stack is None
+        and op.floating_origin is None
+        and bool(op.defines)
+        and all(value.flags for value in op.defines)
+    )
 
 
 def relation(source: Affine, target: Affine, facts: dict) -> AffineMap | None:

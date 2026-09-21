@@ -399,8 +399,8 @@ def _function(module: model.Module, function: model.Function, types: dict[int, m
                 if isinstance(operand, model.DescriptorPlace):
                     pointer = types[values[operand.base].type]
                     field = types[operand.type]
-                    if pointer.kind is not model.TypeKind.POINTER or pointer.element not in types:
-                        raise InvalidHIR(f"{prefix}: descriptor place needs a pointer")
+                    if pointer.kind is not model.TypeKind.POINTER or pointer.element not in types or pointer.rank != 1:
+                        raise InvalidHIR(f"{prefix}: descriptor place needs a slice pointer")
                     if field.kind is not model.TypeKind.INTEGER or field.width != 2 or field.signed is not False:
                         raise InvalidHIR(f"{prefix}: descriptor field is not u16")
         term = block.terminator

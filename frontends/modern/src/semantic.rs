@@ -89,7 +89,7 @@ struct TypeRegistry {
     arrays: BTreeMap<(u32, u32), u32>,
     structs: BTreeMap<String, StructLayout>,
     fixed_names: BTreeMap<String, TypeName>,
-    pointers: BTreeMap<u32, u32>,
+    pointers: BTreeMap<(u32, u32), u32>,
 }
 
 #[derive(Clone, Debug)]
@@ -310,8 +310,8 @@ impl TypeRegistry {
         self.types[(id - 1) as usize].width
     }
 
-    fn pointer(&mut self, target: u32) -> u32 {
-        if let Some(id) = self.pointers.get(&target) {
+    fn pointer(&mut self, target: u32, rank: u32) -> u32 {
+        if let Some(id) = self.pointers.get(&(target, rank)) {
             return *id;
         }
         let id = self.types.len() as u32 + 1;
@@ -324,11 +324,11 @@ impl TypeRegistry {
             signed: None,
             evaluation: "none",
             element: Some(target),
-            rank: 0,
+            rank,
             bounds: Vec::new(),
             address: "far",
         });
-        self.pointers.insert(target, id);
+        self.pointers.insert((target, rank), id);
         id
     }
 
@@ -515,7 +515,8 @@ pub fn compile(module: &Module, module_name: &str) -> Result<String, Diagnostic>
                 ParameterType::Scalar(type_name) => Ok(SignatureParameter::Scalar(*type_name)),
                 ParameterType::Borrowed { mutable, target } => {
                     let (target, target_id) = types.parameter_target(target, parameter.span)?;
-                    let pointer = types.pointer(target_id);
+                    let rank = u32::from(matches!(&target, BindingType::Slice { .. }));
+                    let pointer = types.pointer(target_id, rank);
                     Ok(SignatureParameter::Borrowed {
                         mutable: *mutable,
                         target,

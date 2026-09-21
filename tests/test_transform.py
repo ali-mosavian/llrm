@@ -1546,6 +1546,7 @@ def test_reparenting_a_hoisted_pointer_keeps_its_object_facts() -> None:
     pointer = mir.Value(1, 0, variable=3, version=1)
     object_ = memory.Object(memory.Kind.FRAME, (5, -16, -4), extent=12)
     provenance = memory.Provenance.one(object_, 0, 1)
+    interval = mir.IntegerRange(0, 31, 2)
     address = mir.Op(
         0,
         ir.Operation.ADDRESS,
@@ -1561,6 +1562,7 @@ def test_reparenting_a_hoisted_pointer_keeps_its_object_facts() -> None:
         (mir.MirBlock(0, (), (address,), ()),),
         pointer_values=frozenset({pointer}),
         pointer_seeds={pointer: provenance},
+        integer_ranges={pointer: interval},
     )
 
     result = transform._reparented(body, {pointer})
@@ -1569,6 +1571,7 @@ def test_reparenting_a_hoisted_pointer_keeps_its_object_facts() -> None:
     assert renamed.variable != pointer.variable
     assert result.pointer_values == frozenset({renamed})
     assert result.pointer_seeds == {renamed: provenance}
+    assert result.integer_ranges == {renamed: interval}
 
 
 def test_cse_refuses_an_operand_that_is_only_half_its_value() -> None:

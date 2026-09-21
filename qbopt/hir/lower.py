@@ -271,6 +271,7 @@ def _function(
 ) -> Lowered:
     values = {one.id: mir.Value(one.id, one.id, variable=one.id, version=1) for one in function.values}
     value_types = {one.id: types[one.type] for one in function.values}
+    integer_ranges: dict[mir.Value, mir.IntegerRange] = {}
 
     def value_width(type_: model.Type) -> int:
         return 10 if type_.kind is model.TypeKind.FLOAT else type_.width
@@ -937,6 +938,23 @@ def _function(
             mir.Held(one, value_width(value_types[source]))
             for one, source in zip(made, instruction.results, strict=True)
         )
+        if (
+            instruction.op is model.Op.LOAD
+            and len(instruction.operands) == len(made) == 1
+            and isinstance(instruction.operands[0], model.DescriptorPlace)
+        ):
+            descriptor = instruction.operands[0]
+            pointer = value_types[descriptor.base]
+            assert pointer.element is not None and pointer.rank == 1
+            element = types[pointer.element]
+            # Translate the target ABI rule here, at the HIR boundary.  A
+            # descriptor-backed slice fits in one pointer-offset domain, so
+            # its element count cannot exceed that domain divided by the
+            # element width.  MIR receives only the resulting integer fact.
+            offset_width = pointer.width if pointer.address is model.AddressKind.NEAR else pointer.width // 2
+            field_width = value_types[instruction.results[0]].width
+            maximum = min((1 << (field_width * 8)) - 1, (1 << (offset_width * 8)) // element.width)
+            integer_ranges[made[0]] = mir.IntegerRange(0, maximum, field_width)
         # Shared MIR deliberately has no target-instruction catalogue. Keep
         # source intrinsics as unary floating computation, never CALL: FSQRT
         # is the existing unary-float carrier and ``name`` retains the exact
@@ -1386,6 +1404,7 @@ def _function(
         sealed=True,
         pointer_values=pointer_values,
         pointer_seeds=pointer_seeds,
+        integer_ranges=integer_ranges,
     )
     checked = body
     external = tuple(

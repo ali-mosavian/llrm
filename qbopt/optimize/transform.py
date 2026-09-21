@@ -2621,6 +2621,7 @@ def _reparented(body: MirBody, crossed: set) -> MirBody:
         ),
         pointer_values=frozenset(value(one) for one in body.pointer_values),
         pointer_seeds={value(one): provenance for one, provenance in body.pointer_seeds.items()},
+        integer_ranges={value(one): interval for one, interval in body.integer_ranges.items()},
     )
 
 

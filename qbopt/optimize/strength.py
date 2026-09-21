@@ -86,6 +86,7 @@ class Strength(MIRTransform):
         body = loopexit.evaluated(body)
         body = indvars.rewound(body, self.where.registers, self.where.costs)
         body = indvars.simplified(body)
+        body = indvars.symbolically_zeroed(body)
         return indvars.zeroed(body, address_offsets=True)
 
 
@@ -110,7 +111,7 @@ def reduced(
     candidate_groups = {loop.header: _candidates(body, derived, scales) for loop, _basics, derived in found}
     replacement_credits = (
         _replacement_credits(body, found, candidate_groups, costs)
-        | _countdown_credits(body, found, candidate_groups, costs)
+        | _control_credits(body, found, candidate_groups, costs)
         if control_recurrences
         else frozenset()
     )
@@ -447,82 +448,34 @@ def _formula_descendants(
     return frozenset(operations)
 
 
-def _transparent_aliases(
-    body: MirBody,
-    loop: loopy.Loop,
-    source: mir.Value,
-) -> tuple[frozenset[mir.Value], frozenset[int]]:
-    """Values and operations in a width-preserving copy chain."""
-    aliases = {source}
-    copies: set[int] = set()
-    changed = True
-    while changed:
-        changed = False
-        for block in body.blocks:
-            if block.at not in loop.body:
-                continue
-            for op in block.ops:
-                if (
-                    op.kind is mir.Kind.COPY
-                    and len(op.args) == len(op.results) == 1
-                    and isinstance(op.args[0], mir.Held)
-                    and isinstance(op.results[0], mir.Held)
-                    and op.args[0].value in aliases
-                    and op.results[0].width == op.args[0].width
-                ):
-                    copies.add(id(op))
-                    if op.results[0].value not in aliases:
-                        aliases.add(op.results[0].value)
-                        changed = True
-    return frozenset(aliases), frozenset(copies)
-
-
-def _countdown_credits(
+def _control_credits(
     body: MirBody,
     found: list[tuple[loopy.Loop, dict[int, induction.Affine], list[induction.Derived]]],
     groups: dict[int, list[induction.Derived]],
     costs: OperationCosts,
 ) -> frozenset[int]:
-    """Formulas whose source index is proved replaceable by a countdown.
+    """Formulas whose source index is proved replaceable as loop control.
 
-    This is intentionally separate from ``_replacement_credits``.  That
-    proof transfers loop termination to an affine formula and therefore
-    needs a numeric finite domain plus an injective modular map.  Here the
-    formula replaces every *data* use of ``i`` while the shared counted-loop
-    proof changes control from ``i < bound`` to ``--bound != 0``.  No claim
-    about the formula's injectivity is made or needed.
+    This is intentionally separate from ``_replacement_credits``. That
+    relational proof transfers equality through a formula. Here the formula
+    replaces every *data* use of ``i`` and the shared counted-loop proof says
+    the source recurrence is otherwise control-only. The later induction
+    transform independently chooses either a bounded data recurrence or a
+    countdown as the actual control representation.
 
-    Admitting the formula consumes one recurrence and the countdown removes
-    one, so its net pressure cost is zero.  The structural checks mirror the
-    canonical form the final rotation consumes; if any source or update use
-    would survive, no credit is issued.
+    Admitting the formula consumes one recurrence and replacing the source
+    removes one, so its net pressure cost is zero. Structural and use checks
+    live in ``induction.control_replacement``; strength reduction only ranks
+    the formulas it can cover.
     """
     facts = consts.known(body)
-    blocks = {block.at: block for block in body.blocks}
-    predecessors = loopy.predecessors(body.blocks)
     selected: dict[int, tuple[tuple[int, int, int], induction.Derived]] = {}
 
     for loop, _basics, _derived in found:
         proofs = induction.counted(body, loop, facts)
-        if len(proofs) != 1 or len(loop.body) != 2:
+        if len(proofs) != 1:
             continue
         proof = proofs[0]
-        header, latch = blocks[loop.header], blocks[proof.latch]
-        if (
-            latch.phis
-            or set(predecessors.get(latch.at, ())) != {header.at}
-            or any(
-                op is not proof.compare and op is not proof.branch and op.kind is not mir.Kind.NOTHING
-                for op in header.ops
-            )
-        ):
-            continue
-        update = proof.phi.incoming[proof.latch]
-        made = {value.id: op for block in body.blocks for op in block.ops for value in op.defines}
-        stepping = made.get(update.id)
-        if stepping is None:
-            continue
-        aliases, copies = _transparent_aliases(body, loop, proof.phi.result)
         candidates = [one for one in groups[loop.header] if one.of == proof.counter]
         results = {
             one.op.results[0].value for one in candidates if one.op.results and isinstance(one.op.results[0], mir.Held)
@@ -534,26 +487,7 @@ def _countdown_credits(
         ]
         for order, root in enumerate(roots):
             descendants = _formula_descendants(root, tuple(candidates))
-            allowed = descendants | copies | {id(proof.compare), id(stepping)}
-            if any(
-                aliases.intersection(op.uses) and id(op) not in allowed or update in op.uses
-                for block in body.blocks
-                for op in block.ops
-            ):
-                continue
-            if any(
-                other is not proof.phi and ({*aliases, update} & set(other.incoming.values()))
-                for block in body.blocks
-                for other in block.phis
-            ):
-                continue
-            compare_flags = {value for value in proof.compare.defines if value.flags}
-            step_flags = {value for value in stepping.defines if value.flags}
-            if any(
-                compare_flags.intersection(op.uses) and op is not proof.branch or step_flags.intersection(op.uses)
-                for block in body.blocks
-                for op in block.ops
-            ):
+            if induction.control_replacement(body, loop, proof, descendants) is None:
                 continue
             rank = (len(descendants), _recompute_cost(root, costs), -order)
             previous = selected.get(proof.counter.value)
@@ -613,7 +547,7 @@ def _replacement_credits(
             if len(controls) != 1 or update is None:
                 continue
 
-            aliases, copies = _transparent_aliases(body, loop, phi.result)
+            aliases, copies = induction.transparent_aliases(body, loop, phi.result)
 
             same = tuple(one for one in candidates if one.of == affine)
             results = {
@@ -657,7 +591,7 @@ def _replacement_credits(
             if domain is None or phi is None:
                 continue
             domains[affine.value] = domain
-            source_aliases, _copies = _transparent_aliases(body, loop, phi.result)
+            source_aliases, _copies = induction.transparent_aliases(body, loop, phi.result)
             for value in source_aliases:
                 aliases.setdefault(value, set()).add(affine.value)
 

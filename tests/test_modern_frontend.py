@@ -1,5 +1,6 @@
 import re
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -14,7 +15,6 @@ from qbopt.backend import lower_int64
 from qbopt.frontend.modern import driver
 from qbopt.frontend.qb import physicalize
 from qbopt.frontend.modern import compile as modern_compile
-from qbopt.optimize import rotate
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "frontends" / "modern" / "fixtures" / "control.mod"
@@ -503,6 +503,7 @@ def test_array_parameter_is_one_unsized_payload_pointer() -> None:
 
     assert len(function.parameters) == 1
     assert pointer.kind is hir.TypeKind.POINTER
+    assert pointer.rank == 1
     assert element.name == "i16"
     assert descriptor_loads == [hir.DescriptorPlace(function.parameters[0], hir.DescriptorField.LENGTH, metadata.id)]
 
@@ -511,9 +512,12 @@ def test_runtime_bounded_array_loop_advances_its_payload_address() -> None:
     """sum rebuilt ``payload + index * 2`` on every trip despite its invariant runtime bound."""
     assembly = masm.text(modern_compile.assembled(driver.parsed(SUM), entry="main"))
     function = assembly.split("_sum proc far", 1)[1].split("_sum endp", 1)[0]
+    hot = function.split("L0_3:", 1)[1].split("L0_5:", 1)[0]
 
-    assert not re.search(r"\b(?:imul|shl|lea)\b[^\n]*(?:ecx|cx).*(?:ecx|cx)", function)
-    assert re.search(r"\badd\s+(?:si|di|bx),\s*2\b", function)
+    assert not re.search(r"\b(?:imul|shl|lea)\b", hot)
+    assert "xor ax, ax" in function
+    assert "dec " not in function
+    assert re.search(r"\badd\s+(?:si|di|bx),\s*2\s*\n(?:L\w+:\n)?\s*jne\b", hot)
 
 
 def test_runtime_bounded_array_loop_has_a_symbolic_count_proof() -> None:
@@ -521,19 +525,46 @@ def test_runtime_bounded_array_loop_has_a_symbolic_count_proof() -> None:
     program = driver.parsed(SUM)
     function = next(one for one in program.modules[0].functions if one.name == "sum")
     semantic = next(one for one in modern_compile.semantic_lowered(program) if one.name == "sum.sum")
+    length = next(
+        value
+        for block in semantic.body.blocks
+        for op in block.ops
+        for value in op.defines
+        if value in semantic.body.integer_ranges
+    )
+    assert semantic.body.integer_ranges[length] == mir.IntegerRange(0, 32768, 2)
+
     target = targets.profile("386")
     optimized = modern_compile.optimized(program, function, semantic, target)
     physical = physicalize(program, function, optimized)
     body = modern_compile.optimized(program, function, physical.lowered, target, physical.calls).body
-    loop = next(one for one in loops.loops(body.blocks, body.entry) if one.header == 2)
-    (proof,) = induction.counted(body, loop)
+    (loop,) = loops.loops(body.blocks, body.entry)
+    recurrences = induction.basics(body, loop)
+    assert len(recurrences) == 1
+    assert next(iter(recurrences.values())).step == mir.Const(2, 2)
 
-    assert isinstance(proof.trips, mir.Held)
-    assert proof.counter.start.width == proof.trips.width == 2
+    predecessors = loops.predecessors(body.blocks)
+    assert all(set(phi.incoming) == set(predecessors[block.at]) for block in body.blocks for phi in block.phis)
 
-    rotated = rotate.entered(body)
-    predecessors = loops.predecessors(rotated.blocks)
-    assert all(set(phi.incoming) == set(predecessors[block.at]) for block in rotated.blocks for phi in block.phis)
+
+def test_runtime_bounded_array_control_respects_the_recurrence_period() -> None:
+    """A stride-two offset repeats after 32768 word updates and cannot control a longer loop."""
+    program = driver.parsed(SUM)
+    function = next(one for one in program.modules[0].functions if one.name == "sum")
+    semantic = next(one for one in modern_compile.semantic_lowered(program) if one.name == "sum.sum")
+    (length,) = semantic.body.integer_ranges
+    unsafe = replace(
+        semantic,
+        body=replace(semantic.body, integer_ranges={length: mir.IntegerRange(0, 32769, 2)}),
+    )
+    target = targets.profile("386")
+    optimized = modern_compile.optimized(program, function, unsafe, target)
+    physical = physicalize(program, function, optimized)
+    body = modern_compile.optimized(program, function, physical.lowered, target, physical.calls).body
+    (loop,) = loops.loops(body.blocks, body.entry)
+
+    steps = sorted(one.step.n for one in induction.basics(body, loop).values() if isinstance(one.step, mir.Const))
+    assert steps == [1, 2]
 
 
 def test_borrowed_array_parameter_rejects_a_repeated_fixed_length(tmp_path: Path) -> None:

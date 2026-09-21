@@ -2,6 +2,7 @@
 
 from math import gcd
 from dataclasses import replace
+from dataclasses import dataclass
 
 from qbopt.model import mir
 from qbopt.analysis import ssa
@@ -497,6 +498,268 @@ def _before_leaving(ops: list, inserted: list) -> None:
     """
     cut = len(ops) - bool(ops and ops[-1].kind in (mir.Kind.JUMP, mir.Kind.BRANCH))
     ops[cut:cut] = inserted
+
+
+@dataclass
+class _SeedBuilder:
+    """Construct loop-preheader values after the symbolic proof is complete."""
+
+    serial: int
+    variable: int
+    at: int
+    width: int
+    ops: list[mir.Op]
+
+    def computed(self, kind: mir.Kind, args: tuple[mir.Arg, ...]) -> mir.Held:
+        value = mir.Value(self.serial, self.at, variable=self.variable)
+        self.serial += 1
+        self.variable += 1
+        self.ops.append(mir.computed(self.at, kind, value, args, self.width))
+        return mir.Held(value, self.width)
+
+
+def symbolically_zeroed(body: mir.MirBody) -> mir.MirBody:
+    """Use a bounded affine data recurrence as the loop's sole control.
+
+    For a counted ``0..<n`` loop and an existing recurrence with stride
+    ``s``, rebase its invariant users by ``n*s`` and start the recurrence at
+    ``-n*s``.  Its update reaches zero on exactly the final iteration, so the
+    original unit counter disappears.  The proof is target-independent:
+    the source frontend supplies an integer bound for ``n`` and
+    ``AffineMap.period`` supplies the modular safety condition.
+    """
+    from qbopt.optimize import rotate
+
+    facts = consts.known(body)
+    blocks = {block.at: block for block in body.blocks}
+    made = {value: op for block in body.blocks for op in block.ops for value in op.defines}
+    readers: dict[mir.Value, list[mir.Op]] = {}
+    for block in body.blocks:
+        for op in block.ops:
+            for value in op.uses:
+                readers.setdefault(value, []).append(op)
+    placed = {id(op): block.at for block in body.blocks for op in block.ops}
+    home = {value: block.at for block in body.blocks for op in block.ops for value in op.defines}
+    home.update({phi.result: block.at for block in body.blocks for phi in block.phis})
+    values = tuple(ssa.values(body))
+
+    for loop in loops.loops(body.blocks, body.entry):
+        proofs = induction.counted(body, loop, facts)
+        if len(proofs) != 1:
+            continue
+        proof = proofs[0]
+        control = induction.control_replacement(body, loop, proof)
+        if control is None or proof.maximum is None:
+            continue
+        header = blocks[loop.header]
+        inside = set(loop.body)
+        candidates = induction.basics(body, loop).values()
+        for candidate in candidates:
+            if candidate == proof.counter or candidate.start.width != proof.counter.start.width:
+                continue
+            width = candidate.start.width
+            start = induction._signed(candidate.start, facts, width)
+            step = induction._signed(candidate.step, facts, width)
+            if start is None or step in (None, 0):
+                continue
+            relation = induction.AffineMap(step, start, width)
+            if proof.maximum > relation.period:
+                continue
+            phi = next((one for one in header.phis if one.result.id == candidate.value), None)
+            if phi is None or set(phi.incoming) != {proof.preheader, proof.latch}:
+                continue
+            initial, update = phi.incoming[proof.preheader], phi.incoming[proof.latch]
+            seed, stepping = made.get(initial), made.get(update)
+            if (
+                seed is None
+                or seed.kind is not mir.Kind.COPY
+                or len(seed.args) != 1
+                or stepping is None
+                or not stepping.results
+                or not isinstance(stepping.results[0], mir.Held)
+                or stepping.loads
+                or stepping.stores
+                or stepping.barrier
+                or stepping.merges
+            ):
+                continue
+            offsets = _offsets(
+                phi.result,
+                readers,
+                placed,
+                home,
+                inside,
+                {id(stepping)},
+                address_offsets=True,
+            )
+            # A direct address recurrence has no separate invariant base to
+            # rebase.  It remains valid, but cannot replace control by this
+            # representation.  This is a property of the affine expression,
+            # not of an instruction or register class.
+            if not offsets or any(position is None for _op, position, _multiplier, _address, _extra in offsets):
+                continue
+            read = {value for block in body.blocks for op in block.ops for value in op.uses}
+            if initial in read or update in read:
+                continue
+            if any(value.flags and value in read for value in stepping.defines):
+                continue
+
+            ending = blocks[proof.preheader].ops[-1] if blocks[proof.preheader].ops else proof.compare
+            builder = _SeedBuilder(
+                max((value.id for value in values), default=0) + 1,
+                max((value.variable for value in values), default=0) + 1,
+                ending.at,
+                width,
+                [],
+            )
+
+            count = proof.bound
+            distance = (
+                count
+                if step == 1
+                else builder.computed(
+                    mir.Kind.MUL,
+                    (count, mir.Const(consts.masked(step, width), width)),
+                )
+            )
+            rebased: dict[int, mir.Op] = {}
+            for op, position, multiplier, _address, _extra in offsets:
+                assert position is not None
+                base = op.args[position]
+                delta = (
+                    distance
+                    if multiplier == 1
+                    else builder.computed(
+                        mir.Kind.MUL,
+                        (distance, mir.Const(consts.masked(multiplier, width), width)),
+                    )
+                )
+                adjusted = builder.computed(mir.Kind.ADD, (base, delta))
+                args = tuple(adjusted if index == position else arg for index, arg in enumerate(op.args))
+                assert isinstance(base, (mir.Held, mir.Const))
+                uses = tuple(
+                    adjusted.value if isinstance(base, mir.Held) and value == base.value else value for value in op.uses
+                )
+                rebased[id(op)] = replace(op, args=args, uses=uses, source_backed=False, raised=None)
+
+            source = seed.args[0]
+            begun = builder.computed(mir.Kind.SUB, (source, distance))
+            step_flags = mir.Value(
+                builder.serial,
+                stepping.at,
+                flags=True,
+                variable=builder.variable,
+                version=1,
+            )
+            guard_flags = mir.Value(
+                builder.serial + 1,
+                ending.at,
+                flags=True,
+                variable=builder.variable + 1,
+                version=1,
+            )
+            decrement = replace(
+                stepping,
+                name="",
+                defines=tuple(value for value in stepping.defines if not value.flags) + (step_flags,),
+                source_backed=False,
+                raised=None,
+                symbol=False,
+            )
+            guard_compare = replace(
+                proof.compare,
+                at=ending.at,
+                defines=(guard_flags,),
+                uses=(proof.bound.value,) if isinstance(proof.bound, mir.Held) else (),
+                source_backed=False,
+                args=(proof.bound, mir.Const(0, proof.bound.width)),
+                raised=None,
+                absorbed=(),
+                symbol=False,
+            )
+            guard_branch = replace(
+                proof.branch,
+                at=ending.at,
+                name="",
+                defines=(),
+                uses=(guard_flags,),
+                source_backed=False,
+                test=mir.Kind.EQ,
+                target=proof.exit,
+                raised=None,
+                absorbed=(),
+                symbol=False,
+            )
+            private = tuple(
+                definition
+                for value in (initial, proof.phi.incoming[proof.preheader])
+                if (definition := made.get(value)) is not None
+                and not any(value in op.uses for block in body.blocks for op in block.ops)
+                and not any(
+                    value in other.incoming.values() and other is not phi and other is not proof.phi
+                    for block in body.blocks
+                    for other in block.phis
+                )
+            )
+            entry_ops = [
+                mir.cleared(op) if any(op is candidate for candidate in private if candidate is not None) else op
+                for op in blocks[proof.preheader].ops
+            ]
+            if entry_ops and entry_ops[-1].kind is mir.Kind.JUMP:
+                entry_ops[-1] = mir.cleared(entry_ops[-1])
+            elif entry_ops and entry_ops[-1].kind is mir.Kind.BRANCH:
+                continue
+            _before_leaving(entry_ops, builder.ops)
+            entry_ops += [guard_compare, guard_branch]
+
+            rewritten = []
+            for block in body.blocks:
+                ops = []
+                for op in block.ops:
+                    if op is stepping or op is control.stepping:
+                        continue
+                    if op is proof.compare or any(op is candidate for candidate in private if candidate is not None):
+                        op = mir.cleared(op)
+                    elif op is proof.branch:
+                        op = replace(
+                            op,
+                            name="",
+                            uses=(step_flags,),
+                            source_backed=False,
+                            test=mir.Kind.NE,
+                            target=proof.latch,
+                            raised=None,
+                            symbol=False,
+                        )
+                    else:
+                        op = rebased.get(id(op), op)
+                    ops.append(op)
+                if block.at == proof.latch:
+                    cut = len(ops) - bool(ops and ops[-1].kind is mir.Kind.JUMP)
+                    ops.insert(cut, decrement)
+                phis = block.phis
+                if block.at == loop.header:
+                    phis = tuple(
+                        replace(other, incoming={proof.preheader: begun.value, proof.latch: update})
+                        if other is phi
+                        else other
+                        for other in phis
+                        if other is not proof.phi
+                    )
+                rewritten.append(replace(block, ops=tuple(ops), phis=phis))
+            changed = replace(body, blocks=tuple(rewritten))
+            return symbolically_zeroed(
+                rotate.at_body(
+                    changed,
+                    loop,
+                    proof.preheader,
+                    changed.block(loop.header),
+                    changed.block(proof.latch),
+                    entry_ops,
+                    entry_succ=(proof.latch, proof.exit),
+                )
+            )
+    return body
 
 
 def zeroed(body: mir.MirBody, *, address_offsets: bool = False) -> mir.MirBody:
