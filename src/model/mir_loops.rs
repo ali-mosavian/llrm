@@ -115,6 +115,119 @@ pub(crate) fn dominators(blocks: &[MirBlock], entry: i64) -> BTreeMap<i64, BTree
     dominators
 }
 
+/// One natural loop: where control comes back to, and what is inside.
+///
+/// Direct port of `qbopt.analysis.loops:Loop`.  `latches` is keyed by the
+/// header rather than by an individual back edge: Python deliberately treats
+/// several edges returning to one header as one loop and unions their bodies.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Loop {
+    pub header: i64,
+    pub latches: BTreeSet<i64>,
+    pub body: BTreeSet<i64>,
+}
+
+/// Direct port of `qbopt.analysis.loops:back_edges` for MIR blocks.
+///
+/// The supplied block and successor order is retained.  Python exposes that
+/// order through its list result, and `loops` relies on it when equal-sized
+/// loops retain their discovery order after the stable size sort.
+pub(crate) fn back_edges(
+    blocks: &[MirBlock],
+    dominators: &BTreeMap<i64, BTreeSet<i64>>,
+) -> Vec<(i64, i64)> {
+    let known = blocks.iter().map(|block| block.at).collect::<BTreeSet<_>>();
+    blocks
+        .iter()
+        .flat_map(|block| {
+            block.succ.iter().filter_map(|successor| {
+                (known.contains(successor)
+                    && dominators
+                        .get(&block.at)
+                        .is_some_and(|dominated_by| dominated_by.contains(successor)))
+                .then_some((block.at, *successor))
+            })
+        })
+        .collect()
+}
+
+/// Direct port of `qbopt.analysis.loops:_body` for one natural-loop edge.
+///
+/// The header enters the body before walking backwards.  In particular, a
+/// self edge returns without expanding the header's predecessors, exactly as
+/// Python does.
+fn body(latch: i64, header: i64, predecessors: &BTreeMap<i64, BTreeSet<i64>>) -> BTreeSet<i64> {
+    let mut body = BTreeSet::from([header]);
+    if latch == header {
+        return body;
+    }
+    body.insert(latch);
+    let mut pending = vec![latch];
+    while let Some(at) = pending.pop() {
+        for predecessor in predecessors.get(&at).into_iter().flatten() {
+            if body.insert(*predecessor) {
+                pending.push(*predecessor);
+            }
+        }
+    }
+    body
+}
+
+/// Direct port of `qbopt.analysis.loops:loops` for MIR blocks.
+///
+/// Only reachable blocks are handed to the predecessor walk.  This preserves
+/// Python's refusal to turn disconnected cycles or dead edges into natural
+/// loops.  Header groups use a `Vec`, rather than a map, to retain Python's
+/// first-back-edge insertion order where its stable final sort ties.
+pub(crate) fn loops(blocks: &[MirBlock], entry: Option<i64>) -> Vec<Loop> {
+    let Some(entry) = entry.or_else(|| blocks.first().map(|block| block.at)) else {
+        return Vec::new();
+    };
+    let dominators = dominators(blocks, entry);
+    let reachable_blocks = blocks
+        .iter()
+        .filter(|block| !dominators[&block.at].is_empty())
+        .cloned()
+        .collect::<Vec<_>>();
+    let predecessors = predecessors(&reachable_blocks);
+
+    let mut found = Vec::<Loop>::new();
+    for (latch, header) in back_edges(blocks, &dominators) {
+        let loop_body = body(latch, header, &predecessors);
+        if let Some(found_loop) = found
+            .iter_mut()
+            .find(|found_loop| found_loop.header == header)
+        {
+            found_loop.latches.insert(latch);
+            found_loop.body.extend(loop_body);
+        } else {
+            found.push(Loop {
+                header,
+                latches: BTreeSet::from([latch]),
+                body: loop_body,
+            });
+        }
+    }
+    found.sort_by_key(|found_loop| found_loop.body.len());
+    found
+}
+
+/// Direct port of `qbopt.analysis.loops:depth` for MIR blocks.
+pub(crate) fn depth(blocks: &[MirBlock], entry: Option<i64>) -> BTreeMap<i64, usize> {
+    let mut found = blocks
+        .iter()
+        .map(|block| (block.at, 0_usize))
+        .collect::<BTreeMap<_, _>>();
+    for found_loop in loops(blocks, entry) {
+        for at in found_loop.body {
+            if let Some(value) = found.get_mut(&at) {
+                *value += 1;
+            }
+        }
+    }
+    found
+}
+
 /// Direct port of `qbopt.analysis.loops:irreducible` for MIR blocks.
 ///
 /// This cuts precisely the dominator-defined back edges, then reports the
@@ -127,14 +240,9 @@ pub(crate) fn irreducible(blocks: &[MirBlock], entry: i64) -> BTreeSet<i64> {
         .filter(|block| !dominators[&block.at].is_empty())
         .map(|block| block.at)
         .collect::<BTreeSet<_>>();
-    let mut back_edges = BTreeSet::new();
-    for block in blocks {
-        for successor in &block.succ {
-            if known.contains(successor) && dominators[&block.at].contains(successor) {
-                back_edges.insert((block.at, *successor));
-            }
-        }
-    }
+    let back_edges = back_edges(blocks, &dominators)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
     let forward = blocks
         .iter()
         .filter(|block| known.contains(&block.at))
@@ -264,7 +372,145 @@ mod tests {
 
     use crate::model::mir::MirBlock;
 
-    use super::{dominators, frontiers, immediate_dominators, irreducible, predecessors};
+    use super::{
+        depth, dominators, frontiers, immediate_dominators, irreducible, loops, predecessors, Loop,
+    };
+
+    fn block(at: i64, successors: &[i64]) -> MirBlock {
+        MirBlock::new(at, vec![], vec![], successors.to_vec())
+    }
+
+    #[test]
+    fn direct_mir_loops_straight_line_has_no_loops() {
+        // Direct port of tests/test_loops.py:test_a_straight_line_has_no_loops.
+        let chain = vec![block(0, &[1]), block(1, &[2]), block(2, &[])];
+        assert_eq!(loops(&chain, Some(0)), Vec::<Loop>::new());
+        assert_eq!(
+            loops(&chain, None),
+            loops(&chain, Some(0)),
+            "None selects Python's first supplied block as the entry"
+        );
+        assert_eq!(
+            depth(&chain, Some(0)),
+            std::collections::BTreeMap::from([(0, 0), (1, 0), (2, 0)])
+        );
+        let empty = Vec::<MirBlock>::new();
+        assert_eq!(loops(&empty, None), Vec::<Loop>::new());
+        assert_eq!(depth(&empty, None), std::collections::BTreeMap::new());
+    }
+
+    #[test]
+    fn direct_mir_loops_self_loop_is_its_own_body() {
+        // Direct port of tests/test_loops.py:test_a_self_loop_is_its_own_body.
+        let chain = vec![block(0, &[1]), block(1, &[1, 2]), block(2, &[])];
+        assert_eq!(
+            loops(&chain, Some(0)),
+            vec![Loop {
+                header: 1,
+                latches: BTreeSet::from([1]),
+                body: BTreeSet::from([1]),
+            }],
+            "block 0 is not inside the loop"
+        );
+    }
+
+    #[test]
+    fn direct_mir_loops_bottom_tested_loop_is_reducible() {
+        // Direct port of tests/test_loops.py:test_a_test_at_the_bottom_loop_is_reducible.
+        let chain = vec![
+            block(0, &[2]),
+            block(1, &[2]),
+            block(2, &[1, 3]),
+            block(3, &[]),
+        ];
+        assert_eq!(irreducible(&chain, 0), BTreeSet::new());
+        assert_eq!(
+            loops(&chain, Some(0)),
+            vec![Loop {
+                header: 2,
+                latches: BTreeSet::from([1]),
+                body: BTreeSet::from([1, 2]),
+            }],
+            "the test dominates the body, so the test is the header"
+        );
+    }
+
+    #[test]
+    fn direct_mir_loops_nesting_counts_every_enclosing_loop() {
+        // Direct port of tests/test_loops.py:test_nesting_counts_every_enclosing_loop.
+        let outer_only = vec![
+            block(0, &[1]),
+            block(1, &[2, 4]),
+            block(2, &[3]),
+            block(3, &[2, 1]),
+            block(4, &[]),
+        ];
+        let found = depth(&outer_only, Some(0));
+        assert_eq!(found[&0], 0);
+        assert!(
+            found[&2] > found[&1],
+            "the inner block sits inside both loops"
+        );
+    }
+
+    #[test]
+    fn direct_mir_loops_disconnected_cycle_has_no_natural_loop() {
+        // Direct port of tests/test_loops.py:test_disconnected_cycle_has_no_dominators_or_natural_loops.
+        let chain = vec![
+            block(0, &[1]),
+            block(1, &[]),
+            block(8, &[9]),
+            block(9, &[8]),
+        ];
+        assert_eq!(dominators(&chain, 0)[&8], BTreeSet::new());
+        assert_eq!(dominators(&chain, 0)[&9], BTreeSet::new());
+        assert_eq!(loops(&chain, Some(0)), Vec::<Loop>::new());
+        assert_eq!(irreducible(&chain, 0), BTreeSet::new());
+    }
+
+    #[test]
+    fn direct_mir_loops_dead_edge_into_latch_is_excluded() {
+        // Direct port of tests/test_loops.py:test_dead_edge_into_latch_is_not_part_of_live_loop.
+        let chain = vec![
+            block(0, &[1]),
+            block(1, &[2, 3]),
+            block(2, &[1]),
+            block(3, &[]),
+            block(9, &[2]),
+        ];
+        assert_eq!(
+            loops(&chain, Some(0)),
+            vec![Loop {
+                header: 1,
+                latches: BTreeSet::from([2]),
+                body: BTreeSet::from([1, 2]),
+            }]
+        );
+    }
+
+    #[test]
+    fn direct_mir_loops_shared_header_unions_multiple_latches() {
+        // Direct port of qbopt.analysis.loops:Loop and loops' shared-header
+        // contract.  The Python corpus regression describes this exact case:
+        // several back edges returning to one header are one loop, not nested
+        // loops counted once per latch.
+        let chain = vec![
+            block(0, &[1]),
+            block(1, &[2, 3, 5]),
+            block(2, &[4]),
+            block(3, &[4]),
+            block(4, &[1]),
+            block(5, &[1]),
+        ];
+        assert_eq!(
+            loops(&chain, Some(0)),
+            vec![Loop {
+                header: 1,
+                latches: BTreeSet::from([4, 5]),
+                body: BTreeSet::from([1, 2, 3, 4, 5]),
+            }]
+        );
+    }
 
     #[test]
     fn direct_mir_verify_graph_helpers_ignore_unknown_targets_and_empty_unreachable_dominators() {
@@ -359,10 +605,8 @@ mod tests {
             MirBlock::new(1, vec![], vec![], vec![2]),
             MirBlock::new(2, vec![], vec![], vec![]),
         ];
-        assert!(
-            frontiers(&chain, 0)
-                .values()
-                .all(|where_| !where_.contains(&1) && !where_.contains(&2))
-        );
+        assert!(frontiers(&chain, 0)
+            .values()
+            .all(|where_| !where_.contains(&1) && !where_.contains(&2)));
     }
 }
