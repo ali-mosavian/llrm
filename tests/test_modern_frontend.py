@@ -311,10 +311,16 @@ def test_nbody_position_loop_uses_one_end_relative_byte_offset() -> None:
     assert "lea di" not in loop
     assert "cmp ax, 6" not in loop
     assert "mov si, 65440\nL0_18:" in assembly  # -96 in a word
-    assert "mov ebx, dword ptr [bp+si+8]" in loop
-    assert "add dword ptr [bp+si], ebx" in loop
-    assert "mov ebx, dword ptr [bp+si+12]" in loop
-    assert "add dword ptr [bp+si+4], ebx" in loop
+    assert re.search(
+        r"    mov (?P<x>e(?:ax|bx|cx|dx|si|di)), dword ptr \[bp\+si\+8\]\n"
+        r"    add dword ptr \[bp\+si\], (?P=x)\n",
+        loop,
+    )
+    assert re.search(
+        r"    mov (?P<y>e(?:ax|bx|cx|dx|si|di)), dword ptr \[bp\+si\+12\]\n"
+        r"    add dword ptr \[bp\+si\+4\], (?P=y)\n",
+        loop,
+    )
     assert "add si, 16\nL0_17:\n" in loop
     assert "or si, si" not in loop
     assert "cmp si" not in loop
@@ -332,6 +338,30 @@ def test_nbody_identity_uses_the_paired_byte_recurrences() -> None:
     assert ", 96\n" not in interaction
     assert len(re.findall(r"    add word ptr \[[^]]+\], 16\nL\d+_\d+:\n    jne L\d+_\d+\n", interaction)) == 2
     assert len(re.findall(r"    mov word ptr \[[^]]+\], 65440\n", assembly.split("L0_2:\n", 1)[0])) == 2
+
+
+def test_nbody_velocity_updates_write_the_array_cells_in_place() -> None:
+    """nbody loaded each velocity field, added its acceleration, then stored it.
+
+    The destination is private to the compound update, so x86 can select its
+    memory-destination ADD directly.  Keeping the source load is both smaller
+    and one register cheaper than materializing the old field value as well.
+    """
+    assembly = masm.text(modern_compile.assembled(driver.parsed(NBODY), entry="main"))
+    interaction = assembly.split("L0_7:\n", 1)[1].split("L0_2:\n", 1)[0]
+
+    source = re.search(r"    mov (?P<register>e(?:ax|bx|cx|dx|si|di)), dword ptr \[bp-114\]\n", interaction)
+    assert source is not None
+    assert re.search(
+        rf"    add dword ptr \[bp\+[sd]i\+8\], {source.group('register')}\n",
+        interaction,
+    )
+    assert re.search(r"    add dword ptr \[bp\+[sd]i\+12\], e(?:ax|bx|cx|dx|si|di)\n", interaction)
+    assert not re.search(
+        r"    mov (?P<temporary>e(?:ax|bx|cx|dx|si|di)), dword ptr \[bp\+[sd]i\+(?:8|12)\]\n"
+        r"    add (?P=temporary),",
+        interaction,
+    )
 
 
 def test_counted_struct_loop_uses_its_record_width_as_the_byte_stride(tmp_path: Path) -> None:

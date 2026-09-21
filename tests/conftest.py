@@ -69,6 +69,7 @@ FAST_MODULES = frozenset(
         "test_private_frame.py",
         "test_qb_frontend_command.py",
         "test_rewind.py",
+        "test_rmw.py",
         "test_qbcompat.py",
         "test_sccp.py",
         "test_schedule.py",
