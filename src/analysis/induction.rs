@@ -444,6 +444,30 @@ fn _extended(
     ))
 }
 
+/// Python's `_multiplier(op, by)`.
+///
+/// A left shift records its count rather than its scale, so its derived
+/// recurrence multiplies by `1 << count`.  Its caller establishes whether
+/// that count is valid for the operation width; this helper deliberately
+/// only translates the operand representation.
+fn _multiplier(op: &Op, by: &Arg) -> Arg {
+    if op.kind != Kind::Shl {
+        return by.clone();
+    }
+    let Arg::Const(constant) = by else {
+        return by.clone();
+    };
+    let shift: usize = constant
+        .n
+        .clone()
+        .try_into()
+        .expect("shift count must fit Rust address space");
+    Arg::Const(Const::new(
+        BigInt::from(1_u8) << shift,
+        max(constant.width, 2),
+    ))
+}
+
 /// Python's `_composed(body, loop, found, made, settled)`.
 ///
 /// This is deliberately a fixed-point scan over the original immutable body
@@ -2018,7 +2042,7 @@ mod tests {
 
     use super::{
         Affine, AffineMap, AffineOperand, Derived, LoopShape, _as_signed, _composed, _constant,
-        _copied, _counter_bound, _extended, _quotients, _signed, basics, canonical,
+        _copied, _counter_bound, _extended, _multiplier, _quotients, _signed, basics, canonical,
         control_replacement, counted, counted_with_facts, derived_map, domain, invariant, nonempty,
         relation, test_only, transparent_aliases, trip_count, zero_terminating_control,
     };
@@ -3117,6 +3141,51 @@ mod tests {
             offsets,
             pointer,
         }
+    }
+
+    #[test]
+    fn direct_induction_multiplier_leaves_non_constant_shift_count_unchanged() {
+        // Direct port of the variable case from
+        // tests/test_induction_identity.py:test_a_shift_recurrence_requires_a_constant_count.
+        let count = Arg::Held(Held {
+            value: value(1, 0),
+            width: 2,
+        });
+
+        assert_eq!(
+            _multiplier(&op(0, Kind::Shl, vec![], vec![]), &count),
+            count
+        );
+    }
+
+    #[test]
+    fn direct_induction_multiplier_turns_shift_count_into_scale() {
+        // Direct port of the constant case from
+        // tests/test_induction_identity.py:test_a_shift_recurrence_requires_a_constant_count.
+        let shift = op(0, Kind::Shl, vec![], vec![]);
+
+        assert_eq!(
+            _multiplier(&shift, &Arg::Const(Const::new(0, 1))),
+            Arg::Const(Const::new(1, 2)),
+        );
+        assert_eq!(
+            _multiplier(&shift, &Arg::Const(Const::new(3, 4))),
+            Arg::Const(Const::new(8, 4)),
+        );
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn direct_induction_multiplier_leaves_non_shift_large_count_unchanged() {
+        // This count fits the host shift type but would allocate 512 MiB if
+        // evaluated as `1 << count`.  A non-shift must return it untouched,
+        // without narrowing it to u32 before the kind check.
+        let count = Arg::Const(Const::new(BigInt::from(u32::MAX) + 1_u8, 2));
+
+        assert_eq!(
+            _multiplier(&op(0, Kind::Add, vec![], vec![]), &count),
+            count
+        );
     }
 
     #[test]
