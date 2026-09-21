@@ -60,6 +60,7 @@ FAST_MODULES = frozenset(
         "test_memory_folding.py",
         "test_mir_alias.py",
         "test_modern_frontend.py",
+        "test_modernstages.py",
         "test_omfwrite.py",
         "test_parcopy.py",
         "test_phi_widths.py",
