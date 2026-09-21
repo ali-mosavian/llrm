@@ -1,5 +1,6 @@
 """The small, source-language-neutral IR above qbopt MIR."""
 
+from qbopt.hir import execute
 from qbopt.hir.model import Op
 from qbopt.hir.model import Type
 from qbopt.hir.lower import lower
@@ -84,4 +85,5 @@ __all__ = [
     "lower",
     "mir_text",
     "verify",
+    "execute",
 ]

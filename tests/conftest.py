@@ -52,6 +52,7 @@ FAST_MODULES = frozenset(
         "test_inline.py",
         "test_invariant_values.py",
         "test_hir.py",
+        "test_hir_execute.py",
         "test_jumps.py",
         "test_lower_conditions.py",
         "test_lir_verify.py",

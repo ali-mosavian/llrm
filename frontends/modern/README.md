@@ -110,6 +110,18 @@ cargo run --manifest-path frontends/modern/Cargo.toml -- program.mod
 `--tokens` and `--syntax` expose the two earlier stages without performing
 semantic analysis.
 
+The common-HIR reference executor provides an executable semantic oracle:
+
+```text
+uv run python tools/modernrun.py frontends/modern/fixtures/nbody.mod --entry nbody --show-return 1
+```
+
+This runs source through lexing, parsing, strict semantic analysis, common-HIR
+verification, and HIR execution. It is deliberately not called target
+code-generation: it emits no OMF or executable and supplies no real-mode ABI.
+Its captured output is the known answer that the future freestanding real-mode
+backend must reproduce exactly.
+
 The current stopping point is semantic MIR. The frontend document is accepted
 by `qbopt.hir.decode`, `qbopt.hir.verify`, and `qbopt.hir.lower`; a
 freestanding ABI adapter and final object writer have not been added yet.
