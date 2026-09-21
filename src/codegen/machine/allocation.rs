@@ -22,6 +22,16 @@ pub struct RegisterAssignment {
 }
 
 impl RegisterAssignment {
+    /// Builds an assignment from allocation decisions made by a sibling phase.
+    ///
+    /// Kept crate-private: target-independent allocation owns the mapping,
+    /// while callers outside Machine IR may only inspect it.
+    pub(crate) fn from_assignments(
+        assignments: BTreeMap<VirtualRegisterId, PhysicalRegister>,
+    ) -> Self {
+        Self { assignments }
+    }
+
     /// The physical register assigned to one declared virtual register.
     pub fn get(&self, register: VirtualRegisterId) -> Option<PhysicalRegister> {
         self.assignments.get(&register).copied()
@@ -218,7 +228,7 @@ where
         assignments.insert(register, physical);
     }
 
-    Ok(RegisterAssignment { assignments })
+    Ok(RegisterAssignment::from_assignments(assignments))
 }
 
 fn reject_ties(function: &MachineFunction) -> Result<(), AllocationError> {

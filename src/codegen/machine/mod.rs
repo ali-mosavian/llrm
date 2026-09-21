@@ -1,6 +1,7 @@
 //! Machine IR and target-independent register allocation.
 
 mod allocation;
+mod allocation_greedy;
 mod allocation_constraints;
 mod allocation_intervals;
 mod allocation_rewrite;
@@ -12,6 +13,7 @@ mod text;
 mod verify;
 
 pub use allocation::{AllocationError, RegisterAssignment, allocate};
+pub use allocation_greedy::{GreedyAllocation, GreedyAllocationError, allocate_greedy};
 pub use allocation_constraints::{ConstraintError, ConstraintTarget, split_fixed_occurrences};
 pub use allocation_intervals::{
     DEF, GRACE, PER_INSN, PER_LEVEL, USE, LiveInterval, LiveSegment, MachineIntervalError,
