@@ -114,6 +114,20 @@ pub(crate) struct ControlReplacement<'a> {
     pub copies: BTreeSet<OpOccurrence>,
 }
 
+/// Proof that an affine recurrence's update flags end counted control.
+///
+/// Direct port of `qbopt.analysis.induction:ZeroTerminatingControl`.  The
+/// replacement borrows the exact counted-loop proof supplied by the caller,
+/// as its Python counterpart retains that object.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ZeroTerminatingControl<'a> {
+    pub replacement: ControlReplacement<'a>,
+    pub candidate: Affine,
+    pub step: BigInt,
+    pub maximum: BigInt,
+    pub period: BigInt,
+}
+
 impl AffineMap {
     /// Python's `AffineMap.period` property.
     pub(crate) fn period(&self) -> BigInt {
@@ -824,6 +838,56 @@ pub(crate) fn control_replacement<'a>(
     })
 }
 
+/// Python's `zero_terminating_control(body, loop, proof, candidate, facts)`.
+///
+/// The explicit known-value map replaces Python's default `consts.known(body)`
+/// until that analysis is ported.
+pub(crate) fn zero_terminating_control<'a>(
+    body: &MirBody,
+    loop_: &Loop,
+    proof: &'a CountedLoop,
+    candidate: &Affine,
+    facts: &BTreeMap<Value, Known>,
+) -> Option<ZeroTerminatingControl<'a>> {
+    let replacement = control_replacement(body, loop_, proof, &BTreeSet::new())?;
+    let maximum = proof.maximum.as_ref()?;
+    if candidate == &proof.counter {
+        return None;
+    }
+    let width = proof.counter.start.width();
+    if candidate.start.width() != width
+        || candidate.step.width() != width
+        || maximum < &BigInt::from(0_u8)
+    {
+        return None;
+    }
+    let start = _signed(&candidate.start.as_arg(), facts, width);
+    let step = _signed(&candidate.step.as_arg(), facts, width);
+    if start != Some(BigInt::from(0_u8)) {
+        return None;
+    }
+    let step = step?;
+    if step == BigInt::from(0_u8) {
+        return None;
+    }
+    let period = AffineMap {
+        scale: step.clone(),
+        offset: BigInt::from(0_u8),
+        width,
+    }
+    .period();
+    if maximum > &period {
+        return None;
+    }
+    Some(ZeroTerminatingControl {
+        replacement,
+        candidate: candidate.clone(),
+        step,
+        maximum: maximum.clone(),
+        period,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
@@ -844,7 +908,7 @@ mod tests {
     use super::{
         Affine, AffineMap, AffineOperand, LoopShape, _as_signed, _constant, _copied,
         _counter_bound, _signed, basics, canonical, control_replacement, counted, invariant,
-        relation, test_only, transparent_aliases,
+        relation, test_only, transparent_aliases, zero_terminating_control,
     };
 
     fn value(id: u32, at: i64) -> Value {
@@ -2247,6 +2311,45 @@ mod tests {
             BTreeSet::from([body.blocks[1].phis[0].result])
         );
         assert!(replacement.copies.is_empty());
+    }
+
+    #[test]
+    fn direct_induction_zero_terminating_control_refuses_nonzero_terminal_recurrence() {
+        // Direct Rust regression for
+        // tests/test_indvars.py:test_symbolic_control_refuses_a_nonzero_terminal_recurrence.
+        let (body, loop_, facts, _, _) = symbolic_counted_body(5);
+        let proofs = counted(&body, &loop_, &facts);
+        let proof = &proofs[0];
+        let candidates = basics(&body, &loop_);
+        let candidate = candidates
+            .values()
+            .find(|one| *one != &proof.counter)
+            .expect("the fixture has a non-control affine recurrence");
+
+        assert!(zero_terminating_control(&body, &loop_, proof, candidate, &facts).is_none());
+    }
+
+    #[test]
+    fn direct_induction_zero_terminating_control_proves_zero_terminal_recurrence() {
+        // Direct Rust regression for
+        // tests/test_indvars.py:test_symbolic_control_proves_a_zero_terminal_recurrence.
+        let (body, loop_, facts, _, _) = symbolic_counted_body(0);
+        let proofs = counted(&body, &loop_, &facts);
+        let proof = &proofs[0];
+        let candidates = basics(&body, &loop_);
+        let candidate = candidates
+            .values()
+            .find(|one| *one != &proof.counter)
+            .expect("the fixture has a non-control affine recurrence");
+
+        let proven = zero_terminating_control(&body, &loop_, proof, candidate, &facts)
+            .expect("the zero-terminal recurrence supplies the terminating flags");
+
+        assert!(std::ptr::eq(proven.replacement.counted, proof));
+        assert_eq!(proven.candidate, *candidate);
+        assert_eq!(proven.step, BigInt::from(1_u8));
+        assert_eq!(proven.maximum, BigInt::from(7_u8));
+        assert_eq!(proven.period, BigInt::from(65_536_u32));
     }
 
     #[test]
