@@ -89,6 +89,33 @@ impl Addr {
     }
 }
 
+/// Python `qbopt.objectfile.module:frame_relative`.
+#[must_use]
+pub const fn frame_relative(literal: i64) -> Addr {
+    Addr::new(Space::Frame, literal)
+}
+
+/// Python `qbopt.objectfile.module:far_pointer`.
+#[must_use]
+pub const fn far_pointer(literal: i64, base: PhysicalRegister, segment: PhysicalRegister) -> Addr {
+    Addr {
+        space: Space::Far,
+        disp: literal,
+        index: 0,
+        base,
+        segment,
+    }
+}
+
+/// Python `qbopt.objectfile.module:literal_only`.
+///
+/// `literal` is a raw decoded displacement. OMF's 16-bit source forms keep it
+/// within the signed address representation used by [`Addr`].
+#[must_use]
+pub const fn literal_only(_field_offset: usize, literal: u64) -> Addr {
+    Addr::new(Space::Literal, literal as i64)
+}
+
 /// The independently decoded tables and relocations of one object module.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DecodedModule<'a> {
@@ -162,9 +189,26 @@ impl std::error::Error for ModuleError {
 
 #[cfg(test)]
 mod tests {
-    use super::DecodedModule;
+    use super::{Addr, DecodedModule, Space, far_pointer, frame_relative, literal_only};
     use crate::object::omf::fixups::{FrameMethod, TargetMethod};
     use crate::object::omf::record::Record;
+    use crate::target::x86::X86Register;
+
+    #[test]
+    fn omf_lift_classify_module_address_helpers_match_python() {
+        assert_eq!(frame_relative(-24), Addr::new(Space::Frame, -24));
+        assert_eq!(literal_only(7, 0x1234), Addr::new(Space::Literal, 0x1234));
+        assert_eq!(
+            far_pointer(8, X86Register::Bx.physical(), X86Register::Es.physical(),),
+            Addr {
+                space: Space::Far,
+                disp: 8,
+                index: 0,
+                base: X86Register::Bx.physical(),
+                segment: X86Register::Es.physical(),
+            }
+        );
+    }
 
     #[test]
     fn decodes_connected_tables_data_and_relocations() {
