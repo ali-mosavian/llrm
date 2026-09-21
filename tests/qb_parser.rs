@@ -895,6 +895,45 @@ fn unsuffixed_real_precision_and_d_exponents_select_the_documented_type() {
 }
 
 #[test]
+fn qlight_scale_literal_is_a_long_before_hir_conversion() {
+    // Qlight printed 3492255 when 1000000 was scanned as INTEGER 0x4240 and
+    // then sign-extended. Its unsuffixed decimal magnitude requires LONG.
+    let module = parse(
+        "function qlightScale (word as integer) as long\n\
+         qlightScale = clng(word) * 1000000\n\
+         end function\n",
+        Dialect::QuickBasic45,
+    )
+    .unwrap();
+    let Statement::Assign {
+        value: Expr::Binary { right, .. },
+        ..
+    } = &module.procedures[0].body[0]
+    else {
+        panic!("expected qlight scale assignment");
+    };
+    assert!(matches!(
+        right.as_ref(),
+        Expr::Literal(Literal::Integer(1000000, TypeName::Long), _)
+    ));
+
+    let hir = compile_hir(&module, "qlight_scale", Dialect::QuickBasic45, "qb45").unwrap();
+    let constants = hir.modules[0]
+        .functions
+        .iter()
+        .flat_map(|function| &function.blocks)
+        .flat_map(|block| &block.instructions)
+        .flat_map(|instruction| &instruction.operands);
+    assert!(constants.into_iter().any(|operand| matches!(
+        operand,
+        llrm::hir::Operand::Constant {
+            type_id,
+            value: llrm::hir::ConstantValue::Integer(1000000),
+        } if *type_id == llrm::hir::TypeId::new(2)
+    )));
+}
+
+#[test]
 fn resume_and_on_local_error_are_structured_control_transfers() {
     // RESUME NEXT used to parse NEXT as an expression, and ON LOCAL ERROR
     // was mistaken for the unrelated ON-dispatch statement.  Neither may be

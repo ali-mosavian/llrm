@@ -297,7 +297,13 @@ fn numeric(
             .trim_end_matches(['%', '&'])
             .parse()
             .map_err(|_| error(span(*at), "integer literal is out of range"))?;
-        Ok(TokenKind::Integer(number, explicit_suffix))
+        if number > i64::from(i32::MAX)
+            || (explicit_suffix == Some('%') && number > i64::from(i16::MAX))
+        {
+            return Err(error(span(*at), "integer literal is out of range"));
+        }
+        let suffix = explicit_suffix.or_else(|| (number > i64::from(i16::MAX)).then_some('&'));
+        Ok(TokenKind::Integer(number, suffix))
     }
 }
 
