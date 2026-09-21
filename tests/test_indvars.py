@@ -146,7 +146,7 @@ def test_counter_elimination_requires_a_complete_trip_count_and_no_body_use(monk
     with monkeypatch.context() as context:
         # Counting to zero rewrites the very compare each hazard edits.
         context.setattr(indvars, "simplified", lambda body: body)
-        context.setattr(indvars, "zeroed", lambda body: body)
+        context.setattr(indvars, "zeroed", lambda body, *args, **kwargs: body)
         body = transform.applied(
             mir.bodies(found, partition)[0][1], found.dgroup, found.calls, blocks=partition, found=found
         )

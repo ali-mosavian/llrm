@@ -36,7 +36,9 @@ replaced costs two instructions and carries nothing. The allocator sees the
 decision, not the choice. `_RESERVE` and `Where.registers` are the budget.
 """
 
+from math import gcd
 from dataclasses import replace
+from dataclasses import dataclass
 
 from qbopt.model import ir
 from qbopt.model import mir
@@ -78,12 +80,14 @@ class Strength(MIRTransform):
             self.where.call_registers,
             self.where.costs,
             address_forms=self.where.address_forms,
+            control_recurrences=True,
         )
         body = exitsink.sunk(transform.dead(ivshare.shared(body)))
         body = loopexit.evaluated(body)
         body = indvars.rewound(body, self.where.registers, self.where.costs)
         body = indvars.simplified(body)
-        return indvars.zeroed(body)
+        body = indvars.symbolically_zeroed(body)
+        return indvars.zeroed(body, address_offsets=True)
 
 
 def reduced(
@@ -95,6 +99,7 @@ def reduced(
     call_registers: int = 0,
     costs: OperationCosts = _DEFAULT_COSTS,
     address_forms: tuple[AddressForm, ...] = (),
+    control_recurrences: bool = True,
 ) -> MirBody:
     """`body` with every multiply of a counter by an invariant made an add."""
     from qbopt.optimize import transform as passes
@@ -102,6 +107,14 @@ def reduced(
     found = induction.of(body, dgroup, bounds)
     if not found:
         return body
+
+    candidate_groups = {loop.header: _candidates(body, derived, scales) for loop, _basics, derived in found}
+    replacement_credits = (
+        _replacement_credits(body, found, candidate_groups, costs)
+        | _control_credits(body, found, candidate_groups, costs)
+        if control_recurrences
+        else frozenset()
+    )
 
     live = liveness.live(body) if registers else None
     at_of = {block.at: block for block in body.blocks}
@@ -123,28 +136,12 @@ def reduced(
     pointer_bindings: list[tuple[Op, mir.Value, mir.Value]] = []
     wide: set[mir.Value] = set()
     facts = consts.known(body) if scales or address_forms else {}
-    for loop, _basics, derived in found:
+    for loop, _basics, _derived in found:
         preheader = passes._preheader(body, loop)
         latches = [at for at in loop.latches if at in at_of]
         if preheader is None or at_of[preheader].succ != (loop.header,) or len(latches) != 1:
             continue  # two ways in or out is a bigger change than this
-        candidates = [
-            one
-            for one in derived
-            if _answer(body, one.op) is not None
-            and (
-                _multiplies(one, derived)
-                or one.pointer is not None
-                or one.op.kind is mir.Kind.DIVMOD
-                or one.offsets
-                and one.op.kind is mir.Kind.SHL
-                or any(isinstance(offset, mir.Cell) for offset, _ in one.offsets)
-                or one.op.kind is mir.Kind.ADD
-                and any(isinstance(offset, mir.Held) for offset, _ in one.offsets)
-            )
-        ]
-        if scales:
-            candidates = [one for one in candidates if not _indexed(body, one)]
+        candidates = candidate_groups[loop.header]
         # Priced, which is the half of LLVM's LSR this did not have. A
         # derived counter is a value live around the whole loop, and where
         # the loop already drives a register file's worth the allocator's
@@ -224,7 +221,17 @@ def reduced(
             references=references,
         )
         free = frozenset(native) | secondary_indexes
-        candidates = _formula_set(candidates, room, free, costs=costs, references=references)
+        # A derived recurrence which can replace its source loop counter does
+        # not consume another recurrence slot.  Price it as a substitution,
+        # not as a value carried beside the counter it will make dead.
+        candidates = _formula_set(
+            candidates,
+            room,
+            free,
+            credited=replacement_credits,
+            costs=costs,
+            references=references,
+        )
         indexes = {
             id(one.op): (native | secondary)[id(one.op)]
             for one in candidates
@@ -384,11 +391,322 @@ def reduced(
     return ssa.constructed(changed, frozenset(range(first, taken + 1)))
 
 
+def _candidates(
+    body: MirBody,
+    derived: list[induction.Derived],
+    scales: frozenset[int],
+) -> list[induction.Derived]:
+    candidates = [
+        one
+        for one in derived
+        if _answer(body, one.op) is not None
+        and (
+            _multiplies(one, derived)
+            or one.pointer is not None
+            or one.op.kind is mir.Kind.DIVMOD
+            or one.offsets
+            and one.op.kind is mir.Kind.SHL
+            or any(isinstance(offset, mir.Cell) for offset, _ in one.offsets)
+            or one.op.kind is mir.Kind.ADD
+            and any(isinstance(offset, mir.Held) for offset, _ in one.offsets)
+        )
+    ]
+    return [one for one in candidates if not scales or not _indexed(body, one)]
+
+
+@dataclass(frozen=True, slots=True)
+class _Replacement:
+    loop: loopy.Loop
+    root: induction.Derived
+    mapping: induction.AffineMap
+    domain: tuple[int, int]
+    aliases: frozenset[mir.Value]
+    allowed: frozenset[int]
+    rank: tuple[int, int, int]
+
+
+def _formula_descendants(
+    root: induction.Derived,
+    formulas: tuple[induction.Derived, ...],
+) -> frozenset[int]:
+    pending = [root.op.results[0].value]
+    seen: set[mir.Value] = set()
+    operations = {id(root.op)}
+    while pending:
+        value = pending.pop()
+        if value in seen:
+            continue
+        seen.add(value)
+        for formula in formulas:
+            if (
+                formula.op.results
+                and isinstance(formula.op.results[0], mir.Held)
+                and any(isinstance(arg, mir.Held) and arg.value == value for arg in formula.op.args)
+            ):
+                operations.add(id(formula.op))
+                pending.append(formula.op.results[0].value)
+    return frozenset(operations)
+
+
+def _control_credits(
+    body: MirBody,
+    found: list[tuple[loopy.Loop, dict[int, induction.Affine], list[induction.Derived]]],
+    groups: dict[int, list[induction.Derived]],
+    costs: OperationCosts,
+) -> frozenset[int]:
+    """Formulas whose source index is proved replaceable as loop control.
+
+    This is intentionally separate from ``_replacement_credits``. That
+    relational proof transfers equality through a formula. Here the formula
+    replaces every *data* use of ``i`` and the shared counted-loop proof says
+    the source recurrence is otherwise control-only. The later induction
+    transform independently chooses either a bounded data recurrence or a
+    countdown as the actual control representation.
+
+    Admitting the formula consumes one recurrence and replacing the source
+    removes one, so its net pressure cost is zero. Structural and use checks
+    live in ``induction.control_replacement``; strength reduction only ranks
+    the formulas it can cover.
+    """
+    facts = consts.known(body)
+    selected: dict[int, tuple[tuple[int, int, int], induction.Derived]] = {}
+
+    for loop, _basics, _derived in found:
+        proofs = induction.counted(body, loop, facts)
+        if len(proofs) != 1:
+            continue
+        proof = proofs[0]
+        candidates = [one for one in groups[loop.header] if one.of == proof.counter]
+        results = {
+            one.op.results[0].value for one in candidates if one.op.results and isinstance(one.op.results[0], mir.Held)
+        }
+        roots = [
+            one
+            for one in candidates
+            if not any(isinstance(arg, mir.Held) and arg.value in results for arg in one.op.args)
+        ]
+        for order, root in enumerate(roots):
+            descendants = _formula_descendants(root, tuple(candidates))
+            if induction.control_replacement(body, loop, proof, descendants) is None:
+                continue
+            rank = (len(descendants), _recompute_cost(root, costs), -order)
+            previous = selected.get(proof.counter.value)
+            if previous is None or rank > previous[0]:
+                selected[proof.counter.value] = (rank, root)
+
+    return frozenset(id(root.op) for _rank, root in selected.values())
+
+
+def _replacement_credits(
+    body: MirBody,
+    found: list[tuple[loopy.Loop, dict[int, induction.Affine], list[induction.Derived]]],
+    groups: dict[int, list[induction.Derived]],
+    costs: OperationCosts,
+) -> frozenset[int]:
+    """Root formulas proved to replace their source control recurrences.
+
+    The proof is relational.  A scalar counter may be used by an equality in
+    a nested loop when the other counter has a candidate with the identical
+    modular affine map and that map is injective over both finite domains.
+    Candidate pairs are retained to a fixed point, so an unreplaceable use on
+    either side invalidates the pressure credit on both sides.
+    """
+    facts = consts.known(body)
+    blocks = {block.at: block for block in body.blocks}
+    made = {value.id: op for block in body.blocks for op in block.ops for value in op.defines}
+    flag_readers = {
+        value: [op for block in body.blocks for op in block.ops if value in op.uses]
+        for block in body.blocks
+        for op in block.ops
+        for value in op.defines
+        if value.flags
+    }
+    nodes: list[_Replacement] = []
+
+    for loop, _basics, _derived in found:
+        count = induction.trip_count(body, loop, facts)
+        header = blocks[loop.header]
+        if len(loop.latches) != 1 or count is None or not header.ops:
+            continue
+        branch = header.ops[-1]
+        if branch.kind is not mir.Kind.BRANCH:
+            continue
+        latch = next(iter(loop.latches))
+        candidates = groups[loop.header]
+        for affine in {one.of for one in candidates}:
+            phi = next((one for one in header.phis if one.result.id == affine.value), None)
+            domain = induction.domain(body, loop, affine, facts)
+            if phi is None or latch not in phi.incoming or domain is None:
+                continue
+            controls = {
+                id(op)
+                for op in header.ops[:-1]
+                if induction._counter_bound(op, branch, affine, affine.start.width, made) is not None
+            }
+            update = made.get(phi.incoming[latch].id)
+            if len(controls) != 1 or update is None:
+                continue
+
+            aliases, copies = induction.transparent_aliases(body, loop, phi.result)
+
+            same = tuple(one for one in candidates if one.of == affine)
+            results = {
+                one.op.results[0].value for one in same if one.op.results and isinstance(one.op.results[0], mir.Held)
+            }
+            roots = [
+                one
+                for one in same
+                if not any(isinstance(arg, mir.Held) and arg.value in results for arg in one.op.args)
+            ]
+            for order, root in enumerate(roots):
+                mapping = induction.derived_map(root, facts)
+                width = _width(root.op)
+                stride = _times(root.of.step, root.by, width)
+                signed = induction._signed(stride, facts, width) if stride is not None else None
+                modulus = 1 << (width * 8)
+                if mapping is None or signed in (None, 0) or count >= modulus // gcd(abs(signed), modulus):
+                    continue
+                descendants = _formula_descendants(root, same)
+                nodes.append(
+                    _Replacement(
+                        loop,
+                        root,
+                        mapping,
+                        domain,
+                        aliases,
+                        descendants | controls | copies | {id(update)},
+                        (len(descendants), _recompute_cost(root, costs), -order),
+                    )
+                )
+
+    aliases: dict[mir.Value, set[int]] = {}
+    domains: dict[int, tuple[int, int]] = {}
+    existing: dict[int, set[induction.AffineMap]] = {}
+    for loop, basics, _derived in found:
+        header = blocks[loop.header]
+        latch = next(iter(loop.latches)) if len(loop.latches) == 1 else None
+        for affine in basics.values():
+            domain = induction.domain(body, loop, affine, facts)
+            phi = next((one for one in header.phis if one.result.id == affine.value), None)
+            if domain is None or phi is None:
+                continue
+            domains[affine.value] = domain
+            source_aliases, _copies = induction.transparent_aliases(body, loop, phi.result)
+            for value in source_aliases:
+                aliases.setdefault(value, set()).add(affine.value)
+
+            for alternative in basics.values():
+                if alternative.value == affine.value:
+                    continue
+                relation = induction.relation(affine, alternative, facts)
+                alternative_phi = next(
+                    (one for one in header.phis if one.result.id == alternative.value),
+                    None,
+                )
+                if relation is None or alternative_phi is None or latch is None:
+                    continue
+                update = alternative_phi.incoming.get(latch)
+                if update is None or not any(
+                    alternative_phi.result in op.uses and update not in op.defines
+                    for block in body.blocks
+                    if block.at in loop.body
+                    for op in block.ops
+                ):
+                    continue
+                existing.setdefault(affine.value, set()).add(relation)
+
+    for node in nodes:
+        for value in node.aliases:
+            aliases.setdefault(value, set()).add(node.root.of.value)
+        domains[node.root.of.value] = node.domain
+    by_source: dict[int, list[int]] = {}
+    for index, node in enumerate(nodes):
+        by_source.setdefault(node.root.of.value, []).append(index)
+
+    def equality(node: _Replacement, op: mir.Op, active: set[int]) -> bool:
+        if (
+            op.kind is not mir.Kind.SUB
+            or op.results
+            or op.loads
+            or op.stores
+            or op.barrier
+            or op.merges
+            or len(op.args) != 2
+            or len(op.defines) != 1
+            or not op.defines[0].flags
+            or not flag_readers.get(op.defines[0])
+            or any(
+                reader.kind is not mir.Kind.BRANCH or reader.test not in (mir.Kind.EQ, mir.Kind.NE)
+                for reader in flag_readers[op.defines[0]]
+            )
+        ):
+            return False
+        positions = [
+            index
+            for index, arg in enumerate(op.args)
+            if isinstance(arg, mir.Held) and arg.value in node.aliases and arg.width == node.mapping.width
+        ]
+        if len(positions) != 1:
+            return False
+        other = op.args[1 - positions[0]]
+        if not isinstance(other, mir.Held) or other.width != node.mapping.width:
+            return False
+        partners = aliases.get(other.value, set()) - {node.root.of.value}
+        return any(
+            partner in domains
+            and node.mapping.injective(
+                min(node.domain[0], domains[partner][0]),
+                max(node.domain[1], domains[partner][1]),
+            )
+            and (
+                node.mapping in existing.get(partner, set())
+                or any(
+                    candidate in active and nodes[candidate].mapping == node.mapping
+                    for candidate in by_source.get(partner, ())
+                )
+            )
+            for partner in partners
+        )
+
+    def valid(node: _Replacement, active: set[int]) -> bool:
+        return all(
+            not node.aliases.intersection(op.uses) or id(op) in node.allowed or equality(node, op, active)
+            for block in body.blocks
+            if block.at in node.loop.body
+            for op in block.ops
+        )
+
+    active = set(range(len(nodes)))
+    while True:
+        rejected = {index for index in active if not valid(nodes[index], active)}
+        if not rejected:
+            break
+        active.difference_update(rejected)
+
+    selected: dict[int, int] = {}
+    for index in active:
+        source = nodes[index].root.of.value
+        if source not in selected or nodes[index].rank > nodes[selected[source]].rank:
+            selected[source] = index
+    # A final selection may choose a different map from the one which made an
+    # equality viable.  Remove either side rather than taking speculative
+    # pressure credit; the ordinary formula price remains available.
+    while True:
+        chosen = set(selected.values())
+        rejected = {source for source, index in selected.items() if not valid(nodes[index], chosen)}
+        if not rejected:
+            break
+        for source in rejected:
+            del selected[source]
+    return frozenset(id(nodes[index].root.op) for index in selected.values())
+
+
 def _formula_set(
     candidates: list[induction.Derived],
     room: int | None = None,
     free: set[int] | frozenset[int] = frozenset(),
     *,
+    credited: set[int] | frozenset[int] = frozenset(),
     costs: OperationCosts = _DEFAULT_COSTS,
     references: dict[int, int] | None = None,
 ) -> list[induction.Derived]:
@@ -404,6 +722,8 @@ def _formula_set(
 
     ``free`` names leaves that lowering can express as indexed memory forms;
     they consume no recurrence and must not make their shared parent win.
+    ``credited`` names carried formulas which replace their source control
+    recurrence. They are still emitted, but add no net register pressure.
     """
     made = {
         one.op.results[0].value: one for one in candidates if one.op.results and isinstance(one.op.results[0], mir.Held)
@@ -416,11 +736,28 @@ def _formula_set(
         for one in candidates
         if one.op.results and isinstance(one.op.results[0], mir.Held) and one.op.results[0].value not in consumed
     }
+    # A credited root is the exact map which discharges the old counter's
+    # equality and control uses.  A selected descendant may address the same
+    # bytes with an added field displacement, but it is not that relation.
+    # Carry the root and leave its invariant field additions in the loop.
+    for root in (one for one in candidates if id(one.op) in credited):
+        pending = [root.op.results[0].value]
+        while pending:
+            value = pending.pop()
+            for child in candidates:
+                if child.of != root.of or not any(
+                    isinstance(arg, mir.Held) and arg.value == value for arg in child.op.args
+                ):
+                    continue
+                selected.discard(id(child.op))
+                if child.op.results and isinstance(child.op.results[0], mir.Held):
+                    pending.append(child.op.results[0].value)
+        selected.add(id(root.op))
     if room is None:
         return [one for one in candidates if id(one.op) in selected]
 
     def slots() -> int:
-        return len(selected.difference(free))
+        return len(selected.difference(free | credited))
 
     references = references or {}
     while slots() > room:
@@ -471,7 +808,11 @@ def _formula_set(
     # a variable multiply can remain profitable even when its recurrence has
     # to be updated and consumed from memory.
     while slots() > room:
-        overflow = [one for one in candidates if id(one.op) in selected and id(one.op) not in free]
+        overflow = [
+            one
+            for one in candidates
+            if id(one.op) in selected and id(one.op) not in free and id(one.op) not in credited
+        ]
         priced = []
         for order, one in enumerate(overflow):
             result = one.op.results[0].value if one.op.results and isinstance(one.op.results[0], mir.Held) else None

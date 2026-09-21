@@ -438,10 +438,12 @@ def _expanded(body, loop, header, latch, bridge_ops, latch_ops, exit_at, entry, 
             block = replace(block, ops=ops, phis=phis)
         changed.append(block)
     pointer_values, pointer_seeds = ssa.cloned_pointer_metadata(body, iter(copies))
+    integer_ranges = ssa.cloned_integer_ranges(body, iter(copies))
     return replace(
         body,
         blocks=tuple(changed),
         repetitions=(*body.repetitions, (latch.at, count)),
         pointer_values=pointer_values,
         pointer_seeds=pointer_seeds,
+        integer_ranges=integer_ranges,
     )

@@ -14,10 +14,10 @@ from iced_x86 import Register
 
 from qbopt.model import ir
 from qbopt.model import lir
+from qbopt.backend import target
 from qbopt.backend.peephole import _lanes
-from qbopt.model.passes import LIRTransform
 from qbopt.objectfile.module import Space
-
+from qbopt.model.passes import LIRTransform
 
 _REPRODUCIBLE = frozenset(
     {
@@ -146,8 +146,8 @@ def _written(one: lir.Insn) -> "set[tuple] | None":
     for dest in what.dests:
         if isinstance(dest, ir.Reg):
             writes |= _lanes(dest.register)
-    for _held, register in one.delivers:
-        writes |= _lanes(register)
+    for held, register in one.delivers:
+        writes |= _lanes(target.named(register, held.width))
     for register in one.clobbers:
         writes |= _lanes(register)
     for register in one.clobbers_high:

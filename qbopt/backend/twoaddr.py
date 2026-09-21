@@ -27,7 +27,7 @@ from qbopt.model.passes import LIRTransform
 # and, or, xor and adc alike, and every one of them reads its destination.
 # Widening multiply and divide use fixed registers; a single-result
 # multiply with two sources instead reads its destination.
-_TIED = frozenset({ir.Operation.BINARY, ir.Operation.UNARY})
+_TIED = frozenset({ir.Operation.BINARY, ir.Operation.UNARY, ir.Operation.FUNNEL})
 
 
 class TwoAddress(LIRTransform):

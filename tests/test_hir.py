@@ -328,6 +328,19 @@ def test_hir_verifier_rejects_incomplete_float_and_bad_cfg() -> None:
         hir.verify(replace(source, modules=(replace(module, functions=(broken,)),)))
 
 
+def test_hir_verifier_refuses_unsigned_division_over_signed_values() -> None:
+    """Unsigned source division once reached MIR as signed DIVMOD, changing values above INT_MAX."""
+    source = program()
+    module = source.modules[0]
+    function = module.functions[0]
+    entry = function.blocks[0]
+    instructions = list(entry.instructions)
+    instructions[2] = replace(instructions[2], op=hir.Op.UDIV)
+    broken = replace(function, blocks=(replace(entry, instructions=tuple(instructions)), *function.blocks[1:]))
+    with pytest.raises(hir.InvalidHIR, match="requires unsigned integer operands"):
+        hir.verify(replace(source, modules=(replace(module, functions=(broken,)),)))
+
+
 def test_hir_verifier_rejects_a_store_with_the_wrong_value_type() -> None:
     source = program()
     module = source.modules[0]
@@ -1011,7 +1024,10 @@ def test_qb_float_function_uses_hidden_near_result_pointer() -> None:
     assert len(function.parameters) == 2
 
     listing = masm.text(qb_compile.assembled(source))
-    assert re.search(r"lea ax, ([^\n]+)\n    push dword ptr ([^\n]+)\n    push ax\n    call far ptr ADDHALF", listing)
+    assert re.search(
+        r"push dword ptr ([^\n]+)\n    push offset ([^\n]+)\n    call far ptr ADDHALF",
+        listing,
+    )
     assert "fstp dword ptr [bx]" in listing
     assert "mov ax, bx\n    call far ptr B$EXSA\n    pop bp\n    retf" in listing
 
@@ -1212,6 +1228,56 @@ def test_module_static_numeric_array_has_a_relocated_basic_descriptor() -> None:
         (2, 2, "group", 1),
         (10, 1, "segment", by_name["BC_DATA"][0]),
     ]
+
+
+def test_static_udt_array_loop_carries_a_byte_offset(tmp_path: Path) -> None:
+    """QB nbody recomputed ``current * 16`` after C and modern had reduced it.
+
+    A proved array walk must carry the byte offset regardless of which source
+    frontend formed the MIR.  One hundred iterations keep this witness as a
+    loop rather than allowing the independent unroller to erase it.
+    """
+    source = tmp_path / "stride.bas"
+    source.write_text(
+        """\
+defint a-z
+
+type Vec2i
+    x as long
+    y as long
+end type
+
+type Body
+    pos as Vec2i
+    vel as Vec2i
+end type
+
+declare function walk () as long
+
+dim shared answer as long
+answer = walk()
+end
+
+function walk () as long static
+    dim bodies(0 to 99) as Body
+    dim current as integer
+
+    for current = 0 to 99
+        bodies(current).pos.x = bodies(current).vel.x
+    next current
+    walk = bodies(99).pos.x
+end function
+"""
+    )
+
+    program = qb_driver.parsed(source, dialect="vbdos", runtime="vbdos")
+    listing = masm.text(qb_compile.assembled(program))
+    procedure = listing.split("WALK proc far", 1)[1].split("WALK endp", 1)[0]
+
+    assert not re.search(r"\bshl (?:word ptr \[[^\n]+\]|[a-z]{2}), 4\b", procedure)
+    assert not re.search(r"\bimul\b[^\n]*, 16\b", procedure)
+    assert re.search(r"add (?:word ptr \[[^]]+\]|[a-z]{2}), 16", procedure)
+    assert not re.search(r"cmp word ptr \[bp-[0-9]+\], 0", procedure)
 
 
 def test_rank_two_descriptor_matches_qb_dimension_order_and_adjusted_offset() -> None:
@@ -1882,11 +1948,11 @@ def test_string_builders_have_descriptor_stack_contracts() -> None:
     assert contracts["B$STRS"].cleanup == 4
 
 
-def test_classic_string_stack_abis_are_measured_for_every_runtime_family() -> None:
+def test_classic_string_stack_abis_are_measured_for_every_qb_runtime_family() -> None:
     """Q45LE71 reached B$LEFT but emission refused the previously VBDOS-only cleanup."""
     from qbopt.frontend.qb.abi import _contract
 
-    for family in hir.RuntimeProfile:
+    for family in (hir.RuntimeProfile.QB45, hir.RuntimeProfile.PDS71, hir.RuntimeProfile.VBDOS):
         for name, pushed in {
             "B$LEFT": 4,
             "B$RGHT": 4,

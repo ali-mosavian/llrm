@@ -32,6 +32,7 @@ from qbopt.model.floating import Format
 from qbopt.backend import cpu as targets
 from qbopt.objectfile.module import Addr
 from qbopt.model.floating import Rounding
+from qbopt.objectfile.module import Space
 
 
 def operand(arg: mir.Arg) -> ir.Loc:
@@ -49,6 +50,8 @@ def operand(arg: mir.Arg) -> ir.Loc:
             offset=arg.offset,
             disp_width=1 if -128 <= arg.offset <= 127 else 2,
         )
+    if isinstance(arg, mir.FrameSelector):
+        return ir.Reg(Register.SS, arg.width)
     if isinstance(arg, mir.Cell):
         return arg.ref
     return arg.what  # the x87 stack, which has no MIR form
@@ -80,6 +83,10 @@ _MACHINE: dict[mir.Kind, tuple[ir.Operation, str]] = {
     # destination and nothing else -- the widening form writes dx:ax, and
     # an operation MIR invented defines one value.
     mir.Kind.MUL: (ir.Operation.MULTIPLY, "imul"),
+    # Semantic fixed operations expand below; these names only let the
+    # generic naming boundary acknowledge that this target owns them.
+    mir.Kind.FIXED_MUL: (ir.Operation.MULTIPLY, "fixed_mul"),
+    mir.Kind.FIXED_DIV: (ir.Operation.DIVIDE, "fixed_div"),
     mir.Kind.ADD: (ir.Operation.BINARY, "add"),
     mir.Kind.SHL: (ir.Operation.BINARY, "shl"),
     mir.Kind.SHR: (ir.Operation.BINARY, "shr"),
@@ -236,6 +243,26 @@ def semantics(op: mir.Op, was: ir.Semantics | None = None, place=None) -> ir.Sem
         located = place or _place
         sources = tuple(located(one, (), i) for i, one in enumerate(op.args)) if _indirect_call(op) else ()
         return ir.Semantics(op.op, op.name, (), sources, indirect=op.indirect)
+    if (
+        op.kind is mir.Kind.ADDRESS
+        and len(op.args) == len(op.results) == 1
+        and isinstance(op.args[0], mir.Cell)
+        and op.args[0].ref.addr is not None
+        and op.args[0].ref.addr.space in (Space.SEGMENT, Space.EXTERNAL)
+        and op.args[0].ref.base is None
+        and isinstance(op.results[0], mir.Held)
+        and op.results[0].width == 2
+    ):
+        # A named data object's near address is its relocated offset. LEA can
+        # perform address arithmetic, but it cannot carry the grouped-data
+        # offset fixup that a real-mode object needs here; MOV imm16 can.
+        placed = place or _place
+        return ir.Semantics(
+            ir.Operation.MOVE,
+            "mov",
+            (placed(op.results[0], was.dests if was else (), 0),),
+            (ir.Imm(0, 2, op.args[0].ref.addr),),
+        )
     if not op.args and not op.results and op.raised is None and op.kind is not mir.Kind.BRANCH:
         return None  # nothing to build one from
     # A value resolves to the register the original instruction had in the
@@ -971,6 +998,169 @@ def _word_division(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...]
     )
 
 
+def _fixed_multiply(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...]:
+    """Rescale a fixed i32 product through the 386's native EDX:EAX pair."""
+    if (
+        len(op.args) != 3
+        or len(op.results) != 1
+        or not isinstance(op.results[0], mir.Held)
+        or op.results[0].width != 4
+        or not isinstance(op.args[2], mir.Const)
+        or not 1 <= op.args[2].n < 32
+        or any(not isinstance(arg, (mir.Held, mir.Const)) or arg.width != 4 for arg in op.args[:2])
+    ):
+        raise Unlowered(f"unsupported fixed multiply at {op.at:#x}")
+    setup = []
+    factors = []
+    for arg in op.args[:2]:
+        factor = operand(arg)
+        if isinstance(arg, mir.Const):
+            held = ir.Held(lowering.fresh(), 4)
+            setup.append(ir.Semantics(ir.Operation.MOVE, "mov", (held,), (factor,)))
+            factor = held
+        factors.append(factor)
+    low, high = ir.Held(lowering.fresh(), 4), ir.Held(lowering.fresh(), 4)
+    result = operand(op.results[0])
+    return (
+        *setup,
+        ir.Semantics(ir.Operation.MULTIPLY, "imul", (low, high), tuple(factors)),
+        ir.Semantics(
+            ir.Operation.FUNNEL,
+            "shrd",
+            (result,),
+            (low, high, ir.Imm(op.args[2].n, 1)),
+        ),
+    )
+
+
+def _fixed_division(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...]:
+    """Compute wrapping fixed i32 division without general i64 arithmetic.
+
+    When the quotient is statically known to fit, IDIV consumes the shifted
+    EDX:EAX dividend directly.  Otherwise two unsigned DIVs compute the low
+    dword of the magnitude quotient and the final xor/sub reapplies its sign;
+    that is exactly signed i64 division followed by wrapping i32 narrowing.
+    """
+    if (
+        len(op.args) != 3
+        or len(op.results) != 1
+        or not isinstance(op.results[0], mir.Held)
+        or op.results[0].width != 4
+        or not isinstance(op.args[2], mir.Const)
+        or not 1 <= op.args[2].n < 32
+        or any(not isinstance(arg, (mir.Held, mir.Const)) or arg.width != 4 for arg in op.args[:2])
+    ):
+        raise Unlowered(f"unsupported fixed divide at {op.at:#x}")
+
+    fraction = op.args[2].n
+    left_arg, right_arg = op.args[:2]
+    scale = 1 << fraction
+    shifted_constant = left_arg.n << fraction if isinstance(left_arg, mir.Const) else None
+    quotient_fits = shifted_constant is not None and -(1 << 31) <= shifted_constant < 1 << 31
+    if isinstance(right_arg, mir.Const):
+        # |right| >= 1.0 cannot enlarge the stored numerator.  The sole
+        # exceptional sign case, INT_MIN / -1.0, is excluded by requiring a
+        # strictly larger magnitude for a negative divisor.
+        quotient_fits |= right_arg.n >= scale or right_arg.n < -scale
+
+    setup = []
+
+    def materialize(arg: mir.Held | mir.Const) -> ir.Held:
+        value = operand(arg)
+        if isinstance(value, ir.Held):
+            return value
+        held = ir.Held(lowering.fresh(), 4)
+        setup.append(ir.Semantics(ir.Operation.MOVE, "mov", (held,), (value,)))
+        return held
+
+    divisor = materialize(right_arg)
+    result = operand(op.results[0])
+
+    if quotient_fits:
+        low = ir.Held(lowering.fresh(), 4)
+        if shifted_constant is not None:
+            setup.append(ir.Semantics(ir.Operation.MOVE, "mov", (low,), (ir.Imm(shifted_constant, 4),)))
+            high = ir.Held(lowering.fresh(), 4)
+            setup.append(ir.Semantics(ir.Operation.EXTEND, "cdq", (high,), (low,)))
+        else:
+            left = materialize(left_arg)
+            unshifted_high = ir.Held(lowering.fresh(), 4)
+            setup.append(ir.Semantics(ir.Operation.MOVE, "mov", (low,), (left,)))
+            setup.append(ir.Semantics(ir.Operation.EXTEND, "cdq", (unshifted_high,), (low,)))
+            high = ir.Held(lowering.fresh(), 4)
+            setup.append(
+                ir.Semantics(
+                    ir.Operation.FUNNEL,
+                    "shld",
+                    (high,),
+                    (unshifted_high, low, ir.Imm(fraction, 1)),
+                )
+            )
+            shifted_low = ir.Held(lowering.fresh(), 4)
+            setup.append(ir.Semantics(ir.Operation.BINARY, "shl", (shifted_low,), (low, ir.Imm(fraction, 1))))
+            low = shifted_low
+        remainder = ir.Held(lowering.fresh(), 4)
+        return (
+            *setup,
+            ir.Semantics(ir.Operation.DIVIDE, "idiv", (result, remainder), (high, low, divisor)),
+        )
+
+    left = materialize(left_arg)
+    sign_left, sign_right = ir.Held(lowering.fresh(), 4), ir.Held(lowering.fresh(), 4)
+    setup += [
+        ir.Semantics(ir.Operation.BINARY, "sar", (sign_left,), (left, ir.Imm(31, 1))),
+        ir.Semantics(ir.Operation.BINARY, "sar", (sign_right,), (divisor, ir.Imm(31, 1))),
+    ]
+
+    def magnitude(value: ir.Held, sign: ir.Held) -> ir.Held:
+        changed = ir.Held(lowering.fresh(), 4)
+        absolute = ir.Held(lowering.fresh(), 4)
+        setup.extend(
+            (
+                ir.Semantics(ir.Operation.BINARY, "xor", (changed,), (value, sign)),
+                ir.Semantics(ir.Operation.BINARY, "sub", (absolute,), (changed, sign)),
+            )
+        )
+        return absolute
+
+    absolute_left = magnitude(left, sign_left)
+    absolute_divisor = magnitude(divisor, sign_right)
+    result_sign = ir.Held(lowering.fresh(), 4)
+    high, low = ir.Held(lowering.fresh(), 4), ir.Held(lowering.fresh(), 4)
+    zero = ir.Held(lowering.fresh(), 4)
+    setup += [
+        ir.Semantics(ir.Operation.BINARY, "xor", (result_sign,), (sign_left, sign_right)),
+        ir.Semantics(
+            ir.Operation.BINARY,
+            "shr",
+            (high,),
+            (absolute_left, ir.Imm(32 - fraction, 1)),
+        ),
+        ir.Semantics(ir.Operation.BINARY, "shl", (low,), (absolute_left, ir.Imm(fraction, 1))),
+        ir.Semantics(ir.Operation.MOVE, "mov", (zero,), (ir.Imm(0, 4),)),
+    ]
+    upper_quotient, upper_remainder = ir.Held(lowering.fresh(), 4), ir.Held(lowering.fresh(), 4)
+    low_quotient, low_remainder = ir.Held(lowering.fresh(), 4), ir.Held(lowering.fresh(), 4)
+    signed = ir.Held(lowering.fresh(), 4)
+    return (
+        *setup,
+        ir.Semantics(
+            ir.Operation.DIVIDE,
+            "div",
+            (upper_quotient, upper_remainder),
+            (zero, high, absolute_divisor),
+        ),
+        ir.Semantics(
+            ir.Operation.DIVIDE,
+            "div",
+            (low_quotient, low_remainder),
+            (upper_remainder, low, absolute_divisor),
+        ),
+        ir.Semantics(ir.Operation.BINARY, "xor", (signed,), (low_quotient, result_sign)),
+        ir.Semantics(ir.Operation.BINARY, "sub", (result,), (signed, result_sign)),
+    )
+
+
 def _concat(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...]:
     match op.args, op.results:
         case (mir.Held(width=2) | mir.Const(width=2), mir.Held(width=2) | mir.Const(width=2)), (mir.Held(width=4),):
@@ -1115,6 +1305,8 @@ _EXPANDS: dict = {
     mir.Kind.UDIVMOD: _word_division,
     mir.Kind.CONCAT: _concat,
     mir.Kind.SMULHI: _signed_high_product,
+    mir.Kind.FIXED_MUL: _fixed_multiply,
+    mir.Kind.FIXED_DIV: _fixed_division,
     mir.Kind.PTR_OFFSET: _pointer_offset,
 }
 

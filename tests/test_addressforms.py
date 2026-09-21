@@ -11,6 +11,7 @@ from qbopt.model import mir
 from qbopt.backend import cpu
 from qbopt.backend import lower
 from qbopt.backend import select
+from qbopt.backend import verify
 from qbopt.frontend import blocks
 from qbopt.backend import peephole
 from qbopt.backend import addressforms
@@ -91,6 +92,62 @@ def test_sum_lea_preserves_observed_add_flags() -> None:
     result = peephole.addresses(body, cpu="386").insns
 
     assert [one.what.name for one in result] == ["mov", "add", "je"]
+
+
+def test_sum_lea_preserves_a_copy_result_read_after_the_add() -> None:
+    """Modern nbody lost value 333 and stopped in the LIR verifier.
+
+    Allocation had introduced a copy whose physical destination was reused by
+    the following ADD, while a later opaque call occurrence still named the
+    copy's virtual result.  Folding the pair to LEA discarded that definition.
+    An address fold may remove an intermediate only when all of its readers are
+    inside the folded region.
+    """
+    destination = ir.Reg(Register.EAX, 4)
+    left = ir.Reg(Register.EBP, 4)
+    right = ir.Reg(Register.EDI, 4)
+    saved = ir.Reg(Register.EDX, 4)
+    copy = lir.Insn(
+        1,
+        (1, 1),
+        ir.Semantics(ir.Operation.MOVE, "mov", (destination,), (left,)),
+        (3,),
+        (1,),
+    )
+    addition = lir.Insn(
+        2,
+        (2, 2),
+        ir.Semantics(ir.Operation.BINARY, "add", (destination,), (destination, right)),
+        (1,),
+        (1, 2),
+    )
+    preserve = lir.Insn(
+        3,
+        (3, 3),
+        ir.Semantics(ir.Operation.MOVE, "mov", (saved,), (destination,)),
+        (4,),
+        (3,),
+    )
+    compare = lir.Insn(
+        4,
+        (4, 4),
+        ir.Semantics(ir.Operation.COMPARE, "cmp", (), (destination, ir.Imm(0, 4))),
+        (),
+        (1,),
+    )
+    body = lir.LirBody(
+        "live-copy-sum",
+        1,
+        (lir.LirBlock(1, (copy, addition, preserve, compare), ()),),
+        {},
+        {},
+        inputs=frozenset((1, 2)),
+    )
+
+    transformed = peephole.addresses(body, cpu="386")
+
+    assert [one.what.name for one in transformed.insns] == ["mov", "add", "mov", "cmp"]
+    assert not verify.verify(transformed)
 
 
 def _constant_sum_body(amount: int, *, symbolic_add: bool = False) -> lir.LirBody:
@@ -511,6 +568,59 @@ def test_indexed_frame_array_uses_bp_as_the_encoded_base() -> None:
     assert indexed.through == Register.BP
     assert indexed.base is None
     assert indexed.index == ir.Held(index.id, 2)
+
+
+def test_selected_indexed_frame_cell_keeps_bp_and_its_dynamic_index() -> None:
+    """Modern nbody's six bodies all collapsed onto element zero at final selection.
+
+    MIR still carried the dynamic byte offset, but the frame encoding retained
+    only BP and `-96`, producing `[bp-96]` instead of `[bp+si-96]`.
+    """
+    cell = ir.Mem(
+        Addr(Space.FRAME, -96),
+        4,
+        through=Register.BP,
+        base=ir.Held(1, 2),
+        index_through=Register.SI,
+    )
+
+    made = select.move_from(Register.EAX, cell)
+
+    assert made is not None
+    instruction = decode(made.code, 0)
+    assert instruction is not None
+    assert instruction.insn.memory_base == Register.BP
+    assert instruction.insn.memory_index == Register.SI
+    assert instruction.insn.memory_displacement & 65535 == (-96) & 65535
+
+
+def test_named_data_address_is_a_relocatable_immediate() -> None:
+    """Modern nbody's first string address could not be written to OMF.
+
+    A segment symbol is an offset value, so ``mov ax, offset label`` carries
+    the relocation in an immediate.  Spelling it ``lea ax, label`` leaves the
+    fresh object writer looking for a displacement field the instruction
+    cannot encode in real-mode's grouped data model.
+    """
+    result = mir.Value(2, 1)
+    address = Addr(Space.SEGMENT, 4, 7)
+    operation = mir.Op(
+        1,
+        ir.Operation.ADDRESS,
+        "lea",
+        (result,),
+        (),
+        kind=mir.Kind.ADDRESS,
+        args=(mir.Cell(mir.MemRef(address, 2, space=Space.SEGMENT)),),
+        results=(mir.Held(result, 2),),
+    )
+
+    lowered = lower.semantics(operation, place=lower.as_a_value)
+
+    assert lowered is not None
+    assert lowered.op is ir.Operation.MOVE
+    assert lowered.name == "mov"
+    assert lowered.sources == (ir.Imm(0, 2, address),)
 
 
 def test_constant_frame_array_address_folds_to_a_displacement() -> None:

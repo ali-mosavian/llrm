@@ -417,12 +417,19 @@ def _at(
         for value, seed in callee.pointer_seeds.items()
         if value.id in swap and value.id not in formal_values and swap[value.id] not in pointer_seeds
     )
+    integer_ranges = dict(body.integer_ranges)
+    integer_ranges.update(
+        (swap[value.id], interval)
+        for value, interval in callee.integer_ranges.items()
+        if value.id in swap and value.id not in formal_values and swap[value.id] not in integer_ranges
+    )
     return replace(
         body,
         blocks=tuple(blocks),
         cloned=True,
         pointer_values=frozenset(pointer_values),
         pointer_seeds=pointer_seeds,
+        integer_ranges=integer_ranges,
     )
 
 

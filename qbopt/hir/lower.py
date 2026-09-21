@@ -79,6 +79,7 @@ def _ref(place: model.Place, type_: model.Type) -> mir.MemRef:
         type_.width,
         space=space,
         provenance=provenance,
+        volatile=place.volatile,
     )
 
 
@@ -108,6 +109,10 @@ _COMPARISONS = {
     model.Op.LE,
     model.Op.GT,
     model.Op.GE,
+    model.Op.BELOW,
+    model.Op.BELOW_EQ,
+    model.Op.ABOVE,
+    model.Op.ABOVE_EQ,
     model.Op.STRING_EQ,
     model.Op.STRING_NE,
     model.Op.STRING_LT,
@@ -141,6 +146,8 @@ def _materialized_booleans(function: model.Function, types: dict[int, model.Type
         if isinstance(operand, (model.ArrayElement, model.ProjectedPlace)):
             return tuple(value for index in operand.indices for value in referenced(index))
         if isinstance(operand, model.IndirectPlace):
+            return (operand.base,)
+        if isinstance(operand, model.DescriptorPlace):
             return (operand.base,)
         return ()
 
@@ -264,6 +271,7 @@ def _function(
 ) -> Lowered:
     values = {one.id: mir.Value(one.id, one.id, variable=one.id, version=1) for one in function.values}
     value_types = {one.id: types[one.type] for one in function.values}
+    integer_ranges: dict[mir.Value, mir.IntegerRange] = {}
 
     def value_width(type_: model.Type) -> int:
         return 10 if type_.kind is model.TypeKind.FLOAT else type_.width
@@ -289,6 +297,8 @@ def _function(
         if isinstance(one, (model.ArrayElement, model.ProjectedPlace)):
             return tuple(value for index in one.indices for value in referenced(index))
         if isinstance(one, model.IndirectPlace):
+            return (one.base,)
+        if isinstance(one, model.DescriptorPlace):
             return (one.base,)
         return ()
 
@@ -387,6 +397,7 @@ def _function(
                     space=space,
                     base_width=offset.width,
                     provenance=provenance,
+                    volatile=place.volatile,
                 )
                 return mir.Cell(ref)
             case model.ProjectedPlace(place_id, indices, field_offset, type_id):
@@ -405,6 +416,7 @@ def _function(
                             field_type.width,
                             space=space,
                             provenance=provenance,
+                            volatile=place.volatile,
                         )
                     )
                 assert root.element is not None
@@ -449,6 +461,7 @@ def _function(
                         space=space,
                         base_width=offset.width,
                         provenance=provenance,
+                        volatile=place.volatile,
                     )
                 )
             case model.IndirectPlace(base, offset, type_id, volatile):
@@ -588,6 +601,9 @@ def _function(
                         volatile=volatile,
                     )
                 )
+            case model.DescriptorPlace(base, field, type_id):
+                offset = -4 if field is model.DescriptorField.LENGTH else -2
+                return operand(model.IndirectPlace(base, offset, type_id), before)
 
     def operation(instruction: model.Instruction) -> tuple[mir.Op, ...]:
         nonlocal at, next_value, next_frame_offset
@@ -747,6 +763,9 @@ def _function(
             segment = mir.Value(next_value, at + 1, variable=next_value, version=1)
             next_value += 1
             at += 1
+            selector_source = (
+                mir.FrameSelector() if reference.space is Space.FRAME else mir.Symbol(Space.GROUP, 0, 0, 2)
+            )
             selector = mir.Op(
                 at,
                 ir.Operation.MOVE,
@@ -754,7 +773,7 @@ def _function(
                 (segment,),
                 (),
                 kind=mir.Kind.COPY,
-                args=(mir.Symbol(Space.GROUP, 0, 0, 2),),
+                args=(selector_source,),
                 results=(mir.Held(segment, 2),),
                 id=at,
                 reads_complete=True,
@@ -776,6 +795,85 @@ def _function(
                 memory_complete=True,
             )
             return (*before, *offset_ops, selector, joined)
+        if (
+            instruction.op is model.Op.PTR_OFFSET
+            and value_types[instruction.results[0]].address is model.AddressKind.FAR
+        ):
+            if (
+                len(args) != 2
+                or not isinstance(args[0], mir.Held)
+                or args[0].width != 4
+                or not isinstance(args[1], (mir.Held, mir.Const))
+                or args[1].width not in (1, 2, 4)
+            ):
+                raise InvalidHIR(
+                    f"{module}.{function.name}: far pointer offset needs a pointer and integer displacement"
+                )
+            pointer, displacement = args
+            if displacement.width != 2:
+                displacement = (
+                    mir.Held(displacement.value, 2)
+                    if isinstance(displacement, mir.Held)
+                    else mir.Const(displacement.n, 2)
+                )
+            halves = []
+            for bit in (0, 16):
+                half = mir.Value(next_value, at + 1, variable=next_value, version=1)
+                next_value += 1
+                at += 1
+                before.append(
+                    mir.Op(
+                        at,
+                        ir.Operation.MOVE,
+                        "extract",
+                        (half,),
+                        (pointer.value,),
+                        kind=mir.Kind.EXTRACT,
+                        args=(pointer, mir.Const(bit, 1)),
+                        results=(mir.Held(half, 2),),
+                        id=at,
+                        reads_complete=True,
+                        memory_complete=True,
+                    )
+                )
+                halves.append(half)
+            offset, segment = halves
+            adjusted = mir.Value(next_value, at + 1, variable=next_value, version=1)
+            next_value += 1
+            at += 1
+            before.append(
+                mir.Op(
+                    at,
+                    ir.Operation.BINARY,
+                    "add",
+                    (adjusted,),
+                    tuple(one.value for one in (mir.Held(offset, 2), displacement) if isinstance(one, mir.Held)),
+                    kind=mir.Kind.ADD,
+                    args=(mir.Held(offset, 2), displacement),
+                    results=(mir.Held(adjusted, 2),),
+                    id=at,
+                    reads_complete=True,
+                    memory_complete=True,
+                )
+            )
+            at += 1
+            result = values[instruction.results[0]]
+            before.append(
+                mir.Op(
+                    at,
+                    ir.Operation.MOVE,
+                    "",
+                    (result,),
+                    (segment, adjusted),
+                    kind=mir.Kind.CONCAT,
+                    args=(mir.Held(segment, 2), mir.Held(adjusted, 2)),
+                    results=(mir.Held(result, 4),),
+                    id=instruction.id,
+                    reads_complete=True,
+                    memory_complete=True,
+                )
+            )
+            return tuple(before)
         if instruction.op in (model.Op.POINTER_SEGMENT, model.Op.POINTER_OFFSET):
             if len(args) != 1 or not isinstance(args[0], mir.Held):
                 raise InvalidHIR(f"{module}.{function.name}: pointer projection needs one pointer")
@@ -840,6 +938,23 @@ def _function(
             mir.Held(one, value_width(value_types[source]))
             for one, source in zip(made, instruction.results, strict=True)
         )
+        if (
+            instruction.op is model.Op.LOAD
+            and len(instruction.operands) == len(made) == 1
+            and isinstance(instruction.operands[0], model.DescriptorPlace)
+        ):
+            descriptor = instruction.operands[0]
+            pointer = value_types[descriptor.base]
+            assert pointer.element is not None and pointer.rank == 1
+            element = types[pointer.element]
+            # Translate the target ABI rule here, at the HIR boundary.  A
+            # descriptor-backed slice fits in one pointer-offset domain, so
+            # its element count cannot exceed that domain divided by the
+            # element width.  MIR receives only the resulting integer fact.
+            offset_width = pointer.width if pointer.address is model.AddressKind.NEAR else pointer.width // 2
+            field_width = value_types[instruction.results[0]].width
+            maximum = min((1 << (field_width * 8)) - 1, (1 << (offset_width * 8)) // element.width)
+            integer_ranges[made[0]] = mir.IntegerRange(0, maximum, field_width)
         # Shared MIR deliberately has no target-instruction catalogue. Keep
         # source intrinsics as unary floating computation, never CALL: FSQRT
         # is the existing unary-float carrier and ``name`` retains the exact
@@ -850,16 +965,18 @@ def _function(
             if instruction.op in _STRING_COMPARISONS
             else mir.Kind.FSQRT
             if instruction.op in _X87_INTRINSICS
+            else mir.Kind.UDIVMOD
+            if instruction.op in (model.Op.UDIV, model.Op.UREM, model.Op.UDIVMOD)
             else _KINDS[instruction.op.value]
         )
-        if instruction.op in (model.Op.DIV, model.Op.REM):
+        if instruction.op in (model.Op.DIV, model.Op.REM, model.Op.UDIV, model.Op.UREM):
             source = instruction.results[0]
             extra = mir.Value(next_value, at, variable=next_value, version=1)
             value_types[next_value] = value_types[source]
             next_value += 1
-            made = (made[0], extra) if instruction.op is model.Op.DIV else (extra, made[0])
+            made = (made[0], extra) if instruction.op in (model.Op.DIV, model.Op.UDIV) else (extra, made[0])
             results = tuple(mir.Held(one, value_types[source].width) for one in made)
-            kind = mir.Kind.DIVMOD
+            kind = mir.Kind.UDIVMOD if instruction.op in (model.Op.UDIV, model.Op.UREM) else mir.Kind.DIVMOD
         cells = tuple(one.ref for one in args if isinstance(one, mir.Cell))
         semantics = None
         if instruction.op in _BINARY_FLOAT | _UNARY_FLOAT:
@@ -1178,6 +1295,10 @@ def _function(
                 model.Op.LE: mir.Kind.LE,
                 model.Op.GT: mir.Kind.GT,
                 model.Op.GE: mir.Kind.GE,
+                model.Op.BELOW: mir.Kind.BELOW,
+                model.Op.BELOW_EQ: mir.Kind.BELOW_EQ,
+                model.Op.ABOVE: mir.Kind.ABOVE,
+                model.Op.ABOVE_EQ: mir.Kind.ABOVE_EQ,
                 model.Op.STRING_EQ: mir.Kind.EQ,
                 model.Op.STRING_NE: mir.Kind.NE,
                 model.Op.STRING_LT: mir.Kind.LT,
@@ -1283,6 +1404,7 @@ def _function(
         sealed=True,
         pointer_values=pointer_values,
         pointer_seeds=pointer_seeds,
+        integer_ranges=integer_ranges,
     )
     checked = body
     external = tuple(

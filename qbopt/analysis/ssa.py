@@ -115,6 +115,20 @@ def cloned_pointer_metadata(
     return frozenset(pointer_values), pointer_seeds
 
 
+def cloned_integer_ranges(
+    body: MirBody,
+    mappings: Iterator[dict[int, mir.Value]],
+) -> dict[mir.Value, mir.IntegerRange]:
+    """Carry frontend integer facts onto structurally cloned values."""
+    ranges = {value.id: interval for value, interval in body.integer_ranges.items()}
+    cloned_ranges = dict(body.integer_ranges)
+    for mapping in mappings:
+        for original, cloned in mapping.items():
+            if original in ranges:
+                cloned_ranges[cloned] = ranges[original]
+    return cloned_ranges
+
+
 def renumbered(body: MirBody, variable: int) -> MirBody:
     """Make one variable's versions run from one without a gap.
 

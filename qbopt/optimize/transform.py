@@ -93,6 +93,7 @@ _PURE = frozenset(
         mir.Kind.ADD,
         mir.Kind.SUB,
         mir.Kind.MUL,
+        mir.Kind.FIXED_MUL,
         mir.Kind.SMULHI,
         mir.Kind.PTR_OFFSET,
         mir.Kind.DIV,
@@ -225,9 +226,7 @@ def subexpressions(
             ):
                 candidates.append((order[block.at], index, op))
                 continue
-            if op.loads and avoid_store_crossing and any(
-                crossed.stores for crossed in block.ops[where + 1 : index]
-            ):
+            if op.loads and avoid_store_crossing and any(crossed.stores for crossed in block.ops[where + 1 : index]):
                 candidates.append((order[block.at], index, op))
                 continue
             if len(earlier.defines) != len(op.defines):
@@ -861,11 +860,7 @@ def forwarded(
         return body
     served = {id(one.op): one.value for one in avail.forwardable(body, dgroup, calls, want) if one.value is not None}
     if avoid_store_crossing:
-        locations = {
-            id(op): (block.at, index)
-            for block in body.blocks
-            for index, op in enumerate(block.ops)
-        }
+        locations = {id(op): (block.at, index) for block in body.blocks for index, op in enumerate(block.ops)}
         definitions = {
             value: (block.at, index)
             for block in body.blocks
@@ -918,9 +913,7 @@ def forwarded(
             return not arrived
 
         served = {
-            identity: holder
-            for identity, holder in served.items()
-            if not crosses_store(op_by_id[identity], holder)
+            identity: holder for identity, holder in served.items() if not crosses_store(op_by_id[identity], holder)
         }
     if not served:
         return body
@@ -2628,6 +2621,7 @@ def _reparented(body: MirBody, crossed: set) -> MirBody:
         ),
         pointer_values=frozenset(value(one) for one in body.pointer_values),
         pointer_seeds={value(one): provenance for one, provenance in body.pointer_seeds.items()},
+        integer_ranges={value(one): interval for one, interval in body.integer_ranges.items()},
     )
 
 

@@ -2,7 +2,7 @@
 
 from qbopt.model import mir
 
-_TRAPS = frozenset({mir.Kind.FCHECK, mir.Kind.DIV, mir.Kind.REM, mir.Kind.DIVMOD})
+_TRAPS = frozenset({mir.Kind.FCHECK, mir.Kind.DIV, mir.Kind.REM, mir.Kind.DIVMOD, mir.Kind.FIXED_DIV})
 
 
 def unmodeled_write(op: mir.Op) -> bool:

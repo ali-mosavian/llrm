@@ -167,6 +167,27 @@ def test_direct_mir_default_keeps_medium_model_address_legality(monkeypatch: pyt
     assert observed == [frozenset({1})]
 
 
+def test_shared_optimizer_owns_control_recurrence_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """QB and C kept ``index * sizeof(element)`` while modern carried an offset.
+
+    Replacing a proved control induction variable is a MIR transform, not a
+    frontend language choice.  Every caller of the shared optimization
+    boundary must therefore receive it without opting in independently.
+    """
+    observed = []
+
+    def recording(body, *args, **kwargs):
+        observed.append(kwargs["control_recurrences"])
+        return body
+
+    monkeypatch.setattr(strength, "reduced", recording)
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (), ()),))
+
+    transform.applied(body, frozenset(), {}, only="strength")
+
+    assert observed == [True]
+
+
 def test_direct_mir_default_has_a_bounded_complete_peel_budget(monkeypatch: pytest.MonkeyPatch) -> None:
     """The QB frontend expanded SC_INIT's 25 stores when it omitted two knobs.
 

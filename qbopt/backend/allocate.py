@@ -27,6 +27,7 @@ from qbopt.model import ir
 from qbopt.model import lir
 from qbopt.backend import target
 from qbopt.backend import cpu as targets
+from qbopt.objectfile.module import Space
 from qbopt.model.passes import LIRTransform
 from qbopt.analysis import intervals as ranges
 
@@ -267,7 +268,16 @@ def classes(body: lir.LirBody, prefer_indexes: frozenset[int] = frozenset()) -> 
                     and where.base.width == 2
                     and where.index is None
                 ):
-                    restrict(where.base.value, target.ADDRESSING)
+                    # A local object's fixed address is BP-relative. Its one
+                    # dynamic component therefore occupies the index half of
+                    # a 16-bit [bp+si/di+disp] encoding, not any arbitrary
+                    # addressing register.
+                    registers = (
+                        target.WORD_INDEXES
+                        if where.addr is not None and where.addr.space is Space.FRAME
+                        else target.ADDRESSING
+                    )
+                    restrict(where.base.value, registers)
                 if isinstance(where, ir.Mem) and where.index is not None:
                     numeric.add(where.index.value)
                     if where.index.width == 2:
@@ -1618,7 +1628,12 @@ def _settled(where: ir.Loc | ir.Held, held: dict, origin: dict) -> ir.Loc:
         register = held.get(where.base.value)
         if register is None:
             return where
-        return replace(where, through=target.named(register, 2))
+        placed = target.named(register, 2)
+        if where.addr is not None and where.addr.space is Space.FRAME:
+            # BP names the fixed frame object and the allocated value names
+            # its dynamic byte offset. Neither may replace the other.
+            return replace(where, through=Register.BP, index_through=placed)
+        return replace(where, through=placed)
     if not isinstance(where, ir.Held):
         return where
     register = held.get(where.value)

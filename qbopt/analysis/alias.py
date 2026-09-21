@@ -409,6 +409,15 @@ def _direct(op: mir.Op, values: dict[mir.Value, memory.Provenance]) -> memory.Pr
             return memory.Provenance.one(memory.Object(kind, (space, index)), offset + addend, offset + addend + 1)
         case mir.Kind.COPY, (mir.Held(value=source),):
             return values.get(source)
+        case mir.Kind.EXTRACT, (mir.Held(value=source), mir.Const(n=0)):
+            # The low half of a far pointer is still its object-relative
+            # offset.  Retain that identity while target lowering adjusts the
+            # offset and later rejoins it with the unchanged selector.
+            return values.get(source)
+        case mir.Kind.CONCAT, (_, mir.Held(value=offset)):
+            # Reconstituting selector:offset does not change the object named
+            # by an offset whose provenance is already known.
+            return values.get(offset)
         case mir.Kind.ADD | mir.Kind.PTR_OFFSET, (left, right):
             candidates = ((left, right), (right, left))
         case mir.Kind.SUB, (left, right):

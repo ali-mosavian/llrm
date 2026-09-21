@@ -85,3 +85,12 @@ def test_build_release_reports_cargo_start_failure(monkeypatch: pytest.MonkeyPat
 
     with pytest.raises(qb_driver.FrontendError, match="could not start"):
         qb_driver.build_release()
+
+
+def test_common_hir_profiles_do_not_become_qb_frontend_options() -> None:
+    """Adding modern/freestanding to common HIR once made QB's driver advertise both."""
+    source = qb_driver.ROOT / "not-read.bas"
+    with pytest.raises(qb_driver.FrontendError, match="unknown QB dialect"):
+        qb_driver.syntax_checked(source, dialect="modern")
+    with pytest.raises(qb_driver.FrontendError, match="unknown QB runtime"):
+        qb_driver.syntax_checked(source, runtime="freestanding")

@@ -186,8 +186,14 @@ def test_peeling_clones_pointer_identity_and_seed_facts() -> None:
     _seed, _carried, left, right, selected, stepped, _answer = values
     object_ = memory.Object(memory.Kind.FRAME, (7, -16, -4), extent=12)
     provenance = memory.Provenance.one(object_, 0, 1)
+    interval = mir.IntegerRange(0, 31, 2)
     pointers = frozenset({left, right, selected, stepped})
-    body = replace(body, pointer_values=pointers, pointer_seeds={left: provenance})
+    body = replace(
+        body,
+        pointer_values=pointers,
+        pointer_seeds={left: provenance},
+        integer_ranges={left: interval},
+    )
     (loop,) = loops.loops(body.blocks, body.entry)
 
     changed = loopclone.peeled(body, loop, 1)
@@ -211,6 +217,7 @@ def test_peeling_clones_pointer_identity_and_seed_facts() -> None:
         if op.at == 30
     )
     assert changed.pointer_seeds[cloned_left] == provenance
+    assert changed.integer_ranges[cloned_left] == interval
 
 
 def test_unclosed_loop_value_is_refused():

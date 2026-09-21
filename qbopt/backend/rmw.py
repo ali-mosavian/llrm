@@ -1,11 +1,11 @@
-"""Select exact byte read-modify-write chains before register allocation.
+"""Select exact read-modify-write chains before register allocation.
 
-C promotes ``unsigned char`` operands to ``int``.  For an expression such as
-``cell |= (unsigned char)mask`` that can leave a byte load, two zero extends,
-a word OR, a truncation and a byte store.  x86 has the exact operation as
-``or byte ptr [cell],reg8``.  Folding it before allocation is important: the
-otherwise-dead widened intermediates consume registers and can make an
-unrelated hot-loop range split unplaceable.
+An ordinary compound update initially reaches LIR as ``mov old,[cell]``, a
+binary operation, and ``mov [cell],result``.  x86's two-address form can write
+the cell directly.  C's integer promotions make the byte case longer: for an
+expression such as ``cell |= (unsigned char)mask`` the same update includes
+two zero extends and a truncation.  Both are instruction-selection questions,
+and both must be answered before their dead temporaries compete for registers.
 
 This is deliberately part of lowering, not an LIR optimization pass.  MIR
 retains the language-visible promotion sequence; lowering recognizes a legal
@@ -20,20 +20,121 @@ from qbopt.model import lir
 
 
 def selected(insns: tuple[lir.Insn, ...], users: Counter[int]) -> tuple[lir.Insn, ...]:
-    """Select private ``movzx byte; or; mov byte`` chains as one byte RMW.
+    """Select private load, integer update, and store chains as one RMW.
 
-    The folded sequence has no result value: all its intermediate values must
-    therefore be private to the chain.  The memory operand is both destination
-    and first source, as x86's two-address OR requires.  Any non-pure work
-    between the source load and the store is a barrier, even if it happens not
-    to name the byte.  The replacement itself performs one byte load and one
-    byte store, so it also preserves a volatile compound assignment's two
-    accesses; no *other* memory access may be crossed.
+    The folded sequence has no result value, so the loaded value and result
+    must be private to it.  Volatile accesses retain their explicit ordering.
+    The promoted-byte form is deliberately narrower: it may not cross another
+    memory access because its source-language volatile provenance is not
+    retained by every promotion follower.
     """
-    return tuple(_fold_block(insns, users))
+    byte = tuple(_fold_byte(insns, users))
+    return tuple(_fold_integer(byte, users))
 
 
-def _fold_block(insns: tuple[lir.Insn, ...], users: Counter[int]) -> list[lir.Insn]:
+_MEMORY_BINARY = frozenset({"add", "sub", "and", "or", "xor"})
+_COMMUTATIVE = frozenset({"add", "and", "or", "xor"})
+
+
+def _fold_integer(insns: tuple[lir.Insn, ...], users: Counter[int]) -> list[lir.Insn]:
+    """Select ``load; op; store-same-cell`` as a memory-destination operation."""
+    definitions = {value: (index, one) for index, one in enumerate(insns) for value in one.defines}
+    replaced: dict[int, lir.Insn] = {}
+    erased: set[int] = set()
+    for store_at, store in enumerate(insns):
+        found = _integer_chain(insns, store_at, definitions, users)
+        if found is None:
+            continue
+        load_at, operation_at, cell, source, name = found
+        # Moving the cell's read to the operation may cross only computations
+        # without observable effects.  A nonvolatile source load is permitted:
+        # two reads commute, even when they name the same bytes.  The operation
+        # itself may move down only across zero-byte anchors, so its flags and
+        # the update's store remain at the same observable point.
+        if any(not _preparation(one) for one in insns[load_at + 1 : operation_at]):
+            continue
+        if any(not _anchor(one) for one in insns[operation_at + 1 : store_at]):
+            continue
+
+        what = ir.Semantics(ir.Operation.BINARY, name, (cell,), (cell, source))
+        values = tuple(value.value for operand in (cell, source) for value in ir.values(operand))
+        replaced[store_at] = replace(
+            store,
+            what=what,
+            uses=tuple(dict.fromkeys(values)),
+            defines=(),
+            widths=(),
+        )
+        erased.update((load_at, operation_at))
+    return _rewritten(insns, replaced, erased)
+
+
+def _integer_chain(
+    insns: tuple[lir.Insn, ...],
+    store_at: int,
+    definitions: dict[int, tuple[int, lir.Insn]],
+    users: Counter[int],
+) -> tuple[int, int, ir.Mem, ir.Held | ir.Imm, str] | None:
+    store = insns[store_at]
+    match store.what:
+        case ir.Semantics(ir.Operation.MOVE, "mov", (ir.Mem() as cell,), (ir.Held() as result,)):
+            pass
+        case _:
+            return None
+    if not _plain(store) or _volatile(store) or users[result.value] != 1:
+        return None
+
+    operation_definition = definitions.get(result.value)
+    if operation_definition is None:
+        return None
+    operation_at, operation = operation_definition
+    if operation_at >= store_at or not _plain(operation) or _volatile(operation):
+        return None
+    match operation.what:
+        case ir.Semantics(
+            ir.Operation.BINARY,
+            str(name),
+            (ir.Held() as made,),
+            (ir.Held() as left, (ir.Held() | ir.Imm()) as right),
+        ):
+            pass
+        case _:
+            return None
+    if (
+        name not in _MEMORY_BINARY
+        or made != result
+        or operation.defines != (result.value,)
+        or operation.symbol is True
+        or cell.width not in (1, 2, 4)
+        or cell.width != result.width
+    ):
+        return None
+
+    candidates = ((left, right),)
+    if name in _COMMUTATIVE and isinstance(right, ir.Held):
+        candidates += ((right, left),)
+    for old, source in candidates:
+        if source.width != cell.width or users[old.value] != 1:
+            continue
+        load_definition = definitions.get(old.value)
+        if load_definition is None:
+            continue
+        load_at, load = load_definition
+        if load_at >= operation_at or not _plain(load) or _volatile(load):
+            continue
+        match load.what:
+            case ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held() as loaded,), (ir.Mem() as loaded_cell,)):
+                if (
+                    loaded == old
+                    and load.defines == (old.value,)
+                    and loaded_cell == cell
+                    and loaded_cell.width == old.width == cell.width
+                ):
+                    return load_at, operation_at, cell, source, name
+    return None
+
+
+def _fold_byte(insns: tuple[lir.Insn, ...], users: Counter[int]) -> list[lir.Insn]:
     definitions = {value: (index, one) for index, one in enumerate(insns) for value in one.defines}
     replaced: dict[int, lir.Insn] = {}
     erased: set[int] = set()
@@ -49,6 +150,7 @@ def _fold_block(insns: tuple[lir.Insn, ...], users: Counter[int]) -> list[lir.In
             not _pure(one) for index, one in enumerate(insns[load_at + 1 : store_at], load_at + 1) if index not in erase
         ):
             continue
+        assert store.what is not None
         cell = store.what.dests[0]
         assert isinstance(cell, ir.Mem)
         what = ir.Semantics(ir.Operation.BINARY, "or", (cell,), (cell, mask))
@@ -62,18 +164,7 @@ def _fold_block(insns: tuple[lir.Insn, ...], users: Counter[int]) -> list[lir.In
         )
         erased.update(erase)
         erased.add(load_at)
-    out = []
-    for index, one in enumerate(insns):
-        if index in replaced:
-            out.append(replaced[index])
-        elif index in erased:
-            # Retain source ownership and anchors while removing the virtual
-            # ranges before allocation.  lir.anchor intentionally keeps
-            # definitions for post-allocation cleanup, so clear them here.
-            out.append(replace(lir.anchor(one), defines=(), uses=(), widths=()))
-        else:
-            out.append(one)
-    return out
+    return _rewritten(insns, replaced, erased)
 
 
 def _chain(
@@ -90,9 +181,10 @@ def _chain(
             return None
     if cell.width != narrowed.width == 1 or not _plain(store):
         return None
-    narrowed_at, narrowed_from = definitions.get(narrowed.value, (None, None))
-    if narrowed_from is None or users[narrowed.value] != 1:
+    narrowed_definition = definitions.get(narrowed.value)
+    if narrowed_definition is None or users[narrowed.value] != 1:
         return None
+    narrowed_at, narrowed_from = narrowed_definition
     match narrowed_from.what:
         case ir.Semantics(ir.Operation.EXTEND, "movzx", (ir.Held() as narrowed_result,), (ir.Held() as joined,)):
             # The source-side byte view is deliberately not a distinct SSA
@@ -108,9 +200,10 @@ def _chain(
                 return None
         case _:
             return None
-    joined_at, joined_from = definitions.get(joined.value, (None, None))
-    if joined_from is None or users[joined.value] != 1:
+    joined_definition = definitions.get(joined.value)
+    if joined_definition is None or users[joined.value] != 1:
         return None
+    joined_at, joined_from = joined_definition
     match joined_from.what:
         case ir.Semantics(
             ir.Operation.BINARY, "or", (ir.Held() as joined_result,), (ir.Held() as left, ir.Held() as right)
@@ -130,9 +223,10 @@ def _chain(
         if loaded is None:
             continue
         load_at, loaded_cell = loaded
-        mask_at, mask_from = definitions.get(mask_wide.value, (None, None))
-        if mask_from is None or users[mask_wide.value] != 1:
+        mask_definition = definitions.get(mask_wide.value)
+        if mask_definition is None or users[mask_wide.value] != 1:
             continue
+        mask_at, mask_from = mask_definition
         match mask_from.what:
             case ir.Semantics(ir.Operation.EXTEND, "movzx", (ir.Held() as mask_result,), (ir.Held() as mask,)):
                 if mask_result != mask_wide or mask.width != 1 or not _plain(mask_from):
@@ -150,9 +244,10 @@ def _chain(
 def _byte_load(
     definitions: dict[int, tuple[int, lir.Insn]], users: Counter[int], value: ir.Held
 ) -> tuple[int, ir.Mem] | None:
-    at, one = definitions.get(value.value, (None, None))
-    if one is None or users[value.value] != 1:
+    definition = definitions.get(value.value)
+    if definition is None or users[value.value] != 1:
         return None
+    at, one = definition
     match one.what:
         case ir.Semantics(ir.Operation.EXTEND, "movzx", (ir.Held() as result,), (ir.Mem() as cell,)):
             if result == value and value.width == 2 and cell.width == 1 and _plain(one):
@@ -173,6 +268,57 @@ def _plain(one: lir.Insn) -> bool:
         or one.spill_store
         or one.rematerialized
     )
+
+
+def _volatile(one: lir.Insn) -> bool:
+    return bool(getattr(one.op, "volatile", False))
+
+
+def _anchor(one: lir.Insn) -> bool:
+    return (
+        one.what is not None
+        and one.what.op is ir.Operation.NOTHING
+        and not one.defines
+        and not one.uses
+        and _plain(one)
+    )
+
+
+def _preparation(one: lir.Insn) -> bool:
+    """Whether the destination read may move across one source computation."""
+    if _anchor(one):
+        return True
+    if not _plain(one) or one.what is None or _volatile(one):
+        return False
+    what = one.what
+    if what.op not in (
+        ir.Operation.MOVE,
+        ir.Operation.ADDRESS,
+        ir.Operation.BINARY,
+        ir.Operation.UNARY,
+        ir.Operation.EXTEND,
+        ir.Operation.MULTIPLY,
+    ):
+        return False
+    if any(isinstance(operand, (ir.Mem, ir.Reg)) for operand in what.dests):
+        return False
+    memory_sources = [operand for operand in what.sources if isinstance(operand, ir.Mem)]
+    return not memory_sources or (what.op is ir.Operation.MOVE and len(memory_sources) == 1)
+
+
+def _rewritten(insns: tuple[lir.Insn, ...], replaced: dict[int, lir.Insn], erased: set[int]) -> list[lir.Insn]:
+    out = []
+    for index, one in enumerate(insns):
+        if index in replaced:
+            out.append(replaced[index])
+        elif index in erased:
+            # Retain source ownership and anchors while removing the virtual
+            # ranges before allocation.  lir.anchor intentionally keeps
+            # definitions for post-allocation cleanup, so clear them here.
+            out.append(replace(lir.anchor(one), defines=(), uses=(), widths=()))
+        else:
+            out.append(one)
+    return out
 
 
 def _pure(one: lir.Insn) -> bool:

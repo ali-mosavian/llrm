@@ -15,6 +15,7 @@ class RuntimeProfile(StrEnum):
     QB45 = "qb45"
     PDS71 = "pds71"
     VBDOS = "vbdos"
+    FREESTANDING = "freestanding"
 
 
 class Dialect(StrEnum):
@@ -22,6 +23,7 @@ class Dialect(StrEnum):
     QB45 = "qb45"
     PDS71 = "pds71"
     VBDOS = "vbdos"
+    MODERN = "modern"
 
 
 class TargetProfile(StrEnum):
@@ -118,6 +120,7 @@ class Place:
     symbol: int = 0
     extent: int | None = None
     address: AddressKind = AddressKind.NEAR
+    volatile: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,7 +167,19 @@ class IndirectPlace:
     volatile: bool = False
 
 
-type Operand = ValueRef | Constant | PlaceRef | ArrayElement | ProjectedPlace | IndirectPlace
+class DescriptorField(StrEnum):
+    LENGTH = "length"
+    CAPACITY = "capacity"
+
+
+@dataclass(frozen=True, slots=True)
+class DescriptorPlace:
+    base: int
+    field: DescriptorField
+    type: int
+
+
+type Operand = ValueRef | Constant | PlaceRef | ArrayElement | ProjectedPlace | IndirectPlace | DescriptorPlace
 
 
 class Op(StrEnum):
@@ -182,9 +197,17 @@ class Op(StrEnum):
     ADD = "add"
     SUB = "sub"
     MUL = "mul"
+    # Fixed-point scaling stays semantic through MIR.  Expanding fixed i32
+    # here into generic i64 arithmetic loses that both inputs are narrow and
+    # makes the target legalize a 32x32 product as an arbitrary 64x64 one.
+    FIXED_MUL = "fixed_mul"
+    FIXED_DIV = "fixed_div"
     DIV = "div"
     REM = "rem"
     DIVMOD = "divmod"
+    UDIV = "udiv"
+    UREM = "urem"
+    UDIVMOD = "udivmod"
     AND = "and"
     OR = "or"
     XOR = "xor"
@@ -199,6 +222,10 @@ class Op(StrEnum):
     LE = "le"
     GT = "gt"
     GE = "ge"
+    BELOW = "below"
+    BELOW_EQ = "beloweq"
+    ABOVE = "above"
+    ABOVE_EQ = "aboveeq"
     STRING_EQ = "string_eq"
     STRING_NE = "string_ne"
     STRING_LT = "string_lt"

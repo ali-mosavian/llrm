@@ -417,7 +417,35 @@ class _Legalizer:
     def operation(self, source: mir.Op) -> list[mir.Op]:
         wide = any(isinstance(arg, (mir.Held, mir.Const)) and arg.width == 8 for arg in (*source.args, *source.results))
         if not wide:
-            return [source]
+            # A value may be produced whole and then observed through a
+            # narrower Held view.  Truncating C casts and fixed-point's
+            # post-shift i32 view both have this shape: the Value identity is
+            # the wide result's, while the operand width says only its low
+            # bytes are read.  Once that result is split, the old identity no
+            # longer has a definition; redirect every such view to the low
+            # dword made for it.
+            narrowed: dict[mir.Value, mir.Value] = {}
+
+            def view(arg: mir.Arg) -> mir.Arg:
+                if isinstance(arg, mir.Held) and arg.value in self.pairs:
+                    low, _high = self.pairs[arg.value]
+                    narrowed[arg.value] = low
+                    return mir.Held(low, arg.width)
+                return arg
+
+            args = tuple(view(arg) for arg in source.args)
+            results = tuple(view(result) for result in source.results)
+            if not narrowed:
+                return [source]
+            return [
+                replace(
+                    source,
+                    args=args,
+                    results=results,
+                    defines=tuple(narrowed.get(value, value) for value in source.defines),
+                    uses=tuple(narrowed.get(value, value) for value in source.uses),
+                )
+            ]
         if source.kind is mir.Kind.LOAD:
             low, high = self.pair(source.results[0])
             ref = source.args[0].ref

@@ -195,9 +195,13 @@ def operand_of(what: ir.Mem) -> tuple[MemoryOperand, bool] | None:
             base = what.through if what.base is not None else addr.base
             return MemoryOperand(base=base, displ=0, displ_size=2, seg=addr.segment), True
         case Space.FRAME if addr.base == Register.NONE:
+            index = what.index_through
+            if index != Register.NONE and index not in _WORD_INDEXES:
+                return None
             return (
                 MemoryOperand(
                     base=Register.BP,
+                    index=index,
                     displ=addr.disp,
                     displ_size=_displacement_size(Register.BP, addr.disp),
                 ),

@@ -11,6 +11,7 @@ _RESULTS = {
     model.Op.STORE: 0,
     model.Op.CALL: None,
     model.Op.DIVMOD: 2,
+    model.Op.UDIVMOD: 2,
 }
 _PLACES = {model.Op.LOAD, model.Op.STORE, model.Op.ADDRESS}
 _FLOAT = {
@@ -31,9 +32,14 @@ _INTEGER = {
     model.Op.ADD,
     model.Op.SUB,
     model.Op.MUL,
+    model.Op.FIXED_MUL,
+    model.Op.FIXED_DIV,
     model.Op.DIV,
     model.Op.REM,
     model.Op.DIVMOD,
+    model.Op.UDIV,
+    model.Op.UREM,
+    model.Op.UDIVMOD,
     model.Op.AND,
     model.Op.OR,
     model.Op.XOR,
@@ -50,6 +56,10 @@ _COMPARE = {
     model.Op.LE,
     model.Op.GT,
     model.Op.GE,
+    model.Op.BELOW,
+    model.Op.BELOW_EQ,
+    model.Op.ABOVE,
+    model.Op.ABOVE_EQ,
     model.Op.STRING_EQ,
     model.Op.STRING_NE,
     model.Op.STRING_LT,
@@ -64,6 +74,15 @@ _STRING_COMPARE = {
     model.Op.STRING_LE,
     model.Op.STRING_GT,
     model.Op.STRING_GE,
+}
+_UNSIGNED = {
+    model.Op.UDIV,
+    model.Op.UREM,
+    model.Op.UDIVMOD,
+    model.Op.BELOW,
+    model.Op.BELOW_EQ,
+    model.Op.ABOVE,
+    model.Op.ABOVE_EQ,
 }
 _POINTER_PART = {model.Op.POINTER_SEGMENT, model.Op.POINTER_OFFSET}
 
@@ -89,6 +108,10 @@ def _operand_type(operand: model.Operand, values: dict[int, model.Value], places
                 raise InvalidHIR(f"unknown place {place}")
             return type_
         case model.IndirectPlace(base, _, type_, _):
+            if base not in values:
+                raise InvalidHIR(f"unknown pointer value {base}")
+            return type_
+        case model.DescriptorPlace(base, _, type_):
             if base not in values:
                 raise InvalidHIR(f"unknown pointer value {base}")
             return type_
@@ -249,7 +272,13 @@ def _function(module: model.Module, function: model.Function, types: dict[int, m
                     raise InvalidHIR(f"{prefix}: load result type does not match its place")
                 if not isinstance(
                     instruction.operands[0],
-                    (model.PlaceRef, model.ArrayElement, model.ProjectedPlace, model.IndirectPlace),
+                    (
+                        model.PlaceRef,
+                        model.ArrayElement,
+                        model.ProjectedPlace,
+                        model.IndirectPlace,
+                        model.DescriptorPlace,
+                    ),
                 ):
                     raise InvalidHIR(f"{prefix}: load operand is not a place")
             if instruction.op is model.Op.STORE:
@@ -268,6 +297,24 @@ def _function(module: model.Module, function: model.Function, types: dict[int, m
                 involved = [*(values[one].type for one in instruction.results), *operand_types]
                 if any(types[one].kind not in (model.TypeKind.INTEGER, model.TypeKind.BOOLEAN) for one in involved):
                     raise InvalidHIR(f"{prefix}: {instruction.op} has a non-integer operand")
+            if instruction.op in (model.Op.FIXED_MUL, model.Op.FIXED_DIV):
+                if len(result_types) != 1 or len(operand_types) != 3:
+                    raise InvalidHIR(f"{prefix}: {instruction.op} has the wrong arity")
+                value_type = types[result_types[0]]
+                left_type, right_type, fraction_type = (types[one] for one in operand_types)
+                fraction = instruction.operands[2]
+                if (
+                    value_type.kind is not model.TypeKind.INTEGER
+                    or value_type.width != 4
+                    or value_type.signed is not True
+                    or left_type != value_type
+                    or right_type != value_type
+                    or fraction_type.kind is not model.TypeKind.INTEGER
+                    or fraction_type.width != 1
+                    or not isinstance(fraction, model.Constant)
+                    or not 1 <= fraction.value < 32
+                ):
+                    raise InvalidHIR(f"{prefix}: {instruction.op} is not fixed i32 arithmetic")
             if instruction.op in _COMPARE:
                 if len(result_types) != 1 or types[result_types[0]].kind is not model.TypeKind.BOOLEAN:
                     raise InvalidHIR(f"{prefix}: comparison does not produce a boolean")
@@ -284,6 +331,13 @@ def _function(module: model.Module, function: model.Function, types: dict[int, m
                         raise InvalidHIR(f"{prefix}: string comparison operands are not near addresses")
                 elif operand_types[0] != operand_types[1]:
                     raise InvalidHIR(f"{prefix}: comparison operand types do not agree")
+            if instruction.op in _UNSIGNED:
+                involved = operand_types if instruction.op in _COMPARE else [*result_types, *operand_types]
+                unsigned = all(
+                    types[one].kind is model.TypeKind.INTEGER and types[one].signed is False for one in involved
+                )
+                if not unsigned:
+                    raise InvalidHIR(f"{prefix}: {instruction.op} requires unsigned integer operands")
             if instruction.op in _POINTER_PART:
                 if len(operand_types) != 1 or len(result_types) != 1:
                     raise InvalidHIR(f"{prefix}: pointer projection has the wrong arity")
@@ -342,6 +396,13 @@ def _function(module: model.Module, function: model.Function, types: dict[int, m
                         raise InvalidHIR(f"{prefix}: indirect place disagrees with pointer type")
                     if operand.offset + types[operand.type].width > types[pointer.element].width:
                         raise InvalidHIR(f"{prefix}: indirect place exceeds its pointee")
+                if isinstance(operand, model.DescriptorPlace):
+                    pointer = types[values[operand.base].type]
+                    field = types[operand.type]
+                    if pointer.kind is not model.TypeKind.POINTER or pointer.element not in types or pointer.rank != 1:
+                        raise InvalidHIR(f"{prefix}: descriptor place needs a slice pointer")
+                    if field.kind is not model.TypeKind.INTEGER or field.width != 2 or field.signed is not False:
+                        raise InvalidHIR(f"{prefix}: descriptor field is not u16")
         term = block.terminator
         if any(target not in blocks for target in (*term.targets, *(target for _, target in term.cases))):
             raise InvalidHIR(f"{prefix}: block {block.id} has an unknown target")

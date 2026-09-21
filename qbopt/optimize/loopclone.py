@@ -27,11 +27,7 @@ def _block_local_floating(body: mir.MirBody, originals: list[mir.MirBlock]) -> b
     if any(op.stack is not None for block in originals for op in block.ops):
         return False
     owners = {
-        value: block.at
-        for block in originals
-        for op in block.ops
-        if op.floating is not None
-        for value in op.defines
+        value: block.at for block in originals for op in block.ops if op.floating is not None for value in op.defines
     }
     if not owners:
         return True
@@ -207,10 +203,12 @@ def peeled(body: mir.MirBody, loop: loops.Loop, count: int) -> mir.MirBody | Non
         changed.append(replace(block, phis=tuple(phis)))
 
     pointer_values, pointer_seeds = ssa.cloned_pointer_metadata(body, iter(copies))
+    integer_ranges = ssa.cloned_integer_ranges(body, iter(copies))
     return replace(
         body,
         blocks=(*changed, *cloned),
         cloned=True,
         pointer_values=pointer_values,
         pointer_seeds=pointer_seeds,
+        integer_ranges=integer_ranges,
     )

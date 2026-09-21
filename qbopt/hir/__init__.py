@@ -1,5 +1,6 @@
 """The small, source-language-neutral IR above qbopt MIR."""
 
+from qbopt.hir import execute
 from qbopt.hir.model import Op
 from qbopt.hir.model import Type
 from qbopt.hir.lower import lower
@@ -39,6 +40,8 @@ from qbopt.hir.model import DataRelocation
 from qbopt.hir.model import ProjectedPlace
 from qbopt.hir.model import RuntimeProfile
 from qbopt.hir.model import TerminatorKind
+from qbopt.hir.model import DescriptorField
+from qbopt.hir.model import DescriptorPlace
 from qbopt.hir.model import FloatEvaluation
 from qbopt.hir.model import FunctionLinkage
 
@@ -60,6 +63,8 @@ __all__ = [
     "FunctionLinkage",
     "Instruction",
     "IndirectPlace",
+    "DescriptorField",
+    "DescriptorPlace",
     "InvalidHIR",
     "Lowered",
     "Module",
@@ -84,4 +89,5 @@ __all__ = [
     "lower",
     "mir_text",
     "verify",
+    "execute",
 ]

@@ -172,8 +172,8 @@ without changing its model:
 
 | HIR fact | Current MIR representation |
 |---|---|
-| signed 16-bit or 32-bit value | existing constants/values with the corresponding width |
-| integer arithmetic or comparison | existing integer `Kind` |
+| signed or unsigned 8/16/32-bit value | existing constants/values with the corresponding width |
+| integer arithmetic or comparison | existing signed/unsigned integer `Kind`, including `DIVMOD`/`UDIVMOD` and signed/unsigned branch tests |
 | floating operation | existing floating `Kind` and `FloatingSemantics` |
 | local/global/field place | canonical object, slice, provenance, and `MemRef` from the current memory model |
 | volatile indirect place | the same typed `MemRef`, marked volatile on the memory occurrence and operation |

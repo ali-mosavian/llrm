@@ -281,6 +281,30 @@ def test_a_tied_source_and_destination_share_one_fresh_value() -> None:
     assert 1 not in pins and 2 not in pins
 
 
+def test_a_value_remains_live_at_unconstrained_occurrences_of_the_same_instruction() -> None:
+    """Modern nbody could not allocate ``fixed_mul(x, x)``.
+
+    Widening IMUL requires only its first source in EAX.  Splitting that
+    occurrence must not rename the instruction's complete use list: its
+    second, unconstrained source still reads the original value.
+    """
+    repeated = ir.Held(7, 4)
+    what = ir.Semantics(
+        ir.Operation.MULTIPLY,
+        "imul",
+        (ir.Held(8, 4), ir.Held(9, 4)),
+        (repeated, repeated),
+    )
+
+    got, pins = constrain.constrained(_body(_insn(what, (8, 9), (7,))))
+
+    multiply = next(one for one in got.insns if one.what.name == "imul")
+    pinned = multiply.what.sources[0]
+    assert isinstance(pinned, ir.Held) and pins[pinned.value] == Register.EAX
+    assert multiply.what.sources[1] == repeated
+    assert set(multiply.uses) == {pinned.value, repeated.value}
+
+
 def test_one_value_required_in_two_registers_is_refused() -> None:
     """A value that is both a shift's count and a multiply's high half
     cannot be placed at all, and saying so beats placing it in one of

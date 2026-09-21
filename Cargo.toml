@@ -37,6 +37,10 @@ name = "llrm-opt"
 path = "src/bin/llrm-opt.rs"
 
 [[bin]]
+name = "llrm-modern"
+path = "src/bin/llrm-modern.rs"
+
+[[bin]]
 name = "qbfront"
 path = "src/bin/qbfront.rs"
 

@@ -135,6 +135,7 @@ def test_resolving_renames_pointer_metadata_with_its_values() -> None:
     pointer = mir.Value(99, 0, variable=7, version=4)
     object_ = memory.Object(memory.Kind.FRAME, (3, -16, -4), extent=12)
     provenance = memory.Provenance.one(object_, 0, 1)
+    interval = mir.IntegerRange(0, 31, 2)
     address = mir.Op(
         0,
         ir.Operation.ADDRESS,
@@ -150,6 +151,7 @@ def test_resolving_renames_pointer_metadata_with_its_values() -> None:
         (mir.MirBlock(0, (), (address,), ()),),
         pointer_values=frozenset({pointer}),
         pointer_seeds={pointer: provenance},
+        integer_ranges={pointer: interval},
     )
 
     result = mir.resolved(body)
@@ -159,6 +161,7 @@ def test_resolving_renames_pointer_metadata_with_its_values() -> None:
     assert renamed != pointer
     assert result.pointer_values == frozenset({renamed})
     assert result.pointer_seeds == {renamed: provenance}
+    assert result.integer_ranges == {renamed: interval}
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])

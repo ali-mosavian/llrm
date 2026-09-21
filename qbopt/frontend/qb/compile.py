@@ -23,11 +23,14 @@ from qbopt.model import mir
 from qbopt.backend import masm
 from qbopt.backend import frame
 from qbopt.backend import lower
+from qbopt.hir import callmemory
 from qbopt.objectfile import omf
 from qbopt.backend import phielim
+from qbopt.optimize import rotate
 from qbopt.backend import omfwrite
 from qbopt.backend import prologue
 from qbopt.optimize import transform
+from qbopt.backend import addressvalues
 from qbopt.backend import cpu as targets
 from qbopt.objectfile.module import Addr
 from qbopt.objectfile.module import Space
@@ -800,51 +803,6 @@ def _temporary_string_slots(module: hir.Module, function: hir.Function) -> int:
     return sum(place.storage is hir.Storage.LOCAL and types[place.type].name == "string" for place in function.places)
 
 
-def _address_values(body: lir.LirBody) -> lir.LirBody:
-    """Turn allocated ADDRESS cells into LEA's non-memory operand spelling."""
-
-    def instruction(one: lir.Insn) -> lir.Insn:
-        what = one.what
-        if what is None or what.op is not ir.Operation.ADDRESS:
-            return one
-        sources = []
-        for source in what.sources:
-            if not isinstance(source, ir.Mem):
-                sources.append(source)
-                continue
-            addr = source.addr
-            if addr is not None and addr.space is Space.FRAME and source.base is not None:
-                sources.append(
-                    ir.Address(
-                        None,
-                        through=Register.BP,
-                        index=source.through,
-                        scale=source.scale,
-                        offset=addr.disp,
-                        disp_width=source.disp_width,
-                    )
-                )
-                continue
-            if addr is not None and source.base is not None and source.through != Register.NONE:
-                addr = replace(addr, base=source.through)
-            sources.append(
-                ir.Address(
-                    addr,
-                    through=source.through,
-                    index=source.index_through,
-                    scale=source.scale,
-                    offset=source.offset,
-                    disp_width=source.disp_width,
-                )
-            )
-        return replace(one, what=replace(what, sources=tuple(sources)))
-
-    return replace(
-        body,
-        blocks=tuple(replace(block, insns=tuple(instruction(one) for one in block.insns)) for block in body.blocks),
-    )
-
-
 def _source_instructions(body: lir.LirBody) -> lir.LirBody:
     """Drop source-generated ESCAPE markers, which own no legacy bytes."""
     return replace(
@@ -1197,64 +1155,10 @@ def _alias_annotated(
     semantic: tuple[hir.Lowered, ...],
 ) -> tuple[hir.Lowered, ...]:
     """Apply the shared source-level call-graph mod/ref fixed point."""
-    # Give every source frontend the same whole-module mod/ref boundary before
-    # its bodies enter the ordinary optimizer.  HIR call operands remain in
-    # source-parameter order regardless of the later Pascal stack order, so
-    # the common alias fixed point can instantiate each callee's parameter
-    # effects on the caller's actual objects without knowing the QB ABI.
-    from qbopt.analysis import alias
-
-    types = {one.id: one for one in module.types}
-    callables = {one.id: one for one in module.callables}
-    alias_procedures = {}
-    lowered_by_name = {}
-    for function, lowered in zip(functions, semantic, strict=True):
-        body = alias.annotated(lowered.body)
-        calls = {}
-        arguments = {}
-        abi_sites = {site.instruction for site in function.calls}
-        instructions = {
-            instruction.id: instruction
-            for block in function.blocks
-            for instruction in block.instructions
-            # HIR's ABI table, rather than one particular operation spelling,
-            # defines a call site.  STRING_EQ and its siblings carry the
-            # B$SCMP ABI site while retaining their typed operation so the
-            # lowering can consume its flags directly.
-            if instruction.id in abi_sites
-        }
-        call_ops = {
-            operation.id: operation
-            for block in body.blocks
-            for operation in block.ops
-            if operation.kind is mir.Kind.CALL
-        }
-        value_types = {one.id: types[one.type] for one in function.values}
-        for site in function.calls:
-            operation = call_ops.get(site.instruction)
-            instruction = instructions.get(site.instruction)
-            if operation is None or instruction is None:
-                raise EmissionError(f"{function.name}: call {site.instruction} did not survive HIR lowering")
-            target = callables[site.callee].name if site.callee is not None else operation.name
-            calls[operation.at] = _object_name(target)
-            arguments[operation.at] = tuple(
-                (lowered.values[operand.value], 0)
-                if isinstance(operand, hir.ValueRef) and value_types[operand.value].kind is hir.TypeKind.POINTER
-                else None
-                for operand in instruction.operands
-            )
-        name = _object_name(function.name)
-        procedure = alias.Procedure(body, calls, arguments)
-        alias_procedures[name] = procedure
-        lowered_by_name[name] = replace(lowered, body=body)
-    summaries = alias.summaries(alias_procedures)
-    return tuple(
-        replace(
-            lowered_by_name[_object_name(function.name)],
-            body=alias.calls_annotated(alias_procedures[_object_name(function.name)], summaries),
-        )
-        for function in functions
-    )
+    try:
+        return callmemory.annotated(module, functions, semantic, object_name=_object_name)
+    except ValueError as error:
+        raise EmissionError(str(error)) from error
 
 
 _SCREEN_DRIVER = {
@@ -1351,6 +1255,8 @@ def assembled(program: hir.Program, *, observer: StageObserver | None = None) ->
             physical.lowered.body,
             external_entries,
         )
+        machine_body = rotate.entered(machine_body)
+        _observe(observer, "rotated-mir", replace(physical.lowered, body=machine_body), function)
         low = flow.verified(
             lower.lowered(
                 body.name,
@@ -1478,7 +1384,7 @@ def assembled(program: hir.Program, *, observer: StageObserver | None = None) ->
             else:
                 final_body, initialize = _initialize_frame(final_body, reserve)
             callees.update(initialize)
-        final_body = _address_values(final_body)
+        final_body = addressvalues.converted(final_body)
         final_body, registrations = _materialize_error_registrations(final_body, error_registrations)
         callees.update(registrations)
         referenced_calls.update(callee.name for callee in registrations.values())

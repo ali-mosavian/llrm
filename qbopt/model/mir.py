@@ -190,6 +190,21 @@ class Value:
         return f"{kind}{self.variable}_{self.version}" if self.version else f"{kind}{self.id}"
 
 
+@dataclass(frozen=True, slots=True)
+class IntegerRange:
+    """A frontend-established, non-wrapping mathematical integer range.
+
+    This is source semantics, not a machine representation: it says what
+    values a MIR integer may have.  The frontend boundary is responsible for
+    translating any ABI or target rule into this plain fact before an
+    optimizer sees it.
+    """
+
+    low: int
+    high: int
+    width: int
+
+
 class Synth(StrEnum):
     """Operations no single machine instruction computes.
 
@@ -314,6 +329,13 @@ class FrameAddress:
 
 
 @dataclass(frozen=True, slots=True)
+class FrameSelector:
+    """The run-time selector of the current activation's frame segment."""
+
+    width: int = 2
+
+
+@dataclass(frozen=True, slots=True)
 class ArrayRequest:
     descriptor: Symbol
     element_width: int
@@ -346,7 +368,7 @@ class Opaque:
     name: str = ""
 
 
-type Arg = Held | Const | Symbol | FrameAddress | Cell | Opaque
+type Arg = Held | Const | Symbol | FrameAddress | FrameSelector | Cell | Opaque
 
 
 class Kind(StrEnum):
@@ -386,6 +408,11 @@ class Kind(StrEnum):
     DECREMENT = "decrement"
     MUL = "mul"
     SMULHI = "smulhi"  # Signed product's upper half, at the operands' common width.
+    # Stored-width fixed arithmetic, args (left, right, fractional bits).
+    # These remain semantic until target lowering: on a 386, fixed i32 MUL
+    # is a native 32x32->64 IMUL plus rescale, not a generic i64 operation.
+    FIXED_MUL = "fixed_mul"
+    FIXED_DIV = "fixed_div"
     DIV = "div"
     REM = "rem"
     # One computation with two results, quotient then remainder. BC calls
@@ -932,6 +959,55 @@ class Op:
         return not self.absorbed
 
 
+def computed(at: int, kind: Kind, result: Value, args: tuple[Arg, ...], width: int) -> Op:
+    """A source-free MIR computation invented by a semantic transform.
+
+    Passes name only the computation and its operands. The legacy machine
+    fields are deliberately blank here; selecting an instruction spelling is
+    lowering's responsibility.
+    """
+    loads = tuple(one.ref for one in args if isinstance(one, Cell))
+    uses = dict.fromkeys(one.value for one in args if isinstance(one, Held))
+    uses.update((value, None) for ref in loads for value in (ref.base, ref.segment) if value is not None)
+    return Op(
+        at,
+        ir.Operation.NOTHING,
+        "",
+        (result,),
+        tuple(uses),
+        loads=loads,
+        source_backed=False,
+        kind=kind,
+        args=args,
+        results=(Held(result, width),),
+        id=None,
+        symbol=False,
+        memory_complete=True,
+        reads_complete=True,
+    )
+
+
+def cleared(op: Op) -> Op:
+    """Retain an occurrence's source ownership while deleting its meaning."""
+    return replace(
+        op,
+        kind=Kind.NOTHING,
+        name="",
+        defines=(),
+        uses=(),
+        loads=(),
+        stores=(),
+        args=(),
+        results=(),
+        merges={},
+        raised=None,
+        target=None,
+        test=None,
+        stack=None,
+        symbol=False,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class _RaisedOp(Op):
     """An occurrence inside the raise, before machine provenance is externalized.
@@ -1056,6 +1132,7 @@ class MirBody:
     # Source-language pointer facts. These are semantic metadata, not places.
     pointer_values: frozenset[Value] = frozenset()
     pointer_seeds: dict[Value, "memory.Provenance"] = field(default_factory=dict)
+    integer_ranges: dict[Value, IntegerRange] = field(default_factory=dict)
     # Exact positive execution counts already proved by a MIR transform.
     # Most counts are rediscovered from the final recurrence in lowering;
     # transforms such as nested-recurrence rewind deliberately change that
@@ -1231,6 +1308,8 @@ def _public(body: MirBody) -> MirBody:
         sealed=body.sealed,
         pointer_values=body.pointer_values,
         pointer_seeds=body.pointer_seeds,
+        integer_ranges=body.integer_ranges,
+        loop_trip_counts=body.loop_trip_counts,
     )
 
 
@@ -1320,6 +1399,8 @@ def _with_hints(body: MirBody, hints: AllocationHints) -> _RaisedBody:
         sealed=body.sealed,
         pointer_values=body.pointer_values,
         pointer_seeds=body.pointer_seeds,
+        integer_ranges=body.integer_ranges,
+        loop_trip_counts=body.loop_trip_counts,
         origin=origins,
         pins=pins,
     )
@@ -2473,6 +2554,16 @@ def resolved(body: MirBody, calls: dict[int, str] | None = None) -> MirBody | st
                 pointer_seeds[new] = provenance
     for value in conflicting:
         del pointer_seeds[value]
+    integer_ranges: dict[Value, IntegerRange] = {}
+    range_conflicts: set[Value] = set()
+    for old, interval in body.integer_ranges.items():
+        for new in renamed.get(old, ()):
+            if new in integer_ranges and integer_ranges[new] != interval:
+                range_conflicts.add(new)
+            else:
+                integer_ranges[new] = interval
+    for value in range_conflicts:
+        del integer_ranges[value]
     return MirBody(
         entry=start,
         blocks=resolved_blocks,
@@ -2482,6 +2573,8 @@ def resolved(body: MirBody, calls: dict[int, str] | None = None) -> MirBody | st
         sealed=body.sealed,
         pointer_values=pointer_values | frozenset(pointer_seeds),
         pointer_seeds=pointer_seeds,
+        integer_ranges=integer_ranges,
+        loop_trip_counts=body.loop_trip_counts,
     )
 
 
