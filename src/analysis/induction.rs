@@ -13,6 +13,8 @@ use num_bigint::BigInt;
 
 use super::constants::{self, masked, Known};
 use super::occurrence::{operations, phis, OpOccurrence, PhiOccurrence};
+use super::ranges;
+use super::regions::{overlapping, RegionError, RegionLayout};
 use crate::model::mir::{Arg, Const, Held, Kind, MemRef, MirBody, Op, OrderedMap, Value};
 use crate::model::mir_loops::{predecessors, Loop};
 
@@ -481,9 +483,9 @@ fn _composed<F>(
     found: &OrderedMap<u32, Affine>,
     made: &BTreeMap<u32, &Op>,
     settled: F,
-) -> Vec<Derived>
+) -> Result<Vec<Derived>, RegionError>
 where
-    F: Fn(&MemRef) -> bool,
+    F: Fn(&MemRef) -> Result<bool, RegionError>,
 {
     let inside = loop_.body.clone();
     let known = constants::known(body);
@@ -673,7 +675,7 @@ where
                             || reference.base.is_some_and(|base| !still.contains(&base.id))
                             || reference.segment.is_some()
                             || reference.width != width
-                            || !settled(reference)
+                            || !settled(reference)?
                         {
                             continue;
                         }
@@ -764,7 +766,202 @@ where
             changed = true;
         }
     }
-    out.values().cloned().collect()
+    Ok(out.values().cloned().collect())
+}
+
+/// Python's `unwritten(body, inside, dgroup, bounds)`.
+///
+/// This keeps Python's body/block/operation/store traversal order for the
+/// candidate writes.  Alias facts are computed only when there is a write to
+/// compare, exactly as Python avoids asking `ranges.constants` for an empty
+/// store set.  Rust endpoint failures are deliberately part of the answer:
+/// callers must refuse rather than guess whether the cell is settled.
+fn unwritten<'a>(
+    body: &'a MirBody,
+    inside: &'a BTreeSet<i64>,
+    layout: Option<&'a RegionLayout>,
+) -> impl Fn(&MemRef) -> Result<bool, RegionError> + 'a {
+    let wrote = body
+        .blocks
+        .iter()
+        .filter(|block| inside.contains(&block.at))
+        .flat_map(|block| block.ops.iter())
+        .flat_map(|operation| operation.stores.iter())
+        .collect::<Vec<_>>();
+    let known = (!wrote.is_empty()).then(|| ranges::constants(body));
+
+    move |cell| {
+        let facts = known.as_ref();
+        for store in &wrote {
+            if overlapping(cell, store, facts, facts, layout)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+}
+
+/// Python's `derived(body, loop, found=None, dgroup=frozenset(), bounds=None)`.
+///
+/// The Rust layout is the direct replacement for Python's separately supplied
+/// group/bounds context.  Every result is tied to the immutable body's exact
+/// [`OpOccurrence`], never source provenance or structural operation equality.
+pub(crate) fn derived(
+    body: &MirBody,
+    loop_: &Loop,
+    found: Option<&OrderedMap<u32, Affine>>,
+    layout: Option<&RegionLayout>,
+) -> Result<Vec<Derived>, RegionError> {
+    // Python's comprehension retains the final block for each duplicate
+    // address.  Keep its body index too, so direct formulas receive the
+    // occurrence identity of precisely that surviving block.
+    let at_of = body
+        .blocks
+        .iter()
+        .enumerate()
+        .map(|(index, block)| (block.at, index))
+        .collect::<BTreeMap<_, _>>();
+    let inside = loop_
+        .body
+        .iter()
+        .copied()
+        .filter(|at| at_of.contains_key(at))
+        .collect::<BTreeSet<_>>();
+    let calculated;
+    let found = match found {
+        Some(found) => found,
+        None => {
+            calculated = basics(body, loop_);
+            &calculated
+        }
+    };
+    if found.is_empty() {
+        return Ok(Vec::new());
+    }
+    let still = invariant(body, &inside);
+    let settled = unwritten(body, &inside, layout);
+    // Python's dictionary comprehension is last-definition-wins in body,
+    // block, operation, and defined-value order.
+    let mut made = BTreeMap::<u32, &Op>::new();
+    for block in &body.blocks {
+        for operation in &block.ops {
+            for value in &operation.defines {
+                made.insert(value.id, operation);
+            }
+        }
+    }
+
+    let mut direct = OrderedMap::<OpOccurrence, Derived>::new();
+    // `loop.body` is a Python frozenset.  This port's established finite-set
+    // representation is BTreeSet, so traversal is ascending address order;
+    // the occurrence identity and each block's operation order remain exact.
+    for at in &inside {
+        let block_index = at_of[at];
+        for (occurrence, block, operation) in operations(body) {
+            if occurrence.block_index() != block_index || block.at != *at {
+                continue;
+            }
+            if operation.kind == Kind::PtrOffset
+                && operation.args.len() == 2
+                && operation.results.len() == 1
+                && matches!(&operation.results[0], Arg::Held(result) if result.width == 4)
+                && operation.loads.is_empty()
+                && operation.stores.is_empty()
+                && !operation.barrier()
+                && operation.merges.is_empty()
+            {
+                let (pointer, offset) = (&operation.args[0], &operation.args[1]);
+                if let (Arg::Held(pointer), Arg::Held(offset)) = (pointer, offset) {
+                    let recurrence = found.get(&offset.value.id);
+                    if still.contains(&pointer.value.id)
+                        && pointer.width == offset.width
+                        && recurrence.is_some_and(|one| offset.width == one.start.width())
+                        && offset.width == 4
+                    {
+                        direct.insert(
+                            occurrence,
+                            Derived {
+                                op: occurrence,
+                                of: recurrence.expect("checked above").clone(),
+                                by: Arg::Const(Const::new(1, 4)),
+                                offsets: Vec::new(),
+                                pointer: Some(Arg::Held(*pointer)),
+                            },
+                        );
+                    }
+                }
+                continue;
+            }
+            // A Cell multiplier is an allowed load.  Only stores reject the
+            // direct multiply/shift recognizer, as in Python.
+            if !matches!(operation.kind, Kind::Mul | Kind::Shl) || !operation.stores.is_empty() {
+                continue;
+            }
+            let arguments = operation
+                .args
+                .iter()
+                .map(|argument| match argument {
+                    Arg::Held(held) => Arg::Held(_copied(*held, &made)),
+                    _ => argument.clone(),
+                })
+                .collect::<Vec<_>>();
+            let counters = arguments
+                .iter()
+                .filter(|argument| {
+                    matches!(argument, Arg::Held(held) if found.contains_key(&held.value.id))
+                })
+                .collect::<Vec<_>>();
+            let others = arguments
+                .iter()
+                .filter(|argument| !counters.iter().any(|counter| *counter == *argument))
+                .collect::<Vec<_>>();
+            if counters.len() != 1 || others.len() != 1 {
+                continue;
+            }
+            let Arg::Held(counter) = counters[0] else {
+                unreachable!("counter filter retains Held operands only");
+            };
+            let by = others[0];
+            if operation.kind == Kind::Shl
+                && (arguments[0] != *counters[0]
+                    || !matches!(by, Arg::Const(constant) if constant.n >= BigInt::from(0_u8) && constant.n < BigInt::from(counter.width) * 8_u8))
+            {
+                continue;
+            }
+            if matches!(by, Arg::Held(held) if !still.contains(&held.value.id)) {
+                continue;
+            }
+            if let Arg::Cell(cell) = by {
+                if !settled(&cell.r#ref)? {
+                    continue;
+                }
+            }
+            direct.insert(
+                occurrence,
+                Derived {
+                    op: occurrence,
+                    of: found
+                        .get(&counter.value.id)
+                        .expect("counter filter established recurrence")
+                        .clone(),
+                    by: _multiplier(operation, by),
+                    offsets: Vec::new(),
+                    pointer: None,
+                },
+            );
+        }
+    }
+
+    // Python creates one insertion-ordered dict from direct formulas, then
+    // updates it with composed and quotient formulas.  `OrderedMap::insert`
+    // overwrites in place, retaining that exact output position.
+    for formula in _composed(body, loop_, found, &made, &settled)? {
+        direct.insert(formula.op, formula);
+    }
+    for formula in _quotients(body, loop_, found) {
+        direct.insert(formula.op, formula);
+    }
+    Ok(direct.values().cloned().collect())
 }
 
 /// Python's default `counted(body, loop)` invocation.
@@ -2039,12 +2236,14 @@ mod tests {
 
     use crate::analysis::constants;
     use crate::analysis::occurrence::{operations, OpOccurrence};
+    use crate::object::omf::module::{Addr, Space};
 
     use super::{
         Affine, AffineMap, AffineOperand, Derived, LoopShape, _as_signed, _composed, _constant,
         _copied, _counter_bound, _extended, _multiplier, _quotients, _signed, basics, canonical,
-        control_replacement, counted, counted_with_facts, derived_map, domain, invariant, nonempty,
-        relation, test_only, transparent_aliases, trip_count, zero_terminating_control,
+        control_replacement, counted, counted_with_facts, derived, derived_map, domain, invariant,
+        nonempty, relation, test_only, transparent_aliases, trip_count, unwritten,
+        zero_terminating_control,
     };
 
     fn value(id: u32, at: i64) -> Value {
@@ -3189,6 +3388,305 @@ mod tests {
     }
 
     #[test]
+    fn direct_induction_derived_does_not_share_a_variable_name() {
+        // Direct port of
+        // tests/test_induction_identity.py:test_a_shared_variable_name_is_not_a_shared_recurrence.
+        // Only the exact SSA value in `found` is a counter; source-variable
+        // naming is deliberately not recurrence identity.
+        let counter = Value {
+            variable: 7,
+            ..value(1, 1)
+        };
+        let unrelated = Value {
+            variable: 7,
+            ..value(2, 0)
+        };
+        let result = value(3, 1);
+        let mut multiply = op(1, Kind::Mul, vec![result], vec![unrelated]);
+        multiply.args = vec![
+            Arg::Held(Held {
+                value: unrelated,
+                width: 2,
+            }),
+            Arg::Const(Const::new(2, 2)),
+        ];
+        multiply.results = vec![Arg::Held(Held {
+            value: result,
+            width: 2,
+        })];
+        let mut body = MirBody::new(0, vec![MirBlock::new(1, vec![], vec![multiply], vec![1])]);
+        let loop_ = Loop {
+            header: 1,
+            latches: BTreeSet::from([1]),
+            body: BTreeSet::from([1]),
+        };
+        let mut found = OrderedMap::new();
+        found.insert(
+            counter.id,
+            affine(counter.id, constant(0, 2), constant(1, 2), 1),
+        );
+
+        assert!(derived(&body, &loop_, Some(&found), None)
+            .unwrap()
+            .is_empty());
+        body.blocks[0].ops[0].args[0] = Arg::Held(Held {
+            value: counter,
+            width: 2,
+        });
+        body.blocks[0].ops[0].uses = vec![counter];
+        assert_eq!(derived(&body, &loop_, Some(&found), None).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn direct_induction_derived_only_follows_width_preserving_copies() {
+        // Direct port of
+        // tests/test_induction_identity.py:test_only_width_preserving_copies.
+        for (source_width, accepted) in [(2, true), (4, false)] {
+            let counter = value(1, 1);
+            let copied = value(2, 1);
+            let result = value(3, 1);
+            let copy = copy(1, counter, copied, source_width, 2);
+            let mut multiply = op(1, Kind::Mul, vec![result], vec![copied]);
+            multiply.args = vec![
+                Arg::Held(Held {
+                    value: copied,
+                    width: 2,
+                }),
+                Arg::Const(Const::new(2, 2)),
+            ];
+            multiply.results = vec![Arg::Held(Held {
+                value: result,
+                width: 2,
+            })];
+            let body = MirBody::new(
+                0,
+                vec![MirBlock::new(1, vec![], vec![copy, multiply], vec![1])],
+            );
+            let loop_ = Loop {
+                header: 1,
+                latches: BTreeSet::from([1]),
+                body: BTreeSet::from([1]),
+            };
+            let mut found = OrderedMap::new();
+            found.insert(
+                counter.id,
+                affine(counter.id, constant(0, 2), constant(1, 2), 1),
+            );
+
+            assert_eq!(
+                !derived(&body, &loop_, Some(&found), None)
+                    .unwrap()
+                    .is_empty(),
+                accepted
+            );
+        }
+    }
+
+    #[test]
+    fn direct_induction_derived_requires_every_shift_shape_to_match() {
+        // Direct port of every case in
+        // tests/test_induction_identity.py:test_a_shift_recurrence_requires_a_constant_count.
+        for (shape, accepted) in [
+            ("variable", false),
+            ("counter_count", false),
+            ("constant", true),
+            ("oversized", false),
+        ] {
+            let counter = value(1, 1);
+            let invariant_count = value(2, 0);
+            let result = value(3, 1);
+            let amount = match shape {
+                "constant" => Arg::Const(Const::new(3, 2)),
+                "oversized" => Arg::Const(Const::new(32, 2)),
+                _ => Arg::Held(Held {
+                    value: invariant_count,
+                    width: 2,
+                }),
+            };
+            let args = if shape == "counter_count" {
+                vec![
+                    Arg::Const(Const::new(3, 2)),
+                    Arg::Held(Held {
+                        value: counter,
+                        width: 2,
+                    }),
+                ]
+            } else {
+                vec![
+                    Arg::Held(Held {
+                        value: counter,
+                        width: 2,
+                    }),
+                    amount,
+                ]
+            };
+            let uses = args
+                .iter()
+                .filter_map(|arg| match arg {
+                    Arg::Held(held) => Some(held.value),
+                    _ => None,
+                })
+                .collect();
+            let mut shift = op(1, Kind::Shl, vec![result], uses);
+            shift.args = args;
+            shift.results = vec![Arg::Held(Held {
+                value: result,
+                width: 2,
+            })];
+            let body = MirBody::new(0, vec![MirBlock::new(1, vec![], vec![shift], vec![1])]);
+            let loop_ = Loop {
+                header: 1,
+                latches: BTreeSet::from([1]),
+                body: BTreeSet::from([1]),
+            };
+            let mut found = OrderedMap::new();
+            found.insert(
+                counter.id,
+                affine(counter.id, constant(0, 2), constant(1, 2), 1),
+            );
+
+            let formulas = derived(&body, &loop_, Some(&found), None).unwrap();
+            assert_eq!(!formulas.is_empty(), accepted, "{shape}");
+            if accepted {
+                assert_eq!(formulas[0].by, Arg::Const(Const::new(8, 2)));
+            }
+        }
+    }
+
+    #[test]
+    fn direct_induction_unwritten_keeps_disjoint_cells_and_refuses_overlap() {
+        // A Cell multiplier may load from the loop only when no store can
+        // reach it.  This exercises exact store order plus the range facts
+        // supplied to both sides of `overlapping`.
+        let counter = value(1, 1);
+        let disjoint_result = value(2, 1);
+        let overlap_result = value(3, 1);
+        let disjoint = MemRef::new(Some(Addr::new(Space::Segment, 2)), 2);
+        let overlap = MemRef::new(Some(Addr::new(Space::Segment, 6)), 2);
+        let mut store = op(1, Kind::Store, vec![], vec![]);
+        store.stores = vec![overlap.clone()];
+        let mut disjoint_multiply = op(1, Kind::Mul, vec![disjoint_result], vec![counter]);
+        disjoint_multiply.args = vec![
+            Arg::Held(Held {
+                value: counter,
+                width: 2,
+            }),
+            Arg::Cell(Cell {
+                r#ref: disjoint.clone(),
+            }),
+        ];
+        disjoint_multiply.results = vec![Arg::Held(Held {
+            value: disjoint_result,
+            width: 2,
+        })];
+        let mut overlap_multiply = op(1, Kind::Mul, vec![overlap_result], vec![counter]);
+        overlap_multiply.args = vec![
+            Arg::Held(Held {
+                value: counter,
+                width: 2,
+            }),
+            Arg::Cell(Cell {
+                r#ref: overlap.clone(),
+            }),
+        ];
+        overlap_multiply.results = vec![Arg::Held(Held {
+            value: overlap_result,
+            width: 2,
+        })];
+        let body = MirBody::new(
+            0,
+            vec![MirBlock::new(
+                1,
+                vec![],
+                vec![store, disjoint_multiply, overlap_multiply],
+                vec![1],
+            )],
+        );
+        let loop_ = Loop {
+            header: 1,
+            latches: BTreeSet::from([1]),
+            body: BTreeSet::from([1]),
+        };
+        let inside = BTreeSet::from([1]);
+        let settled = unwritten(&body, &inside, None);
+        assert_eq!(settled(&disjoint), Ok(true));
+        assert_eq!(settled(&overlap), Ok(false));
+        let mut found = OrderedMap::new();
+        found.insert(
+            counter.id,
+            affine(counter.id, constant(0, 2), constant(1, 2), 1),
+        );
+
+        let formulas = derived(&body, &loop_, Some(&found), None).unwrap();
+        assert_eq!(formulas.len(), 1);
+        assert_eq!(formulas[0].by, Arg::Cell(Cell { r#ref: disjoint }));
+    }
+
+    #[test]
+    fn direct_induction_derived_keeps_occurrences_and_overwrites_in_place() {
+        // Two structurally identical source operations are distinct Python
+        // objects.  Direct discovery sees both; composed discovery replaces
+        // the first formula in place after proving its copied factor constant.
+        let counter = value(1, 1);
+        let factor = value(2, 0);
+        let result = value(3, 1);
+        let mut constant_op = op(0, Kind::Copy, vec![factor], vec![]);
+        constant_op.args = vec![Arg::Const(Const::new(2, 2))];
+        constant_op.results = vec![Arg::Held(Held {
+            value: factor,
+            width: 2,
+        })];
+        let mut multiply = op(1, Kind::Mul, vec![result], vec![counter, factor]);
+        multiply.args = vec![
+            Arg::Held(Held {
+                value: counter,
+                width: 2,
+            }),
+            Arg::Held(Held {
+                value: factor,
+                width: 2,
+            }),
+        ];
+        multiply.results = vec![Arg::Held(Held {
+            value: result,
+            width: 2,
+        })];
+        let body = MirBody::new(
+            0,
+            vec![
+                MirBlock::new(0, vec![], vec![constant_op], vec![1]),
+                MirBlock::new(1, vec![], vec![multiply.clone(), multiply], vec![1]),
+            ],
+        );
+        let loop_ = Loop {
+            header: 1,
+            latches: BTreeSet::from([1]),
+            body: BTreeSet::from([1]),
+        };
+        let occurrences = operations(&body)
+            .map(|(occurrence, _, _)| occurrence)
+            .collect::<Vec<_>>();
+        let mut found = OrderedMap::new();
+        found.insert(
+            counter.id,
+            affine(counter.id, constant(0, 2), constant(1, 2), 1),
+        );
+
+        let formulas = derived(&body, &loop_, Some(&found), None).unwrap();
+        assert_eq!(formulas.len(), 2);
+        assert_eq!(formulas[0].op, occurrences[1]);
+        assert_eq!(formulas[1].op, occurrences[2]);
+        assert_eq!(formulas[0].by, Arg::Const(Const::new(2, 2)));
+        assert_eq!(
+            formulas[1].by,
+            Arg::Held(Held {
+                value: factor,
+                width: 2,
+            })
+        );
+    }
+
+    #[test]
     fn direct_induction_composed_word_address_has_one_recurrence() {
         // Direct port of
         // tests/test_induction_identity.py:test_composed_word_address_has_one_recurrence.
@@ -3269,7 +3767,12 @@ mod tests {
                 .collect::<Vec<_>>();
 
             assert_eq!(
-                _composed(&body, &loop_, &found, &made, |_| true),
+                _composed(&body, &loop_, &found, &made, |_| Ok(true)).unwrap(),
+                derived(&body, &loop_, Some(&found), None).unwrap(),
+            );
+
+            assert_eq!(
+                derived(&body, &loop_, Some(&found), None).unwrap(),
                 vec![
                     Derived {
                         op: occurrences[1],
@@ -3366,7 +3869,12 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(
-            _composed(&body, &loop_, &found, &made, |_| true),
+            _composed(&body, &loop_, &found, &made, |_| Ok(true)).unwrap(),
+            derived(&body, &loop_, Some(&found), None).unwrap(),
+        );
+
+        assert_eq!(
+            derived(&body, &loop_, Some(&found), None).unwrap(),
             vec![
                 Derived {
                     op: occurrences[0],
@@ -3453,7 +3961,12 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(
-            _composed(&body, &loop_, &found, &made, |_| true),
+            _composed(&body, &loop_, &found, &made, |_| Ok(true)).unwrap(),
+            derived(&body, &loop_, Some(&found), None).unwrap(),
+        );
+
+        assert_eq!(
+            derived(&body, &loop_, Some(&found), None).unwrap(),
             vec![
                 Derived {
                     op: occurrences[1],
