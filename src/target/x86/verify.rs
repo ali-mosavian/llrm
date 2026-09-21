@@ -204,14 +204,23 @@ impl Verifier {
         classes: &BTreeMap<VirtualRegisterId, RegisterClass>,
         frames: &BTreeMap<FrameIndex, &FrameObject>,
     ) {
-        let (address, source) = match instruction.operands.as_slice() {
-            [address, source] => ((address, None), source),
+        let (address, source_position, source) = match instruction.operands.as_slice() {
+            [address, source] => ((address, None), 1, source),
+            // The second operand distinguishes the two three-operand forms:
+            // a frame Store is [BP, displacement, source], while segmented
+            // memory is [address, source, ES]. Testing only the final operand
+            // classified a valid frame Store as segmented whenever its source
+            // was a register.
+            [base, displacement, source]
+                if matches!(displacement.kind, MachineOperandKind::Immediate(_)) =>
+            {
+                ((base, Some(displacement)), 2, source)
+            }
             [base, source, selector]
                 if matches!(selector.kind, MachineOperandKind::Register(_)) =>
             {
-                ((base, Some(selector)), source)
+                ((base, Some(selector)), 1, source)
             }
-            [base, displacement, source] => ((base, Some(displacement)), source),
             _ => {
                 self.instruction_error(
                     function,
@@ -226,7 +235,7 @@ impl Verifier {
             function,
             block,
             instruction,
-            1,
+            source_position,
             source,
             OperandRole::Use,
             classes,
@@ -1663,6 +1672,34 @@ mod tests {
         assert!(messages.iter().any(|message| {
             message.contains("materialized frame base must be an unconstrained physical BP use")
         }));
+    }
+
+    #[test]
+    fn frame_store_reports_its_source_at_operand_two() {
+        let invalid = module(vec![instruction(
+            0,
+            X86Opcode::Store,
+            vec![
+                physical(X86Register::Bp, OperandRole::Use),
+                immediate(-24),
+                immediate(7),
+            ],
+            InstructionFlags {
+                side_effects: true,
+                may_store: true,
+                ..InstructionFlags::NONE
+            },
+        )]);
+
+        let messages = verify_machine(&invalid)
+            .unwrap_err()
+            .into_iter()
+            .map(|diagnostic| diagnostic.message)
+            .collect::<Vec<_>>();
+
+        assert!(messages
+            .iter()
+            .any(|message| message.contains("operand 2 must be a register")));
     }
 
     #[test]
