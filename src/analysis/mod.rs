@@ -8,6 +8,7 @@ pub(crate) mod induction;
 mod loops;
 pub(crate) mod occurrence;
 mod postorder;
+pub(crate) mod ssa;
 
 pub use cfg::{CfgError, ControlFlowGraph};
 pub use def_use::{DefUse, DefUseError, Definition, Use};
