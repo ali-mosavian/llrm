@@ -1163,3 +1163,31 @@ were deselected by the repository's default full-test filter; one still spent
 passing gate.  Two delegated cached target-wide invocations also exposed the
 same pre-existing `Copy`/`Mov` expectation failure and were not repeated.  No
 optimizer, complete host, matrix, or qrender gate ran.
+
+Commits `9633ec48` and `f9e7c0db` advance the paired `qmove` rung through
+verified portable IR.  The implementation follows Python's storage/evaluation
+split: WCC `TY_SINGLE` is binary32 in memory and at call boundaries but uses
+extended80 SSA values between those boundaries.  Loads extend, stores and
+rvalue call arguments truncate, and assignment expressions reload their
+stored value.  C float-to-integer conversion carries toward-zero rounding;
+BASIC conversion carries the dynamic x87 rounding rule.  Those semantic facts
+are selected in their frontends and represented generically in HIR and IR;
+no C, BASIC, WCC, register, or x87 name enters a generic pass.
+
+The public schemas advance to qhir 2, qir 7, and qmir 7.  The real 7,317-byte
+`qmove.cgs` capture now emits a 178-line canonical qir 7 artifact, which parses,
+verifies, and prints byte-for-byte identically through `llrm-opt`.  Its first
+adjacent failure has moved from the WCC frontend to x86 selection, which now
+explicitly reports `unsupported IR type 6` for binary32.  This is the next port
+boundary: the established Python x87 selector and floating-stack allocator,
+not a new floating backend design.
+
+Primary review rejected six delegated lowering errors before acceptance:
+unused evaluation types in integer modules, declaration-order drift, base
+loads for projected places, omission of direct binary32 place arguments,
+same-format literal truncation, and casts chosen from storage rather than
+evaluation formats.  Focused compilation, fail-first checks, frontend tests,
+schema round trips, and the two adjacent real-capture probes used about 51
+seconds of command execution.  No broad suite, optimizer pipeline, matrix,
+runtime gate, or qrender command ran; verification remained below ten percent
+of the implementation and review interval.
