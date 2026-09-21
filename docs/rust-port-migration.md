@@ -999,3 +999,41 @@ local 1Password signing failure consumed waiting time but no verification or
 code changes.  Focused verification remained below ten percent of this
 iteration's elapsed implementation and review time; no qrender or optimizer
 gate ran.
+
+The BASIC aggregate exit now follows Python's established construction rather
+than allocating around a Rust-only lifetime.  Python's pre-optimization
+`PARITYKERNEL` MIR stores the completed LONG result, calls `B$ERAS`, reloads
+the result, exposes its low and high words, calls `B$EXSA`, and returns through
+`DX:AX`.  Rust had loaded the result before appending local cleanup, keeping a
+dword live across `B$ERAS`.  Commit `992eca3f` leaves scalar exits cleanup-only
+until `B$STDL` and `B$ERAS` have run, then reloads the result place.  STRING
+results remain a distinct measured ABI: `B$SCPF` first copies the owned result
+descriptor to the runtime temporary chain, and the returned descriptor address
+survives cleanup.  Focused typed-HIR regressions cover both orders.
+
+Primary review rejected an alternative `B$ERAS` name exception in the x86
+call-clobber materializer.  Its SI/DI preservation is a true measured runtime
+fact, but using it to retain the premature Rust result value would have hidden
+the frontend mismatch.  Precise per-callee clobbers remain future contract-data
+work; generic allocation still uses its conservative far-call default, and no
+QB runtime name was added to generic Machine IR or allocation.
+
+The corrected exit exposed a pre-existing x86 verifier failure after successful
+allocation.  Frame layout correctly rewrote `Store(frame, source)` as
+`Store(BP, displacement, source)`, but the verifier classified every
+three-operand store ending in a register as segmented memory.  Commit
+`902fc62d` distinguishes the materialized-frame and segmented forms by the
+second operand and reports the actual source position.  The existing legal
+frame-store test was observed failing first, then passed together with a new
+diagnostic regression and the segmented-memory verifier test.
+
+With commit `234f7153`, the real `bench/parity/parity.bas` now compiles through
+`llrm-qb` to fresh OMF, links with Microsoft LINK and the VBDOS runtime, runs
+under DOSBox-X, and matches the checked-in `RESULT= 1789` and `DONE` oracle.
+This joins the already-complete `llrm-c` aggregate parity rung without invoking
+an optimization pass.  Delegated focused checks for the semantic fix consumed
+8.15 seconds; primary focused Rust tests consumed 4.95 seconds; the three
+adjacent-stage object/QMIR probes consumed 4.32 seconds; and the single new
+external runtime gate took 13.11 seconds wall time.  Verification stayed below
+ten percent of the iteration's elapsed work, and no broad suite or qrender run
+was used.
