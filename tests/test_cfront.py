@@ -807,6 +807,23 @@ def test_loop_tests_at_its_bottom(name):
     assert back == [], body
 
 
+def test_zero_ending_array_walk_branches_on_its_step_flags():
+    """C dot retained ``add bx,2 / cmp bx,0 / jne`` after modern removed the compare.
+
+    The shared loop finalizer has proved that the end-relative byte offset
+    reaches zero exactly.  Its ADD supplies ZF whether allocation keeps the
+    offset in a register or spills it to memory, so no frontend needs a
+    second test of the same value.
+    """
+    text = cfront.compiled((FIXTURES / "rotate.cgs").read_text(), "rotate", optimise=True)
+    body = _proc([line.strip() for line in text.splitlines()], "_dot")
+
+    assert "cmp bx, 0" not in body
+    step = body.index("add bx, 2")
+    assert body[step + 1].startswith("L") and body[step + 1].endswith(":")
+    assert body[step + 2].startswith("jne ")
+
+
 def test_short_value_crosses_a_call_in_si_or_di():
     """crosscall's total and counter were merged because both started at zero.
 

@@ -25,6 +25,7 @@ from qbopt.backend import frame
 from qbopt.backend import lower
 from qbopt.objectfile import omf
 from qbopt.backend import phielim
+from qbopt.optimize import rotate
 from qbopt.backend import omfwrite
 from qbopt.backend import prologue
 from qbopt.optimize import transform
@@ -1351,6 +1352,8 @@ def assembled(program: hir.Program, *, observer: StageObserver | None = None) ->
             physical.lowered.body,
             external_entries,
         )
+        machine_body = rotate.entered(machine_body)
+        _observe(observer, "rotated-mir", replace(physical.lowered, body=machine_body), function)
         low = flow.verified(
             lower.lowered(
                 body.name,

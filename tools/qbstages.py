@@ -263,7 +263,7 @@ def dumped(
     functions = tuple(function for module in program.modules for function in module.functions)
     (output / "00-input.bas").write_text(_source_text(source))
     numbers = {id(function): number for number, function in enumerate(functions, 1)}
-    next_machine_stage = {id(function): 7 for function in functions}
+    next_machine_stage = {id(function): 8 for function in functions}
 
     def observe(event: qb_compile.Stage) -> None:
         if event.name == "hir":
@@ -293,8 +293,11 @@ def dumped(
             case "optimized-physical-mir":
                 path = output / f"{stem}-05-optimized-physical-mir.txt"
                 text = hir.mir_text(cast(hir.Lowered, event.value))
+            case "rotated-mir":
+                path = output / f"{stem}-06-rotated-mir.txt"
+                text = hir.mir_text(cast(hir.Lowered, event.value))
             case "initial-lir":
-                path = output / f"{stem}-06-lir.txt"
+                path = output / f"{stem}-07-lir.txt"
                 text = _lir(cast(lir.LirBody, event.value))
             case name if name.startswith("machine:"):
                 stage = next_machine_stage[id(event.function)]

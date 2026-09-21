@@ -33,6 +33,7 @@ def test_stage_observer_uses_one_compilation_and_preserves_object_bytes(
         "optimized-mir",
         "physical-mir",
         "optimized-physical-mir",
+        "rotated-mir",
         "initial-lir",
         "machine:far-indirect-calls",
         "machine:floatalloc",

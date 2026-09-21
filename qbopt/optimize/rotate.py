@@ -15,7 +15,7 @@ from qbopt.analysis import consts
 from qbopt.analysis import induction
 
 
-def entered(body: mir.MirBody, *, step_tests: bool = False) -> mir.MirBody:
+def entered(body: mir.MirBody) -> mir.MirBody:
     """Every proven loop entered at its body, each test merged into its latch.
 
     After the passes, not among them: a rotated loop is no longer the
@@ -24,7 +24,7 @@ def entered(body: mir.MirBody, *, step_tests: bool = False) -> mir.MirBody:
     """
     from qbopt.optimize import cfg
 
-    return cfg.merged(rotated(_counted_down(body), step_tests=step_tests))
+    return cfg.merged(rotated(_counted_down(body)))
 
 
 def _counted_down(body: mir.MirBody) -> mir.MirBody:
@@ -248,7 +248,7 @@ def _counted_down(body: mir.MirBody) -> mir.MirBody:
     return body
 
 
-def rotated(body: mir.MirBody, *, step_tests: bool = False) -> mir.MirBody:
+def rotated(body: mir.MirBody) -> mir.MirBody:
     from qbopt.optimize import transform
 
     blocks = {block.at: block for block in body.blocks}
@@ -279,14 +279,10 @@ def rotated(body: mir.MirBody, *, step_tests: bool = False) -> mir.MirBody:
         else:
             at = ops[-1].at if ops else entry.at
             ops.append(mir.Op(at, ir.Operation.JUMP, "", (), (), kind=mir.Kind.JUMP, target=first.at, symbol=False))
-        if step_tests:
-            body = _step_test(body, loop, header)
+        body = _step_test(body, loop, header)
         header = body.block(header.at)
         first = body.block(first.at)
-        return rotated(
-            _entered(body, loop, preheader, header, first, ops),
-            step_tests=step_tests,
-        )
+        return rotated(_entered(body, loop, preheader, header, first, ops))
     return body
 
 

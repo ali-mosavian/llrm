@@ -104,7 +104,7 @@ def assembled(
             physical,
             lowered=replace(
                 physical.lowered,
-                body=rotate.entered(physical.lowered.body, step_tests=True),
+                body=rotate.entered(physical.lowered.body),
             ),
         )
         legalized = lower_int64.expanded(

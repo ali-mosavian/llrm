@@ -1277,6 +1277,7 @@ end function
     assert not re.search(r"\bshl (?:word ptr \[[^\n]+\]|[a-z]{2}), 4\b", procedure)
     assert not re.search(r"\bimul\b[^\n]*, 16\b", procedure)
     assert re.search(r"add (?:word ptr \[[^]]+\]|[a-z]{2}), 16", procedure)
+    assert not re.search(r"cmp word ptr \[bp-[0-9]+\], 0", procedure)
 
 
 def test_rank_two_descriptor_matches_qb_dimension_order_and_adjusted_offset() -> None:
