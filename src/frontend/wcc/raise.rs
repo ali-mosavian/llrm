@@ -25,6 +25,7 @@ const I32_TYPE: hir::TypeId = hir::TypeId::new(2);
 const U16_TYPE: hir::TypeId = hir::TypeId::new(3);
 const U32_TYPE: hir::TypeId = hir::TypeId::new(4);
 const BOOL_TYPE: hir::TypeId = hir::TypeId::new(5);
+const F32_TYPE: hir::TypeId = hir::TypeId::new(6);
 const WCC_BIG_DATA: u32 = 0x2;
 
 struct WccTypes {
@@ -285,6 +286,19 @@ fn static_data(
 
 fn wcc_types(unit: &CaptureUnit) -> Result<WccTypes, RaiseError> {
     let mut types = scalar_types();
+    if capture_uses_type(unit, "TY_SINGLE") {
+        types.push(hir::Type {
+            id: F32_TYPE,
+            name: "f32".into(),
+            kind: hir::TypeKind::Float,
+            width: 4,
+            signed: None,
+            evaluation: hir::FloatEvaluation::Extended80,
+            element: None,
+            bounds: Vec::new(),
+            address: hir::AddressKind::None,
+        });
+    }
     // Every supported value-producing CG node carries its type in its final
     // argument. CGCall is scalar-only in this slice and resolves its type
     // from CGInitCall instead, so it cannot introduce a supported pointer.
@@ -346,6 +360,22 @@ fn wcc_types(unit: &CaptureUnit) -> Result<WccTypes, RaiseError> {
         aggregates,
         near_pointer,
     })
+}
+
+fn capture_uses_type(unit: &CaptureUnit, wanted: &str) -> bool {
+    let is_wanted = |name: &str| unit.canonical_type(name) == wanted;
+    unit.nodes
+        .values()
+        .flat_map(|node| &node.args)
+        .any(|name| is_wanted(name))
+        || unit.calls.values().any(|call| {
+            is_wanted(&call.value_type) || call.parameters.iter().any(|(_, name)| is_wanted(name))
+        })
+        || unit.procedures.iter().any(|procedure| {
+            is_wanted(&procedure.value_type)
+                || procedure.parameters.iter().any(|(_, name)| is_wanted(name))
+                || procedure.automatics.iter().any(|(_, name)| is_wanted(name))
+        })
 }
 
 fn scalar_types() -> Vec<hir::Type> {
@@ -428,10 +458,11 @@ fn callable(
     let symbol = symbol(unit, procedure.symbol, SourceLocation::default())?;
     let id = u32::try_from(index)
         .map_err(|_| error_default(RaiseErrorKind::IdOverflow { entity: "callable" }))?;
+    let result_type = procedure_result_type(unit, procedure, SourceLocation::default())?;
     Ok(hir::Callable {
         id: hir::CallableId::new(id),
         name: symbol.object_name(),
-        result_type: optional_result_type(unit, &procedure.value_type, SourceLocation::default())?,
+        result_type: (result_type != VOID_TYPE).then_some(result_type),
         parameters: procedure
             .parameters
             .iter()
@@ -519,7 +550,7 @@ fn raise_function(
     Ok(hir::Function {
         id: hir::FunctionId::new(id),
         name: symbol.object_name(),
-        result_type: value_type(unit, &procedure.value_type, location)?,
+        result_type: procedure_result_type(unit, procedure, location)?,
         values: builder.values,
         places,
         blocks,
@@ -656,7 +687,7 @@ impl<'a> FunctionRaiser<'a> {
     }
 
     fn raise_statements(&mut self) -> Result<(), RaiseError> {
-        for statement in &self.procedure.body {
+        for (statement_index, statement) in self.procedure.body.iter().enumerate() {
             if self.current().terminator.is_some()
                 && !matches!(statement.call.as_str(), "CGControl")
             {
@@ -668,25 +699,42 @@ impl<'a> FunctionRaiser<'a> {
             self.location = statement.location;
             match statement.call.as_str() {
                 "CGDone" => {
-                    self.require_argument(&statement.args, 0)?;
-                    self.node(NodeId::new(parse_node_id(
-                        &statement.args[0],
-                        self.location,
-                    )?))?;
-                }
-                "CGReturn" => {
-                    let node = NodeId::new(parse_node_id(
+                    let node_id = NodeId::new(parse_node_id(
                         self.require_argument(&statement.args, 0)?,
                         self.location,
                     )?);
-                    let expected = value_type(
-                        self.unit,
-                        self.require_argument(&statement.args, 1)?,
-                        self.location,
-                    )?;
-                    let operand = self.node(node)?;
-                    require_operand_type(expected, &operand, &self.values, self.location)?;
-                    self.current_mut().terminator = Some(hir::Terminator::Return(Some(operand)));
+                    let node = self.unit.nodes.get(&node_id).cloned().ok_or_else(|| {
+                        error(self.location, RaiseErrorKind::MissingNode(node_id))
+                    })?;
+                    if node.call == "CGCall" {
+                        if let Some(result) = self.call(node_id, &node)? {
+                            self.node_bindings.insert(node_id, result);
+                        }
+                    } else {
+                        self.node(node_id)?;
+                    }
+                }
+                "CGReturn" => {
+                    let expected = procedure_result_type(self.unit, self.procedure, self.location)?;
+                    let returned = self.require_argument(&statement.args, 0)?;
+                    let value = if expected == VOID_TYPE {
+                        if returned != "n0" {
+                            return Err(self.invalid_node(
+                                NodeId::new(0),
+                                "void CGReturn does not use WCC's n0 sentinel",
+                            ));
+                        }
+                        None
+                    } else {
+                        let operand = if returned == "n0" {
+                            self.n0_return_operand(statement_index)?
+                        } else {
+                            self.node(NodeId::new(parse_node_id(returned, self.location)?))?
+                        };
+                        require_operand_type(expected, &operand, &self.values, self.location)?;
+                        Some(operand)
+                    };
+                    self.current_mut().terminator = Some(hir::Terminator::Return(value));
                 }
                 "CGControl" => self.control(statement)?,
                 call => {
@@ -831,12 +879,15 @@ impl<'a> FunctionRaiser<'a> {
             "CGFEName" => self.frontend_name(id, &node)?,
             "CGTempName" => self.temporary_name(id, &node)?,
             "CGInteger" => self.integer(id, &node)?,
+            "CGFloat" => self.real(id, &node)?,
             "CGUnary" => self.unary(id, &node)?,
             "CGBinary" => self.binary(id, &node)?,
             "CGCompare" => self.compare(id, &node)?,
             "CGAssign" => self.assign(id, &node)?,
             "CGPreGets" => self.pre_gets(id, &node)?,
-            "CGCall" => self.call(id, &node)?,
+            "CGCall" => self.call(id, &node)?.ok_or_else(|| {
+                self.invalid_node(id, "void CGCall cannot be used as a scalar expression")
+            })?,
             _ => {
                 return Err(error(
                     self.location,
@@ -937,6 +988,24 @@ impl<'a> FunctionRaiser<'a> {
         })
     }
 
+    fn real(&self, id: NodeId, node: &Node) -> Result<hir::Operand, RaiseError> {
+        let value = self.node_argument(id, node, 0)?;
+        let parsed = value.parse::<f32>().map_err(|_| {
+            self.invalid_node(id, "real literal is outside the supported f32 range")
+        })?;
+        if !parsed.is_finite() {
+            return Err(self.invalid_node(id, "real literal is outside the supported f32 range"));
+        }
+        let type_id = value_type(self.unit, self.node_argument(id, node, 1)?, self.location)?;
+        if type_id != F32_TYPE {
+            return Err(self.invalid_node(id, "real literal is not TY_SINGLE"));
+        }
+        Ok(hir::Operand::Constant {
+            type_id,
+            value: hir::ConstantValue::Real(value.to_owned()),
+        })
+    }
+
     fn unary(&mut self, id: NodeId, node: &Node) -> Result<hir::Operand, RaiseError> {
         let operation = self.node_argument(id, node, 0)?;
         let operand_id = NodeId::new(parse_node_id(
@@ -979,7 +1048,7 @@ impl<'a> FunctionRaiser<'a> {
                     if self.is_near_pointer_type(type_id) {
                         return Ok(hir::Operand::Value(base));
                     }
-                    if !is_integer_type(type_id) {
+                    if !is_scalar_type(type_id) {
                         return Err(
                             self.invalid_node(id, "pointer dereference is not a scalar type")
                         );
@@ -1048,33 +1117,44 @@ impl<'a> FunctionRaiser<'a> {
         if self.is_near_pointer_type(capture_type) {
             return self.near_pointer_arithmetic(id, node, left_id, right_id);
         }
-        let opcode = match self.node_argument(id, node, 0)? {
-            "O_PLUS" => hir::Opcode::Add,
-            "O_MINUS" => hir::Opcode::Subtract,
-            "O_TIMES" => hir::Opcode::Multiply,
-            "O_DIV" => hir::Opcode::Divide,
-            "O_MOD" => hir::Opcode::Remainder,
-            "O_AND" => hir::Opcode::And,
-            "O_OR" => hir::Opcode::Or,
-            "O_XOR" => hir::Opcode::Xor,
-            "O_LSHIFT" => hir::Opcode::ShiftLeft,
-            "O_RSHIFT" => {
-                let signed = self
-                    .types
-                    .types
-                    .iter()
-                    .find(|type_| type_.id == capture_type)
-                    .and_then(|type_| type_.signed)
-                    .ok_or_else(|| {
-                        self.invalid_node(id, "integer right shift has no signed type")
-                    })?;
-                if signed {
-                    hir::Opcode::ShiftRightArithmetic
-                } else {
-                    hir::Opcode::ShiftRight
-                }
+        let operation = self.node_argument(id, node, 0)?;
+        let opcode = if capture_type == F32_TYPE {
+            match operation {
+                "O_PLUS" => hir::Opcode::FloatAdd,
+                "O_MINUS" => hir::Opcode::FloatSubtract,
+                "O_TIMES" => hir::Opcode::FloatMultiply,
+                "O_DIV" => hir::Opcode::FloatDivide,
+                _ => return Err(self.invalid_node(id, "unsupported float binary operation")),
             }
-            _ => return Err(self.invalid_node(id, "unsupported binary operation")),
+        } else {
+            match operation {
+                "O_PLUS" => hir::Opcode::Add,
+                "O_MINUS" => hir::Opcode::Subtract,
+                "O_TIMES" => hir::Opcode::Multiply,
+                "O_DIV" => hir::Opcode::Divide,
+                "O_MOD" => hir::Opcode::Remainder,
+                "O_AND" => hir::Opcode::And,
+                "O_OR" => hir::Opcode::Or,
+                "O_XOR" => hir::Opcode::Xor,
+                "O_LSHIFT" => hir::Opcode::ShiftLeft,
+                "O_RSHIFT" => {
+                    let signed = self
+                        .types
+                        .types
+                        .iter()
+                        .find(|type_| type_.id == capture_type)
+                        .and_then(|type_| type_.signed)
+                        .ok_or_else(|| {
+                            self.invalid_node(id, "integer right shift has no signed type")
+                        })?;
+                    if signed {
+                        hir::Opcode::ShiftRightArithmetic
+                    } else {
+                        hir::Opcode::ShiftRight
+                    }
+                }
+                _ => return Err(self.invalid_node(id, "unsupported binary operation")),
+            }
         };
         let left = self.node(left_id)?;
         let right = self.node(right_id)?;
@@ -1242,31 +1322,20 @@ impl<'a> FunctionRaiser<'a> {
         let value = self.node(source)?;
         let type_id = value_type(self.unit, self.node_argument(id, node, 2)?, self.location)?;
         let value = self.coerce(value, source_type, type_id)?;
-        let address = match target {
-            hir::Operand::Place(place) => {
-                self.require_place_type(place, type_id)?;
-                hir::Operand::Place(place)
-            }
-            hir::Operand::Value(base) if self.is_pointer_value(base)? => hir::Operand::Indirect {
-                base,
-                offset: 0,
-                type_id,
-                volatile: false,
-            },
-            _ => {
-                return Err(error(
-                    self.location,
-                    RaiseErrorKind::InvalidAssignmentTarget(destination),
-                ));
-            }
-        };
+        let address = self.typed_lvalue(target, type_id, destination)?;
         self.push_instruction(
             hir::Opcode::Store,
             Vec::new(),
-            vec![address, value.clone()],
+            vec![address.clone(), value.clone()],
             None,
         )?;
-        Ok(value)
+        if type_id == F32_TYPE {
+            let result = self.new_value(type_id)?;
+            self.push_instruction(hir::Opcode::Load, vec![result], vec![address], None)?;
+            Ok(hir::Operand::Value(result))
+        } else {
+            Ok(value)
+        }
     }
 
     fn pre_gets(&mut self, id: NodeId, node: &Node) -> Result<hir::Operand, RaiseError> {
@@ -1280,21 +1349,10 @@ impl<'a> FunctionRaiser<'a> {
             self.location,
         )?);
         let target = self.node(target_id)?;
-        let hir::Operand::Place(place) = target else {
-            return Err(error(
-                self.location,
-                RaiseErrorKind::InvalidAssignmentTarget(target_id),
-            ));
-        };
         let type_id = value_type(self.unit, self.node_argument(id, node, 3)?, self.location)?;
-        self.require_place_type(place, type_id)?;
+        let address = self.typed_lvalue(target, type_id, target_id)?;
         let old = self.new_value(type_id)?;
-        self.push_instruction(
-            hir::Opcode::Load,
-            vec![old],
-            vec![hir::Operand::Place(place)],
-            None,
-        )?;
+        self.push_instruction(hir::Opcode::Load, vec![old], vec![address.clone()], None)?;
         let source_id = NodeId::new(parse_node_id(
             self.node_argument(id, node, 2)?,
             self.location,
@@ -1304,7 +1362,15 @@ impl<'a> FunctionRaiser<'a> {
         let source = self.coerce(source, source_type, type_id)?;
         let result = self.new_value(type_id)?;
         self.push_instruction(
-            opcode,
+            if type_id == F32_TYPE {
+                match self.node_argument(id, node, 0)? {
+                    "O_PLUS" => hir::Opcode::FloatAdd,
+                    "O_MINUS" => hir::Opcode::FloatSubtract,
+                    _ => unreachable!("pre_gets validated its operation"),
+                }
+            } else {
+                opcode
+            },
             vec![result],
             vec![hir::Operand::Value(old), source],
             None,
@@ -1312,13 +1378,19 @@ impl<'a> FunctionRaiser<'a> {
         self.push_instruction(
             hir::Opcode::Store,
             Vec::new(),
-            vec![hir::Operand::Place(place), hir::Operand::Value(result)],
+            vec![address.clone(), hir::Operand::Value(result)],
             None,
         )?;
-        Ok(hir::Operand::Value(result))
+        if type_id == F32_TYPE {
+            let rounded = self.new_value(type_id)?;
+            self.push_instruction(hir::Opcode::Load, vec![rounded], vec![address], None)?;
+            Ok(hir::Operand::Value(rounded))
+        } else {
+            Ok(hir::Operand::Value(result))
+        }
     }
 
-    fn call(&mut self, id: NodeId, node: &Node) -> Result<hir::Operand, RaiseError> {
+    fn call(&mut self, id: NodeId, node: &Node) -> Result<Option<hir::Operand>, RaiseError> {
         let call = CallId::new(parse_call_id(
             self.node_argument(id, node, 0)?,
             self.location,
@@ -1377,7 +1449,7 @@ impl<'a> FunctionRaiser<'a> {
             require_operand_type(type_id, &operand, &self.values, self.location)?;
             operands.push(operand);
         }
-        let result_type = value_type(self.unit, &pending.value_type, self.location)?;
+        let result_type = self.call_result_type(target_symbol)?;
         let results = if result_type == VOID_TYPE {
             Vec::new()
         } else {
@@ -1401,8 +1473,8 @@ impl<'a> FunctionRaiser<'a> {
             callee: Some(callable),
         });
         match results.as_slice() {
-            [] => Err(self.invalid_node(id, "void CGCall cannot be used as a scalar expression")),
-            [result] => Ok(hir::Operand::Value(*result)),
+            [] => Ok(None),
+            [result] => Ok(Some(hir::Operand::Value(*result))),
             _ => Err(self.invalid_node(id, "scalar CGCall has multiple results")),
         }
     }
@@ -1481,6 +1553,31 @@ impl<'a> FunctionRaiser<'a> {
         Ok(self.is_near_pointer_type(type_id))
     }
 
+    fn call_result_type(&self, symbol_id: SymbolId) -> Result<hir::TypeId, RaiseError> {
+        let procedure = self
+            .unit
+            .procedures
+            .iter()
+            .find(|procedure| procedure.symbol == symbol_id)
+            .ok_or_else(|| error(self.location, RaiseErrorKind::MissingCallable(symbol_id)))?;
+        procedure_result_type(self.unit, procedure, self.location)
+    }
+
+    fn n0_return_operand(&mut self, statement_index: usize) -> Result<hir::Operand, RaiseError> {
+        let previous =
+            previous_done_in_block(self.procedure, statement_index).ok_or_else(|| {
+                self.invalid_node(NodeId::new(0), "n0 return has no preceding CGDone")
+            })?;
+        let node = NodeId::new(parse_node_id(
+            previous
+                .args
+                .first()
+                .ok_or_else(|| self.invalid_node(NodeId::new(0), "CGDone has no node"))?,
+            self.location,
+        )?);
+        self.node(node)
+    }
+
     fn node_type(&self, id: NodeId) -> Result<hir::TypeId, RaiseError> {
         let node = self
             .unit
@@ -1491,7 +1588,7 @@ impl<'a> FunctionRaiser<'a> {
             return Ok(BOOL_TYPE);
         }
         let type_index = match node.call.as_str() {
-            "CGFEName" | "CGTempName" | "CGInteger" => 1,
+            "CGFEName" | "CGTempName" | "CGInteger" | "CGFloat" => 1,
             "CGUnary" | "CGBinary" | "CGAssign" | "CGPreGets" => node.args.len() - 1,
             "CGCall" => {
                 let call = CallId::new(parse_call_id(
@@ -1503,7 +1600,7 @@ impl<'a> FunctionRaiser<'a> {
                 let pending = self.unit.calls.get(&call).ok_or_else(|| {
                     error(self.location, RaiseErrorKind::MissingPendingCall(call))
                 })?;
-                return value_type(self.unit, &pending.value_type, self.location);
+                return self.call_result_type(pending.symbol);
             }
             _ => return Err(self.invalid_node(id, "expression has no scalar type")),
         };
@@ -1540,7 +1637,14 @@ impl<'a> FunctionRaiser<'a> {
             }
         }
         let result = self.new_value(target)?;
-        self.push_instruction(hir::Opcode::Convert, vec![result], vec![operand], None)?;
+        let opcode = if source == F32_TYPE && is_integer_type(target) {
+            hir::Opcode::FloatToInteger {
+                rounding: hir::FloatRounding::TowardZero,
+            }
+        } else {
+            hir::Opcode::Convert
+        };
+        self.push_instruction(opcode, vec![result], vec![operand], None)?;
         Ok(hir::Operand::Value(result))
     }
 
@@ -1551,6 +1655,32 @@ impl<'a> FunctionRaiser<'a> {
         target: hir::TypeId,
     ) -> Result<hir::Operand, RaiseError> {
         self.coerce(operand, source, target)
+    }
+
+    fn typed_lvalue(
+        &self,
+        target: hir::Operand,
+        type_id: hir::TypeId,
+        node: NodeId,
+    ) -> Result<hir::Operand, RaiseError> {
+        match target {
+            hir::Operand::Place(place) => {
+                self.require_place_type(place, type_id)?;
+                Ok(hir::Operand::Place(place))
+            }
+            hir::Operand::Value(base) if self.is_pointer_value(base)? => {
+                Ok(hir::Operand::Indirect {
+                    base,
+                    offset: 0,
+                    type_id,
+                    volatile: false,
+                })
+            }
+            _ => Err(error(
+                self.location,
+                RaiseErrorKind::InvalidAssignmentTarget(node),
+            )),
+        }
     }
 
     fn push_instruction(
@@ -1654,6 +1784,7 @@ fn value_type(
         "TY_INT_4" => Ok(I32_TYPE),
         "TY_UINT_2" | "TY_UNSIGNED" => Ok(U16_TYPE),
         "TY_UINT_4" => Ok(U32_TYPE),
+        "TY_SINGLE" => Ok(F32_TYPE),
         _ => Err(error(
             location,
             RaiseErrorKind::UnsupportedType {
@@ -1718,6 +1849,10 @@ fn is_integer_type(type_id: hir::TypeId) -> bool {
     matches!(type_id, I16_TYPE | I32_TYPE | U16_TYPE | U32_TYPE)
 }
 
+fn is_scalar_type(type_id: hir::TypeId) -> bool {
+    is_integer_type(type_id) || type_id == F32_TYPE
+}
+
 /// A constant conversion is a value fact. Nonconstants remain explicit HIR
 /// conversions so lowering chooses sign or zero extension from the source type.
 fn wrap_integer(value: i64, target: hir::TypeId) -> i64 {
@@ -1735,13 +1870,137 @@ fn wrap_integer(value: i64, target: hir::TypeId) -> i64 {
     }
 }
 
-fn optional_result_type(
+fn procedure_result_type(
     unit: &CaptureUnit,
-    name: &str,
+    procedure: &Procedure,
     location: SourceLocation,
-) -> Result<Option<hir::TypeId>, RaiseError> {
-    let type_id = value_type(unit, name, location)?;
-    Ok((type_id != VOID_TYPE).then_some(type_id))
+) -> Result<hir::TypeId, RaiseError> {
+    procedure_result_type_inner(unit, procedure, location, &mut Vec::new())
+}
+
+fn procedure_result_type_inner(
+    unit: &CaptureUnit,
+    procedure: &Procedure,
+    location: SourceLocation,
+    visiting: &mut Vec<SymbolId>,
+) -> Result<hir::TypeId, RaiseError> {
+    if visiting.contains(&procedure.symbol) {
+        return Err(error(
+            location,
+            RaiseErrorKind::InvalidNode {
+                node: NodeId::new(0),
+                detail: "cyclic CGReturn n0 call pass-through is unsupported".into(),
+            },
+        ));
+    }
+    visiting.push(procedure.symbol);
+    let returns = procedure
+        .body
+        .iter()
+        .enumerate()
+        .filter(|(_, statement)| statement.call == "CGReturn")
+        .collect::<Vec<_>>();
+    if !returns
+        .iter()
+        .all(|(_, statement)| statement.args.first().is_some_and(|node| node == "n0"))
+    {
+        visiting.pop();
+        return value_type(unit, &procedure.value_type, location);
+    }
+    let mut result = None;
+    for (at, _) in returns {
+        let passed = n0_call_result_type(unit, procedure, at, location, visiting)?;
+        if let Some(previous) = result.replace(passed) {
+            if previous != passed {
+                return Err(error(
+                    location,
+                    RaiseErrorKind::InvalidNode {
+                        node: NodeId::new(0),
+                        detail: "CGReturn n0 mixes void and scalar call pass-through".into(),
+                    },
+                ));
+            }
+        }
+    }
+    visiting.pop();
+    Ok(result.unwrap_or(VOID_TYPE))
+}
+
+fn n0_call_result_type(
+    unit: &CaptureUnit,
+    procedure: &Procedure,
+    return_at: usize,
+    location: SourceLocation,
+    visiting: &mut Vec<SymbolId>,
+) -> Result<hir::TypeId, RaiseError> {
+    let Some(previous) = previous_done_in_block(procedure, return_at) else {
+        return Ok(VOID_TYPE);
+    };
+    let Some(node_text) = previous.args.first() else {
+        return Ok(VOID_TYPE);
+    };
+    let node_id = NodeId::new(parse_node_id(node_text, location)?);
+    let Some(node) = unit.nodes.get(&node_id) else {
+        return Err(error(location, RaiseErrorKind::MissingNode(node_id)));
+    };
+    if node.call != "CGCall" {
+        return Ok(VOID_TYPE);
+    }
+    let call = CallId::new(parse_call_id(
+        node.args.first().ok_or_else(|| {
+            error(
+                location,
+                RaiseErrorKind::InvalidNode {
+                    node: node_id,
+                    detail: "CGCall has no call handle".into(),
+                },
+            )
+        })?,
+        location,
+    )?);
+    let pending = unit
+        .calls
+        .get(&call)
+        .ok_or_else(|| error(location, RaiseErrorKind::MissingPendingCall(call)))?;
+    let called = unit
+        .procedures
+        .iter()
+        .find(|called| called.symbol == pending.symbol)
+        .ok_or_else(|| error(location, RaiseErrorKind::MissingCallable(pending.symbol)))?;
+    let captured = value_type(unit, &pending.value_type, location)?;
+    let semantic = procedure_result_type_inner(unit, called, location, visiting)?;
+    if semantic == VOID_TYPE && captured != VOID_TYPE {
+        return Err(error(
+            location,
+            RaiseErrorKind::InvalidNode {
+                node: node_id,
+                detail:
+                    "CGReturn n0 pass-through of a capture-only scalar call result is unsupported"
+                        .into(),
+            },
+        ));
+    }
+    if semantic != captured {
+        return Err(error(
+            location,
+            RaiseErrorKind::InvalidNode {
+                node: node_id,
+                detail: "CGReturn n0 call result disagrees with the defined callee type".into(),
+            },
+        ));
+    }
+    Ok(semantic)
+}
+
+fn previous_done_in_block(
+    procedure: &Procedure,
+    before: usize,
+) -> Option<&super::capture::Statement> {
+    procedure.body[..before]
+        .iter()
+        .rev()
+        .take_while(|statement| statement.call != "CGControl")
+        .find(|statement| statement.call == "CGDone")
 }
 
 fn is_supported_c_convention(class: u32) -> bool {
@@ -1859,7 +2118,9 @@ fn error_default(kind: RaiseErrorKind) -> RaiseError {
 mod tests {
     use std::collections::BTreeSet;
 
-    use super::{raise_module, RaiseError, RaiseErrorKind, U16_TYPE, U32_TYPE, WCC_BIG_DATA};
+    use super::{
+        RaiseError, RaiseErrorKind, U16_TYPE, U32_TYPE, VOID_TYPE, WCC_BIG_DATA, raise_module,
+    };
     use crate::frontend::wcc::{capture, parse};
     use crate::hir;
     use crate::ir;
@@ -1889,6 +2150,215 @@ mod tests {
     fn algebra() -> capture::CaptureUnit {
         capture::build(&parse(include_str!("../../../fixtures/c/parity/algebra.cgs")).unwrap())
             .unwrap()
+    }
+
+    fn single_slice() -> capture::CaptureUnit {
+        let source = r#"INIT sw=0x808000 target=0xec size=50 rev=0x23
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=2
+SEG 3 attr=0xc name="CONST2" align=2
+SEG 4 attr=0x6 name="_DATA" align=2
+START
+f1 DBSrcFile "single.c"
+SYM y1 name="single_work" base="single_work" pattern="_*" attr=0x7 seg=1
+SYM y2 name="items" base="items" pattern="_*" attr=0x0 seg=-1
+SYM y3 name="scale" base="scale" pattern="_*" attr=0x0 seg=-1
+SYM y4 name="total" base="total" pattern="_*" attr=0x0 seg=-1
+SYM y5 name="single_caller" base="single_caller" pattern="_*" attr=0x7 seg=1
+SYM y6 name="caller_total" base="caller_total" pattern="_*" attr=0x0 seg=-1
+CALLCONV y1 class=0x80 target=0x716 parms=[] ret=0:0
+CALLCONV y5 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y1 TY_INTEGER
+- CGParmDecl y2 TY_POINTER
+- CGParmDecl y3 TY_SINGLE
+- CGAutoDecl y4 TY_SINGLE
+l2 CGLastParm
+n3 CGFEName y4 TY_SINGLE
+n4 CGFloat "1.0000000000000000000e+00" TY_SINGLE
+n5 CGAssign n3 n4 TY_SINGLE
+- CGDone n5
+n6 CGFEName y4 TY_SINGLE
+n7 CGUnary O_POINTS n6 TY_SINGLE
+n8 CGFEName y3 TY_SINGLE
+n9 CGUnary O_POINTS n8 TY_SINGLE
+n10 CGBinary O_TIMES n7 n9 TY_SINGLE
+n11 CGFEName y4 TY_SINGLE
+n12 CGAssign n11 n10 TY_SINGLE
+- CGDone n12
+n13 CGFEName y4 TY_SINGLE
+n14 CGUnary O_POINTS n13 TY_SINGLE
+n15 CGFloat "0.0000000000000000000e+00" TY_SINGLE
+n16 CGCompare O_GT n14 n15 TY_SINGLE
+- CGDone n16
+n17 CGFEName y2 TY_POINTER
+n18 CGUnary O_POINTS n17 TY_POINTER
+n19 CGInteger 0 TY_UNSIGNED
+n20 CGBinary O_PLUS n18 n19 TY_POINTER
+n21 CGFloat "2.0000000000000000000e+00" TY_SINGLE
+n22 CGPreGets O_PLUS n20 n21 TY_SINGLE
+- CGDone n22
+n23 CGUnary O_CONVERT n14 TY_INT_4
+- CGDone n23
+- CGReturn n0 TY_INTEGER
+- CGProcDecl y5 TY_INTEGER
+- CGAutoDecl y6 TY_SINGLE
+l2 CGLastParm
+n24 CGFEName y1 TY_CODE_PTR
+c25 CGInitCall n24 TY_INTEGER y1
+n26 CGFloat "1.0000000000000000000e+00" TY_SINGLE
+- CGAddParm c25 n26 TY_SINGLE
+n27 CGFEName y6 TY_SINGLE
+n28 CGUnary O_CONVERT n27 TY_POINTER
+- CGAddParm c25 n28 TY_POINTER
+n29 CGCall c25
+- CGDone n29
+n30 CGInteger 0 TY_INTEGER
+- CGDone n30
+- CGReturn n0 TY_INTEGER
+STOP
+FINI
+"#;
+        capture::build(&parse(source).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn raises_single_values_and_indirect_lvalues_as_verified_hir() {
+        let module = raise_module(&single_slice(), "single").unwrap();
+        module.verify().unwrap();
+        let function = &module.functions[0];
+        assert_eq!(function.result_type, hir::TypeId::new(0));
+        assert_eq!(function.abi.parameter_bytes, 6);
+        assert!(matches!(
+            &module.types[6],
+            hir::Type {
+                kind: hir::TypeKind::Float,
+                width: 4,
+                evaluation: hir::FloatEvaluation::Extended80,
+                ..
+            }
+        ));
+        let instructions = function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .collect::<Vec<_>>();
+        assert!(
+            instructions
+                .iter()
+                .any(|instruction| instruction.opcode == hir::Opcode::FloatMultiply)
+        );
+        assert!(
+            instructions
+                .iter()
+                .any(|instruction| instruction.opcode == hir::Opcode::GreaterThan)
+        );
+        assert!(instructions.iter().any(|instruction| matches!(
+            instruction.operands.as_slice(),
+            [hir::Operand::Indirect { type_id, .. }] if *type_id == hir::TypeId::new(6)
+        )));
+        assert!(
+            instructions.windows(2).any(|pair| matches!(
+                pair,
+                [
+                    hir::Instruction { opcode: hir::Opcode::Store, operands: stored, .. },
+                    hir::Instruction { opcode: hir::Opcode::Load, operands: loaded, .. },
+                ] if matches!(
+                    (stored.as_slice(), loaded.as_slice()),
+                    ([address, _], [reloaded]) if address == reloaded
+                )
+            )),
+            "a SINGLE assignment expression reloads its stored, rounded value"
+        );
+        assert!(instructions.iter().any(|instruction| matches!(
+            instruction.opcode,
+            hir::Opcode::FloatToInteger {
+                rounding: hir::FloatRounding::TowardZero,
+            }
+        )));
+        let caller = &module.functions[1];
+        assert_eq!(caller.calls.len(), 1);
+        assert_eq!(caller.calls[0].callee, Some(hir::CallableId::new(0)));
+        let call = caller
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .find(|instruction| instruction.opcode == hir::Opcode::Call)
+            .unwrap();
+        assert!(
+            call.results.is_empty(),
+            "n0-derived void calls produce no scalar result"
+        );
+        assert!(matches!(
+            function.blocks[0].terminator,
+            hir::Terminator::Return(None)
+        ));
+        let lowered = hir::lower_to_ir(&module).unwrap();
+        assert!(
+            lowered.functions[0].blocks[0]
+                .instructions
+                .iter()
+                .any(|instruction| matches!(
+                    instruction.kind,
+                    ir::InstructionKind::Binary {
+                        op: ir::BinaryOp::FloatMultiply,
+                        ..
+                    }
+                ))
+        );
+    }
+
+    #[test]
+    fn refuses_an_n0_pass_through_from_a_semantically_void_defined_call() {
+        let mut unit = single_slice();
+        unit.procedures[1].body.retain(|statement| {
+            statement
+                .args
+                .first()
+                .is_none_or(|argument| argument != "n30")
+        });
+
+        let error = raise_module(&unit, "single").unwrap_err();
+
+        assert!(matches!(
+            error.kind,
+            RaiseErrorKind::InvalidNode { detail, .. }
+                if detail.contains("capture-only scalar call result")
+        ));
+    }
+
+    #[test]
+    fn an_n0_return_does_not_reuse_a_call_from_an_earlier_block() {
+        let mut unit = single_slice();
+        let procedure = &mut unit.procedures[1];
+        procedure.body.retain(|statement| {
+            statement
+                .args
+                .first()
+                .is_none_or(|argument| argument != "n30")
+        });
+        let return_at = procedure
+            .body
+            .iter()
+            .position(|statement| statement.call == "CGReturn")
+            .unwrap();
+        procedure.body.insert(
+            return_at,
+            capture::Statement {
+                call: "CGControl".into(),
+                args: vec!["O_LABEL".into(), "n0".into(), "l99".into()],
+                location: capture::SourceLocation::default(),
+            },
+        );
+
+        let module = raise_module(&unit, "single").unwrap();
+
+        assert_eq!(module.functions[1].result_type, VOID_TYPE);
+        assert!(
+            module.functions[1]
+                .blocks
+                .iter()
+                .any(|block| matches!(block.terminator, hir::Terminator::Return(None)))
+        );
     }
 
     fn comparison(operation: &str, type_name: &str) -> capture::CaptureUnit {
