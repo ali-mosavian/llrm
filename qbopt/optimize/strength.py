@@ -61,9 +61,8 @@ _DEFAULT_COSTS = OperationCosts()
 class Strength(MIRTransform):
     name = "strength"
 
-    def __init__(self, where: Where, *, control_recurrences: bool = False) -> None:
+    def __init__(self, where: Where) -> None:
         self.where = where
-        self.control_recurrences = control_recurrences
 
     def transform(self, body: MirBody) -> MirBody:
         from qbopt.optimize import indvars
@@ -81,13 +80,13 @@ class Strength(MIRTransform):
             self.where.call_registers,
             self.where.costs,
             address_forms=self.where.address_forms,
-            control_recurrences=self.control_recurrences,
+            control_recurrences=True,
         )
         body = exitsink.sunk(transform.dead(ivshare.shared(body)))
         body = loopexit.evaluated(body)
         body = indvars.rewound(body, self.where.registers, self.where.costs)
         body = indvars.simplified(body)
-        return indvars.zeroed(body, address_offsets=self.control_recurrences)
+        return indvars.zeroed(body, address_offsets=True)
 
 
 def reduced(
@@ -99,7 +98,7 @@ def reduced(
     call_registers: int = 0,
     costs: OperationCosts = _DEFAULT_COSTS,
     address_forms: tuple[AddressForm, ...] = (),
-    control_recurrences: bool = False,
+    control_recurrences: bool = True,
 ) -> MirBody:
     """`body` with every multiply of a counter by an invariant made an add."""
     from qbopt.optimize import transform as passes

@@ -58,7 +58,6 @@ def optimized(
         # recurrence, and address-strength passes remain enabled.
         unroll_=False,
         peel_=False,
-        control_recurrences=True,
     )
     return replace(lowered, body=body)
 

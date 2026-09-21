@@ -2977,7 +2977,6 @@ def pipeline(where: Where, **wanted) -> list[MIRTransform]:
     Order is the list's own. A pass that is off is not in it, rather than in
     it and skipped, so what runs is what this returns.
     """
-    control_recurrences = wanted.pop("control_recurrences", False)
     every: list[MIRTransform] = [
         # Pointer identity is a solved program fact, not a frontend code-shape
         # requirement.  Resolve it before a packed pointer becomes independent
@@ -3002,7 +3001,7 @@ def pipeline(where: Where, **wanted) -> list[MIRTransform]:
         # moving all of mem2reg ahead of loop normalization inflated matmul
         # from 165 to 226 instructions by creating loop phis too early.
         promote.Promote(where),
-        strength.Strength(where, control_recurrences=control_recurrences),
+        strength.Strength(where),
         Algebraic(),
         Dead(),
         Place(where),
@@ -3043,7 +3042,6 @@ def applied(
     drop_stores: bool = True,
     promote_: bool = True,
     strength_: bool = True,
-    control_recurrences: bool = False,
     floatloop_: bool = True,
     unroll_: bool = True,
     peel_: bool = True,
@@ -3092,7 +3090,6 @@ def applied(
         "sroa": promote_,
         "promote": promote_,
         "strength": strength_,
-        "control_recurrences": control_recurrences,
         "unroll": unroll_,
         "peel": peel_,
         "fill": fill_,

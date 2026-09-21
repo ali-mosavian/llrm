@@ -1230,6 +1230,55 @@ def test_module_static_numeric_array_has_a_relocated_basic_descriptor() -> None:
     ]
 
 
+def test_static_udt_array_loop_carries_a_byte_offset(tmp_path: Path) -> None:
+    """QB nbody recomputed ``current * 16`` after C and modern had reduced it.
+
+    A proved array walk must carry the byte offset regardless of which source
+    frontend formed the MIR.  One hundred iterations keep this witness as a
+    loop rather than allowing the independent unroller to erase it.
+    """
+    source = tmp_path / "stride.bas"
+    source.write_text(
+        """\
+defint a-z
+
+type Vec2i
+    x as long
+    y as long
+end type
+
+type Body
+    pos as Vec2i
+    vel as Vec2i
+end type
+
+declare function walk () as long
+
+dim shared answer as long
+answer = walk()
+end
+
+function walk () as long static
+    dim bodies(0 to 99) as Body
+    dim current as integer
+
+    for current = 0 to 99
+        bodies(current).pos.x = bodies(current).vel.x
+    next current
+    walk = bodies(99).pos.x
+end function
+"""
+    )
+
+    program = qb_driver.parsed(source, dialect="vbdos", runtime="vbdos")
+    listing = masm.text(qb_compile.assembled(program))
+    procedure = listing.split("WALK proc far", 1)[1].split("WALK endp", 1)[0]
+
+    assert not re.search(r"\bshl (?:word ptr \[[^\n]+\]|[a-z]{2}), 4\b", procedure)
+    assert not re.search(r"\bimul\b[^\n]*, 16\b", procedure)
+    assert re.search(r"add (?:word ptr \[[^]]+\]|[a-z]{2}), 16", procedure)
+
+
 def test_rank_two_descriptor_matches_qb_dimension_order_and_adjusted_offset() -> None:
     """Q45A05 returned dimension 2 for LBOUND(a,1) because its descriptor was source-ordered."""
     source = qb_driver.parsed(
