@@ -15,8 +15,8 @@ use crate::codegen::machine::{
 };
 
 use super::{
-    BasicFramePlan, BasicFramePlanError, BasicRuntime, X86Opcode, X86Register, X86RegisterClass,
-    plan_basic_frame,
+    plan_basic_frame, BasicFramePlan, BasicFramePlanError, BasicRuntime, X86Opcode, X86Register,
+    X86RegisterClass,
 };
 
 /// A BASIC function together with the immutable frame plan that shaped it.
@@ -30,6 +30,7 @@ pub struct ExpandedBasicFunction {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum BasicAbiError {
     Frame(BasicFramePlanError),
+    FramePlanFunctionMismatch,
     EmptyFunction,
     UnknownEntry(MachineBlockId),
     ReturnNear {
@@ -39,6 +40,14 @@ pub enum BasicAbiError {
     AlreadyExpanded {
         symbol: &'static str,
     },
+    MissingEntryShell {
+        entry: MachineBlockId,
+    },
+    AmbiguousEntryShell,
+    MalformedEntryShell {
+        entry: MachineBlockId,
+        reason: &'static str,
+    },
     VirtualRegisterIdExhausted,
     InstructionIdExhausted,
 }
@@ -47,6 +56,10 @@ impl fmt::Display for BasicAbiError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Frame(error) => error.fmt(formatter),
+            Self::FramePlanFunctionMismatch => write!(
+                formatter,
+                "BASIC runtime frame plan belongs to a different function"
+            ),
             Self::EmptyFunction => write!(formatter, "BASIC runtime frame has no entry block"),
             Self::UnknownEntry(block) => {
                 write!(
@@ -61,6 +74,19 @@ impl fmt::Display for BasicAbiError {
             Self::AlreadyExpanded { symbol } => {
                 write!(formatter, "BASIC runtime frame already contains {symbol}")
             }
+            Self::MissingEntryShell { entry } => {
+                write!(
+                    formatter,
+                    "BASIC runtime entry block {entry} has no B$ENRA shell"
+                )
+            }
+            Self::AmbiguousEntryShell => {
+                write!(formatter, "BASIC runtime frame has multiple B$ENRA shells")
+            }
+            Self::MalformedEntryShell { entry, reason } => write!(
+                formatter,
+                "BASIC runtime entry block {entry} has a malformed B$ENRA shell: {reason}"
+            ),
             Self::VirtualRegisterIdExhausted => {
                 write!(
                     formatter,
@@ -78,10 +104,14 @@ impl Error for BasicAbiError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Frame(error) => Some(error),
-            Self::EmptyFunction
+            Self::FramePlanFunctionMismatch
+            | Self::EmptyFunction
             | Self::UnknownEntry(_)
             | Self::ReturnNear { .. }
             | Self::AlreadyExpanded { .. }
+            | Self::MissingEntryShell { .. }
+            | Self::AmbiguousEntryShell
+            | Self::MalformedEntryShell { .. }
             | Self::VirtualRegisterIdExhausted
             | Self::InstructionIdExhausted => None,
         }
@@ -195,6 +225,144 @@ pub fn expand_basic_runtime(
         function: expanded,
         frame,
     })
+}
+
+/// Refreshes an expanded BASIC frame after allocation has appended spills.
+///
+/// `B$ENRA` owns the local reservation, so every new spill must be included
+/// in its CX immediate.  The existing shell is not rebuilt: allocation may
+/// split its fixed CX/BX occurrences with copies, but it preserves the first
+/// local-size producer.  Refresh verifies that stable producer and the unique
+/// entry call, then changes only the producer's immediate.
+pub fn refresh_basic_runtime_frame(
+    function: &MachineFunction,
+    previous: &BasicFramePlan,
+) -> Result<ExpandedBasicFunction, BasicAbiError> {
+    if previous.function() != function.id {
+        return Err(BasicAbiError::FramePlanFunctionMismatch);
+    }
+    let frame = plan_basic_frame(
+        function,
+        previous.runtime(),
+        u32::from(previous.temporary_strings()),
+    )
+    .map_err(BasicAbiError::Frame)?;
+    let shell = validate_entry_shell(function, previous)?;
+
+    // Every refusal above happens before cloning, so refresh is as
+    // non-mutating as initial expansion on malformed input.
+    let mut refreshed = function.clone();
+    refreshed.blocks[shell.block].instructions[0].operands[1] =
+        immediate(i64::from(frame.local_bytes()));
+
+    Ok(ExpandedBasicFunction {
+        function: refreshed,
+        frame,
+    })
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct EntryShell {
+    block: usize,
+}
+
+fn validate_entry_shell(
+    function: &MachineFunction,
+    previous: &BasicFramePlan,
+) -> Result<EntryShell, BasicAbiError> {
+    let Some((entry_index, entry)) = function
+        .blocks
+        .iter()
+        .enumerate()
+        .find(|(_, block)| block.id == function.entry)
+    else {
+        return Err(BasicAbiError::UnknownEntry(function.entry));
+    };
+
+    let enra_sites = function
+        .blocks
+        .iter()
+        .enumerate()
+        .flat_map(|(block_index, block)| {
+            block.instructions.iter().enumerate().filter_map(
+                move |(instruction_index, instruction)| {
+                    begins_external_symbol(instruction, "B$ENRA")
+                        .then_some((block_index, instruction_index))
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    let [(shell_block, shell_instruction)] = enra_sites.as_slice() else {
+        return if enra_sites.is_empty() {
+            Err(BasicAbiError::MissingEntryShell {
+                entry: function.entry,
+            })
+        } else {
+            Err(BasicAbiError::AmbiguousEntryShell)
+        };
+    };
+    if *shell_block != entry_index {
+        return malformed_entry_shell(function.entry, "B$ENRA call must be in the entry block");
+    }
+
+    if !is_local_size_producer(entry.instructions.first(), previous.local_bytes()) {
+        return malformed_entry_shell(
+            function.entry,
+            "first shell instruction must move the prior local size into CX",
+        );
+    }
+    let call = &entry.instructions[*shell_instruction];
+    if call.opcode != X86Opcode::CallFar.machine_opcode() {
+        return malformed_entry_shell(function.entry, "B$ENRA shell target must be a far call");
+    }
+
+    Ok(EntryShell { block: entry_index })
+}
+
+fn begins_external_symbol(instruction: &MachineInstruction, symbol: &str) -> bool {
+    instruction.operands.first().is_some_and(|operand| {
+        matches!(
+            &operand.kind,
+            MachineOperandKind::ExternalSymbol { name, .. } if name == symbol
+        )
+    })
+}
+
+fn is_local_size_producer(instruction: Option<&MachineInstruction>, local_bytes: u16) -> bool {
+    let Some(instruction) = instruction else {
+        return false;
+    };
+    if instruction.opcode != X86Opcode::Mov.machine_opcode()
+        || instruction.flags != InstructionFlags::NONE
+    {
+        return false;
+    }
+    let [destination, MachineOperand {
+        kind: MachineOperandKind::Immediate(immediate),
+        role: OperandRole::None,
+        constraint: None,
+        tied_to: None,
+    }] = instruction.operands.as_slice()
+    else {
+        return false;
+    };
+    *immediate == i64::from(local_bytes)
+        && matches!(
+            destination,
+            MachineOperand {
+                kind: MachineOperandKind::Register(MachineRegister::Virtual(_)),
+                role: OperandRole::Def,
+                constraint: Some(RegisterConstraint::Fixed(physical)),
+                tied_to: None,
+            } if *physical == X86Register::Cx.physical()
+        )
+}
+
+fn malformed_entry_shell<T>(
+    entry: MachineBlockId,
+    reason: &'static str,
+) -> Result<T, BasicAbiError> {
+    Err(BasicAbiError::MalformedEntryShell { entry, reason })
 }
 
 fn preflight(function: &MachineFunction) -> Result<(), BasicAbiError> {
@@ -606,6 +774,95 @@ mod tests {
         let expanded = expand_basic_runtime(&function, BasicRuntime::Qb45, 0)
             .expect("a noreturn body still needs entry frame setup");
         assert_eq!(expanded.function.blocks[0].instructions.len(), 3);
+    }
+
+    #[test]
+    fn refreshes_the_entry_local_size_after_split_spill_materialization() {
+        // A six-byte allocator spill after the original four-byte local must
+        // grow B$ENRA's CX reservation from 4 to 10; otherwise the spill
+        // aliases memory below the runtime-owned frame header.  Splitting the
+        // fixed B$ENRA occurrences inserts copies between the producers and
+        // call, just as the spill/retry allocator does before materializing.
+        let selected = procedure(MachineBlockId::new(0), vec![block(0, vec![return_far(2)])]);
+        let expanded = expand_basic_runtime(&selected, BasicRuntime::Pds71, 3)
+            .expect("selected function receives its initial runtime shell");
+        let mut with_spill =
+            super::super::allocation::split_fixed_register_occurrences(&expanded.function)
+                .expect("fixed B$ENRA occurrences split before register allocation");
+        assert_eq!(
+            with_spill.blocks[0].instructions[0].id,
+            MachineInstructionId::new(3)
+        );
+        assert_eq!(
+            with_spill.blocks[0].instructions[1].opcode,
+            X86Opcode::Copy.machine_opcode(),
+            "the CX carrier is copied after its stable local-size producer"
+        );
+        assert_eq!(
+            with_spill.blocks[0].instructions[6].opcode,
+            X86Opcode::CallFar.machine_opcode(),
+            "the B$ENRA call moves after the split CX/BX traffic"
+        );
+        with_spill.frame_objects.push(FrameObject {
+            index: FrameIndex::new(1),
+            size: 6,
+            alignment: 2,
+            kind: FrameObjectKind::Spill,
+        });
+        let mut expected = with_spill.clone();
+        expected.blocks[0].instructions[0].operands[1] = immediate(10);
+
+        let refreshed = refresh_basic_runtime_frame(&with_spill, &expanded.frame)
+            .expect("the original B$ENRA shell accepts an appended spill");
+
+        assert_eq!(refreshed.frame.local_bytes(), 10);
+        assert_eq!(refreshed.frame.runtime(), BasicRuntime::Pds71);
+        assert_eq!(refreshed.frame.temporary_strings(), 3);
+        assert_eq!(refreshed.function, expected);
+        assert!(matches!(
+            refreshed.function.blocks[0].instructions[0].operands[1].kind,
+            MachineOperandKind::Immediate(10)
+        ));
+    }
+
+    #[test]
+    fn refresh_refuses_missing_ambiguous_and_malformed_entry_shells_without_mutation() {
+        // Refresh is deliberately not a second expansion pass.  A missing,
+        // duplicate, or edited shell has no trustworthy CX site to repair,
+        // and must leave allocation's input untouched.
+        let selected = procedure(MachineBlockId::new(0), vec![block(0, vec![return_far(2)])]);
+        let expanded = expand_basic_runtime(&selected, BasicRuntime::Qb45, 0)
+            .expect("selected function receives its initial runtime shell");
+
+        let mut missing = expanded.function.clone();
+        missing.blocks[0].instructions.remove(2);
+        let missing_before = missing.clone();
+        assert_eq!(
+            refresh_basic_runtime_frame(&missing, &expanded.frame),
+            Err(BasicAbiError::MissingEntryShell {
+                entry: MachineBlockId::new(0),
+            })
+        );
+        assert_eq!(missing, missing_before);
+
+        let mut ambiguous = expanded.function.clone();
+        let duplicate_shell_call = ambiguous.blocks[0].instructions[2].clone();
+        ambiguous.blocks[0].instructions.push(duplicate_shell_call);
+        let ambiguous_before = ambiguous.clone();
+        assert_eq!(
+            refresh_basic_runtime_frame(&ambiguous, &expanded.frame),
+            Err(BasicAbiError::AmbiguousEntryShell)
+        );
+        assert_eq!(ambiguous, ambiguous_before);
+
+        let mut malformed = expanded.function.clone();
+        malformed.blocks[0].instructions[0].operands[1] = immediate(99);
+        let malformed_before = malformed.clone();
+        assert!(matches!(
+            refresh_basic_runtime_frame(&malformed, &expanded.frame),
+            Err(BasicAbiError::MalformedEntryShell { .. })
+        ));
+        assert_eq!(malformed, malformed_before);
     }
 
     #[test]
