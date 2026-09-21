@@ -17,6 +17,8 @@ PARITY_SOURCE = ROOT / "bench" / "parity" / "parity.bas"
 PARITY_GOLDEN = ROOT / "bench" / "parity" / "golden" / "parity.txt"
 ALGEBRA_SOURCE = ROOT / "bench" / "parity" / "algebra.bas"
 ALGEBRA_GOLDEN = ROOT / "bench" / "parity" / "golden" / "algebra.txt"
+BRANCH_SOURCE = ROOT / "bench" / "parity" / "branch.bas"
+BRANCH_GOLDEN = ROOT / "bench" / "parity" / "golden" / "branch.txt"
 CFG = CONFIGS["v-g3"]
 
 pytestmark = [
@@ -114,3 +116,12 @@ def test_rust_qb_algebra_matches_its_program_level_oracle(tmp_path: Path) -> Non
     Python-era program oracle rather than accepting allocation in isolation.
     """
     _assert_program_matches_oracle(tmp_path, ALGEBRA_SOURCE, ALGEBRA_GOLDEN, "ALGEBRA")
+
+
+def test_rust_qb_branch_matches_its_program_level_oracle(tmp_path: Path) -> None:
+    """The IF/ELSE paired program must print branch's -87904/DONE oracle.
+
+    This keeps the signed INTEGER comparison, both LONG-returning function
+    arms, and their join on the real VBDOS object/runtime path.
+    """
+    _assert_program_matches_oracle(tmp_path, BRANCH_SOURCE, BRANCH_GOLDEN, "BRANCH")

@@ -18,6 +18,8 @@ PARITY_SOURCE = ROOT / "fixtures" / "c" / "parity" / "parity.cgs"
 PARITY_HARNESS = ROOT / "fixtures" / "c" / "parity" / "parity-start.asm"
 ALGEBRA_SOURCE = ROOT / "fixtures" / "c" / "parity" / "algebra.cgs"
 ALGEBRA_HARNESS = ROOT / "fixtures" / "c" / "parity" / "algebra-start.asm"
+BRANCH_SOURCE = ROOT / "fixtures" / "c" / "parity" / "branch.cgs"
+BRANCH_HARNESS = ROOT / "fixtures" / "c" / "parity" / "branch-start.asm"
 CELLS_SOURCE = ROOT / "fixtures" / "c" / "cells.cgs"
 CELLS_HARNESS = ROOT / "fixtures" / "c" / "cells-start.asm"
 JWASM = shutil.which("jwasm") or str(Path.home() / "work/other/d32x/toolchains/native/bin/jwasm")
@@ -124,3 +126,13 @@ def test_rust_c_algebra_returns_the_existing_python_oracle(tmp_path: Path) -> No
     actual Python-era oracle rather than a Rust-only instruction pattern.
     """
     assert _compile_and_run(ALGEBRA_SOURCE, ALGEBRA_HARNESS, tmp_path, timeout=20) == 702774
+
+
+def test_rust_c_branch_returns_the_existing_python_oracle(tmp_path: Path) -> None:
+    """The two-arm C branch must retain the established -87904 result.
+
+    The real WCC capture has a signed short comparison, an explicit join, and
+    two far-cdecl LONG-returning calls.  Link the fresh Rust object with the
+    independent caller and check the Python-era program oracle on DOS.
+    """
+    assert _compile_and_run(BRANCH_SOURCE, BRANCH_HARNESS, tmp_path, timeout=20) == -87904
