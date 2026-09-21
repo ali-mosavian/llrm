@@ -8,6 +8,8 @@
 use std::error::Error;
 use std::fmt;
 
+pub use crate::support::PhysicalRegister;
+
 macro_rules! entity_id {
     ($name:ident) => {
         #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -38,7 +40,6 @@ entity_id!(MachineInstructionId);
 entity_id!(VirtualRegisterId);
 entity_id!(FrameIndex);
 entity_id!(TargetOpcode);
-entity_id!(PhysicalRegister);
 entity_id!(RegisterClass);
 
 /// Position of an operand in one instruction.

@@ -2,6 +2,8 @@
 
 use std::fmt;
 
+use crate::support::PhysicalRegister;
+
 use super::data::{self, DataBlock, DataError};
 use super::declarations::{self, DeclarationError, Declarations};
 use super::fixups::{self, Fixup, FixupError};
@@ -11,6 +13,81 @@ use super::modend::{self, ModendError, ModuleEnd};
 use super::record::Record;
 use super::segments::{self, SegmentError, SegmentTable};
 use super::symbols::{self, SymbolError, SymbolTables};
+
+/// The address namespace used by Python's object/MIR/LIR pipeline.
+///
+/// Direct port of `qbopt.objectfile.module:Space`.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum Space {
+    Segment,
+    External,
+    Frame,
+    Literal,
+    Group,
+    Far,
+    Stack,
+}
+
+impl Space {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Segment => "seg",
+            Self::External => "external",
+            Self::Frame => "bp",
+            Self::Literal => "abs",
+            Self::Group => "grp",
+            Self::Far => "far",
+            Self::Stack => "sp",
+        }
+    }
+}
+
+impl fmt::Display for Space {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+/// The direct-port sentinel for Python's `Register.NONE` in `Addr`.
+pub const NO_REGISTER: PhysicalRegister = PhysicalRegister::new(0);
+
+/// A symbolic or concrete machine address.
+///
+/// Direct port of `qbopt.objectfile.module:Addr`. All five fields are part of
+/// its identity, including `base` and `segment`.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct Addr {
+    pub space: Space,
+    pub disp: i64,
+    pub index: u32,
+    pub base: PhysicalRegister,
+    pub segment: PhysicalRegister,
+}
+
+impl Addr {
+    pub const fn new(space: Space, disp: i64) -> Self {
+        Self {
+            space,
+            disp,
+            index: 0,
+            base: NO_REGISTER,
+            segment: NO_REGISTER,
+        }
+    }
+
+    /// Python `Addr.direct`: whether this address has no run-time base.
+    pub fn direct(self) -> bool {
+        self.base == NO_REGISTER
+    }
+
+    /// Python `Addr.plus`: retain address identity while moving its displacement.
+    pub const fn plus(self, bytes_along: i64) -> Self {
+        Self {
+            disp: self.disp + bytes_along,
+            ..self
+        }
+    }
+}
 
 /// The independently decoded tables and relocations of one object module.
 #[derive(Clone, Debug, Eq, PartialEq)]

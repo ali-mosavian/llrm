@@ -9,6 +9,7 @@ mod allocation_spill;
 mod interference;
 mod liveness;
 mod model;
+mod semantics;
 mod text;
 mod verify;
 
@@ -29,5 +30,6 @@ pub use liveness::{
     BlockLiveness, MachineLiveness, MachineLivenessError, compute_liveness,
 };
 pub use model::*;
+pub use semantics::*;
 pub use text::{FORMAT_VERSION, TextError, parse_text, write_text};
 pub use verify::verify;

@@ -18,6 +18,7 @@ mod omf;
 mod registers;
 mod segmented_memory;
 mod selection;
+mod semantic_registers;
 mod verify;
 mod word_merge;
 
@@ -54,5 +55,6 @@ pub use omf::{X86OmfError, lower_to_omf, lower_to_omf_with_dgroup};
 pub use registers::{X86Register, X86RegisterClass};
 pub use segmented_memory::{SegmentedMemoryExpansionError, expand_allocated_segmented_memory};
 pub use selection::{FunctionProperty, SelectionError, select_module};
+pub use semantic_registers::root;
 pub use verify::verify_machine;
 pub use word_merge::{expand_allocated_word_merges, WordMergeExpansionError};
