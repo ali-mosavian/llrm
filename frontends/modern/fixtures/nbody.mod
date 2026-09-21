@@ -10,16 +10,16 @@ struct body:
 
 fn nbody(step_count: i32) -> scalar:
     var bodies: [body; 6] = [
-        body { pos: vec2i { x: -15, y: -12 }, vel: vec2i { x: 0, y: 0 } },
-        body { pos: vec2i { x: -8, y: -7 }, vel: vec2i { x: 0, y: 0 } },
-        body { pos: vec2i { x: -1, y: -2 }, vel: vec2i { x: 0, y: 0 } },
-        body { pos: vec2i { x: 6, y: 3 }, vel: vec2i { x: 0, y: 0 } },
-        body { pos: vec2i { x: 13, y: 8 }, vel: vec2i { x: 0, y: 0 } },
-        body { pos: vec2i { x: 20, y: 13 }, vel: vec2i { x: 0, y: 0 } },
+        {{-15, -12}, {0, 0}},
+        {{-8, -7}, {0, 0}},
+        {{-1, -2}, {0, 0}},
+        {{6, 3}, {0, 0}},
+        {{13, 8}, {0, 0}},
+        {{20, 13}, {0, 0}},
     ]
     for step_no in 0..step_count:
         for current in &mut bodies:
-            var acc: vec2i = vec2i { x: 0, y: 0 }
+            var acc = vec2i { x: 0, y: 0 }
             for other in &bodies:
                 if current is not other:
                     let delta = vec2i {

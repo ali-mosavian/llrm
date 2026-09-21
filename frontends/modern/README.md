@@ -76,10 +76,27 @@ address arithmetic; no array, field-access, or iterator helper is emitted.
 Structs may be bound with an explicit type or inferred from a literal or copy:
 
 ```text
-var acc: vec2i = vec2i { x: 0, y: 0 }
+var acc = vec2i { x: 0, y: 0 }
 let delta = vec2i { x: other.x - current.x, y: other.y - current.y }
 acc.x += delta.x
 ```
+
+When an aggregate's type is already known, the literal omits its nominal type.
+That context flows through arrays and nested fields. Fields may be named, or
+given positionally in declaration order:
+
+```text
+var named: [body; 1] = [
+    { pos: { x: -15, y: -12 }, vel: { x: 0, y: 0 } },
+]
+var compact: [body; 1] = [
+    {{-15, -12}, {0, 0}},
+]
+```
+
+A literal cannot mix named and positional fields, and it must initialize every
+field. An anonymous literal without an expected struct type is an error; write
+the type once, as in `vec2i { x: 0, y: 0 }`, and inference handles the binding.
 
 Whole-struct assignment is a structural field copy. All source leaves are
 evaluated and loaded before any destination leaf is stored, so overlapping

@@ -226,8 +226,8 @@ pub enum Expr {
         span: Span,
     },
     StructLiteral {
-        name: String,
-        fields: Vec<(String, Expr, Span)>,
+        name: Option<String>,
+        fields: StructLiteralFields,
         span: Span,
     },
     Unary {
@@ -246,6 +246,12 @@ pub enum Expr {
         arguments: Vec<Expr>,
         span: Span,
     },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum StructLiteralFields {
+    Named(Vec<(String, Expr, Span)>),
+    Positional(Vec<Expr>),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

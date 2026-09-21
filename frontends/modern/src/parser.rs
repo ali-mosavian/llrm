@@ -18,6 +18,7 @@ use crate::syntax::Span;
 use crate::syntax::Statement;
 use crate::syntax::Struct;
 use crate::syntax::StructField;
+use crate::syntax::StructLiteralFields;
 use crate::syntax::TypeAnnotation;
 use crate::syntax::TypeName;
 use crate::syntax::TypeSpec;
@@ -528,11 +529,13 @@ impl Parser {
             TokenKind::False => Ok(Expr::Boolean(false, token.span)),
             TokenKind::Identifier(name) => {
                 if matches!(self.peek().kind, TokenKind::LeftBrace) {
-                    self.struct_literal(name, token.span)
+                    self.bump();
+                    self.struct_literal(Some(name), token.span)
                 } else {
                     Ok(Expr::Name(name, token.span))
                 }
             }
+            TokenKind::LeftBrace => self.struct_literal(None, token.span),
             TokenKind::LeftBracket => {
                 let mut values = Vec::new();
                 if !matches!(self.peek().kind, TokenKind::RightBracket) {
@@ -641,10 +644,14 @@ impl Parser {
         })
     }
 
-    fn struct_literal(&mut self, name: String, start: Span) -> Result<Expr, Diagnostic> {
-        self.bump();
-        let mut fields = Vec::new();
-        if !matches!(self.peek().kind, TokenKind::RightBrace) {
+    fn struct_literal(&mut self, name: Option<String>, start: Span) -> Result<Expr, Diagnostic> {
+        let named = matches!(self.peek().kind, TokenKind::Identifier(_))
+            && self
+                .tokens
+                .get(self.at + 1)
+                .is_some_and(|token| matches!(token.kind, TokenKind::Colon));
+        let fields = if named {
+            let mut fields = Vec::new();
             loop {
                 let (field, span) = self.identifier("expected field name")?;
                 self.expect(
@@ -653,14 +660,44 @@ impl Parser {
                 )?;
                 let value = self.expression(0)?;
                 fields.push((field, value, span));
-                if self.take(|kind| matches!(kind, TokenKind::Comma)).is_none() {
+                if self.take(|kind| matches!(kind, TokenKind::Comma)).is_none()
+                    || matches!(self.peek().kind, TokenKind::RightBrace)
+                {
                     break;
                 }
-                if matches!(self.peek().kind, TokenKind::RightBrace) {
-                    break;
+                if !matches!(self.peek().kind, TokenKind::Identifier(_))
+                    || !self
+                        .tokens
+                        .get(self.at + 1)
+                        .is_some_and(|token| matches!(token.kind, TokenKind::Colon))
+                {
+                    return Err(Diagnostic::new(
+                        self.peek().span,
+                        "cannot mix named and positional struct fields",
+                    ));
                 }
             }
-        }
+            StructLiteralFields::Named(fields)
+        } else {
+            let mut fields = Vec::new();
+            if !matches!(self.peek().kind, TokenKind::RightBrace) {
+                loop {
+                    fields.push(self.expression(0)?);
+                    if matches!(self.peek().kind, TokenKind::Colon) {
+                        return Err(Diagnostic::new(
+                            self.peek().span,
+                            "cannot mix positional and named struct fields",
+                        ));
+                    }
+                    if self.take(|kind| matches!(kind, TokenKind::Comma)).is_none()
+                        || matches!(self.peek().kind, TokenKind::RightBrace)
+                    {
+                        break;
+                    }
+                }
+            }
+            StructLiteralFields::Positional(fields)
+        };
         let close = self.expect(
             |kind| matches!(kind, TokenKind::RightBrace),
             "expected '}' after struct literal",

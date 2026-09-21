@@ -14,6 +14,7 @@ use crate::syntax::Module;
 use crate::syntax::Span;
 use crate::syntax::Statement;
 use crate::syntax::Struct;
+use crate::syntax::StructLiteralFields;
 use crate::syntax::TypeAnnotation;
 use crate::syntax::TypeName;
 use crate::syntax::TypeSpec;
@@ -94,6 +95,7 @@ struct StructLayout {
     id: u32,
     name: String,
     fields: BTreeMap<String, FieldLayout>,
+    field_order: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -207,6 +209,7 @@ impl TypeRegistry {
                 ));
             }
             let mut fields = BTreeMap::new();
+            let mut field_order = Vec::new();
             let mut offset = 0;
             let mut alignment = 1;
             for field in &declaration.fields {
@@ -227,6 +230,7 @@ impl TypeRegistry {
                         offset,
                     },
                 );
+                field_order.push(field.name.clone());
                 offset += field_width;
                 alignment = alignment.max(field_alignment);
             }
@@ -250,6 +254,7 @@ impl TypeRegistry {
                     id,
                     name: declaration.name.clone(),
                     fields,
+                    field_order,
                 },
             );
         }
@@ -1316,14 +1321,38 @@ impl<'a> FunctionCompiler<'a> {
             }
             return self.prepare_struct_copy(destination, &source, stores);
         };
-        if name != &layout.name {
-            return Err(Diagnostic::new(
-                *span,
-                format!("expected {} literal, found {name}", layout.name),
-            ));
+        if let Some(name) = name {
+            if name != &layout.name {
+                return Err(Diagnostic::new(
+                    *span,
+                    format!("expected {} literal, found {name}", layout.name),
+                ));
+            }
         }
+        let fields = match fields {
+            StructLiteralFields::Named(fields) => fields.clone(),
+            StructLiteralFields::Positional(values) => {
+                if values.len() != layout.field_order.len() {
+                    return Err(Diagnostic::new(
+                        *span,
+                        format!(
+                            "{} literal expects {} fields, got {}",
+                            layout.name,
+                            layout.field_order.len(),
+                            values.len()
+                        ),
+                    ));
+                }
+                layout
+                    .field_order
+                    .iter()
+                    .zip(values)
+                    .map(|(name, value)| (name.clone(), value.clone(), value.span()))
+                    .collect()
+            }
+        };
         let mut seen = BTreeMap::new();
-        for (name, value, field_span) in fields {
+        for (name, value, field_span) in &fields {
             if seen.insert(name, *field_span).is_some() {
                 return Err(Diagnostic::new(
                     *field_span,
@@ -1446,12 +1475,18 @@ impl<'a> FunctionCompiler<'a> {
         span: Span,
     ) -> Result<Option<u32>, Diagnostic> {
         match expression {
-            Expr::StructLiteral { name, .. } => self
+            Expr::StructLiteral {
+                name: Some(name), ..
+            } => self
                 .types
                 .structs
                 .get(name)
                 .map(|one| Some(one.id))
                 .ok_or_else(|| Diagnostic::new(span, format!("unknown struct {name:?}"))),
+            Expr::StructLiteral { name: None, .. } => Err(Diagnostic::new(
+                span,
+                "anonymous struct literal requires an expected struct type",
+            )),
             Expr::Name(name, _) => Ok(match self.binding(name, span)?.type_ {
                 BindingType::Struct(struct_id) => Some(struct_id),
                 _ => None,
@@ -1755,7 +1790,7 @@ impl<'a> FunctionCompiler<'a> {
             )),
             Expr::StructLiteral { span, .. } => Err(Diagnostic::new(
                 *span,
-                "a struct literal is currently valid only inside a fixed-array initializer",
+                "a struct literal requires an expected struct type",
             )),
             Expr::Boolean(value, span) => {
                 if expected.is_some_and(|one| one != TypeName::Bool) {

@@ -67,6 +67,29 @@ def test_local_struct_copy_and_compound_assignment_have_value_semantics(tmp_path
     assert execute.run(driver.parsed(source), "calculate").value == 31
 
 
+def test_context_typed_struct_literals_support_named_and_positional_fields(tmp_path: Path) -> None:
+    """Nested aggregate initializers once repeated every nominal struct name."""
+    source = tmp_path / "aggregate_literals.mod"
+    source.write_text(
+        "struct point:\n"
+        "    x: i32\n"
+        "    y: i32\n"
+        "struct body:\n"
+        "    pos: point\n"
+        "    vel: point\n"
+        "fn calculate() -> i32:\n"
+        "    let bodies: [body; 2] = [\n"
+        "        { pos: { x: 1, y: 2 }, vel: { x: 3, y: 4 } },\n"
+        "        {{5, 6}, {7, 8}},\n"
+        "    ]\n"
+        "    return bodies[0].pos.x + bodies[0].pos.y * 10 + bodies[0].vel.x * 100 + "
+        "bodies[0].vel.y * 1000 + bodies[1].pos.x * 10000 + bodies[1].pos.y * 100000 + "
+        "bodies[1].vel.x * 1000000 + bodies[1].vel.y * 10000000\n"
+    )
+
+    assert execute.run(driver.parsed(source), "calculate").value == 87_654_321
+
+
 def test_address_of_aggregate_does_not_read_the_aggregate() -> None:
     """Addressing a local array used to attempt an impossible first-class aggregate load."""
     void = hir.Type(1, "void", hir.TypeKind.VOID, 0)
