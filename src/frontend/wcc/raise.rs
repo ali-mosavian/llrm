@@ -1361,7 +1361,11 @@ impl<'a> FunctionRaiser<'a> {
         )?;
         self.calls.push(hir::CallAbi {
             instruction,
-            order: (0..pending.parameters.len()).rev().collect(),
+            // CGAddParm arrives in WCC's physical right-to-left push order,
+            // while `operands` above has already restored source parameter
+            // order.  HIR records the callee's logical parameter order; the
+            // x86 cdecl selector owns the physical push reversal.
+            order: (0..pending.parameters.len()).collect(),
             cleanup: hir::StackCleanup::Caller,
             distance: call_distance(self.unit, target_symbol, self.location)?,
             callee: Some(callable),
@@ -1954,6 +1958,10 @@ mod tests {
             .iter()
             .find(|function| function.name == "_parity_algebra_demo")
             .unwrap();
+        assert!(
+            demo.calls.iter().all(|call| call.order == [0, 1]),
+            "WCC's reversed CGAddParm stream is already restored to source parameter order; the cdecl selector owns right-to-left pushes"
+        );
         let places = demo
             .places
             .iter()
