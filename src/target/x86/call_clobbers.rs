@@ -1,4 +1,4 @@
-//! Materialize the x86 BASIC far-call clobber contract before allocation.
+//! Materialize x86 ABI call-clobber contracts before allocation.
 //!
 //! Values live across a call must not reuse an alias the callee clobbers.
 //! In particular, an earlier B$EXSA lowering lost one half of a `LONG` by
@@ -22,6 +22,13 @@ const FAR_CALL_CLOBBERS: [X86Register; 6] = [
     X86Register::Bx,
     X86Register::Si,
     X86Register::Di,
+];
+
+const C_CALL_CLOBBERS: [X86Register; 4] = [
+    X86Register::Ax,
+    X86Register::Cx,
+    X86Register::Dx,
+    X86Register::Bx,
 ];
 
 /// Failure while materializing target-owned far-call clobbers.
@@ -63,17 +70,46 @@ impl Error for CallClobberError {}
 pub fn materialize_far_call_clobbers(
     function: &MachineFunction,
 ) -> Result<MachineFunction, CallClobberError> {
+    materialize_call_clobbers(function, |instruction| {
+        (instruction.opcode == X86Opcode::CallFar.machine_opcode())
+            .then(|| far_call_clobbers(instruction).collect::<Vec<_>>())
+    })
+}
+
+/// Adds artificial fixed definitions for C caller-saved register clobbers.
+///
+/// Both near-C and far-cdecl calls may overwrite AX, BX, CX, and DX.  A fixed
+/// result definition already owns AX or DX, so the shared materializer leaves
+/// that real result in place rather than adding a competing artificial write.
+pub fn materialize_c_call_clobbers(
+    function: &MachineFunction,
+) -> Result<MachineFunction, CallClobberError> {
+    materialize_call_clobbers(function, |instruction| {
+        matches!(
+            X86Opcode::from_machine_opcode(instruction.opcode),
+            Some(X86Opcode::CallNear | X86Opcode::CallFar)
+        )
+        .then_some(C_CALL_CLOBBERS)
+    })
+}
+
+fn materialize_call_clobbers<I>(
+    function: &MachineFunction,
+    clobbers_for: impl Fn(&MachineInstruction) -> Option<I>,
+) -> Result<MachineFunction, CallClobberError>
+where
+    I: IntoIterator<Item = X86Register>,
+{
     validate_fixed_registers(function)?;
 
     let mut next = next_virtual_register(function);
     let mut additions = Vec::new();
     for (block_index, block) in function.blocks.iter().enumerate() {
         for (instruction_index, instruction) in block.instructions.iter().enumerate() {
-            if instruction.opcode != X86Opcode::CallFar.machine_opcode() {
+            let Some(clobbers) = clobbers_for(instruction) else {
                 continue;
-            }
+            };
 
-            let clobbers = far_call_clobbers(instruction);
             let mut registers = Vec::new();
             for clobber in clobbers {
                 if has_fixed_definition_for(instruction, clobber) {
@@ -265,6 +301,19 @@ mod tests {
         .unwrap()
     }
 
+    fn near_call(operands: Vec<MachineOperand>) -> MachineInstruction {
+        MachineInstruction::new(
+            MachineInstructionId::new(3),
+            X86Opcode::CallNear.machine_opcode(),
+            operands,
+            InstructionFlags {
+                call: true,
+                ..InstructionFlags::NONE
+            },
+        )
+        .unwrap()
+    }
+
     fn fixed_definitions(function: &MachineFunction) -> Vec<X86Register> {
         function.blocks[0].instructions[0]
             .operands
@@ -316,6 +365,108 @@ mod tests {
                 X86Register::Si,
                 X86Register::Di
             ]
+        );
+    }
+
+    #[test]
+    fn c_far_i32_result_keeps_ax_dx_and_clobbers_only_bx_cx() {
+        let registers = word_registers(&[9, 10]);
+        let result = materialize_c_call_clobbers(&function(
+            far_call(vec![
+                callee("_c_function"),
+                fixed(9, OperandRole::Def, X86Register::Ax),
+                fixed(10, OperandRole::Def, X86Register::Dx),
+            ]),
+            registers,
+        ))
+        .unwrap();
+
+        assert_eq!(
+            fixed_definitions(&result),
+            vec![
+                X86Register::Ax,
+                X86Register::Dx,
+                X86Register::Cx,
+                X86Register::Bx
+            ]
+        );
+    }
+
+    #[test]
+    fn c_far_i16_result_keeps_ax_and_clobbers_bx_cx_dx() {
+        let registers = word_registers(&[9]);
+        let result = materialize_c_call_clobbers(&function(
+            far_call(vec![
+                callee("_c_function"),
+                fixed(9, OperandRole::Def, X86Register::Ax),
+            ]),
+            registers,
+        ))
+        .unwrap();
+
+        assert_eq!(
+            fixed_definitions(&result),
+            vec![
+                X86Register::Ax,
+                X86Register::Cx,
+                X86Register::Dx,
+                X86Register::Bx
+            ]
+        );
+    }
+
+    #[test]
+    fn c_near_call_gets_caller_saved_clobbers() {
+        let result =
+            materialize_c_call_clobbers(&function(near_call(vec![callee("_c_function")]), vec![]))
+                .unwrap();
+
+        assert_eq!(
+            fixed_definitions(&result),
+            vec![
+                X86Register::Ax,
+                X86Register::Cx,
+                X86Register::Dx,
+                X86Register::Bx
+            ]
+        );
+    }
+
+    #[test]
+    fn c_call_does_not_apply_the_basic_bexsa_exception() {
+        let result =
+            materialize_c_call_clobbers(&function(far_call(vec![callee("B$EXSA")]), vec![]))
+                .unwrap();
+
+        assert_eq!(
+            fixed_definitions(&result),
+            vec![
+                X86Register::Ax,
+                X86Register::Cx,
+                X86Register::Dx,
+                X86Register::Bx
+            ]
+        );
+    }
+
+    #[test]
+    fn c_materialization_leaves_input_unchanged_and_reports_exhaustion() {
+        let input = function(near_call(vec![callee("_c_function")]), vec![]);
+        let baseline = input.clone();
+        let first = materialize_c_call_clobbers(&input).unwrap();
+        assert_eq!(input, baseline);
+        assert_eq!(materialize_c_call_clobbers(&first).unwrap(), first);
+
+        let exhausted = function(
+            far_call(vec![callee("_c_function")]),
+            vec![VirtualRegister {
+                id: VirtualRegisterId::new(u32::MAX),
+                class: X86RegisterClass::Word.machine_class(),
+            }],
+        );
+        assert_eq!(
+            materialize_c_call_clobbers(&exhausted),
+            Err(CallClobberError::IdExhausted)
         );
     }
 

@@ -32,7 +32,9 @@ pub use basic_abi_expand::{BasicAbiExpansionError, expand_allocated_basic_abi};
 pub use c_abi::{
     CAbiExpansionError, CFramePlan, CFramePlanError, expand_allocated_c_abi, plan_c_frame,
 };
-pub use call_clobbers::{CallClobberError, materialize_far_call_clobbers};
+pub use call_clobbers::{
+    CallClobberError, materialize_c_call_clobbers, materialize_far_call_clobbers,
+};
 pub use encoding::{EncodeError, EncodedInstruction, encode, encode_with_fixups, encoded_size};
 pub use fixup::X86FixupKind;
 pub use frame::{BasicFramePlan, BasicFramePlanError, BasicRuntime, X86FrameLayout, plan_basic_frame};
