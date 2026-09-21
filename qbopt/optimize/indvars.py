@@ -412,13 +412,8 @@ def _rebased_equalities(
     ):
         return None
     width = source[1]
-    flags_readers = {
-        value: [op for block in body.blocks for op in block.ops if value in op.uses]
-        for block in body.blocks
-        for op in block.ops
-        for value in op.defines
-        if value.flags
-    }
+    flags = {value for block in body.blocks for op in block.ops for value in op.defines if value.flags}
+    flags_readers = ssa.use_index(body, flags)
     replacements = {}
     for block in body.blocks:
         if block.at in following:
