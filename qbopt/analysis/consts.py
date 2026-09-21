@@ -22,6 +22,7 @@ Phi inputs and memory facts meet on agreement across incoming paths.
 
 from dataclasses import replace
 from dataclasses import dataclass
+from dataclasses import field
 from contextvars import ContextVar
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -53,6 +54,50 @@ UNARY = {
 # Memory facts are stored as bytes so partial writes and control-flow
 # joins do not discard an untouched neighbor. Reads assemble their width.
 Cells = dict
+
+
+@dataclass(slots=True)
+class _MemoryQueries:
+    """Alias questions for one immutable known-value epoch.
+
+    ``cells`` walks a body to a fixed point, but its supplied ``known`` map
+    cannot change during that invocation.  Address resolution, interval
+    construction and overlap answers are therefore facts of the invocation,
+    not work to repeat for every operation on every walk.
+
+    Reference identity is deliberate.  ``MemRef`` excludes some semantic
+    alias fields from dataclass equality, while this cache must never merge
+    references merely because those fields compare equal.
+    """
+
+    known: dict[mir.Value, "Known"]
+    dgroup: frozenset[int]
+    facts: dict = field(init=False, default_factory=dict)
+    addressed: dict[int, mir.MemRef] = field(init=False, default_factory=dict)
+    overlaps: dict[tuple[tuple, int], bool] = field(init=False, default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.facts = _intervals(self.known)
+        self.addressed = {}
+        self.overlaps = {}
+
+    def resolve(self, ref: mir.MemRef) -> mir.MemRef:
+        key = id(ref)
+        if key not in self.addressed:
+            self.addressed[key] = _addressed(ref, self.known)
+        return self.addressed[key]
+
+    def may_overlap(self, where: tuple, ref: mir.MemRef) -> bool:
+        key = (where, id(ref))
+        if key not in self.overlaps:
+            self.overlaps[key] = mir.overlapping(
+                mir.MemRef(where[0], where[1], None, None),
+                ref,
+                self.dgroup,
+                known=self.facts,
+                other_known=self.facts,
+            )
+        return self.overlaps[key]
 
 
 # One MIR fixed-point transaction repeatedly asks several analyses for the
@@ -230,6 +275,7 @@ def _kills(
     assume: "set[mir.Value] | None" = None,
     allowed: "frozenset[mir.Value] | None" = None,
     edge_facts: bool = False,
+    queries: "_MemoryQueries | None" = None,
 ) -> Cells:
     """The cell facts still standing after this operation.
 
@@ -264,9 +310,9 @@ def _kills(
         if runtime.barrier(contract) or runtime.writes_caller_memory(contract):
             here = {}
     put = _put(op, known) if op.kind is mir.Kind.STORE else updated(op, known, here)
-    facts = _intervals(known)
+    queries = queries if queries is not None else _MemoryQueries(known, dgroup)
     for ref in op.stores:
-        ref = _addressed(ref, known)
+        ref = queries.resolve(ref)
         if assume is not None and (selector := _selector(ref, known, allowed)) is not None:
             # Taken on faith, and recorded so the caller can check it. A cell
             # in `here` is always a static -- `_fragments` adds no far ref --
@@ -276,9 +322,7 @@ def _kills(
         here = {
             where: fact
             for where, fact in here.items()
-            if not mir.overlapping(
-                mir.MemRef(where[0], where[1], None, None), ref, dgroup, known=facts, other_known=facts
-            )
+            if not queries.may_overlap(where, ref)
         }
         if put is not None and ref.addr is not None and ref.base is None and ref.segment is None:
             here.update(_fragments(ref, put))
@@ -319,6 +363,7 @@ def cells(
     7 even though the entry block says so three instructions earlier.
     """
     known = known if known is not None else {}
+    queries = _MemoryQueries(known, dgroup)
     if initial is None:
         initial = {}
         for ref, value in body.initial:
@@ -357,7 +402,7 @@ def cells(
             if here is None:
                 continue
             for op in block.ops:
-                here = _kills(here, op, known, dgroup, calls, assume, allowed, bool(edges))
+                here = _kills(here, op, known, dgroup, calls, assume, allowed, bool(edges), queries)
             if outof[block.at] != here:
                 outof[block.at] = here
                 changing = True
@@ -367,7 +412,7 @@ def cells(
         here = entering(block.at) or {}
         for index, op in enumerate(block.ops):
             found[(block.at, index)] = here
-            here = _kills(here, op, known, dgroup, calls, assume, allowed, bool(edges))
+            here = _kills(here, op, known, dgroup, calls, assume, allowed, bool(edges), queries)
     return found
 
 
