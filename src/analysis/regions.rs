@@ -4,14 +4,16 @@
 //! `qbopt/analysis/regions.py`: `RegionSet`, `_under`, `_meets`,
 //! `_surviving`, `_absolute`, `_region`, `_floor`, `_at`, `addressed`,
 //! `_holes`, `_spans`, `regions`, `_same_typed_start`, `typed_apart`, and
-//! `addresses`.  `may_alias` is intentionally not here: its provenance
-//! narrowing and the public MIR overlapping entry point are a separate port.
+//! `addresses`, and `may_alias`.  The public MIR overlapping entry point is
+//! deliberately separate: this module answers only the underlying alias
+//! query, exactly as Python `qbopt.analysis.regions` does.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use num_bigint::BigInt;
 
 use crate::analysis::ranges::Interval;
+use crate::model::memory::{Provenance, Slice, SliceError};
 use crate::model::mir::{MemRef, Symbol, Value};
 use crate::object::omf::module::{Addr, Space, NO_REGISTER};
 
@@ -139,6 +141,12 @@ pub(crate) struct RegionLayout {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RegionError {
     EndpointOverflow,
+    /// Python integers can describe a narrowed slice outside Rust's signed
+    /// `Slice` endpoints.  Do not discard an otherwise-applicable fact.
+    NarrowedSliceUnrepresentable,
+    /// `Slice` rejects the same invalid interval shape that Python rejects
+    /// when `memory.Slice` is constructed.
+    InvalidNarrowedSlice(SliceError),
 }
 
 fn endpoint(low: i64, width: u32) -> Result<i64, RegionError> {
@@ -391,6 +399,82 @@ pub(crate) fn typed_apart(one: &MemRef, other: &MemRef) -> bool {
     one_type.0 != other_type.0 && !same_typed_start(one, other)
 }
 
+/// Python `may_alias`'s private `narrowed` helper.
+///
+/// An indexed reference with one concrete source object and a matching range
+/// fact can name fewer bytes than its coarse provenance.  The range counts
+/// starts, so the access width is included exactly once when calculating the
+/// final byte.  BigInt retains Python arithmetic until the new `Slice` must
+/// be represented by Rust's bounded endpoints.
+fn narrowed(
+    reference: &MemRef,
+    provenance: &Provenance,
+    facts: Option<&BTreeMap<Value, Interval>>,
+) -> Result<Provenance, RegionError> {
+    let Some(base) = reference.base else {
+        return Ok(provenance.clone());
+    };
+    let Some(address) = reference.addr else {
+        return Ok(provenance.clone());
+    };
+    let Some(interval) = facts.and_then(|facts| facts.get(&base)) else {
+        return Ok(provenance.clone());
+    };
+    if interval.width != reference.base_width || provenance.slices.len() != 1 {
+        return Ok(provenance.clone());
+    }
+    let source = provenance
+        .slices
+        .first()
+        .expect("one source slice was checked above");
+    let width = i64::from(reference.width.max(1));
+    let low = BigInt::from(address.disp) + &interval.low;
+    let high = BigInt::from(address.disp) + &interval.high + 1_u8;
+    let end = &high + width - 1_i64;
+
+    if let Some(extent) = source.object.extent {
+        let extent = BigInt::from(extent);
+        if low < BigInt::from(0_u8) || low >= high || end > extent {
+            return Ok(provenance.clone());
+        }
+    }
+
+    let (Ok(low), Ok(high)) = (i64::try_from(&low), i64::try_from(&high)) else {
+        return Err(RegionError::NarrowedSliceUnrepresentable);
+    };
+    let slice = Slice::new(source.object.clone(), low, high, 1, width)
+        .map_err(RegionError::InvalidNarrowedSlice)?;
+    Ok(Provenance {
+        slices: BTreeSet::from([slice]),
+        restrict: provenance.restrict.clone(),
+    })
+}
+
+/// Python `qbopt.analysis.regions:may_alias`.
+///
+/// Each reference gets its own interval facts.  If both have provenance,
+/// their concrete object paths decide; otherwise the source-neutral region
+/// lattice supplies the conservative answer.
+pub(crate) fn may_alias(
+    one: &MemRef,
+    other: &MemRef,
+    known: Option<&BTreeMap<Value, Interval>>,
+    other_known: Option<&BTreeMap<Value, Interval>>,
+    layout: Option<&RegionLayout>,
+) -> Result<bool, RegionError> {
+    if typed_apart(one, other) {
+        return Ok(false);
+    }
+    if let (Some(one_provenance), Some(other_provenance)) = (&one.provenance, &other.provenance) {
+        return Ok(narrowed(one, one_provenance, known)?.intersects(&narrowed(
+            other,
+            other_provenance,
+            other_known,
+        )?));
+    }
+    Ok(regions(one, known, layout)?.intersects(&regions(other, other_known, layout)?))
+}
+
 /// Python `addresses`: byte-region intersection for two naked addresses.
 pub(crate) fn addresses(
     one: Option<Addr>,
@@ -432,10 +516,13 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use super::{
-        addresses, regions, typed_apart, Origin, Region, RegionError, RegionLayout, RegionPart,
-        RegionSet, Span,
+        addresses, may_alias, regions, typed_apart, Origin, Region, RegionError, RegionLayout,
+        RegionPart, RegionSet, Span,
     };
     use crate::analysis::ranges::Interval;
+    use crate::model::memory::{
+        MemoryKind, MemoryObject, ObjectIdentity, ObjectTag, Provenance, RestrictRoot, SliceError,
+    };
     use crate::model::mir::{MemRef, Symbol, Value};
     use crate::object::omf::module::{Addr, Space, NO_REGISTER};
     use crate::support::PhysicalRegister;
@@ -452,6 +539,18 @@ mod tests {
 
     fn reference(address: Addr, width: u32) -> MemRef {
         MemRef::new(Some(address), width)
+    }
+
+    fn object(index: u32, extent: Option<u32>) -> MemoryObject {
+        MemoryObject {
+            kind: MemoryKind::Global,
+            identity: Some(ObjectIdentity::TaggedIndex {
+                tag: ObjectTag::Seg,
+                index,
+            }),
+            generation: 0,
+            extent,
+        }
     }
 
     #[test]
@@ -565,6 +664,11 @@ mod tests {
         assert!(regions(&shared, None, Some(&layout))
             .unwrap()
             .intersects(&regions(&external, None, Some(&layout)).unwrap()));
+
+        // `may_alias` has no provenance path here, and must therefore retain
+        // the same owned/shared layout answer from `regions`.
+        assert!(!may_alias(&owned, &external, None, None, Some(&layout)).unwrap());
+        assert!(may_alias(&shared, &external, None, None, Some(&layout)).unwrap());
     }
 
     #[test]
@@ -652,6 +756,166 @@ mod tests {
             &pointer_with_address,
             &pointer_without_address
         ));
+    }
+
+    #[test]
+    fn provenance_alias_uses_canonical_subobjects_and_byte_ranges() {
+        // `tests/test_mir_alias.py::test_canonical_subobjects_use_object_identity_and_byte_ranges`:
+        // fields of one object, and equal offsets in distinct objects, are disjoint.
+        let first = object(1, Some(8));
+        let second = object(2, Some(8));
+        let mut a = MemRef::new(None, 4);
+        a.provenance =
+            Some(Provenance::one_with_slice(first.clone(), 0, 4, 1, 1, BTreeSet::new()).unwrap());
+        let mut b = MemRef::new(None, 4);
+        b.provenance =
+            Some(Provenance::one_with_slice(first, 4, 8, 1, 1, BTreeSet::new()).unwrap());
+        let mut c = MemRef::new(None, 4);
+        c.provenance =
+            Some(Provenance::one_with_slice(second, 0, 4, 1, 1, BTreeSet::new()).unwrap());
+
+        assert!(!may_alias(&a, &b, None, None, None).unwrap());
+        assert!(!may_alias(&a, &c, None, None, None).unwrap());
+        assert!(may_alias(&a, &a, None, None, None).unwrap());
+    }
+
+    #[test]
+    fn provenance_alias_respects_strides_restrict_roots_and_typed_union_starts() {
+        // Directly ports `test_strided_ranges_prove_interleaved_arrays_disjoint`
+        // and `test_restrict_roots_and_tbaa_share_the_alias_query`.
+        let lanes = object(4, Some(64));
+        let mut even = MemRef::new(None, 1);
+        even.provenance =
+            Some(Provenance::one_with_slice(lanes.clone(), 0, 64, 2, 1, BTreeSet::new()).unwrap());
+        let mut odd = MemRef::new(None, 1);
+        odd.provenance =
+            Some(Provenance::one_with_slice(lanes, 1, 64, 2, 1, BTreeSet::new()).unwrap());
+        assert!(!may_alias(&even, &odd, None, None, None).unwrap());
+
+        let unknown = MemoryObject::new(MemoryKind::Unknown);
+        let mut left = MemRef::new(None, 4);
+        left.typed = Some(("int4".into(), false));
+        left.provenance = Some(
+            Provenance::one_with_slice(
+                unknown.clone(),
+                super::FLOOR,
+                super::CEILING,
+                1,
+                1,
+                BTreeSet::from([RestrictRoot::Node { node: 1 }]),
+            )
+            .unwrap(),
+        );
+        let mut right = MemRef::new(None, 4);
+        right.typed = Some(("float4".into(), false));
+        right.provenance = Some(
+            Provenance::one_with_slice(
+                unknown.clone(),
+                super::FLOOR,
+                super::CEILING,
+                1,
+                1,
+                BTreeSet::from([RestrictRoot::Node { node: 2 }]),
+            )
+            .unwrap(),
+        );
+        assert!(!may_alias(&left, &right, None, None, None).unwrap());
+
+        // With matching scalar types, only the disjoint restrict roots make
+        // this pair disjoint, so the provenance path is exercised directly.
+        let mut restrict_only = right.clone();
+        restrict_only.typed = Some(("int4".into(), false));
+        assert!(!may_alias(&left, &restrict_only, None, None, None).unwrap());
+
+        // Removing the roots leaves incompatible indirect scalar views apart.
+        let mut typed_only = right.clone();
+        typed_only.provenance = Some(Provenance::one(unknown));
+        assert!(!may_alias(&left, &typed_only, None, None, None).unwrap());
+
+        let union_start = address(Space::Frame, -8, 0);
+        let mut union_int = reference(union_start, 4);
+        union_int.typed = Some(("int4".into(), false));
+        let mut union_float = reference(union_start, 4);
+        union_float.typed = Some(("float4".into(), false));
+        assert!(may_alias(&union_int, &union_float, None, None, None).unwrap());
+    }
+
+    #[test]
+    fn index_interval_narrows_once_and_refuses_out_of_extent_accesses() {
+        // `tests/test_mir_alias.py::test_index_interval_counts_an_access_width_once`:
+        // one dword index start touches bytes 0..4, not 0..8.
+        let index = Value::new(1, 1);
+        let indexed_object = object(3, Some(16));
+        let mut indexed = reference(address(Space::Segment, 0, 3), 4);
+        indexed.base = Some(index);
+        indexed.base_width = 2;
+        indexed.provenance = Some(Provenance::one(indexed_object.clone()));
+        let mut next_field = MemRef::new(None, 4);
+        next_field.provenance = Some(
+            Provenance::one_with_slice(indexed_object.clone(), 4, 8, 1, 1, BTreeSet::new())
+                .unwrap(),
+        );
+        let known = BTreeMap::from([(
+            index,
+            Interval {
+                low: 0.into(),
+                high: 0.into(),
+                width: 2,
+            },
+        )]);
+        assert!(!may_alias(&indexed, &next_field, Some(&known), None, None).unwrap());
+
+        // A fact that would reach outside a bounded object is not used to
+        // narrow it.  The original whole-object provenance remains conservative.
+        let bounded = object(5, Some(4));
+        indexed.provenance = Some(Provenance::one(bounded.clone()));
+        next_field.provenance =
+            Some(Provenance::one_with_slice(bounded, 3, 4, 1, 1, BTreeSet::new()).unwrap());
+        let outside = BTreeMap::from([(
+            index,
+            Interval {
+                low: 0.into(),
+                high: 1.into(),
+                width: 2,
+            },
+        )]);
+        assert!(may_alias(&indexed, &next_field, Some(&outside), None, None).unwrap());
+    }
+
+    #[test]
+    fn narrowing_reports_invalid_and_unrepresentable_python_slices() {
+        let index = Value::new(1, 1);
+        let mut indexed = reference(address(Space::Segment, 0, 3), 1);
+        indexed.base = Some(index);
+        indexed.base_width = 2;
+        indexed.provenance = Some(Provenance::one(object(3, None)));
+        let other = indexed.clone();
+
+        let invalid = BTreeMap::from([(
+            index,
+            Interval {
+                low: 2.into(),
+                high: 1.into(),
+                width: 2,
+            },
+        )]);
+        assert_eq!(
+            may_alias(&indexed, &other, Some(&invalid), None, None),
+            Err(RegionError::InvalidNarrowedSlice(SliceError::Empty))
+        );
+
+        let too_large = BTreeMap::from([(
+            index,
+            Interval {
+                low: i64::MAX.into(),
+                high: i64::MAX.into(),
+                width: 2,
+            },
+        )]);
+        assert_eq!(
+            may_alias(&indexed, &other, Some(&too_large), None, None),
+            Err(RegionError::NarrowedSliceUnrepresentable)
+        );
     }
 
     #[test]
