@@ -866,3 +866,48 @@ statements, now reaches OMF; the full source still stops at relocatable QB data.
 Metadata, statement-table, comparison, object-envelope, and runtime checks in
 this slice consumed under 40 seconds in total, below ten percent of elapsed
 implementation time.  No broad suite, qrender, or optimization pass ran.
+
+The initialized-data boundary now retains the Python frontend's complete
+symbolic facts instead of recovering them from names at object emission.
+Portable IR globals carry their own storage address space in `.qir` version 5;
+Machine IR uses typed data-object IDs and carries ordered `(offset, target,
+addend, width, address-space)` relocations in `.qmir` version 6.  X86 selection
+preserves those fields exactly.  MC maps near offsets, selector words, and far
+16:16 pointers to distinct target fixup kinds, and OMF emits selector words as
+zero-initialized, target-framed `BASE` relocations.  Unsupported width/space
+pairs and nonzero selector addends are explicit refusals.  Primary review
+inspected both delegated diffs, added the selector-addend regression, and
+independently reproduced the selection, text round-trip, verifier, and OMF
+boundaries.  Delegated and primary focused verification consumed under 35
+seconds; no broad suite ran.
+
+The next adjacent scalar boundary was the existing BASIC runtime's near
+string-descriptor argument, not a new calling convention.  Far-Pascal now
+accepts that standard 16-bit near pointer, materializes its address with
+`lea`, pushes it in source order, and leaves stack cleanup to the callee.  Its
+focused `B$PSSD` regression passed in 6.06 seconds.  The complete existing
+`bench/parity/scalar.bas`, including both print statements and the function
+body, now reaches verified Machine IR.
+
+The next slice ported Python `_data()` and the relevant `_object_data()` and
+BASIC-envelope behavior rather than inventing a new layout.  The QB MC adapter
+preserves source order while grouping initialized objects into `BC_DATA`,
+`BC_CN`, and VBDOS `FSL_CONST`, including the exact six-byte `BC_DATA` prefix.
+The object adapter retains those bytes and relocations while assigning the
+measured BASIC segment order, classes, combines, alignments, DGROUP frames, and
+private far-data segments.  The later array-descriptor far-pointer-to-DGROUP
+form remains an explicit refusal; it is not approximated by an ordinary far
+pointer.
+
+`llrm-qb` now compiles `bench/parity/scalar.bas` through Rust to OMF.  VBDOS
+LINK accepts that object, and the linked program completes under DOSBox with
+the checked-in `RESULT= 1789` and `DONE` output.  Primary review inspected the
+complete delegated diffs, corrected the generic `.text` interface mismatch,
+ran the two focused data/object tests in 5.52 seconds of parallel wall time,
+and reproduced object emission in 4.31 seconds.  The delegated end-to-end gate
+took 12.80 seconds.  An independent Terra source-and-object audit found no
+scalar data-layout discrepancy and identified the intentionally refused array
+descriptor boundary above.  A commit hook also spent 17.4 seconds exposing
+pre-existing repository-wide Python type and compatibility failures; it was
+not rerun.  Total verification remained below ten percent of elapsed work, and
+no qrender or optimization suite ran.
