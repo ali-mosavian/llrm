@@ -19,6 +19,7 @@ def test_nbody_stage_dumps_cover_every_implemented_boundary(tmp_path: Path) -> N
         "02-syntax.txt",
         "03-hir.json",
         "04-nbody-nbody-mir.txt",
+        "05-nbody-main-mir.txt",
         "README.txt",
     ]
     assert output.joinpath("00-input.mod").read_bytes() == NBODY.read_bytes()

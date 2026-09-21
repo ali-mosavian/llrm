@@ -231,7 +231,7 @@ fn function_json(out: &mut String, function: &Function) {
         comma(out, index);
         write!(
             out,
-            "{{\"callee\":{},\"cleanup\":\"caller\",\"distance\":\"near\",\"instruction\":{},\"order\":[",
+            "{{\"callee\":{},\"cleanup\":\"caller\",\"distance\":\"far\",\"instruction\":{},\"order\":[",
             call.callee, call.instruction
         )
         .unwrap();

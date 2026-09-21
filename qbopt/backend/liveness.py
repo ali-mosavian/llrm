@@ -8,6 +8,7 @@ it again.
 """
 
 from iced_x86 import Register
+from iced_x86 import Register_
 
 from qbopt.model import ir
 from qbopt.model import lir
@@ -76,19 +77,23 @@ def _declared(one) -> "tuple[frozenset, frozenset] | None":
     callee never names look live -- which kept every value a phi copies alive
     across the whole loop.
     """
+    from qbopt.backend import target
     from qbopt.backend.peephole import _lanes
     from qbopt.backend.peephole import _flag_lanes
+
+    def held_lanes(held: ir.Held, register: Register_) -> set[tuple[Register_, int]]:
+        return _lanes(target.named(register, held.width))
 
     if one.what is not None and one.what.op is ir.Operation.RETURN and getattr(one.op, "reads_complete", False):
         # Nothing runs after it: it reads explicit results and only the
         # architectural state its generated epilogue itself needs.
-        reads = {lane for held, register in one.requires for lane in _lanes(register)}
+        reads = {lane for held, register in one.requires for lane in held_lanes(held, register)}
         for register in _RETURN_STATE:
             reads |= _lanes(register)
         return frozenset(reads), _universe() - reads
     if not one.clobbers or one.symbol is True:
         return None
-    reads = {lane for held, register in one.requires for lane in _lanes(register)}
+    reads = {lane for held, register in one.requires for lane in held_lanes(held, register)}
     # A transfer's decoded effects are unavailable, but its explicit operands
     # are still real reads. In particular an indirect `call bx` reads BX
     # before the calling convention clobbers it.
@@ -101,7 +106,7 @@ def _declared(one) -> "tuple[frozenset, frozenset] | None":
             selector = getattr(source, "selector", None)
             if isinstance(selector, ir.Reg):
                 reads |= _lanes(selector.register)
-    writes = {lane for held, register in one.delivers for lane in _lanes(register)}
+    writes = {lane for held, register in one.delivers for lane in held_lanes(held, register)}
     for register in one.clobbers:
         writes |= _lanes(register)
     for register in one.clobbers_high:

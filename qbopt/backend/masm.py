@@ -407,7 +407,7 @@ def _memory(cell: ir.Mem, names: dict) -> str:
     disp = _signed(address.disp)
     match address.space:
         case Space.FRAME:
-            return f"{size}[bp{disp}]"
+            return f"{size}[{registers or 'bp'}{disp}]"
         case Space.SEGMENT | Space.EXTERNAL:
             symbol = names[(address.space, address.index)]
             return f"{size}{symbol}{disp}" + (f"[{registers}]" if registers else "")

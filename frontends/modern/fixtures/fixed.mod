@@ -13,3 +13,7 @@ fn fixed_literals() -> fixed16:
     print(value)
     print(f"fixed={value}")
     return value
+
+fn main() -> i16:
+    fixed_literals()
+    return 0

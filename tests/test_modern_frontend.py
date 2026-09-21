@@ -5,13 +5,17 @@ import pytest
 
 from qbopt import hir
 from qbopt.model import mir
+from qbopt.backend import lower_int64
 from qbopt.frontend.modern import driver
+from qbopt.frontend.qb import physicalize
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "frontends" / "modern" / "fixtures" / "control.mod"
 PRIMITIVES = ROOT / "frontends" / "modern" / "fixtures" / "primitives.mod"
 NBODY = ROOT / "frontends" / "modern" / "fixtures" / "nbody.mod"
 FIXED = ROOT / "frontends" / "modern" / "fixtures" / "fixed.mod"
+STARTUP = ROOT / "runtime" / "modern" / "start.asm"
+RUNTIME = ROOT / "runtime" / "modern" / "rt.c"
 
 
 @pytest.fixture(scope="module")
@@ -24,6 +28,17 @@ def test_frontend_document_crosses_the_strict_common_hir_boundary(program: hir.P
     assert program.runtime is hir.RuntimeProfile.FREESTANDING
     assert [function.name for function in program.modules[0].functions] == ["step", "count"]
     assert hir.decode(hir.encode(program)) == program
+
+
+def test_dos_bootstrap_enters_the_runtime_before_language_main() -> None:
+    """The assembly entry must not bypass runtime initialization policy."""
+    startup = STARTUP.read_text()
+    runtime = RUNTIME.read_text()
+    assert "extrn _start:far" in startup
+    assert "call far ptr _start" in startup
+    assert "_main" not in startup
+    assert "int start(void)" in runtime
+    assert "return main();" in runtime
 
 
 def test_frontend_lowers_control_flow_and_calls_to_existing_mir(program: hir.Program) -> None:
@@ -147,6 +162,59 @@ def test_fixed_point_types_scale_literals_and_lower_through_wide_integer_mir() -
     assert {mir.Kind.SIGN_EXTEND, mir.Kind.SHL, mir.Kind.DIVMOD} <= quotient_kinds
 
 
+def test_narrow_view_of_legalized_fixed_product_uses_its_low_dword() -> None:
+    """Native nbody printed every initial position unchanged after one step.
+
+    Fixed multiplication computes an i64 product, shifts that wide value, and
+    then takes its narrow i32 view.  Int64 legalization must redirect that
+    view to the low dword it just made, rather than leave a use of the removed
+    wide value for lowering to interpret as an unrelated live-in.
+    """
+    program = driver.parsed(NBODY)
+    function = next(one for one in program.modules[0].functions if one.name == "nbody")
+    lowered = next(one for one in hir.lower(program) if one.name == "nbody.nbody")
+    physical = physicalize(program, function, lowered)
+
+    source_shift = next(
+        operation
+        for block in physical.lowered.body.blocks
+        for operation in block.ops
+        if operation.kind is mir.Kind.SAR
+        and isinstance(operation.args[0], mir.Held)
+        and operation.args[0].width == 8
+        and operation.results[0].width == 8
+    )
+    narrow = next(
+        operation
+        for block in physical.lowered.body.blocks
+        for operation in block.ops
+        if operation.kind is mir.Kind.COPY
+        and isinstance(operation.args[0], mir.Held)
+        and operation.args[0].value == source_shift.results[0].value
+        and operation.args[0].width == 4
+    )
+
+    legalized = lower_int64.expanded(
+        physical.lowered.body,
+        physical.calls,
+        physical.contracts,
+        physical.hints,
+    ).body
+    low_result = next(
+        operation.results[0]
+        for block in legalized.blocks
+        for operation in block.ops
+        if operation.at == source_shift.at and operation.kind is mir.Kind.OR
+    )
+    legalized_narrow = next(
+        operation
+        for block in legalized.blocks
+        for operation in block.ops
+        if operation.at == narrow.at and operation.kind is mir.Kind.COPY
+    )
+    assert legalized_narrow.args == (low_result,)
+
+
 def test_nbody_arrays_strings_and_print_cross_hir_and_verify_in_mir() -> None:
     program = driver.parsed(NBODY)
     module = program.modules[0]
@@ -177,8 +245,11 @@ def test_nbody_arrays_strings_and_print_cross_hir_and_verify_in_mir() -> None:
     assert callables["__print_fixed_i32"].defined is False
     assert callables["__print_fixed_i32"].parameter_types == (types["i32"].id, types["u8"].id)
     assert callables["__print_newline"].defined is False
+    assert all(call.distance is hir.CallDistance.FAR for call in module.functions[0].calls)
+    fixed_id = callables["__print_fixed_i32"].id
+    assert all(call.order == (1, 0) for call in module.functions[0].calls if call.callee == fixed_id)
 
-    [lowered] = hir.lower(program)
+    lowered = next(one for one in hir.lower(program) if one.name == "nbody.nbody")
     assert not mir.verify(lowered.body)
     kinds = {operation.kind for block in lowered.body.blocks for operation in block.ops}
     assert {

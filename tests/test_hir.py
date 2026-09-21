@@ -1024,7 +1024,10 @@ def test_qb_float_function_uses_hidden_near_result_pointer() -> None:
     assert len(function.parameters) == 2
 
     listing = masm.text(qb_compile.assembled(source))
-    assert re.search(r"lea ax, ([^\n]+)\n    push dword ptr ([^\n]+)\n    push ax\n    call far ptr ADDHALF", listing)
+    assert re.search(
+        r"push dword ptr ([^\n]+)\n    push offset ([^\n]+)\n    call far ptr ADDHALF",
+        listing,
+    )
     assert "fstp dword ptr [bx]" in listing
     assert "mov ax, bx\n    call far ptr B$EXSA\n    pop bp\n    retf" in listing
 

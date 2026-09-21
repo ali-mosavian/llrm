@@ -43,3 +43,7 @@ fn nbody(step_count: i32) -> scalar:
         print(f"VY={current.vel.y}")
     print("DONE")
     return bodies[0].pos.x + bodies[1].pos.y + bodies[2].pos.x + bodies[3].pos.y
+
+fn main() -> i16:
+    nbody(1)
+    return 0

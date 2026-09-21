@@ -112,6 +112,36 @@ def test_dword_constant_stays_wide_when_any_upper_lane_is_live() -> None:
     assert peephole.narrowed_moves(body) == body
 
 
+def test_dword_fixed_register_argument_keeps_all_value_lanes_live() -> None:
+    """Native nbody left its last Y velocity undamped: the inline signed
+    divider received ``mov bx,8192`` with stale upper EBX bits.
+
+    ABI constraints spell a conventional fixed register such as BX together
+    with the actual value width.  Physical liveness must read the dword named
+    by that pair; the register spelling alone is not permission to shorten
+    its defining move to a word.
+    """
+    source = lir.Insn(
+        1,
+        (1, 1),
+        ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg(Register.EBX, 4),), (ir.Imm(8192, 4),)),
+        (1,),
+        (),
+    )
+    call = lir.Insn(
+        2,
+        (2, 2),
+        ir.Semantics(ir.Operation.CALL, "call", (), ()),
+        (),
+        (1,),
+        clobbers=frozenset({Register.EAX, Register.EBX, Register.ECX, Register.EDX}),
+        requires=((ir.Held(1, 4), Register.BX),),
+    )
+    body = lir.LirBody("wide-fixed-argument", 1, (lir.LirBlock(1, (source, call), ()),), {}, {})
+
+    assert peephole.narrowed_moves(body) == body
+
+
 def test_register_high_extract_uses_one_double_shift_for_dx_ax_return() -> None:
     """Frontend-parity ALGEBRA returned its high word with push/pop/pop.
 

@@ -32,6 +32,7 @@ from qbopt.model.floating import Format
 from qbopt.backend import cpu as targets
 from qbopt.objectfile.module import Addr
 from qbopt.model.floating import Rounding
+from qbopt.objectfile.module import Space
 
 
 def operand(arg: mir.Arg) -> ir.Loc:
@@ -236,6 +237,26 @@ def semantics(op: mir.Op, was: ir.Semantics | None = None, place=None) -> ir.Sem
         located = place or _place
         sources = tuple(located(one, (), i) for i, one in enumerate(op.args)) if _indirect_call(op) else ()
         return ir.Semantics(op.op, op.name, (), sources, indirect=op.indirect)
+    if (
+        op.kind is mir.Kind.ADDRESS
+        and len(op.args) == len(op.results) == 1
+        and isinstance(op.args[0], mir.Cell)
+        and op.args[0].ref.addr is not None
+        and op.args[0].ref.addr.space in (Space.SEGMENT, Space.EXTERNAL)
+        and op.args[0].ref.base is None
+        and isinstance(op.results[0], mir.Held)
+        and op.results[0].width == 2
+    ):
+        # A named data object's near address is its relocated offset. LEA can
+        # perform address arithmetic, but it cannot carry the grouped-data
+        # offset fixup that a real-mode object needs here; MOV imm16 can.
+        placed = place or _place
+        return ir.Semantics(
+            ir.Operation.MOVE,
+            "mov",
+            (placed(op.results[0], was.dests if was else (), 0),),
+            (ir.Imm(0, 2, op.args[0].ref.addr),),
+        )
     if not op.args and not op.results and op.raised is None and op.kind is not mir.Kind.BRANCH:
         return None  # nothing to build one from
     # A value resolves to the register the original instruction had in the

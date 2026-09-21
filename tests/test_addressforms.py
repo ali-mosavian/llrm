@@ -513,6 +513,59 @@ def test_indexed_frame_array_uses_bp_as_the_encoded_base() -> None:
     assert indexed.index == ir.Held(index.id, 2)
 
 
+def test_selected_indexed_frame_cell_keeps_bp_and_its_dynamic_index() -> None:
+    """Modern nbody's six bodies all collapsed onto element zero at final selection.
+
+    MIR still carried the dynamic byte offset, but the frame encoding retained
+    only BP and `-96`, producing `[bp-96]` instead of `[bp+si-96]`.
+    """
+    cell = ir.Mem(
+        Addr(Space.FRAME, -96),
+        4,
+        through=Register.BP,
+        base=ir.Held(1, 2),
+        index_through=Register.SI,
+    )
+
+    made = select.move_from(Register.EAX, cell)
+
+    assert made is not None
+    instruction = decode(made.code, 0)
+    assert instruction is not None
+    assert instruction.insn.memory_base == Register.BP
+    assert instruction.insn.memory_index == Register.SI
+    assert instruction.insn.memory_displacement & 65535 == (-96) & 65535
+
+
+def test_named_data_address_is_a_relocatable_immediate() -> None:
+    """Modern nbody's first string address could not be written to OMF.
+
+    A segment symbol is an offset value, so ``mov ax, offset label`` carries
+    the relocation in an immediate.  Spelling it ``lea ax, label`` leaves the
+    fresh object writer looking for a displacement field the instruction
+    cannot encode in real-mode's grouped data model.
+    """
+    result = mir.Value(2, 1)
+    address = Addr(Space.SEGMENT, 4, 7)
+    operation = mir.Op(
+        1,
+        ir.Operation.ADDRESS,
+        "lea",
+        (result,),
+        (),
+        kind=mir.Kind.ADDRESS,
+        args=(mir.Cell(mir.MemRef(address, 2, space=Space.SEGMENT)),),
+        results=(mir.Held(result, 2),),
+    )
+
+    lowered = lower.semantics(operation, place=lower.as_a_value)
+
+    assert lowered is not None
+    assert lowered.op is ir.Operation.MOVE
+    assert lowered.name == "mov"
+    assert lowered.sources == (ir.Imm(0, 2, address),)
+
+
 def test_constant_frame_array_address_folds_to_a_displacement() -> None:
     """Unrolled C nbody spilled twelve ``&local[0] + constant`` addresses.
 

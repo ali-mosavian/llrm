@@ -2236,7 +2236,7 @@ impl<'a> FunctionCompiler<'a> {
         );
         self.calls.push(hir::CallSite {
             instruction,
-            order: (0..arguments.len() as u32).collect(),
+            order: (0..arguments.len() as u32).rev().collect(),
             callee: signature.id,
         });
         Ok(TypedOperand {
@@ -2345,7 +2345,7 @@ impl<'a> FunctionCompiler<'a> {
         let instruction = self.emit("call", Vec::new(), operands, Some(name.into()));
         self.calls.push(hir::CallSite {
             instruction,
-            order: (0..count as u32).collect(),
+            order: (0..count as u32).rev().collect(),
             callee: *self
                 .builtin_ids
                 .get(name)

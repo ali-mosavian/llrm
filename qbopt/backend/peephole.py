@@ -1167,8 +1167,11 @@ def _register_effects(one, *, may_write=False, flags: bool = False):
         if encoded is None:
             return None
         instructions = tuple(Decoder(16, encoded.code))
-    reads = {lane for _, register in one.requires for lane in _lanes(register)}
-    writes = {lane for _, register in one.delivers for lane in _lanes(register)}
+    # A fixed-register ABI names the conventional register (AX, BX, ...)
+    # separately from the value it carries.  The Held width is authoritative:
+    # a dword in the BX slot occupies EBX, including its upper lanes.
+    reads = {lane for held, register in one.requires for lane in _lanes(target.named(register, held.width))}
+    writes = {lane for held, register in one.delivers for lane in _lanes(target.named(register, held.width))}
     for insn in instructions:
         if insn.is_invalid or insn.flow_control != FlowControl.NEXT:
             return None
