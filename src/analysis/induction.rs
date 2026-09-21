@@ -1,13 +1,16 @@
 //! Control-only facts for Python MIR induction analysis.
 //!
 //! Direct port of `qbopt.analysis.induction` loop-shape and affine-recurrence
-//! facts: `LoopShape`, `Affine`, `canonical`, `invariant`, `test_only`,
-//! `basics`, `_copied`, and `_stepped`.  This module deliberately does not
-//! invent a portable-IR loop abstraction: Python MIR is the current stage
-//! contract.
+//! facts: `LoopShape`, `Affine`, `AffineMap`, `canonical`, `invariant`,
+//! `test_only`, `basics`, `_copied`, `_stepped`, and `relation`.  This module
+//! deliberately does not invent a portable-IR loop abstraction: Python MIR
+//! is the current stage contract.
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use num_bigint::BigInt;
+
+use super::constants::{Known, masked};
 use crate::model::mir::{Arg, Const, Held, Kind, MirBody, Op, OrderedMap};
 use crate::model::mir_loops::{Loop, predecessors};
 
@@ -39,6 +42,13 @@ impl AffineOperand {
             Self::Const(constant) => constant.width,
         }
     }
+
+    fn as_arg(&self) -> Arg {
+        match self {
+            Self::Held(held) => Arg::Held(*held),
+            Self::Const(constant) => Arg::Const(constant.clone()),
+        }
+    }
 }
 
 /// `start + step * iteration`, in the loop this was asked about.
@@ -50,6 +60,125 @@ pub(crate) struct Affine {
     pub start: AffineOperand,
     pub step: AffineOperand,
     pub header: i64,
+}
+
+/// A width-limited `scale * source + offset` relation.
+///
+/// Direct port of `qbopt.analysis.induction:AffineMap`.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct AffineMap {
+    pub scale: BigInt,
+    pub offset: BigInt,
+    pub width: u32,
+}
+
+impl AffineMap {
+    /// Python's `AffineMap.period` property.
+    pub(crate) fn period(&self) -> BigInt {
+        let modulus = BigInt::from(1_u8) << (self.width * 8);
+        let scale = if self.scale < BigInt::from(0_u8) {
+            -&self.scale
+        } else {
+            self.scale.clone()
+        };
+        modulus.clone() / gcd(scale, modulus)
+    }
+
+    /// Python's `AffineMap.injective(low, high)`.
+    pub(crate) fn injective(&self, low: &BigInt, high: &BigInt) -> bool {
+        self.scale != BigInt::from(0_u8) && high - low < self.period()
+    }
+}
+
+/// Python's `relation(source, target, facts)`.
+pub(crate) fn relation(
+    source: &Affine,
+    target: &Affine,
+    facts: &BTreeMap<crate::model::mir::Value, Known>,
+) -> Option<AffineMap> {
+    let width = source.start.width();
+    if target.start.width() != width {
+        return None;
+    }
+    let source_start = _signed(&source.start.as_arg(), facts, width)?;
+    let source_step = _signed(&source.step.as_arg(), facts, width)?;
+    let target_start = _signed(&target.start.as_arg(), facts, width)?;
+    let target_step = _signed(&target.step.as_arg(), facts, width)?;
+    if source_step == BigInt::from(0_u8) || (&target_step % &source_step) != BigInt::from(0_u8) {
+        return None;
+    }
+    // Divisibility was established immediately above, so Rust's truncating
+    // division has the same result as Python's floor division here.
+    let scale = &target_step / &source_step;
+    if scale == BigInt::from(0_u8) {
+        return None;
+    }
+    let offset = masked(&(target_start - &scale * source_start), width);
+    Some(AffineMap {
+        scale,
+        offset,
+        width,
+    })
+}
+
+/// Python's `_constant(arg, facts, width)`.
+fn _constant(
+    argument: &Arg,
+    facts: &BTreeMap<crate::model::mir::Value, Known>,
+    width: u32,
+) -> Option<BigInt> {
+    let argument_width = match argument {
+        Arg::Held(held) => held.width,
+        Arg::Const(constant) => constant.width,
+        _ => return None,
+    };
+    if argument_width != width {
+        return None;
+    }
+    let (number, fact_width) = match argument {
+        Arg::Held(held) => {
+            let fact = facts.get(&held.value)?;
+            (&fact.n, fact.width)
+        }
+        Arg::Const(constant) => (&constant.n, constant.width),
+        _ => return None,
+    };
+    if fact_width < width {
+        return None;
+    }
+    Some(masked(number, width))
+}
+
+/// Python's `_as_signed(value, width)`.
+fn _as_signed(value: &BigInt, width: u32) -> BigInt {
+    let sign = BigInt::from(1_u8) << (width * 8 - 1);
+    (value ^ &sign) - sign
+}
+
+/// Python's `_signed(arg, facts, width)`.
+fn _signed(
+    argument: &Arg,
+    facts: &BTreeMap<crate::model::mir::Value, Known>,
+    width: u32,
+) -> Option<BigInt> {
+    let argument_width = match argument {
+        Arg::Held(held) => held.width,
+        Arg::Const(constant) => constant.width,
+        _ => return None,
+    };
+    if argument_width != width {
+        return None;
+    }
+    _constant(argument, facts, width).map(|value| _as_signed(&value, width))
+}
+
+fn gcd(mut one: BigInt, mut other: BigInt) -> BigInt {
+    while other != BigInt::from(0_u8) {
+        let remainder = one % &other;
+        one = other;
+        other = remainder;
+    }
+    one
 }
 
 /// Python's `canonical(body, loop)`.
@@ -235,7 +364,12 @@ pub(crate) fn basics(body: &MirBody, loop_: &Loop) -> OrderedMap<u32, Affine> {
             let width = results[0].width;
             widths.insert(width);
             let root = _copied(results[0], &made);
-            let step = _stepped(made.get(&root.value.id).copied(), phi.result.id, &still, &made);
+            let step = _stepped(
+                made.get(&root.value.id).copied(),
+                phi.result.id,
+                &still,
+                &made,
+            );
             steps.push(step.filter(|step| step.width() == width));
         }
         if widths.len() == 1
@@ -319,16 +453,20 @@ fn _stepped(
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
+    use num_bigint::BigInt;
+
+    use crate::analysis::constants::{Known, masked};
     use crate::codegen::machine::Operation;
     use crate::model::floating::{Format, Precision, Rounding, Semantics as FloatingSemantics};
     use crate::model::mir::{
-        Arg, Const, FloatingOrigin, Held, Kind, MemRef, MirBlock, MirBody, Op, OpCode, Phi,
+        Arg, Cell, Const, FloatingOrigin, Held, Kind, MemRef, MirBlock, MirBody, Op, OpCode, Phi,
         Value,
     };
     use crate::model::mir_loops::Loop;
 
     use super::{
-        _copied, AffineOperand, LoopShape, basics, canonical, invariant, test_only,
+        _as_signed, _constant, _copied, _signed, Affine, AffineMap, AffineOperand, LoopShape,
+        basics, canonical, invariant, relation, test_only,
     };
 
     fn value(id: u32, at: i64) -> Value {
@@ -383,7 +521,10 @@ mod tests {
             ..value(14, 1)
         };
         let mut increment = op(1, Kind::Increment, vec![following], vec![counter]);
-        increment.args = vec![Arg::Held(Held { value: counter, width: 2 })];
+        increment.args = vec![Arg::Held(Held {
+            value: counter,
+            width: 2,
+        })];
         increment.results = vec![Arg::Held(Held {
             value: following,
             width: 2,
@@ -625,7 +766,10 @@ mod tests {
         one.args.push(Arg::Const(Const::new(1, 2)));
         cases.push(one);
         let mut one = empty.clone();
-        one.results.push(Arg::Held(Held { value: value(2, 0), width: 2 }));
+        one.results.push(Arg::Held(Held {
+            value: value(2, 0),
+            width: 2,
+        }));
         cases.push(one);
         let mut one = empty.clone();
         one.loads.push(MemRef::new(None, 2));
@@ -655,7 +799,10 @@ mod tests {
         one.kind = Kind::Add;
         cases.push(one);
         let mut one = flags.clone();
-        one.results.push(Arg::Held(Held { value: value(2, 0), width: 2 }));
+        one.results.push(Arg::Held(Held {
+            value: value(2, 0),
+            width: 2,
+        }));
         cases.push(one);
         let mut one = flags.clone();
         one.loads.push(MemRef::new(None, 2));
@@ -852,7 +999,10 @@ mod tests {
         incoming.insert(0, start);
         incoming.insert(1, following);
         let mut increment = op(1, Kind::Increment, vec![following], vec![counter]);
-        increment.args = vec![Arg::Held(Held { value: counter, width: 2 })];
+        increment.args = vec![Arg::Held(Held {
+            value: counter,
+            width: 2,
+        })];
         increment.results = vec![Arg::Held(Held {
             value: following,
             width: 2,
@@ -973,7 +1123,8 @@ mod tests {
                 },
             );
             body.blocks[1].succ = vec![1, 2, 3];
-            body.blocks.push(MirBlock::new(3, vec![], vec![step], vec![1]));
+            body.blocks
+                .push(MirBlock::new(3, vec![], vec![step], vec![1]));
             body.blocks.push(MirBlock::new(4, vec![], vec![], vec![1]));
             loop_.body = BTreeSet::from([1, 3]);
             loop_.latches = BTreeSet::from([1, 3]);
@@ -1002,7 +1153,13 @@ mod tests {
                 width: 2,
             })];
             let made = BTreeMap::from([(copied.id, &copy)]);
-            let root = _copied(Held { value: copied, width: 2 }, &made);
+            let root = _copied(
+                Held {
+                    value: copied,
+                    width: 2,
+                },
+                &made,
+            );
             assert_eq!(root.value == counter, expected_source);
             assert_eq!(root.width, 2);
         }
@@ -1043,14 +1200,174 @@ mod tests {
         type_mismatch.args = vec![Arg::Const(Const::new(1, 2))];
         assert_eq!(follows(&type_mismatch), operand);
         let mut source_width = copy.clone();
-        source_width.args = vec![Arg::Held(Held { value: source, width: 4 })];
+        source_width.args = vec![Arg::Held(Held {
+            value: source,
+            width: 4,
+        })];
         assert_eq!(follows(&source_width), operand);
         let mut result_width = copy.clone();
-        result_width.results = vec![Arg::Held(Held { value: result, width: 4 })];
+        result_width.results = vec![Arg::Held(Held {
+            value: result,
+            width: 4,
+        })];
         assert_eq!(follows(&result_width), operand);
 
         let mut cycle = copy;
         cycle.args = vec![Arg::Held(operand)];
         assert_eq!(follows(&cycle), operand);
+    }
+
+    fn constant(value: i64, width: u32) -> AffineOperand {
+        AffineOperand::Const(Const::new(value, width))
+    }
+
+    fn affine(value: u32, start: AffineOperand, step: AffineOperand, header: i64) -> Affine {
+        Affine {
+            value,
+            start,
+            step,
+            header,
+        }
+    }
+
+    #[test]
+    fn direct_induction_affine_map_carries_the_modular_injectivity_proof() {
+        // Direct port of
+        // tests/test_induction_identity.py:test_affine_map_carries_the_modular_injectivity_proof.
+        let source = affine(1, constant(0, 2), constant(1, 2), 1);
+        let byte_offset = affine(2, constant(0, 2), constant(16, 2), 1);
+
+        let mapping = relation(&source, &byte_offset, &BTreeMap::new())
+            .expect("the scaled constant recurrence has a relation");
+
+        assert_eq!(
+            mapping,
+            AffineMap {
+                scale: BigInt::from(16),
+                offset: BigInt::from(0),
+                width: 2,
+            }
+        );
+        assert!(mapping.injective(&BigInt::from(0), &BigInt::from(5)));
+        assert!(!mapping.injective(&BigInt::from(0), &BigInt::from(4096)));
+    }
+
+    #[test]
+    fn direct_induction_affine_map_preserves_python_period_and_boundaries() {
+        // Direct branch coverage for `AffineMap.period` and `injective`.
+        let negative = AffineMap {
+            scale: BigInt::from(-16),
+            offset: BigInt::from(0),
+            width: 2,
+        };
+        assert_eq!(negative.period(), BigInt::from(4096));
+        assert!(negative.injective(&BigInt::from(4), &BigInt::from(0)));
+        let zero = AffineMap {
+            scale: BigInt::from(0),
+            offset: BigInt::from(0),
+            width: 2,
+        };
+        assert_eq!(zero.period(), BigInt::from(1));
+        assert!(!zero.injective(&BigInt::from(0), &BigInt::from(0)));
+    }
+
+    #[test]
+    fn direct_induction_affine_map_constant_refusals_and_masking() {
+        // Direct port of every refusal in `induction._constant`.
+        let facts = BTreeMap::new();
+        assert_eq!(masked(&BigInt::from(-1), 2), BigInt::from(0xffff));
+        assert_eq!(
+            _constant(&constant(-1, 2).as_arg(), &facts, 2),
+            Some(BigInt::from(0xffff))
+        );
+        assert_eq!(_constant(&constant(1, 4).as_arg(), &facts, 2), None);
+
+        let held = Value::new(90, 0);
+        let operand = AffineOperand::Held(Held {
+            value: held,
+            width: 2,
+        });
+        assert_eq!(_constant(&operand.as_arg(), &facts, 2), None);
+        let narrow = BTreeMap::from([(held, Known::new(1, 1))]);
+        assert_eq!(_constant(&operand.as_arg(), &narrow, 2), None);
+        let wide = BTreeMap::from([(held, Known::new(0x1_2345, 4))]);
+        assert_eq!(
+            _constant(&operand.as_arg(), &wide, 2),
+            Some(BigInt::from(0x2345))
+        );
+        let cell = Arg::Cell(Cell {
+            r#ref: MemRef::new(None, 2),
+        });
+        assert_eq!(_constant(&cell, &facts, 2), None);
+    }
+
+    #[test]
+    fn direct_induction_affine_map_signed_reinterpretation_and_refusals() {
+        // Direct port of `induction._as_signed` and every refusal in
+        // `induction._signed`.
+        assert_eq!(_as_signed(&BigInt::from(0x7fff), 2), BigInt::from(32767));
+        assert_eq!(_as_signed(&BigInt::from(0x8000), 2), BigInt::from(-32768));
+        assert_eq!(_as_signed(&BigInt::from(0xffff), 2), BigInt::from(-1));
+        let facts = BTreeMap::new();
+        assert_eq!(
+            _signed(&constant(-1, 2).as_arg(), &facts, 2),
+            Some(BigInt::from(-1))
+        );
+        assert_eq!(
+            _signed(&constant(0x8000, 2).as_arg(), &facts, 2),
+            Some(BigInt::from(-32768))
+        );
+        assert_eq!(_signed(&constant(1, 4).as_arg(), &facts, 2), None);
+        let held = Value::new(91, 0);
+        let operand = AffineOperand::Held(Held {
+            value: held,
+            width: 2,
+        });
+        assert_eq!(_signed(&operand.as_arg(), &facts, 2), None);
+        let narrow = BTreeMap::from([(held, Known::new(1, 1))]);
+        assert_eq!(_signed(&operand.as_arg(), &narrow, 2), None);
+        let cell = Arg::Cell(Cell {
+            r#ref: MemRef::new(None, 2),
+        });
+        assert_eq!(_signed(&cell, &facts, 2), None);
+    }
+
+    #[test]
+    fn direct_induction_affine_map_relation_refuses_each_python_case() {
+        // Direct port of every `None` branch in `induction.relation`.
+        let source = affine(1, constant(0, 2), constant(1, 2), 1);
+        let target = affine(2, constant(0, 2), constant(16, 2), 1);
+        let facts = BTreeMap::new();
+
+        let mismatched_start = affine(2, constant(0, 4), constant(16, 2), 1);
+        assert_eq!(relation(&source, &mismatched_start, &facts), None);
+        let zero_source_step = affine(1, constant(0, 2), constant(0, 2), 1);
+        assert_eq!(relation(&zero_source_step, &target, &facts), None);
+        let source_step_two = affine(1, constant(0, 2), constant(2, 2), 1);
+        let non_integral_scale = affine(2, constant(0, 2), constant(3, 2), 1);
+        assert_eq!(
+            relation(&source_step_two, &non_integral_scale, &facts),
+            None
+        );
+        let zero_scale = affine(2, constant(0, 2), constant(0, 2), 1);
+        assert_eq!(relation(&source, &zero_scale, &facts), None);
+
+        for position in 0..4 {
+            let unknown = AffineOperand::Held(Held {
+                value: Value::new(100 + position, 0),
+                width: 2,
+            });
+            let (mut source, mut target) = (source.clone(), target.clone());
+            match position {
+                0 => source.start = unknown,
+                1 => source.step = unknown,
+                2 => target.start = unknown,
+                3 => target.step = unknown,
+                _ => unreachable!("four Python signed inputs"),
+            }
+            assert_eq!(relation(&source, &target, &facts), None);
+        }
+        let target_step_width = affine(2, constant(0, 2), constant(16, 4), 1);
+        assert_eq!(relation(&source, &target_step_width, &facts), None);
     }
 }
