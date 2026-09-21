@@ -21,6 +21,9 @@ one is otherwise a bisect through all three.
 """
 
 from dataclasses import replace
+from contextvars import ContextVar
+from contextlib import contextmanager
+from collections.abc import Iterator
 
 from qbopt.model import ir
 from qbopt.model import mir
@@ -1427,6 +1430,20 @@ def _leaving(body: MirBody) -> set:
 LOW, HIGH = 0, 1
 
 
+_NO_HALVES_REUSE = object()
+_halves_reuse: ContextVar = ContextVar("qbopt_half_liveness_reuse", default=_NO_HALVES_REUSE)
+
+
+@contextmanager
+def _reusing_halves() -> Iterator[None]:
+    """Share half-liveness for equal immutable states in one transaction."""
+    token = _halves_reuse.set(None)
+    try:
+        yield
+    finally:
+        _halves_reuse.reset(token)
+
+
 def halves(body: MirBody) -> set:
     """Which half of which value something reads, to a fixed point.
 
@@ -1444,7 +1461,15 @@ def halves(body: MirBody) -> set:
 
     Both halves of everything reaching an exit are live, because what the
     caller reads is not a fact this body holds.
+
+    MIR states are immutable at the pass boundary.  One optimizer transaction
+    may nevertheless allocate an equal replacement, so equality rather than
+    object identity establishes that the saved answer still describes it.
     """
+    saved = _halves_reuse.get()
+    if saved is not _NO_HALVES_REUSE and saved is not None and saved[0] == body:
+        return set(saved[1])
+
     out: set = set()
     for value in _leaving(body):
         out.add((value, LOW))
@@ -1506,6 +1531,8 @@ def halves(body: MirBody) -> set:
                     if (phi.result, half) in out:
                         out |= {(one, half) for one in phi.incoming.values()}
         changing = len(out) != before
+    if saved is not _NO_HALVES_REUSE:
+        _halves_reuse.set((body, frozenset(out)))
     return out
 
 
@@ -3026,6 +3053,7 @@ PASSES_ON = (
 
 
 @consts.reusing()
+@_reusing_halves()
 def applied(
     body: MirBody,
     dgroup: frozenset[int],

@@ -7,6 +7,7 @@ neither time could the host suite see it.
 """
 
 from pathlib import Path
+from dataclasses import replace
 
 import pytest
 from iced_x86 import Register
@@ -19,6 +20,49 @@ from qbopt.backend import lower
 from qbopt.objectfile import omf
 from qbopt.objectfile import module
 from qbopt.optimize import transform
+
+
+def test_applied_reuses_half_liveness_only_inside_one_transaction(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Matmul recomputed the same half-value fixed point 205 times.
+
+    Equal immutable MIR states share the analysis inside one optimizer
+    transaction, and a later independent query must compute its own answer.
+    """
+    value = mir.Value(1, 0, variable=1)
+    copy = mir.Op(
+        0,
+        ir.Operation.MOVE,
+        "mov",
+        (value,),
+        (mir.Const(1, 2),),
+        kind=mir.Kind.COPY,
+        results=(mir.Held(value, 2),),
+    )
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (copy,), ()),))
+    leaving = transform._leaving
+    calls = 0
+
+    def counted(state):
+        nonlocal calls
+        calls += 1
+        return leaving(state)
+
+    class Probe:
+        name = "probe"
+
+        def transform(self, state):
+            transform.halves(state)
+            return replace(state, blocks=tuple(state.blocks))
+
+    monkeypatch.setattr(transform, "_leaving", counted)
+    monkeypatch.setattr(transform, "pipeline", lambda *_args, **_kwargs: [Probe(), Probe()])
+
+    result = transform.applied(body, frozenset(), {})
+
+    assert result == body and result is not body
+    assert calls == 1
+    transform.halves(body)
+    assert calls == 2
 
 
 def test_final_pipeline_inerts_unreachable_executable_blocks() -> None:
