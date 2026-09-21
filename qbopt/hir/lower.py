@@ -108,6 +108,10 @@ _COMPARISONS = {
     model.Op.LE,
     model.Op.GT,
     model.Op.GE,
+    model.Op.BELOW,
+    model.Op.BELOW_EQ,
+    model.Op.ABOVE,
+    model.Op.ABOVE_EQ,
     model.Op.STRING_EQ,
     model.Op.STRING_NE,
     model.Op.STRING_LT,
@@ -850,16 +854,18 @@ def _function(
             if instruction.op in _STRING_COMPARISONS
             else mir.Kind.FSQRT
             if instruction.op in _X87_INTRINSICS
+            else mir.Kind.UDIVMOD
+            if instruction.op in (model.Op.UDIV, model.Op.UREM, model.Op.UDIVMOD)
             else _KINDS[instruction.op.value]
         )
-        if instruction.op in (model.Op.DIV, model.Op.REM):
+        if instruction.op in (model.Op.DIV, model.Op.REM, model.Op.UDIV, model.Op.UREM):
             source = instruction.results[0]
             extra = mir.Value(next_value, at, variable=next_value, version=1)
             value_types[next_value] = value_types[source]
             next_value += 1
-            made = (made[0], extra) if instruction.op is model.Op.DIV else (extra, made[0])
+            made = (made[0], extra) if instruction.op in (model.Op.DIV, model.Op.UDIV) else (extra, made[0])
             results = tuple(mir.Held(one, value_types[source].width) for one in made)
-            kind = mir.Kind.DIVMOD
+            kind = mir.Kind.UDIVMOD if instruction.op in (model.Op.UDIV, model.Op.UREM) else mir.Kind.DIVMOD
         cells = tuple(one.ref for one in args if isinstance(one, mir.Cell))
         semantics = None
         if instruction.op in _BINARY_FLOAT | _UNARY_FLOAT:
@@ -1178,6 +1184,10 @@ def _function(
                 model.Op.LE: mir.Kind.LE,
                 model.Op.GT: mir.Kind.GT,
                 model.Op.GE: mir.Kind.GE,
+                model.Op.BELOW: mir.Kind.BELOW,
+                model.Op.BELOW_EQ: mir.Kind.BELOW_EQ,
+                model.Op.ABOVE: mir.Kind.ABOVE,
+                model.Op.ABOVE_EQ: mir.Kind.ABOVE_EQ,
                 model.Op.STRING_EQ: mir.Kind.EQ,
                 model.Op.STRING_NE: mir.Kind.NE,
                 model.Op.STRING_LT: mir.Kind.LT,

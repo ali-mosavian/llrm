@@ -253,6 +253,8 @@ impl Parser {
         let token = self.bump().clone();
         match token.kind {
             TokenKind::Integer(value) => Ok(Expr::Integer(value, token.span)),
+            TokenKind::Float(value) => Ok(Expr::Float(value, token.span)),
+            TokenKind::Character(value) => Ok(Expr::Character(value, token.span)),
             TokenKind::True => Ok(Expr::Boolean(true, token.span)),
             TokenKind::False => Ok(Expr::Boolean(false, token.span)),
             TokenKind::Identifier(name) => Ok(Expr::Name(name, token.span)),
@@ -316,8 +318,15 @@ impl Parser {
     fn type_name(&mut self) -> Result<TypeName, Diagnostic> {
         let token = self.bump();
         match token.kind {
+            TokenKind::Char => Ok(TypeName::Char),
+            TokenKind::I8 => Ok(TypeName::I8),
+            TokenKind::U8 => Ok(TypeName::U8),
             TokenKind::I16 => Ok(TypeName::I16),
+            TokenKind::U16 => Ok(TypeName::U16),
             TokenKind::I32 => Ok(TypeName::I32),
+            TokenKind::U32 => Ok(TypeName::U32),
+            TokenKind::F32 => Ok(TypeName::F32),
+            TokenKind::F64 => Ok(TypeName::F64),
             TokenKind::Bool => Ok(TypeName::Bool),
             TokenKind::Void => Ok(TypeName::Void),
             _ => Err(Diagnostic::new(token.span, "expected a type name")),

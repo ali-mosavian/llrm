@@ -12,9 +12,42 @@ use crate::syntax::TypeName;
 use crate::syntax::UnaryOp;
 
 const VOID: u32 = 1;
-const I16: u32 = 2;
-const I32: u32 = 3;
-const BOOL: u32 = 4;
+const BOOL: u32 = 2;
+const CHAR: u32 = 3;
+const I8: u32 = 4;
+const U8: u32 = 5;
+const I16: u32 = 6;
+const U16: u32 = 7;
+const I32: u32 = 8;
+const U32: u32 = 9;
+const F32: u32 = 10;
+const F64: u32 = 11;
+
+#[derive(Default)]
+struct FloatPool {
+    symbols: BTreeMap<(TypeName, u64), u32>,
+    data: Vec<hir::DataObject>,
+}
+
+impl FloatPool {
+    fn intern(&mut self, type_name: TypeName, bits: u64) -> u32 {
+        if let Some(symbol) = self.symbols.get(&(type_name, bits)) {
+            return *symbol;
+        }
+        let id = self.data.len() as u32 + 1;
+        let (name, bytes) = match type_name {
+            TypeName::F32 => {
+                let bits = bits as u32;
+                (format!("$f32_{bits:08x}"), bits.to_le_bytes().to_vec())
+            }
+            TypeName::F64 => (format!("$f64_{bits:016x}"), bits.to_le_bytes().to_vec()),
+            _ => unreachable!("only floats enter the constant pool"),
+        };
+        self.symbols.insert((type_name, bits), id);
+        self.data.push(hir::DataObject { id, name, bytes });
+        id
+    }
+}
 
 #[derive(Clone, Debug)]
 struct Signature {
@@ -97,9 +130,13 @@ pub fn compile(module: &Module, module_name: &str) -> Result<String, Diagnostic>
         })
         .collect();
     let mut functions = Vec::new();
+    let mut float_pool = FloatPool::default();
     for function in &module.functions {
         let signature = signatures.get(&function.name).expect("collected function");
-        functions.push(FunctionCompiler::new(function, signature, &signatures)?.compile(function)?);
+        functions.push(
+            FunctionCompiler::new(function, signature, &signatures, &mut float_pool)?
+                .compile(function)?,
+        );
     }
     let program = hir::Program {
         module_name: module_name.into(),
@@ -110,35 +147,70 @@ pub fn compile(module: &Module, module_name: &str) -> Result<String, Diagnostic>
                 kind: "void",
                 width: 0,
                 signed: None,
+                evaluation: "none",
             },
-            hir::Type {
-                id: I16,
-                name: "i16",
-                kind: "integer",
-                width: 2,
-                signed: Some(true),
-            },
-            hir::Type {
-                id: I32,
-                name: "i32",
-                kind: "integer",
-                width: 4,
-                signed: Some(true),
-            },
-            // The first backend slice uses the established -1/0 boolean
-            // representation, so `not` is the ordinary semantic NOT op.
             hir::Type {
                 id: BOOL,
                 name: "bool",
                 kind: "boolean",
-                width: 2,
+                width: 1,
+                signed: None,
+                evaluation: "none",
+            },
+            hir::Type {
+                id: CHAR,
+                name: "char",
+                kind: "integer",
+                width: 1,
+                signed: Some(false),
+                evaluation: "none",
+            },
+            hir::Type {
+                id: I8,
+                name: "i8",
+                kind: "integer",
+                width: 1,
                 signed: Some(true),
+                evaluation: "none",
+            },
+            integer_type(U8, "u8", 1, false),
+            integer_type(I16, "i16", 2, true),
+            integer_type(U16, "u16", 2, false),
+            integer_type(I32, "i32", 4, true),
+            integer_type(U32, "u32", 4, false),
+            hir::Type {
+                id: F32,
+                name: "f32",
+                kind: "float",
+                width: 4,
+                signed: None,
+                evaluation: "binary32",
+            },
+            hir::Type {
+                id: F64,
+                name: "f64",
+                kind: "float",
+                width: 8,
+                signed: None,
+                evaluation: "binary64",
             },
         ],
         functions,
         callables,
+        data: float_pool.data,
     };
     Ok(program.json())
+}
+
+fn integer_type(id: u32, name: &'static str, width: u32, signed: bool) -> hir::Type {
+    hir::Type {
+        id,
+        name,
+        kind: "integer",
+        width,
+        signed: Some(signed),
+        evaluation: "none",
+    }
 }
 
 struct FunctionCompiler<'a> {
@@ -156,6 +228,8 @@ struct FunctionCompiler<'a> {
     next_place: u32,
     next_instruction: u32,
     next_frame_offset: i32,
+    float_pool: &'a mut FloatPool,
+    constant_places: BTreeMap<u32, u32>,
 }
 
 impl<'a> FunctionCompiler<'a> {
@@ -163,6 +237,7 @@ impl<'a> FunctionCompiler<'a> {
         function: &Function,
         signature: &'a Signature,
         signatures: &'a BTreeMap<String, Signature>,
+        float_pool: &'a mut FloatPool,
     ) -> Result<Self, Diagnostic> {
         let mut compiler = Self {
             signature,
@@ -183,6 +258,8 @@ impl<'a> FunctionCompiler<'a> {
             next_place: 1,
             next_instruction: 1,
             next_frame_offset: 0,
+            float_pool,
+            constant_places: BTreeMap::new(),
         };
         for parameter in &function.parameters {
             let value = compiler.value(parameter.type_name);
@@ -456,6 +533,20 @@ impl<'a> FunctionCompiler<'a> {
     ) -> Result<TypedOperand, Diagnostic> {
         match expression {
             Expr::Integer(value, span) => self.integer(*value, expected, *span),
+            Expr::Float(spelling, span) => self.float(spelling, expected, *span),
+            Expr::Character(value, span) => {
+                if expected.is_some_and(|one| one != TypeName::Char) {
+                    return Err(type_mismatch(
+                        *span,
+                        expected.expect("checked"),
+                        TypeName::Char,
+                    ));
+                }
+                Ok(TypedOperand {
+                    operand: Some(hir::Operand::Constant(CHAR, i64::from(*value))),
+                    type_name: TypeName::Char,
+                })
+            }
             Expr::Boolean(value, span) => {
                 if expected.is_some_and(|one| one != TypeName::Bool) {
                     return Err(type_mismatch(
@@ -505,13 +596,18 @@ impl<'a> FunctionCompiler<'a> {
                     }
                 }
                 let wanted = match op {
-                    UnaryOp::Negative => expected.filter(|one| is_integer(*one)),
+                    UnaryOp::Negative => expected.filter(|one| is_signed(*one) || is_float(*one)),
                     UnaryOp::Not => Some(TypeName::Bool),
                 };
                 let operand = self.expression(operand, wanted)?;
                 match op {
-                    UnaryOp::Negative if !is_integer(operand.type_name) => {
-                        return Err(Diagnostic::new(*span, "unary '-' requires an integer"))
+                    UnaryOp::Negative
+                        if !is_signed(operand.type_name) && !is_float(operand.type_name) =>
+                    {
+                        return Err(Diagnostic::new(
+                            *span,
+                            "unary '-' requires a signed integer or float",
+                        ))
                     }
                     UnaryOp::Not if operand.type_name != TypeName::Bool => {
                         return Err(Diagnostic::new(*span, "not requires bool"))
@@ -521,6 +617,7 @@ impl<'a> FunctionCompiler<'a> {
                 let result = self.value(operand.type_name);
                 self.emit(
                     match op {
+                        UnaryOp::Negative if is_float(operand.type_name) => "fneg",
                         UnaryOp::Negative => "neg",
                         UnaryOp::Not => "not",
                     },
@@ -554,15 +651,19 @@ impl<'a> FunctionCompiler<'a> {
         span: Span,
     ) -> Result<TypedOperand, Diagnostic> {
         let type_name = match expected {
-            Some(type_name) if is_integer(type_name) => type_name,
+            Some(type_name) if is_integer(type_name) || type_name == TypeName::Char => type_name,
             Some(other) => return Err(type_mismatch(span, other, TypeName::I16)),
             None if i16::try_from(value).is_ok() => TypeName::I16,
             None if i32::try_from(value).is_ok() => TypeName::I32,
             None => return Err(Diagnostic::new(span, "integer literal does not fit i32")),
         };
         let fits = match type_name {
+            TypeName::Char | TypeName::U8 => u8::try_from(value).is_ok(),
+            TypeName::I8 => i8::try_from(value).is_ok(),
             TypeName::I16 => i16::try_from(value).is_ok(),
+            TypeName::U16 => u16::try_from(value).is_ok(),
             TypeName::I32 => i32::try_from(value).is_ok(),
+            TypeName::U32 => u32::try_from(value).is_ok(),
             _ => false,
         };
         if !fits {
@@ -576,6 +677,52 @@ impl<'a> FunctionCompiler<'a> {
         }
         Ok(TypedOperand {
             operand: Some(hir::Operand::Constant(type_id(type_name), value)),
+            type_name,
+        })
+    }
+
+    fn float(
+        &mut self,
+        spelling: &str,
+        expected: Option<TypeName>,
+        span: Span,
+    ) -> Result<TypedOperand, Diagnostic> {
+        let type_name = match expected {
+            Some(type_name) if is_float(type_name) => type_name,
+            Some(other) => return Err(type_mismatch(span, other, TypeName::F64)),
+            None => TypeName::F64,
+        };
+        let parsed = spelling
+            .parse::<f64>()
+            .map_err(|_| Diagnostic::new(span, "invalid floating literal"))?;
+        let bits = match type_name {
+            TypeName::F32 => {
+                let rounded = parsed as f32;
+                if !rounded.is_finite() {
+                    return Err(Diagnostic::new(span, "floating literal does not fit f32"));
+                }
+                u64::from(rounded.to_bits())
+            }
+            TypeName::F64 => {
+                if !parsed.is_finite() {
+                    return Err(Diagnostic::new(span, "floating literal does not fit f64"));
+                }
+                parsed.to_bits()
+            }
+            _ => unreachable!(),
+        };
+        let symbol = self.float_pool.intern(type_name, bits);
+        let place = if let Some(place) = self.constant_places.get(&symbol) {
+            *place
+        } else {
+            let place = self.static_place(symbol, type_name);
+            self.constant_places.insert(symbol, place);
+            place
+        };
+        let result = self.value(type_name);
+        self.emit("load", vec![result], vec![hir::Operand::Place(place)], None);
+        Ok(TypedOperand {
+            operand: Some(hir::Operand::Value(result)),
             type_name,
         })
     }
@@ -604,12 +751,33 @@ impl<'a> FunctionCompiler<'a> {
                 TypeName::Bool,
             ));
         }
-        let arithmetic_expected = (!comparison).then_some(expected).flatten();
-        let left = self.expression(left, arithmetic_expected)?;
-        if !is_integer(left.type_name) {
+        let mut left_expected = (!comparison).then_some(expected).flatten();
+        if comparison {
+            let hint = self.expression_type_hint(right);
+            if (matches!(left, Expr::Integer(..))
+                && hint.is_some_and(|one| is_integer(one) || one == TypeName::Char))
+                || (matches!(left, Expr::Float(..)) && hint.is_some_and(is_float))
+            {
+                left_expected = hint;
+            }
+        }
+        let left = self.expression(left, left_expected)?;
+        if comparison {
+            let equality = matches!(operation, BinaryOp::Equal | BinaryOp::NotEqual);
+            if (!equality && !is_ordered(left.type_name)) || left.type_name == TypeName::Void {
+                return Err(Diagnostic::new(
+                    span,
+                    if equality {
+                        "equality requires scalar operands"
+                    } else {
+                        "ordering requires numeric or char operands"
+                    },
+                ));
+            }
+        } else if !is_numeric(left.type_name) {
             return Err(Diagnostic::new(
                 span,
-                "binary arithmetic and ordering require integers",
+                "arithmetic requires numeric operands",
             ));
         }
         let right = self.expression(right, Some(left.type_name))?;
@@ -620,13 +788,26 @@ impl<'a> FunctionCompiler<'a> {
         };
         let result = self.value(result_type);
         let op = match operation {
+            BinaryOp::Add if is_float(left.type_name) => "fadd",
+            BinaryOp::Subtract if is_float(left.type_name) => "fsub",
+            BinaryOp::Multiply if is_float(left.type_name) => "fmul",
+            BinaryOp::Divide if is_float(left.type_name) => "fdiv",
+            BinaryOp::Remainder if is_float(left.type_name) => {
+                return Err(Diagnostic::new(span, "'%' is not defined for floats"))
+            }
             BinaryOp::Add => "add",
             BinaryOp::Subtract => "sub",
             BinaryOp::Multiply => "mul",
+            BinaryOp::Divide if is_unsigned(left.type_name) => "udiv",
             BinaryOp::Divide => "div",
+            BinaryOp::Remainder if is_unsigned(left.type_name) => "urem",
             BinaryOp::Remainder => "rem",
             BinaryOp::Equal => "eq",
             BinaryOp::NotEqual => "ne",
+            BinaryOp::Less if is_unsigned(left.type_name) => "below",
+            BinaryOp::LessEqual if is_unsigned(left.type_name) => "beloweq",
+            BinaryOp::Greater if is_unsigned(left.type_name) => "above",
+            BinaryOp::GreaterEqual if is_unsigned(left.type_name) => "aboveeq",
             BinaryOp::Less => "lt",
             BinaryOp::LessEqual => "le",
             BinaryOp::Greater => "gt",
@@ -642,6 +823,21 @@ impl<'a> FunctionCompiler<'a> {
             operand: Some(hir::Operand::Value(result)),
             type_name: result_type,
         })
+    }
+
+    fn expression_type_hint(&self, expression: &Expr) -> Option<TypeName> {
+        match expression {
+            Expr::Float(..) => Some(TypeName::F64),
+            Expr::Character(..) => Some(TypeName::Char),
+            Expr::Boolean(..) => Some(TypeName::Bool),
+            Expr::Name(name, _) => self
+                .binding(name, expression.span())
+                .ok()
+                .map(|one| one.type_name),
+            Expr::Call { name, .. } => self.signatures.get(name).map(|one| one.result),
+            Expr::Unary { operand, .. } => self.expression_type_hint(operand),
+            Expr::Integer(..) | Expr::Binary { .. } => None,
+        }
     }
 
     fn call(
@@ -730,6 +926,24 @@ impl<'a> FunctionCompiler<'a> {
             mutable,
             offset: self.next_frame_offset,
             extent,
+            storage: "local",
+            symbol: 0,
+        });
+        id
+    }
+
+    fn static_place(&mut self, symbol: u32, type_name: TypeName) -> u32 {
+        let id = self.next_place;
+        self.next_place += 1;
+        self.places.push(hir::Place {
+            id,
+            name: format!("$literal{symbol}"),
+            type_id: type_id(type_name),
+            mutable: false,
+            offset: 0,
+            extent: width(type_name),
+            storage: "module",
+            symbol,
         });
         id
     }
@@ -800,32 +1014,74 @@ fn jump(target: u32) -> hir::Terminator {
 }
 
 fn is_integer(type_name: TypeName) -> bool {
-    matches!(type_name, TypeName::I16 | TypeName::I32)
+    matches!(
+        type_name,
+        TypeName::I8 | TypeName::U8 | TypeName::I16 | TypeName::U16 | TypeName::I32 | TypeName::U32
+    )
+}
+
+fn is_signed(type_name: TypeName) -> bool {
+    matches!(type_name, TypeName::I8 | TypeName::I16 | TypeName::I32)
+}
+
+fn is_unsigned(type_name: TypeName) -> bool {
+    matches!(
+        type_name,
+        TypeName::Char | TypeName::U8 | TypeName::U16 | TypeName::U32
+    )
+}
+
+fn is_float(type_name: TypeName) -> bool {
+    matches!(type_name, TypeName::F32 | TypeName::F64)
+}
+
+fn is_numeric(type_name: TypeName) -> bool {
+    is_integer(type_name) || is_float(type_name)
+}
+
+fn is_ordered(type_name: TypeName) -> bool {
+    is_numeric(type_name) || type_name == TypeName::Char
 }
 
 fn type_id(type_name: TypeName) -> u32 {
     match type_name {
         TypeName::Void => VOID,
-        TypeName::I16 => I16,
-        TypeName::I32 => I32,
         TypeName::Bool => BOOL,
+        TypeName::Char => CHAR,
+        TypeName::I8 => I8,
+        TypeName::U8 => U8,
+        TypeName::I16 => I16,
+        TypeName::U16 => U16,
+        TypeName::I32 => I32,
+        TypeName::U32 => U32,
+        TypeName::F32 => F32,
+        TypeName::F64 => F64,
     }
 }
 
 fn width(type_name: TypeName) -> u32 {
     match type_name {
         TypeName::Void => 0,
-        TypeName::I16 | TypeName::Bool => 2,
-        TypeName::I32 => 4,
+        TypeName::Bool | TypeName::Char | TypeName::I8 | TypeName::U8 => 1,
+        TypeName::I16 | TypeName::U16 => 2,
+        TypeName::I32 | TypeName::U32 | TypeName::F32 => 4,
+        TypeName::F64 => 8,
     }
 }
 
 fn type_name_text(type_name: TypeName) -> &'static str {
     match type_name {
         TypeName::Void => "void",
-        TypeName::I16 => "i16",
-        TypeName::I32 => "i32",
         TypeName::Bool => "bool",
+        TypeName::Char => "char",
+        TypeName::I8 => "i8",
+        TypeName::U8 => "u8",
+        TypeName::I16 => "i16",
+        TypeName::U16 => "u16",
+        TypeName::I32 => "i32",
+        TypeName::U32 => "u32",
+        TypeName::F32 => "f32",
+        TypeName::F64 => "f64",
     }
 }
 
@@ -902,5 +1158,38 @@ mod tests {
         )
         .unwrap();
         assert!(json.contains("\"value\":-32768"));
+    }
+
+    #[test]
+    fn integer_literals_are_checked_against_their_primitive_width() {
+        let error = compile_source(
+            "fn tooLarge() -> u8:\n\
+             \x20\x20\x20\x20return 256\n",
+        )
+        .unwrap_err();
+        assert!(error.message.contains("does not fit u8"));
+
+        let error = compile_source(
+            "fn negative() -> u32:\n\
+             \x20\x20\x20\x20return -1\n",
+        )
+        .unwrap_err();
+        assert!(error.message.contains("does not fit u32"));
+    }
+
+    #[test]
+    fn unsigned_and_float_operators_emit_distinct_hir_operations() {
+        let json = compile_source(
+            "fn quotient(a: u32, b: u32) -> u32:\n\
+             \x20\x20\x20\x20return a / b\n\
+             fn less(a: u16, b: u16) -> bool:\n\
+             \x20\x20\x20\x20return a < b\n\
+             fn product(a: f32, b: f32) -> f32:\n\
+             \x20\x20\x20\x20return a * b\n",
+        )
+        .unwrap();
+        assert!(json.contains("\"op\":\"udiv\""));
+        assert!(json.contains("\"op\":\"below\""));
+        assert!(json.contains("\"op\":\"fmul\""));
     }
 }

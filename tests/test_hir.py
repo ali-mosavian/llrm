@@ -328,6 +328,19 @@ def test_hir_verifier_rejects_incomplete_float_and_bad_cfg() -> None:
         hir.verify(replace(source, modules=(replace(module, functions=(broken,)),)))
 
 
+def test_hir_verifier_refuses_unsigned_division_over_signed_values() -> None:
+    """Unsigned source division once reached MIR as signed DIVMOD, changing values above INT_MAX."""
+    source = program()
+    module = source.modules[0]
+    function = module.functions[0]
+    entry = function.blocks[0]
+    instructions = list(entry.instructions)
+    instructions[2] = replace(instructions[2], op=hir.Op.UDIV)
+    broken = replace(function, blocks=(replace(entry, instructions=tuple(instructions)), *function.blocks[1:]))
+    with pytest.raises(hir.InvalidHIR, match="requires unsigned integer operands"):
+        hir.verify(replace(source, modules=(replace(module, functions=(broken,)),)))
+
+
 def test_hir_verifier_rejects_a_store_with_the_wrong_value_type() -> None:
     source = program()
     module = source.modules[0]

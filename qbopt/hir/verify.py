@@ -11,6 +11,7 @@ _RESULTS = {
     model.Op.STORE: 0,
     model.Op.CALL: None,
     model.Op.DIVMOD: 2,
+    model.Op.UDIVMOD: 2,
 }
 _PLACES = {model.Op.LOAD, model.Op.STORE, model.Op.ADDRESS}
 _FLOAT = {
@@ -34,6 +35,9 @@ _INTEGER = {
     model.Op.DIV,
     model.Op.REM,
     model.Op.DIVMOD,
+    model.Op.UDIV,
+    model.Op.UREM,
+    model.Op.UDIVMOD,
     model.Op.AND,
     model.Op.OR,
     model.Op.XOR,
@@ -50,6 +54,10 @@ _COMPARE = {
     model.Op.LE,
     model.Op.GT,
     model.Op.GE,
+    model.Op.BELOW,
+    model.Op.BELOW_EQ,
+    model.Op.ABOVE,
+    model.Op.ABOVE_EQ,
     model.Op.STRING_EQ,
     model.Op.STRING_NE,
     model.Op.STRING_LT,
@@ -64,6 +72,15 @@ _STRING_COMPARE = {
     model.Op.STRING_LE,
     model.Op.STRING_GT,
     model.Op.STRING_GE,
+}
+_UNSIGNED = {
+    model.Op.UDIV,
+    model.Op.UREM,
+    model.Op.UDIVMOD,
+    model.Op.BELOW,
+    model.Op.BELOW_EQ,
+    model.Op.ABOVE,
+    model.Op.ABOVE_EQ,
 }
 _POINTER_PART = {model.Op.POINTER_SEGMENT, model.Op.POINTER_OFFSET}
 
@@ -284,6 +301,13 @@ def _function(module: model.Module, function: model.Function, types: dict[int, m
                         raise InvalidHIR(f"{prefix}: string comparison operands are not near addresses")
                 elif operand_types[0] != operand_types[1]:
                     raise InvalidHIR(f"{prefix}: comparison operand types do not agree")
+            if instruction.op in _UNSIGNED:
+                involved = operand_types if instruction.op in _COMPARE else [*result_types, *operand_types]
+                unsigned = all(
+                    types[one].kind is model.TypeKind.INTEGER and types[one].signed is False for one in involved
+                )
+                if not unsigned:
+                    raise InvalidHIR(f"{prefix}: {instruction.op} requires unsigned integer operands")
             if instruction.op in _POINTER_PART:
                 if len(operand_types) != 1 or len(result_types) != 1:
                     raise InvalidHIR(f"{prefix}: pointer projection has the wrong arity")

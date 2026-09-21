@@ -7,6 +7,7 @@ pub struct Type {
     pub kind: &'static str,
     pub width: u32,
     pub signed: Option<bool>,
+    pub evaluation: &'static str,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -23,6 +24,15 @@ pub struct Place {
     pub mutable: bool,
     pub offset: i32,
     pub extent: u32,
+    pub storage: &'static str,
+    pub symbol: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DataObject {
+    pub id: u32,
+    pub name: String,
+    pub bytes: Vec<u8>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -89,6 +99,7 @@ pub struct Program {
     pub types: Vec<Type>,
     pub functions: Vec<Function>,
     pub callables: Vec<Callable>,
+    pub data: Vec<DataObject>,
 }
 
 impl Program {
@@ -114,7 +125,21 @@ impl Program {
             booleans(&mut out, callable.parameter_types.len(), false);
             out.push_str("]}");
         }
-        out.push_str("],\"data\":[],\"functions\":[");
+        out.push_str("],\"data\":[");
+        for (index, object) in self.data.iter().enumerate() {
+            comma(&mut out, index);
+            write!(out, "{{\"address\":\"near\",\"bytes\":[").unwrap();
+            bytes(&mut out, &object.bytes);
+            write!(
+                out,
+                "],\"id\":{},\"linkage\":\"internal\",\"name\":",
+                object.id
+            )
+            .unwrap();
+            string(&mut out, &object.name);
+            out.push_str(",\"readonly\":true,\"relocations\":[]}");
+        }
+        out.push_str("],\"functions\":[");
         for (index, function) in self.functions.iter().enumerate() {
             comma(&mut out, index);
             function_json(&mut out, function);
@@ -126,8 +151,8 @@ impl Program {
             comma(&mut out, index);
             write!(
                 out,
-                "{{\"address\":\"none\",\"bounds\":[],\"element\":null,\"evaluation\":\"none\",\"id\":{},\"kind\":\"{}\",\"name\":",
-                type_.id, type_.kind
+                "{{\"address\":\"none\",\"bounds\":[],\"element\":null,\"evaluation\":\"{}\",\"id\":{},\"kind\":\"{}\",\"name\":",
+                type_.evaluation, type_.id, type_.kind
             )
             .unwrap();
             string(&mut out, type_.name);
@@ -210,8 +235,8 @@ fn function_json(out: &mut String, function: &Function) {
         string(out, &place.name);
         write!(
             out,
-            ",\"offset\":{},\"storage\":\"local\",\"symbol\":0,\"type\":{}}}",
-            place.offset, place.type_id
+            ",\"offset\":{},\"storage\":\"{}\",\"symbol\":{},\"type\":{}}}",
+            place.offset, place.storage, place.symbol, place.type_id
         )
         .unwrap();
     }
@@ -248,6 +273,13 @@ fn operands(out: &mut String, values: &[Operand]) {
 }
 
 fn numbers(out: &mut String, values: &[u32]) {
+    for (index, value) in values.iter().enumerate() {
+        comma(out, index);
+        write!(out, "{value}").unwrap();
+    }
+}
+
+fn bytes(out: &mut String, values: &[u8]) {
     for (index, value) in values.iter().enumerate() {
         comma(out, index);
         write!(out, "{value}").unwrap();

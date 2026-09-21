@@ -5,6 +5,8 @@ use crate::syntax::Span;
 pub enum TokenKind {
     Identifier(String),
     Integer(i64),
+    Float(String),
+    Character(u8),
     Fn,
     Let,
     Var,
@@ -17,8 +19,15 @@ pub enum TokenKind {
     True,
     False,
     Not,
+    Char,
+    I8,
+    U8,
     I16,
+    U16,
     I32,
+    U32,
+    F32,
+    F64,
     Bool,
     Void,
     LeftParen,
@@ -71,8 +80,15 @@ fn keyword(word: &str) -> Option<TokenKind> {
         "true" => TokenKind::True,
         "false" => TokenKind::False,
         "not" => TokenKind::Not,
+        "char" => TokenKind::Char,
+        "i8" => TokenKind::I8,
+        "u8" => TokenKind::U8,
         "i16" => TokenKind::I16,
+        "u16" => TokenKind::U16,
         "i32" => TokenKind::I32,
+        "u32" => TokenKind::U32,
+        "f32" => TokenKind::F32,
+        "f64" => TokenKind::F64,
         "bool" => TokenKind::Bool,
         "void" => TokenKind::Void,
         _ => return None,
@@ -155,14 +171,151 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
                     while index < bytes.len() && bytes[index].is_ascii_digit() {
                         index += 1;
                     }
+                    let mut floating = false;
+                    if index < bytes.len() && bytes[index] == b'.' {
+                        floating = true;
+                        index += 1;
+                        while index < bytes.len() && bytes[index].is_ascii_digit() {
+                            index += 1;
+                        }
+                    }
+                    if index < bytes.len() && matches!(bytes[index], b'e' | b'E') {
+                        floating = true;
+                        index += 1;
+                        if index < bytes.len() && matches!(bytes[index], b'+' | b'-') {
+                            index += 1;
+                        }
+                        let exponent = index;
+                        while index < bytes.len() && bytes[index].is_ascii_digit() {
+                            index += 1;
+                        }
+                        if exponent == index {
+                            return Err(Diagnostic::new(
+                                Span::new(line_number, start + 1, index + 1),
+                                "floating literal exponent requires digits",
+                            ));
+                        }
+                    }
                     let spelling = &line[start..index];
-                    let value = spelling.parse::<i64>().map_err(|_| {
-                        Diagnostic::new(
+                    if floating {
+                        tokens.push(token(
+                            TokenKind::Float(spelling.into()),
+                            line_number,
+                            start,
+                            index,
+                        ));
+                    } else {
+                        let value = spelling.parse::<i64>().map_err(|_| {
+                            Diagnostic::new(
+                                Span::new(line_number, start + 1, index + 1),
+                                "integer literal is too large",
+                            )
+                        })?;
+                        tokens.push(token(TokenKind::Integer(value), line_number, start, index));
+                    }
+                }
+                b'.' if index + 1 < bytes.len() && bytes[index + 1].is_ascii_digit() => {
+                    index += 2;
+                    while index < bytes.len() && bytes[index].is_ascii_digit() {
+                        index += 1;
+                    }
+                    if index < bytes.len() && matches!(bytes[index], b'e' | b'E') {
+                        index += 1;
+                        if index < bytes.len() && matches!(bytes[index], b'+' | b'-') {
+                            index += 1;
+                        }
+                        let exponent = index;
+                        while index < bytes.len() && bytes[index].is_ascii_digit() {
+                            index += 1;
+                        }
+                        if exponent == index {
+                            return Err(Diagnostic::new(
+                                Span::new(line_number, start + 1, index + 1),
+                                "floating literal exponent requires digits",
+                            ));
+                        }
+                    }
+                    tokens.push(token(
+                        TokenKind::Float(line[start..index].into()),
+                        line_number,
+                        start,
+                        index,
+                    ));
+                }
+                b'\'' => {
+                    index += 1;
+                    if index >= bytes.len() {
+                        return Err(Diagnostic::new(
                             Span::new(line_number, start + 1, index + 1),
-                            "integer literal is too large",
-                        )
-                    })?;
-                    tokens.push(token(TokenKind::Integer(value), line_number, start, index));
+                            "unterminated character literal",
+                        ));
+                    }
+                    let value = if bytes[index] == b'\\' {
+                        index += 1;
+                        if index >= bytes.len() {
+                            return Err(Diagnostic::new(
+                                Span::new(line_number, start + 1, index + 1),
+                                "unterminated character escape",
+                            ));
+                        }
+                        if bytes[index] == b'x' {
+                            if index + 2 >= bytes.len() {
+                                return Err(Diagnostic::new(
+                                    Span::new(line_number, index + 1, bytes.len() + 1),
+                                    "byte escape requires two hexadecimal digits",
+                                ));
+                            }
+                            let high = hex_digit(bytes[index + 1]);
+                            let low = hex_digit(bytes[index + 2]);
+                            let (Some(high), Some(low)) = (high, low) else {
+                                return Err(Diagnostic::new(
+                                    Span::new(line_number, index + 1, index + 4),
+                                    "byte escape requires two hexadecimal digits",
+                                ));
+                            };
+                            index += 3;
+                            high * 16 + low
+                        } else {
+                            let escaped = match bytes[index] {
+                                b'0' => 0,
+                                b'n' => b'\n',
+                                b'r' => b'\r',
+                                b't' => b'\t',
+                                b'\\' => b'\\',
+                                b'\'' => b'\'',
+                                _ => {
+                                    return Err(Diagnostic::new(
+                                        Span::new(line_number, index + 1, index + 2),
+                                        "unknown character escape",
+                                    ))
+                                }
+                            };
+                            index += 1;
+                            escaped
+                        }
+                    } else if bytes[index].is_ascii() {
+                        let value = bytes[index];
+                        index += 1;
+                        value
+                    } else {
+                        return Err(Diagnostic::new(
+                            Span::new(line_number, index + 1, index + 2),
+                            "character literals are single-byte code units",
+                        ));
+                    };
+                    if index >= bytes.len() || bytes[index] != b'\'' {
+                        return Err(Diagnostic::new(
+                            Span::new(line_number, start + 1, index + 1),
+                            "character literal must contain exactly one byte",
+                        ));
+                    }
+                    index += 1;
+                    tokens.push(token(
+                        TokenKind::Character(value),
+                        line_number,
+                        start,
+                        index,
+                    ));
                 }
                 b'(' => {
                     nesting += 1;
@@ -287,6 +440,15 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
     Ok(tokens)
 }
 
+fn hex_digit(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -322,5 +484,37 @@ mod tests {
         let error = lex("if true:\n    work()\n  next()\n").unwrap_err();
         assert_eq!(error.span.line, 3);
         assert!(error.message.contains("does not match"));
+    }
+
+    #[test]
+    fn lexes_every_primitive_name_and_scalar_literal_form() {
+        let tokens =
+            lex("char i8 u8 i16 u16 i32 u32 f32 f64 bool void 1 1.5 .25 2e3 'A' '\\x80'\n")
+                .unwrap();
+        let kinds: Vec<_> = tokens.into_iter().map(|one| one.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::Char,
+                TokenKind::I8,
+                TokenKind::U8,
+                TokenKind::I16,
+                TokenKind::U16,
+                TokenKind::I32,
+                TokenKind::U32,
+                TokenKind::F32,
+                TokenKind::F64,
+                TokenKind::Bool,
+                TokenKind::Void,
+                TokenKind::Integer(1),
+                TokenKind::Float("1.5".into()),
+                TokenKind::Float(".25".into()),
+                TokenKind::Float("2e3".into()),
+                TokenKind::Character(b'A'),
+                TokenKind::Character(0x80),
+                TokenKind::Newline,
+                TokenKind::Eof,
+            ]
+        );
     }
 }
