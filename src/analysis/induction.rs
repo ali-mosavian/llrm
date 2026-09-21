@@ -16,7 +16,7 @@ use super::occurrence::{operations, phis, OpOccurrence, PhiOccurrence};
 use super::ranges;
 use super::regions::{overlapping, RegionError, RegionLayout};
 use crate::model::mir::{Arg, Const, Held, Kind, MemRef, MirBody, Op, OrderedMap, Value};
-use crate::model::mir_loops::{predecessors, Loop};
+use crate::model::mir_loops::{self, predecessors, Loop};
 
 /// The canonical pre-tested, single-latch loop CFG.
 ///
@@ -962,6 +962,27 @@ pub(crate) fn derived(
         direct.insert(formula.op, formula);
     }
     Ok(direct.values().cloned().collect())
+}
+
+/// Python's `of(body, dgroup=frozenset(), bounds=None)`.
+///
+/// Loop discovery, basic recurrences, and derived formulas remain one
+/// analysis query.  Loops without a basic recurrence are omitted exactly as
+/// in Python; alias-proof failures remain explicit to the caller.
+pub(crate) fn of(
+    body: &MirBody,
+    layout: Option<&RegionLayout>,
+) -> Result<Vec<(Loop, OrderedMap<u32, Affine>, Vec<Derived>)>, RegionError> {
+    let mut result = Vec::new();
+    for loop_ in mir_loops::loops(&body.blocks, Some(body.entry)) {
+        let found = basics(body, &loop_);
+        if found.is_empty() {
+            continue;
+        }
+        let formulas = derived(body, &loop_, Some(&found), layout)?;
+        result.push((loop_, found, formulas));
+    }
+    Ok(result)
 }
 
 /// Python's default `counted(body, loop)` invocation.
@@ -2242,7 +2263,7 @@ mod tests {
         Affine, AffineMap, AffineOperand, Derived, LoopShape, _as_signed, _composed, _constant,
         _copied, _counter_bound, _extended, _multiplier, _quotients, _signed, basics, canonical,
         control_replacement, counted, counted_with_facts, derived, derived_map, domain, invariant,
-        nonempty, relation, test_only, transparent_aliases, trip_count, unwritten,
+        nonempty, of, relation, test_only, transparent_aliases, trip_count, unwritten,
         zero_terminating_control,
     };
 
@@ -3684,6 +3705,22 @@ mod tests {
                 width: 2,
             })
         );
+    }
+
+    #[test]
+    fn direct_induction_of_reports_only_loops_with_basic_recurrences() {
+        let (body, expected_loop) = identity_body();
+        let expected = basics(&body, &expected_loop);
+
+        let result = of(&body, None).unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].0, expected_loop);
+        assert_eq!(result[0].1, expected);
+        assert!(result[0].2.is_empty());
+
+        let acyclic = MirBody::new(0, vec![MirBlock::new(0, vec![], vec![], vec![])]);
+        assert!(of(&acyclic, None).unwrap().is_empty());
     }
 
     #[test]
