@@ -7,6 +7,7 @@ mod cse;
 mod dead;
 mod dead_store;
 mod fold;
+pub(crate) mod indvars;
 pub(crate) mod loop_utils;
 mod pass;
 mod rewrite;
