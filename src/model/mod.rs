@@ -4,5 +4,6 @@
 //! Machine IR scaffolding. Python stage parity is established here before any
 //! consumer is migrated.
 
+pub mod floating;
 pub mod memory;
 pub mod mir;
