@@ -2,6 +2,7 @@
 
 mod allocation;
 mod allocation_constraints;
+mod allocation_intervals;
 mod allocation_rewrite;
 mod allocation_spill;
 mod interference;
@@ -12,6 +13,11 @@ mod verify;
 
 pub use allocation::{AllocationError, RegisterAssignment, allocate};
 pub use allocation_constraints::{ConstraintError, ConstraintTarget, split_fixed_occurrences};
+pub use allocation_intervals::{
+    DEF, GRACE, PER_INSN, PER_LEVEL, USE, LiveInterval, LiveSegment, MachineIntervalError,
+    MachineIntervalIndexes, index_intervals, interval_weights, live_intervals,
+    weighted_live_intervals,
+};
 pub use allocation_rewrite::{AllocationRewriteError, apply_assignment};
 pub use allocation_spill::{
     SpillMaterialization, SpillMaterializationError, SpillTarget, materialize_spills,
