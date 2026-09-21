@@ -573,6 +573,7 @@ fn build_with_options(
         compiler.finish();
         compiler.cleanup_local_strings()?;
         compiler.cleanup_local_arrays()?;
+        compiler.materialize_scalar_result();
         // STRING expressions in HIR are near descriptor addresses.  The
         // declared result place remains an owned four-byte descriptor, but a
         // callable result must have the same value type its callers consume.
@@ -7109,7 +7110,7 @@ impl Compiler {
                 }
             }
             self.select_block(target);
-            let result = if type_id == STRING {
+            if type_id == STRING {
                 // A function's local result descriptor dies with its runtime
                 // frame.  Microsoft BASIC's SCPF copies it to the temporary
                 // string chain and returns the surviving descriptor address
@@ -7120,20 +7121,40 @@ impl Compiler {
                 let pointer_type = self.pointer_type(STRING);
                 let result = self.value(pointer_type);
                 self.emit_runtime_call("B$SCPF", vec![result], vec![descriptor]);
-                result
+                self.blocks[self.current_block].terminator =
+                    Some(Terminator::Return(Some(Operand::Value(result))));
             } else {
-                let result = self.value(type_id);
-                self.emit(hir::Opcode::Load, vec![result], vec![Operand::Place(place)]);
-                result
-            };
-            self.blocks[self.current_block].terminator =
-                Some(Terminator::Return(Some(Operand::Value(result))));
+                // B$ERAS and B$STDL may clobber a scalar return register.
+                // Leave this as a cleanup-bearing return block until they
+                // have run, then materialize the result from its frame place.
+                self.blocks[self.current_block].terminator = Some(Terminator::Return(None));
+            }
         }
         for block in &mut self.blocks {
             if block.terminator.is_none() {
                 block.terminator = Some(Terminator::Return(None));
             }
         }
+    }
+
+    fn materialize_scalar_result(&mut self) {
+        let Some((place, type_id)) = self.result_place else {
+            return;
+        };
+        if type_id == STRING {
+            // `finish` emits B$SCPF for STRING results before the runtime
+            // frame is released. That path returns a temporary descriptor,
+            // not the function's owned result place.
+            return;
+        }
+        let target = self
+            .return_block
+            .expect("a function result has a unified return block");
+        self.select_block(target);
+        let result = self.value(type_id);
+        self.emit(hir::Opcode::Load, vec![result], vec![Operand::Place(place)]);
+        self.blocks[self.current_block].terminator =
+            Some(Terminator::Return(Some(Operand::Value(result))));
     }
 
     fn cleanup_local_arrays(&mut self) -> Result<(), SemanticError> {

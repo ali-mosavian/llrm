@@ -1261,6 +1261,122 @@ fn nonstatic_procedure_arrays_are_dynamic_despite_module_static_default() {
 }
 
 #[test]
+fn long_function_loads_its_result_after_erasing_local_arrays() {
+    // Python parity stage 133's PARITYKERNEL saves its LONG result, calls
+    // B$ERAS for the local dynamic array, then reloads the result for return.
+    // Loading first let B$ERAS clobber the return value in the Rust port.
+    let module = parse(
+        "function total as long\n\
+         dim cells(0 to 0) as integer\n\
+         total = 42\n\
+         end function\n",
+        Dialect::VbDos,
+    )
+    .unwrap();
+    let program = compile_hir(&module, "exit_cleanup", Dialect::VbDos, "vbdos").unwrap();
+    let function = program.modules[0]
+        .functions
+        .iter()
+        .find(|function| function.name == "TOTAL")
+        .expect("TOTAL function");
+    let result_place = function
+        .places
+        .iter()
+        .find(|place| place.name == "TOTAL")
+        .expect("function result place")
+        .id;
+    let exit = function
+        .blocks
+        .iter()
+        .find(|block| matches!(block.terminator, llrm::hir::Terminator::Return(Some(_))))
+        .expect("value-returning exit block");
+    let erase = exit
+        .instructions
+        .iter()
+        .position(|instruction| instruction.callee.as_deref() == Some("B$ERAS"))
+        .expect("local array cleanup");
+    let result_load = exit
+        .instructions
+        .iter()
+        .position(|instruction| {
+            instruction.opcode == llrm::hir::Opcode::Load
+                && matches!(instruction.operands.as_slice(), [llrm::hir::Operand::Place(place)] if *place == result_place)
+        })
+        .expect("function result load");
+    assert!(erase < result_load, "exit block: {exit:#?}");
+}
+
+#[test]
+fn string_function_copies_its_result_before_cleaning_other_local_strings() {
+    // Python's test_string_function_copies_its_local_result_to_the_runtime_temporary_chain
+    // caught COM_ARG returning its owned descriptor after B$EXSA freed it.
+    let module = parse(
+        "function pick as string\n\
+         dim other as string\n\
+         other = \"kept\"\n\
+         pick = other\n\
+         end function\n",
+        Dialect::VbDos,
+    )
+    .unwrap();
+    let program = compile_hir(&module, "string_exit", Dialect::VbDos, "vbdos").unwrap();
+    let function = program.modules[0]
+        .functions
+        .iter()
+        .find(|function| function.name == "PICK")
+        .expect("PICK function");
+    let result_place = function
+        .places
+        .iter()
+        .find(|place| place.name == "PICK")
+        .expect("function result place")
+        .id;
+    let other_place = function
+        .places
+        .iter()
+        .find(|place| place.name == "OTHER")
+        .expect("other local string place")
+        .id;
+    let exit = function
+        .blocks
+        .iter()
+        .find(|block| matches!(block.terminator, llrm::hir::Terminator::Return(Some(_))))
+        .expect("value-returning exit block");
+    let (scpf_at, scpf) = exit
+        .instructions
+        .iter()
+        .enumerate()
+        .find(|(_, instruction)| instruction.callee.as_deref() == Some("B$SCPF"))
+        .expect("result descriptor copied to the temporary chain");
+    let [scpf_result] = scpf.results.as_slice() else {
+        panic!("B$SCPF result: {scpf:#?}");
+    };
+    assert!(matches!(
+        &exit.terminator,
+        llrm::hir::Terminator::Return(Some(llrm::hir::Operand::Value(result))) if result == scpf_result
+    ));
+    let (stdl_at, stdl) = exit
+        .instructions
+        .iter()
+        .enumerate()
+        .find(|(_, instruction)| instruction.callee.as_deref() == Some("B$STDL"))
+        .expect("other local string cleanup");
+    assert!(scpf_at < stdl_at, "exit block: {exit:#?}");
+    let [llrm::hir::Operand::Value(stdl_descriptor)] = stdl.operands.as_slice() else {
+        panic!("B$STDL arguments: {stdl:#?}");
+    };
+    let descriptor_address = exit.instructions[..stdl_at]
+        .iter()
+        .find(|instruction| instruction.results.as_slice() == [*stdl_descriptor])
+        .expect("B$STDL descriptor address");
+    assert_eq!(descriptor_address.opcode, llrm::hir::Opcode::Address);
+    assert!(matches!(
+        descriptor_address.operands.as_slice(),
+        [llrm::hir::Operand::Place(place)] if *place == other_place && *place != result_place
+    ));
+}
+
+#[test]
 fn rem_array_metacommands_match_apostrophe_metacommands() {
     // Gorillas switches back with REM $STATIC after an apostrophe $DYNAMIC.
     // Discarding every character after REM left the second form semantically
