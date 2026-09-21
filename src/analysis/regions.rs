@@ -12,9 +12,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use num_bigint::BigInt;
 
-use crate::analysis::ranges::Interval;
+use crate::analysis::ranges::{covering, Interval};
 use crate::model::memory::{Provenance, Slice, SliceError};
-use crate::model::mir::{MemRef, Symbol, Value};
+use crate::model::mir::{symbolic_ref, MemRef, Symbol, Value};
 use crate::object::omf::module::{Addr, Space, NO_REGISTER};
 
 const FLOOR: i64 = -(1_i64 << 31);
@@ -475,6 +475,59 @@ pub(crate) fn may_alias(
     Ok(regions(one, known, layout)?.intersects(&regions(other, other_known, layout)?))
 }
 
+/// Whether a write through `other` could land on `one`.
+///
+/// Direct port of `qbopt.model.mir:overlapping`.  Provenance and regions
+/// answer the symbolic part; when two ordinary references retain the same
+/// base value, their byte intervals answer the remaining displacement
+/// question.  `Result` makes a region endpoint Python can express but Rust
+/// cannot retain an explicit refusal instead of a conservative guess.
+pub(crate) fn overlapping(
+    one: &MemRef,
+    other: &MemRef,
+    known: Option<&BTreeMap<Value, Interval>>,
+    other_known: Option<&BTreeMap<Value, Interval>>,
+    layout: Option<&RegionLayout>,
+) -> Result<bool, RegionError> {
+    if typed_apart(one, other) {
+        return Ok(false);
+    }
+    if one.provenance.is_some() && other.provenance.is_some() {
+        return may_alias(one, other, known, other_known, layout);
+    }
+    if !one.pointer && !other.pointer {
+        let have_facts = known.is_some_and(|facts| !facts.is_empty())
+            || other_known.is_some_and(|facts| !facts.is_empty());
+        let empty = BTreeMap::new();
+        let one = if have_facts {
+            covering(one, known.unwrap_or(&empty))
+        } else {
+            one.clone()
+        };
+        let other = if have_facts {
+            covering(other, other_known.unwrap_or(&empty))
+        } else {
+            other.clone()
+        };
+        let one = symbolic_ref(&one);
+        let other = symbolic_ref(&other);
+        if let (Some(one_address), Some(other_address)) = (one.addr, other.addr) {
+            if one.base == other.base
+                && one_address.space == other_address.space
+                && one_address.index == other_address.index
+                && one.segment == other.segment
+                && (one_address.space != Space::Far || one.segment.is_some())
+            {
+                let one_low = i128::from(one_address.disp);
+                let other_low = i128::from(other_address.disp);
+                return Ok(one_low < other_low + i128::from(other.width)
+                    && other_low < one_low + i128::from(one.width));
+            }
+        }
+    }
+    may_alias(one, other, known, other_known, layout)
+}
+
 /// Python `addresses`: byte-region intersection for two naked addresses.
 pub(crate) fn addresses(
     one: Option<Addr>,
@@ -516,8 +569,8 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use super::{
-        addresses, may_alias, regions, typed_apart, Origin, Region, RegionError, RegionLayout,
-        RegionPart, RegionSet, Span,
+        addresses, may_alias, overlapping, regions, typed_apart, Origin, Region, RegionError,
+        RegionLayout, RegionPart, RegionSet, Span,
     };
     use crate::analysis::ranges::Interval;
     use crate::model::memory::{
@@ -915,6 +968,163 @@ mod tests {
         assert_eq!(
             may_alias(&indexed, &other, Some(&too_large), None, None),
             Err(RegionError::NarrowedSliceUnrepresentable)
+        );
+    }
+
+    #[test]
+    fn overlapping_far_segments_need_a_segment_identity_before_offsets_decide() {
+        // Direct port of tests/test_mir_alias.py::{test_equal_offsets_do_not_prove_far_segments_disjoint,
+        // test_unknown_far_segments_cannot_use_offset_disjointness}.  Far
+        // offsets alone do not identify a byte: 1000:0020 and 1001:0010
+        // can name the same address.
+        let base = Value::new(1, 0);
+        let mut one_address = address(Space::Far, 0x20, 0);
+        one_address.base = PhysicalRegister::new(3);
+        let mut one = reference(one_address, 2);
+        one.base = Some(base);
+        one.segment = Some(Value::new(2, 0));
+
+        let mut other = one.clone();
+        other.addr.as_mut().expect("address").disp = 0x10;
+        other.segment = Some(Value::new(3, 0));
+        assert_eq!(overlapping(&one, &other, None, None, None), Ok(true));
+        assert_eq!(overlapping(&other, &one, None, None, None), Ok(true));
+
+        other.segment = one.segment;
+        assert_eq!(overlapping(&one, &other, None, None, None), Ok(false));
+
+        one.segment = None;
+        other = one.clone();
+        other.addr.as_mut().expect("address").disp += 16;
+        assert_eq!(overlapping(&one, &other, None, None, None), Ok(true));
+    }
+
+    #[test]
+    fn overlapping_keeps_indexed_segments_disjoint() {
+        // Direct port of tests/test_mir_alias.py::test_an_index_stays_inside_its_own_segment.
+        let base = Value::new(1, 0);
+        let mut one_address = address(Space::Segment, 0x20, 1);
+        one_address.base = PhysicalRegister::new(3);
+        let mut one = reference(one_address, 2);
+        one.base = Some(base);
+        let mut other = one.clone();
+        other.addr.as_mut().expect("address").index = 2;
+        other.addr.as_mut().expect("address").disp = 0x10;
+
+        assert_eq!(overlapping(&one, &other, None, None, None), Ok(false));
+    }
+
+    #[test]
+    fn overlapping_same_base_statics_use_half_open_byte_ranges() {
+        let one = reference(address(Space::Segment, 10, 5), 4);
+        let mut overlaps = one.clone();
+        overlaps.addr.as_mut().expect("address").disp = 13;
+        let mut adjacent = one.clone();
+        adjacent.addr.as_mut().expect("address").disp = 14;
+
+        assert_eq!(overlapping(&one, &overlaps, None, None, None), Ok(true));
+        assert_eq!(overlapping(&one, &adjacent, None, None, None), Ok(false));
+    }
+
+    #[test]
+    fn overlapping_range_covering_respects_width_wrap_and_each_fact_map() {
+        // Direct port of tests/test_ranges.py::test_range_alias_checks_cover_width_and_wrap.
+        let base = Value::new(1, 0);
+        let mut indexed = reference(address(Space::Segment, 4, 5), 2);
+        indexed.base = Some(base);
+        indexed.base_width = 2;
+
+        for (low, high, interval_width, offset, width, overlaps) in [
+            (0_i64, 20_i64, 2_u32, 26_i64, 2_u32, false),
+            (0, 20, 2, 25, 2, true),
+            (0, 20, 2, 100, 4, false),
+            (-8, 20, 2, 100, 4, true),
+            (0, 65_535, 2, 100, 4, true),
+            (0, 20, 4, 100, 4, true),
+        ] {
+            let known = BTreeMap::from([(
+                base,
+                Interval {
+                    low: low.into(),
+                    high: high.into(),
+                    width: interval_width,
+                },
+            )]);
+            let static_ = reference(address(Space::Segment, offset, 5), width);
+
+            assert_eq!(
+                overlapping(&indexed, &static_, Some(&known), None, None),
+                Ok(overlaps),
+                "left facts: {low}..{high}, width {interval_width}, static {offset}/{width}",
+            );
+            assert_eq!(
+                overlapping(&static_, &indexed, None, Some(&known), None),
+                Ok(overlaps),
+                "right facts: {low}..{high}, width {interval_width}, static {offset}/{width}",
+            );
+        }
+    }
+
+    #[test]
+    fn overlapping_incompatible_scalars_are_apart_except_at_a_union_start() {
+        // Direct port of tests/test_mir_alias.py::test_restrict_roots_and_tbaa_share_the_alias_query.
+        let address = address(Space::Frame, -8, 0);
+        let mut short = reference(address, 2);
+        short.typed = Some(("short".to_owned(), false));
+        let mut long = reference(address, 4);
+        long.typed = Some(("long".to_owned(), false));
+        let mut distinct = long.clone();
+        distinct.addr.as_mut().expect("address").disp = -4;
+
+        assert_eq!(overlapping(&short, &long, None, None, None), Ok(true));
+        assert_eq!(overlapping(&short, &distinct, None, None, None), Ok(false));
+    }
+
+    #[test]
+    fn overlapping_delegates_both_provenances_before_base_arithmetic() {
+        // `tests/test_mir_alias.py::test_canonical_subobjects_use_object_identity_and_byte_ranges`:
+        // equal address spellings in distinct objects are disjoint.
+        let mut one = reference(address(Space::Segment, 0, 1), 2);
+        one.provenance = Some(Provenance::one(object(1, Some(4))));
+        let mut other = one.clone();
+        other.provenance = Some(Provenance::one(object(2, Some(4))));
+
+        assert_eq!(overlapping(&one, &other, None, None, None), Ok(false));
+    }
+
+    #[test]
+    fn overlapping_pointers_skip_covering_and_same_base_arithmetic() {
+        // Direct port of tests/test_pointer_memory.py::test_pointer_identity_is_not_a_disjointness_proof.
+        let base = Value::new(1, 0);
+        let mut one = reference(address(Space::Segment, 0, 0), 2);
+        one.base = Some(base);
+        one.base_width = 2;
+        one.pointer = true;
+        let mut other = one.clone();
+        other.addr.as_mut().expect("address").disp = 8;
+        let known = BTreeMap::from([(
+            base,
+            Interval {
+                low: 0.into(),
+                high: 0.into(),
+                width: 2,
+            },
+        )]);
+
+        assert_eq!(
+            overlapping(&one, &other, Some(&known), None, None),
+            Ok(true)
+        );
+    }
+
+    #[test]
+    fn overlapping_reports_unrepresentable_region_endpoints() {
+        let overflowing = reference(address(Space::Segment, i64::MAX, 5), 1);
+        let frame = reference(address(Space::Frame, 0, 0), 1);
+
+        assert_eq!(
+            overlapping(&overflowing, &frame, None, None, None),
+            Err(RegionError::EndpointOverflow)
         );
     }
 
