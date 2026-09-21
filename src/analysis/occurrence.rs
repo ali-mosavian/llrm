@@ -25,6 +25,11 @@ impl OpOccurrence {
     pub(crate) const fn block_index(self) -> usize {
         self.block_index
     }
+
+    /// The operation's ordinal within its immutable block snapshot.
+    pub(crate) const fn operation_index(self) -> usize {
+        self.operation_index
+    }
 }
 
 /// One phi occurrence in an immutable MIR body snapshot.
@@ -41,6 +46,11 @@ impl PhiOccurrence {
     /// The immutable body ordinal this phi occurrence belongs to.
     pub(crate) const fn block_index(self) -> usize {
         self.block_index
+    }
+
+    /// The phi's ordinal within its immutable block snapshot.
+    pub(crate) const fn phi_index(self) -> usize {
+        self.phi_index
     }
 }
 
@@ -112,6 +122,8 @@ mod tests {
 
         assert_eq!(found.len(), 2);
         assert_ne!(found[0], found[1]);
+        assert_eq!(found[0].operation_index(), 0);
+        assert_eq!(found[1].operation_index(), 1);
     }
 
     #[test]
@@ -128,5 +140,7 @@ mod tests {
 
         assert_eq!(found.len(), 2);
         assert_ne!(found[0], found[1]);
+        assert_eq!(found[0].phi_index(), 0);
+        assert_eq!(found[1].phi_index(), 1);
     }
 }
