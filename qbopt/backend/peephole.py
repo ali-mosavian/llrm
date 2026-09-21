@@ -1850,10 +1850,30 @@ def _loaded_addresses(
     return replace(block, insns=tuple(one for index, one in enumerate(insns) if index not in removed))
 
 
+def _loses_live_definition(parts: tuple[lir.Insn, ...], combined: lir.Insn, users: Counter) -> bool:
+    """Whether replacing ``parts`` drops a value read outside that region.
+
+    Allocated instructions may carry virtual occurrence identities that do
+    not follow their final physical two-address spelling.  A copy feeding an
+    ADD normally has no reader beyond that ADD, but constrained occurrences
+    can still name the copy result later even after the physical register has
+    been updated.  A machine fold cannot erase such an identity: the verifier
+    and later opaque occurrences still need its definition.
+    """
+    eliminated = {value for one in parts for value in one.defines} - set(combined.defines)
+    if not eliminated:
+        return False
+    local = Counter(value for one in parts for value in one.uses)
+    local.update(held.value for one in parts for held, _register in one.requires)
+    return any(users[value] > local[value] for value in eliminated)
+
+
 def addresses(body: lir.LirBody, *, cpu: str | targets.Profile = "386") -> lir.LirBody:
     """Select LEA for allocated arithmetic when the replaced flags are dead."""
     target_cpu = targets.profile(cpu)
     virtual_uses = Counter(value for block in body.blocks for one in block.insns for value in one.uses)
+    virtual_uses.update(held.value for block in body.blocks for one in block.insns for held, _register in one.requires)
+    virtual_uses.update(value for block in body.blocks for phi in block.phis for _source, value in phi.incoming)
     blocks = []
     for block in body.blocks:
         block = _loaded_addresses(block, virtual_uses, target_cpu)
@@ -1867,13 +1887,17 @@ def addresses(body: lir.LirBody, *, cpu: str | targets.Profile = "386") -> lir.L
         index = 0
         while index < len(block.insns):
             triple = block.insns[index : index + 3]
+            combined_parts = triple
             combined = (
                 _scaled_address(triple, flags_dead=True, cpu=target_cpu)
                 if len(triple) == 3 and id(triple[2]) in dead
                 else None
             )
             if combined is None:
-                combined = _scaled_address(block.insns[index : index + 4], cpu=target_cpu)
+                combined_parts = block.insns[index : index + 4]
+                combined = _scaled_address(combined_parts, cpu=target_cpu)
+            if combined is not None and _loses_live_definition(combined_parts, combined, virtual_uses):
+                combined = None
             if combined is not None:
                 insns.append(combined)
                 index += 3
@@ -1882,6 +1906,8 @@ def addresses(body: lir.LirBody, *, cpu: str | targets.Profile = "386") -> lir.L
                 combined = _sum_address(pair, cpu=target_cpu) if len(pair) == 2 and id(pair[1]) in dead else None
                 if combined is None:
                     combined = _shift_address(pair, cpu=target_cpu) if len(pair) == 2 and id(pair[1]) in dead else None
+                if combined is not None and _loses_live_definition(pair, combined, virtual_uses):
+                    combined = None
                 if combined is not None:
                     removed = pair[1]
                     folded = (

@@ -1,20 +1,64 @@
 """Common HIR from the modern frontend to a fresh 16-bit OMF object."""
 
 from pathlib import Path
+from dataclasses import replace
 
 from qbopt import hir
 from qbopt import flow
+from qbopt.model import mir
 from qbopt.backend import masm
 from qbopt.backend import jumps
 from qbopt.backend import lower
 from qbopt.backend import phielim
 from qbopt.backend import omfwrite
 from qbopt.backend import prologue
+from qbopt.optimize import transform
 from qbopt.backend import lower_int64
 from qbopt.backend import cpu as targets
 from qbopt.backend import frame as frames
 from qbopt.frontend.qb import physicalize
 from qbopt.objectfile.module import Space
+
+
+def optimized(
+    program: hir.Program,
+    function: hir.Function,
+    lowered: hir.Lowered,
+    target: targets.Profile,
+    calls: dict[int, str] | None = None,
+) -> hir.Lowered:
+    """Run the common MIR fixed point for one modern-language function."""
+    module = next(one for one in program.modules if function in one.functions)
+    dgroup = frozenset(
+        one.id
+        for one in module.data
+        if one.linkage is hir.DataLinkage.INTERNAL and one.address not in (hir.AddressKind.FAR, hir.AddressKind.HUGE)
+    )
+    if calls is None:
+        calls = {
+            operation.at: operation.name
+            for block in lowered.body.blocks
+            for operation in block.ops
+            if operation.kind is mir.Kind.CALL
+        }
+    body = transform.applied(
+        lowered.body,
+        dgroup,
+        calls,
+        registers=target.register_capacity,
+        call_registers=target.call_register_capacity,
+        index_scales=target.address_scales,
+        address_forms=target.address_forms,
+        costs=target.operations,
+        max_unroll_iterations=target.max_unroll_iterations,
+        max_unrolled_operations=target.max_unrolled_operations,
+        # The real-mode frontend optimizes for a compact loop body. Complete
+        # unrolling and speculative peeling duplicate code; the scalar,
+        # recurrence, and address-strength passes remain enabled.
+        unroll_=False,
+        peel_=False,
+    )
+    return replace(lowered, body=body)
 
 
 def assembled(
@@ -45,7 +89,12 @@ def assembled(
         return name if name.startswith("__") else f"_{name}"
 
     for function, lowered in zip(module.functions, semantic, strict=True):
+        lowered = optimized(program, function, lowered, target)
         physical = physicalize(program, function, lowered)
+        physical = replace(
+            physical,
+            lowered=optimized(program, function, physical.lowered, target, physical.calls),
+        )
         legalized = lower_int64.expanded(
             physical.lowered.body,
             physical.calls,

@@ -11,6 +11,7 @@ from qbopt.model import mir
 from qbopt.backend import cpu
 from qbopt.backend import lower
 from qbopt.backend import select
+from qbopt.backend import verify
 from qbopt.frontend import blocks
 from qbopt.backend import peephole
 from qbopt.backend import addressforms
@@ -91,6 +92,62 @@ def test_sum_lea_preserves_observed_add_flags() -> None:
     result = peephole.addresses(body, cpu="386").insns
 
     assert [one.what.name for one in result] == ["mov", "add", "je"]
+
+
+def test_sum_lea_preserves_a_copy_result_read_after_the_add() -> None:
+    """Modern nbody lost value 333 and stopped in the LIR verifier.
+
+    Allocation had introduced a copy whose physical destination was reused by
+    the following ADD, while a later opaque call occurrence still named the
+    copy's virtual result.  Folding the pair to LEA discarded that definition.
+    An address fold may remove an intermediate only when all of its readers are
+    inside the folded region.
+    """
+    destination = ir.Reg(Register.EAX, 4)
+    left = ir.Reg(Register.EBP, 4)
+    right = ir.Reg(Register.EDI, 4)
+    saved = ir.Reg(Register.EDX, 4)
+    copy = lir.Insn(
+        1,
+        (1, 1),
+        ir.Semantics(ir.Operation.MOVE, "mov", (destination,), (left,)),
+        (3,),
+        (1,),
+    )
+    addition = lir.Insn(
+        2,
+        (2, 2),
+        ir.Semantics(ir.Operation.BINARY, "add", (destination,), (destination, right)),
+        (1,),
+        (1, 2),
+    )
+    preserve = lir.Insn(
+        3,
+        (3, 3),
+        ir.Semantics(ir.Operation.MOVE, "mov", (saved,), (destination,)),
+        (4,),
+        (3,),
+    )
+    compare = lir.Insn(
+        4,
+        (4, 4),
+        ir.Semantics(ir.Operation.COMPARE, "cmp", (), (destination, ir.Imm(0, 4))),
+        (),
+        (1,),
+    )
+    body = lir.LirBody(
+        "live-copy-sum",
+        1,
+        (lir.LirBlock(1, (copy, addition, preserve, compare), ()),),
+        {},
+        {},
+        inputs=frozenset((1, 2)),
+    )
+
+    transformed = peephole.addresses(body, cpu="386")
+
+    assert [one.what.name for one in transformed.insns] == ["mov", "add", "mov", "cmp"]
+    assert not verify.verify(transformed)
 
 
 def _constant_sum_body(amount: int, *, symbolic_add: bool = False) -> lir.LirBody:

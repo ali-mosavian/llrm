@@ -5,9 +5,11 @@ import pytest
 
 from qbopt import hir
 from qbopt.model import mir
+from qbopt.backend import masm
 from qbopt.backend import lower_int64
 from qbopt.frontend.modern import driver
 from qbopt.frontend.qb import physicalize
+from qbopt.frontend.modern import compile as modern_compile
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "frontends" / "modern" / "fixtures" / "control.mod"
@@ -283,3 +285,13 @@ def test_nbody_string_places_point_after_the_descriptor() -> None:
     strings = [place for place in function.places if place.name.startswith("$string")]
     assert strings
     assert all(place.offset == 4 for place in strings)
+
+
+def test_nbody_native_loops_eliminate_redundant_index_arithmetic() -> None:
+    """Modern nbody emitted 52 `sub index,0; shl index,4` address chains."""
+    assembly = masm.text(modern_compile.assembled(driver.parsed(NBODY), entry="main"))
+
+    assert "sub si, 0" not in assembly
+    assert "sub di, 0" not in assembly
+    scaled_indices = assembly.count("shl si, 4") + assembly.count("shl di, 4")
+    assert scaled_indices <= 2
