@@ -8,6 +8,7 @@ mod dead_store;
 mod fold;
 mod pass;
 mod rewrite;
+pub(crate) mod rotate;
 mod unreachable;
 
 pub use algebraic::{AlgebraicError, AlgebraicSimplify};
