@@ -6,6 +6,8 @@ use crate::syntax::AssignTarget;
 use crate::syntax::BinaryOp;
 use crate::syntax::Expr;
 use crate::syntax::FStringPart;
+use crate::syntax::FixedStorage;
+use crate::syntax::FixedType;
 use crate::syntax::Function;
 use crate::syntax::IterationMode;
 use crate::syntax::Module;
@@ -29,6 +31,8 @@ const U32: u32 = 9;
 const F32: u32 = 10;
 const F64: u32 = 11;
 const STRING: u32 = 12;
+const I64: u32 = 13;
+const FIXED_START: u32 = 14;
 
 #[derive(Default)]
 struct LiteralPool {
@@ -82,6 +86,7 @@ struct TypeRegistry {
     types: Vec<hir::Type>,
     arrays: BTreeMap<(u32, u32), u32>,
     structs: BTreeMap<String, StructLayout>,
+    fixed_names: BTreeMap<String, TypeName>,
 }
 
 #[derive(Clone, Debug)]
@@ -142,12 +147,60 @@ impl TypeRegistry {
             ],
             arrays: BTreeMap::new(),
             structs: BTreeMap::new(),
+            fixed_names: BTreeMap::new(),
         }
+    }
+
+    fn register_fixed_types(&mut self, declarations: &[FixedType]) -> Result<(), Diagnostic> {
+        if declarations.is_empty() {
+            return Ok(());
+        }
+        self.types
+            .push(plain_type(I64, "$i64", "integer", 8, Some(true), "none"));
+        for declaration in declarations {
+            if self.fixed_names.contains_key(&declaration.name) {
+                return Err(Diagnostic::new(
+                    declaration.span,
+                    format!("type {:?} is declared more than once", declaration.name),
+                ));
+            }
+            let TypeName::Fixed {
+                storage,
+                declaration: ordinal,
+                ..
+            } = declaration.type_name
+            else {
+                unreachable!("only fixed types are registered here")
+            };
+            let id = FIXED_START + u32::from(ordinal);
+            if id != self.types.len() as u32 + 1 {
+                return Err(Diagnostic::new(
+                    declaration.span,
+                    "fixed-point declarations are out of order",
+                ));
+            }
+            self.types.push(plain_type(
+                id,
+                &declaration.name,
+                "integer",
+                match storage {
+                    FixedStorage::I16 => 2,
+                    FixedStorage::I32 => 4,
+                },
+                Some(true),
+                "none",
+            ));
+            self.fixed_names
+                .insert(declaration.name.clone(), declaration.type_name);
+        }
+        Ok(())
     }
 
     fn register_structs(&mut self, declarations: &[Struct]) -> Result<(), Diagnostic> {
         for declaration in declarations {
-            if self.structs.contains_key(&declaration.name) {
+            if self.structs.contains_key(&declaration.name)
+                || self.fixed_names.contains_key(&declaration.name)
+            {
                 return Err(Diagnostic::new(
                     declaration.span,
                     format!("struct {:?} is declared more than once", declaration.name),
@@ -207,10 +260,16 @@ impl TypeRegistry {
         match spec {
             TypeSpec::Primitive(type_name) => Ok(ElementType::Scalar(*type_name)),
             TypeSpec::Named(name) => self
-                .structs
+                .fixed_names
                 .get(name)
-                .map(|one| ElementType::Struct(one.id))
-                .ok_or_else(|| Diagnostic::new(span, format!("unknown struct {name:?}"))),
+                .copied()
+                .map(ElementType::Scalar)
+                .or_else(|| {
+                    self.structs
+                        .get(name)
+                        .map(|one| ElementType::Struct(one.id))
+                })
+                .ok_or_else(|| Diagnostic::new(span, format!("unknown type {name:?}"))),
         }
     }
 
@@ -378,6 +437,7 @@ pub fn compile(module: &Module, module_name: &str) -> Result<String, Diagnostic>
     let mut functions = Vec::new();
     let mut literals = LiteralPool::default();
     let mut types = TypeRegistry::new();
+    types.register_fixed_types(&module.fixed_types)?;
     types.register_structs(&module.structs)?;
     for function in &module.functions {
         let signature = signatures.get(&function.name).expect("collected function");
@@ -403,10 +463,10 @@ pub fn compile(module: &Module, module_name: &str) -> Result<String, Diagnostic>
     Ok(program.json())
 }
 
-fn print_builtins() -> Vec<(&'static str, Option<TypeName>)> {
+fn print_builtins() -> Vec<(&'static str, Vec<TypeName>)> {
     let mut out = vec![
-        ("__print_newline", None),
-        ("__print_text", Some(TypeName::String)),
+        ("__print_newline", Vec::new()),
+        ("__print_text", vec![TypeName::String]),
     ];
     for type_name in [
         TypeName::Bool,
@@ -433,8 +493,14 @@ fn print_builtins() -> Vec<(&'static str, Option<TypeName>)> {
             TypeName::F64 => "__print_f64",
             _ => unreachable!(),
         };
-        out.push((name, Some(type_name)));
+        out.push((name, vec![type_name]));
     }
+    // These are formatting boundaries, not arithmetic helpers. They receive
+    // the signed raw storage value followed by its fractional-bit count and
+    // write canonical base-10 integer.fraction text. The formatter keeps one
+    // digit after the point and trims any further trailing zeroes.
+    out.push(("__print_fixed_i16", vec![TypeName::I16, TypeName::U8]));
+    out.push(("__print_fixed_i32", vec![TypeName::I32, TypeName::U8]));
     out
 }
 
@@ -1538,6 +1604,14 @@ impl<'a> FunctionCompiler<'a> {
         expected: Option<TypeName>,
         span: Span,
     ) -> Result<TypedOperand, Diagnostic> {
+        if let Some(type_name @ TypeName::Fixed { fraction, .. }) = expected {
+            let scaled = i128::from(value) << fraction;
+            let value = fixed_storage_value(scaled, type_name, span)?;
+            return Ok(TypedOperand {
+                operand: Some(hir::Operand::Constant(type_id(type_name), value)),
+                type_name,
+            });
+        }
         let type_name = match expected {
             Some(type_name) if is_integer(type_name) || type_name == TypeName::Char => type_name,
             Some(other) => return Err(type_mismatch(span, other, TypeName::I16)),
@@ -1575,6 +1649,14 @@ impl<'a> FunctionCompiler<'a> {
         expected: Option<TypeName>,
         span: Span,
     ) -> Result<TypedOperand, Diagnostic> {
+        if let Some(type_name @ TypeName::Fixed { fraction, .. }) = expected {
+            let scaled = scaled_decimal(spelling, fraction, span)?;
+            let value = fixed_storage_value(scaled, type_name, span)?;
+            return Ok(TypedOperand {
+                operand: Some(hir::Operand::Constant(type_id(type_name), value)),
+                type_name,
+            });
+        }
         let type_name = match expected {
             Some(type_name) if is_float(type_name) => type_name,
             Some(other) => return Err(type_mismatch(span, other, TypeName::F64)),
@@ -1757,11 +1839,13 @@ impl<'a> FunctionCompiler<'a> {
             ));
         }
         let mut left_expected = (!comparison).then_some(expected).flatten();
-        if comparison {
+        if left_expected.is_none() {
             let hint = self.expression_type_hint(right);
             if (matches!(left, Expr::Integer(..))
-                && hint.is_some_and(|one| is_integer(one) || one == TypeName::Char))
-                || (matches!(left, Expr::Float(..)) && hint.is_some_and(is_float))
+                && hint
+                    .is_some_and(|one| is_integer(one) || one == TypeName::Char || is_fixed(one)))
+                || (matches!(left, Expr::Float(..))
+                    && hint.is_some_and(|one| is_float(one) || is_fixed(one)))
             {
                 left_expected = hint;
             }
@@ -1792,6 +1876,14 @@ impl<'a> FunctionCompiler<'a> {
             ));
         }
         let right = self.expression(right, Some(left.type_name))?;
+        if is_fixed(left.type_name)
+            && matches!(
+                operation,
+                BinaryOp::Multiply | BinaryOp::Divide | BinaryOp::Remainder
+            )
+        {
+            return self.fixed_binary(operation, left, right, span);
+        }
         let result_type = if comparison {
             TypeName::Bool
         } else {
@@ -1834,6 +1926,90 @@ impl<'a> FunctionCompiler<'a> {
         Ok(TypedOperand {
             operand: Some(hir::Operand::Value(result)),
             type_name: result_type,
+        })
+    }
+
+    fn fixed_binary(
+        &mut self,
+        operation: BinaryOp,
+        left: TypedOperand,
+        right: TypedOperand,
+        span: Span,
+    ) -> Result<TypedOperand, Diagnostic> {
+        let fixed_type = left.type_name;
+        let TypeName::Fixed {
+            storage, fraction, ..
+        } = fixed_type
+        else {
+            unreachable!("fixed arithmetic requires a fixed type")
+        };
+        if operation == BinaryOp::Remainder {
+            return Err(Diagnostic::new(
+                span,
+                "'%' is not defined for fixed-point values",
+            ));
+        }
+        let wide_type = match storage {
+            FixedStorage::I16 => TypeName::I32,
+            FixedStorage::I32 => TypeName::I64,
+        };
+        let left = self.convert_value(left, wide_type, span)?;
+        let right = self.convert_value(right, wide_type, span)?;
+        let left = required(left, span)?;
+        let right = required(right, span)?;
+        let adjusted = self.value(wide_type);
+        match operation {
+            BinaryOp::Multiply => {
+                let product = self.value(wide_type);
+                self.emit("mul", vec![product], vec![left, right], None);
+                self.emit(
+                    "sar",
+                    vec![adjusted],
+                    vec![
+                        hir::Operand::Value(product),
+                        hir::Operand::Constant(U8, i64::from(fraction)),
+                    ],
+                    None,
+                );
+            }
+            BinaryOp::Divide => {
+                let numerator = self.value(wide_type);
+                self.emit(
+                    "shl",
+                    vec![numerator],
+                    vec![left, hir::Operand::Constant(U8, i64::from(fraction))],
+                    None,
+                );
+                self.emit(
+                    "div",
+                    vec![adjusted],
+                    vec![hir::Operand::Value(numerator), right],
+                    None,
+                );
+            }
+            _ => unreachable!("only scaling fixed operations reach this helper"),
+        }
+        self.convert_value(
+            TypedOperand {
+                operand: Some(hir::Operand::Value(adjusted)),
+                type_name: wide_type,
+            },
+            fixed_type,
+            span,
+        )
+    }
+
+    fn convert_value(
+        &mut self,
+        value: TypedOperand,
+        target: TypeName,
+        span: Span,
+    ) -> Result<TypedOperand, Diagnostic> {
+        let result = self.value(target);
+        self.emit("convert", vec![result], vec![required(value, span)?], None);
+        Ok(TypedOperand {
+            operand: Some(hir::Operand::Value(result)),
+            type_name: target,
         })
     }
 
@@ -2125,6 +2301,28 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn emit_print(&mut self, type_name: TypeName, operand: hir::Operand) {
+        if let TypeName::Fixed {
+            storage, fraction, ..
+        } = type_name
+        {
+            let storage_type = match storage {
+                FixedStorage::I16 => TypeName::I16,
+                FixedStorage::I32 => TypeName::I32,
+            };
+            let raw = self.value(storage_type);
+            self.emit("convert", vec![raw], vec![operand], None);
+            self.emit_builtin(
+                match storage {
+                    FixedStorage::I16 => "__print_fixed_i16",
+                    FixedStorage::I32 => "__print_fixed_i32",
+                },
+                vec![
+                    hir::Operand::Value(raw),
+                    hir::Operand::Constant(U8, i64::from(fraction)),
+                ],
+            );
+            return;
+        }
         let name = match type_name {
             TypeName::String => "__print_text",
             TypeName::Bool => "__print_bool",
@@ -2137,7 +2335,7 @@ impl<'a> FunctionCompiler<'a> {
             TypeName::U32 => "__print_u32",
             TypeName::F32 => "__print_f32",
             TypeName::F64 => "__print_f64",
-            TypeName::Void => unreachable!(),
+            TypeName::Void | TypeName::I64 | TypeName::Fixed { .. } => unreachable!(),
         };
         self.emit_builtin(name, vec![operand]);
     }
@@ -2315,6 +2513,75 @@ fn jump(target: u32) -> hir::Terminator {
     }
 }
 
+fn scaled_decimal(spelling: &str, fraction: u8, span: Span) -> Result<i128, Diagnostic> {
+    let (mantissa, exponent) = spelling
+        .find(['e', 'E'])
+        .map(|at| (&spelling[..at], &spelling[at + 1..]))
+        .unwrap_or((spelling, "0"));
+    let exponent = exponent
+        .parse::<i32>()
+        .map_err(|_| Diagnostic::new(span, "invalid fixed-point literal exponent"))?;
+    let (whole, fractional) = mantissa
+        .split_once('.')
+        .map_or((mantissa, ""), |(whole, fractional)| (whole, fractional));
+    let digits = format!("{whole}{fractional}");
+    let significand = digits
+        .parse::<i128>()
+        .map_err(|_| Diagnostic::new(span, "fixed-point literal is too large"))?;
+    let fractional_digits = i32::try_from(fractional.len())
+        .map_err(|_| Diagnostic::new(span, "fixed-point literal is too long"))?;
+    let decimal_power = exponent
+        .checked_sub(fractional_digits)
+        .ok_or_else(|| Diagnostic::new(span, "fixed-point literal exponent is too large"))?;
+    let binary_scale = 1_i128
+        .checked_shl(u32::from(fraction))
+        .ok_or_else(|| Diagnostic::new(span, "fixed-point fraction is too large"))?;
+    let mut numerator = significand
+        .checked_mul(binary_scale)
+        .ok_or_else(|| Diagnostic::new(span, "fixed-point literal is too large"))?;
+    let denominator = if decimal_power >= 0 {
+        let decimal_scale = checked_power_of_ten(decimal_power as u32, span)?;
+        numerator = numerator
+            .checked_mul(decimal_scale)
+            .ok_or_else(|| Diagnostic::new(span, "fixed-point literal is too large"))?;
+        1
+    } else {
+        checked_power_of_ten(decimal_power.unsigned_abs(), span)?
+    };
+    let quotient = numerator / denominator;
+    let remainder = numerator % denominator;
+    Ok(if remainder != 0 && remainder >= denominator / 2 {
+        quotient + 1
+    } else {
+        quotient
+    })
+}
+
+fn checked_power_of_ten(power: u32, span: Span) -> Result<i128, Diagnostic> {
+    (0..power).try_fold(1_i128, |value, _| {
+        value
+            .checked_mul(10)
+            .ok_or_else(|| Diagnostic::new(span, "fixed-point literal exponent is too large"))
+    })
+}
+
+fn fixed_storage_value(value: i128, type_name: TypeName, span: Span) -> Result<i64, Diagnostic> {
+    let TypeName::Fixed { storage, .. } = type_name else {
+        unreachable!("fixed storage check requires a fixed type")
+    };
+    let value = match storage {
+        FixedStorage::I16 => i16::try_from(value).map(i64::from),
+        FixedStorage::I32 => i32::try_from(value).map(i64::from),
+    }
+    .map_err(|_| {
+        Diagnostic::new(
+            span,
+            format!("literal does not fit {}", type_name_text(type_name)),
+        )
+    })?;
+    Ok(value)
+}
+
 fn is_integer(type_name: TypeName) -> bool {
     matches!(
         type_name,
@@ -2323,7 +2590,10 @@ fn is_integer(type_name: TypeName) -> bool {
 }
 
 fn is_signed(type_name: TypeName) -> bool {
-    matches!(type_name, TypeName::I8 | TypeName::I16 | TypeName::I32)
+    matches!(
+        type_name,
+        TypeName::I8 | TypeName::I16 | TypeName::I32 | TypeName::I64 | TypeName::Fixed { .. }
+    )
 }
 
 fn is_unsigned(type_name: TypeName) -> bool {
@@ -2338,11 +2608,15 @@ fn is_float(type_name: TypeName) -> bool {
 }
 
 fn is_numeric(type_name: TypeName) -> bool {
-    is_integer(type_name) || is_float(type_name)
+    is_integer(type_name) || is_float(type_name) || is_fixed(type_name)
 }
 
 fn is_ordered(type_name: TypeName) -> bool {
     is_numeric(type_name) || type_name == TypeName::Char
+}
+
+fn is_fixed(type_name: TypeName) -> bool {
+    matches!(type_name, TypeName::Fixed { .. })
 }
 
 fn type_id(type_name: TypeName) -> u32 {
@@ -2359,6 +2633,8 @@ fn type_id(type_name: TypeName) -> u32 {
         TypeName::F32 => F32,
         TypeName::F64 => F64,
         TypeName::String => STRING,
+        TypeName::I64 => I64,
+        TypeName::Fixed { declaration, .. } => FIXED_START + u32::from(declaration),
     }
 }
 
@@ -2370,27 +2646,48 @@ fn width(type_name: TypeName) -> u32 {
         TypeName::I32 | TypeName::U32 | TypeName::F32 => 4,
         TypeName::F64 => 8,
         TypeName::String => 2,
+        TypeName::I64 => 8,
+        TypeName::Fixed { storage, .. } => match storage {
+            FixedStorage::I16 => 2,
+            FixedStorage::I32 => 4,
+        },
     }
 }
 
-fn type_name_text(type_name: TypeName) -> &'static str {
+fn type_name_text(type_name: TypeName) -> String {
     match type_name {
-        TypeName::Void => "void",
-        TypeName::Bool => "bool",
-        TypeName::Char => "char",
-        TypeName::I8 => "i8",
-        TypeName::U8 => "u8",
-        TypeName::I16 => "i16",
-        TypeName::U16 => "u16",
-        TypeName::I32 => "i32",
-        TypeName::U32 => "u32",
-        TypeName::F32 => "f32",
-        TypeName::F64 => "f64",
-        TypeName::String => "string",
+        TypeName::Void => "void".into(),
+        TypeName::Bool => "bool".into(),
+        TypeName::Char => "char".into(),
+        TypeName::I8 => "i8".into(),
+        TypeName::U8 => "u8".into(),
+        TypeName::I16 => "i16".into(),
+        TypeName::U16 => "u16".into(),
+        TypeName::I32 => "i32".into(),
+        TypeName::U32 => "u32".into(),
+        TypeName::F32 => "f32".into(),
+        TypeName::F64 => "f64".into(),
+        TypeName::String => "string".into(),
+        TypeName::I64 => "$i64".into(),
+        TypeName::Fixed {
+            storage, fraction, ..
+        } => format!(
+            "fixed {}, fraction={fraction}",
+            match storage {
+                FixedStorage::I16 => "i16",
+                FixedStorage::I32 => "i32",
+            }
+        ),
     }
 }
 
 fn type_mismatch(span: Span, expected: TypeName, found: TypeName) -> Diagnostic {
+    if matches!(expected, TypeName::Fixed { .. })
+        && matches!(found, TypeName::Fixed { .. })
+        && expected != found
+    {
+        return Diagnostic::new(span, "distinct fixed-point types do not match");
+    }
     Diagnostic::new(
         span,
         format!(
@@ -2573,6 +2870,57 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.message.contains("range bounds must be integers"));
+    }
+
+    #[test]
+    fn fixed_point_literals_and_arithmetic_are_scaled_at_compile_time() {
+        let json = compile_source(
+            "type fixed8 = fixed i16, fraction=8\n\
+             type fixed16 = fixed i32, fraction=16\n\
+             fn calculate(a: fixed8, b: fixed8) -> fixed8:\n\
+             \x20\x20\x20\x20var factor: fixed8 = 1.5\n\
+             \x20\x20\x20\x20factor = 2.25\n\
+             \x20\x20\x20\x20return 0.5 * a * factor / b\n",
+        )
+        .unwrap();
+        assert!(json.contains("\"kind\":\"integer\",\"name\":\"fixed8\""));
+        assert!(json.contains("\"kind\":\"integer\",\"name\":\"fixed16\""));
+        assert!(json.contains(&format!("\"type\":{},\"value\":384", FIXED_START)));
+        assert!(json.contains(&format!("\"type\":{},\"value\":576", FIXED_START)));
+        for operation in ["convert", "mul", "sar", "shl", "div"] {
+            assert!(json.contains(&format!("\"op\":\"{operation}\"")));
+        }
+    }
+
+    #[test]
+    fn fixed_point_decimal_literals_round_once_and_must_fit_storage() {
+        let rounded = compile_source(
+            "type fixed8 = fixed i16, fraction=8\n\
+             fn tenth() -> fixed8:\n\
+             \x20\x20\x20\x20return 0.1\n",
+        )
+        .unwrap();
+        assert!(rounded.contains(&format!("\"type\":{},\"value\":26", FIXED_START)));
+
+        let too_large = compile_source(
+            "type fixed8 = fixed i16, fraction=8\n\
+             fn bad() -> fixed8:\n\
+             \x20\x20\x20\x20return 128\n",
+        )
+        .unwrap_err();
+        assert!(too_large.message.contains("does not fit"));
+    }
+
+    #[test]
+    fn separately_declared_fixed_point_types_do_not_mix_implicitly() {
+        let error = compile_source(
+            "type distance = fixed i16, fraction=8\n\
+             type duration = fixed i16, fraction=8\n\
+             fn bad(left: distance, right: duration) -> distance:\n\
+             \x20\x20\x20\x20return left + right\n",
+        )
+        .unwrap_err();
+        assert!(error.message.contains("distinct fixed-point types"));
     }
 
     #[test]

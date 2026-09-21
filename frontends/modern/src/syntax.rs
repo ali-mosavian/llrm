@@ -29,6 +29,18 @@ pub enum TypeName {
     String,
     Bool,
     Void,
+    I64,
+    Fixed {
+        storage: FixedStorage,
+        fraction: u8,
+        declaration: u16,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum FixedStorage {
+    I16,
+    I32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -45,8 +57,16 @@ pub enum TypeSpec {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Module {
+    pub fixed_types: Vec<FixedType>,
     pub structs: Vec<Struct>,
     pub functions: Vec<Function>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FixedType {
+    pub name: String,
+    pub type_name: TypeName,
+    pub span: Span,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

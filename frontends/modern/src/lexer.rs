@@ -10,6 +10,9 @@ pub enum TokenKind {
     String(Vec<u8>),
     FString(Vec<u8>),
     Fn,
+    Type,
+    Fixed,
+    Fraction,
     Struct,
     Let,
     Var,
@@ -85,6 +88,9 @@ fn token(kind: TokenKind, line: usize, start: usize, end: usize) -> Token {
 fn keyword(word: &str) -> Option<TokenKind> {
     Some(match word {
         "fn" => TokenKind::Fn,
+        "type" => TokenKind::Type,
+        "fixed" => TokenKind::Fixed,
+        "fraction" => TokenKind::Fraction,
         "struct" => TokenKind::Struct,
         "let" => TokenKind::Let,
         "var" => TokenKind::Var,

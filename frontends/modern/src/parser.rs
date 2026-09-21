@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use crate::error::Diagnostic;
 use crate::lexer::lex;
 use crate::lexer::Token;
@@ -6,6 +8,8 @@ use crate::syntax::AssignTarget;
 use crate::syntax::BinaryOp;
 use crate::syntax::Expr;
 use crate::syntax::FStringPart;
+use crate::syntax::FixedStorage;
+use crate::syntax::FixedType;
 use crate::syntax::Function;
 use crate::syntax::IterationMode;
 use crate::syntax::Module;
@@ -20,16 +24,23 @@ use crate::syntax::TypeSpec;
 use crate::syntax::UnaryOp;
 
 pub fn parse(tokens: Vec<Token>) -> Result<Module, Diagnostic> {
-    Parser { tokens, at: 0 }.module()
+    Parser {
+        tokens,
+        at: 0,
+        fixed_types: BTreeMap::new(),
+    }
+    .module()
 }
 
 struct Parser {
     tokens: Vec<Token>,
     at: usize,
+    fixed_types: BTreeMap<String, TypeName>,
 }
 
 impl Parser {
     fn module(&mut self) -> Result<Module, Diagnostic> {
+        let mut fixed_types = Vec::new();
         let mut structs = Vec::new();
         let mut functions = Vec::new();
         while !matches!(self.peek().kind, TokenKind::Eof) {
@@ -39,7 +50,9 @@ impl Parser {
             {
                 continue;
             }
-            if matches!(self.peek().kind, TokenKind::Struct) {
+            if matches!(self.peek().kind, TokenKind::Type) {
+                fixed_types.push(self.fixed_type()?);
+            } else if matches!(self.peek().kind, TokenKind::Struct) {
                 structs.push(self.structure()?);
             } else {
                 functions.push(self.function()?);
@@ -51,7 +64,92 @@ impl Parser {
                 "module contains no functions",
             ));
         }
-        Ok(Module { structs, functions })
+        Ok(Module {
+            fixed_types,
+            structs,
+            functions,
+        })
+    }
+
+    fn fixed_type(&mut self) -> Result<FixedType, Diagnostic> {
+        let span = self.bump().span;
+        let (name, name_span) = self.identifier("expected fixed-point type name")?;
+        if self.fixed_types.contains_key(&name) {
+            return Err(Diagnostic::new(
+                name_span,
+                format!("type {name:?} is declared more than once"),
+            ));
+        }
+        self.expect(
+            |kind| matches!(kind, TokenKind::Equal),
+            "expected '=' after type name",
+        )?;
+        self.expect(
+            |kind| matches!(kind, TokenKind::Fixed),
+            "expected 'fixed' numeric type",
+        )?;
+        let storage = match self.bump().clone() {
+            Token {
+                kind: TokenKind::I16,
+                ..
+            } => FixedStorage::I16,
+            Token {
+                kind: TokenKind::I32,
+                ..
+            } => FixedStorage::I32,
+            token => {
+                return Err(Diagnostic::new(
+                    token.span,
+                    "fixed-point storage must be i16 or i32",
+                ))
+            }
+        };
+        self.expect(
+            |kind| matches!(kind, TokenKind::Comma),
+            "expected ',' before fixed-point fraction",
+        )?;
+        self.expect(
+            |kind| matches!(kind, TokenKind::Fraction),
+            "expected 'fraction'",
+        )?;
+        self.expect(
+            |kind| matches!(kind, TokenKind::Equal),
+            "expected '=' after 'fraction'",
+        )?;
+        let fraction_token = self.bump().clone();
+        let TokenKind::Integer(fraction) = fraction_token.kind else {
+            return Err(Diagnostic::new(
+                fraction_token.span,
+                "fraction must be an integer literal",
+            ));
+        };
+        let storage_bits = match storage {
+            FixedStorage::I16 => 16,
+            FixedStorage::I32 => 32,
+        };
+        let fraction = u8::try_from(fraction)
+            .ok()
+            .filter(|one| *one > 0 && u32::from(*one) < storage_bits)
+            .ok_or_else(|| {
+                Diagnostic::new(
+                    fraction_token.span,
+                    format!("fraction must be between 1 and {}", storage_bits - 1),
+                )
+            })?;
+        self.line_end()?;
+        let declaration = u16::try_from(self.fixed_types.len())
+            .map_err(|_| Diagnostic::new(span, "too many fixed-point types"))?;
+        let type_name = TypeName::Fixed {
+            storage,
+            fraction,
+            declaration,
+        };
+        self.fixed_types.insert(name.clone(), type_name);
+        Ok(FixedType {
+            name,
+            type_name,
+            span,
+        })
     }
 
     fn structure(&mut self) -> Result<Struct, Diagnostic> {
@@ -656,7 +754,7 @@ impl Parser {
     }
 
     fn type_name(&mut self) -> Result<TypeName, Diagnostic> {
-        let token = self.bump();
+        let token = self.bump().clone();
         match token.kind {
             TokenKind::Char => Ok(TypeName::Char),
             TokenKind::I8 => Ok(TypeName::I8),
@@ -670,6 +768,9 @@ impl Parser {
             TokenKind::StringType => Ok(TypeName::String),
             TokenKind::Bool => Ok(TypeName::Bool),
             TokenKind::Void => Ok(TypeName::Void),
+            TokenKind::Identifier(name) => self.fixed_types.get(&name).copied().ok_or_else(|| {
+                Diagnostic::new(token.span, format!("unknown scalar type {name:?}"))
+            }),
             _ => Err(Diagnostic::new(token.span, "expected a type name")),
         }
     }
@@ -678,7 +779,12 @@ impl Parser {
         if let TokenKind::Identifier(name) = &self.peek().kind {
             let name = name.clone();
             self.bump();
-            Ok(TypeSpec::Named(name))
+            Ok(self
+                .fixed_types
+                .get(&name)
+                .copied()
+                .map(TypeSpec::Primitive)
+                .unwrap_or(TypeSpec::Named(name)))
         } else {
             self.type_name().map(TypeSpec::Primitive)
         }
@@ -734,6 +840,7 @@ fn parse_inline_expression(source: &str, outer: Span) -> Result<Expr, Diagnostic
     let mut parser = Parser {
         tokens: lex(source).map_err(|error| Diagnostic::new(outer, error.message))?,
         at: 0,
+        fixed_types: BTreeMap::new(),
     };
     let expression = parser
         .expression(0)
@@ -860,5 +967,31 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn parses_named_fixed_point_types() {
+        let module = parse(
+            lex("type fixed8 = fixed i16, fraction=8\n\
+                 fn scale(value: fixed8) -> fixed8:\n\
+                 \x20\x20\x20\x20return value * 1.5\n")
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(module.fixed_types.len(), 1);
+        assert_eq!(module.fixed_types[0].name, "fixed8");
+        assert!(matches!(
+            module.fixed_types[0].type_name,
+            TypeName::Fixed {
+                storage: FixedStorage::I16,
+                fraction: 8,
+                declaration: 0,
+            }
+        ));
+        assert_eq!(
+            module.functions[0].parameters[0].type_name,
+            module.fixed_types[0].type_name
+        );
+        assert_eq!(module.functions[0].result, module.fixed_types[0].type_name);
     }
 }

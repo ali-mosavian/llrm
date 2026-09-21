@@ -7,6 +7,7 @@ This crate implements the first source-language slice:
 - indentation-delimited functions and blocks;
 - the complete scalar set: `bool`, `char`, signed and unsigned 8/16/32-bit
   integers, `f32`, `f64`, and `void`;
+- named signed fixed-point types backed by `i16` or `i32` storage;
 - typed parameters and return values;
 - `let` and `var` bindings;
 - assignment, calls, `return`, `if`/`else`, `while`, and typed half-open
@@ -24,6 +25,36 @@ making the compiler or runtime Unicode-aware. Decimal floating literals are
 stored once in read-only module data. There are no implicit numeric
 conversions: literals may acquire a type from context, while nonliteral
 operands must already have the same type.
+
+Fixed-point types make their representation explicit:
+
+```text
+type fixed8 = fixed i16, fraction=8
+type fixed16 = fixed i32, fraction=16
+```
+
+The fractional count is part of the named type and must be between one and
+one less than the storage width. Distinct declarations are distinct types,
+even when their storage and fraction match. Integer literals are scaled
+exactly at compile time. Decimal literals are rounded once to the nearest
+representable quantum, with ties away from zero. There are no implicit
+conversions between fixed types, integers, or floats.
+
+Addition, subtraction, negation, and comparison use the signed stored
+representation directly. Multiplication and division widen first (`i16` to
+`i32`, `i32` to an internal `i64`) and then rescale, so storage-width overflow
+cannot destroy the intermediate product. Multiplication discards low
+fractional bits with an arithmetic shift; division shifts the widened
+numerator before signed division. Narrowing back to storage follows the
+language's current wrapping integer policy. No descriptor, heap object, or
+fixed-point arithmetic runtime routine is generated. Printing uses the
+existing output boundary with the raw value and a compile-time fractional-bit
+argument. Both direct `print(value)` and fixed values inside f-strings render
+canonical signed base-10 `integer.fraction`: at least one digit appears on
+each side of the decimal point, and redundant trailing fractional zeroes are
+removed. Thus Q8 raw values `384`, `-64`, and `512` print as `1.5`, `-0.25`,
+and `2.0`, respectively; the scaled storage integer is never printed as the
+source value.
 
 Strings deliberately match the real-mode systems boundary. A string value is
 a 16-bit near pointer to NUL-terminated payload bytes. Two little-endian
@@ -49,7 +80,8 @@ remain value comparisons (struct value equality is not in this slice).
 `for step_no in 0..step_count` runs exactly `step_count` iterations when
 `step_count` is nonnegative.
 Literal indices are checked by the frontend. The
-`fixtures/nbody.mod` fixed-point integrator—an array of six `body` structs—is
+`fixtures/nbody.mod` fixed-point integrator—using a named Q23.9 `scalar` and
+an array of six `body` structs—is
 the current end-to-end feature gate for structs, arrays, nested loops,
 strings, f-strings, and printing.
 

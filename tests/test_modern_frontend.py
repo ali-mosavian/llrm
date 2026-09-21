@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "frontends" / "modern" / "fixtures" / "control.mod"
 PRIMITIVES = ROOT / "frontends" / "modern" / "fixtures" / "primitives.mod"
 NBODY = ROOT / "frontends" / "modern" / "fixtures" / "nbody.mod"
+FIXED = ROOT / "frontends" / "modern" / "fixtures" / "fixed.mod"
 
 
 @pytest.fixture(scope="module")
@@ -105,10 +106,53 @@ def test_unsigned_and_floating_operations_keep_their_semantics_in_mir() -> None:
     assert branch.test is mir.Kind.BELOW
 
 
+def test_fixed_point_types_scale_literals_and_lower_through_wide_integer_mir() -> None:
+    program = driver.parsed(FIXED)
+    module = program.modules[0]
+    types = {one.name: one for one in module.types}
+    assert (types["fixed8"].width, types["fixed8"].signed) == (2, True)
+    assert (types["fixed16"].width, types["fixed16"].signed) == (4, True)
+    assert (types["$i64"].width, types["$i64"].signed) == (8, True)
+
+    fixed_literals = next(one for one in module.functions if one.name == "fixed_literals")
+    constants = [
+        operand
+        for block in fixed_literals.blocks
+        for instruction in block.instructions
+        for operand in instruction.operands
+        if isinstance(operand, hir.Constant)
+    ]
+    assert hir.Constant(types["fixed16"].id, 98_304) in constants
+    assert hir.Constant(types["fixed16"].id, 147_456) in constants
+
+    decimal_prints = [
+        instruction
+        for block in fixed_literals.blocks
+        for instruction in block.instructions
+        if instruction.callee == "__print_fixed_i32"
+    ]
+    assert len(decimal_prints) == 2
+    value_types = {one.id: one.type for one in fixed_literals.values}
+    for decimal_print in decimal_prints:
+        raw, fraction = decimal_print.operands
+        assert isinstance(raw, hir.ValueRef)
+        assert value_types[raw.value] == types["i32"].id
+        assert fraction == hir.Constant(types["u8"].id, 16)
+
+    lowered = {one.name: one.body for one in hir.lower(program)}
+    assert all(not mir.verify(body) for body in lowered.values())
+    product_kinds = {operation.kind for block in lowered["fixed.product"].blocks for operation in block.ops}
+    quotient_kinds = {operation.kind for block in lowered["fixed.quotient"].blocks for operation in block.ops}
+    assert {mir.Kind.SIGN_EXTEND, mir.Kind.MUL, mir.Kind.SAR} <= product_kinds
+    assert {mir.Kind.SIGN_EXTEND, mir.Kind.SHL, mir.Kind.DIVMOD} <= quotient_kinds
+
+
 def test_nbody_arrays_strings_and_print_cross_hir_and_verify_in_mir() -> None:
     program = driver.parsed(NBODY)
     module = program.modules[0]
     types = {one.name: one for one in module.types}
+    scalar = types["scalar"]
+    assert (scalar.kind, scalar.width, scalar.signed) == (hir.TypeKind.INTEGER, 4, True)
     vec2i = types["vec2i"]
     assert (vec2i.kind, vec2i.width) == (hir.TypeKind.OPAQUE, 8)
     body = types["body"]
@@ -130,7 +174,8 @@ def test_nbody_arrays_strings_and_print_cross_hir_and_verify_in_mir() -> None:
 
     callables = {one.name: one for one in module.callables}
     assert callables["__print_text"].defined is False
-    assert callables["__print_i32"].defined is False
+    assert callables["__print_fixed_i32"].defined is False
+    assert callables["__print_fixed_i32"].parameter_types == (types["i32"].id, types["u8"].id)
     assert callables["__print_newline"].defined is False
 
     [lowered] = hir.lower(program)
