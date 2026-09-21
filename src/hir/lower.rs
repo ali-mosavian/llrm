@@ -10,8 +10,8 @@ use std::fmt;
 use crate::support::diagnostic::Diagnostic;
 use crate::{hir, ir};
 
-use super::calls::{calling_convention, plan_calls, CallPlan, CallPlanError};
-use super::globals::{plan_globals, GlobalPlan, GlobalPlanError, PlannedPlace};
+use super::calls::{CallPlan, CallPlanError, calling_convention, plan_calls};
+use super::globals::{GlobalPlan, GlobalPlanError, PlannedPlace, plan_globals};
 
 /// A HIR feature that the portable scalar lowering cannot represent exactly.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -781,7 +781,8 @@ impl<'module> Lowerer<'module> {
             Opcode::Load => self.lower_load(function, block, instruction)?,
             Opcode::Store => self.lower_store(function, block, instruction)?,
             Opcode::Address => self.lower_address(function, block, instruction)?,
-            Opcode::OffsetPointer | Opcode::PointerOffset | Opcode::PointerSegment => {
+            Opcode::OffsetPointer => self.lower_offset_pointer(function, block, instruction)?,
+            Opcode::PointerOffset | Opcode::PointerSegment => {
                 return self.unsupported_instruction(
                     function,
                     block,
@@ -1005,6 +1006,72 @@ impl<'module> Lowerer<'module> {
             op: ir::CastOp::Bitcast,
             operand: address,
             to: result.type_id,
+        })
+    }
+
+    fn lower_offset_pointer(
+        &self,
+        function: &hir::Function,
+        block: hir::BlockId,
+        instruction: &hir::Instruction,
+    ) -> Result<ir::InstructionKind, LowerError> {
+        if instruction.operands.len() != 2 {
+            return self.invalid_instruction(
+                function,
+                block,
+                instruction,
+                InvalidProperty::OperandArity,
+            );
+        }
+        let result = self.one_result(function, block, instruction)?;
+        let result_type = self.type_by_id(hir::TypeId::new(result.type_id.get()))?;
+        let base_type = self.operand_type(
+            function,
+            block,
+            Some(instruction.id),
+            0,
+            &instruction.operands[0],
+        )?;
+        let base_type = self.type_by_id(base_type)?;
+        let offset_type = self.operand_type(
+            function,
+            block,
+            Some(instruction.id),
+            1,
+            &instruction.operands[1],
+        )?;
+        let offset_type = self.type_by_id(offset_type)?;
+        if result_type.kind != hir::TypeKind::Pointer
+            || base_type.kind != hir::TypeKind::Pointer
+            || !matches!(
+                offset_type.kind,
+                hir::TypeKind::Boolean | hir::TypeKind::Integer
+            )
+        {
+            return self.invalid_instruction(
+                function,
+                block,
+                instruction,
+                InvalidProperty::OperandTypes,
+            );
+        }
+        Ok(ir::InstructionKind::GetElementPointer {
+            base: self.lower_operand(
+                function,
+                block,
+                Some(instruction.id),
+                0,
+                &instruction.operands[0],
+            )?,
+            // OffsetPointer is deliberately byte-addressed in HIR; any
+            // element scaling is already explicit in the offset operand.
+            indices: vec![self.lower_operand(
+                function,
+                block,
+                Some(instruction.id),
+                1,
+                &instruction.operands[1],
+            )?],
         })
     }
 

@@ -25,6 +25,13 @@ const I32_TYPE: hir::TypeId = hir::TypeId::new(2);
 const U16_TYPE: hir::TypeId = hir::TypeId::new(3);
 const U32_TYPE: hir::TypeId = hir::TypeId::new(4);
 const BOOL_TYPE: hir::TypeId = hir::TypeId::new(5);
+const WCC_BIG_DATA: u32 = 0x2;
+
+struct WccTypes {
+    types: Vec<hir::Type>,
+    aggregates: BTreeMap<String, hir::TypeId>,
+    near_pointer: Option<hir::TypeId>,
+}
 
 /// A source-located refusal while raising a WCC capture unit.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -151,6 +158,7 @@ impl Error for RaiseError {}
 
 /// Raises the supported scalar WCC capture subset into one generic HIR module.
 pub fn raise_module(unit: &CaptureUnit, module_name: &str) -> Result<hir::Module, RaiseError> {
+    let types = wcc_types(unit)?;
     let mut callable_ids = BTreeMap::new();
     for (index, procedure) in unit.procedures.iter().enumerate() {
         let raw = u32::try_from(index)
@@ -168,16 +176,81 @@ pub fn raise_module(unit: &CaptureUnit, module_name: &str) -> Result<hir::Module
         .procedures
         .iter()
         .enumerate()
-        .map(|(index, procedure)| raise_function(unit, procedure, index, &callable_ids))
+        .map(|(index, procedure)| raise_function(unit, procedure, index, &callable_ids, &types))
         .collect::<Result<Vec<_>, _>>()?;
 
     Ok(hir::Module {
         id: hir::ModuleId::new(0),
         name: module_name.to_owned(),
-        types: scalar_types(),
+        types: types.types,
         functions,
         data: Vec::new(),
         callables,
+    })
+}
+
+fn wcc_types(unit: &CaptureUnit) -> Result<WccTypes, RaiseError> {
+    let mut types = scalar_types();
+    // Every supported value-producing CG node carries its type in its final
+    // argument. CGCall is scalar-only in this slice and resolves its type
+    // from CGInitCall instead, so it cannot introduce a supported pointer.
+    let has_near_pointer = unit.nodes.values().any(|node| {
+        node.args
+            .last()
+            .is_some_and(|name| unit.canonical_type(name) == "TY_POINTER")
+    });
+    if has_near_pointer && unit.target & WCC_BIG_DATA != 0 {
+        return Err(error_default(RaiseErrorKind::UnsupportedType {
+            name: "TY_POINTER in a WCC big-data target".into(),
+        }));
+    }
+    let near_pointer = if has_near_pointer {
+        let id = hir::TypeId::new(
+            u32::try_from(types.len())
+                .map_err(|_| error_default(RaiseErrorKind::IdOverflow { entity: "type" }))?,
+        );
+        types.push(hir::Type {
+            id,
+            name: "near-pointer".into(),
+            kind: hir::TypeKind::Pointer,
+            width: 2,
+            signed: None,
+            evaluation: hir::FloatEvaluation::None,
+            element: None,
+            bounds: Vec::new(),
+            address: hir::AddressKind::Near,
+        });
+        Some(id)
+    } else {
+        None
+    };
+    let mut aggregates = BTreeMap::new();
+    for (name, width) in &unit.types {
+        let id = hir::TypeId::new(
+            u32::try_from(types.len())
+                .map_err(|_| error_default(RaiseErrorKind::IdOverflow { entity: "type" }))?,
+        );
+        types.push(hir::Type {
+            id,
+            name: name.clone(),
+            kind: hir::TypeKind::Opaque,
+            width: usize::try_from(*width).map_err(|_| {
+                error_default(RaiseErrorKind::IdOverflow {
+                    entity: "aggregate extent",
+                })
+            })?,
+            signed: None,
+            evaluation: hir::FloatEvaluation::None,
+            element: None,
+            bounds: Vec::new(),
+            address: hir::AddressKind::None,
+        });
+        aggregates.insert(name.clone(), id);
+    }
+    Ok(WccTypes {
+        types,
+        aggregates,
+        near_pointer,
     })
 }
 
@@ -285,6 +358,7 @@ fn raise_function(
     procedure: &Procedure,
     index: usize,
     callable_ids: &BTreeMap<SymbolId, hir::CallableId>,
+    types: &WccTypes,
 ) -> Result<hir::Function, RaiseError> {
     let location = procedure_location(procedure);
     let symbol = symbol(unit, procedure.symbol, location)?;
@@ -315,14 +389,14 @@ fn raise_function(
 
     let id = u32::try_from(index)
         .map_err(|_| error(location, RaiseErrorKind::IdOverflow { entity: "function" }))?;
-    let mut builder = FunctionRaiser::new(unit, procedure, location, callable_ids)?;
+    let mut builder = FunctionRaiser::new(unit, procedure, location, callable_ids, types)?;
     let parameters = builder.parameters()?;
     let parameter_bytes = procedure
         .parameters
         .iter()
         .try_fold(0usize, |sum, (_, type_name)| {
             let type_id = value_type(unit, type_name, location)?;
-            let width = match type_width(type_id) {
+            let width = match type_width(&types.types, type_id, location)? {
                 width @ (2 | 4) => width,
                 _ => {
                     return Err(error(
@@ -381,6 +455,7 @@ struct FunctionRaiser<'a> {
     procedure: &'a Procedure,
     location: SourceLocation,
     callable_ids: &'a BTreeMap<SymbolId, hir::CallableId>,
+    types: &'a WccTypes,
     values: Vec<hir::Value>,
     places: Vec<hir::Place>,
     blocks: Vec<RaisedBlock>,
@@ -408,12 +483,13 @@ impl<'a> FunctionRaiser<'a> {
         procedure: &'a Procedure,
         location: SourceLocation,
         callable_ids: &'a BTreeMap<SymbolId, hir::CallableId>,
+        types: &'a WccTypes,
     ) -> Result<Self, RaiseError> {
         let mut places = Vec::new();
         let mut automatic_places = BTreeMap::new();
         let mut temporary_places = BTreeMap::new();
         for (automatic, type_name) in &procedure.automatics {
-            let type_id = value_type(unit, type_name, location)?;
+            let type_id = capture_type(unit, types, type_name, location)?;
             let id =
                 hir::PlaceId::new(u32::try_from(places.len()).map_err(|_| {
                     error(location, RaiseErrorKind::IdOverflow { entity: "place" })
@@ -436,7 +512,7 @@ impl<'a> FunctionRaiser<'a> {
                 storage: hir::Storage::Local,
                 offset: 0,
                 symbol: hir::DataId::new(0),
-                extent: type_width(type_id),
+                extent: type_width(&types.types, type_id, location)?,
                 address: hir::AddressKind::Near,
             });
         }
@@ -445,6 +521,7 @@ impl<'a> FunctionRaiser<'a> {
             procedure,
             location,
             callable_ids,
+            types,
             values: Vec::new(),
             places,
             blocks: vec![RaisedBlock {
@@ -733,25 +810,25 @@ impl<'a> FunctionRaiser<'a> {
             self.node_argument(id, node, 1)?,
             self.location,
         )?);
-        if operation == "O_POINTS"
-            && !self.unit.nodes.get(&operand_id).is_some_and(|operand| {
-                matches!(operand.call.as_str(), "CGFEName" | "CGTempName" | "CGCall")
-            })
-        {
-            return Err(self.invalid_node(
-                id,
-                "O_POINTS is only established for scalar names and call results",
-            ));
-        }
+        let established_value = self.unit.nodes.get(&operand_id).is_some_and(|operand| {
+            matches!(operand.call.as_str(), "CGFEName" | "CGTempName" | "CGCall")
+        });
         let operand = self.node(operand_id)?;
-        let type_id = value_type(self.unit, self.node_argument(id, node, 2)?, self.location)?;
+        let type_id = capture_type(
+            self.unit,
+            self.types,
+            self.node_argument(id, node, 2)?,
+            self.location,
+        )?;
         match operation {
-            // WCC wraps scalar frame cells in O_POINTS. Parameters and call
-            // results are already values, while automatic and temporary cells
-            // become explicit generic HIR loads.
+            // WCC uses O_POINTS both to preserve an aggregate's address and to
+            // dereference a typed pointer. Scalar frame cells remain loads.
             "O_POINTS" => match operand {
                 hir::Operand::Place(place) => {
                     self.require_place_type(place, type_id)?;
+                    if self.is_aggregate_type(type_id) {
+                        return Ok(hir::Operand::Place(place));
+                    }
                     let result = self.new_value(type_id)?;
                     self.push_instruction(
                         hir::Opcode::Load,
@@ -761,10 +838,34 @@ impl<'a> FunctionRaiser<'a> {
                     )?;
                     Ok(hir::Operand::Value(result))
                 }
-                _ => {
+                hir::Operand::Value(base) if self.is_pointer_value(base)? => {
+                    if !is_integer_type(type_id) {
+                        return Err(
+                            self.invalid_node(id, "pointer dereference is not a scalar type")
+                        );
+                    }
+                    let result = self.new_value(type_id)?;
+                    self.push_instruction(
+                        hir::Opcode::Load,
+                        vec![result],
+                        vec![hir::Operand::Indirect {
+                            base,
+                            offset: 0,
+                            type_id,
+                            volatile: false,
+                        }],
+                        None,
+                    )?;
+                    Ok(hir::Operand::Value(result))
+                }
+                _ if established_value => {
                     require_operand_type(type_id, &operand, &self.values, self.location)?;
                     Ok(operand)
                 }
+                _ => Err(self.invalid_node(
+                    id,
+                    "O_POINTS is only established for scalar names, call results, and typed pointers",
+                )),
             },
             "O_CONVERT" => {
                 let source_type = self.node_type(operand_id)?;
@@ -776,6 +877,15 @@ impl<'a> FunctionRaiser<'a> {
     }
 
     fn binary(&mut self, id: NodeId, node: &Node) -> Result<hir::Operand, RaiseError> {
+        let capture_type = capture_type(
+            self.unit,
+            self.types,
+            self.node_argument(id, node, 3)?,
+            self.location,
+        )?;
+        if self.is_near_pointer_type(capture_type) {
+            return self.aggregate_pointer_add(id, node);
+        }
         let opcode = match self.node_argument(id, node, 0)? {
             "O_TIMES" => hir::Opcode::Multiply,
             "O_PLUS" => hir::Opcode::Add,
@@ -793,11 +903,59 @@ impl<'a> FunctionRaiser<'a> {
         )?);
         let left = self.node(left_id)?;
         let right = self.node(right_id)?;
-        let type_id = value_type(self.unit, self.node_argument(id, node, 3)?, self.location)?;
+        let type_id = capture_type;
         let left = self.coerce(left, self.node_type(left_id)?, type_id)?;
         let right = self.coerce(right, self.node_type(right_id)?, type_id)?;
         let result = self.new_value(type_id)?;
         self.push_instruction(opcode, vec![result], vec![left, right], None)?;
+        Ok(hir::Operand::Value(result))
+    }
+
+    fn aggregate_pointer_add(
+        &mut self,
+        id: NodeId,
+        node: &Node,
+    ) -> Result<hir::Operand, RaiseError> {
+        if self.node_argument(id, node, 0)? != "O_PLUS" {
+            return Err(self.invalid_node(id, "unsupported near-pointer operation"));
+        }
+        let aggregate = NodeId::new(parse_node_id(
+            self.node_argument(id, node, 1)?,
+            self.location,
+        )?);
+        let offset = NodeId::new(parse_node_id(
+            self.node_argument(id, node, 2)?,
+            self.location,
+        )?);
+        let aggregate = self.node(aggregate)?;
+        let hir::Operand::Place(place) = aggregate else {
+            return Err(self.invalid_node(id, "near-pointer base is not an aggregate place"));
+        };
+        let aggregate_type = self.place_type(place)?;
+        if !self.is_aggregate_type(aggregate_type) {
+            return Err(self.invalid_node(id, "near-pointer base is not an aggregate type"));
+        }
+        let offset_type = self.node_type(offset)?;
+        let offset = self.node(offset)?;
+        require_operand_type(offset_type, &offset, &self.values, self.location)?;
+        if !is_integer_type(offset_type) {
+            return Err(self.invalid_node(id, "near-pointer byte offset is not an integer"));
+        }
+        let pointer_type = self.near_pointer_type()?;
+        let base = self.new_value(pointer_type)?;
+        self.push_instruction(
+            hir::Opcode::Address,
+            vec![base],
+            vec![hir::Operand::Place(place)],
+            None,
+        )?;
+        let result = self.new_value(pointer_type)?;
+        self.push_instruction(
+            hir::Opcode::OffsetPointer,
+            vec![result],
+            vec![hir::Operand::Value(base), offset],
+            None,
+        )?;
         Ok(hir::Operand::Value(result))
     }
 
@@ -831,24 +989,7 @@ impl<'a> FunctionRaiser<'a> {
             self.node_argument(id, node, 0)?,
             self.location,
         )?);
-        let destination_node = self
-            .unit
-            .nodes
-            .get(&destination)
-            .ok_or_else(|| error(self.location, RaiseErrorKind::MissingNode(destination)))?;
-        if !matches!(destination_node.call.as_str(), "CGTempName" | "CGFEName") {
-            return Err(error(
-                self.location,
-                RaiseErrorKind::InvalidAssignmentTarget(destination),
-            ));
-        }
         let target = self.node(destination)?;
-        let hir::Operand::Place(place) = target else {
-            return Err(error(
-                self.location,
-                RaiseErrorKind::InvalidAssignmentTarget(destination),
-            ));
-        };
         let source = NodeId::new(parse_node_id(
             self.node_argument(id, node, 1)?,
             self.location,
@@ -857,11 +998,28 @@ impl<'a> FunctionRaiser<'a> {
         let value = self.node(source)?;
         let type_id = value_type(self.unit, self.node_argument(id, node, 2)?, self.location)?;
         let value = self.coerce(value, source_type, type_id)?;
-        self.require_place_type(place, type_id)?;
+        let address = match target {
+            hir::Operand::Place(place) => {
+                self.require_place_type(place, type_id)?;
+                hir::Operand::Place(place)
+            }
+            hir::Operand::Value(base) if self.is_pointer_value(base)? => hir::Operand::Indirect {
+                base,
+                offset: 0,
+                type_id,
+                volatile: false,
+            },
+            _ => {
+                return Err(error(
+                    self.location,
+                    RaiseErrorKind::InvalidAssignmentTarget(destination),
+                ));
+            }
+        };
         self.push_instruction(
             hir::Opcode::Store,
             Vec::new(),
-            vec![hir::Operand::Place(place), value.clone()],
+            vec![address, value.clone()],
             None,
         )?;
         Ok(value)
@@ -1033,6 +1191,48 @@ impl<'a> FunctionRaiser<'a> {
         }
     }
 
+    fn place_type(&self, place: hir::PlaceId) -> Result<hir::TypeId, RaiseError> {
+        self.places
+            .iter()
+            .find(|candidate| candidate.id == place)
+            .map(|candidate| candidate.type_id)
+            .ok_or_else(|| self.invalid_node(NodeId::new(0), "operand refers to an unknown place"))
+    }
+
+    fn is_aggregate_type(&self, type_id: hir::TypeId) -> bool {
+        self.types
+            .aggregates
+            .values()
+            .any(|candidate| *candidate == type_id)
+    }
+
+    fn near_pointer_type(&self) -> Result<hir::TypeId, RaiseError> {
+        self.types.near_pointer.ok_or_else(|| {
+            error(
+                self.location,
+                RaiseErrorKind::UnsupportedType {
+                    name: "TY_POINTER without a pointer capture node".into(),
+                },
+            )
+        })
+    }
+
+    fn is_near_pointer_type(&self, type_id: hir::TypeId) -> bool {
+        self.types.near_pointer == Some(type_id)
+    }
+
+    fn is_pointer_value(&self, value: hir::ValueId) -> Result<bool, RaiseError> {
+        let type_id = self
+            .values
+            .iter()
+            .find(|candidate| candidate.id == value)
+            .ok_or_else(|| {
+                self.invalid_node(NodeId::new(0), "expression refers to an unknown value")
+            })?
+            .type_id;
+        Ok(self.is_near_pointer_type(type_id))
+    }
+
     fn node_type(&self, id: NodeId) -> Result<hir::TypeId, RaiseError> {
         let node = self
             .unit
@@ -1059,8 +1259,9 @@ impl<'a> FunctionRaiser<'a> {
             }
             _ => return Err(self.invalid_node(id, "expression has no scalar type")),
         };
-        value_type(
+        capture_type(
             self.unit,
+            self.types,
             node.args
                 .get(type_index)
                 .ok_or_else(|| self.invalid_node(id, "expression is missing its type"))?,
@@ -1214,12 +1415,55 @@ fn value_type(
     }
 }
 
-fn type_width(type_id: hir::TypeId) -> usize {
-    match type_id {
-        I16_TYPE | U16_TYPE => 2,
-        I32_TYPE | U32_TYPE => 4,
-        _ => 0,
+fn capture_type(
+    unit: &CaptureUnit,
+    types: &WccTypes,
+    name: &str,
+    location: SourceLocation,
+) -> Result<hir::TypeId, RaiseError> {
+    if unit.canonical_type(name) == "TY_POINTER" {
+        return types.near_pointer.ok_or_else(|| {
+            error(
+                location,
+                RaiseErrorKind::UnsupportedType {
+                    name: name.to_owned(),
+                },
+            )
+        });
     }
+    value_type(unit, name, location).or_else(|_| {
+        types
+            .aggregates
+            .get(unit.canonical_type(name).as_str())
+            .copied()
+            .ok_or_else(|| {
+                error(
+                    location,
+                    RaiseErrorKind::UnsupportedType {
+                        name: name.to_owned(),
+                    },
+                )
+            })
+    })
+}
+
+fn type_width(
+    types: &[hir::Type],
+    type_id: hir::TypeId,
+    location: SourceLocation,
+) -> Result<usize, RaiseError> {
+    types
+        .iter()
+        .find(|type_| type_.id == type_id)
+        .map(|type_| type_.width)
+        .ok_or_else(|| {
+            error(
+                location,
+                RaiseErrorKind::UnsupportedType {
+                    name: format!("missing HIR type {type_id}"),
+                },
+            )
+        })
 }
 
 fn is_integer_type(type_id: hir::TypeId) -> bool {
@@ -1365,7 +1609,7 @@ fn error_default(kind: RaiseErrorKind) -> RaiseError {
 
 #[cfg(test)]
 mod tests {
-    use super::{raise_module, RaiseErrorKind, U16_TYPE, U32_TYPE};
+    use super::{RaiseError, RaiseErrorKind, U16_TYPE, U32_TYPE, WCC_BIG_DATA, raise_module};
     use crate::frontend::wcc::{capture, parse};
     use crate::hir;
     use crate::ir;
@@ -1381,6 +1625,182 @@ mod tests {
 
     fn unsigned() -> capture::CaptureUnit {
         capture::build(&parse(include_str!("../../../fixtures/c/unsigned.cgs")).unwrap()).unwrap()
+    }
+
+    fn cells() -> capture::CaptureUnit {
+        capture::build(&parse(include_str!("../../../fixtures/c/cells.cgs")).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn raises_real_short_cells_by_extent_and_typed_dereference() {
+        // Python qbopt/cfront/raise_hir.py::_Raise.points and ::assign use
+        // cells.cgs's WCC T-record extent, O_PLUS, CGAssign, and O_POINTS.
+        let module = raise_module(&cells(), "cells").unwrap();
+        let function = &module.functions[0];
+        let cells = function
+            .places
+            .iter()
+            .find(|place| place.name == "cells")
+            .expect("captured automatic cells place");
+
+        assert!(matches!(
+            &module.types[cells.type_id.get() as usize],
+            hir::Type {
+                kind: hir::TypeKind::Opaque,
+                width: 8,
+                element: None,
+                bounds,
+                ..
+            } if bounds.is_empty()
+        ));
+        assert_eq!(cells.extent, 8);
+        let dynamic_offset = function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .find_map(|instruction| match instruction {
+                hir::Instruction {
+                    opcode: hir::Opcode::OffsetPointer,
+                    operands,
+                    ..
+                } => match operands.as_slice() {
+                    [hir::Operand::Value(_), hir::Operand::Value(offset)] => Some(*offset),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .expect("dynamic cells access has a byte offset");
+        assert!(function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .any(|instruction| matches!(
+                instruction,
+                hir::Instruction {
+                    opcode: hir::Opcode::Multiply,
+                    results,
+                    operands,
+                    ..
+                } if results == &vec![dynamic_offset]
+                    && matches!(operands.as_slice(), [hir::Operand::Value(_), hir::Operand::Constant {
+                        type_id,
+                        value: hir::ConstantValue::Integer(2),
+                    }] if *type_id == hir::TypeId::new(1))
+            )));
+        assert!(function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .any(|instruction| matches!(
+                instruction,
+                hir::Instruction {
+                    opcode: hir::Opcode::OffsetPointer,
+                    operands,
+                    ..
+                } if matches!(operands.as_slice(), [hir::Operand::Value(_), hir::Operand::Constant {
+                    type_id,
+                    value: hir::ConstantValue::Integer(6),
+                }] if *type_id == hir::TypeId::new(1))
+            )));
+        assert!(function.blocks.iter().flat_map(|block| &block.instructions).any(
+            |instruction| matches!(
+                instruction,
+                hir::Instruction {
+                    opcode: hir::Opcode::Store,
+                    operands,
+                    ..
+                } if matches!(operands.first(), Some(hir::Operand::Indirect { type_id, offset: 0, .. }) if *type_id == hir::TypeId::new(1))
+            )
+        ));
+        assert!(function.blocks.iter().flat_map(|block| &block.instructions).any(
+            |instruction| matches!(
+                instruction,
+                hir::Instruction {
+                    opcode: hir::Opcode::Load,
+                    operands,
+                    ..
+                } if matches!(operands.as_slice(), [hir::Operand::Indirect { type_id, offset: 0, .. }] if *type_id == hir::TypeId::new(1))
+            )
+        ));
+        assert!(module.verify().is_ok());
+
+        let lowered = hir::lower_to_ir(&module).unwrap();
+        assert!(
+            lowered.functions[0]
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(
+                    instruction.kind,
+                    ir::InstructionKind::StackAlloc {
+                        size: 8,
+                        alignment: 1,
+                        ..
+                    }
+                ))
+        );
+        assert!(
+            lowered.functions[0]
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(
+                    instruction.kind,
+                    ir::InstructionKind::GetElementPointer { .. }
+                ))
+        );
+        assert!(
+            lowered.functions[0]
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(
+                    &instruction.kind,
+                    ir::InstructionKind::GetElementPointer { indices, .. }
+                        if matches!(indices.as_slice(), [ir::Operand::Constant(ir::TypedConstant {
+                            type_id,
+                            value: ir::Constant::Integer(6),
+                        })] if *type_id == ir::TypeId::new(1))
+                ))
+        );
+        assert!(
+            lowered.functions[0]
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction.kind, ir::InstructionKind::Store { .. }))
+        );
+        assert!(
+            lowered.functions[0]
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(
+                    instruction,
+                    ir::Instruction {
+                        results,
+                        kind: ir::InstructionKind::Load { .. },
+                        ..
+                    } if matches!(results.as_slice(), [ir::Value { type_id, .. }] if *type_id == ir::TypeId::new(1))
+                ))
+        );
+    }
+
+    #[test]
+    fn refuses_to_narrow_a_big_data_pointer_to_near() {
+        // Python _Raise.width/far_pointer make TY_POINTER four bytes and far
+        // when WCC's BIG_DATA target bit is present. Until far pointers are
+        // ported, the Rust frontend must refuse instead of changing its ABI.
+        let mut unit = cells();
+        unit.target |= WCC_BIG_DATA;
+
+        assert!(matches!(
+            raise_module(&unit, "cells"),
+            Err(RaiseError {
+                kind: RaiseErrorKind::UnsupportedType { name },
+                ..
+            }) if name.contains("big-data")
+        ));
     }
 
     #[test]

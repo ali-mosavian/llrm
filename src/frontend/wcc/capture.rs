@@ -980,6 +980,7 @@ mod tests {
         for name in [
             "anims.cgs",
             "calls.cgs",
+            "cells.cgs",
             "choose.cgs",
             "control.cgs",
             "crosscall.cgs",
