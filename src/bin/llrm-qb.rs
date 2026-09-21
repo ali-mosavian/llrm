@@ -228,7 +228,7 @@ mod tests {
         let module = driver::lower_qb_to_ir(&program).unwrap();
         let text = llrm::ir::write_text(&module);
 
-        assert!(text.starts_with("qir 6\nmodule \"program\"\n"));
+        assert!(text.starts_with("qir 7\nmodule \"program\"\n"));
         assert!(llrm::ir::parse_text(&text).is_ok());
     }
 
@@ -263,7 +263,7 @@ mod tests {
         let parsed = llrm::codegen::machine::parse_text(&text)
             .expect("the qmir writer must emit parseable text");
 
-        assert!(text.starts_with("qmir 6\n"));
+        assert!(text.starts_with("qmir 7\n"));
         parsed.verify().expect("parsed qmir must verify");
         fs::remove_dir_all(directory).unwrap();
     }

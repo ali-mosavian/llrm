@@ -624,7 +624,15 @@ fn cast_name(value: CastOp) -> &'static str {
         CastOp::SignExtend => "signextend",
         CastOp::ZeroExtend => "zeroextend",
         CastOp::IntegerToFloat => "integertofloat",
-        CastOp::FloatToInteger => "floattointeger",
+        CastOp::FloatToInteger {
+            rounding: FloatRounding::Dynamic,
+        } => "floattointeger_dynamic",
+        CastOp::FloatToInteger {
+            rounding: FloatRounding::TowardZero,
+        } => "floattointeger_toward_zero",
+        CastOp::FloatToInteger {
+            rounding: FloatRounding::NearestEven,
+        } => "floattointeger_nearest_even",
         CastOp::FloatExtend => "floatextend",
         CastOp::FloatTruncate => "floattruncate",
         CastOp::PointerToInteger => "pointertointeger",
@@ -1504,7 +1512,15 @@ fn parse_cast(parser: &mut Parser) -> Result<CastOp, TextError> {
         "signextend" => Ok(CastOp::SignExtend),
         "zeroextend" => Ok(CastOp::ZeroExtend),
         "integertofloat" => Ok(CastOp::IntegerToFloat),
-        "floattointeger" => Ok(CastOp::FloatToInteger),
+        "floattointeger_dynamic" => Ok(CastOp::FloatToInteger {
+            rounding: FloatRounding::Dynamic,
+        }),
+        "floattointeger_toward_zero" => Ok(CastOp::FloatToInteger {
+            rounding: FloatRounding::TowardZero,
+        }),
+        "floattointeger_nearest_even" => Ok(CastOp::FloatToInteger {
+            rounding: FloatRounding::NearestEven,
+        }),
         "floatextend" => Ok(CastOp::FloatExtend),
         "floattruncate" => Ok(CastOp::FloatTruncate),
         "pointertointeger" => Ok(CastOp::PointerToInteger),
@@ -1943,21 +1959,50 @@ mod tests {
     fn rejects_unknown_and_malformed_input() {
         for obsolete in ["basic", "runtime"] {
             let source = format!(
-                "qir 6\nmodule \"m\"\ntype 0 void\nfunction 0 \"f\" linkage external result 0 parameters [] variadic false cc {obsolete} attributes []\nendfunction\nend\n"
+                "qir 7\nmodule \"m\"\ntype 0 void\nfunction 0 \"f\" linkage external result 0 parameters [] variadic false cc {obsolete} attributes []\nendfunction\nend\n"
             );
             let error = parse(&source).expect_err("source-language ABI labels must not enter IR");
             assert!(error.message.contains("unknown calling convention"));
         }
         assert!(parse("qir 3\nmodule \"m\"\nend\n").is_err());
         assert!(parse("qir 2\nmodule \"m\"\nend\n").is_err());
-        assert!(parse("qir 6\nmodule \"m\"\ntype 0 nope\nend\n").is_err());
+        assert!(parse("qir 6\nmodule \"m\"\nend\n").is_err());
+        assert!(parse("qir 7\nmodule \"m\"\ntype 0 nope\nend\n").is_err());
         assert!(
-            parse("qir 6\nmodule \"m\"\nglobal 0 \"g\" 0 neardata internal false some bytes \"f\"\nend\n")
+            parse("qir 7\nmodule \"m\"\nglobal 0 \"g\" 0 neardata internal false some bytes \"f\"\nend\n")
                 .is_err()
         );
         assert!(
-            parse("qir 6\nmodule \"m\"\nglobal 0 \"g\" 9 fardata external false none\nend\n")
+            parse("qir 7\nmodule \"m\"\nglobal 0 \"g\" 9 fardata external false none\nend\n")
                 .is_err()
         );
+    }
+
+    #[test]
+    fn float_to_integer_rounding_casts_have_distinct_canonical_spellings() {
+        for (op, text) in [
+            (
+                CastOp::FloatToInteger {
+                    rounding: FloatRounding::Dynamic,
+                },
+                "floattointeger_dynamic",
+            ),
+            (
+                CastOp::FloatToInteger {
+                    rounding: FloatRounding::TowardZero,
+                },
+                "floattointeger_toward_zero",
+            ),
+            (
+                CastOp::FloatToInteger {
+                    rounding: FloatRounding::NearestEven,
+                },
+                "floattointeger_nearest_even",
+            ),
+        ] {
+            assert_eq!(cast_name(op), text);
+            let mut parser = Parser::new(text).expect("valid cast token");
+            assert_eq!(parse_cast(&mut parser), Ok(op));
+        }
     }
 }

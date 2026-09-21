@@ -491,14 +491,8 @@ pub(super) fn plan_calls(module: &hir::Module) -> Result<CallPlan, CallPlanError
                 }
                 let abi = matching_abi(function, instruction.id)?;
                 let calling_convention = validate_abi(function.id, instruction, abi)?;
-                let signature = infer_signature(
-                    module,
-                    function.id,
-                    instruction,
-                    &values,
-                    abi,
-                    &mut void_type,
-                )?;
+                let signature =
+                    infer_signature(module, function, instruction, &values, abi, &mut void_type)?;
                 let call = match abi.callee {
                     Some(callable) => PendingCall::Defined {
                         target: resolve_defined_target(
@@ -530,9 +524,7 @@ pub(super) fn plan_calls(module: &hir::Module) -> Result<CallPlan, CallPlanError
                                     incoming: runtime_signature.signature,
                                 });
                             }
-                            if existing.calling_convention
-                                != runtime_signature.calling_convention
-                            {
+                            if existing.calling_convention != runtime_signature.calling_convention {
                                 return Err(CallPlanError::CallingConventionConflict {
                                     callee: callee.clone(),
                                     existing: existing.calling_convention,
@@ -990,7 +982,7 @@ fn normalized_name(name: &str) -> String {
 
 fn infer_signature(
     module: &hir::Module,
-    function: hir::FunctionId,
+    function: &hir::Function,
     instruction: &hir::Instruction,
     values: &ValueTypes,
     abi: &hir::CallAbi,
@@ -1005,10 +997,10 @@ fn infer_signature(
                 type_id
             }
         },
-        [result] => ir::TypeId::new(values.get(function, instruction.id, *result)?.get()),
+        [result] => ir::TypeId::new(values.get(function.id, instruction.id, *result)?.get()),
         _ => {
             return Err(CallPlanError::ResultArity {
-                function,
+                function: function.id,
                 instruction: instruction.id,
                 count: instruction.results.len(),
             });
@@ -1017,27 +1009,30 @@ fn infer_signature(
     let mut source_types = Vec::with_capacity(instruction.operands.len());
     for (index, operand) in instruction.operands.iter().enumerate() {
         let type_id = match operand {
-            hir::Operand::Value(value) => values.get(function, instruction.id, *value)?,
+            hir::Operand::Value(value) => values.get(function.id, instruction.id, *value)?,
             hir::Operand::Constant { type_id, .. } => *type_id,
-            hir::Operand::Place(_) => {
-                return Err(unsupported_operand(
-                    function,
-                    instruction.id,
-                    index,
-                    CallOperandError::Place,
-                ));
+            // A frontend may deliberately materialize a floating BYVAL
+            // argument in declared-width storage before the call.  Preserve
+            // that explicit rounding boundary: the call signature sees the
+            // place's storage type, and lowering emits a direct load rather
+            // than extending and immediately truncating the value again.
+            hir::Operand::Place(place) => {
+                float_place_type(module, function, *place).ok_or_else(|| {
+                    unsupported_operand(function.id, instruction.id, index, CallOperandError::Place)
+                })?
             }
             hir::Operand::Element { .. } => {
                 return Err(unsupported_operand(
-                    function,
+                    function.id,
                     instruction.id,
                     index,
                     CallOperandError::Element,
                 ));
             }
+            hir::Operand::Projection { type_id, .. } if is_float_type(module, *type_id) => *type_id,
             hir::Operand::Projection { .. } => {
                 return Err(unsupported_operand(
-                    function,
+                    function.id,
                     instruction.id,
                     index,
                     CallOperandError::Projection,
@@ -1045,7 +1040,7 @@ fn infer_signature(
             }
             hir::Operand::Indirect { .. } => {
                 return Err(unsupported_operand(
-                    function,
+                    function.id,
                     instruction.id,
                     index,
                     CallOperandError::Indirect,
@@ -1060,13 +1055,31 @@ fn infer_signature(
             .get(*index)
             .copied()
             .ok_or(CallPlanError::MalformedOrder {
-                function,
+                function: function.id,
                 instruction: instruction.id,
                 issue: AbiOrderError::OutOfBounds { index: *index },
             })?;
         parameters.push(type_id);
     }
     Ok(CallSignature { result, parameters })
+}
+
+fn is_float_type(module: &hir::Module, type_id: hir::TypeId) -> bool {
+    let mut matches = module.types.iter().filter(|type_| type_.id == type_id);
+    matches
+        .next()
+        .is_some_and(|type_| type_.kind == hir::TypeKind::Float)
+        && matches.next().is_none()
+}
+
+fn float_place_type(
+    module: &hir::Module,
+    function: &hir::Function,
+    place_id: hir::PlaceId,
+) -> Option<hir::TypeId> {
+    let mut matches = function.places.iter().filter(|place| place.id == place_id);
+    let type_id = matches.next()?.type_id;
+    (matches.next().is_none() && is_float_type(module, type_id)).then_some(type_id)
 }
 
 fn unsupported_operand(
@@ -1373,6 +1386,49 @@ mod tests {
         assert_eq!(
             plan.sites[&(hir::FunctionId::new(0), hir::InstructionId::new(0))].argument_indices,
             vec![1, 0]
+        );
+    }
+
+    #[test]
+    fn plans_an_explicit_float_storage_place_as_a_by_value_argument() {
+        let f32 = hir::TypeId::new(3);
+        let mut module = module(
+            Vec::new(),
+            vec![call(
+                0,
+                "B$FLOAT",
+                Vec::new(),
+                vec![hir::Operand::Place(hir::PlaceId::new(0))],
+            )],
+            vec![abi(0, vec![0])],
+        );
+        module.types.push(hir::Type {
+            id: f32,
+            name: "single".into(),
+            kind: hir::TypeKind::Float,
+            width: 4,
+            signed: None,
+            evaluation: hir::FloatEvaluation::Extended80,
+            element: None,
+            bounds: Vec::new(),
+            address: hir::AddressKind::None,
+        });
+        module.functions[0].places.push(hir::Place {
+            id: hir::PlaceId::new(0),
+            name: "rounded".into(),
+            type_id: f32,
+            storage: hir::Storage::Local,
+            offset: 0,
+            symbol: hir::DataId::new(0),
+            extent: 4,
+            address: hir::AddressKind::Near,
+        });
+
+        let plan = plan_calls(&module).unwrap();
+
+        assert_eq!(
+            plan.declarations[0].signature.parameters,
+            vec![ir::TypeId::new(3)]
         );
     }
 

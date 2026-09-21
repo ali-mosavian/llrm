@@ -131,7 +131,7 @@ mod tests {
     use llrm::target::x86::X86Opcode;
 
     const MINIMAL_INTEGER_IR: &str = concat!(
-        "qir 6\n",
+        "qir 7\n",
         "module \"m\"\n",
         "type 0 void\n",
         "type 1 integer 16\n",
@@ -182,7 +182,7 @@ mod tests {
 
     #[test]
     fn reports_text_failures_without_selecting() {
-        assert!(matches!(compile("qir 6\n"), Err(CompileError::Text(_))));
+        assert!(matches!(compile("qir 7\n"), Err(CompileError::Text(_))));
     }
 
     #[test]

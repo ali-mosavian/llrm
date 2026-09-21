@@ -503,7 +503,7 @@ impl<'module> TypeVerifier<'module> {
             CastOp::IntegerToFloat => {
                 self.require_kinds(source, target, &context, is_integer, is_float)
             }
-            CastOp::FloatToInteger => {
+            CastOp::FloatToInteger { .. } => {
                 self.require_kinds(source, target, &context, is_float, is_integer)
             }
             CastOp::FloatExtend => {

@@ -344,7 +344,7 @@ for replay and for inspecting adjacent pass output.
 
 Every file begins with a version directive:
 
-    qir version 1
+    qir 7
 
 The grammar is defined by that version, not inferred from the implementation
 revision. A format change that affects valid input, printed meaning, or public

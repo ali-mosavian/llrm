@@ -10,15 +10,15 @@ use std::fmt;
 use super::{
     FrameIndex, FrameObject, FrameObjectKind, InstructionFlags, MachineAddressSpace, MachineBlock,
     MachineBlockId, MachineCallingConvention, MachineDataObject, MachineDataObjectId,
-    MachineDataRelocation, MachineFunction, MachineFunctionId, MachineInstruction,
-    MachineInstructionId, MachineLinkage, MachineModule, MachineOperand, MachineOperandKind,
-    MachineRegister, MachineSignature, MachineValueType, OperandIndex, OperandRole,
-    PhysicalRegister, RegisterClass, RegisterConstraint, TargetOpcode, VirtualRegister,
-    VirtualRegisterId,
+    MachineDataRelocation, MachineFloatKind, MachineFunction, MachineFunctionId,
+    MachineInstruction, MachineInstructionId, MachineLinkage, MachineModule, MachineOperand,
+    MachineOperandKind, MachineRegister, MachineSignature, MachineValueType, OperandIndex,
+    OperandRole, PhysicalRegister, RegisterClass, RegisterConstraint, TargetOpcode,
+    VirtualRegister, VirtualRegisterId,
 };
 
 /// Version of the `.qmir` textual format.
-pub const FORMAT_VERSION: u32 = 6;
+pub const FORMAT_VERSION: u32 = 7;
 
 /// A syntax or value error in `.qmir` text.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -299,6 +299,11 @@ fn value_type_name(value_type: Option<MachineValueType>) -> String {
             bits,
             address_space,
         }) => format!("p{bits}:{}", address_space_name(address_space)),
+        Some(MachineValueType::Float { kind }) => match kind {
+            MachineFloatKind::Binary32 => "f32".to_owned(),
+            MachineFloatKind::Binary64 => "f64".to_owned(),
+            MachineFloatKind::Extended80 => "f80".to_owned(),
+        },
     }
 }
 
@@ -726,6 +731,15 @@ fn parse_value_type(
                     "expected an unsigned 16-bit width",
                 )
             });
+    }
+    let kind = match token.value {
+        "f32" => Some(MachineFloatKind::Binary32),
+        "f64" => Some(MachineFloatKind::Binary64),
+        "f80" => Some(MachineFloatKind::Extended80),
+        _ => None,
+    };
+    if let Some(kind) = kind {
+        return Ok(Some(MachineValueType::Float { kind }));
     }
     let Some(pointer) = token.value.strip_prefix('p') else {
         return Err(unexpected(&token, "a machine value type"));
@@ -1185,7 +1199,7 @@ mod tests {
     #[test]
     fn reports_the_malformed_operand_location() {
         let error =
-            parse_text("qmir 6\nfunction 0 0 66 internal c - 0 0\nblock 0 0\ninst 0 0 0 1\noperand use - - wat\n")
+            parse_text("qmir 7\nfunction 0 0 66 internal c - 0 0\nblock 0 0\ninst 0 0 0 1\noperand use - - wat\n")
                 .expect_err("unknown operand kind must be rejected");
         assert_eq!(error.line, 5);
         assert_eq!(error.column, 17);
@@ -1193,13 +1207,13 @@ mod tests {
     }
 
     #[test]
-    fn accepts_only_the_version_six_schema() {
-        let error = parse_text("qmir 5\n").expect_err("qmir version five is not accepted");
+    fn accepts_only_the_version_seven_schema() {
+        let error = parse_text("qmir 6\n").expect_err("qmir version six is not accepted");
         assert_eq!(error.line, 1);
         assert!(error.message.contains("invalid qmir format header"));
 
         for obsolete in ["basic", "runtime"] {
-            let source = format!("qmir 6\nfunction 0 0 66 internal {obsolete} - 0 0\n");
+            let source = format!("qmir 7\nfunction 0 0 66 internal {obsolete} - 0 0\n");
             let error = parse_text(&source)
                 .expect_err("source-language ABI labels must not enter Machine IR");
             assert!(error.message.contains("calling convention"));
@@ -1235,5 +1249,32 @@ mod tests {
 
         assert!(text.contains(" far_cdecl "));
         assert_eq!(parse_text(&text), Ok(module));
+    }
+
+    #[test]
+    fn float_signature_types_round_trip_with_canonical_names() {
+        let source = "qmir 7\nfunction 0 0 66 external c f80 0 2 f32 f64\nblock 0 0\nendblock\nendfunction\n";
+
+        let module = parse_text(source).expect("portable float signature types must parse");
+
+        assert_eq!(
+            module.functions[0].signature,
+            MachineSignature {
+                result: Some(MachineValueType::Float {
+                    kind: MachineFloatKind::Extended80,
+                }),
+                parameters: vec![
+                    MachineValueType::Float {
+                        kind: MachineFloatKind::Binary32,
+                    },
+                    MachineValueType::Float {
+                        kind: MachineFloatKind::Binary64,
+                    },
+                ],
+                variadic: false,
+                calling_convention: MachineCallingConvention::C,
+            }
+        );
+        assert_eq!(write_text(&module), source);
     }
 }

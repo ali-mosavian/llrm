@@ -59,6 +59,7 @@ pub enum InvalidProperty {
     ExtentOverflow,
     ValueIdOverflow,
     InstructionIdOverflow,
+    SynthesizedTypeIdOverflow,
 }
 
 /// The kind of an unsupported HIR operand.
@@ -305,19 +306,24 @@ pub fn lower_module(module: &hir::Module) -> Result<ir::Module, LowerError> {
     let calls = plan_calls(module).map_err(|error| LowerError::CallPlan { error })?;
     let globals = plan_globals(module).map_err(|error| LowerError::GlobalPlan { error })?;
     let stack = plan_stack_places(module, &globals)?;
+    // The frontend may retain a catalog of unused built-ins.  Synthesis must
+    // follow the same reachability rule as ordinary type lowering so an
+    // integer-only module does not acquire an irrelevant evaluation format.
+    let mut required_types = required_type_ids(module);
+    required_types.extend(indirect_offset_type_ids(module)?);
+    required_types.extend(globals.source_types.iter().copied());
+    let float_types = FloatTypes::new(module, &globals, &required_types)?;
     let lowerer = Lowerer {
         module,
         calls: &calls,
         globals: &globals,
         stack: &stack,
+        float_types: &float_types,
     };
     // The QB frontend carries a catalog of built-in types and callables in
     // every module. Declarations that no lowered function references have no
     // portable-IR semantics, so they must not make an otherwise scalar module
     // fail merely because their representation is not implemented yet.
-    let mut required_types = required_type_ids(module);
-    required_types.extend(indirect_offset_type_ids(module)?);
-    required_types.extend(globals.source_types.iter().copied());
     let mut types = module
         .types
         .iter()
@@ -331,6 +337,7 @@ pub fn lower_module(module: &hir::Module) -> Result<ir::Module, LowerError> {
         .collect::<Result<Vec<_>, _>>()?;
     drop(lowerer);
     types.extend(globals.extra_types);
+    types.extend(float_types.declarations());
     functions.extend(calls.declarations);
     let lowered = ir::Module {
         name: module.name.clone(),
@@ -566,6 +573,123 @@ struct Lowerer<'module> {
     calls: &'module CallPlan,
     globals: &'module GlobalPlan,
     stack: &'module StackPlan,
+    float_types: &'module FloatTypes,
+}
+
+/// The source type id always names storage.  When evaluation needs a wider
+/// format, this table gives that format one fresh, module-wide IR type id.
+/// Keeping it separate from HIR ids makes the ABI/storage boundary explicit.
+struct FloatTypes {
+    binary32: Option<ir::TypeId>,
+    binary64: Option<ir::TypeId>,
+    extended80: Option<ir::TypeId>,
+}
+
+impl FloatTypes {
+    fn new(
+        module: &hir::Module,
+        globals: &GlobalPlan,
+        required: &BTreeSet<hir::TypeId>,
+    ) -> Result<Self, LowerError> {
+        let mut needed = [false; 3];
+        for type_ in module
+            .types
+            .iter()
+            .filter(|type_| required.contains(&type_.id))
+        {
+            if type_.kind != hir::TypeKind::Float {
+                continue;
+            }
+            let storage = storage_float_kind(type_)?;
+            let evaluation = evaluation_float_kind(type_)?;
+            if storage != evaluation {
+                needed[float_kind_index(evaluation)] = true;
+            }
+        }
+        let maximum = module
+            .types
+            .iter()
+            .map(|type_| type_.id.get())
+            .chain(globals.extra_types.iter().map(|type_| type_.id.get()))
+            .max();
+        let mut next = maximum.map_or(Some(0), |id| id.checked_add(1));
+        let mut ids = [None; 3];
+        for index in 0..ids.len() {
+            if needed[index] {
+                let id = next.ok_or(LowerError::InvalidType {
+                    type_id: hir::TypeId::new(u32::MAX),
+                    property: InvalidProperty::SynthesizedTypeIdOverflow,
+                })?;
+                next = id.checked_add(1);
+                ids[index] = Some(ir::TypeId::new(id));
+            }
+        }
+        Ok(Self {
+            binary32: ids[0],
+            binary64: ids[1],
+            extended80: ids[2],
+        })
+    }
+
+    fn id(&self, kind: ir::FloatKind) -> Option<ir::TypeId> {
+        match kind {
+            ir::FloatKind::Binary32 => self.binary32,
+            ir::FloatKind::Binary64 => self.binary64,
+            ir::FloatKind::Extended80 => self.extended80,
+        }
+    }
+
+    fn declarations(&self) -> Vec<ir::Type> {
+        [
+            (self.binary32, ir::FloatKind::Binary32),
+            (self.binary64, ir::FloatKind::Binary64),
+            (self.extended80, ir::FloatKind::Extended80),
+        ]
+        .into_iter()
+        .filter_map(|(id, kind)| {
+            id.map(|id| ir::Type {
+                id,
+                kind: ir::TypeKind::Float(kind),
+            })
+        })
+        .collect()
+    }
+}
+
+fn float_kind_index(kind: ir::FloatKind) -> usize {
+    match kind {
+        ir::FloatKind::Binary32 => 0,
+        ir::FloatKind::Binary64 => 1,
+        ir::FloatKind::Extended80 => 2,
+    }
+}
+
+fn storage_float_kind(type_: &hir::Type) -> Result<ir::FloatKind, LowerError> {
+    match type_.width {
+        4 => Ok(ir::FloatKind::Binary32),
+        8 => Ok(ir::FloatKind::Binary64),
+        10 => Ok(ir::FloatKind::Extended80),
+        0 => Err(LowerError::InvalidType {
+            type_id: type_.id,
+            property: InvalidProperty::ZeroWidth,
+        }),
+        _ => Err(LowerError::InvalidType {
+            type_id: type_.id,
+            property: InvalidProperty::WidthOverflow,
+        }),
+    }
+}
+
+fn evaluation_float_kind(type_: &hir::Type) -> Result<ir::FloatKind, LowerError> {
+    match type_.evaluation {
+        hir::FloatEvaluation::Binary32 => Ok(ir::FloatKind::Binary32),
+        hir::FloatEvaluation::Binary64 => Ok(ir::FloatKind::Binary64),
+        hir::FloatEvaluation::Extended80 => Ok(ir::FloatKind::Extended80),
+        hir::FloatEvaluation::None => Err(LowerError::InvalidType {
+            type_id: type_.id,
+            property: InvalidProperty::MissingFloatEvaluation,
+        }),
+    }
 }
 
 struct GeneratedIds {
@@ -686,15 +810,32 @@ impl<'module> Lowerer<'module> {
     }
 
     fn float_kind(&self, type_: &hir::Type) -> Result<ir::FloatKind, LowerError> {
-        match type_.evaluation {
-            hir::FloatEvaluation::Binary32 => Ok(ir::FloatKind::Binary32),
-            hir::FloatEvaluation::Binary64 => Ok(ir::FloatKind::Binary64),
-            hir::FloatEvaluation::Extended80 => Ok(ir::FloatKind::Extended80),
-            hir::FloatEvaluation::None => Err(LowerError::InvalidType {
-                type_id: type_.id,
-                property: InvalidProperty::MissingFloatEvaluation,
-            }),
+        storage_float_kind(type_)
+    }
+
+    fn evaluation_type(&self, type_id: hir::TypeId) -> Result<ir::TypeId, LowerError> {
+        let type_ = self.type_by_id(type_id)?;
+        if type_.kind != hir::TypeKind::Float {
+            return Ok(ir::TypeId::new(type_id.get()));
         }
+        let storage = storage_float_kind(type_)?;
+        let evaluation = evaluation_float_kind(type_)?;
+        Ok(if storage == evaluation {
+            ir::TypeId::new(type_id.get())
+        } else {
+            self.float_types
+                .id(evaluation)
+                .ok_or(LowerError::InvalidType {
+                    type_id,
+                    property: InvalidProperty::MissingFloatEvaluation,
+                })?
+        })
+    }
+
+    fn is_split_float(&self, type_id: hir::TypeId) -> Result<bool, LowerError> {
+        let type_ = self.type_by_id(type_id)?;
+        Ok(type_.kind == hir::TypeKind::Float
+            && storage_float_kind(type_)? != evaluation_float_kind(type_)?)
     }
 
     fn lower_function(&self, function: &hir::Function) -> Result<ir::Function, LowerError> {
@@ -717,10 +858,40 @@ impl<'module> Lowerer<'module> {
             });
         }
 
+        if self.is_split_float(function.result_type)? {
+            return Err(LowerError::UnsupportedFunction {
+                function: function.id,
+                feature: UnsupportedFeature::CallAbi,
+            });
+        }
+        let mut generated = GeneratedIds::for_function(function, self.stack);
+        let mut parameter_extends = Vec::new();
         let parameters = function
             .parameters
             .iter()
-            .map(|id| self.lower_value(function, *id, function.entry, None))
+            .map(|id| {
+                let value = self.value_by_id(function, *id, function.entry, None)?;
+                if !self.is_split_float(value.type_id)? {
+                    return self.lower_value(function, *id, function.entry, None);
+                }
+                let raw = ir::Value {
+                    id: generated.value(function.id)?,
+                    type_id: ir::TypeId::new(value.type_id.get()),
+                };
+                parameter_extends.push(ir::Instruction {
+                    id: generated.instruction(function.id)?,
+                    results: vec![ir::Value {
+                        id: value_id(value.id),
+                        type_id: self.evaluation_type(value.type_id)?,
+                    }],
+                    kind: ir::InstructionKind::Cast {
+                        op: ir::CastOp::FloatExtend,
+                        operand: ir::Operand::Value(raw.id),
+                        to: self.evaluation_type(value.type_id)?,
+                    },
+                });
+                Ok(raw)
+            })
             .collect::<Result<Vec<_>, _>>()?;
         let calling_convention = calling_convention(function.abi.distance, function.abi.cleanup)
             .ok_or(LowerError::UnsupportedFunctionAbi {
@@ -737,7 +908,6 @@ impl<'module> Lowerer<'module> {
             variadic: false,
             calling_convention,
         };
-        let mut generated = GeneratedIds::for_function(function, self.stack);
         let mut blocks = function
             .blocks
             .iter()
@@ -755,6 +925,19 @@ impl<'module> Lowerer<'module> {
             entry
                 .instructions
                 .splice(insertion..insertion, allocations.iter().cloned());
+        }
+        if !parameter_extends.is_empty() {
+            let entry = blocks.first_mut().expect("entry block was checked above");
+            let insertion = entry
+                .instructions
+                .iter()
+                .take_while(|instruction| {
+                    matches!(instruction.kind, ir::InstructionKind::Phi { .. })
+                })
+                .count();
+            entry
+                .instructions
+                .splice(insertion..insertion, parameter_extends);
         }
 
         Ok(ir::Function {
@@ -776,6 +959,33 @@ impl<'module> Lowerer<'module> {
     ) -> Result<ir::Block, LowerError> {
         let mut instructions = Vec::with_capacity(block.instructions.len());
         for instruction in &block.instructions {
+            if self.split_memory_access(function, block.id, instruction)? {
+                instructions.extend(self.lower_split_memory_access(
+                    function,
+                    block.id,
+                    instruction,
+                    generated,
+                )?);
+                continue;
+            }
+            if self.split_float_operation(function, block.id, instruction)? {
+                instructions.extend(self.lower_split_float_operation(
+                    function,
+                    block.id,
+                    instruction,
+                    generated,
+                )?);
+                continue;
+            }
+            if self.split_float_call(function, block.id, instruction)? {
+                instructions.extend(self.lower_split_float_call(
+                    function,
+                    block.id,
+                    instruction,
+                    generated,
+                )?);
+                continue;
+            }
             if let Some(prefix) =
                 self.indirect_offset_prefix(function, block.id, instruction, generated)?
             {
@@ -801,6 +1011,672 @@ impl<'module> Lowerer<'module> {
             instructions,
             terminator: self.lower_terminator(function, block)?,
         })
+    }
+
+    fn split_float_call(
+        &self,
+        function: &hir::Function,
+        block: hir::BlockId,
+        instruction: &hir::Instruction,
+    ) -> Result<bool, LowerError> {
+        if instruction.opcode != hir::Opcode::Call {
+            return Ok(false);
+        }
+        if let [result] = instruction.results.as_slice() {
+            if self.is_split_float(
+                self.value_by_id(function, *result, block, Some(instruction.id))?
+                    .type_id,
+            )? {
+                return Ok(true);
+            }
+        }
+        for (index, operand) in instruction.operands.iter().enumerate() {
+            match operand {
+                hir::Operand::Place(place) => {
+                    let place = self.call_place(function, block, instruction, index, *place)?;
+                    if self.is_float(place.type_id)? {
+                        return Ok(true);
+                    }
+                }
+                hir::Operand::Projection { type_id, .. } => {
+                    if self.is_float(*type_id)? {
+                        return Ok(true);
+                    }
+                }
+                _ => {
+                    let type_id =
+                        self.operand_type(function, block, Some(instruction.id), index, operand)?;
+                    if self.is_split_float(type_id)? {
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+        Ok(false)
+    }
+
+    fn lower_split_float_call(
+        &self,
+        function: &hir::Function,
+        block: hir::BlockId,
+        instruction: &hir::Instruction,
+        generated: &mut GeneratedIds,
+    ) -> Result<Vec<ir::Instruction>, LowerError> {
+        if let [result] = instruction.results.as_slice() {
+            let value = self.value_by_id(function, *result, block, Some(instruction.id))?;
+            if self.is_split_float(value.type_id)? {
+                return self.unsupported_instruction(
+                    function,
+                    block,
+                    instruction,
+                    UnsupportedFeature::CallAbi,
+                );
+            }
+        }
+        let planned = self.calls.sites.get(&(function.id, instruction.id)).ok_or(
+            LowerError::InvalidInstruction {
+                function: function.id,
+                block,
+                instruction: instruction.id,
+                property: InvalidProperty::MissingCallPlan,
+            },
+        )?;
+        let mut prefixes = Vec::new();
+        let arguments = planned
+            .argument_indices
+            .iter()
+            .map(|index| {
+                let operand =
+                    instruction
+                        .operands
+                        .get(*index)
+                        .ok_or(LowerError::InvalidInstruction {
+                            function: function.id,
+                            block,
+                            instruction: instruction.id,
+                            property: InvalidProperty::MissingCallPlan,
+                        })?;
+                self.storage_call_operand(
+                    function,
+                    block,
+                    instruction,
+                    *index,
+                    operand,
+                    generated,
+                    &mut prefixes,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        prefixes.push(ir::Instruction {
+            id: instruction_id(instruction.id),
+            results: instruction
+                .results
+                .iter()
+                .map(|result| self.lower_value(function, *result, block, Some(instruction.id)))
+                .collect::<Result<Vec<_>, _>>()?,
+            kind: ir::InstructionKind::Call {
+                callee: ir::Callee::Direct(planned.target),
+                arguments,
+                effects: ir::Effects {
+                    memory: ir::MemoryEffects::Unknown,
+                    may_trap: true,
+                    observable: true,
+                },
+            },
+        });
+        Ok(prefixes)
+    }
+
+    fn storage_call_operand(
+        &self,
+        function: &hir::Function,
+        block: hir::BlockId,
+        instruction: &hir::Instruction,
+        index: usize,
+        operand: &hir::Operand,
+        generated: &mut GeneratedIds,
+        prefixes: &mut Vec<ir::Instruction>,
+    ) -> Result<ir::Operand, LowerError> {
+        let type_id = match operand {
+            hir::Operand::Place(place) => {
+                self.call_place(function, block, instruction, index, *place)?
+                    .type_id
+            }
+            hir::Operand::Projection { type_id, .. } => *type_id,
+            _ => self.operand_type(function, block, Some(instruction.id), index, operand)?,
+        };
+        match operand {
+            hir::Operand::Place(place_id) => self.load_call_place(
+                function,
+                block,
+                instruction,
+                index,
+                *place_id,
+                type_id,
+                generated,
+                prefixes,
+            ),
+            hir::Operand::Projection {
+                place,
+                indices,
+                offset,
+                ..
+            } => self.load_call_projection(
+                function,
+                block,
+                instruction,
+                index,
+                *place,
+                indices,
+                *offset,
+                type_id,
+                generated,
+                prefixes,
+            ),
+            _ if !self.is_split_float(type_id)? => {
+                self.lower_operand(function, block, Some(instruction.id), index, operand)
+            }
+            // Rvalue values are evaluation-format values.  Constants have
+            // storage-format semantics already, so they enter the ABI direct.
+            hir::Operand::Value(_) => {
+                let stored = ir::Value {
+                    id: generated.value(function.id)?,
+                    type_id: ir::TypeId::new(type_id.get()),
+                };
+                prefixes.push(ir::Instruction {
+                    id: generated.instruction(function.id)?,
+                    results: vec![stored.clone()],
+                    kind: ir::InstructionKind::Cast {
+                        op: ir::CastOp::FloatTruncate,
+                        operand: self.lower_operand(
+                            function,
+                            block,
+                            Some(instruction.id),
+                            index,
+                            operand,
+                        )?,
+                        to: stored.type_id,
+                    },
+                });
+                Ok(ir::Operand::Value(stored.id))
+            }
+            hir::Operand::Constant { .. } => {
+                self.lower_operand(function, block, Some(instruction.id), index, operand)
+            }
+            _ => Err(self.unsupported_operand(
+                function,
+                block,
+                Some(instruction.id),
+                index,
+                UnsupportedOperand::Place,
+            )),
+        }
+    }
+
+    fn load_call_place(
+        &self,
+        function: &hir::Function,
+        block: hir::BlockId,
+        instruction: &hir::Instruction,
+        index: usize,
+        place_id: hir::PlaceId,
+        type_id: hir::TypeId,
+        generated: &mut GeneratedIds,
+        prefixes: &mut Vec<ir::Instruction>,
+    ) -> Result<ir::Operand, LowerError> {
+        let place = self.call_place(function, block, instruction, index, place_id)?;
+        if place.type_id != type_id {
+            return self.invalid_instruction(
+                function,
+                block,
+                instruction,
+                InvalidProperty::OperandTypes,
+            );
+        }
+        let address =
+            if let Some(planned) = self.globals.places.get(&(function.id, place_id)).copied() {
+                global_address(planned, planned.pointer_type)
+            } else if let Some(value) = self.stack.places.get(&(function.id, place_id)) {
+                ir::Operand::Value(value.id)
+            } else {
+                return self.invalid_instruction(
+                    function,
+                    block,
+                    instruction,
+                    InvalidProperty::MissingGlobalPlan,
+                );
+            };
+        let value = ir::Value {
+            id: generated.value(function.id)?,
+            type_id: ir::TypeId::new(type_id.get()),
+        };
+        prefixes.push(ir::Instruction {
+            id: generated.instruction(function.id)?,
+            results: vec![value.clone()],
+            kind: ir::InstructionKind::Load {
+                address,
+                alignment: 1,
+                volatile: false,
+            },
+        });
+        Ok(ir::Operand::Value(value.id))
+    }
+
+    fn load_call_projection(
+        &self,
+        function: &hir::Function,
+        block: hir::BlockId,
+        instruction: &hir::Instruction,
+        index: usize,
+        place_id: hir::PlaceId,
+        indices: &[hir::Operand],
+        offset: usize,
+        type_id: hir::TypeId,
+        generated: &mut GeneratedIds,
+        prefixes: &mut Vec<ir::Instruction>,
+    ) -> Result<ir::Operand, LowerError> {
+        let place = self.call_place(function, block, instruction, index, place_id)?;
+        let (base, pointer_type) =
+            if let Some(planned) = self.globals.places.get(&(function.id, place_id)).copied() {
+                (
+                    global_address(planned, planned.pointer_type),
+                    planned.pointer_type,
+                )
+            } else if let Some(value) = self.stack.places.get(&(function.id, place_id)) {
+                (ir::Operand::Value(value.id), value.type_id)
+            } else {
+                return self.invalid_instruction(
+                    function,
+                    block,
+                    instruction,
+                    InvalidProperty::MissingGlobalPlan,
+                );
+            };
+        let mut lowered_indices = indices
+            .iter()
+            .enumerate()
+            .map(|(projection_index, operand)| {
+                self.lower_operand(
+                    function,
+                    block,
+                    Some(instruction.id),
+                    projection_index,
+                    operand,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if offset != 0 {
+            let width = match place.address {
+                hir::AddressKind::Near | hir::AddressKind::Far => 2,
+                hir::AddressKind::Huge => 4,
+                hir::AddressKind::None | hir::AddressKind::Code | hir::AddressKind::Segment => {
+                    return self.invalid_instruction(
+                        function,
+                        block,
+                        instruction,
+                        InvalidProperty::UnsupportedIndirectOffsetAddress,
+                    );
+                }
+            };
+            let offset_type = self
+                .module
+                .types
+                .iter()
+                .find(|type_| type_.kind == hir::TypeKind::Integer && type_.width == width)
+                .ok_or(LowerError::InvalidInstruction {
+                    function: function.id,
+                    block,
+                    instruction: instruction.id,
+                    property: InvalidProperty::MissingIndirectOffsetType,
+                })?;
+            lowered_indices.push(ir::Operand::Constant(ir::TypedConstant {
+                type_id: ir::TypeId::new(offset_type.id.get()),
+                value: ir::Constant::Integer(offset as i128),
+            }));
+        }
+        let address = if lowered_indices.is_empty() {
+            base
+        } else {
+            let address = ir::Value {
+                id: generated.value(function.id)?,
+                type_id: pointer_type,
+            };
+            prefixes.push(ir::Instruction {
+                id: generated.instruction(function.id)?,
+                results: vec![address.clone()],
+                kind: ir::InstructionKind::GetElementPointer {
+                    base,
+                    indices: lowered_indices,
+                },
+            });
+            ir::Operand::Value(address.id)
+        };
+        let value = ir::Value {
+            id: generated.value(function.id)?,
+            type_id: ir::TypeId::new(type_id.get()),
+        };
+        prefixes.push(ir::Instruction {
+            id: generated.instruction(function.id)?,
+            results: vec![value.clone()],
+            kind: ir::InstructionKind::Load {
+                address,
+                alignment: 1,
+                volatile: false,
+            },
+        });
+        Ok(ir::Operand::Value(value.id))
+    }
+
+    fn call_place<'function>(
+        &self,
+        function: &'function hir::Function,
+        block: hir::BlockId,
+        instruction: &hir::Instruction,
+        index: usize,
+        id: hir::PlaceId,
+    ) -> Result<&'function hir::Place, LowerError> {
+        let mut places = function.places.iter().filter(|place| place.id == id);
+        let Some(place) = places.next() else {
+            return Err(LowerError::UnknownPlace {
+                function: function.id,
+                block,
+                instruction: instruction.id,
+                place: id,
+            });
+        };
+        if places.next().is_some() {
+            return Err(LowerError::AmbiguousPlace {
+                function: function.id,
+                block,
+                instruction: instruction.id,
+                place: id,
+            });
+        }
+        if !self.is_float(place.type_id)? {
+            return Err(self.unsupported_operand(
+                function,
+                block,
+                Some(instruction.id),
+                index,
+                UnsupportedOperand::Place,
+            ));
+        }
+        Ok(place)
+    }
+
+    fn split_float_operation(
+        &self,
+        function: &hir::Function,
+        block: hir::BlockId,
+        instruction: &hir::Instruction,
+    ) -> Result<bool, LowerError> {
+        let relevant = matches!(
+            instruction.opcode,
+            hir::Opcode::Copy
+                | hir::Opcode::Convert
+                | hir::Opcode::Equal
+                | hir::Opcode::NotEqual
+                | hir::Opcode::LessThan
+                | hir::Opcode::LessEqual
+                | hir::Opcode::GreaterThan
+                | hir::Opcode::GreaterEqual
+                | hir::Opcode::FloatAdd
+                | hir::Opcode::FloatSubtract
+                | hir::Opcode::FloatMultiply
+                | hir::Opcode::FloatDivide
+                | hir::Opcode::FloatNegate
+                | hir::Opcode::FloatAbsolute
+                | hir::Opcode::FloatSquareRoot
+                | hir::Opcode::FloatSine
+                | hir::Opcode::FloatCosine
+                | hir::Opcode::FloatArctangent
+                | hir::Opcode::FloatLog2
+                | hir::Opcode::FloatExp2
+                | hir::Opcode::FloatToInteger { .. }
+        );
+        if !relevant {
+            return Ok(false);
+        }
+        for (index, operand) in instruction.operands.iter().enumerate() {
+            let type_id =
+                self.operand_type(function, block, Some(instruction.id), index, operand)?;
+            if self.is_split_float(type_id)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn lower_split_float_operation(
+        &self,
+        function: &hir::Function,
+        block: hir::BlockId,
+        instruction: &hir::Instruction,
+        generated: &mut GeneratedIds,
+    ) -> Result<Vec<ir::Instruction>, LowerError> {
+        let mut prefixes = Vec::new();
+        let mut lowered = self.lower_instruction(function, block, instruction)?;
+        let mut operands = Vec::with_capacity(instruction.operands.len());
+        for (index, operand) in instruction.operands.iter().enumerate() {
+            operands.push(self.evaluated_float_operand(
+                function,
+                block,
+                instruction,
+                index,
+                operand,
+                generated,
+                &mut prefixes,
+            )?);
+        }
+        match &mut lowered.kind {
+            ir::InstructionKind::Binary { left, right, .. }
+            | ir::InstructionKind::Compare { left, right, .. } => {
+                *left = operands[0].clone();
+                *right = operands[1].clone();
+            }
+            ir::InstructionKind::Unary { operand, .. }
+            | ir::InstructionKind::Cast { operand, .. } => *operand = operands[0].clone(),
+            ir::InstructionKind::Intrinsic { arguments, .. } => *arguments = operands,
+            _ => unreachable!("only scalar float operations take the split path"),
+        }
+        prefixes.push(lowered);
+        Ok(prefixes)
+    }
+
+    /// A real constant remains typed as its storage format before the extend.
+    /// `Constant::Float` is textual today, so exact source bits remain a risk
+    /// until constants carry an exact binary representation.
+    fn evaluated_float_operand(
+        &self,
+        function: &hir::Function,
+        block: hir::BlockId,
+        instruction: &hir::Instruction,
+        index: usize,
+        operand: &hir::Operand,
+        generated: &mut GeneratedIds,
+        prefixes: &mut Vec<ir::Instruction>,
+    ) -> Result<ir::Operand, LowerError> {
+        let type_id = self.operand_type(function, block, Some(instruction.id), index, operand)?;
+        if !self.is_split_float(type_id)? {
+            return self.lower_operand(function, block, Some(instruction.id), index, operand);
+        }
+        match operand {
+            hir::Operand::Constant { .. } => {
+                let value = ir::Value {
+                    id: generated.value(function.id)?,
+                    type_id: self.evaluation_type(type_id)?,
+                };
+                prefixes.push(ir::Instruction {
+                    id: generated.instruction(function.id)?,
+                    results: vec![value.clone()],
+                    kind: ir::InstructionKind::Cast {
+                        op: ir::CastOp::FloatExtend,
+                        operand: self.lower_operand(
+                            function,
+                            block,
+                            Some(instruction.id),
+                            index,
+                            operand,
+                        )?,
+                        to: value.type_id,
+                    },
+                });
+                Ok(ir::Operand::Value(value.id))
+            }
+            _ => self.lower_operand(function, block, Some(instruction.id), index, operand),
+        }
+    }
+
+    fn split_memory_access(
+        &self,
+        function: &hir::Function,
+        block: hir::BlockId,
+        instruction: &hir::Instruction,
+    ) -> Result<bool, LowerError> {
+        if !matches!(instruction.opcode, hir::Opcode::Load | hir::Opcode::Store) {
+            return Ok(false);
+        }
+        let memory = self.memory_address(
+            function,
+            block,
+            instruction,
+            0,
+            if instruction.opcode == hir::Opcode::Load {
+                1
+            } else {
+                2
+            },
+        )?;
+        self.is_split_float(memory.type_id)
+    }
+
+    fn lower_split_memory_access(
+        &self,
+        function: &hir::Function,
+        block: hir::BlockId,
+        instruction: &hir::Instruction,
+        generated: &mut GeneratedIds,
+    ) -> Result<Vec<ir::Instruction>, LowerError> {
+        let arity = if instruction.opcode == hir::Opcode::Load {
+            1
+        } else {
+            2
+        };
+        let mut result = Vec::new();
+        let mut memory = self.memory_address(function, block, instruction, 0, arity)?;
+        if let Some(prefix) =
+            self.indirect_offset_prefix(function, block, instruction, generated)?
+        {
+            memory.address = ir::Operand::Value(prefix.results[0].id);
+            result.push(prefix);
+        }
+        let storage = ir::TypeId::new(memory.type_id.get());
+        let evaluation = self.evaluation_type(memory.type_id)?;
+        match instruction.opcode {
+            hir::Opcode::Load => {
+                let loaded = ir::Value {
+                    id: generated.value(function.id)?,
+                    type_id: storage,
+                };
+                result.push(ir::Instruction {
+                    id: instruction_id(instruction.id),
+                    results: vec![loaded.clone()],
+                    kind: ir::InstructionKind::Load {
+                        address: memory.address,
+                        alignment: 1,
+                        volatile: memory.volatile,
+                    },
+                });
+                result.push(ir::Instruction {
+                    id: generated.instruction(function.id)?,
+                    results: vec![self.one_result(function, block, instruction)?],
+                    kind: ir::InstructionKind::Cast {
+                        op: ir::CastOp::FloatExtend,
+                        operand: ir::Operand::Value(loaded.id),
+                        to: evaluation,
+                    },
+                });
+            }
+            hir::Opcode::Store => {
+                if memory.readonly {
+                    return self.invalid_instruction(
+                        function,
+                        block,
+                        instruction,
+                        InvalidProperty::ReadOnlyStore,
+                    );
+                }
+                if !instruction.results.is_empty() {
+                    return self.invalid_instruction(
+                        function,
+                        block,
+                        instruction,
+                        InvalidProperty::ResultArity,
+                    );
+                }
+                let value_type = self.operand_type(
+                    function,
+                    block,
+                    Some(instruction.id),
+                    1,
+                    &instruction.operands[1],
+                )?;
+                if value_type != memory.type_id {
+                    return self.invalid_instruction(
+                        function,
+                        block,
+                        instruction,
+                        InvalidProperty::OperandTypes,
+                    );
+                }
+                let stored_value = match &instruction.operands[1] {
+                    // A literal is already represented in its declared
+                    // storage format; truncating storage to itself is not a
+                    // valid cast and would discard that fact.
+                    hir::Operand::Constant { .. } => self.lower_operand(
+                        function,
+                        block,
+                        Some(instruction.id),
+                        1,
+                        &instruction.operands[1],
+                    )?,
+                    _ => {
+                        let stored = ir::Value {
+                            id: generated.value(function.id)?,
+                            type_id: storage,
+                        };
+                        result.push(ir::Instruction {
+                            id: generated.instruction(function.id)?,
+                            results: vec![stored.clone()],
+                            kind: ir::InstructionKind::Cast {
+                                op: ir::CastOp::FloatTruncate,
+                                operand: self.lower_operand(
+                                    function,
+                                    block,
+                                    Some(instruction.id),
+                                    1,
+                                    &instruction.operands[1],
+                                )?,
+                                to: storage,
+                            },
+                        });
+                        ir::Operand::Value(stored.id)
+                    }
+                };
+                result.push(ir::Instruction {
+                    id: instruction_id(instruction.id),
+                    results: Vec::new(),
+                    kind: ir::InstructionKind::Store {
+                        address: memory.address,
+                        value: stored_value,
+                        alignment: 1,
+                        volatile: memory.volatile,
+                    },
+                });
+            }
+            _ => unreachable!("split memory access was checked above"),
+        }
+        Ok(result)
     }
 
     fn indirect_offset_prefix(
@@ -892,6 +1768,9 @@ impl<'module> Lowerer<'module> {
                     operand,
                     to: result.type_id,
                 }
+            }
+            Opcode::FloatToInteger { rounding } => {
+                self.float_to_integer(function, block, instruction, rounding)?
             }
             Opcode::SignExtend => {
                 self.explicit_extend(function, block, instruction, ir::CastOp::SignExtend)?
@@ -1458,8 +2337,8 @@ impl<'module> Lowerer<'module> {
         if !self.is_integer(left_type)?
             || !self.is_integer(right_type)?
             || !self.is_integer_ir(result.type_id)?
-            || type_id(left_type) != result.type_id
-            || type_id(right_type) != result.type_id
+            || self.evaluation_type(left_type)? != result.type_id
+            || self.evaluation_type(right_type)? != result.type_id
         {
             return self.invalid_instruction(
                 function,
@@ -1519,7 +2398,7 @@ impl<'module> Lowerer<'module> {
         let (result, operand, source_type) = self.unary_parts(function, block, instruction)?;
         if !self.is_integer(source_type)?
             || !self.is_integer_ir(result.type_id)?
-            || type_id(source_type) != result.type_id
+            || self.evaluation_type(source_type)? != result.type_id
         {
             return self.invalid_instruction(
                 function,
@@ -1597,8 +2476,8 @@ impl<'module> Lowerer<'module> {
         if !self.is_float(left_type)?
             || !self.is_float(right_type)?
             || !self.is_float_ir(result.type_id)?
-            || type_id(left_type) != result.type_id
-            || type_id(right_type) != result.type_id
+            || self.evaluation_type(left_type)? != result.type_id
+            || self.evaluation_type(right_type)? != result.type_id
         {
             return self.invalid_instruction(
                 function,
@@ -1620,7 +2499,7 @@ impl<'module> Lowerer<'module> {
         let (result, operand, source_type) = self.unary_parts(function, block, instruction)?;
         if !self.is_float(source_type)?
             || !self.is_float_ir(result.type_id)?
-            || type_id(source_type) != result.type_id
+            || self.evaluation_type(source_type)? != result.type_id
         {
             return self.invalid_instruction(
                 function,
@@ -1642,7 +2521,7 @@ impl<'module> Lowerer<'module> {
         let (result, operand, source_type) = self.unary_parts(function, block, instruction)?;
         if !self.is_float(source_type)?
             || !self.is_float_ir(result.type_id)?
-            || type_id(source_type) != result.type_id
+            || self.evaluation_type(source_type)? != result.type_id
         {
             return self.invalid_instruction(
                 function,
@@ -1657,6 +2536,35 @@ impl<'module> Lowerer<'module> {
         })
     }
 
+    fn float_to_integer(
+        &self,
+        function: &hir::Function,
+        block: hir::BlockId,
+        instruction: &hir::Instruction,
+        rounding: hir::FloatRounding,
+    ) -> Result<ir::InstructionKind, LowerError> {
+        let (result, operand, source_type) = self.unary_parts(function, block, instruction)?;
+        if !self.is_float(source_type)? || !self.is_integer_ir(result.type_id)? {
+            return self.invalid_instruction(
+                function,
+                block,
+                instruction,
+                InvalidProperty::CastTypes,
+            );
+        }
+        Ok(ir::InstructionKind::Cast {
+            op: ir::CastOp::FloatToInteger {
+                rounding: match rounding {
+                    hir::FloatRounding::Dynamic => ir::FloatRounding::Dynamic,
+                    hir::FloatRounding::TowardZero => ir::FloatRounding::TowardZero,
+                    hir::FloatRounding::NearestEven => ir::FloatRounding::NearestEven,
+                },
+            },
+            operand,
+            to: result.type_id,
+        })
+    }
+
     fn convert_op(
         &self,
         function: &hir::Function,
@@ -1665,7 +2573,25 @@ impl<'module> Lowerer<'module> {
         source: hir::TypeId,
         target: ir::TypeId,
     ) -> Result<ir::CastOp, LowerError> {
-        let target_hir = hir::TypeId::new(target.get());
+        let [result] = instruction.results.as_slice() else {
+            return self.invalid_instruction(
+                function,
+                block,
+                instruction,
+                InvalidProperty::ResultArity,
+            );
+        };
+        let target_hir = self
+            .value_by_id(function, *result, block, Some(instruction.id))?
+            .type_id;
+        if target != self.evaluation_type(target_hir)? {
+            return self.invalid_instruction(
+                function,
+                block,
+                instruction,
+                InvalidProperty::CastTypes,
+            );
+        }
         let source_type = self.type_by_id(source)?;
         let target_type = self.type_by_id(target_hir)?;
         match (source_type.kind, target_type.kind) {
@@ -2010,7 +2936,7 @@ impl<'module> Lowerer<'module> {
         self.type_by_id(value.type_id)?;
         Ok(ir::Value {
             id: value_id(value.id),
-            type_id: type_id(value.type_id),
+            type_id: self.evaluation_type(value.type_id)?,
         })
     }
 
@@ -2064,6 +2990,14 @@ impl<'module> Lowerer<'module> {
     }
 
     fn is_float_ir(&self, id: ir::TypeId) -> Result<bool, LowerError> {
+        if self
+            .float_types
+            .declarations()
+            .iter()
+            .any(|type_| type_.id == id)
+        {
+            return Ok(true);
+        }
         self.is_float(hir::TypeId::new(id.get()))
     }
 
@@ -2096,7 +3030,7 @@ impl<'module> Lowerer<'module> {
         source: hir::TypeId,
         property: InvalidProperty,
     ) -> Result<(), LowerError> {
-        if result == type_id(source) {
+        if result == self.evaluation_type(source)? {
             Ok(())
         } else {
             self.invalid_instruction(function, block, instruction, property)
@@ -3031,7 +3965,10 @@ mod tests {
         let lowered = lower_module(&module).expect("far indirect byte offset lowers through GEP");
         let instructions = &lowered.functions[0].blocks[0].instructions;
         assert!(matches!(
-            lowered.types.iter().find(|type_| type_.id == ir::TypeId::new(7)),
+            lowered
+                .types
+                .iter()
+                .find(|type_| type_.id == ir::TypeId::new(7)),
             Some(ir::Type {
                 kind: ir::TypeKind::Pointer {
                     address_space: ir::AddressSpace::FarData,
@@ -3177,5 +4114,140 @@ mod tests {
                 feature: UnsupportedFeature::UnsupportedCast,
             })
         );
+    }
+
+    fn split_single_module() -> hir::Module {
+        let mut module = scalar_module();
+        module.types[5].evaluation = hir::FloatEvaluation::Extended80;
+        let function = &mut module.functions[0];
+        function.values = vec![hir::Value {
+            id: hir::ValueId::new(5),
+            type_id: hir::TypeId::new(5),
+        }];
+        function.parameters = vec![hir::ValueId::new(5)];
+        function.abi.parameter_bytes = 4;
+        function.blocks = vec![hir::Block {
+            id: hir::BlockId::new(4),
+            instructions: Vec::new(),
+            terminator: hir::Terminator::Return(None),
+        }];
+        function.entry = hir::BlockId::new(4);
+        module
+    }
+
+    #[test]
+    fn split_single_parameter_keeps_four_byte_signature_and_extends_in_entry() {
+        let lowered = lower_module(&split_single_module()).expect("split single parameter lowers");
+        let function = &lowered.functions[0];
+        assert_eq!(function.signature.parameters, vec![ir::TypeId::new(5)]);
+        assert_eq!(
+            lowered
+                .types
+                .iter()
+                .find(|type_| type_.id == ir::TypeId::new(5)),
+            Some(&ir::Type {
+                id: ir::TypeId::new(5),
+                kind: ir::TypeKind::Float(ir::FloatKind::Binary32),
+            })
+        );
+        assert_eq!(function.parameters[0].type_id, ir::TypeId::new(5));
+        assert!(matches!(
+            &function.blocks[0].instructions[0],
+            ir::Instruction {
+                results,
+                kind: ir::InstructionKind::Cast {
+                    op: ir::CastOp::FloatExtend,
+                    to,
+                    ..
+                },
+                ..
+            } if results[0].id == ir::ValueId::new(5)
+                && *to != ir::TypeId::new(5)
+                && lowered.types.iter().any(|type_| type_.id == *to
+                    && type_.kind == ir::TypeKind::Float(ir::FloatKind::Extended80))
+        ));
+    }
+
+    #[test]
+    fn split_single_load_extends_and_store_truncates() {
+        let mut module = split_single_module();
+        let function = &mut module.functions[0];
+        function.places = vec![hir::Place {
+            id: hir::PlaceId::new(0),
+            name: "cell".into(),
+            type_id: hir::TypeId::new(5),
+            storage: hir::Storage::Local,
+            offset: 0,
+            symbol: hir::DataId::new(0),
+            extent: 4,
+            address: hir::AddressKind::Near,
+        }];
+        function.values.push(hir::Value {
+            id: hir::ValueId::new(6),
+            type_id: hir::TypeId::new(5),
+        });
+        function.blocks[0].instructions = vec![
+            hir::Instruction {
+                id: hir::InstructionId::new(19),
+                opcode: hir::Opcode::Store,
+                results: Vec::new(),
+                operands: vec![
+                    hir::Operand::Place(hir::PlaceId::new(0)),
+                    hir::Operand::Constant {
+                        type_id: hir::TypeId::new(5),
+                        value: hir::ConstantValue::Real("1.25".into()),
+                    },
+                ],
+                callee: None,
+            },
+            hir::Instruction {
+                id: hir::InstructionId::new(20),
+                opcode: hir::Opcode::Store,
+                results: Vec::new(),
+                operands: vec![
+                    hir::Operand::Place(hir::PlaceId::new(0)),
+                    hir::Operand::Value(hir::ValueId::new(5)),
+                ],
+                callee: None,
+            },
+            hir::Instruction {
+                id: hir::InstructionId::new(21),
+                opcode: hir::Opcode::Load,
+                results: vec![hir::ValueId::new(6)],
+                operands: vec![hir::Operand::Place(hir::PlaceId::new(0))],
+                callee: None,
+            },
+        ];
+        let lowered = lower_module(&module).expect("split single memory lowers");
+        let instructions = &lowered.functions[0].blocks[0].instructions;
+        assert!(instructions.iter().any(|instruction| matches!(
+            &instruction.kind,
+            ir::InstructionKind::Store {
+                value: ir::Operand::Constant(ir::TypedConstant {
+                    type_id,
+                    value: ir::Constant::Float(value),
+                }),
+                ..
+            } if *type_id == ir::TypeId::new(5) && value == "1.25"
+        )));
+        assert!(instructions.iter().any(|instruction| matches!(
+            instruction.kind,
+            ir::InstructionKind::Cast {
+                op: ir::CastOp::FloatTruncate,
+                ..
+            }
+        )));
+        assert!(
+            instructions
+                .iter()
+                .any(|instruction| matches!(instruction.kind, ir::InstructionKind::Load { .. }))
+        );
+        assert!(instructions.iter().any(|instruction| matches!(
+            instruction.kind,
+            ir::InstructionKind::Cast {
+                op: ir::CastOp::FloatExtend,
+                ..
+            }
+        )));
     }
 }

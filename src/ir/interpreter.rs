@@ -598,7 +598,7 @@ fn execute_instruction(
                     });
                 }
                 CastOp::IntegerToFloat
-                | CastOp::FloatToInteger
+                | CastOp::FloatToInteger { .. }
                 | CastOp::FloatExtend
                 | CastOp::FloatTruncate
                 | CastOp::PointerToInteger

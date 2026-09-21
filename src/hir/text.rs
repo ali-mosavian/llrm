@@ -10,9 +10,9 @@ use std::fmt::{self, Write};
 use super::{
     AddressKind, ArrayOrder, Block, BlockId, CallAbi, CallDistance, Callable, CallableId,
     ConstantValue, DataId, DataObject, DataRelocation, Dialect, FORMAT_VERSION, FloatEvaluation,
-    FloatMode, Function, FunctionId, Instruction, InstructionId, Linkage, Module, ModuleId, Opcode,
-    Operand, Parameter, Place, PlaceId, ProcedureAbi, Program, RuntimeProfile, StackCleanup,
-    Storage, TargetProfile, Terminator, Type, TypeId, TypeKind, Value, ValueId,
+    FloatMode, FloatRounding, Function, FunctionId, Instruction, InstructionId, Linkage, Module,
+    ModuleId, Opcode, Operand, Parameter, Place, PlaceId, ProcedureAbi, Program, RuntimeProfile,
+    StackCleanup, Storage, TargetProfile, Terminator, Type, TypeId, TypeKind, Value, ValueId,
 };
 
 /// A structural or semantic `.qhir` decoding failure.
@@ -1344,6 +1344,15 @@ fn parse_opcode(value: &str, line: usize) -> Result<Opcode, TextError> {
         "pointer_segment" => Ok(Opcode::PointerSegment),
         "concat" => Ok(Opcode::Concat),
         "convert" => Ok(Opcode::Convert),
+        "float_to_int_dynamic" => Ok(Opcode::FloatToInteger {
+            rounding: FloatRounding::Dynamic,
+        }),
+        "float_to_int_toward_zero" => Ok(Opcode::FloatToInteger {
+            rounding: FloatRounding::TowardZero,
+        }),
+        "float_to_int_nearest_even" => Ok(Opcode::FloatToInteger {
+            rounding: FloatRounding::NearestEven,
+        }),
         "sign_extend" => Ok(Opcode::SignExtend),
         "zero_extend" => Ok(Opcode::ZeroExtend),
         "add" => Ok(Opcode::Add),
@@ -1412,7 +1421,7 @@ mod tests {
     #[test]
     fn round_trips_a_complete_minimal_program() {
         let program = Program {
-            version: 1,
+            version: FORMAT_VERSION,
             dialect: Dialect::Qb45,
             runtime: RuntimeProfile::Qb45,
             target: TargetProfile::I386RealMode,
@@ -1528,8 +1537,38 @@ mod tests {
 
     #[test]
     fn rejects_an_unknown_version() {
-        let error = parse("qhir 2\n").expect_err("unknown version is invalid");
+        let error = parse("qhir 3\n").expect_err("unknown version is invalid");
         assert_eq!(error.line, 1);
         assert!(error.message.contains("unsupported qhir version"));
+        let error = parse("qhir 1\n").expect_err("the previous qhir schema is invalid");
+        assert_eq!(error.line, 1);
+        assert!(error.message.contains("unsupported qhir version"));
+    }
+
+    #[test]
+    fn float_to_integer_rounding_opcodes_have_distinct_canonical_spellings() {
+        for (opcode, text) in [
+            (
+                Opcode::FloatToInteger {
+                    rounding: FloatRounding::Dynamic,
+                },
+                "float_to_int_dynamic",
+            ),
+            (
+                Opcode::FloatToInteger {
+                    rounding: FloatRounding::TowardZero,
+                },
+                "float_to_int_toward_zero",
+            ),
+            (
+                Opcode::FloatToInteger {
+                    rounding: FloatRounding::NearestEven,
+                },
+                "float_to_int_nearest_even",
+            ),
+        ] {
+            assert_eq!(opcode.as_str(), text);
+            assert_eq!(parse_opcode(text, 1), Ok(opcode));
+        }
     }
 }

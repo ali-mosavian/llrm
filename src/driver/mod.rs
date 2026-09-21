@@ -1420,7 +1420,7 @@ mod tests {
     #[test]
     fn verified_integer_ir_reaches_x86_machine_ir() {
         let source = concat!(
-            "qir 6\n",
+            "qir 7\n",
             "module \"driver\"\n",
             "type 0 void\n",
             "type 1 integer 16\n",

@@ -1,6 +1,6 @@
 use std::fmt;
 
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 
 macro_rules! entity_id {
     ($name:ident) => {
@@ -257,6 +257,13 @@ pub enum Operand {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FloatRounding {
+    Dynamic,
+    TowardZero,
+    NearestEven,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Opcode {
     Copy,
     Load,
@@ -267,6 +274,7 @@ pub enum Opcode {
     PointerSegment,
     Concat,
     Convert,
+    FloatToInteger { rounding: FloatRounding },
     SignExtend,
     ZeroExtend,
     Add,
@@ -322,6 +330,15 @@ impl Opcode {
             Self::PointerSegment => "pointer_segment",
             Self::Concat => "concat",
             Self::Convert => "convert",
+            Self::FloatToInteger {
+                rounding: FloatRounding::Dynamic,
+            } => "float_to_int_dynamic",
+            Self::FloatToInteger {
+                rounding: FloatRounding::TowardZero,
+            } => "float_to_int_toward_zero",
+            Self::FloatToInteger {
+                rounding: FloatRounding::NearestEven,
+            } => "float_to_int_nearest_even",
             Self::SignExtend => "sign_extend",
             Self::ZeroExtend => "zero_extend",
             Self::Add => "add",

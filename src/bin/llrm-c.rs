@@ -189,7 +189,7 @@ mod tests {
                 .unwrap();
         let text = llrm::ir::write_text(&module);
 
-        assert!(text.starts_with("qir 6\nmodule \"iparg\"\n"));
+        assert!(text.starts_with("qir 7\nmodule \"iparg\"\n"));
         assert!(text.contains("function 0 \"_twice\""));
         assert!(text.contains("function 1 \"_answer_from_argument\""));
         assert!(text.contains("cc c"));
@@ -205,7 +205,7 @@ mod tests {
         let machine = driver::lower_ir_to_machine(&module).unwrap();
         let text = llrm::codegen::machine::write_text(&machine);
 
-        assert!(text.starts_with("qmir 6\n"));
+        assert!(text.starts_with("qmir 7\n"));
         assert!(text.contains(" far_cdecl "));
         assert!(text.contains(" c "));
         assert!(llrm::codegen::machine::parse_text(&text).is_ok());

@@ -323,6 +323,34 @@ fn floating_array_subscripts_are_converted_to_integer_indices() {
 }
 
 #[test]
+fn floating_to_integer_conversion_retains_basic_rounding_semantics() {
+    // BASIC's CINT/CLNG family observes the active floating-point rounding
+    // mode.  The portable HIR must carry that fact explicitly so a generic
+    // pass cannot replace it with C's toward-zero conversion.
+    let module = parse(
+        "dim value as single\r\n\
+         dim rounded as long\r\n\
+         rounded = clng(value)\r\n",
+        Dialect::VbDos,
+    )
+    .unwrap();
+    let hir = compile_hir(&module, "float_rounding", Dialect::VbDos, "vbdos").unwrap();
+    assert!(
+        hir.modules[0]
+            .functions
+            .iter()
+            .flat_map(|function| &function.blocks)
+            .flat_map(|block| &block.instructions)
+            .any(|instruction| matches!(
+                instruction.opcode,
+                llrm::hir::Opcode::FloatToInteger {
+                    rounding: llrm::hir::FloatRounding::Dynamic
+                }
+            ))
+    );
+}
+
+#[test]
 fn decoded_cp437_string_literals_are_encoded_back_to_dos_bytes() {
     // Nibbles' dialog border contains CP437 box drawing characters. Source
     // loading decodes them for parsing; emitted literal data must recover CD.

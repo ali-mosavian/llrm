@@ -313,14 +313,16 @@ impl<'module> Verifier<'module> {
         position: &str,
         value_type: MachineValueType,
     ) {
-        let bits = match value_type {
-            MachineValueType::Integer { bits } | MachineValueType::Pointer { bits, .. } => bits,
-        };
-        if bits == 0 {
-            self.error(format!(
-                "machine function {} {} type has zero width",
-                function.id, position
-            ));
+        match value_type {
+            MachineValueType::Integer { bits } | MachineValueType::Pointer { bits, .. } => {
+                if bits == 0 {
+                    self.error(format!(
+                        "machine function {} {} type has zero width",
+                        function.id, position
+                    ));
+                }
+            }
+            MachineValueType::Float { .. } => {}
         }
     }
 
@@ -570,10 +572,10 @@ mod tests {
     use super::*;
     use crate::codegen::machine::{
         FrameObject, FrameObjectKind, InstructionFlags, MachineAddressSpace, MachineBlock,
-        MachineDataObject, MachineDataRelocation, MachineFunction, MachineInstruction,
-        MachineInstructionId, MachineLinkage, MachineModule, MachineOperand, MachineOperandKind,
-        MachineRegister, MachineSignature, OperandIndex, PhysicalRegister, RegisterClass,
-        RegisterConstraint, TargetOpcode, VirtualRegister,
+        MachineDataObject, MachineDataRelocation, MachineFloatKind, MachineFunction,
+        MachineInstruction, MachineInstructionId, MachineLinkage, MachineModule, MachineOperand,
+        MachineOperandKind, MachineRegister, MachineSignature, OperandIndex, PhysicalRegister,
+        RegisterClass, RegisterConstraint, TargetOpcode, VirtualRegister,
     };
 
     fn register(id: u32, role: OperandRole) -> MachineOperand {
@@ -1111,5 +1113,30 @@ mod tests {
         assert!(diagnostic_messages.iter().any(|message| message.contains(
             "marked copy but does not have exactly one register def and one register use"
         )));
+    }
+
+    #[test]
+    fn accepts_intrinsically_valid_float_signature_types() {
+        let mut function = valid_function();
+        function.signature.result = Some(MachineValueType::Float {
+            kind: MachineFloatKind::Extended80,
+        });
+        function.signature.parameters = vec![
+            MachineValueType::Float {
+                kind: MachineFloatKind::Binary32,
+            },
+            MachineValueType::Float {
+                kind: MachineFloatKind::Binary64,
+            },
+            MachineValueType::Float {
+                kind: MachineFloatKind::Extended80,
+            },
+        ];
+
+        verify(&MachineModule {
+            data_objects: Vec::new(),
+            functions: vec![function],
+        })
+        .expect("portable float formats are intrinsically valid ABI value types");
     }
 }

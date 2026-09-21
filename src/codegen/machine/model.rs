@@ -151,6 +151,20 @@ pub enum MachineValueType {
         bits: u16,
         address_space: MachineAddressSpace,
     },
+    Float {
+        kind: MachineFloatKind,
+    },
+}
+
+/// A portable binary floating-point format used by a machine ABI value.
+///
+/// This identifies only the value format. Register assignment, storage,
+/// rounding, and target calling-convention details belong to later layers.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MachineFloatKind {
+    Binary32,
+    Binary64,
+    Extended80,
 }
 
 /// An abstract address space for machine-level ABI values.

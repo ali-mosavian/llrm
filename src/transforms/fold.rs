@@ -247,7 +247,7 @@ impl ConstantFold {
                 return None;
             }
             CastOp::IntegerToFloat
-            | CastOp::FloatToInteger
+            | CastOp::FloatToInteger { .. }
             | CastOp::FloatExtend
             | CastOp::FloatTruncate
             | CastOp::PointerToInteger

@@ -1,6 +1,6 @@
 use std::fmt;
 
-pub const FORMAT_VERSION: u32 = 6;
+pub const FORMAT_VERSION: u32 = 7;
 
 macro_rules! entity_id {
     ($name:ident) => {
@@ -364,12 +364,19 @@ pub enum ComparePredicate {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FloatRounding {
+    Dynamic,
+    TowardZero,
+    NearestEven,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CastOp {
     Truncate,
     SignExtend,
     ZeroExtend,
     IntegerToFloat,
-    FloatToInteger,
+    FloatToInteger { rounding: FloatRounding },
     FloatExtend,
     FloatTruncate,
     PointerToInteger,

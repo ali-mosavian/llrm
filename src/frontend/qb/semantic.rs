@@ -5547,7 +5547,13 @@ impl Compiler {
             // For nearest-rounded integer n, trunc(x) is
             // n + (x < n ? -1 : 0) - (x > n ? -1 : 0).
             let rounded = self.value(LONG);
-            self.emit(hir::Opcode::Convert, vec![rounded], vec![operand.clone()]);
+            self.emit(
+                hir::Opcode::FloatToInteger {
+                    rounding: hir::FloatRounding::Dynamic,
+                },
+                vec![rounded],
+                vec![operand.clone()],
+            );
             let integral = self.convert(Operand::Value(rounded), LONG, type_id)?;
             let below = self.value(BOOLEAN);
             self.emit(
@@ -5774,7 +5780,13 @@ impl Compiler {
         // Express the correction in ordinary HIR so optimization sees every
         // value. QB booleans are -1/0 and supply that correction.
         let rounded = self.value(LONG);
-        self.emit(hir::Opcode::Convert, vec![rounded], vec![operand.clone()]);
+        self.emit(
+            hir::Opcode::FloatToInteger {
+                rounding: hir::FloatRounding::Dynamic,
+            },
+            vec![rounded],
+            vec![operand.clone()],
+        );
         let integral = self.convert(Operand::Value(rounded), LONG, type_id)?;
         let below = self.value(BOOLEAN);
         self.emit(
@@ -6572,7 +6584,19 @@ impl Compiler {
             return Ok(Operand::Value(result));
         }
         let result = self.value(to);
-        self.emit(hir::Opcode::Convert, vec![result], vec![operand]);
+        let opcode =
+            if matches!(from, SINGLE | DOUBLE) && matches!(to, INTEGER | LONG | BOOLEAN | BYTE) {
+                // BASIC floating-to-integer conversion observes the current x87
+                // rounding mode.  Keep that language rule explicit in HIR so
+                // neither portable lowering nor an optimization pass has to
+                // infer it from a source type or a runtime convention.
+                hir::Opcode::FloatToInteger {
+                    rounding: hir::FloatRounding::Dynamic,
+                }
+            } else {
+                hir::Opcode::Convert
+            };
+        self.emit(opcode, vec![result], vec![operand]);
         Ok(Operand::Value(result))
     }
 
