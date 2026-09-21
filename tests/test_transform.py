@@ -22,11 +22,12 @@ from qbopt.objectfile import module
 from qbopt.optimize import transform
 
 
-def test_applied_reuses_half_liveness_only_inside_one_transaction(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Matmul recomputed the same half-value fixed point 205 times.
+def test_half_liveness_reuses_each_immutable_body_across_a_transaction(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Matmul recomputed 595 fixed points for only 170 body objects.
 
-    Equal immutable MIR states share the analysis inside one optimizer
-    transaction, and a later independent query must compute its own answer.
+    Analysis of a nested candidate temporarily displaces its parent state.
+    Returning to that exact immutable parent must recover its earlier answer,
+    rather than retaining only the transaction's most recent body.
     """
     value = mir.Value(1, 0, variable=1)
     copy = mir.Op(
@@ -47,21 +48,12 @@ def test_applied_reuses_half_liveness_only_inside_one_transaction(monkeypatch: p
         calls += 1
         return leaving(state)
 
-    class Probe:
-        name = "probe"
-
-        def transform(self, state):
-            transform.halves(state)
-            return replace(state, blocks=tuple(state.blocks))
-
     monkeypatch.setattr(transform, "_leaving", counted)
-    monkeypatch.setattr(transform, "pipeline", lambda *_args, **_kwargs: [Probe(), Probe()])
+    with transform._reusing_halves():
+        other = replace(body, entry=1)
+        assert transform.halves(body) == transform.halves(other)
+        assert transform.halves(body) == transform.halves(other)
 
-    result = transform.applied(body, frozenset(), {})
-
-    assert result == body and result is not body
-    assert calls == 1
-    transform.halves(body)
     assert calls == 2
 
 
@@ -193,12 +185,9 @@ def test_hoisted_variables_do_not_collide_with_promoted_cells() -> None:
         watch=lambda name, state: stages.setdefault(name, state),
     )
     body = stages["r01-place"]
-    value = next(
-        op
-        for block in body.blocks
-        for op in block.ops
-        if op.at == 0x76 and op.kind is mir.Kind.ADD
-    ).defines[-1]
+    value = next(op for block in body.blocks for op in block.ops if op.at == 0x76 and op.kind is mir.Kind.ADD).defines[
+        -1
+    ]
     after = transform._reparented(body, {value})
     renamed = next(one for one in after.values if one.id == value.id)
     assert renamed.variable > max(one.variable for one in body.values)
@@ -294,9 +283,7 @@ def test_dead_store_does_not_delete_a_load_at_the_same_address() -> None:
         loads=(counter,),
     )
     overwrite = replace(store, at=6)
-    use = mir.Op(
-        9, ir.Operation.PUSH, "push", (), (loaded,), kind=mir.Kind.ARG, args=(mir.Held(loaded, 2),)
-    )
+    use = mir.Op(9, ir.Operation.PUSH, "push", (), (loaded,), kind=mir.Kind.ARG, args=(mir.Held(loaded, 2),))
     body = mir.MirBody(0, (mir.MirBlock(0, (), (first, store, load, overwrite, use), ()),))
     done = transform.without_dead_stores(body, frozenset({5}), {})
     ops = done.blocks[0].ops
@@ -464,8 +451,7 @@ def test_fixed_point_budget_scales_with_the_body(monkeypatch: pytest.MonkeyPatch
             return body if not block.ops else replace(body, blocks=(replace(block, ops=block.ops[:-1]),))
 
     ops = tuple(
-        mir.Op(at, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.NOTHING, source_backed=False)
-        for at in range(20)
+        mir.Op(at, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.NOTHING, source_backed=False) for at in range(20)
     )
     body = mir.MirBody(0, (mir.MirBlock(0, (), ops, ()),))
     monkeypatch.setattr(transform, "pipeline", lambda *_args, **_kwargs: [OneAtATime()])
@@ -509,15 +495,14 @@ def test_sroa_runs_once_before_the_scalar_fixed_point(monkeypatch: pytest.Monkey
         calls += 1
         return body
 
-    from qbopt.model.passes import Where
     from qbopt.optimize import promote
+    from qbopt.model.passes import Where
 
     first = promote.Sroa(Where())
     monkeypatch.setattr(first, "transform", sroa)
     monkeypatch.setattr(transform, "pipeline", lambda *_args, **_kwargs: [first, OneAtATime()])
     ops = tuple(
-        mir.Op(at, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.NOTHING, source_backed=False)
-        for at in range(20)
+        mir.Op(at, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.NOTHING, source_backed=False) for at in range(20)
     )
     body = mir.MirBody(0, (mir.MirBlock(0, (), ops, ()),))
 
@@ -529,9 +514,9 @@ def test_sroa_crosses_both_structural_candidate_boundaries(monkeypatch: pytest.M
     """Matmul exposed aggregate leaves both at cloning and after scalar convergence."""
     from dataclasses import replace
 
-    from qbopt.model.passes import Where
     from qbopt.optimize import peel
     from qbopt.optimize import promote
+    from qbopt.model.passes import Where
 
     seen = []
     scalarizer = promote.Sroa(Where())
@@ -568,9 +553,9 @@ def test_structural_profitability_prices_leaves_exposed_by_scalar_convergence(
     """
     from dataclasses import replace
 
-    from qbopt.model.passes import Where
     from qbopt.optimize import peel
     from qbopt.optimize import promote
+    from qbopt.model.passes import Where
 
     seen = []
     scalarizer = promote.Sroa(Where())
@@ -614,10 +599,10 @@ def test_structural_candidate_refuses_a_pressure_regression_after_settled_sroa(
     """
     from dataclasses import replace
 
-    from qbopt.model.passes import Where
     from qbopt.optimize import peel
     from qbopt.optimize import profit
     from qbopt.optimize import promote
+    from qbopt.model.passes import Where
 
     scalarizer = promote.Sroa(Where())
     structural = peel.Peel(Where())
@@ -1209,12 +1194,8 @@ def test_dead_code_leaves_a_body_it_cannot_read_alone() -> None:
     """
     # Something before it, so the deletion has a survivor to give its bytes
     # to -- without one _absorb refuses and the guard is never reached.
-    first = mir.Op(
-        0x10, ir.Operation.MOVE, "mov", (mir.Value(1, 0x10),), (), kind=mir.Kind.COPY, absorbed=(1,)
-    )
-    doomed = mir.Op(
-        0x12, ir.Operation.MOVE, "mov", (mir.Value(2, 0x12),), (), kind=mir.Kind.COPY, absorbed=(2,)
-    )
+    first = mir.Op(0x10, ir.Operation.MOVE, "mov", (mir.Value(1, 0x10),), (), kind=mir.Kind.COPY, absorbed=(1,))
+    doomed = mir.Op(0x12, ir.Operation.MOVE, "mov", (mir.Value(2, 0x12),), (), kind=mir.Kind.COPY, absorbed=(2,))
     plain = mir.MirBody(0x10, (mir.MirBlock(0x10, (), (first, doomed), ()),))
     assert transform.dead(plain) is not plain, "a dead move goes when the body is readable"
 
@@ -1357,8 +1338,8 @@ def test_an_unplaced_held_keeps_its_fold() -> None:
     allocator. The original defect made lngmix print 110 for 142900.
     """
     from qbopt.model import ir
-    from qbopt.backend import lower
     from qbopt.abi import runtime
+    from qbopt.backend import lower
 
     found, bodies = _bodies("hotlop-p-g2.obj")
     for name, body in bodies:
@@ -1387,7 +1368,9 @@ def test_an_unplaced_held_keeps_its_fold() -> None:
             assert any(isinstance(one, ir.Imm) for one in what.sources), (
                 f"{name}: {op.at:#x} went back to the read it replaced"
             )
-            assert any(isinstance(one, ir.Held) for one in what.dests), f"{name}: {op.at:#x} was placed before allocation"
+            assert any(isinstance(one, ir.Held) for one in what.dests), (
+                f"{name}: {op.at:#x} was placed before allocation"
+            )
         return
     raise AssertionError("no body folded anything; the test measures nothing")
 
@@ -1406,9 +1389,9 @@ def test_what_leaves_a_loop_is_its_own_semantic_variable() -> None:
     semantic identity is enough for SSA; physical placement lives in the
     external allocation-hint table and must not be copied by this pass.
     """
+    from qbopt.analysis import ssa
     from qbopt.objectfile import omf
     from qbopt.objectfile import module
-    from qbopt.analysis import ssa
     from qbopt.frontend import blocks as split
     from qbopt.frontend.blocks import code_map
 
