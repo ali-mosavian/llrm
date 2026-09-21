@@ -14,7 +14,7 @@ use std::hash::{Hash, Hasher};
 
 use num_bigint::BigInt;
 
-use crate::codegen::machine::{Loc, Operation};
+use crate::codegen::machine::{Loc, Operation, Semantics};
 use crate::model::floating::Semantics as FloatingSemantics;
 use crate::model::memory::Provenance;
 use crate::object::omf::module::{Addr, Space};
@@ -322,6 +322,48 @@ pub enum Arg {
     Opaque(Opaque),
 }
 
+/// What one selected node computes, as MIR says it.
+///
+/// Direct port of `qbopt.model.mir:_kind_of`.  The mnemonic is consulted
+/// here and in the closed `BY_NAME` table only.  For moves, source and result
+/// operands decide copy versus load versus store exactly as the Python port
+/// does.
+pub(crate) fn kind_of(what: &Semantics, args: &[Arg], results: &[Arg]) -> Kind {
+    let name = what.name.as_deref().unwrap_or("");
+    match what.op {
+        Operation::Binary | Operation::Unary => by_name(name).unwrap_or(Kind::Opaque),
+        Operation::Move => {
+            if results.iter().any(|one| matches!(one, Arg::Cell(_))) {
+                Kind::Store
+            } else if args.iter().any(|one| matches!(one, Arg::Cell(_))) {
+                Kind::Load
+            } else {
+                Kind::Copy
+            }
+        }
+        Operation::Multiply => Kind::Mul,
+        Operation::Divide => Kind::Div,
+        Operation::Compare => by_name(name).unwrap_or(Kind::Sub),
+        Operation::Extend => Kind::Convert,
+        Operation::Address => Kind::Address,
+        Operation::Push => Kind::Arg,
+        Operation::Pop => Kind::Result,
+        Operation::Jump => Kind::Jump,
+        Operation::Branch => Kind::Branch,
+        Operation::Call => Kind::Call,
+        Operation::Return => Kind::Return,
+        Operation::Escape => Kind::Escape,
+        Operation::Nothing => Kind::Nothing,
+        Operation::Restore => Kind::Join,
+        Operation::FloatLoad => Kind::Fload,
+        Operation::FloatStore => Kind::Fstore,
+        Operation::FloatArith | Operation::FloatArithPop | Operation::FloatUnary => {
+            by_name(name).unwrap_or(Kind::Opaque)
+        }
+        _ => Kind::Opaque,
+    }
+}
+
 /// Direct port of `qbopt.model.mir:same_bytes`.
 ///
 /// This is the forwarding question: both references must certainly name the
@@ -587,6 +629,57 @@ impl fmt::Display for Kind {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.as_str())
     }
+}
+
+// Direct port of `qbopt.model.mir:_BY_NAME`.  `_kind_of` is the one place
+// which reads these selected mnemonic spellings; MIR itself carries `Kind`.
+const BY_NAME: [(&str, Kind); 40] = [
+    ("add", Kind::Add),
+    ("adc", Kind::AddCarry),
+    ("inc", Kind::Increment),
+    ("sub", Kind::Sub),
+    ("sbb", Kind::SubBorrow),
+    ("dec", Kind::Decrement),
+    ("cmp", Kind::Sub),
+    ("and", Kind::And),
+    ("test", Kind::And),
+    ("or", Kind::Or),
+    ("xor", Kind::Xor),
+    ("not", Kind::Not),
+    ("neg", Kind::Neg),
+    ("shl", Kind::Shl),
+    ("sal", Kind::Shl),
+    ("shr", Kind::Shr),
+    ("sar", Kind::Sar),
+    ("imul", Kind::Mul),
+    ("mul", Kind::Mul),
+    ("idiv", Kind::Div),
+    ("div", Kind::Div),
+    ("fadd", Kind::Fadd),
+    ("faddp", Kind::Fadd),
+    ("fsub", Kind::Fsub),
+    ("fsubp", Kind::Fsub),
+    ("fsubr", Kind::Fsub),
+    ("fsubrp", Kind::Fsub),
+    ("fmul", Kind::Fmul),
+    ("fmulp", Kind::Fmul),
+    ("fdiv", Kind::Fdiv),
+    ("fdivp", Kind::Fdiv),
+    ("fdivr", Kind::Fdiv),
+    ("fdivrp", Kind::Fdiv),
+    ("fchs", Kind::Fneg),
+    ("fabs", Kind::Fabs),
+    ("fsqrt", Kind::Fsqrt),
+    ("fcom", Kind::Fcompare),
+    ("fcomp", Kind::Fcompare),
+    ("fcompp", Kind::Fcompare),
+    ("ftst", Kind::Fcompare),
+];
+
+fn by_name(name: &str) -> Option<Kind> {
+    BY_NAME
+        .iter()
+        .find_map(|(spelling, kind)| (*spelling == name).then_some(*kind))
 }
 
 /// Python's ordered `dict`, with mapping equality.
@@ -1196,7 +1289,7 @@ mod tests {
 
     use num_bigint::BigInt;
 
-    use crate::codegen::machine::Operation;
+    use crate::codegen::machine::{Operation, Semantics};
     use crate::model::floating::{Format, Precision, Rounding, Semantics as FloatingSemantics};
     use crate::model::memory::{MemoryKind, MemoryObject, ObjectIdentity, ObjectTag, Provenance};
     use crate::object::omf::module::{Addr, Space};
@@ -1205,8 +1298,8 @@ mod tests {
     use super::{
         AllocationHints, AllocationHintsError, Arg, ArrayRequest, Cell, Const, FloatingOrigin,
         Held, Kind, MemRef, MirBlock, MirBody, Op, OpCode, Opaque, OrderedMap, Phi, RaisedBody,
-        Symbol, Synth, Value, consumed, exit_values, exposed, ordinary_uses, partial, rewritten,
-        same_bytes, stepping, unheld,
+        Symbol, Synth, Value, consumed, exit_values, exposed, kind_of, ordinary_uses, partial,
+        rewritten, same_bytes, stepping, unheld,
     };
 
     #[test]
@@ -1303,6 +1396,190 @@ mod tests {
                 "nothing",
             ]
         );
+    }
+
+    fn semantics(operation: Operation, name: &str) -> Semantics {
+        let mut semantics = Semantics::new(operation);
+        semantics.name = Some(name.to_owned());
+        semantics
+    }
+
+    fn cell() -> Arg {
+        Arg::Cell(Cell {
+            r#ref: MemRef::new(None, 2),
+        })
+    }
+
+    #[test]
+    fn kind_of_reads_every_python_by_name_entry_for_binary_and_unary() {
+        // Direct transcription of qbopt/model/mir.py::_BY_NAME.  The
+        // Python classifier permits this table for both BINARY and UNARY;
+        // the table itself, rather than an opcode-specific filter, decides.
+        for (name, expected) in [
+            ("add", Kind::Add),
+            ("adc", Kind::AddCarry),
+            ("inc", Kind::Increment),
+            ("sub", Kind::Sub),
+            ("sbb", Kind::SubBorrow),
+            ("dec", Kind::Decrement),
+            ("cmp", Kind::Sub),
+            ("and", Kind::And),
+            ("test", Kind::And),
+            ("or", Kind::Or),
+            ("xor", Kind::Xor),
+            ("not", Kind::Not),
+            ("neg", Kind::Neg),
+            ("shl", Kind::Shl),
+            ("sal", Kind::Shl),
+            ("shr", Kind::Shr),
+            ("sar", Kind::Sar),
+            ("imul", Kind::Mul),
+            ("mul", Kind::Mul),
+            ("idiv", Kind::Div),
+            ("div", Kind::Div),
+            ("fadd", Kind::Fadd),
+            ("faddp", Kind::Fadd),
+            ("fsub", Kind::Fsub),
+            ("fsubp", Kind::Fsub),
+            ("fsubr", Kind::Fsub),
+            ("fsubrp", Kind::Fsub),
+            ("fmul", Kind::Fmul),
+            ("fmulp", Kind::Fmul),
+            ("fdiv", Kind::Fdiv),
+            ("fdivp", Kind::Fdiv),
+            ("fdivr", Kind::Fdiv),
+            ("fdivrp", Kind::Fdiv),
+            ("fchs", Kind::Fneg),
+            ("fabs", Kind::Fabs),
+            ("fsqrt", Kind::Fsqrt),
+            ("fcom", Kind::Fcompare),
+            ("fcomp", Kind::Fcompare),
+            ("fcompp", Kind::Fcompare),
+            ("ftst", Kind::Fcompare),
+        ] {
+            for operation in [Operation::Binary, Operation::Unary] {
+                assert_eq!(
+                    kind_of(&semantics(operation, name), &[], &[]),
+                    expected,
+                    "{name}"
+                );
+            }
+        }
+        assert_eq!(
+            kind_of(&semantics(Operation::Binary, "unknown"), &[], &[]),
+            Kind::Opaque
+        );
+        assert_eq!(
+            kind_of(&semantics(Operation::Unary, "ADD"), &[], &[]),
+            Kind::Opaque
+        );
+        assert_eq!(
+            kind_of(&Semantics::new(Operation::Binary), &[], &[]),
+            Kind::Opaque
+        );
+    }
+
+    #[test]
+    fn kind_of_uses_operands_for_move_and_preserves_python_result_priority() {
+        let moved = semantics(Operation::Move, "mov");
+        assert_eq!(kind_of(&moved, &[], &[]), Kind::Copy);
+        assert_eq!(kind_of(&moved, &[Arg::Opaque(Opaque::new(None))], &[]), Kind::Copy);
+        assert_eq!(kind_of(&moved, &[cell()], &[]), Kind::Load);
+        assert_eq!(kind_of(&moved, &[], &[cell()]), Kind::Store);
+        assert_eq!(kind_of(&moved, &[cell()], &[cell()]), Kind::Store);
+    }
+
+    #[test]
+    fn kind_of_covers_each_python_semantics_arm_and_fallback() {
+        for (operation, expected) in [
+            (Operation::Multiply, Kind::Mul),
+            (Operation::Divide, Kind::Div),
+            (Operation::Extend, Kind::Convert),
+            (Operation::Address, Kind::Address),
+            (Operation::Push, Kind::Arg),
+            (Operation::Pop, Kind::Result),
+            (Operation::Jump, Kind::Jump),
+            (Operation::Branch, Kind::Branch),
+            (Operation::Call, Kind::Call),
+            (Operation::Return, Kind::Return),
+            (Operation::Escape, Kind::Escape),
+            (Operation::Nothing, Kind::Nothing),
+            (Operation::Restore, Kind::Join),
+            (Operation::FloatLoad, Kind::Fload),
+            (Operation::FloatStore, Kind::Fstore),
+        ] {
+            assert_eq!(
+                kind_of(&semantics(operation, "ignored"), &[], &[]),
+                expected
+            );
+        }
+
+        assert_eq!(
+            kind_of(&semantics(Operation::Compare, "cmp"), &[], &[]),
+            Kind::Sub
+        );
+        assert_eq!(
+            kind_of(&semantics(Operation::Compare, "add"), &[], &[]),
+            Kind::Add
+        );
+        assert_eq!(
+            kind_of(&semantics(Operation::Compare, "test"), &[], &[]),
+            Kind::And
+        );
+        assert_eq!(
+            kind_of(&semantics(Operation::Compare, "unknown"), &[], &[]),
+            Kind::Sub
+        );
+        assert_eq!(kind_of(&semantics(Operation::Compare, ""), &[], &[]), Kind::Sub);
+        assert_eq!(kind_of(&Semantics::new(Operation::Compare), &[], &[]), Kind::Sub);
+        assert_eq!(
+            kind_of(&semantics(Operation::Branch, "jl"), &[], &[]),
+            Kind::Branch
+        );
+        assert_eq!(
+            kind_of(&semantics(Operation::Branch, "je"), &[], &[]),
+            Kind::Branch
+        );
+        for operation in [
+            Operation::FloatArith,
+            Operation::FloatArithPop,
+            Operation::FloatUnary,
+        ] {
+            assert_eq!(kind_of(&semantics(operation, "fadd"), &[], &[]), Kind::Fadd);
+            assert_eq!(
+                kind_of(&semantics(operation, "unknown"), &[], &[]),
+                Kind::Opaque
+            );
+        }
+        assert_eq!(
+            kind_of(&Semantics::new(Operation::FloatArith), &[], &[]),
+            Kind::Opaque
+        );
+        assert_eq!(
+            kind_of(&semantics(Operation::FloatUnary, ""), &[], &[]),
+            Kind::Opaque
+        );
+        assert_ne!(
+            kind_of(&semantics(Operation::FloatUnary, "fchs"), &[], &[]),
+            kind_of(&semantics(Operation::FloatUnary, "fabs"), &[], &[])
+        );
+        assert_eq!(
+            kind_of(&semantics(Operation::FloatArithPop, "fsubrp"), &[], &[]),
+            Kind::Fsub
+        );
+        for operation in [
+            Operation::Exchange,
+            Operation::Funnel,
+            Operation::Leave,
+            Operation::Fill,
+            Operation::Data,
+            Operation::Barrier,
+        ] {
+            assert_eq!(
+                kind_of(&semantics(operation, "ignored"), &[], &[]),
+                Kind::Opaque
+            );
+        }
     }
 
     #[test]
