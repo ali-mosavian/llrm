@@ -12,8 +12,8 @@ use std::fmt;
 use crate::hir;
 
 use super::capture::{
-    AutomaticId, CallId, CaptureUnit, Node, NodeId, Procedure, SourceLocation, Symbol, SymbolId,
-    TempId,
+    AutomaticId, BackTarget, CallId, CaptureUnit, DataItemKind, Node, NodeId, Procedure,
+    SourceLocation, Symbol, SymbolId, TempId,
 };
 
 const WCC_REVERSE_PARAMETERS: u32 = 0x01;
@@ -31,6 +31,17 @@ struct WccTypes {
     types: Vec<hir::Type>,
     aggregates: BTreeMap<String, hir::TypeId>,
     near_pointer: Option<hir::TypeId>,
+}
+
+/// A labelled WCC data object that a procedure may name as module storage.
+///
+/// The capture has already established the bytes and its default near address;
+/// HIR needs neither a C declaration nor WCC segment spelling to use it.
+#[derive(Clone, Debug)]
+struct StaticObject {
+    data: hir::DataId,
+    name: String,
+    extent: usize,
 }
 
 /// A source-located refusal while raising a WCC capture unit.
@@ -159,6 +170,7 @@ impl Error for RaiseError {}
 /// Raises the supported scalar WCC capture subset into one generic HIR module.
 pub fn raise_module(unit: &CaptureUnit, module_name: &str) -> Result<hir::Module, RaiseError> {
     let types = wcc_types(unit)?;
+    let (data, statics) = static_data(unit)?;
     let mut callable_ids = BTreeMap::new();
     for (index, procedure) in unit.procedures.iter().enumerate() {
         let raw = u32::try_from(index)
@@ -170,13 +182,15 @@ pub fn raise_module(unit: &CaptureUnit, module_name: &str) -> Result<hir::Module
         .procedures
         .iter()
         .enumerate()
-        .map(|(index, procedure)| callable(unit, procedure, index))
+        .map(|(index, procedure)| callable(unit, procedure, index, &types))
         .collect::<Result<Vec<_>, _>>()?;
     let functions = unit
         .procedures
         .iter()
         .enumerate()
-        .map(|(index, procedure)| raise_function(unit, procedure, index, &callable_ids, &types))
+        .map(|(index, procedure)| {
+            raise_function(unit, procedure, index, &callable_ids, &types, &statics)
+        })
         .collect::<Result<Vec<_>, _>>()?;
 
     Ok(hir::Module {
@@ -184,9 +198,89 @@ pub fn raise_module(unit: &CaptureUnit, module_name: &str) -> Result<hir::Module
         name: module_name.to_owned(),
         types: types.types,
         functions,
-        data: Vec::new(),
+        data,
         callables,
     })
+}
+
+/// Raises only exact, labelled near BSS objects.  Other WCC data forms remain
+/// outside this scalar slice rather than being approximated as zero bytes.
+fn static_data(
+    unit: &CaptureUnit,
+) -> Result<(Vec<hir::DataObject>, BTreeMap<SymbolId, StaticObject>), RaiseError> {
+    let mut data = Vec::new();
+    let mut statics = BTreeMap::new();
+    for segment_id in &unit.segment_order {
+        let Some(segment) = unit.segments.get(segment_id) else {
+            continue;
+        };
+        let labels = segment
+            .items
+            .iter()
+            .enumerate()
+            .filter_map(|(index, item)| match item.kind {
+                DataItemKind::Label => item.args.first().and_then(|back| {
+                    back.strip_prefix('b')
+                        .and_then(|raw| raw.parse::<u32>().ok())
+                        .and_then(|raw| unit.backs.get(&super::capture::BackId::new(raw)))
+                        .and_then(|target| match target {
+                            BackTarget::Symbol(symbol) => Some((index, *symbol)),
+                            BackTarget::Literal => None,
+                        })
+                }),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for (label_index, (start, symbol_id)) in labels.iter().enumerate() {
+            let Some(symbol) = unit.symbols.get(symbol_id) else {
+                continue;
+            };
+            if symbol.attributes.is_procedure() || !unit.is_grouped(symbol) {
+                continue;
+            }
+            let end = labels
+                .get(label_index + 1)
+                .map_or(segment.items.len(), |(next, _)| *next);
+            let items = &segment.items[start + 1..end];
+            if items.is_empty()
+                || !items
+                    .iter()
+                    .all(|item| item.kind == DataItemKind::UninitializedBytes)
+            {
+                continue;
+            }
+            let extent = items.iter().try_fold(0usize, |total, item| {
+                let count = item.args.first()?.parse::<usize>().ok()?;
+                total.checked_add(count)
+            });
+            let Some(extent) = extent else {
+                continue;
+            };
+            let id = hir::DataId::new(
+                u32::try_from(data.len())
+                    .map_err(|_| error_default(RaiseErrorKind::IdOverflow { entity: "data" }))?,
+            );
+            let name = symbol.object_name();
+            data.push(hir::DataObject {
+                id,
+                name: name.clone(),
+                bytes: vec![0; extent],
+                readonly: false,
+                relocations: Vec::new(),
+                linkage: hir::Linkage::Internal,
+                address: hir::AddressKind::Near,
+            });
+            statics.insert(
+                *symbol_id,
+                StaticObject {
+                    data: id,
+                    name,
+                    extent,
+                },
+            );
+        }
+    }
+    Ok((data, statics))
 }
 
 fn wcc_types(unit: &CaptureUnit) -> Result<WccTypes, RaiseError> {
@@ -329,6 +423,7 @@ fn callable(
     unit: &CaptureUnit,
     procedure: &Procedure,
     index: usize,
+    types: &WccTypes,
 ) -> Result<hir::Callable, RaiseError> {
     let symbol = symbol(unit, procedure.symbol, SourceLocation::default())?;
     let id = u32::try_from(index)
@@ -342,7 +437,7 @@ fn callable(
             .iter()
             .map(|(_, type_name)| {
                 Ok(hir::Parameter {
-                    type_id: value_type(unit, type_name, SourceLocation::default())?,
+                    type_id: capture_type(unit, types, type_name, SourceLocation::default())?,
                     by_value: true,
                     segmented: false,
                     array: false,
@@ -359,6 +454,7 @@ fn raise_function(
     index: usize,
     callable_ids: &BTreeMap<SymbolId, hir::CallableId>,
     types: &WccTypes,
+    statics: &BTreeMap<SymbolId, StaticObject>,
 ) -> Result<hir::Function, RaiseError> {
     let location = procedure_location(procedure);
     let symbol = symbol(unit, procedure.symbol, location)?;
@@ -389,13 +485,13 @@ fn raise_function(
 
     let id = u32::try_from(index)
         .map_err(|_| error(location, RaiseErrorKind::IdOverflow { entity: "function" }))?;
-    let mut builder = FunctionRaiser::new(unit, procedure, location, callable_ids, types)?;
+    let mut builder = FunctionRaiser::new(unit, procedure, location, callable_ids, types, statics)?;
     let parameters = builder.parameters()?;
     let parameter_bytes = procedure
         .parameters
         .iter()
         .try_fold(0usize, |sum, (_, type_name)| {
-            let type_id = value_type(unit, type_name, location)?;
+            let type_id = capture_type(unit, types, type_name, location)?;
             let width = match type_width(&types.types, type_id, location)? {
                 width @ (2 | 4) => width,
                 _ => {
@@ -456,6 +552,7 @@ struct FunctionRaiser<'a> {
     location: SourceLocation,
     callable_ids: &'a BTreeMap<SymbolId, hir::CallableId>,
     types: &'a WccTypes,
+    statics: &'a BTreeMap<SymbolId, StaticObject>,
     values: Vec<hir::Value>,
     places: Vec<hir::Place>,
     blocks: Vec<RaisedBlock>,
@@ -464,6 +561,7 @@ struct FunctionRaiser<'a> {
     calls: Vec<hir::CallAbi>,
     parameter_bindings: BTreeMap<SymbolId, hir::Operand>,
     automatic_places: BTreeMap<SymbolId, hir::PlaceId>,
+    static_places: BTreeMap<SymbolId, hir::PlaceId>,
     temporary_places: BTreeMap<TempId, hir::PlaceId>,
     node_bindings: BTreeMap<NodeId, hir::Operand>,
     next_value: u32,
@@ -484,6 +582,7 @@ impl<'a> FunctionRaiser<'a> {
         location: SourceLocation,
         callable_ids: &'a BTreeMap<SymbolId, hir::CallableId>,
         types: &'a WccTypes,
+        statics: &'a BTreeMap<SymbolId, StaticObject>,
     ) -> Result<Self, RaiseError> {
         let mut places = Vec::new();
         let mut automatic_places = BTreeMap::new();
@@ -522,6 +621,7 @@ impl<'a> FunctionRaiser<'a> {
             location,
             callable_ids,
             types,
+            statics,
             values: Vec::new(),
             places,
             blocks: vec![RaisedBlock {
@@ -534,6 +634,7 @@ impl<'a> FunctionRaiser<'a> {
             calls: Vec::new(),
             parameter_bindings: BTreeMap::new(),
             automatic_places,
+            static_places: BTreeMap::new(),
             temporary_places,
             node_bindings: BTreeMap::new(),
             next_value: 0,
@@ -545,7 +646,7 @@ impl<'a> FunctionRaiser<'a> {
     fn parameters(&mut self) -> Result<Vec<hir::ValueId>, RaiseError> {
         let mut parameters = Vec::with_capacity(self.procedure.parameters.len());
         for (symbol, type_name) in &self.procedure.parameters {
-            let type_id = value_type(self.unit, type_name, self.location)?;
+            let type_id = capture_type(self.unit, self.types, type_name, self.location)?;
             let value = self.new_value(type_id)?;
             self.parameter_bindings
                 .insert(*symbol, hir::Operand::Value(value));
@@ -750,7 +851,7 @@ impl<'a> FunctionRaiser<'a> {
         Ok(result)
     }
 
-    fn frontend_name(&self, id: NodeId, node: &Node) -> Result<hir::Operand, RaiseError> {
+    fn frontend_name(&mut self, id: NodeId, node: &Node) -> Result<hir::Operand, RaiseError> {
         let symbol = SymbolId::new(parse_symbol_id(
             self.node_argument(id, node, 0)?,
             self.location,
@@ -758,16 +859,48 @@ impl<'a> FunctionRaiser<'a> {
         if let Some(parameter) = self.parameter_bindings.get(&symbol) {
             return Ok(parameter.clone());
         }
-        self.automatic_places
-            .get(&symbol)
-            .copied()
-            .map(hir::Operand::Place)
-            .ok_or_else(|| {
-                error(
-                    self.location,
-                    RaiseErrorKind::MissingParameterBinding(symbol),
-                )
-            })
+        if let Some(place) = self.automatic_places.get(&symbol) {
+            return Ok(hir::Operand::Place(*place));
+        }
+        if let Some(place) = self.static_places.get(&symbol) {
+            return Ok(hir::Operand::Place(*place));
+        }
+        let static_object = self.statics.get(&symbol).ok_or_else(|| {
+            error(
+                self.location,
+                RaiseErrorKind::MissingParameterBinding(symbol),
+            )
+        })?;
+        let type_id = capture_type(
+            self.unit,
+            self.types,
+            self.node_argument(id, node, 1)?,
+            self.location,
+        )?;
+        if type_width(&self.types.types, type_id, self.location)? != static_object.extent {
+            return Err(self.invalid_node(
+                id,
+                "static object extent disagrees with its scalar access type",
+            ));
+        }
+        let place = hir::PlaceId::new(u32::try_from(self.places.len()).map_err(|_| {
+            error(
+                self.location,
+                RaiseErrorKind::IdOverflow { entity: "place" },
+            )
+        })?);
+        self.places.push(hir::Place {
+            id: place,
+            name: static_object.name.clone(),
+            type_id,
+            storage: hir::Storage::Module,
+            offset: 0,
+            symbol: static_object.data,
+            extent: static_object.extent,
+            address: hir::AddressKind::Near,
+        });
+        self.static_places.insert(symbol, place);
+        Ok(hir::Operand::Place(place))
     }
 
     fn temporary_name(&self, id: NodeId, node: &Node) -> Result<hir::Operand, RaiseError> {
@@ -839,6 +972,13 @@ impl<'a> FunctionRaiser<'a> {
                     Ok(hir::Operand::Value(result))
                 }
                 hir::Operand::Value(base) if self.is_pointer_value(base)? => {
+                    // Parameters are already HIR values rather than Python's
+                    // frame places.  WCC still wraps that value in O_POINTS
+                    // at its own pointer type before the following O_POINTS
+                    // performs the typed scalar dereference.
+                    if self.is_near_pointer_type(type_id) {
+                        return Ok(hir::Operand::Value(base));
+                    }
                     if !is_integer_type(type_id) {
                         return Err(
                             self.invalid_node(id, "pointer dereference is not a scalar type")
@@ -869,6 +1009,20 @@ impl<'a> FunctionRaiser<'a> {
             },
             "O_CONVERT" => {
                 let source_type = self.node_type(operand_id)?;
+                if let hir::Operand::Place(place) = operand {
+                    self.require_place_type(place, source_type)?;
+                    if self.is_near_pointer_type(type_id) {
+                        let result = self.new_value(type_id)?;
+                        self.push_instruction(
+                            hir::Opcode::Address,
+                            vec![result],
+                            vec![hir::Operand::Place(place)],
+                            None,
+                        )?;
+                        return Ok(hir::Operand::Value(result));
+                    }
+                    return Err(self.invalid_node(id, "addressable place converts only to a supported pointer"));
+                }
                 require_operand_type(source_type, &operand, &self.values, self.location)?;
                 self.convert(operand, source_type, type_id)
             }
@@ -1189,7 +1343,7 @@ impl<'a> FunctionRaiser<'a> {
         let mut operands = Vec::with_capacity(pending.parameters.len());
         for (argument, type_name) in pending.parameters.iter().rev() {
             let operand = self.node(*argument)?;
-            let type_id = value_type(self.unit, type_name, self.location)?;
+            let type_id = capture_type(self.unit, self.types, type_name, self.location)?;
             require_operand_type(type_id, &operand, &self.values, self.location)?;
             operands.push(operand);
         }
@@ -1671,7 +1825,7 @@ fn error_default(kind: RaiseErrorKind) -> RaiseError {
 mod tests {
     use std::collections::BTreeSet;
 
-    use super::{RaiseError, RaiseErrorKind, U16_TYPE, U32_TYPE, WCC_BIG_DATA, raise_module};
+    use super::{raise_module, RaiseError, RaiseErrorKind, U16_TYPE, U32_TYPE, WCC_BIG_DATA};
     use crate::frontend::wcc::{capture, parse};
     use crate::hir;
     use crate::ir;
@@ -1696,6 +1850,175 @@ mod tests {
     fn parity() -> capture::CaptureUnit {
         capture::build(&parse(include_str!("../../../fixtures/c/parity/parity.cgs")).unwrap())
             .unwrap()
+    }
+
+    fn algebra() -> capture::CaptureUnit {
+        capture::build(&parse(include_str!("../../../fixtures/c/parity/algebra.cgs")).unwrap())
+            .unwrap()
+    }
+
+    #[test]
+    fn raises_real_algebra_near_pointer_parameters_and_static_addresses() {
+        // This real capture previously stopped in callable() with
+        // `unsupported WCC type "TY_POINTER"` before it raised any node.  The
+        // same WCC TY_POINTER now describes the two near pointer parameters,
+        // their typed short dereferences, and the addresses passed for the two
+        // mutable module objects.
+        let module = raise_module(&algebra(), "algebra").unwrap();
+        assert!(module.verify().is_ok());
+
+        assert_eq!(
+            module
+                .data
+                .iter()
+                .map(|data| (
+                    data.name.as_str(),
+                    data.bytes.len(),
+                    data.readonly,
+                    data.linkage,
+                    data.address,
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    "_demo_a",
+                    2,
+                    false,
+                    hir::Linkage::Internal,
+                    hir::AddressKind::Near
+                ),
+                (
+                    "_demo_b",
+                    2,
+                    false,
+                    hir::Linkage::Internal,
+                    hir::AddressKind::Near
+                ),
+            ]
+        );
+
+        let algebra = module
+            .functions
+            .iter()
+            .find(|function| function.name == "_parity_algebra")
+            .unwrap();
+        let parameter_types = algebra
+            .parameters
+            .iter()
+            .map(|parameter| {
+                algebra
+                    .values
+                    .iter()
+                    .find(|value| value.id == *parameter)
+                    .unwrap()
+                    .type_id
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(parameter_types.len(), 2);
+        for type_id in parameter_types {
+            assert!(matches!(
+                &module.types[type_id.get() as usize],
+                hir::Type {
+                    kind: hir::TypeKind::Pointer,
+                    width: 2,
+                    address: hir::AddressKind::Near,
+                    ..
+                }
+            ));
+        }
+        assert_eq!(
+            algebra
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .filter(|instruction| matches!(
+                    instruction,
+                    hir::Instruction {
+                        opcode: hir::Opcode::Load,
+                        operands,
+                        ..
+                    } if matches!(operands.as_slice(), [hir::Operand::Indirect {
+                        type_id,
+                        offset: 0,
+                        volatile: false,
+                        ..
+                    }] if *type_id == hir::TypeId::new(1))
+                ))
+                .count(),
+            3,
+            "each source *a or *b is a typed i16 load through its near pointer"
+        );
+
+        let demo = module
+            .functions
+            .iter()
+            .find(|function| function.name == "_parity_algebra_demo")
+            .unwrap();
+        let places = demo
+            .places
+            .iter()
+            .map(|place| (place.name.as_str(), place.storage, place.address))
+            .collect::<Vec<_>>();
+        assert!(places.contains(&(
+            "_demo_a",
+            hir::Storage::Module,
+            hir::AddressKind::Near
+        )));
+        assert!(places.contains(&(
+            "_demo_b",
+            hir::Storage::Module,
+            hir::AddressKind::Near
+        )));
+
+        let instructions = demo
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .collect::<Vec<_>>();
+        let addresses = instructions
+            .iter()
+            .filter_map(|instruction| match instruction {
+                hir::Instruction {
+                    opcode: hir::Opcode::Address,
+                    results,
+                    operands,
+                    ..
+                } if matches!(operands.as_slice(), [hir::Operand::Place(_)]) => Some((
+                    results[0],
+                    match operands[0] {
+                        hir::Operand::Place(place) => place,
+                        _ => unreachable!(),
+                    },
+                )),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(addresses.len(), 4);
+        let calls = instructions
+            .iter()
+            .filter(|instruction| instruction.opcode == hir::Opcode::Call)
+            .collect::<Vec<_>>();
+        assert_eq!(calls.len(), 2);
+        for call in calls {
+            let names = call
+                .operands
+                .iter()
+                .map(|operand| match operand {
+                    hir::Operand::Value(value) => addresses
+                        .iter()
+                        .find(|(address, _)| address == value)
+                        .and_then(|(_, place)| {
+                            demo.places
+                                .iter()
+                                .find(|candidate| candidate.id == *place)
+                                .map(|candidate| candidate.name.as_str())
+                        })
+                        .unwrap(),
+                    _ => panic!("static address call actual is not a value"),
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(names, vec!["_demo_a", "_demo_b"]);
+        }
     }
 
     fn near_pointer_arithmetic(first_operation: &str) -> capture::CaptureUnit {
