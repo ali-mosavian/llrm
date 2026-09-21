@@ -428,7 +428,11 @@ pub fn same_bytes(one: &MemRef, other: &MemRef) -> bool {
     one_addr == other_addr
 }
 
-fn symbolic_ref(reference: &MemRef) -> MemRef {
+/// Direct port of `qbopt.model.mir:_symbolic_ref`.
+///
+/// Analyses that need an address-based view of a reference must use this
+/// normalization rather than spelling symbolic resolution themselves.
+pub(crate) fn symbolic_ref(reference: &MemRef) -> MemRef {
     let Some(symbol) = reference.symbolic else {
         return reference.clone();
     };
