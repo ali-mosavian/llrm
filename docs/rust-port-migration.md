@@ -56,8 +56,8 @@ until implementation and review time bring the cumulative ratio below 10%.
 The portable Rust IR contract is fixed in `docs/rust-ir.md`.  It defines the
 HIR/IR/Machine IR boundaries, verifier and editor rules, object-frontend change
 map, and the one sanctioned post-allocation target peephole.  This is the
-semantic contract for the port; the Rust implementation will not translate the
-Python MIR data structures.
+semantic contract for the port.  Superseded: the port translates the Python
+MIR data structures and algorithms 1:1; see the port rule in `agents.md`.
 
 Two provenance-complete external gates were added for later differential use:
 

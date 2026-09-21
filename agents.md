@@ -1,5 +1,26 @@
 # Working on qbopt
 
+## The Rust port -- read this first
+
+**The Rust port is a 1:1 translation of the Python compiler.** The Python
+code and its tests are the specification. Rust is how it is written down,
+not a chance to redesign it.
+
+- Port Python's data structures and algorithms as they are: MIR, LIR,
+  passes, allocator, ABI and emission. Rust module and function names map
+  to the Python ones. LLVM-style restructuring waits until parity.
+  `docs/rust-ir.md` does not override this.
+- Every port names the Python `file:function` it replaces and ports that
+  function's tests and regressions in the same commit.
+- Behaviour, refusals, ordering and emitted code match Python. Correct
+  output by a different mechanism is a failed port. So is a "safe subset",
+  a textbook version of a pass with the same name, or a new abstraction the
+  Python code does not have.
+- Acceptance is a `tools/stages.py` dump that matches Python stage by stage,
+  not a passing Rust test.
+- A sub-agent brief restates this section and names the Python source and
+  tests to port. Anything not traceable to Python is rejected.
+
 ## Measurements — the second rule
 
 **Doubt the measurement before the subject.** A result that contradicts what
