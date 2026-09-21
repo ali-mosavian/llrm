@@ -22,7 +22,9 @@ const WCC_CALLER_CLEANUP: u32 = 0x80;
 const VOID_TYPE: hir::TypeId = hir::TypeId::new(0);
 const I16_TYPE: hir::TypeId = hir::TypeId::new(1);
 const I32_TYPE: hir::TypeId = hir::TypeId::new(2);
-const BOOL_TYPE: hir::TypeId = hir::TypeId::new(3);
+const U16_TYPE: hir::TypeId = hir::TypeId::new(3);
+const U32_TYPE: hir::TypeId = hir::TypeId::new(4);
+const BOOL_TYPE: hir::TypeId = hir::TypeId::new(5);
 
 /// A source-located refusal while raising a WCC capture unit.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -215,6 +217,28 @@ fn scalar_types() -> Vec<hir::Type> {
             address: hir::AddressKind::None,
         },
         hir::Type {
+            id: U16_TYPE,
+            name: "u16".into(),
+            kind: hir::TypeKind::Integer,
+            width: 2,
+            signed: Some(false),
+            evaluation: hir::FloatEvaluation::None,
+            element: None,
+            bounds: Vec::new(),
+            address: hir::AddressKind::None,
+        },
+        hir::Type {
+            id: U32_TYPE,
+            name: "u32".into(),
+            kind: hir::TypeKind::Integer,
+            width: 4,
+            signed: Some(false),
+            evaluation: hir::FloatEvaluation::None,
+            element: None,
+            bounds: Vec::new(),
+            address: hir::AddressKind::None,
+        },
+        hir::Type {
             id: BOOL_TYPE,
             name: "bool".into(),
             kind: hir::TypeKind::Boolean,
@@ -298,8 +322,8 @@ fn raise_function(
         .iter()
         .try_fold(0usize, |sum, (_, type_name)| {
             let type_id = value_type(unit, type_name, location)?;
-            let width = match type_id {
-                I16_TYPE => 2,
+            let width = match type_width(type_id) {
+                width @ (2 | 4) => width,
                 _ => {
                     return Err(error(
                         location,
@@ -689,15 +713,17 @@ impl<'a> FunctionRaiser<'a> {
     fn integer(&self, id: NodeId, node: &Node) -> Result<hir::Operand, RaiseError> {
         let value = self
             .node_argument(id, node, 0)?
-            .parse::<i16>()
-            .map_err(|_| self.invalid_node(id, "integer literal is outside signed i16"))?;
+            .parse::<i64>()
+            .map_err(|_| {
+                self.invalid_node(id, "integer literal is outside the supported scalar range")
+            })?;
         let type_id = value_type(self.unit, self.node_argument(id, node, 1)?, self.location)?;
-        if type_id != I16_TYPE {
-            return Err(self.invalid_node(id, "integer literal is not TY_INT_2 or TY_INTEGER"));
+        if !is_integer_type(type_id) {
+            return Err(self.invalid_node(id, "integer literal is not a supported integer type"));
         }
         Ok(hir::Operand::Constant {
             type_id,
-            value: hir::ConstantValue::Integer(i64::from(value)),
+            value: hir::ConstantValue::Integer(wrap_integer(value, type_id)),
         })
     }
 
@@ -754,6 +780,7 @@ impl<'a> FunctionRaiser<'a> {
             "O_TIMES" => hir::Opcode::Multiply,
             "O_PLUS" => hir::Opcode::Add,
             "O_MINUS" => hir::Opcode::Subtract,
+            "O_DIV" => hir::Opcode::Divide,
             _ => return Err(self.invalid_node(id, "unsupported binary operation")),
         };
         let left_id = NodeId::new(parse_node_id(
@@ -1051,7 +1078,7 @@ impl<'a> FunctionRaiser<'a> {
         if source == target {
             return Ok(operand);
         }
-        if matches!(source, I16_TYPE | I32_TYPE) && matches!(target, I16_TYPE | I32_TYPE) {
+        if is_integer_type(source) && is_integer_type(target) {
             if let hir::Operand::Constant {
                 value: hir::ConstantValue::Integer(value),
                 ..
@@ -1059,7 +1086,7 @@ impl<'a> FunctionRaiser<'a> {
             {
                 return Ok(hir::Operand::Constant {
                     type_id: target,
-                    value: hir::ConstantValue::Integer(wrap_signed_integer(value, target)),
+                    value: hir::ConstantValue::Integer(wrap_integer(value, target)),
                 });
             }
         }
@@ -1176,6 +1203,8 @@ fn value_type(
     match unit.canonical_type(name).as_str() {
         "TY_INT_2" | "TY_INTEGER" => Ok(I16_TYPE),
         "TY_INT_4" => Ok(I32_TYPE),
+        "TY_UINT_2" | "TY_UNSIGNED" => Ok(U16_TYPE),
+        "TY_UINT_4" => Ok(U32_TYPE),
         _ => Err(error(
             location,
             RaiseErrorKind::UnsupportedType {
@@ -1187,24 +1216,27 @@ fn value_type(
 
 fn type_width(type_id: hir::TypeId) -> usize {
     match type_id {
-        I16_TYPE => 2,
-        I32_TYPE => 4,
+        I16_TYPE | U16_TYPE => 2,
+        I32_TYPE | U32_TYPE => 4,
         _ => 0,
     }
 }
 
-/// Mirrors `FunctionRaiser.wrapped` for the signed scalar types this slice
-/// has established. A constant conversion is a value fact; nonconstants
-/// still need a HIR conversion so selection can emit `movsx` where required.
-fn wrap_signed_integer(value: i64, target: hir::TypeId) -> i64 {
+fn is_integer_type(type_id: hir::TypeId) -> bool {
+    matches!(type_id, I16_TYPE | I32_TYPE | U16_TYPE | U32_TYPE)
+}
+
+/// A constant conversion is a value fact. Nonconstants remain explicit HIR
+/// conversions so lowering chooses sign or zero extension from the source type.
+fn wrap_integer(value: i64, target: hir::TypeId) -> i64 {
     let bits = match target {
-        I16_TYPE => 16,
-        I32_TYPE => 32,
-        _ => unreachable!("constant folding is restricted to signed scalar targets"),
+        I16_TYPE | U16_TYPE => 16,
+        I32_TYPE | U32_TYPE => 32,
+        _ => unreachable!("constant folding is restricted to integer scalar targets"),
     };
     let modulus = 1_i64 << bits;
     let wrapped = value & (modulus - 1);
-    if wrapped & (modulus >> 1) != 0 {
+    if matches!(target, I16_TYPE | I32_TYPE) && wrapped & (modulus >> 1) != 0 {
         wrapped - modulus
     } else {
         wrapped
@@ -1333,7 +1365,7 @@ fn error_default(kind: RaiseErrorKind) -> RaiseError {
 
 #[cfg(test)]
 mod tests {
-    use super::{RaiseErrorKind, raise_module};
+    use super::{raise_module, RaiseErrorKind, U16_TYPE, U32_TYPE};
     use crate::frontend::wcc::{capture, parse};
     use crate::hir;
     use crate::ir;
@@ -1347,12 +1379,71 @@ mod tests {
             .unwrap()
     }
 
+    fn unsigned() -> capture::CaptureUnit {
+        capture::build(&parse(include_str!("../../../fixtures/c/unsigned.cgs")).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn raises_real_unsigned_scalars_with_unsigned_lowering() {
+        let module = raise_module(&unsigned(), "unsigned").unwrap();
+
+        assert!(matches!(
+            module.types[U16_TYPE.get() as usize],
+            hir::Type {
+                kind: hir::TypeKind::Integer,
+                width: 2,
+                signed: Some(false),
+                ..
+            }
+        ));
+        assert!(matches!(
+            module.types[U32_TYPE.get() as usize],
+            hir::Type {
+                kind: hir::TypeKind::Integer,
+                width: 4,
+                signed: Some(false),
+                ..
+            }
+        ));
+        assert!(module.verify().is_ok());
+
+        let lowered = hir::lower_to_ir(&module).unwrap();
+        let instructions = lowered
+            .functions
+            .iter()
+            .flat_map(|function| &function.blocks)
+            .flat_map(|block| &block.instructions)
+            .map(|instruction| &instruction.kind)
+            .collect::<Vec<_>>();
+        assert!(instructions.iter().any(|kind| matches!(
+            kind,
+            ir::InstructionKind::Cast {
+                op: ir::CastOp::ZeroExtend,
+                ..
+            }
+        )));
+        assert!(instructions.iter().any(|kind| matches!(
+            kind,
+            ir::InstructionKind::Binary {
+                op: ir::BinaryOp::UnsignedDivide,
+                ..
+            }
+        )));
+        assert!(instructions.iter().any(|kind| matches!(
+            kind,
+            ir::InstructionKind::Compare {
+                predicate: ir::ComparePredicate::UnsignedLessThan,
+                ..
+            }
+        )));
+    }
+
     #[test]
     fn raises_the_real_scalar_capture_with_typed_cells_and_loop_control() {
         let module = raise_module(&parity_scalar(), "parity_scalar").unwrap();
         let function = &module.functions[0];
 
-        assert_eq!(module.types.len(), 4);
+        assert_eq!(module.types.len(), 6);
         assert_eq!(function.name, "_parity_scalar");
         assert_eq!(function.result_type, hir::TypeId::new(2));
         assert_eq!(
@@ -1482,7 +1573,7 @@ mod tests {
     fn raises_the_real_iparg_capture_to_generic_hir() {
         let module = raise_module(&iparg(), "iparg").unwrap();
 
-        assert_eq!(module.types.len(), 2);
+        assert_eq!(module.types.len(), 6);
         assert_eq!(module.functions.len(), 2);
         assert_eq!(module.functions[0].name, "_twice");
         assert_eq!(module.functions[0].linkage, hir::Linkage::Internal);
@@ -1584,7 +1675,7 @@ mod tests {
     #[test]
     fn refuses_an_unrecognised_expression_at_its_source_cue() {
         let mut unit = iparg();
-        unit.nodes.get_mut(&capture::NodeId::new(7)).unwrap().args[0] = "O_PLUS".into();
+        unit.nodes.get_mut(&capture::NodeId::new(7)).unwrap().args[0] = "O_UNKNOWN".into();
 
         let error = raise_module(&unit, "iparg").unwrap_err();
         assert_eq!(error.location.file, Some(capture::SourceFileId::new(1)));
