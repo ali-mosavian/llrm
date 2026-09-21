@@ -128,3 +128,67 @@ def test_memory_fact_meet_is_independent_of_initializer_width():
     unknown = mir.Op(1, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.STORE,
                      stores=(mir.MemRef(None, 2),))
     assert consts._kills(wide, unknown, {}, frozenset({5}), {}) == {}
+
+
+def test_cells_builds_one_interval_epoch_for_all_memory_kills(monkeypatch: pytest.MonkeyPatch) -> None:
+    """QB nbody rebuilt the complete known-value interval map 2.85m times.
+
+    Known values cannot change while one cells() dataflow invocation runs.
+    Every operation in that invocation must therefore share one interval
+    epoch, including its fixed-point and final fact-recording walks.
+    """
+    address = Addr(Space.SEGMENT, 0, 5)
+    value = mir.Value(1, 0, variable=1)
+    operations = tuple(
+        mir.Op(
+            index,
+            ir.Operation.MOVE,
+            "mov",
+            (),
+            (),
+            kind=mir.Kind.STORE,
+            stores=(mir.MemRef(address.plus(index * 2), 2),),
+        )
+        for index in range(16)
+    )
+    body = mir.MirBody(0, (mir.MirBlock(0, (), operations, ()),))
+    intervals = consts._intervals
+    calls = 0
+
+    def counted(known):
+        nonlocal calls
+        calls += 1
+        return intervals(known)
+
+    monkeypatch.setattr(consts, "_intervals", counted)
+    consts.cells(body, frozenset({5}), {}, {value: consts.Known(3, 2)})
+
+    assert calls == 1
+
+
+def test_cells_reuses_overlap_answers_within_one_fact_epoch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """QB nbody repeated identical alias questions on every dataflow walk."""
+    address = Addr(Space.SEGMENT, 0, 5)
+    initial = {(address.plus(index * 2), 2): consts.Known(index, 2) for index in range(16)}
+    unknown = mir.Op(
+        0,
+        ir.Operation.MOVE,
+        "mov",
+        (),
+        (),
+        kind=mir.Kind.STORE,
+        stores=(mir.MemRef(None, 2),),
+    )
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (unknown,), ()),))
+    overlapping = consts.mir.overlapping
+    calls = 0
+
+    def counted(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return overlapping(*args, **kwargs)
+
+    monkeypatch.setattr(consts.mir, "overlapping", counted)
+    consts.cells(body, frozenset({5}), {}, initial=initial)
+
+    assert calls == len(initial)
