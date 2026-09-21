@@ -1,12 +1,15 @@
 //! x86 target hooks for target-independent register assignment.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 
 use crate::codegen::machine::{
-    self, AllocationError, ConstraintError, InstructionFlags, MachineCallingConvention,
-    MachineFunction, MachineInstruction, MachineInstructionId, MachineOperand, MachineOperandKind,
-    MachineRegister, OperandRole, RegisterAssignment, RegisterClass, VirtualRegisterId,
+    self, AllocationError, ConstraintError, FrameIndex, FrameObject, FrameObjectKind,
+    GreedyAllocationError, InstructionFlags, MachineCallingConvention, MachineFunction,
+    MachineInstruction, MachineInstructionId, MachineIntervalError, MachineOperand,
+    MachineOperandKind, MachineRegister, OperandRole, PhysicalRegister, RegisterAssignment,
+    RegisterClass, RegisterConstraint, SpillMaterializationError, SpillTarget, VirtualRegisterId,
 };
 
 use super::{X86Opcode, X86Register, X86RegisterClass};
@@ -17,6 +20,10 @@ pub enum X86AllocationError {
     UnknownRegisterClass(RegisterClass),
     Constraint(ConstraintError),
     Allocation(AllocationError),
+    Intervals(Vec<MachineIntervalError>),
+    Greedy(GreedyAllocationError),
+    Spill(SpillMaterializationError<X86SpillError>),
+    RoundLimit { rounds: usize },
 }
 
 impl fmt::Display for X86AllocationError {
@@ -27,6 +34,17 @@ impl fmt::Display for X86AllocationError {
             }
             Self::Constraint(error) => error.fmt(formatter),
             Self::Allocation(error) => error.fmt(formatter),
+            Self::Intervals(errors) => write!(
+                formatter,
+                "cannot compute allocation intervals: {} error(s)",
+                errors.len()
+            ),
+            Self::Greedy(error) => error.fmt(formatter),
+            Self::Spill(error) => error.fmt(formatter),
+            Self::RoundLimit { rounds } => write!(
+                formatter,
+                "x86 register allocation did not settle in {rounds} spill rounds"
+            ),
         }
     }
 }
@@ -37,9 +55,44 @@ impl Error for X86AllocationError {
             Self::UnknownRegisterClass(_) => None,
             Self::Constraint(error) => Some(error),
             Self::Allocation(error) => Some(error),
+            Self::Intervals(_) | Self::RoundLimit { .. } => None,
+            Self::Greedy(error) => Some(error),
+            Self::Spill(error) => Some(error),
         }
     }
 }
+
+/// The target-specific fact that prevents a virtual class from having a stack
+/// representation in this first x86 spill path.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum X86SpillError {
+    UnsupportedRegisterClass(RegisterClass),
+}
+
+impl fmt::Display for X86SpillError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnsupportedRegisterClass(class) => {
+                write!(formatter, "x86 cannot spill register class {class}")
+            }
+        }
+    }
+}
+
+impl Error for X86SpillError {}
+
+/// The completed result of the spill/retry allocator.
+///
+/// `function` retains abstract frame-index operands.  Frame planning and
+/// frame-index materialization deliberately remain downstream clients.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct X86AllocationResult {
+    pub function: MachineFunction,
+    pub assignment: RegisterAssignment,
+}
+
+/// The bounded retry count used by Python `RegAlloc.transform`.
+pub const SPILL_ALLOCATION_ROUNDS: usize = 12;
 
 struct X86ConstraintTarget;
 
@@ -102,6 +155,133 @@ pub fn allocate_registers(
         .map_err(X86AllocationError::Allocation)
 }
 
+/// Assigns x86 registers, materializing an entire spill batch and retrying
+/// until every remaining virtual range has a physical register.
+///
+/// This is the deliberately small Machine-IR half of Python
+/// `RegAlloc.transform`: fixed occurrences are split once, each attempt
+/// recomputes its intervals and constraints, and a materialized reload is
+/// carried into the next attempt as unspillable.  It does not choose frame
+/// displacements or lower the abstract `FrameIndex` operands it creates.
+pub fn allocate_registers_with_spills(
+    function: &MachineFunction,
+) -> Result<X86AllocationResult, X86AllocationError> {
+    validate_register_classes(function)?;
+    let mut function = split_fixed_register_occurrences(function)?;
+    let target = X86SpillTarget;
+    let mut unspillable = BTreeSet::new();
+
+    for _round in 0..SPILL_ALLOCATION_ROUNDS {
+        // A first-round spill creates a frame object, which itself makes BP
+        // unavailable to every subsequent round.
+        let reserve_bp = reserves_bp(&function);
+        let classes = declared_classes(&function);
+        let fixed = fixed_constraints(&function, &classes, reserve_bp)?;
+        let intervals = machine::weighted_live_intervals(&function, |_| 0)
+            .map_err(X86AllocationError::Intervals)?;
+        match machine::allocate_greedy(
+            &intervals,
+            &classes,
+            &fixed,
+            &unspillable,
+            &BTreeSet::new(),
+            |class| candidates(class, reserve_bp),
+            overlaps,
+        )
+        .map_err(X86AllocationError::Greedy)?
+        {
+            machine::GreedyAllocation::Complete(assignment) => {
+                return Ok(X86AllocationResult {
+                    function,
+                    assignment,
+                });
+            }
+            machine::GreedyAllocation::Spills { spills, .. } => {
+                let rewritten = machine::materialize_spills(
+                    &function,
+                    &spills.into_iter().collect::<Vec<_>>(),
+                    &target,
+                )
+                .map_err(X86AllocationError::Spill)?;
+                function = rewritten.function;
+                unspillable.extend(rewritten.unspillable);
+            }
+        }
+    }
+
+    Err(X86AllocationError::RoundLimit {
+        rounds: SPILL_ALLOCATION_ROUNDS,
+    })
+}
+
+struct X86SpillTarget;
+
+impl SpillTarget for X86SpillTarget {
+    type Error = X86SpillError;
+
+    fn spill_frame_object(
+        &self,
+        index: FrameIndex,
+        class: RegisterClass,
+    ) -> Result<FrameObject, Self::Error> {
+        let (size, alignment) = match X86RegisterClass::from_machine_class(class) {
+            Some(X86RegisterClass::Word) => (2, 2),
+            // Both current x86 frame planners lay stack objects out on word
+            // boundaries; requiring 4 here would make C-frame planning
+            // reject an otherwise ordinary dword spill.
+            Some(X86RegisterClass::Dword) => (4, 2),
+            _ => return Err(X86SpillError::UnsupportedRegisterClass(class)),
+        };
+        Ok(FrameObject {
+            index,
+            size,
+            alignment,
+            kind: FrameObjectKind::Spill,
+        })
+    }
+
+    fn spill_load(
+        &self,
+        id: MachineInstructionId,
+        destination: VirtualRegisterId,
+        frame: FrameIndex,
+    ) -> MachineInstruction {
+        MachineInstruction {
+            id,
+            opcode: X86Opcode::Load.machine_opcode(),
+            operands: vec![
+                virtual_operand(destination, OperandRole::Def),
+                frame_operand(frame),
+            ],
+            flags: InstructionFlags {
+                may_load: true,
+                ..InstructionFlags::NONE
+            },
+        }
+    }
+
+    fn spill_store(
+        &self,
+        id: MachineInstructionId,
+        source: VirtualRegisterId,
+        frame: FrameIndex,
+    ) -> MachineInstruction {
+        MachineInstruction {
+            id,
+            opcode: X86Opcode::Store.machine_opcode(),
+            operands: vec![
+                frame_operand(frame),
+                virtual_operand(source, OperandRole::Use),
+            ],
+            flags: InstructionFlags {
+                side_effects: true,
+                may_store: true,
+                ..InstructionFlags::NONE
+            },
+        }
+    }
+}
+
 fn validate_register_classes(function: &MachineFunction) -> Result<(), X86AllocationError> {
     for register in &function.virtual_registers {
         if X86RegisterClass::from_machine_class(register.class).is_none() {
@@ -109,6 +289,92 @@ fn validate_register_classes(function: &MachineFunction) -> Result<(), X86Alloca
         }
     }
     Ok(())
+}
+
+fn declared_classes(function: &MachineFunction) -> BTreeMap<VirtualRegisterId, RegisterClass> {
+    function
+        .virtual_registers
+        .iter()
+        .map(|register| (register.id, register.class))
+        .collect()
+}
+
+fn fixed_constraints(
+    function: &MachineFunction,
+    classes: &BTreeMap<VirtualRegisterId, RegisterClass>,
+    reserve_bp: bool,
+) -> Result<BTreeMap<VirtualRegisterId, PhysicalRegister>, X86AllocationError> {
+    let mut fixed = BTreeMap::new();
+    for block in &function.blocks {
+        for instruction in &block.instructions {
+            for operand in &instruction.operands {
+                let MachineOperandKind::Register(MachineRegister::Virtual(register)) = operand.kind
+                else {
+                    continue;
+                };
+                let class =
+                    classes
+                        .get(&register)
+                        .copied()
+                        .ok_or(X86AllocationError::Allocation(
+                            AllocationError::MissingDeclaredClass { register },
+                        ))?;
+                match operand.constraint {
+                    Some(RegisterConstraint::Fixed(physical)) => {
+                        if let Some(previous) = fixed.insert(register, physical) {
+                            if previous != physical {
+                                return Err(X86AllocationError::Allocation(
+                                    AllocationError::FixedConstraintConflict {
+                                        register,
+                                        first: previous,
+                                        second: physical,
+                                    },
+                                ));
+                            }
+                        }
+                        if !candidates(class, reserve_bp).contains(&physical) {
+                            return Err(X86AllocationError::Allocation(
+                                AllocationError::FixedRegisterUnavailable {
+                                    register,
+                                    class,
+                                    physical,
+                                },
+                            ));
+                        }
+                    }
+                    Some(RegisterConstraint::Class(constraint)) if constraint != class => {
+                        return Err(X86AllocationError::Allocation(
+                            AllocationError::ClassConstraintConflict {
+                                register,
+                                declared: class,
+                                constraint,
+                            },
+                        ));
+                    }
+                    Some(RegisterConstraint::Class(_)) | None => {}
+                }
+            }
+        }
+    }
+    Ok(fixed)
+}
+
+fn virtual_operand(register: VirtualRegisterId, role: OperandRole) -> MachineOperand {
+    MachineOperand {
+        kind: MachineOperandKind::Register(MachineRegister::Virtual(register)),
+        role,
+        constraint: None,
+        tied_to: None,
+    }
+}
+
+fn frame_operand(index: FrameIndex) -> MachineOperand {
+    MachineOperand {
+        kind: MachineOperandKind::FrameIndex { index, addend: 0 },
+        role: OperandRole::None,
+        constraint: None,
+        tied_to: None,
+    }
 }
 
 fn candidates(class: RegisterClass, reserve_bp: bool) -> Vec<machine::PhysicalRegister> {
@@ -134,6 +400,12 @@ fn uses_basic_runtime_frame(function: &MachineFunction) -> bool {
                 )
         })
     })
+}
+
+fn reserves_bp(function: &MachineFunction) -> bool {
+    function.signature.calling_convention == MachineCallingConvention::FarPascal
+        || !function.frame_objects.is_empty()
+        || uses_basic_runtime_frame(function)
 }
 
 fn overlaps(left: machine::PhysicalRegister, right: machine::PhysicalRegister) -> bool {
@@ -450,6 +722,161 @@ mod tests {
             split_fixed_register_occurrences(&clobbered).unwrap(),
             clobbered
         );
+    }
+
+    #[test]
+    fn pressure_converges_by_spilling_a_word_to_an_abstract_frame_slot() {
+        // Python RegAlloc.transform's ordinary retry: one cold value spans
+        // six live words, but its own use is after that pressure.  Spilling
+        // it must create a Word-sized abstract slot, a store, and a later
+        // reload rather than returning the first-round refusal.
+        let mut instructions = vec![MachineInstruction {
+            id: MachineInstructionId::new(0),
+            opcode: X86Opcode::Mov.machine_opcode(),
+            operands: vec![virtual_definition(0), immediate(0)],
+            flags: InstructionFlags::NONE,
+        }];
+        for register in 1..=6 {
+            instructions.push(MachineInstruction {
+                id: MachineInstructionId::new(register),
+                opcode: X86Opcode::Mov.machine_opcode(),
+                operands: vec![virtual_definition(register), immediate(i64::from(register))],
+                flags: InstructionFlags::NONE,
+            });
+        }
+        for (offset, register) in (1..=6).enumerate() {
+            instructions.push(MachineInstruction {
+                id: MachineInstructionId::new(7 + offset as u32),
+                opcode: X86Opcode::Push.machine_opcode(),
+                operands: vec![virtual_use(register)],
+                flags: InstructionFlags::NONE,
+            });
+        }
+        instructions.push(MachineInstruction {
+            id: MachineInstructionId::new(13),
+            opcode: X86Opcode::Push.machine_opcode(),
+            operands: vec![virtual_use(0)],
+            flags: InstructionFlags::NONE,
+        });
+
+        let mut function = word_function_with_registers(instructions, 7);
+        function.signature.calling_convention = MachineCallingConvention::FarPascal;
+        let allocated = allocate_registers_with_spills(&function).unwrap();
+
+        assert_eq!(allocated.function.frame_objects.len(), 1);
+        assert_eq!(
+            allocated.function.frame_objects[0],
+            FrameObject {
+                index: FrameIndex::new(0),
+                size: 2,
+                alignment: 2,
+                kind: FrameObjectKind::Spill,
+            }
+        );
+        let instructions = &allocated.function.blocks[0].instructions;
+        assert!(instructions
+            .iter()
+            .any(|instruction| instruction.opcode == X86Opcode::Store.machine_opcode()));
+        let reload = instructions
+            .iter()
+            .find(|instruction| instruction.opcode == X86Opcode::Load.machine_opcode())
+            .expect("the spilled final use reloads from its frame slot");
+        let MachineOperandKind::Register(MachineRegister::Virtual(reload)) =
+            reload.operands[0].kind
+        else {
+            panic!("spill reload must define a virtual register");
+        };
+        assert!(allocated.assignment.get(reload).is_some());
+    }
+
+    #[test]
+    fn dword_spills_use_a_word_aligned_four_byte_slot() {
+        // The 16-bit C and BASIC frames align stack objects to words even
+        // when the stored value is a dword. Algebra's live LONG therefore
+        // needs four bytes without requesting an unsupported 4-byte frame
+        // alignment.
+        assert_eq!(
+            X86SpillTarget
+                .spill_frame_object(
+                    FrameIndex::new(7),
+                    X86RegisterClass::Dword.machine_class(),
+                )
+                .unwrap(),
+            FrameObject {
+                index: FrameIndex::new(7),
+                size: 4,
+                alignment: 2,
+                kind: FrameObjectKind::Spill,
+            }
+        );
+    }
+
+    #[test]
+    fn constrained_reload_is_unspillable_on_the_retry() {
+        // The final AX requirement is first split into its own short range.
+        // When its source spills, the inserted reload must be protected on
+        // the retry; spilling it recursively would add another slot/load
+        // pair forever instead of reaching the constrained use.
+        let mut instructions = vec![MachineInstruction {
+            id: MachineInstructionId::new(0),
+            opcode: X86Opcode::Mov.machine_opcode(),
+            operands: vec![virtual_definition(0), immediate(0)],
+            flags: InstructionFlags::NONE,
+        }];
+        for register in 1..=6 {
+            instructions.push(MachineInstruction {
+                id: MachineInstructionId::new(register),
+                opcode: X86Opcode::Mov.machine_opcode(),
+                operands: vec![virtual_definition(register), immediate(i64::from(register))],
+                flags: InstructionFlags::NONE,
+            });
+        }
+        for (offset, register) in (1..=6).enumerate() {
+            instructions.push(MachineInstruction {
+                id: MachineInstructionId::new(7 + offset as u32),
+                opcode: X86Opcode::Push.machine_opcode(),
+                operands: vec![virtual_use(register)],
+                flags: InstructionFlags::NONE,
+            });
+        }
+        instructions.push(MachineInstruction {
+            id: MachineInstructionId::new(13),
+            opcode: X86Opcode::Push.machine_opcode(),
+            operands: vec![fixed_virtual(0, OperandRole::Use, X86Register::Ax)],
+            flags: InstructionFlags::NONE,
+        });
+
+        let mut function = word_function_with_registers(instructions, 7);
+        function.signature.calling_convention = MachineCallingConvention::FarPascal;
+        let allocated = allocate_registers_with_spills(&function).unwrap();
+
+        assert_eq!(allocated.function.frame_objects.len(), 1);
+        let reload = allocated.function.blocks[0]
+            .instructions
+            .iter()
+            .find(|instruction| instruction.opcode == X86Opcode::Load.machine_opcode())
+            .expect("the spilled source needs one protected reload");
+        let MachineOperandKind::Register(MachineRegister::Virtual(reload)) =
+            reload.operands[0].kind
+        else {
+            panic!("spill reload must define a virtual register");
+        };
+        assert!(allocated.assignment.get(reload).is_some());
+        assert!(allocated.function.blocks[0]
+            .instructions
+            .iter()
+            .any(|instruction| {
+                instruction.opcode == X86Opcode::Push.machine_opcode()
+                    && matches!(
+                        instruction.operands.as_slice(),
+                        [MachineOperand {
+                            kind: MachineOperandKind::Register(MachineRegister::Virtual(register)),
+                            constraint: Some(RegisterConstraint::Fixed(physical)),
+                            ..
+                        }] if *physical == X86Register::Ax.physical()
+                            && allocated.assignment.get(*register) == Some(X86Register::Ax.physical())
+                    )
+            }));
     }
 
     fn word_function(instructions: Vec<MachineInstruction>) -> MachineFunction {
