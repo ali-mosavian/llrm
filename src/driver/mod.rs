@@ -296,13 +296,29 @@ pub fn compile_qb(source: &str, module_name: &str, options: QbOptions) -> Result
     .map_err(Error::Semantic)
 }
 
-/// Parse a WCC capture and lower its verified source-neutral HIR to IR.
-pub fn compile_wcc_capture(source: &str, module_name: &str) -> Result<ir::Module, Error> {
+/// Parse and build one WCC capture without lowering it.
+///
+/// The caller may observe this source stage before passing the same unit to
+/// [`compile_wcc_capture_unit`].
+pub fn parse_wcc_capture(source: &str) -> Result<wcc::capture::CaptureUnit, Error> {
     let records = wcc::parse(source).map_err(Error::WccParse)?;
-    let unit = wcc::capture::build(&records).map_err(Error::WccCapture)?;
-    let module = wcc::raise_module(&unit, module_name).map_err(Error::WccRaise)?;
+    wcc::capture::build(&records).map_err(Error::WccCapture)
+}
+
+/// Lower one already-built WCC capture through verified HIR to portable IR.
+pub fn compile_wcc_capture_unit(
+    unit: &wcc::capture::CaptureUnit,
+    module_name: &str,
+) -> Result<ir::Module, Error> {
+    let module = wcc::raise_module(unit, module_name).map_err(Error::WccRaise)?;
     module.verify().map_err(Error::Hir)?;
     crate::hir::lower_to_ir(&module).map_err(Error::Lower)
+}
+
+/// Parse a WCC capture and lower its verified source-neutral HIR to IR.
+pub fn compile_wcc_capture(source: &str, module_name: &str) -> Result<ir::Module, Error> {
+    let unit = parse_wcc_capture(source)?;
+    compile_wcc_capture_unit(&unit, module_name)
 }
 
 /// Lower one verified QB HIR program into portable SSA IR.
