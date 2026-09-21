@@ -9,7 +9,8 @@ This crate implements the first source-language slice:
   integers, `f32`, `f64`, and `void`;
 - typed parameters and return values;
 - `let` and `var` bindings;
-- assignment, calls, `return`, `if`/`else`, and `while`;
+- assignment, calls, `return`, `if`/`else`, `while`, and typed half-open
+  integer ranges;
 - `break` and `continue`;
 - strictly typed integer and floating arithmetic and comparisons;
 - fixed one-dimensional arrays, written `[T; length]`, with literals and
@@ -43,6 +44,10 @@ semantics are implemented. A mutable view's field stores update the original
 element.
 `is` and `is not` compare the identity of scoped views, while `==` and `!=`
 remain value comparisons (struct value equality is not in this slice).
+`for index in start..end` evaluates both bounds once and visits `start` through
+`end - 1`. Its immutable induction variable has the bounds' integer type, so
+`for step_no in 0..step_count` runs exactly `step_count` iterations when
+`step_count` is nonnegative.
 Literal indices are checked by the frontend. The
 `fixtures/nbody.mod` fixed-point integrator—an array of six `body` structs—is
 the current end-to-end feature gate for structs, arrays, nested loops,

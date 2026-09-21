@@ -116,6 +116,13 @@ pub enum Statement {
         body: Vec<Statement>,
         span: Span,
     },
+    ForRange {
+        name: String,
+        start: Expr,
+        end: Expr,
+        body: Vec<Statement>,
+        span: Span,
+    },
     Break(Span),
     Continue(Span),
 }
@@ -143,6 +150,7 @@ impl Statement {
             | Self::If { span, .. }
             | Self::While { span, .. }
             | Self::For { span, .. }
+            | Self::ForRange { span, .. }
             | Self::Break(span)
             | Self::Continue(span) => *span,
             Self::Expr(expression) => expression.span(),

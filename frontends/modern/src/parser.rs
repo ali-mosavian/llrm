@@ -319,6 +319,19 @@ impl Parser {
             IterationMode::Value
         };
         let iterable = self.expression(0)?;
+        if mode == IterationMode::Value
+            && self.take(|kind| matches!(kind, TokenKind::Range)).is_some()
+        {
+            let end = self.expression(0)?;
+            let body = self.suite()?;
+            return Ok(Statement::ForRange {
+                name,
+                start: iterable,
+                end,
+                body,
+                span,
+            });
+        }
         let body = self.suite()?;
         Ok(Statement::For {
             mode,
@@ -819,5 +832,33 @@ mod tests {
             panic!("expected print call")
         };
         assert!(matches!(arguments[0], Expr::FString { .. }));
+    }
+
+    #[test]
+    fn parses_a_half_open_range_loop() {
+        let module = parse(
+            lex("fn count(step_count: i32) -> i32:\n\
+                 \x20\x20\x20\x20var total: i32 = 0\n\
+                 \x20\x20\x20\x20for step_no in 0..step_count - 1:\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20total = total + step_no\n\
+                 \x20\x20\x20\x20return total\n")
+            .unwrap(),
+        )
+        .unwrap();
+        let Statement::ForRange {
+            name, start, end, ..
+        } = &module.functions[0].body[1]
+        else {
+            panic!("expected range loop")
+        };
+        assert_eq!(name, "step_no");
+        assert!(matches!(start, Expr::Integer(0, _)));
+        assert!(matches!(
+            end,
+            Expr::Binary {
+                op: BinaryOp::Subtract,
+                ..
+            }
+        ));
     }
 }

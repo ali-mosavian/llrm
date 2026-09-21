@@ -47,6 +47,7 @@ pub enum TokenKind {
     Comma,
     Semicolon,
     Dot,
+    Range,
     Colon,
     Arrow,
     Equal,
@@ -202,7 +203,10 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
                         index += 1;
                     }
                     let mut floating = false;
-                    if index < bytes.len() && bytes[index] == b'.' {
+                    if index < bytes.len()
+                        && bytes[index] == b'.'
+                        && bytes.get(index + 1) != Some(&b'.')
+                    {
                         floating = true;
                         index += 1;
                         while index < bytes.len() && bytes[index].is_ascii_digit() {
@@ -404,7 +408,13 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
                 }
                 b'.' => {
                     index += 1;
-                    tokens.push(token(TokenKind::Dot, line_number, start, index));
+                    let kind = if index < bytes.len() && bytes[index] == b'.' {
+                        index += 1;
+                        TokenKind::Range
+                    } else {
+                        TokenKind::Dot
+                    };
+                    tokens.push(token(kind, line_number, start, index));
                 }
                 b':' => {
                     index += 1;
@@ -682,6 +692,24 @@ mod tests {
                 TokenKind::RightBracket,
                 TokenKind::String(vec![b'A', 0x80]),
                 TokenKind::FString(b"{value}".to_vec()),
+                TokenKind::Newline,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn lexes_a_range_after_an_integer_without_making_a_float() {
+        let tokens = lex("0..step_count - 1\n").unwrap();
+        let kinds: Vec<_> = tokens.into_iter().map(|one| one.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::Integer(0),
+                TokenKind::Range,
+                TokenKind::Identifier("step_count".into()),
+                TokenKind::Minus,
+                TokenKind::Integer(1),
                 TokenKind::Newline,
                 TokenKind::Eof,
             ]

@@ -158,6 +158,8 @@ def test_nbody_arrays_strings_and_print_cross_hir_and_verify_in_mir() -> None:
     assert any(
         instruction.op is hir.Op.NE for block in module.functions[0].blocks for instruction in block.instructions
     )
+    range_counter = next(place for place in module.functions[0].places if place.name == "$range_step_no")
+    assert range_counter.type == types["i32"].id
 
 
 def test_nbody_string_places_point_after_the_descriptor() -> None:

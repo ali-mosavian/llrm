@@ -15,8 +15,7 @@ fn nbody(step_count: i32) -> i32:
         body { pos: vec2i { x: 6656, y: 4096 }, vel: vec2i { x: 0, y: 0 } },
         body { pos: vec2i { x: 10240, y: 6656 }, vel: vec2i { x: 0, y: 0 } },
     ]
-    var step_no: i32 = 0
-    while step_no < step_count:
+    for step_no in 0..step_count:
         for current in &mut bodies:
             var acc_x: i32 = 0
             var acc_y: i32 = 0
@@ -35,7 +34,6 @@ fn nbody(step_count: i32) -> i32:
         for current in &mut bodies:
             current.pos.x = current.pos.x + current.vel.x
             current.pos.y = current.pos.y + current.vel.y
-        step_no = step_no + 1
     for current in &bodies:
         print(f"PX={current.pos.x}")
         print(f"PY={current.pos.y}")

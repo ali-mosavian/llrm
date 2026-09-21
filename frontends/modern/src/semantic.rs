@@ -721,6 +721,13 @@ impl<'a> FunctionCompiler<'a> {
                 body,
                 span,
             } => self.for_statement(*mode, name, iterable, body, *span)?,
+            Statement::ForRange {
+                name,
+                start,
+                end,
+                body,
+                span,
+            } => self.range_statement(name, start, end, body, *span)?,
             Statement::Break(span) => {
                 let Some((target, _)) = self.loops.last().copied() else {
                     return Err(Diagnostic::new(*span, "break is only valid inside a loop"));
@@ -944,6 +951,137 @@ impl<'a> FunctionCompiler<'a> {
             vec![
                 hir::Operand::Place(index_place),
                 hir::Operand::Value(next_index),
+            ],
+            None,
+        );
+        self.terminate(jump(condition_block));
+        self.current = exit_block;
+        Ok(())
+    }
+
+    fn range_statement(
+        &mut self,
+        name: &str,
+        start: &Expr,
+        end: &Expr,
+        body: &[Statement],
+        _span: Span,
+    ) -> Result<(), Diagnostic> {
+        let hint = self.expression_type_hint(end);
+        if hint.is_some_and(|one| !is_integer(one)) {
+            return Err(Diagnostic::new(end.span(), "range bounds must be integers"));
+        }
+        let start_value = self.expression(start, hint)?;
+        if !is_integer(start_value.type_name) {
+            return Err(Diagnostic::new(
+                start.span(),
+                "range bounds must be integers",
+            ));
+        }
+        let type_name = start_value.type_name;
+        let end_value = self.expression(end, Some(type_name))?;
+        let counter_place = self.place(&format!("$range_{name}"), type_name, true);
+        let limit_place = self.place(&format!("$range_limit_{name}"), type_name, false);
+        self.emit(
+            "store",
+            Vec::new(),
+            vec![
+                hir::Operand::Place(counter_place),
+                required(start_value, start.span())?,
+            ],
+            None,
+        );
+        self.emit(
+            "store",
+            Vec::new(),
+            vec![
+                hir::Operand::Place(limit_place),
+                required(end_value, end.span())?,
+            ],
+            None,
+        );
+
+        let condition_block = self.block();
+        let body_block = self.block();
+        let increment_block = self.block();
+        let exit_block = self.block();
+        self.terminate(jump(condition_block));
+
+        self.current = condition_block;
+        let current = self.value(type_name);
+        self.emit(
+            "load",
+            vec![current],
+            vec![hir::Operand::Place(counter_place)],
+            None,
+        );
+        let limit = self.value(type_name);
+        self.emit(
+            "load",
+            vec![limit],
+            vec![hir::Operand::Place(limit_place)],
+            None,
+        );
+        let condition = self.value(TypeName::Bool);
+        self.emit(
+            if is_unsigned(type_name) {
+                "below"
+            } else {
+                "lt"
+            },
+            vec![condition],
+            vec![hir::Operand::Value(current), hir::Operand::Value(limit)],
+            None,
+        );
+        self.terminate(hir::Terminator {
+            kind: "branch",
+            operands: vec![hir::Operand::Value(condition)],
+            targets: vec![body_block, exit_block],
+        });
+
+        self.current = body_block;
+        self.scopes.push(BTreeMap::new());
+        self.scopes.last_mut().expect("scope").insert(
+            name.into(),
+            Binding {
+                type_: BindingType::Scalar(type_name),
+                mutable: false,
+                storage: Storage::Place(counter_place),
+            },
+        );
+        self.loops.push((exit_block, increment_block));
+        let result = self.statements(body);
+        self.loops.pop();
+        self.scopes.pop();
+        result?;
+        if self.open() {
+            self.terminate(jump(increment_block));
+        }
+
+        self.current = increment_block;
+        let old_value = self.value(type_name);
+        self.emit(
+            "load",
+            vec![old_value],
+            vec![hir::Operand::Place(counter_place)],
+            None,
+        );
+        let next_value = self.value(type_name);
+        self.emit(
+            "add",
+            vec![next_value],
+            vec![
+                hir::Operand::Value(old_value),
+                hir::Operand::Constant(type_id(type_name), 1),
+            ],
+            None,
+        );
+        self.emit(
+            "store",
+            Vec::new(),
+            vec![
+                hir::Operand::Place(counter_place),
+                hir::Operand::Value(next_value),
             ],
             None,
         );
@@ -1840,11 +1978,35 @@ impl<'a> FunctionCompiler<'a> {
                     })
             }
             Expr::Member { base, field, span } => self.member_type_hint(base, field, *span),
+            Expr::Binary {
+                op, left, right, ..
+            } => {
+                if matches!(
+                    op,
+                    BinaryOp::Equal
+                        | BinaryOp::NotEqual
+                        | BinaryOp::Less
+                        | BinaryOp::LessEqual
+                        | BinaryOp::Greater
+                        | BinaryOp::GreaterEqual
+                        | BinaryOp::Is
+                        | BinaryOp::IsNot
+                ) {
+                    return Some(TypeName::Bool);
+                }
+                match (
+                    self.expression_type_hint(left),
+                    self.expression_type_hint(right),
+                ) {
+                    (Some(left), Some(right)) if left == right => Some(left),
+                    (Some(type_name), None) | (None, Some(type_name)) => Some(type_name),
+                    (Some(_), Some(_)) | (None, None) => None,
+                }
+            }
             Expr::Integer(..)
             | Expr::FString { .. }
             | Expr::Array(..)
-            | Expr::StructLiteral { .. }
-            | Expr::Binary { .. } => None,
+            | Expr::StructLiteral { .. } => None,
         }
     }
 
@@ -2382,6 +2544,35 @@ mod tests {
         assert!(json.contains("\"tag\":\"projection\""));
         assert!(json.contains("\"op\":\"below\""));
         assert!(!json.contains("\"callee\":\"__iter"));
+    }
+
+    #[test]
+    fn range_loop_keeps_the_bound_type_and_lowers_without_a_runtime_iterator() {
+        let json = compile_source(
+            "fn sum(step_count: u16) -> u16:\n\
+             \x20\x20\x20\x20var total: u16 = 0\n\
+             \x20\x20\x20\x20for step_no in 0..step_count - 1:\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20total = total + step_no\n\
+             \x20\x20\x20\x20return total\n",
+        )
+        .unwrap();
+        let range_at = json.find("\"name\":\"$range_step_no\"").unwrap();
+        let range_place = &json[range_at..range_at + json[range_at..].find('}').unwrap()];
+        assert!(range_place.contains(&format!("\"type\":{}", type_id(TypeName::U16))));
+        assert!(json.contains("\"op\":\"below\""));
+        assert!(json.contains("\"op\":\"add\""));
+        assert!(!json.contains("\"callee\":\"__iter"));
+    }
+
+    #[test]
+    fn range_loop_requires_integer_bounds() {
+        let error = compile_source(
+            "fn bad(limit: f32) -> void:\n\
+             \x20\x20\x20\x20for item in 0..limit:\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20print(item)\n",
+        )
+        .unwrap_err();
+        assert!(error.message.contains("range bounds must be integers"));
     }
 
     #[test]
