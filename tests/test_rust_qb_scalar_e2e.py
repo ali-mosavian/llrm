@@ -23,6 +23,8 @@ MEMORY_SOURCE = ROOT / "bench" / "parity" / "memory.bas"
 MEMORY_GOLDEN = ROOT / "bench" / "parity" / "golden" / "memory.txt"
 LOOP_SOURCE = ROOT / "bench" / "parity" / "loop.bas"
 LOOP_GOLDEN = ROOT / "bench" / "parity" / "golden" / "loop.txt"
+CONTROL_SOURCE = ROOT / "bench" / "parity" / "control.bas"
+CONTROL_GOLDEN = ROOT / "bench" / "parity" / "golden" / "control.txt"
 CFG = CONFIGS["v-g3"]
 
 pytestmark = [
@@ -139,3 +141,8 @@ def test_rust_qb_memory_matches_its_program_level_oracle(tmp_path: Path) -> None
 def test_rust_qb_loop_matches_its_program_level_oracle(tmp_path: Path) -> None:
     """The loop-carried LONG total must print loop's 130991/DONE oracle."""
     _assert_program_matches_oracle(tmp_path, LOOP_SOURCE, LOOP_GOLDEN, "LOOP")
+
+
+def test_rust_qb_control_matches_its_program_level_oracle(tmp_path: Path) -> None:
+    """The nested parity branch must print control's 15007/DONE oracle."""
+    _assert_program_matches_oracle(tmp_path, CONTROL_SOURCE, CONTROL_GOLDEN, "CONTROL")

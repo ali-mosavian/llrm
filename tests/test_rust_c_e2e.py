@@ -24,6 +24,8 @@ MEMORY_SOURCE = ROOT / "fixtures" / "c" / "parity" / "memory.cgs"
 MEMORY_HARNESS = ROOT / "fixtures" / "c" / "parity" / "memory-start.asm"
 LOOP_SOURCE = ROOT / "fixtures" / "c" / "parity" / "loop.cgs"
 LOOP_HARNESS = ROOT / "fixtures" / "c" / "parity" / "loop-start.asm"
+CONTROL_SOURCE = ROOT / "fixtures" / "c" / "parity" / "control.cgs"
+CONTROL_HARNESS = ROOT / "fixtures" / "c" / "parity" / "control-start.asm"
 CELLS_SOURCE = ROOT / "fixtures" / "c" / "cells.cgs"
 CELLS_HARNESS = ROOT / "fixtures" / "c" / "cells-start.asm"
 JWASM = shutil.which("jwasm") or str(Path.home() / "work/other/d32x/toolchains/native/bin/jwasm")
@@ -158,3 +160,12 @@ def test_rust_c_loop_returns_the_existing_python_oracle(tmp_path: Path) -> None:
     comparison, loop-carried LONG arithmetic, and two far-cdecl calls.
     """
     assert _compile_and_run(LOOP_SOURCE, LOOP_HARNESS, tmp_path, timeout=20) == 130991
+
+
+def test_rust_c_control_returns_the_existing_python_oracle(tmp_path: Path) -> None:
+    """Nested i16 parity control and LONG updates must retain 15007.
+
+    The real WCC capture combines an i16 AND/equality branch inside a signed
+    loop with the paired long add/sub updates and far-cdecl calls.
+    """
+    assert _compile_and_run(CONTROL_SOURCE, CONTROL_HARNESS, tmp_path, timeout=20) == 15007

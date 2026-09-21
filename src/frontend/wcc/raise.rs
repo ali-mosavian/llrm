@@ -1049,10 +1049,31 @@ impl<'a> FunctionRaiser<'a> {
             return self.near_pointer_arithmetic(id, node, left_id, right_id);
         }
         let opcode = match self.node_argument(id, node, 0)? {
-            "O_TIMES" => hir::Opcode::Multiply,
             "O_PLUS" => hir::Opcode::Add,
             "O_MINUS" => hir::Opcode::Subtract,
+            "O_TIMES" => hir::Opcode::Multiply,
             "O_DIV" => hir::Opcode::Divide,
+            "O_MOD" => hir::Opcode::Remainder,
+            "O_AND" => hir::Opcode::And,
+            "O_OR" => hir::Opcode::Or,
+            "O_XOR" => hir::Opcode::Xor,
+            "O_LSHIFT" => hir::Opcode::ShiftLeft,
+            "O_RSHIFT" => {
+                let signed = self
+                    .types
+                    .types
+                    .iter()
+                    .find(|type_| type_.id == capture_type)
+                    .and_then(|type_| type_.signed)
+                    .ok_or_else(|| {
+                        self.invalid_node(id, "integer right shift has no signed type")
+                    })?;
+                if signed {
+                    hir::Opcode::ShiftRightArithmetic
+                } else {
+                    hir::Opcode::ShiftRight
+                }
+            }
             _ => return Err(self.invalid_node(id, "unsupported binary operation")),
         };
         let left = self.node(left_id)?;
@@ -1175,7 +1196,16 @@ impl<'a> FunctionRaiser<'a> {
 
     fn compare(&mut self, id: NodeId, node: &Node) -> Result<hir::Operand, RaiseError> {
         let opcode = match self.node_argument(id, node, 0)? {
+            // Faithful to Python cfront/raise_hir.py TESTS.  Signedness is a
+            // type fact carried by the operands; source-neutral HIR records
+            // the relational operation and its lowering selects the signed
+            // or unsigned IR predicate.
+            "O_EQ" => hir::Opcode::Equal,
+            "O_NE" => hir::Opcode::NotEqual,
             "O_LT" => hir::Opcode::LessThan,
+            "O_LE" => hir::Opcode::LessEqual,
+            "O_GT" => hir::Opcode::GreaterThan,
+            "O_GE" => hir::Opcode::GreaterEqual,
             _ => return Err(self.invalid_node(id, "unsupported comparison operation")),
         };
         let left_id = NodeId::new(parse_node_id(
@@ -1859,6 +1889,177 @@ mod tests {
     fn algebra() -> capture::CaptureUnit {
         capture::build(&parse(include_str!("../../../fixtures/c/parity/algebra.cgs")).unwrap())
             .unwrap()
+    }
+
+    fn comparison(operation: &str, type_name: &str) -> capture::CaptureUnit {
+        // The minimal CGCompare shape from WCC's capture stream.  Keeping the
+        // operation and scalar type as parameters lets the vocabulary test
+        // exercise every TESTS entry without fixture-specific records.
+        let source = format!(
+            r#"INIT sw=0x808000 target=0xec size=50 rev=0x23
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=2
+SEG 3 attr=0xc name="CONST2" align=2
+SEG 4 attr=0x6 name="_DATA" align=2
+START
+f1 DBSrcFile "comparison.c"
+SYM y1 name="comparison" base="comparison" pattern="_*" attr=0x7 seg=1
+CALLCONV y1 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y1 TY_INTEGER
+l2 CGLastParm
+n3 CGInteger 1 {type_name}
+n4 CGInteger 2 {type_name}
+n5 CGCompare {operation} n3 n4 {type_name}
+- CGDone n5
+n6 CGInteger 0 TY_INTEGER
+- CGReturn n6 TY_INTEGER
+STOP
+FINI
+"#
+        );
+        capture::build(&parse(&source).unwrap()).unwrap()
+    }
+
+    fn binary(operation: &str, type_name: &str) -> capture::CaptureUnit {
+        // The scalar CGBinary form is independent of the concrete operator;
+        // parameterizing it exercises WCC's full integer vocabulary without
+        // tying a regression to one recorded program.
+        let source = format!(
+            r#"INIT sw=0x808000 target=0xec size=50 rev=0x23
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=2
+SEG 3 attr=0xc name="CONST2" align=2
+SEG 4 attr=0x6 name="_DATA" align=2
+START
+f1 DBSrcFile "binary.c"
+SYM y1 name="binary" base="binary" pattern="_*" attr=0x7 seg=1
+CALLCONV y1 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y1 TY_INTEGER
+l2 CGLastParm
+n3 CGInteger 8 {type_name}
+n4 CGInteger 2 {type_name}
+n5 CGBinary {operation} n3 n4 {type_name}
+- CGDone n5
+n6 CGInteger 0 TY_INTEGER
+- CGReturn n6 TY_INTEGER
+STOP
+FINI
+"#
+        );
+        capture::build(&parse(&source).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn raises_the_complete_wcc_comparison_vocabulary() {
+        // Python cfront/raise_hir.py TESTS defines all six WCC CGCompare
+        // spellings. This guards against retaining only the O_LT form that
+        // happened to be implemented before control.cgs exercised O_EQ.
+        for (operation, expected) in [
+            ("O_EQ", hir::Opcode::Equal),
+            ("O_NE", hir::Opcode::NotEqual),
+            ("O_LT", hir::Opcode::LessThan),
+            ("O_LE", hir::Opcode::LessEqual),
+            ("O_GT", hir::Opcode::GreaterThan),
+            ("O_GE", hir::Opcode::GreaterEqual),
+        ] {
+            let module = raise_module(&comparison(operation, "TY_INTEGER"), "comparison")
+                .unwrap_or_else(|error| panic!("{operation} must raise: {error}"));
+            let instructions = &module.functions[0].blocks[0].instructions;
+            assert_eq!(
+                instructions
+                    .iter()
+                    .filter(|instruction| instruction.results.len() == 1)
+                    .map(|instruction| instruction.opcode)
+                    .collect::<Vec<_>>(),
+                vec![expected],
+                "{operation} must retain its source-neutral HIR comparison"
+            );
+            assert!(module.verify().is_ok(), "{operation} must verify as HIR");
+        }
+    }
+
+    #[test]
+    fn lowers_unsigned_wcc_relational_comparison_from_type_facts() {
+        // HIR deliberately does not carry a C signed/unsigned opcode split.
+        // The captured TY_UNSIGNED operand type is sufficient for generic HIR
+        // lowering to select an unsigned IR predicate.
+        let module = raise_module(&comparison("O_GE", "TY_UNSIGNED"), "comparison").unwrap();
+        let lowered = hir::lower_to_ir(&module).unwrap();
+        assert!(
+            lowered.functions[0].blocks[0]
+                .instructions
+                .iter()
+                .any(|instruction| matches!(
+                    instruction.kind,
+                    ir::InstructionKind::Compare {
+                        predicate: ir::ComparePredicate::UnsignedGreaterEqual,
+                        ..
+                    }
+                ))
+        );
+    }
+
+    #[test]
+    fn raises_the_complete_wcc_integer_binary_vocabulary() {
+        // Python cfront/raise_hir.py ARITHMETIC plus _Raise.arithmetic has
+        // these integer forms; shifts have their own signedness-aware branch.
+        for (operation, expected) in [
+            ("O_PLUS", hir::Opcode::Add),
+            ("O_MINUS", hir::Opcode::Subtract),
+            ("O_TIMES", hir::Opcode::Multiply),
+            ("O_DIV", hir::Opcode::Divide),
+            ("O_MOD", hir::Opcode::Remainder),
+            ("O_AND", hir::Opcode::And),
+            ("O_OR", hir::Opcode::Or),
+            ("O_XOR", hir::Opcode::Xor),
+            ("O_LSHIFT", hir::Opcode::ShiftLeft),
+            ("O_RSHIFT", hir::Opcode::ShiftRightArithmetic),
+        ] {
+            let module = raise_module(&binary(operation, "TY_INTEGER"), "binary")
+                .unwrap_or_else(|error| panic!("{operation} must raise: {error}"));
+            assert_eq!(
+                module.functions[0].blocks[0]
+                    .instructions
+                    .iter()
+                    .filter(|instruction| instruction.results.len() == 1)
+                    .map(|instruction| instruction.opcode)
+                    .collect::<Vec<_>>(),
+                vec![expected],
+                "{operation} must retain its HIR operation"
+            );
+            assert!(module.verify().is_ok(), "{operation} must verify as HIR");
+        }
+    }
+
+    #[test]
+    fn lowers_wcc_right_shift_from_the_captured_integer_signedness() {
+        // The WCC spelling alone is not enough: the captured scalar type
+        // decides whether generic IR receives SHR or SAR.
+        for (type_name, hir_opcode, ir_opcode) in [
+            (
+                "TY_UNSIGNED",
+                hir::Opcode::ShiftRight,
+                ir::BinaryOp::LogicalShiftRight,
+            ),
+            (
+                "TY_INTEGER",
+                hir::Opcode::ShiftRightArithmetic,
+                ir::BinaryOp::ArithmeticShiftRight,
+            ),
+        ] {
+            let module = raise_module(&binary("O_RSHIFT", type_name), "binary").unwrap();
+            assert_eq!(
+                module.functions[0].blocks[0].instructions[0].opcode,
+                hir_opcode
+            );
+            let lowered = hir::lower_to_ir(&module).unwrap();
+            assert!(lowered.functions[0].blocks[0].instructions.iter().any(
+                |instruction| matches!(
+                    instruction.kind,
+                    ir::InstructionKind::Binary { op, .. } if op == ir_opcode
+                )
+            ));
+        }
     }
 
     #[test]
