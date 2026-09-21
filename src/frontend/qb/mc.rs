@@ -1,20 +1,24 @@
-//! QB's module-header contribution to an already selected MC module.
+//! QB-owned contributions to an already selected MC module.
 //!
-//! This adapter owns only the immutable prefix required by the QB runtime.
-//! Section selection and all object-format policy remain explicit at its
-//! caller and outside this frontend boundary.
+//! This adapter owns the runtime's initialized-data grouping and immutable
+//! module prefix. Generic MC remains free of BASIC section conventions; final
+//! OMF segment policy stays in the adjacent QB object adapter.
 
+use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
 
+use crate::codegen::machine::{MachineAddressSpace, MachineDataObject, MachineDataObjectId};
 use crate::frontend::qb::module_header::MODULE_HEADER_SIZE;
+use crate::hir::RuntimeProfile;
 use crate::mc::{
-    DataFragment, FragmentId, MCFragment, MCModule, SectionFlags, SectionId, SectionKind,
-    SymbolBinding, SymbolDefinition, SymbolId, SymbolVisibility,
+    DataFragment, FragmentId, MCFragment, MCModule, MCSection, SectionFlags, SectionId,
+    SectionKind, SymbolBinding, SymbolDefinition, SymbolId, SymbolVisibility,
 };
 use crate::support::diagnostic::Diagnostic;
 
 const HEADER_SYMBOL: &str = "$QB$HEADER";
+const DATA_PREFIX_SYMBOL: &str = "$QB$DATA";
 
 /// Why the QB module header cannot be added to an MC module.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -39,6 +43,52 @@ pub enum ModuleMcError {
     ReservedSymbol {
         name: String,
     },
+    MissingGenericSection {
+        kind: SectionKind,
+    },
+    DuplicateGenericSection {
+        kind: SectionKind,
+    },
+    UnexpectedGenericSection {
+        section: SectionId,
+        kind: SectionKind,
+    },
+    DuplicateDataObjectName {
+        name: String,
+    },
+    MissingDataSymbol {
+        data: MachineDataObjectId,
+        name: String,
+    },
+    DuplicateDataSymbol {
+        data: MachineDataObjectId,
+        name: String,
+    },
+    InvalidDataSymbol {
+        data: MachineDataObjectId,
+        symbol: SymbolId,
+    },
+    MissingDataFragments {
+        data: MachineDataObjectId,
+        fragment: FragmentId,
+    },
+    UnexpectedDataFragment {
+        section: SectionId,
+        fragment: FragmentId,
+    },
+    NonUnitDataAlignment {
+        data: MachineDataObjectId,
+        alignment: u32,
+    },
+    UnsupportedDataAddressSpace {
+        data: MachineDataObjectId,
+        address_space: MachineAddressSpace,
+    },
+    FarDataUnsupported {
+        runtime: RuntimeProfile,
+        data: MachineDataObjectId,
+    },
+    SectionIdExhausted,
     FragmentIdExhausted,
     SymbolIdExhausted,
 }
@@ -84,6 +134,64 @@ impl fmt::Display for ModuleMcError {
                     "QB header reserved symbol {name:?} already exists"
                 )
             }
+            Self::MissingGenericSection { kind } => {
+                write!(
+                    formatter,
+                    "QB data placement requires one {kind:?} MC section"
+                )
+            }
+            Self::DuplicateGenericSection { kind } => {
+                write!(
+                    formatter,
+                    "QB data placement found multiple {kind:?} MC sections"
+                )
+            }
+            Self::UnexpectedGenericSection { section, kind } => write!(
+                formatter,
+                "QB data placement cannot classify generic MC section {section} ({kind:?})"
+            ),
+            Self::DuplicateDataObjectName { name } => {
+                write!(
+                    formatter,
+                    "QB data placement found duplicate data object name {name:?}"
+                )
+            }
+            Self::MissingDataSymbol { data, name } => write!(
+                formatter,
+                "QB data object {data} ({name:?}) has no MC symbol"
+            ),
+            Self::DuplicateDataSymbol { data, name } => write!(
+                formatter,
+                "QB data object {data} ({name:?}) has multiple MC symbols"
+            ),
+            Self::InvalidDataSymbol { data, symbol } => write!(
+                formatter,
+                "QB data object {data} has invalid MC symbol {symbol}"
+            ),
+            Self::MissingDataFragments { data, fragment } => write!(
+                formatter,
+                "QB data object {data} is missing its alignment/data pair at fragment {fragment}"
+            ),
+            Self::UnexpectedDataFragment { section, fragment } => write!(
+                formatter,
+                "QB data placement found unexpected generic data fragment {fragment} in section {section}"
+            ),
+            Self::NonUnitDataAlignment { data, alignment } => write!(
+                formatter,
+                "QB data object {data} has unsupported alignment {alignment}; Python establishes unit alignment"
+            ),
+            Self::UnsupportedDataAddressSpace {
+                data,
+                address_space,
+            } => write!(
+                formatter,
+                "QB data object {data} uses unsupported storage address space {address_space:?}"
+            ),
+            Self::FarDataUnsupported { runtime, data } => write!(
+                formatter,
+                "{runtime:?} cannot place data object {data} in VBDOS FSL_CONST"
+            ),
+            Self::SectionIdExhausted => write!(formatter, "MC section identifiers are exhausted"),
             Self::FragmentIdExhausted => write!(formatter, "MC fragment identifiers are exhausted"),
             Self::SymbolIdExhausted => write!(formatter, "MC symbol identifiers are exhausted"),
         }
@@ -91,6 +199,245 @@ impl fmt::Display for ModuleMcError {
 }
 
 impl Error for ModuleMcError {}
+
+/// Rehomes representable initialized data in the QB runtime's measured sections.
+///
+/// Generic lowering contributes one text, read-only-data, and writable-data
+/// section. Each selected object owns one adjacent unit-alignment/data pair,
+/// named by an MC symbol at the data fragment. This adapter preserves those
+/// pairs, symbols, fixups, and text untouched while regrouping them in source
+/// order for QB's runtime-owned data sections.
+pub fn place_data(
+    module: &MCModule,
+    data_objects: &[MachineDataObject],
+    runtime: RuntimeProfile,
+) -> Result<MCModule, ModuleMcError> {
+    module.verify().map_err(ModuleMcError::InputVerification)?;
+    if module
+        .symbols
+        .iter()
+        .any(|symbol| symbol.name == DATA_PREFIX_SYMBOL)
+    {
+        return Err(ModuleMcError::ReservedSymbol {
+            name: DATA_PREFIX_SYMBOL.to_owned(),
+        });
+    }
+
+    let (text, read_only, data) = generic_sections(module)?;
+    let mut names = BTreeSet::new();
+    let mut used = BTreeSet::new();
+    let mut mutable_near = Vec::new();
+    let mut constant_near = Vec::new();
+    let mut far = Vec::new();
+
+    for object in data_objects {
+        if !names.insert(&object.name) {
+            return Err(ModuleMcError::DuplicateDataObjectName {
+                name: object.name.clone(),
+            });
+        }
+        if object.alignment != 1 {
+            return Err(ModuleMcError::NonUnitDataAlignment {
+                data: object.id,
+                alignment: object.alignment,
+            });
+        }
+        let fragments = object_fragments(module, object, read_only, data, &mut used)?;
+        match object.address_space {
+            MachineAddressSpace::NearData if object.constant => constant_near.push(fragments),
+            MachineAddressSpace::NearData => mutable_near.push(fragments),
+            MachineAddressSpace::FarData | MachineAddressSpace::HugeData => {
+                if runtime != RuntimeProfile::Vbdos {
+                    return Err(ModuleMcError::FarDataUnsupported {
+                        runtime,
+                        data: object.id,
+                    });
+                }
+                far.push(fragments);
+            }
+            MachineAddressSpace::Generic
+            | MachineAddressSpace::Code
+            | MachineAddressSpace::Segment => {
+                return Err(ModuleMcError::UnsupportedDataAddressSpace {
+                    data: object.id,
+                    address_space: object.address_space,
+                });
+            }
+        }
+    }
+    reject_unclaimed_fragments(read_only, &used)?;
+    reject_unclaimed_fragments(data, &used)?;
+
+    let prefix = next_fragment_id(module)?;
+    let prefix_symbol = next_symbol_id(module)?;
+    let mut symbols = module.symbols.clone();
+    symbols.push(crate::mc::MCSymbol {
+        id: prefix_symbol,
+        name: DATA_PREFIX_SYMBOL.to_owned(),
+        binding: SymbolBinding::Local,
+        visibility: SymbolVisibility::Hidden,
+        definition: SymbolDefinition::Fragment {
+            fragment: prefix,
+            offset: 0,
+        },
+    });
+
+    let mut bc_data = data.clone();
+    bc_data.name = "BC_DATA".to_owned();
+    bc_data.fragments = vec![MCFragment::Data(DataFragment {
+        id: prefix,
+        bytes: vec![0; 6],
+        fixups: Vec::new(),
+    })];
+    for fragments in mutable_near {
+        bc_data.fragments.extend(fragments);
+    }
+
+    let mut bc_cn = read_only.clone();
+    bc_cn.name = "BC_CN".to_owned();
+    bc_cn.fragments = constant_near.into_iter().flatten().collect();
+
+    let mut sections = vec![text.clone(), bc_data, bc_cn];
+    if runtime == RuntimeProfile::Vbdos {
+        sections.push(MCSection {
+            id: next_section_id(module)?,
+            name: "FSL_CONST".to_owned(),
+            kind: SectionKind::Data,
+            flags: SectionFlags::ALLOC.union(SectionFlags::WRITABLE),
+            alignment: 1,
+            fragments: far.into_iter().flatten().collect(),
+        });
+    }
+    let output = MCModule { sections, symbols };
+    output.verify().map_err(ModuleMcError::OutputVerification)?;
+    Ok(output)
+}
+
+fn generic_sections(
+    module: &MCModule,
+) -> Result<(&MCSection, &MCSection, &MCSection), ModuleMcError> {
+    let mut text = None;
+    let mut read_only = None;
+    let mut data = None;
+    for section in &module.sections {
+        let slot = match section.kind {
+            SectionKind::Text => &mut text,
+            SectionKind::ReadOnlyData => &mut read_only,
+            SectionKind::Data => &mut data,
+            kind => {
+                return Err(ModuleMcError::UnexpectedGenericSection {
+                    section: section.id,
+                    kind,
+                });
+            }
+        };
+        if slot.replace(section).is_some() {
+            return Err(ModuleMcError::DuplicateGenericSection { kind: section.kind });
+        }
+    }
+    Ok((
+        text.ok_or(ModuleMcError::MissingGenericSection {
+            kind: SectionKind::Text,
+        })?,
+        read_only.ok_or(ModuleMcError::MissingGenericSection {
+            kind: SectionKind::ReadOnlyData,
+        })?,
+        data.ok_or(ModuleMcError::MissingGenericSection {
+            kind: SectionKind::Data,
+        })?,
+    ))
+}
+
+fn object_fragments(
+    module: &MCModule,
+    object: &MachineDataObject,
+    read_only: &MCSection,
+    data: &MCSection,
+    used: &mut BTreeSet<FragmentId>,
+) -> Result<Vec<MCFragment>, ModuleMcError> {
+    let symbols = module
+        .symbols
+        .iter()
+        .filter(|symbol| symbol.name == object.name)
+        .collect::<Vec<_>>();
+    let [symbol] = symbols.as_slice() else {
+        return if symbols.is_empty() {
+            Err(ModuleMcError::MissingDataSymbol {
+                data: object.id,
+                name: object.name.clone(),
+            })
+        } else {
+            Err(ModuleMcError::DuplicateDataSymbol {
+                data: object.id,
+                name: object.name.clone(),
+            })
+        };
+    };
+    let SymbolDefinition::Fragment {
+        fragment,
+        offset: 0,
+    } = symbol.definition
+    else {
+        return Err(ModuleMcError::InvalidDataSymbol {
+            data: object.id,
+            symbol: symbol.id,
+        });
+    };
+    let expected = if object.constant { read_only } else { data };
+    let Some(index) = expected
+        .fragments
+        .iter()
+        .position(|candidate| candidate.id() == fragment)
+    else {
+        return Err(ModuleMcError::MissingDataFragments {
+            data: object.id,
+            fragment,
+        });
+    };
+    let Some(MCFragment::Align(align)) = index
+        .checked_sub(1)
+        .and_then(|index| expected.fragments.get(index))
+    else {
+        return Err(ModuleMcError::MissingDataFragments {
+            data: object.id,
+            fragment,
+        });
+    };
+    if align.alignment != 1
+        || align.fill != 0
+        || !matches!(&expected.fragments[index], MCFragment::Data(_))
+    {
+        return Err(ModuleMcError::MissingDataFragments {
+            data: object.id,
+            fragment,
+        });
+    }
+    if !used.insert(align.id) || !used.insert(fragment) {
+        return Err(ModuleMcError::MissingDataFragments {
+            data: object.id,
+            fragment,
+        });
+    }
+    Ok(vec![
+        expected.fragments[index - 1].clone(),
+        expected.fragments[index].clone(),
+    ])
+}
+
+fn reject_unclaimed_fragments(
+    section: &MCSection,
+    used: &BTreeSet<FragmentId>,
+) -> Result<(), ModuleMcError> {
+    for fragment in &section.fragments {
+        if !used.contains(&fragment.id()) {
+            return Err(ModuleMcError::UnexpectedDataFragment {
+                section: section.id,
+                fragment: fragment.id(),
+            });
+        }
+    }
+    Ok(())
+}
 
 /// Retain the sole text section for the initial data-free QB object slice.
 ///
@@ -212,6 +559,18 @@ fn next_fragment_id(module: &MCModule) -> Result<FragmentId, ModuleMcError> {
     Ok(FragmentId::new(next))
 }
 
+fn next_section_id(module: &MCModule) -> Result<SectionId, ModuleMcError> {
+    let next = module
+        .sections
+        .iter()
+        .map(|section| section.id.get())
+        .max()
+        .map_or(Ok(0), |id| {
+            id.checked_add(1).ok_or(ModuleMcError::SectionIdExhausted)
+        })?;
+    Ok(SectionId::new(next))
+}
+
 fn next_symbol_id(module: &MCModule) -> Result<SymbolId, ModuleMcError> {
     let next = module
         .symbols
@@ -227,13 +586,19 @@ fn next_symbol_id(module: &MCModule) -> Result<SymbolId, ModuleMcError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codegen::machine::{
+        MachineAddressSpace, MachineDataObject, MachineDataObjectId, MachineDataRelocation,
+        MachineLinkage,
+    };
     use crate::frontend::qb::module_header::module_header;
     use crate::hir::{
-        ArrayOrder, Dialect, FloatMode, Module, ModuleId, Program, RuntimeProfile, TargetProfile,
-        FORMAT_VERSION,
+        ArrayOrder, Dialect, FORMAT_VERSION, FloatMode, Module, ModuleId, Program, RuntimeProfile,
+        TargetProfile,
     };
-    use crate::mc::{Fixup, MCExpression, MCSection, MCSymbol, SectionFlags, SymbolDefinition};
-    use crate::target::x86::{lower_to_omf, X86FixupKind};
+    use crate::mc::{
+        AlignFragment, Fixup, MCExpression, MCSection, MCSymbol, SectionFlags, SymbolDefinition,
+    };
+    use crate::target::x86::{X86FixupKind, lower_to_omf};
 
     const TEXT: SectionId = SectionId::new(4);
 
@@ -299,6 +664,231 @@ mod tests {
                 },
             ],
         }
+    }
+
+    fn data_object(
+        id: u32,
+        name: &str,
+        bytes: Vec<u8>,
+        address_space: MachineAddressSpace,
+        constant: bool,
+        relocations: Vec<MachineDataRelocation>,
+    ) -> MachineDataObject {
+        MachineDataObject {
+            id: MachineDataObjectId::new(id),
+            name: name.to_owned(),
+            bytes,
+            address_space,
+            relocations,
+            alignment: 1,
+            constant,
+            linkage: MachineLinkage::Internal,
+        }
+    }
+
+    fn scalar_data_shape() -> (MCModule, Vec<MachineDataObject>) {
+        let objects = vec![
+            data_object(
+                1,
+                "$fslSegment",
+                vec![0, 0],
+                MachineAddressSpace::NearData,
+                true,
+                vec![MachineDataRelocation {
+                    offset: 0,
+                    target: MachineDataObjectId::new(2),
+                    addend: 0,
+                    width: 2,
+                    address_space: MachineAddressSpace::Segment,
+                }],
+            ),
+            data_object(
+                2,
+                "far-first",
+                vec![1, 2],
+                MachineAddressSpace::FarData,
+                true,
+                Vec::new(),
+            ),
+            data_object(
+                3,
+                "near-constant-descriptor",
+                vec![0, 0, 0, 0],
+                MachineAddressSpace::NearData,
+                true,
+                Vec::new(),
+            ),
+            data_object(
+                4,
+                "far-second",
+                vec![3, 4],
+                MachineAddressSpace::HugeData,
+                false,
+                Vec::new(),
+            ),
+            data_object(
+                5,
+                "near-mutable-descriptor",
+                vec![0, 0],
+                MachineAddressSpace::NearData,
+                false,
+                Vec::new(),
+            ),
+        ];
+        let symbols = objects
+            .iter()
+            .enumerate()
+            .map(|(index, object)| MCSymbol {
+                id: SymbolId::new(20 + index as u32),
+                name: object.name.clone(),
+                binding: SymbolBinding::Local,
+                visibility: SymbolVisibility::Hidden,
+                definition: SymbolDefinition::Fragment {
+                    fragment: FragmentId::new(11 + 2 * index as u32),
+                    offset: 0,
+                },
+            })
+            .collect::<Vec<_>>();
+        let fixup = Fixup {
+            offset: 0,
+            kind: X86FixupKind::Segment16.into(),
+            expression: MCExpression {
+                symbol: SymbolId::new(21),
+                addend: 0,
+            },
+            pc_relative: false,
+        };
+        let pair = |index: u32, object: &MachineDataObject, fixups: Vec<Fixup>| {
+            vec![
+                MCFragment::Align(AlignFragment {
+                    id: FragmentId::new(10 + 2 * index),
+                    alignment: 1,
+                    fill: 0,
+                }),
+                MCFragment::Data(DataFragment {
+                    id: FragmentId::new(11 + 2 * index),
+                    bytes: object.bytes.clone(),
+                    fixups,
+                }),
+            ]
+        };
+        let mut read_only = pair(0, &objects[0], vec![fixup]);
+        read_only.extend(pair(1, &objects[1], Vec::new()));
+        read_only.extend(pair(2, &objects[2], Vec::new()));
+        let mut data = pair(3, &objects[3], Vec::new());
+        data.extend(pair(4, &objects[4], Vec::new()));
+        (
+            MCModule {
+                sections: vec![
+                    MCSection {
+                        id: TEXT,
+                        name: ".text".to_owned(),
+                        kind: SectionKind::Text,
+                        flags: SectionFlags::ALLOC.union(SectionFlags::EXECUTABLE),
+                        alignment: 1,
+                        fragments: Vec::new(),
+                    },
+                    MCSection {
+                        id: SectionId::new(5),
+                        name: ".rodata".to_owned(),
+                        kind: SectionKind::ReadOnlyData,
+                        flags: SectionFlags::ALLOC,
+                        alignment: 1,
+                        fragments: read_only,
+                    },
+                    MCSection {
+                        id: SectionId::new(6),
+                        name: ".data".to_owned(),
+                        kind: SectionKind::Data,
+                        flags: SectionFlags::ALLOC.union(SectionFlags::WRITABLE),
+                        alignment: 1,
+                        fragments: data,
+                    },
+                ],
+                symbols,
+            },
+            objects,
+        )
+    }
+
+    #[test]
+    fn places_vbdos_scalar_literals_in_python_runtime_section_order() {
+        // Python compile._data emits the near selector/descriptors in BC_CN,
+        // far payloads in FSL_CONST, and the mutable near descriptor after
+        // BC_DATA's exact six-byte $QB$DATA prefix.
+        let (input, objects) = scalar_data_shape();
+        let placed = place_data(&input, &objects, RuntimeProfile::Vbdos).unwrap();
+
+        assert_eq!(
+            placed
+                .sections
+                .iter()
+                .map(|section| section.name.as_str())
+                .collect::<Vec<_>>(),
+            vec![".text", "BC_DATA", "BC_CN", "FSL_CONST"]
+        );
+        let MCFragment::Data(prefix) = &placed.sections[1].fragments[0] else {
+            panic!("BC_DATA must begin with the QB prefix data fragment");
+        };
+        assert_eq!(prefix.bytes, vec![0; 6]);
+        assert_eq!(
+            placed.sections[1]
+                .fragments
+                .iter()
+                .map(MCFragment::id)
+                .collect::<Vec<_>>(),
+            vec![prefix.id, FragmentId::new(18), FragmentId::new(19)]
+        );
+        assert_eq!(
+            placed.sections[2]
+                .fragments
+                .iter()
+                .map(MCFragment::id)
+                .collect::<Vec<_>>(),
+            vec![
+                FragmentId::new(10),
+                FragmentId::new(11),
+                FragmentId::new(14),
+                FragmentId::new(15)
+            ]
+        );
+        assert_eq!(
+            placed.sections[3]
+                .fragments
+                .iter()
+                .map(MCFragment::id)
+                .collect::<Vec<_>>(),
+            vec![
+                FragmentId::new(12),
+                FragmentId::new(13),
+                FragmentId::new(16),
+                FragmentId::new(17)
+            ]
+        );
+        assert_eq!(placed.symbols[..5], input.symbols);
+        assert_eq!(placed.symbols[5].name, DATA_PREFIX_SYMBOL);
+        assert_eq!(
+            match &placed.sections[2].fragments[1] {
+                MCFragment::Data(data) => data.fixups.clone(),
+                _ => panic!("selector must remain data"),
+            },
+            match &input.sections[1].fragments[1] {
+                MCFragment::Data(data) => data.fixups.clone(),
+                _ => panic!("input selector must be data"),
+            }
+        );
+    }
+
+    #[test]
+    fn refuses_far_data_for_non_vbdos_runtime() {
+        let (input, objects) = scalar_data_shape();
+        assert_eq!(
+            place_data(&input, &objects, RuntimeProfile::Qb45),
+            Err(ModuleMcError::FarDataUnsupported {
+                runtime: RuntimeProfile::Qb45,
+                data: MachineDataObjectId::new(2),
+            })
+        );
     }
 
     #[test]

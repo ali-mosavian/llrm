@@ -517,10 +517,10 @@ pub fn write_x86_omf(module_name: &[u8], module: &crate::mc::MCModule) -> Result
     crate::object::omf::write::to_bytes(&object).map_err(Error::OmfWrite)
 }
 
-/// Compile the current data-free QB slice into its measured BASIC OMF envelope.
+/// Compile the current QB slice into its measured BASIC OMF envelope.
 ///
-/// Nonempty runtime statement tables and source data are explicitly refused
-/// until their exact source-to-fragment and segment mappings are available.
+/// The QB adapter owns runtime data placement and the BASIC object envelope;
+/// generic x86 lowering remains unaware of those source-language conventions.
 pub fn write_qb_omf(program: &Program, module_name: &[u8]) -> Result<Vec<u8>, Error> {
     let [source] = program.modules.as_slice() else {
         return Err(Error::ExpectedSingleModule {
@@ -547,9 +547,10 @@ pub fn write_qb_omf(program: &Program, module_name: &[u8]) -> Result<Vec<u8>, Er
             count: text_sections.len(),
         });
     };
-    let scalar = qb::mc::scalar_text_only(&lowered, *text_section).map_err(Error::QbMc)?;
+    let placed = qb::mc::place_data(&lowered, &selected.module.data_objects, program.runtime)
+        .map_err(Error::QbMc)?;
     let table = qb::statement_mc::append_statement_table(
-        &scalar,
+        &placed,
         *text_section,
         &[],
         crate::target::x86::X86FixupKind::Absolute16.into(),
