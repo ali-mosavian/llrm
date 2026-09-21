@@ -6,6 +6,7 @@
 //! deliberately does not invent a portable-IR loop abstraction: Python MIR
 //! is the current stage contract.
 
+use std::cmp::max;
 use std::collections::{BTreeMap, BTreeSet};
 
 use num_bigint::BigInt;
@@ -338,7 +339,12 @@ fn _continuing_test(branch: &Op, inside: &BTreeSet<i64>) -> Option<Kind> {
 }
 
 /// Python's `_counter_bound(op, branch, counter, width, made=None)`.
-fn _counter_bound(
+///
+/// This crate-visible exact spelling is shared by the trip proofs and their
+/// transform consumers. It returns the original MIR operand: recognizing a
+/// comparison is analysis, while choosing what to do with it remains the
+/// caller's job.
+pub(crate) fn _counter_bound(
     op: &Op,
     branch: &Op,
     counter: &Affine,
@@ -423,6 +429,529 @@ fn _signed(
         return None;
     }
     _constant(argument, facts, width).map(|value| _as_signed(&value, width))
+}
+
+/// Python's `_last_counter(body, loop, counter, facts, width)`.
+///
+/// The comparison's continuation is normalized by `_continuing_test`, so the
+/// arithmetic below is deliberately the Python case split rather than a
+/// generalized range solver.  It proves the update after the last observed
+/// value remains representable; an otherwise plausible wrapping recurrence is
+/// not a finite loop proof.
+fn _last_counter(
+    body: &MirBody,
+    loop_: &Loop,
+    counter: &Affine,
+    facts: &BTreeMap<Value, Known>,
+    width: u32,
+) -> Option<BigInt> {
+    if let Some(posttested) = _posttested_last(body, loop_, counter, facts, width) {
+        return Some(posttested);
+    }
+    let blocks = body
+        .blocks
+        .iter()
+        .map(|block| (block.at, block))
+        .collect::<BTreeMap<_, _>>();
+    if loop_.latches.len() != 1 {
+        return None;
+    }
+    let header = *blocks.get(&loop_.header)?;
+    let latch = *blocks.get(loop_.latches.first()?)?;
+    if latch.succ.as_slice() != [header.at] || header.ops.is_empty() || header.succ.len() != 2 {
+        return None;
+    }
+    let branch = header.ops.last()?;
+    if branch.kind != Kind::Branch
+        || !branch
+            .target
+            .is_some_and(|target| header.succ.contains(&target))
+    {
+        return None;
+    }
+    let inside = &loop_.body;
+    if inside.iter().filter(|at| **at != header.at).any(|at| {
+        let block = blocks[at];
+        block.succ.is_empty() || block.succ.iter().any(|to| !inside.contains(to))
+    }) || header.succ.iter().filter(|to| inside.contains(to)).count() != 1
+    {
+        return None;
+    }
+    let test = _continuing_test(branch, inside)?;
+    let mut made = BTreeMap::<u32, &Op>::new();
+    for block in &body.blocks {
+        for operation in &block.ops {
+            for value in &operation.defines {
+                made.insert(value.id, operation);
+            }
+        }
+    }
+    let comparisons = header.ops[..header.ops.len() - 1]
+        .iter()
+        .filter_map(|operation| _counter_bound(operation, branch, counter, width, Some(&made)))
+        .collect::<Vec<_>>();
+    if comparisons.len() != 1 {
+        return None;
+    }
+    let raw_start = _constant(&counter.start.as_arg(), facts, width)?;
+    let raw_step = _constant(&counter.step.as_arg(), facts, width)?;
+    let raw_bound = _constant(&comparisons[0], facts, width)?;
+    let step = _as_signed(&raw_step, width);
+    if step == BigInt::from(0_u8) {
+        return None;
+    }
+    let unsigned = matches!(
+        test,
+        Kind::Below | Kind::BelowEq | Kind::Above | Kind::AboveEq
+    );
+    let start = if unsigned {
+        raw_start
+    } else {
+        _as_signed(&raw_start, width)
+    };
+    let bound = if unsigned {
+        raw_bound
+    } else {
+        _as_signed(&raw_bound, width)
+    };
+    let distance = if step > BigInt::from(0_u8)
+        && matches!(test, Kind::Le | Kind::Lt | Kind::BelowEq | Kind::Below)
+    {
+        let limit = match test {
+            Kind::Lt | Kind::Below => &bound - 1_u8,
+            _ => bound.clone(),
+        };
+        limit - &start
+    } else if step < BigInt::from(0_u8)
+        && matches!(test, Kind::Ge | Kind::Gt | Kind::AboveEq | Kind::Above)
+    {
+        let limit = match test {
+            Kind::Gt | Kind::Above => &bound + 1_u8,
+            _ => bound.clone(),
+        };
+        &start - limit
+    } else if test == Kind::Ne
+        && (&bound - &start) * &step > BigInt::from(0_u8)
+        && (&bound - &start) % &step == BigInt::from(0_u8)
+    {
+        let difference = &bound - &start;
+        abs(&difference) - abs(&step)
+    } else {
+        return None;
+    };
+    if distance < BigInt::from(0_u8) {
+        return None;
+    }
+    let last = &start + (&distance / abs(&step)) * &step;
+    let after = &last + &step;
+    if unsigned {
+        let limit = BigInt::from(1_u8) << (width * 8);
+        (after >= BigInt::from(0_u8) && after < limit).then_some(last)
+    } else {
+        let sign = BigInt::from(1_u8) << (width * 8 - 1);
+        (after >= -&sign && after < sign).then_some(last)
+    }
+}
+
+/// Python's `_posttested_bound(op, branch, counter, width, made)`.
+fn _posttested_bound(
+    op: &Op,
+    branch: &Op,
+    counter: &Affine,
+    width: u32,
+    made: &BTreeMap<u32, &Op>,
+) -> Option<(Arg, Const)> {
+    let following = match op.args.first() {
+        Some(Arg::Held(held)) if op.args.len() == 2 && held.width == width => *held,
+        _ => return None,
+    };
+    if op.kind != Kind::Sub
+        || !op.loads.is_empty()
+        || !op.stores.is_empty()
+        || op.barrier()
+        || !op.results.is_empty()
+        || op.defines.len() != 1
+        || !op
+            .defines
+            .iter()
+            .any(|value| value.flags && branch.uses.contains(value))
+    {
+        return None;
+    }
+    let definition = made.get(&following.value.id).copied()?;
+    if !definition.loads.is_empty()
+        || !definition.stores.is_empty()
+        || definition.barrier()
+        || !definition.merges.is_empty()
+        || !definition.results.contains(&Arg::Held(following))
+    {
+        return None;
+    }
+    let (source, delta) = crate::model::mir::stepping(definition)?;
+    let (Arg::Held(source), Arg::Const(delta)) = (source, delta) else {
+        return None;
+    };
+    if source.width != width
+        || delta.width != width
+        || _copied(source, made).value.id != counter.value
+    {
+        return None;
+    }
+    Some((op.args[1].clone(), delta))
+}
+
+/// Python's `_posttested_last(body, loop, counter, facts, width)`.
+fn _posttested_last(
+    body: &MirBody,
+    loop_: &Loop,
+    counter: &Affine,
+    facts: &BTreeMap<Value, Known>,
+    width: u32,
+) -> Option<BigInt> {
+    let blocks = body
+        .blocks
+        .iter()
+        .map(|block| (block.at, block))
+        .collect::<BTreeMap<_, _>>();
+    if loop_.latches.len() != 1 {
+        return None;
+    }
+    let latch = *blocks.get(loop_.latches.first()?)?;
+    let inside = &loop_.body;
+    if latch.succ.len() != 2
+        || !latch.succ.contains(&loop_.header)
+        || latch.succ.iter().filter(|to| inside.contains(to)).count() != 1
+        || latch.ops.is_empty()
+    {
+        return None;
+    }
+    let branch = latch.ops.last()?;
+    if branch.kind != Kind::Branch
+        || !branch
+            .target
+            .is_some_and(|target| latch.succ.contains(&target))
+    {
+        return None;
+    }
+    if inside
+        .iter()
+        .filter(|at| **at != latch.at)
+        .any(|at| blocks[at].succ.iter().any(|to| !inside.contains(to)))
+    {
+        return None;
+    }
+    let test = _continuing_test(branch, inside)?;
+    let mut made = BTreeMap::<u32, &Op>::new();
+    for block in &body.blocks {
+        for operation in &block.ops {
+            for value in &operation.defines {
+                made.insert(value.id, operation);
+            }
+        }
+    }
+    let comparisons = latch.ops[..latch.ops.len() - 1]
+        .iter()
+        .filter_map(|operation| _posttested_bound(operation, branch, counter, width, &made))
+        .collect::<Vec<_>>();
+    if comparisons.len() != 1 {
+        return None;
+    }
+    let (bound_arg, after_step) = &comparisons[0];
+    let raw_start = _constant(&counter.start.as_arg(), facts, width)?;
+    let raw_step = _constant(&counter.step.as_arg(), facts, width)?;
+    let raw_bound = _constant(bound_arg, facts, width)?;
+    let raw_after = _constant(&Arg::Const(after_step.clone()), facts, width)?;
+    let step = _as_signed(&raw_step, width);
+    let after = _as_signed(&raw_after, width);
+    if step == BigInt::from(0_u8) || after != step {
+        return None;
+    }
+    let unsigned = matches!(
+        test,
+        Kind::Below | Kind::BelowEq | Kind::Above | Kind::AboveEq
+    );
+    let start = if unsigned {
+        raw_start
+    } else {
+        _as_signed(&raw_start, width)
+    };
+    let bound = if unsigned {
+        raw_bound
+    } else {
+        _as_signed(&raw_bound, width)
+    };
+    let first = &start + &step;
+    let count = if step > BigInt::from(0_u8) && matches!(test, Kind::Lt | Kind::Below) {
+        if first <= bound {
+            max(BigInt::from(1_u8), (&bound - &first) / &step + 1_u8)
+        } else {
+            BigInt::from(1_u8)
+        }
+    } else if step > BigInt::from(0_u8) && matches!(test, Kind::Le | Kind::BelowEq) {
+        if first <= bound {
+            max(BigInt::from(1_u8), (&bound - &first) / &step + 2_u8)
+        } else {
+            BigInt::from(1_u8)
+        }
+    } else if step < BigInt::from(0_u8) && matches!(test, Kind::Gt | Kind::Above) {
+        if first >= bound {
+            max(BigInt::from(1_u8), (&first - &bound) / -&step + 1_u8)
+        } else {
+            BigInt::from(1_u8)
+        }
+    } else if step < BigInt::from(0_u8) && matches!(test, Kind::Ge | Kind::AboveEq) {
+        if first >= bound {
+            max(BigInt::from(1_u8), (&first - &bound) / -&step + 2_u8)
+        } else {
+            BigInt::from(1_u8)
+        }
+    } else if test == Kind::Ne
+        && (&bound - &start) * &step > BigInt::from(0_u8)
+        && (&bound - &start) % &step == BigInt::from(0_u8)
+    {
+        (&bound - &start) / &step
+    } else {
+        return None;
+    };
+    if count <= BigInt::from(0_u8) {
+        return None;
+    }
+    let last = &start + (&count - 1_u8) * &step;
+    let next_value = &last + &step;
+    if unsigned {
+        let limit = BigInt::from(1_u8) << (width * 8);
+        (last >= BigInt::from(0_u8)
+            && last < limit
+            && next_value >= BigInt::from(0_u8)
+            && next_value < limit)
+            .then_some(last)
+    } else {
+        let sign = BigInt::from(1_u8) << (width * 8 - 1);
+        (last >= -&sign && last < sign && next_value >= -&sign && next_value < sign).then_some(last)
+    }
+}
+
+/// Python's `trip_count(body, loop, facts)`.
+pub(crate) fn trip_count(
+    body: &MirBody,
+    loop_: &Loop,
+    facts: &BTreeMap<Value, Known>,
+) -> Option<BigInt> {
+    let mut counts = BTreeSet::new();
+    for counter in basics(body, loop_).values() {
+        let width = counter.start.width();
+        let start = _signed(&counter.start.as_arg(), facts, width);
+        let step = _signed(&counter.step.as_arg(), facts, width);
+        let last = _last_counter(body, loop_, counter, facts, width);
+        if let (Some(start), Some(step), Some(last)) = (start, step, last) {
+            if step != BigInt::from(0_u8) {
+                let distance = &last - &start;
+                if &distance % &step == BigInt::from(0_u8) {
+                    let count = distance / step + 1_u8;
+                    if count > BigInt::from(0_u8) {
+                        counts.insert(count);
+                    }
+                }
+            }
+        }
+        if let Some(symbolic) = _sentinel_trip_count(body, loop_, counter, facts, width) {
+            counts.insert(symbolic);
+        }
+    }
+    if counts.len() != 1 {
+        if !counts.is_empty() {
+            return None;
+        }
+        // Python's `dict(body.loop_trip_counts)` preserves the last duplicate
+        // header fact; reproduce that source-order overwrite explicitly.
+        return body
+            .loop_trip_counts
+            .iter()
+            .filter_map(|(header, count)| (*header == loop_.header).then_some(BigInt::from(*count)))
+            .last();
+    }
+    counts.into_iter().next()
+}
+
+/// Python's `_sentinel_trip_count(body, loop, counter, facts, width)`.
+fn _sentinel_trip_count(
+    body: &MirBody,
+    loop_: &Loop,
+    counter: &Affine,
+    facts: &BTreeMap<Value, Known>,
+    width: u32,
+) -> Option<BigInt> {
+    let blocks = body
+        .blocks
+        .iter()
+        .map(|block| (block.at, block))
+        .collect::<BTreeMap<_, _>>();
+    if loop_.latches.len() != 1 {
+        return None;
+    }
+    let header = *blocks.get(&loop_.header)?;
+    let latch = *blocks.get(loop_.latches.first()?)?;
+    let inside = &loop_.body;
+    let (control, posttested) = if latch.succ.as_slice() == [header.at] && header.succ.len() == 2 {
+        (header, false)
+    } else if latch.succ.len() == 2 && latch.succ.contains(&header.at) {
+        (latch, true)
+    } else {
+        return None;
+    };
+    if control.ops.is_empty() || control.succ.iter().filter(|to| inside.contains(to)).count() != 1 {
+        return None;
+    }
+    let branch = control.ops.last()?;
+    if branch.kind != Kind::Branch
+        || !branch
+            .target
+            .is_some_and(|target| control.succ.contains(&target))
+    {
+        return None;
+    }
+    if inside.iter().filter(|at| **at != control.at).any(|at| {
+        let block = blocks[at];
+        block.succ.is_empty() || block.succ.iter().any(|to| !inside.contains(to))
+    }) {
+        return None;
+    }
+    if _continuing_test(branch, inside) != Some(Kind::Ne) {
+        return None;
+    }
+    let mut made = BTreeMap::<u32, &Op>::new();
+    let mut owners = BTreeMap::<u32, i64>::new();
+    for block in &body.blocks {
+        for operation in &block.ops {
+            for value in &operation.defines {
+                made.insert(value.id, operation);
+                owners.insert(value.id, block.at);
+            }
+        }
+    }
+    let (bound, raw_after) = if posttested {
+        let compared = control.ops[..control.ops.len() - 1]
+            .iter()
+            .filter_map(|operation| _posttested_bound(operation, branch, counter, width, &made))
+            .collect::<Vec<_>>();
+        if compared.len() != 1 {
+            return None;
+        }
+        let (bound, after) = compared.into_iter().next()?;
+        (bound, _constant(&Arg::Const(after), facts, width))
+    } else {
+        let compared = control.ops[..control.ops.len() - 1]
+            .iter()
+            .filter_map(|operation| _counter_bound(operation, branch, counter, width, Some(&made)))
+            .collect::<Vec<_>>();
+        if compared.len() != 1 {
+            return None;
+        }
+        (compared.into_iter().next()?, None)
+    };
+    let Arg::Held(bound) = bound else {
+        return None;
+    };
+    let definition = made.get(&bound.value.id).copied()?;
+    if owners
+        .get(&bound.value.id)
+        .is_some_and(|owner| inside.contains(owner))
+        || definition.kind != Kind::Add
+        || !definition.loads.is_empty()
+        || !definition.stores.is_empty()
+        || definition.barrier()
+        || !definition.merges.is_empty()
+        || definition.args.len() != 2
+        || definition.results.len() != 1
+        || definition.results[0] != Arg::Held(bound)
+    {
+        return None;
+    }
+    let starts = definition
+        .args
+        .iter()
+        .filter(|argument| **argument == counter.start.as_arg())
+        .collect::<Vec<_>>();
+    let offsets = definition
+        .args
+        .iter()
+        .filter(|argument| **argument != counter.start.as_arg())
+        .collect::<Vec<_>>();
+    if starts.len() != 1 || offsets.len() != 1 {
+        return None;
+    }
+    let raw_step = _constant(&counter.step.as_arg(), facts, width)?;
+    let delta = _constant(offsets[0], facts, width)?;
+    if raw_step == BigInt::from(0_u8) || (posttested && raw_after != Some(raw_step.clone())) {
+        return None;
+    }
+    let modulus = BigInt::from(1_u8) << (8 * width);
+    let divisor = gcd(raw_step.clone(), modulus.clone());
+    if &delta % &divisor != BigInt::from(0_u8) {
+        return None;
+    }
+    let period = &modulus / &divisor;
+    let count = mod_floor(
+        &(floor_div(&delta, &divisor) * modular_inverse(&floor_div(&raw_step, &divisor), &period)?),
+        &period,
+    );
+    (count != BigInt::from(0_u8)).then_some(count)
+}
+
+/// Python's `nonempty(body, loop)`.
+pub(crate) fn nonempty(body: &MirBody, loop_: &Loop) -> bool {
+    let facts = constants::known(body);
+    trip_count(body, loop_, &facts).is_some()
+}
+
+fn abs(value: &BigInt) -> BigInt {
+    if value < &BigInt::from(0_u8) {
+        -value
+    } else {
+        value.clone()
+    }
+}
+
+/// Python floor division for a nonzero divisor.  `BigInt` truncates toward
+/// zero, while the sentinel modular proof uses Python's `//` for negatives.
+fn floor_div(numerator: &BigInt, denominator: &BigInt) -> BigInt {
+    let quotient = numerator / denominator;
+    let remainder = numerator % denominator;
+    if remainder != BigInt::from(0_u8)
+        && ((remainder < BigInt::from(0_u8)) != (denominator < &BigInt::from(0_u8)))
+    {
+        quotient - 1_u8
+    } else {
+        quotient
+    }
+}
+
+/// Python's modulo sign rule, used with the positive modular period.
+fn mod_floor(value: &BigInt, modulus: &BigInt) -> BigInt {
+    let remainder = value % modulus;
+    if remainder < BigInt::from(0_u8) {
+        remainder + modulus
+    } else {
+        remainder
+    }
+}
+
+/// The exact local equivalent of Python `pow(value, -1, modulus)`.
+fn modular_inverse(value: &BigInt, modulus: &BigInt) -> Option<BigInt> {
+    let mut old_r = mod_floor(value, modulus);
+    let mut r = modulus.clone();
+    let mut old_s = BigInt::from(1_u8);
+    let mut s = BigInt::from(0_u8);
+    while r != BigInt::from(0_u8) {
+        let quotient = &old_r / &r;
+        let next_r = &old_r - &quotient * &r;
+        old_r = r;
+        r = next_r;
+        let next_s = &old_s - &quotient * &s;
+        old_s = s;
+        s = next_s;
+    }
+    (old_r == BigInt::from(1_u8)).then(|| mod_floor(&old_s, modulus))
 }
 
 fn gcd(mut one: BigInt, mut other: BigInt) -> BigInt {
@@ -915,7 +1444,7 @@ mod tests {
     use crate::model::floating::{Format, Precision, Rounding, Semantics as FloatingSemantics};
     use crate::model::mir::{
         Arg, Cell, Const, FloatingOrigin, Held, IntegerRange, Kind, MemRef, MirBlock, MirBody, Op,
-        OpCode, Phi, Value,
+        OpCode, OrderedMap, Phi, Value,
     };
     use crate::model::mir_loops::Loop;
 
@@ -925,8 +1454,8 @@ mod tests {
     use super::{
         Affine, AffineMap, AffineOperand, LoopShape, _as_signed, _constant, _copied,
         _counter_bound, _signed, basics, canonical, control_replacement, counted,
-        counted_with_facts, invariant, relation, test_only, transparent_aliases,
-        zero_terminating_control,
+        counted_with_facts, invariant, nonempty, relation, test_only, transparent_aliases,
+        trip_count, zero_terminating_control,
     };
 
     fn value(id: u32, at: i64) -> Value {
@@ -2531,5 +3060,347 @@ mod tests {
             control_replacement(&step_flags, &loop_, proof, &BTreeSet::new()),
             None
         );
+    }
+
+    /// Direct Rust form of
+    /// `test_induction_identity:test_posttested_counter_has_an_exact_fixed_trip_count`.
+    fn posttested_counter_body(
+        start_number: i64,
+        bound_number: i64,
+        test: Kind,
+    ) -> (MirBody, Loop) {
+        let start = Value {
+            variable: 1,
+            ..value(920, 0)
+        };
+        let counter = Value {
+            variable: 1,
+            ..value(921, 1)
+        };
+        let following = Value {
+            variable: 1,
+            ..value(922, 1)
+        };
+        let flags = Value {
+            flags: true,
+            ..value(923, 2)
+        };
+        let mut initial = op(0, Kind::Copy, vec![start], vec![]);
+        initial.args = vec![Arg::Const(Const::new(start_number, 2))];
+        initial.results = vec![Arg::Held(Held {
+            value: start,
+            width: 2,
+        })];
+        let mut increment = op(1, Kind::Increment, vec![following], vec![counter]);
+        increment.args = vec![Arg::Held(Held {
+            value: counter,
+            width: 2,
+        })];
+        increment.results = vec![Arg::Held(Held {
+            value: following,
+            width: 2,
+        })];
+        let mut compare = op(2, Kind::Sub, vec![flags], vec![following]);
+        compare.args = vec![
+            Arg::Held(Held {
+                value: following,
+                width: 2,
+            }),
+            Arg::Const(Const::new(bound_number, 2)),
+        ];
+        let mut branch = op(2, Kind::Branch, vec![], vec![flags]);
+        branch.test = Some(test);
+        branch.target = Some(3);
+        let mut incoming = OrderedMap::new();
+        incoming.insert(0, start);
+        incoming.insert(2, following);
+        (
+            MirBody::new(
+                0,
+                vec![
+                    MirBlock::new(0, vec![], vec![initial], vec![1]),
+                    MirBlock::new(
+                        1,
+                        vec![Phi {
+                            result: counter,
+                            incoming,
+                        }],
+                        vec![increment],
+                        vec![2],
+                    ),
+                    MirBlock::new(2, vec![], vec![compare, branch], vec![1, 3]),
+                    MirBlock::new(3, vec![], vec![], vec![]),
+                ],
+            ),
+            Loop {
+                header: 1,
+                latches: BTreeSet::from([2]),
+                body: BTreeSet::from([1, 2]),
+            },
+        )
+    }
+
+    #[test]
+    fn direct_induction_posttested_counter_keeps_c_nbody_exact_count() {
+        // C nbody's rotated `i < 4` loop was priced as ten trips after GCC
+        // unrolled it. Python proves the immediate latch update has four.
+        let (body, loop_) = posttested_counter_body(0, 4, Kind::AboveEq);
+        assert_eq!(
+            trip_count(&body, &loop_, &constants::known(&body)),
+            Some(BigInt::from(4))
+        );
+    }
+
+    #[test]
+    fn direct_induction_pretested_counter_proves_trip_count_and_nonempty() {
+        // Direct pre-tested counterpart of Python's finite recurrence proof:
+        // seed=0; while i < 4: i += 1.  `rotated` consumes this `_last_counter`
+        // path before it has changed the loop into a post-tested shape.
+        let start = Value {
+            variable: 5,
+            ..value(924, 0)
+        };
+        let counter = Value {
+            variable: 5,
+            ..value(925, 1)
+        };
+        let following = Value {
+            variable: 5,
+            ..value(926, 2)
+        };
+        let flags = Value {
+            flags: true,
+            ..value(927, 1)
+        };
+        let mut initial = op(0, Kind::Copy, vec![start], vec![]);
+        initial.args = vec![Arg::Const(Const::new(0, 2))];
+        initial.results = vec![Arg::Held(Held {
+            value: start,
+            width: 2,
+        })];
+        let mut compare = op(1, Kind::Sub, vec![flags], vec![counter]);
+        compare.args = vec![
+            Arg::Held(Held {
+                value: counter,
+                width: 2,
+            }),
+            Arg::Const(Const::new(4, 2)),
+        ];
+        let mut branch = op(1, Kind::Branch, vec![], vec![flags]);
+        branch.test = Some(Kind::AboveEq);
+        branch.target = Some(3);
+        let mut increment = op(2, Kind::Increment, vec![following], vec![counter]);
+        increment.args = vec![Arg::Held(Held {
+            value: counter,
+            width: 2,
+        })];
+        increment.results = vec![Arg::Held(Held {
+            value: following,
+            width: 2,
+        })];
+        let mut incoming = OrderedMap::new();
+        incoming.insert(0, start);
+        incoming.insert(2, following);
+        let body = MirBody::new(
+            0,
+            vec![
+                MirBlock::new(0, vec![], vec![initial], vec![1]),
+                MirBlock::new(
+                    1,
+                    vec![Phi {
+                        result: counter,
+                        incoming,
+                    }],
+                    vec![compare, branch],
+                    vec![2, 3],
+                ),
+                MirBlock::new(2, vec![], vec![increment], vec![1]),
+                MirBlock::new(3, vec![], vec![], vec![]),
+            ],
+        );
+        let loop_ = Loop {
+            header: 1,
+            latches: BTreeSet::from([2]),
+            body: BTreeSet::from([1, 2]),
+        };
+        assert_eq!(
+            trip_count(&body, &loop_, &constants::known(&body)),
+            Some(BigInt::from(4))
+        );
+        assert!(nonempty(&body, &loop_));
+    }
+
+    #[test]
+    fn direct_induction_posttested_symbolic_sentinel_keeps_mandelbrot_count() {
+        // Python regression `test_posttested_symbolic_sentinel_keeps_its_exact_trip_count`:
+        // Mandelbrot's 24-byte coordinate recurrence reaches +768 in 32 trips.
+        let start = Value {
+            variable: 1,
+            ..value(930, 0)
+        };
+        let end = Value {
+            variable: 2,
+            ..value(931, 0)
+        };
+        let counter = Value {
+            variable: 3,
+            ..value(932, 1)
+        };
+        let following = Value {
+            variable: 3,
+            ..value(933, 2)
+        };
+        let flags = Value {
+            flags: true,
+            ..value(934, 2)
+        };
+        let mut endpoint = op(0, Kind::Add, vec![end], vec![start]);
+        endpoint.args = vec![
+            Arg::Held(Held {
+                value: start,
+                width: 4,
+            }),
+            Arg::Const(Const::new(768, 4)),
+        ];
+        endpoint.results = vec![Arg::Held(Held {
+            value: end,
+            width: 4,
+        })];
+        let mut increment = op(2, Kind::Add, vec![following], vec![counter]);
+        increment.args = vec![
+            Arg::Held(Held {
+                value: counter,
+                width: 4,
+            }),
+            Arg::Const(Const::new(24, 4)),
+        ];
+        increment.results = vec![Arg::Held(Held {
+            value: following,
+            width: 4,
+        })];
+        let mut compare = op(2, Kind::Sub, vec![flags], vec![following, end]);
+        compare.args = vec![
+            Arg::Held(Held {
+                value: following,
+                width: 4,
+            }),
+            Arg::Held(Held {
+                value: end,
+                width: 4,
+            }),
+        ];
+        let mut branch = op(2, Kind::Branch, vec![], vec![flags]);
+        branch.test = Some(Kind::Ne);
+        branch.target = Some(1);
+        let mut incoming = OrderedMap::new();
+        incoming.insert(0, start);
+        incoming.insert(2, following);
+        let body = MirBody::new(
+            0,
+            vec![
+                MirBlock::new(0, vec![], vec![endpoint], vec![1]),
+                MirBlock::new(
+                    1,
+                    vec![Phi {
+                        result: counter,
+                        incoming,
+                    }],
+                    vec![],
+                    vec![2],
+                ),
+                MirBlock::new(2, vec![], vec![increment, compare, branch], vec![1, 3]),
+                MirBlock::new(3, vec![], vec![], vec![]),
+            ],
+        );
+        let loop_ = Loop {
+            header: 1,
+            latches: BTreeSet::from([2]),
+            body: BTreeSet::from([1, 2]),
+        };
+        assert_eq!(
+            trip_count(&body, &loop_, &constants::known(&body)),
+            Some(BigInt::from(32))
+        );
+    }
+
+    #[test]
+    fn direct_induction_trip_count_uses_only_empty_new_proof_fallback() {
+        let (mut body, loop_) = posttested_counter_body(0, 4, Kind::AboveEq);
+        body.loop_trip_counts = vec![(1, 7), (1, 8)];
+        // A fresh exact proof wins; stored facts only preserve a relationship a prior transform consumed.
+        assert_eq!(
+            trip_count(&body, &loop_, &constants::known(&body)),
+            Some(BigInt::from(4))
+        );
+        body.blocks[1].phis.clear();
+        // Python's dict construction retains the last duplicate header entry.
+        assert_eq!(
+            trip_count(&body, &loop_, &constants::known(&body)),
+            Some(BigInt::from(8))
+        );
+    }
+
+    #[test]
+    fn direct_induction_trip_count_refuses_conflicting_new_recurrences() {
+        // A stored header fact may repair only the absence of a newly derived
+        // count. Two current recurrences that disagree must still be refused.
+        let (mut body, loop_) = posttested_counter_body(0, 4, Kind::AboveEq);
+        body.loop_trip_counts = vec![(1, 99)];
+        let start = Value {
+            variable: 4,
+            ..value(940, 0)
+        };
+        let counter = Value {
+            variable: 4,
+            ..value(941, 1)
+        };
+        let following = Value {
+            variable: 4,
+            ..value(942, 1)
+        };
+        let flags = Value {
+            flags: true,
+            ..value(943, 2)
+        };
+        let mut initial = op(0, Kind::Copy, vec![start], vec![]);
+        initial.args = vec![Arg::Const(Const::new(0, 2))];
+        initial.results = vec![Arg::Held(Held {
+            value: start,
+            width: 2,
+        })];
+        body.blocks[0].ops.push(initial);
+        let mut incoming = OrderedMap::new();
+        incoming.insert(0, start);
+        incoming.insert(2, following);
+        body.blocks[1].phis.push(Phi {
+            result: counter,
+            incoming,
+        });
+        let mut increment = op(1, Kind::Increment, vec![following], vec![counter]);
+        increment.args = vec![Arg::Held(Held {
+            value: counter,
+            width: 2,
+        })];
+        increment.results = vec![Arg::Held(Held {
+            value: following,
+            width: 2,
+        })];
+        body.blocks[1].ops.push(increment);
+        let mut compare = op(2, Kind::Sub, vec![flags], vec![following]);
+        compare.args = vec![
+            Arg::Held(Held {
+                value: following,
+                width: 2,
+            }),
+            Arg::Const(Const::new(2, 2)),
+        ];
+        body.blocks[2]
+            .ops
+            .last_mut()
+            .expect("fixture branch")
+            .uses
+            .push(flags);
+        body.blocks[2].ops.insert(1, compare);
+        assert_eq!(trip_count(&body, &loop_, &constants::known(&body)), None);
     }
 }
