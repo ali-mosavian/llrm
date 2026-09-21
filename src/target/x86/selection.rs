@@ -1750,6 +1750,43 @@ impl<'types> FunctionSelector<'types> {
                     X86Register::Ax,
                 ));
             }
+            TypeKind::Integer { bits: 32 } => {
+                let result = self.result_definition(block, instruction)?;
+                if result.type_id != target.signature.result {
+                    return Err(SelectionError::OperandTypeMismatch {
+                        function: self.function.id,
+                        block,
+                        instruction: instruction.id,
+                        expected: target.signature.result,
+                        actual: result.type_id,
+                    });
+                }
+                let low = self.fresh_virtual_register(X86RegisterClass::Word.machine_class())?;
+                let high = self.fresh_virtual_register(X86RegisterClass::Word.machine_class())?;
+                operands.push(fixed_virtual_operand(
+                    low,
+                    OperandRole::Def,
+                    X86Register::Ax,
+                ));
+                operands.push(fixed_virtual_operand(
+                    high,
+                    OperandRole::Def,
+                    X86Register::Dx,
+                ));
+                self.push_instruction(opcode, operands, call_flags(effects), output)?;
+                let joined = self.define_register_value(result)?;
+                self.push_instruction(
+                    X86Opcode::MergeWords,
+                    vec![
+                        virtual_operand(joined, OperandRole::Def),
+                        virtual_operand(low, OperandRole::Use),
+                        virtual_operand(high, OperandRole::Use),
+                    ],
+                    InstructionFlags::NONE,
+                    output,
+                )?;
+                return self.select_caller_cleanup(target, output);
+            }
             _ => {
                 return Err(SelectionError::UnsupportedCallResult {
                     function: self.function.id,
@@ -4781,6 +4818,134 @@ mod tests {
                 kind: MachineOperandKind::Immediate(0),
                 ..
             }] if *register == X86Register::Ax.physical()
+        ));
+    }
+
+    #[test]
+    fn selects_far_cdecl_i32_call_result_in_dx_ax_and_cleans_arguments() {
+        let callee = Function {
+            id: FunctionId::new(5),
+            name: "sum".into(),
+            signature: Signature {
+                result: I32,
+                parameters: vec![I16, I16],
+                variadic: false,
+                calling_convention: CallingConvention::FarCdecl,
+            },
+            linkage: Linkage::Internal,
+            attributes: Vec::new(),
+            parameters: vec![
+                Value {
+                    id: ValueId::new(0),
+                    type_id: I16,
+                },
+                Value {
+                    id: ValueId::new(1),
+                    type_id: I16,
+                },
+            ],
+            blocks: vec![Block {
+                id: BlockId::new(0),
+                instructions: Vec::new(),
+                terminator: Terminator::Unreachable,
+            }],
+        };
+        let caller = Function {
+            id: FunctionId::new(4),
+            name: "main".into(),
+            signature: Signature {
+                result: I32,
+                parameters: Vec::new(),
+                variadic: false,
+                calling_convention: CallingConvention::FarCdecl,
+            },
+            linkage: Linkage::Internal,
+            attributes: Vec::new(),
+            parameters: Vec::new(),
+            blocks: vec![Block {
+                id: BlockId::new(0),
+                instructions: vec![Instruction {
+                    id: crate::ir::InstructionId::new(0),
+                    results: vec![Value {
+                        id: ValueId::new(0),
+                        type_id: I32,
+                    }],
+                    kind: InstructionKind::Call {
+                        callee: Callee::Direct(callee.id),
+                        arguments: vec![
+                            Operand::Constant(TypedConstant {
+                                type_id: I16,
+                                value: Constant::Integer(11),
+                            }),
+                            Operand::Constant(TypedConstant {
+                                type_id: I16,
+                                value: Constant::Integer(22),
+                            }),
+                        ],
+                        effects: Effects::NONE,
+                    },
+                }],
+                terminator: Terminator::Return(Some(Operand::Value(ValueId::new(0)))),
+            }],
+        };
+
+        let selected = select_module(&module(basic_types(), vec![caller, callee]))
+            .expect("far caller-cleanup i32 call selects");
+        selected.verify().expect("selected Machine IR verifies");
+
+        let caller = &selected.functions[0].blocks[0].instructions;
+        assert_eq!(
+            caller
+                .iter()
+                .map(|instruction| instruction.opcode)
+                .collect::<Vec<_>>(),
+            vec![
+                X86Opcode::Mov.machine_opcode(),
+                X86Opcode::Push.machine_opcode(),
+                X86Opcode::Mov.machine_opcode(),
+                X86Opcode::Push.machine_opcode(),
+                X86Opcode::CallFar.machine_opcode(),
+                X86Opcode::MergeWords.machine_opcode(),
+                X86Opcode::Add.machine_opcode(),
+                X86Opcode::LowWord.machine_opcode(),
+                X86Opcode::HighWord.machine_opcode(),
+                X86Opcode::ReturnFar.machine_opcode(),
+            ]
+        );
+        assert_eq!(caller[0].operands[1], immediate_operand(22));
+        assert_eq!(caller[2].operands[1], immediate_operand(11));
+        assert!(matches!(
+            caller[4].operands.as_slice(),
+            [MachineOperand {
+                kind: MachineOperandKind::Function(target),
+                ..
+            }, MachineOperand {
+                role: OperandRole::Def,
+                constraint: Some(RegisterConstraint::Fixed(low)),
+                ..
+            }, MachineOperand {
+                role: OperandRole::Def,
+                constraint: Some(RegisterConstraint::Fixed(high)),
+                ..
+            }] if *target == MachineFunctionId::new(5)
+                && *low == X86Register::Ax.physical()
+                && *high == X86Register::Dx.physical()
+        ));
+        assert_eq!(caller[5].operands[0].role, OperandRole::Def);
+        assert_eq!(caller[5].operands[1].role, OperandRole::Use);
+        assert_eq!(caller[5].operands[2].role, OperandRole::Use);
+        assert_eq!(caller[5].operands[1].kind, caller[4].operands[1].kind);
+        assert_eq!(caller[5].operands[2].kind, caller[4].operands[2].kind);
+        assert!(matches!(
+            caller[6].operands.as_slice(),
+            [MachineOperand {
+                kind: MachineOperandKind::Register(MachineRegister::Physical(register)),
+                role: OperandRole::UseDef,
+                ..
+            }, MachineOperand {
+                kind: MachineOperandKind::Immediate(4),
+                ..
+            }] if *register == X86Register::Sp.physical()
         ));
     }
 
