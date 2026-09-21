@@ -62,6 +62,28 @@ impl fmt::Debug for Value {
     }
 }
 
+/// A frontend-established, non-wrapping mathematical integer range.
+///
+/// Direct port of `qbopt.model.mir:IntegerRange`.  This is source semantics,
+/// not a target representation: the frontend translates its own ABI facts
+/// into this source-neutral range before MIR analyses consume it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IntegerRange {
+    pub low: BigInt,
+    pub high: BigInt,
+    pub width: u32,
+}
+
+impl IntegerRange {
+    pub fn new(low: impl Into<BigInt>, high: impl Into<BigInt>, width: u32) -> Self {
+        Self {
+            low: low.into(),
+            high: high.into(),
+            width,
+        }
+    }
+}
+
 /// Operations no single machine instruction computes.
 ///
 /// Direct port of `qbopt.model.mir:Synth`.
@@ -746,6 +768,13 @@ impl<K: Eq, V> OrderedMap<K, V> {
         self.entries.push((key, value));
         None
     }
+
+    pub fn remove(&mut self, key: &K) -> Option<V> {
+        self.entries
+            .iter()
+            .position(|(candidate, _)| candidate == key)
+            .map(|index| self.entries.remove(index).1)
+    }
 }
 
 impl<K, V> Default for OrderedMap<K, V> {
@@ -969,6 +998,7 @@ pub struct MirBody {
     pub sealed: bool,
     pub pointer_values: BTreeSet<Value>,
     pub pointer_seeds: OrderedMap<Value, Provenance>,
+    pub integer_ranges: OrderedMap<Value, IntegerRange>,
     pub loop_trip_counts: Vec<(i64, i64)>,
 }
 
@@ -984,6 +1014,7 @@ impl MirBody {
             sealed: false,
             pointer_values: BTreeSet::new(),
             pointer_seeds: OrderedMap::new(),
+            integer_ranges: OrderedMap::new(),
             loop_trip_counts: Vec::new(),
         }
     }
@@ -1282,6 +1313,448 @@ pub fn unheld(op: &Op) -> (&Option<BTreeSet<String>>, &Option<BTreeSet<String>>)
     (&op.opaque_defs, &op.opaque_uses)
 }
 
+/// Direct port of Python `qbopt.model.mir:_Renamer`.
+struct Renamer {
+    next: u32,
+    stack: BTreeMap<u32, Vec<Value>>,
+    versions: BTreeMap<u32, u32>,
+}
+
+impl Renamer {
+    fn fresh(&mut self, variable: u32, at: i64, flags: bool) -> Value {
+        self.next += 1;
+        let version = self.versions.entry(variable).or_default();
+        *version += 1;
+        Value {
+            id: self.next,
+            at,
+            flags,
+            variable,
+            version: *version,
+        }
+    }
+
+    fn current_of(&mut self, variable: u32, at: i64) -> Value {
+        if self.stack.get(&variable).is_none_or(Vec::is_empty) {
+            let value = self.fresh(variable, at, false);
+            self.stack.entry(variable).or_default().push(value);
+        }
+        *self.stack[&variable]
+            .last()
+            .expect("a Python renamer current value was just established")
+    }
+
+    fn current(&mut self, value: Value, at: i64) -> Value {
+        if self.stack.get(&value.variable).is_none_or(Vec::is_empty) {
+            let current = self.fresh(value.variable, at, value.flags);
+            self.stack.entry(value.variable).or_default().push(current);
+        }
+        *self.stack[&value.variable]
+            .last()
+            .expect("a Python renamer current value was just established")
+    }
+}
+
+fn remember(
+    renamed: &mut BTreeMap<Value, BTreeSet<Value>>,
+    old: Option<Value>,
+    new: Option<Value>,
+) {
+    if let (Some(old), Some(new)) = (old, new) {
+        renamed.entry(old).or_default().insert(new);
+    }
+}
+
+/// Direct port of Python `qbopt.model.mir:_renamed_arg`.
+fn renamed_arg(argument: &Arg, swap: &BTreeMap<u32, Value>, refs: &[(MemRef, MemRef)]) -> Arg {
+    match argument {
+        Arg::Held(held) => swap
+            .get(&held.value.variable)
+            .map(|value| {
+                Arg::Held(Held {
+                    value: *value,
+                    width: held.width,
+                })
+            })
+            .unwrap_or_else(|| argument.clone()),
+        Arg::Cell(cell) => refs
+            .iter()
+            // Python `dict(zip(...))` keeps the last equal key's value.
+            .rev()
+            .find_map(|(old, new)| (old == &cell.r#ref).then(|| new.clone()))
+            .map(|r#ref| Arg::Cell(Cell { r#ref }))
+            .unwrap_or_else(|| argument.clone()),
+        Arg::Const(_) | Arg::Symbol(_) | Arg::FrameAddress(_) | Arg::Opaque(_) => argument.clone(),
+    }
+}
+
+/// Direct port of Python `qbopt.model.mir:_rehomed`.
+fn rehomed(reference: &MemRef, namer: &mut Renamer, at: i64) -> MemRef {
+    let base = reference.base.map(|value| namer.current(value, at));
+    let segment = reference.segment.map(|value| namer.current(value, at));
+    if base == reference.base && segment == reference.segment {
+        reference.clone()
+    } else {
+        let mut renamed = reference.clone();
+        renamed.base = base;
+        renamed.segment = segment;
+        renamed
+    }
+}
+
+fn resolved_rename(
+    at: i64,
+    start: i64,
+    blocks: &BTreeMap<i64, &MirBlock>,
+    children: &BTreeMap<i64, Vec<i64>>,
+    namer: &mut Renamer,
+    phis: &mut BTreeMap<i64, Vec<(u32, Phi)>>,
+    out: &mut BTreeMap<i64, Vec<Op>>,
+    renamed: &mut BTreeMap<Value, BTreeSet<Value>>,
+) {
+    let block = blocks[&at];
+    let mut pushed = Vec::new();
+    for (variable, phi) in &phis[&at] {
+        namer.stack.entry(*variable).or_default().push(phi.result);
+        pushed.push(*variable);
+    }
+
+    for operation in &block.ops {
+        let used = operation
+            .uses
+            .iter()
+            .copied()
+            .map(|value| namer.current(value, start))
+            .collect::<Vec<_>>();
+        let exits = operation
+            .exits
+            .iter()
+            .copied()
+            .map(|value| namer.current(value, start))
+            .collect::<Vec<_>>();
+        for (old, new) in operation.uses.iter().zip(&used) {
+            remember(renamed, Some(*old), Some(*new));
+        }
+        for (old, new) in operation.exits.iter().zip(&exits) {
+            remember(renamed, Some(*old), Some(*new));
+        }
+        let swap = operation
+            .uses
+            .iter()
+            .map(|value| value.variable)
+            .zip(used.iter().copied())
+            .collect::<BTreeMap<_, _>>();
+        let loads = operation
+            .loads
+            .iter()
+            .map(|reference| rehomed(reference, namer, start))
+            .collect::<Vec<_>>();
+        let stores = operation
+            .stores
+            .iter()
+            .map(|reference| rehomed(reference, namer, start))
+            .collect::<Vec<_>>();
+        for (old, new) in operation
+            .loads
+            .iter()
+            .chain(&operation.stores)
+            .zip(loads.iter().chain(&stores))
+        {
+            remember(renamed, old.base, new.base);
+            remember(renamed, old.segment, new.segment);
+        }
+        let refs = operation
+            .loads
+            .iter()
+            .chain(&operation.stores)
+            .cloned()
+            .zip(loads.iter().chain(&stores).cloned())
+            .collect::<Vec<_>>();
+        let mut fresh = Vec::new();
+        for value in &operation.defines {
+            let now = namer.fresh(value.variable, operation.at, value.flags);
+            namer.stack.entry(value.variable).or_default().push(now);
+            pushed.push(value.variable);
+            fresh.push(now);
+            remember(renamed, Some(*value), Some(now));
+        }
+        let made = operation
+            .defines
+            .iter()
+            .map(|value| value.variable)
+            .zip(fresh.iter().copied())
+            .collect::<BTreeMap<_, _>>();
+        let mut merges = OrderedMap::new();
+        for (before, after) in operation.merges.iter() {
+            merges.insert(
+                swap.get(&before.variable).copied().unwrap_or(*before),
+                made.get(&after.variable).copied().unwrap_or(*after),
+            );
+        }
+        let mut made_operation = operation.clone();
+        made_operation.defines = fresh;
+        made_operation.uses = used;
+        made_operation.exits = exits;
+        made_operation.loads = loads;
+        made_operation.stores = stores;
+        made_operation.args = operation
+            .args
+            .iter()
+            .map(|argument| renamed_arg(argument, &swap, &refs))
+            .collect();
+        made_operation.results = operation
+            .results
+            .iter()
+            .map(|argument| renamed_arg(argument, &made, &refs))
+            .collect();
+        made_operation.raised = operation.raised.as_ref().map(|(args, results)| {
+            (
+                args.iter()
+                    .map(|argument| renamed_arg(argument, &swap, &refs))
+                    .collect(),
+                results
+                    .iter()
+                    .map(|argument| renamed_arg(argument, &made, &refs))
+                    .collect(),
+            )
+        });
+        made_operation.merges = merges;
+        out.get_mut(&at)
+            .expect("every Python block receives an output operation list")
+            .push(made_operation);
+    }
+
+    for successor in &block.succ {
+        if let Some(successor_phis) = phis.get_mut(successor) {
+            for (variable, phi) in successor_phis {
+                phi.incoming.insert(at, namer.current_of(*variable, start));
+            }
+        }
+    }
+
+    let mut descendants = children[&at].clone();
+    descendants.sort_unstable();
+    for child in descendants {
+        resolved_rename(child, start, blocks, children, namer, phis, out, renamed);
+    }
+    for variable in pushed.into_iter().rev() {
+        namer
+            .stack
+            .get_mut(&variable)
+            .expect("every pushed Python variable has a stack")
+            .pop();
+    }
+}
+
+/// Direct port of `qbopt.model.mir:resolved`.
+///
+/// The optional `calls` argument is deliberately retained even though Python
+/// currently does not read it; callers supply it at the same port boundary.
+pub fn resolved(body: &MirBody, _calls: Option<&BTreeMap<i64, String>>) -> Result<MirBody, String> {
+    if body.blocks.is_empty() {
+        return Err("no blocks to resolve".to_owned());
+    }
+    let start = body.entry;
+    let everything = body
+        .blocks
+        .iter()
+        .map(|block| (block.at, block))
+        .collect::<BTreeMap<_, _>>();
+    if !everything.contains_key(&start) {
+        return Err(format!(
+            "the entry {} is not one of these blocks",
+            python_padded_hex(start)
+        ));
+    }
+
+    let mut reachable = BTreeSet::from([start]);
+    let mut pending = vec![start];
+    while let Some(at) = pending.pop() {
+        for successor in &everything[&at].succ {
+            if everything.contains_key(successor) && reachable.insert(*successor) {
+                pending.push(*successor);
+            }
+        }
+    }
+    let blocks = body
+        .blocks
+        .iter()
+        .filter(|block| reachable.contains(&block.at))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !mir_loops::irreducible(&blocks, start).is_empty() {
+        return Err(
+            "the body's control flow is irreducible, so it has no dominator tree".to_owned(),
+        );
+    }
+
+    let by_at = blocks
+        .iter()
+        .map(|block| (block.at, block))
+        .collect::<BTreeMap<_, _>>();
+    let immediate = mir_loops::immediate_dominators(&blocks, start);
+    let mut children = blocks
+        .iter()
+        .map(|block| (block.at, Vec::new()))
+        .collect::<BTreeMap<_, Vec<i64>>>();
+    for block in &blocks {
+        if let Some(parent) = immediate[&block.at] {
+            children
+                .get_mut(&parent)
+                .expect("an immediate dominator is a supplied block")
+                .push(block.at);
+        }
+    }
+    let frontier = mir_loops::frontiers(&blocks, start);
+    let mut where_defined = BTreeMap::<u32, BTreeSet<i64>>::new();
+    for block in &blocks {
+        for operation in &block.ops {
+            for value in &operation.defines {
+                where_defined
+                    .entry(value.variable)
+                    .or_default()
+                    .insert(block.at);
+            }
+        }
+    }
+    let mut needed = blocks
+        .iter()
+        .map(|block| (block.at, BTreeSet::new()))
+        .collect::<BTreeMap<i64, BTreeSet<u32>>>();
+    for (variable, defined) in &where_defined {
+        let mut pending = defined.iter().copied().collect::<Vec<_>>();
+        let mut seen = BTreeSet::new();
+        while let Some(at) = pending.pop() {
+            for join in &frontier[&at] {
+                if seen.insert(*join) {
+                    needed
+                        .get_mut(join)
+                        .expect("a frontier only names supplied blocks")
+                        .insert(*variable);
+                    pending.push(*join);
+                }
+            }
+        }
+    }
+
+    let mut namer = Renamer {
+        next: 0,
+        stack: BTreeMap::new(),
+        versions: BTreeMap::new(),
+    };
+    let mut phis = blocks
+        .iter()
+        .map(|block| (block.at, Vec::<(u32, Phi)>::new()))
+        .collect::<BTreeMap<_, _>>();
+    let mut out = blocks
+        .iter()
+        .map(|block| (block.at, Vec::new()))
+        .collect::<BTreeMap<_, Vec<Op>>>();
+    let mut renamed = BTreeMap::<Value, BTreeSet<Value>>::new();
+    let flagged = blocks
+        .iter()
+        .flat_map(|block| block.ops.iter())
+        .flat_map(|operation| operation.defines.iter())
+        .filter(|value| value.flags)
+        .map(|value| value.variable)
+        .collect::<BTreeSet<_>>();
+    for block in &blocks {
+        let mut variables = needed[&block.at].iter().copied().collect::<Vec<_>>();
+        variables.sort_by_key(|variable| (!flagged.contains(variable), *variable));
+        for variable in variables {
+            let result = namer.fresh(variable, block.at, flagged.contains(&variable));
+            phis.get_mut(&block.at)
+                .expect("every supplied block has a phi list")
+                .push((variable, Phi::new(result)));
+        }
+        for old in &block.phis {
+            if let Some((_, made)) = phis[&block.at]
+                .iter()
+                .find(|(variable, _)| *variable == old.result.variable)
+            {
+                remember(&mut renamed, Some(old.result), Some(made.result));
+            }
+        }
+    }
+    resolved_rename(
+        start,
+        start,
+        &by_at,
+        &children,
+        &mut namer,
+        &mut phis,
+        &mut out,
+        &mut renamed,
+    );
+
+    let resolved_blocks = blocks
+        .iter()
+        .map(|block| MirBlock {
+            at: block.at,
+            phis: phis[&block.at].iter().map(|(_, phi)| phi.clone()).collect(),
+            ops: out[&block.at].clone(),
+            succ: block
+                .succ
+                .iter()
+                .copied()
+                .filter(|successor| reachable.contains(successor))
+                .collect(),
+        })
+        .collect();
+    let mut pointer_values = body
+        .pointer_values
+        .iter()
+        .flat_map(|old| renamed.get(old).into_iter().flatten().copied())
+        .collect::<BTreeSet<_>>();
+    let mut pointer_seeds = OrderedMap::new();
+    let mut conflicting = BTreeSet::new();
+    for (old, provenance) in body.pointer_seeds.iter() {
+        for new in renamed.get(old).into_iter().flatten() {
+            if pointer_seeds
+                .get(new)
+                .is_some_and(|previous| previous != provenance)
+            {
+                conflicting.insert(*new);
+            } else {
+                pointer_seeds.insert(*new, provenance.clone());
+            }
+        }
+    }
+    for value in conflicting {
+        pointer_seeds.remove(&value);
+    }
+    let mut integer_ranges = OrderedMap::new();
+    let mut range_conflicts = BTreeSet::new();
+    for (old, interval) in body.integer_ranges.iter() {
+        for new in renamed.get(old).into_iter().flatten() {
+            if integer_ranges
+                .get(new)
+                .is_some_and(|previous| previous != interval)
+            {
+                range_conflicts.insert(*new);
+            } else {
+                integer_ranges.insert(*new, interval.clone());
+            }
+        }
+    }
+    for value in range_conflicts {
+        integer_ranges.remove(&value);
+    }
+    pointer_values.extend(pointer_seeds.keys().copied());
+    Ok(MirBody {
+        entry: start,
+        blocks: resolved_blocks,
+        initial: body.initial.clone(),
+        repetitions: body.repetitions.clone(),
+        cloned: body.cloned,
+        sealed: body.sealed,
+        pointer_values,
+        pointer_seeds,
+        integer_ranges,
+        loop_trip_counts: body.loop_trip_counts.clone(),
+    })
+}
+
 /// Direct port of `qbopt.model.mir:verify`.
 ///
 /// The returned diagnostics establish only Python MIR's three SSA promises:
@@ -1448,9 +1921,9 @@ mod tests {
 
     use super::{
         AllocationHints, AllocationHintsError, Arg, ArrayRequest, Cell, Const, FloatingOrigin,
-        Held, Kind, MemRef, MirBlock, MirBody, Op, OpCode, Opaque, OrderedMap, Phi, RaisedBody,
-        Symbol, Synth, Value, consumed, exit_values, exposed, kind_of, ordinary_uses, partial,
-        python_padded_hex, rewritten, same_bytes, stepping, unheld, verify,
+        Held, IntegerRange, Kind, MemRef, MirBlock, MirBody, Op, OpCode, Opaque, OrderedMap, Phi,
+        RaisedBody, Symbol, Synth, Value, consumed, exit_values, exposed, kind_of, ordinary_uses,
+        partial, python_padded_hex, resolved, rewritten, same_bytes, stepping, unheld, verify,
     };
 
     #[test]
@@ -1897,6 +2370,277 @@ mod tests {
             Some(Value::new(2, 0))
         );
         assert_eq!(replaced.keys().copied().collect::<Vec<_>>(), [20, 10]);
+    }
+
+    #[test]
+    fn direct_mir_resolved_places_phis_in_python_dominator_child_order() {
+        // Direct port of tests/test_loops.py::test_a_frontier_is_where_two_definitions_could_meet,
+        // through qbopt/model/mir.py::resolved.  The entry lists its children
+        // backwards; Python renames sorted dominator children, so the phi's
+        // insertion-ordered incoming dictionary is 1 then 2.
+        let variable = 5;
+        let first = Value {
+            id: 71,
+            at: 1,
+            flags: false,
+            variable,
+            version: 8,
+        };
+        let second = Value {
+            id: 72,
+            at: 2,
+            flags: false,
+            variable,
+            version: 9,
+        };
+        let body = MirBody::new(
+            0,
+            vec![
+                MirBlock::new(0, vec![], vec![], vec![2, 1]),
+                MirBlock::new(
+                    1,
+                    vec![],
+                    vec![Op::new(1, None::<OpCode>, "", vec![first], vec![])],
+                    vec![3],
+                ),
+                MirBlock::new(
+                    2,
+                    vec![],
+                    vec![Op::new(2, None::<OpCode>, "", vec![second], vec![])],
+                    vec![3],
+                ),
+                MirBlock::new(3, vec![], vec![], vec![]),
+            ],
+        );
+
+        let rebuilt = resolved(&body, None).expect("the diamond is reducible");
+        let phi = &rebuilt.block(3).expect("join block").phis[0];
+        assert_eq!(
+            phi.result,
+            Value {
+                id: 1,
+                at: 3,
+                flags: false,
+                variable,
+                version: 1
+            }
+        );
+        assert_eq!(phi.incoming.keys().copied().collect::<Vec<_>>(), [1, 2]);
+        assert_eq!(
+            phi.incoming.values().copied().collect::<Vec<_>>(),
+            [
+                Value {
+                    id: 2,
+                    at: 1,
+                    flags: false,
+                    variable,
+                    version: 2
+                },
+                Value {
+                    id: 3,
+                    at: 2,
+                    flags: false,
+                    variable,
+                    version: 3
+                },
+            ]
+        );
+        assert!(verify(&rebuilt).is_empty());
+    }
+
+    #[test]
+    fn direct_mir_resolved_rehomes_cells_raised_values_and_pointer_metadata() {
+        // Direct port of tests/test_mir.py::{test_resolving_segld_renames_memory_operands_with_their_accesses,
+        // test_resolving_renames_pointer_metadata_with_its_values}.  `raised`
+        // must receive the same names as ordinary args/results, otherwise an
+        // unchanged operation is falsely seen as rewritten after SSA repair.
+        let pointer = Value {
+            id: 99,
+            at: 0,
+            flags: false,
+            variable: 7,
+            version: 4,
+        };
+        let mut reference = MemRef::new(None, 2);
+        reference.base = Some(pointer);
+        let mut operation = Op::new(10, None::<OpCode>, "", vec![pointer], vec![pointer]);
+        operation.exits = vec![pointer];
+        operation.loads = vec![reference.clone()];
+        operation.stores = vec![reference.clone()];
+        operation.args = vec![
+            Arg::Held(Held {
+                value: pointer,
+                width: 2,
+            }),
+            Arg::Cell(Cell {
+                r#ref: reference.clone(),
+            }),
+        ];
+        operation.results = vec![
+            Arg::Held(Held {
+                value: pointer,
+                width: 2,
+            }),
+            Arg::Cell(Cell {
+                r#ref: reference.clone(),
+            }),
+        ];
+        operation.raised = Some((operation.args.clone(), operation.results.clone()));
+        operation.merges.insert(pointer, pointer);
+
+        let provenance = Provenance {
+            slices: BTreeSet::new(),
+            restrict: BTreeSet::new(),
+        };
+        let interval = IntegerRange::new(0, 31, 2);
+        let mut body = MirBody::new(0, vec![MirBlock::new(0, vec![], vec![operation], vec![])]);
+        body.pointer_values.insert(pointer);
+        body.pointer_seeds.insert(pointer, provenance.clone());
+        body.integer_ranges.insert(pointer, interval.clone());
+        body.loop_trip_counts = vec![(0, 3)];
+
+        let rebuilt = resolved(&body, None).expect("one block is reducible");
+        let operation = &rebuilt.blocks[0].ops[0];
+        let used = Value {
+            id: 1,
+            at: 0,
+            flags: false,
+            variable: 7,
+            version: 1,
+        };
+        let defined = Value {
+            id: 2,
+            at: 10,
+            flags: false,
+            variable: 7,
+            version: 2,
+        };
+        assert_eq!(operation.uses, [used]);
+        assert_eq!(operation.exits, [used]);
+        assert_eq!(operation.defines, [defined]);
+        assert_eq!(operation.loads[0].base, Some(used));
+        assert_eq!(operation.stores[0].base, Some(used));
+        assert!(matches!(&operation.args[0], Arg::Held(Held { value, .. }) if *value == used));
+        assert!(
+            matches!(&operation.results[0], Arg::Held(Held { value, .. }) if *value == defined)
+        );
+        assert_eq!(
+            operation.raised,
+            Some((operation.args.clone(), operation.results.clone()))
+        );
+        assert_eq!(
+            operation.merges.iter().collect::<Vec<_>>(),
+            vec![(&used, &defined)]
+        );
+        assert_eq!(rebuilt.pointer_values, BTreeSet::from([used, defined]));
+        assert_eq!(
+            rebuilt.pointer_seeds.iter().collect::<Vec<_>>(),
+            vec![(&used, &provenance), (&defined, &provenance)]
+        );
+        assert!(
+            rebuilt.integer_ranges.iter().all(|(_, range)| range == &interval),
+            "every renamed value retains the Python range fact"
+        );
+        assert_eq!(
+            rebuilt.integer_ranges.keys().copied().collect::<BTreeSet<_>>(),
+            BTreeSet::from([used, defined])
+        );
+        assert_eq!(rebuilt.loop_trip_counts, [(0, 3)]);
+    }
+
+    #[test]
+    fn direct_mir_resolved_drops_conflicting_metadata_just_as_python_does() {
+        let first = Value {
+            id: 40,
+            at: 0,
+            flags: false,
+            variable: 7,
+            version: 1,
+        };
+        let second = Value {
+            id: 41,
+            at: 0,
+            flags: false,
+            variable: 7,
+            version: 2,
+        };
+        let mut operation = Op::new(0, None::<OpCode>, "", vec![], vec![first, second]);
+        operation.args = vec![
+            Arg::Held(Held {
+                value: first,
+                width: 2,
+            }),
+            Arg::Held(Held {
+                value: second,
+                width: 2,
+            }),
+        ];
+        let mut body = MirBody::new(0, vec![MirBlock::new(0, vec![], vec![operation], vec![])]);
+        body.pointer_values.extend([first, second]);
+        body.pointer_seeds.insert(
+            first,
+            Provenance::one(MemoryObject::new(MemoryKind::Frame)),
+        );
+        body.pointer_seeds.insert(
+            second,
+            Provenance::one(MemoryObject::new(MemoryKind::Global)),
+        );
+        body.integer_ranges
+            .insert(first, IntegerRange::new(0, 31, 2));
+        body.integer_ranges
+            .insert(second, IntegerRange::new(0, 63, 2));
+
+        let rebuilt = resolved(&body, None).expect("one block is reducible");
+        assert_eq!(rebuilt.pointer_values.len(), 1);
+        assert!(rebuilt.pointer_seeds.is_empty());
+        assert!(rebuilt.integer_ranges.is_empty());
+    }
+
+    #[test]
+    fn direct_mir_resolved_refuses_python_error_shapes_and_drops_unreachable_blocks() {
+        // Direct ports of qbopt/model/mir.py::resolved's three refusal paths
+        // and its reachable-body filter.
+        assert_eq!(
+            resolved(&MirBody::new(0, vec![]), None),
+            Err("no blocks to resolve".to_owned())
+        );
+        assert_eq!(
+            resolved(
+                &MirBody::new(-1, vec![MirBlock::new(0, vec![], vec![], vec![])]),
+                None
+            ),
+            Err("the entry -0x001 is not one of these blocks".to_owned())
+        );
+        let irreducible = MirBody::new(
+            0,
+            vec![
+                MirBlock::new(0, vec![], vec![], vec![1, 2]),
+                MirBlock::new(1, vec![], vec![], vec![2]),
+                MirBlock::new(2, vec![], vec![], vec![1]),
+            ],
+        );
+        assert_eq!(
+            resolved(&irreducible, None),
+            Err("the body's control flow is irreducible, so it has no dominator tree".to_owned())
+        );
+        let body = MirBody::new(
+            0,
+            vec![
+                MirBlock::new(0, vec![], vec![], vec![1, 99]),
+                MirBlock::new(1, vec![], vec![], vec![]),
+                MirBlock::new(8, vec![], vec![], vec![]),
+            ],
+        );
+        let rebuilt = resolved(&body, None).expect("unknown edges are ignored");
+        assert_eq!(
+            rebuilt
+                .blocks
+                .iter()
+                .map(|block| block.at)
+                .collect::<Vec<_>>(),
+            [0, 1]
+        );
+        assert_eq!(rebuilt.blocks[0].succ, [1]);
     }
 
     #[test]
