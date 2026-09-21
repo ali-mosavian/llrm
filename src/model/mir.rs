@@ -17,6 +17,7 @@ use num_bigint::BigInt;
 use crate::codegen::machine::{Loc, Operation, Semantics};
 use crate::model::floating::Semantics as FloatingSemantics;
 use crate::model::memory::Provenance;
+use crate::model::mir_loops;
 use crate::object::omf::module::{Addr, Space};
 use crate::support::PhysicalRegister;
 
@@ -1281,6 +1282,156 @@ pub fn unheld(op: &Op) -> (&Option<BTreeSet<String>>, &Option<BTreeSet<String>>)
     (&op.opaque_defs, &op.opaque_uses)
 }
 
+/// Direct port of `qbopt.model.mir:verify`.
+///
+/// The returned diagnostics establish only Python MIR's three SSA promises:
+/// one definition per value, definitions that dominate uses, and one phi
+/// incoming value per predecessor.  This is intentionally not a structural
+/// or type verifier.
+pub fn verify(body: &MirBody) -> Vec<String> {
+    let dominators = mir_loops::dominators(&body.blocks, body.entry);
+    let mut problems = Vec::new();
+
+    let mut defined_at = BTreeMap::<Value, i64>::new();
+    for block in &body.blocks {
+        for phi in &block.phis {
+            if defined_at.contains_key(&phi.result) {
+                problems.push(format!("{} defined twice", phi.result));
+            }
+            defined_at.insert(phi.result, block.at);
+        }
+        for op in &block.ops {
+            for value in &op.defines {
+                if defined_at.contains_key(value) {
+                    problems.push(format!(
+                        "{} defined twice, at {}",
+                        value,
+                        python_padded_hex(op.at)
+                    ));
+                }
+                defined_at.insert(*value, block.at);
+            }
+        }
+    }
+
+    let predecessors = mir_loops::predecessors(&body.blocks);
+    for block in &body.blocks {
+        for phi in &block.phis {
+            let want = predecessors
+                .get(&block.at)
+                .expect("every supplied block has a predecessor entry")
+                .iter()
+                .filter(|predecessor| body.block(**predecessor).is_some())
+                .copied()
+                .collect::<BTreeSet<_>>();
+            let have = phi.incoming.keys().copied().collect::<BTreeSet<_>>();
+            if have != want {
+                problems.push(format!(
+                    "{} at {} has {}, its predecessors are {}",
+                    phi.result,
+                    python_padded_hex(block.at),
+                    python_hex_list(&have),
+                    python_hex_list(&want)
+                ));
+            }
+            for (came_from, value) in phi.incoming.iter() {
+                if let Some(where_) = defined_at.get(value) {
+                    if !dominators
+                        .get(came_from)
+                        .is_some_and(|dominators| dominators.contains(where_))
+                    {
+                        problems.push(format!(
+                            "{} takes {} from {}, which it does not reach",
+                            phi.result,
+                            value,
+                            python_padded_hex(*came_from)
+                        ));
+                    }
+                }
+            }
+        }
+
+        let mut pending = block
+            .ops
+            .iter()
+            .flat_map(|op| op.defines.iter().copied())
+            .collect::<BTreeSet<_>>();
+        for op in &block.ops {
+            for value in &op.uses {
+                let Some(where_) = defined_at.get(value) else {
+                    continue;
+                };
+                if pending.contains(value) {
+                    problems.push(format!(
+                        "{} uses {} before its definition in {}",
+                        python_padded_hex(op.at),
+                        value,
+                        python_padded_hex(block.at)
+                    ));
+                } else if !dominators
+                    .get(&block.at)
+                    .is_some_and(|dominators| dominators.contains(where_))
+                {
+                    problems.push(format!(
+                        "{} uses {}, defined in {}, which does not dominate it",
+                        python_padded_hex(op.at),
+                        value,
+                        python_padded_hex(*where_)
+                    ));
+                }
+            }
+            for value in &op.defines {
+                pending.remove(value);
+            }
+            for value in &op.exits {
+                if let Some(where_) = defined_at.get(value) {
+                    if !dominators
+                        .get(&block.at)
+                        .is_some_and(|dominators| dominators.contains(where_))
+                    {
+                        problems.push(format!(
+                            "{} exposes {}, defined in {}, which does not dominate it",
+                            python_padded_hex(op.at),
+                            value,
+                            python_padded_hex(*where_)
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    problems
+}
+
+fn python_hex_list(values: &BTreeSet<i64>) -> String {
+    let mut values = values
+        .iter()
+        .map(|value| python_hex(*value))
+        .collect::<Vec<_>>();
+    values.sort();
+    let values = values
+        .iter()
+        .map(|value| format!("'{value}'"))
+        .collect::<Vec<_>>();
+    format!("[{}]", values.join(", "))
+}
+
+fn python_hex(value: i64) -> String {
+    if value < 0 {
+        format!("-0x{:x}", value.unsigned_abs())
+    } else {
+        format!("0x{value:x}")
+    }
+}
+
+fn python_padded_hex(value: i64) -> String {
+    if value < 0 {
+        format!("-0x{:03x}", value.unsigned_abs())
+    } else {
+        format!("0x{value:04x}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
@@ -1299,7 +1450,7 @@ mod tests {
         AllocationHints, AllocationHintsError, Arg, ArrayRequest, Cell, Const, FloatingOrigin,
         Held, Kind, MemRef, MirBlock, MirBody, Op, OpCode, Opaque, OrderedMap, Phi, RaisedBody,
         Symbol, Synth, Value, consumed, exit_values, exposed, kind_of, ordinary_uses, partial,
-        rewritten, same_bytes, stepping, unheld,
+        python_padded_hex, rewritten, same_bytes, stepping, unheld, verify,
     };
 
     #[test]
@@ -2203,6 +2354,250 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "definition (9, 0) has conflicting allocation pins: 1 and 2"
+        );
+    }
+
+    fn direct_mir_verify_op(at: i64, defines: Vec<Value>, uses: Vec<Value>) -> Op {
+        Op::new(at, None::<OpCode>, "", defines, uses)
+    }
+
+    #[test]
+    fn direct_mir_verify_accepts_complete_phi_arguments_from_every_predecessor() {
+        // Port of tests/test_mir.py::test_a_phi_argument_comes_from_every_predecessor.
+        // Caller-defined inputs have no in-body definition and are in scope on
+        // either predecessor, exactly as Python verify permits.
+        let result = Value::new(3, 3);
+        let mut phi = Phi::new(result);
+        phi.incoming.insert(1, Value::new(1, 0));
+        phi.incoming.insert(2, Value::new(2, 0));
+        let body = MirBody::new(
+            0,
+            vec![
+                MirBlock::new(0, vec![], vec![], vec![1, 2]),
+                MirBlock::new(1, vec![], vec![], vec![3]),
+                MirBlock::new(2, vec![], vec![], vec![3]),
+                MirBlock::new(3, vec![phi], vec![], vec![]),
+            ],
+        );
+
+        assert_eq!(verify(&body), Vec::<String>::new());
+    }
+
+    #[test]
+    fn direct_mir_verify_reports_duplicate_phi_and_operation_definitions_in_source_order() {
+        // Port of tests/test_mir.py::test_a_value_is_defined_exactly_once.
+        let phi_value = Value::new(1, 0);
+        let op_value = Value::new(2, 0);
+        let body = MirBody::new(
+            0,
+            vec![MirBlock::new(
+                0,
+                vec![Phi::new(phi_value), Phi::new(phi_value)],
+                vec![
+                    direct_mir_verify_op(0, vec![op_value], vec![]),
+                    direct_mir_verify_op(1, vec![op_value], vec![]),
+                ],
+                vec![],
+            )],
+        );
+
+        assert_eq!(
+            verify(&body),
+            vec![
+                "v1 defined twice".to_owned(),
+                "v2 defined twice, at 0x0001".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn direct_mir_verify_keeps_the_later_definition_for_following_dominance_checks() {
+        let repeated = Value::new(1, 0);
+        let body = MirBody::new(
+            0,
+            vec![
+                MirBlock::new(
+                    0,
+                    vec![],
+                    vec![direct_mir_verify_op(0, vec![repeated], vec![])],
+                    vec![1, 2],
+                ),
+                MirBlock::new(
+                    1,
+                    vec![],
+                    vec![direct_mir_verify_op(1, vec![repeated], vec![])],
+                    vec![],
+                ),
+                MirBlock::new(
+                    2,
+                    vec![],
+                    vec![direct_mir_verify_op(2, vec![], vec![repeated])],
+                    vec![],
+                ),
+            ],
+        );
+
+        assert_eq!(
+            verify(&body),
+            vec![
+                "v1 defined twice, at 0x0001".to_owned(),
+                "0x0002 uses v1, defined in 0x0001, which does not dominate it".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn direct_mir_verify_reports_missing_and_excess_phi_predecessors_with_python_lists() {
+        let result = Value::new(3, 2);
+        let caller = Value::new(4, 0);
+        let mut missing = Phi::new(result);
+        missing.incoming.insert(0, caller);
+        let mut excess = Phi::new(Value::new(5, 2));
+        excess.incoming.insert(0, caller);
+        excess.incoming.insert(1, caller);
+        excess.incoming.insert(3, caller);
+        let body = MirBody::new(
+            0,
+            vec![
+                MirBlock::new(0, vec![], vec![], vec![2]),
+                MirBlock::new(1, vec![], vec![], vec![2]),
+                MirBlock::new(2, vec![missing, excess], vec![], vec![]),
+            ],
+        );
+
+        assert_eq!(
+            verify(&body),
+            vec![
+                "v3 at 0x0002 has ['0x0'], its predecessors are ['0x0', '0x1']".to_owned(),
+                "v5 at 0x0002 has ['0x0', '0x1', '0x3'], its predecessors are ['0x0', '0x1']"
+                    .to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn direct_mir_verify_reports_a_phi_value_that_does_not_reach_its_edge() {
+        let defined = Value::new(1, 1);
+        let mut phi = Phi::new(Value::new(2, 3));
+        phi.incoming.insert(1, defined);
+        phi.incoming.insert(2, defined);
+        let body = MirBody::new(
+            0,
+            vec![
+                MirBlock::new(0, vec![], vec![], vec![1, 2]),
+                MirBlock::new(
+                    1,
+                    vec![],
+                    vec![direct_mir_verify_op(1, vec![defined], vec![])],
+                    vec![3],
+                ),
+                MirBlock::new(2, vec![], vec![], vec![3]),
+                MirBlock::new(3, vec![phi], vec![], vec![]),
+            ],
+        );
+
+        assert_eq!(
+            verify(&body),
+            vec!["v2 takes v1 from 0x0002, which it does not reach".to_owned()]
+        );
+    }
+
+    #[test]
+    fn direct_mir_verify_reports_a_same_block_use_before_its_definition() {
+        // Port of tests/test_cfront.py::test_verify_reports_a_use_before_its_definition_in_one_block.
+        let start = Value::new(1, 1);
+        let limit = Value::new(2, 1);
+        let body = MirBody::new(
+            1,
+            vec![MirBlock::new(
+                1,
+                vec![],
+                vec![
+                    direct_mir_verify_op(1, vec![limit], vec![start]),
+                    direct_mir_verify_op(2, vec![start], vec![]),
+                ],
+                vec![],
+            )],
+        );
+
+        assert_eq!(
+            verify(&body),
+            vec!["0x0001 uses v1 before its definition in 0x0001".to_owned()]
+        );
+    }
+
+    #[test]
+    fn direct_mir_verify_formats_negative_addresses_like_python() {
+        assert_eq!(python_padded_hex(-1), "-0x001");
+        assert_eq!(python_padded_hex(-16), "-0x010");
+        assert_eq!(python_padded_hex(1), "0x0001");
+
+        let start = Value::new(1, -1);
+        let body = MirBody::new(
+            -1,
+            vec![MirBlock::new(
+                -1,
+                vec![],
+                vec![
+                    direct_mir_verify_op(-1, vec![Value::new(2, -1)], vec![start]),
+                    direct_mir_verify_op(-16, vec![start], vec![]),
+                ],
+                vec![],
+            )],
+        );
+
+        assert_eq!(
+            verify(&body),
+            vec!["-0x001 uses v1 before its definition in -0x001".to_owned()]
+        );
+    }
+
+    #[test]
+    fn direct_mir_verify_sorts_phi_address_diagnostics_by_python_hex_spelling() {
+        let caller = Value::new(1, 0);
+        let mut phi = Phi::new(Value::new(2, 16));
+        phi.incoming.insert(2, caller);
+        phi.incoming.insert(16, caller);
+        let body = MirBody::new(
+            0,
+            vec![
+                MirBlock::new(0, vec![], vec![], vec![2, 16]),
+                MirBlock::new(2, vec![], vec![], vec![]),
+                MirBlock::new(16, vec![phi], vec![], vec![]),
+            ],
+        );
+
+        assert_eq!(
+            verify(&body),
+            vec!["v2 at 0x0010 has ['0x10', '0x2'], its predecessors are ['0x0']".to_owned()]
+        );
+    }
+
+    #[test]
+    fn direct_mir_verify_reports_non_dominating_use_and_exit() {
+        let defined = Value::new(1, 1);
+        let mut exit = direct_mir_verify_op(2, vec![], vec![defined]);
+        exit.exits = vec![defined];
+        let body = MirBody::new(
+            0,
+            vec![
+                MirBlock::new(0, vec![], vec![], vec![1, 2]),
+                MirBlock::new(
+                    1,
+                    vec![],
+                    vec![direct_mir_verify_op(1, vec![defined], vec![])],
+                    vec![],
+                ),
+                MirBlock::new(2, vec![], vec![exit], vec![]),
+            ],
+        );
+
+        assert_eq!(
+            verify(&body),
+            vec![
+                "0x0002 uses v1, defined in 0x0001, which does not dominate it".to_owned(),
+                "0x0002 exposes v1, defined in 0x0001, which does not dominate it".to_owned(),
+            ]
         );
     }
 }

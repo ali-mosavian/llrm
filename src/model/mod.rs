@@ -7,3 +7,4 @@
 pub mod floating;
 pub mod memory;
 pub mod mir;
+pub(crate) mod mir_loops;
