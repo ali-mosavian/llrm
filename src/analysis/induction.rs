@@ -64,6 +64,25 @@ pub(crate) struct Affine {
     pub header: i64,
 }
 
+/// An operation that computes an affine value from another one.
+///
+/// Direct port of `qbopt.analysis.induction:Derived`.  Python retains the
+/// exact immutable `mir.Op` object that produced the formula; an
+/// [`OpOccurrence`] is the corresponding identity in one immutable Rust MIR
+/// snapshot.  It is deliberately neither source provenance (`Op.id`) nor a
+/// source address nor structural operation equality.
+///
+/// `offsets` remains an ordered vector, rather than a map: Python retains
+/// duplicate invariant terms and their declaration order exactly.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Derived {
+    pub op: OpOccurrence,
+    pub of: Affine,
+    pub by: Arg,
+    pub offsets: Vec<(Arg, BigInt)>,
+    pub pointer: Option<Arg>,
+}
+
 /// A width-limited `scale * source + offset` relation.
 ///
 /// Direct port of `qbopt.analysis.induction:AffineMap`.
@@ -175,6 +194,55 @@ pub(crate) fn relation(
         scale,
         offset,
         width,
+    })
+}
+
+/// Python's `derived_map(formula, facts)`.
+///
+/// This deliberately proves only the constant modular map carried by one
+/// already-recognized `Derived` formula.  Recognition, pointer formation, and
+/// recurrence discovery belong to their Python-equivalent callers; this is
+/// not a second scalar-evolution solver.
+pub(crate) fn derived_map(
+    formula: &Derived,
+    facts: &BTreeMap<Value, Known>,
+) -> Option<AffineMap> {
+    let width = formula.of.start.width();
+    let scale = _signed(&formula.by, facts, width)?;
+    if scale == BigInt::from(0_u8) || formula.pointer.is_some() {
+        return None;
+    }
+    let modulus = BigInt::from(1_u8) << (width * 8);
+    let mut offset = BigInt::from(0_u8);
+    for (value, coefficient) in &formula.offsets {
+        let constant = _constant(value, facts, width)?;
+        offset = mod_floor(&(offset + constant * coefficient), &modulus);
+    }
+    Some(AffineMap {
+        scale,
+        offset,
+        width,
+    })
+}
+
+/// Python's `domain(body, loop, affine, facts)`.
+///
+/// `_signed` establishes the initial integer interpretation and
+/// `_last_counter` is the sole finite-loop proof.  Keeping their exact calls
+/// here prevents this consumer from becoming an independent range solver.
+pub(crate) fn domain(
+    body: &MirBody,
+    loop_: &Loop,
+    affine: &Affine,
+    facts: &BTreeMap<Value, Known>,
+) -> Option<(BigInt, BigInt)> {
+    let width = affine.start.width();
+    let start = _signed(&affine.start.as_arg(), facts, width)?;
+    let last = _last_counter(body, loop_, affine, facts, width)?;
+    Some(if start <= last {
+        (start, last)
+    } else {
+        (last, start)
     })
 }
 
@@ -1449,13 +1517,13 @@ mod tests {
     use crate::model::mir_loops::Loop;
 
     use crate::analysis::constants;
-    use crate::analysis::occurrence::operations;
+    use crate::analysis::occurrence::{operations, OpOccurrence};
 
     use super::{
-        Affine, AffineMap, AffineOperand, LoopShape, _as_signed, _constant, _copied,
+        Affine, AffineMap, AffineOperand, Derived, LoopShape, _as_signed, _constant, _copied,
         _counter_bound, _signed, basics, canonical, control_replacement, counted,
-        counted_with_facts, invariant, nonempty, relation, test_only, transparent_aliases,
-        trip_count, zero_terminating_control,
+        counted_with_facts, derived_map, domain, invariant, nonempty, relation, test_only,
+        transparent_aliases, trip_count, zero_terminating_control,
     };
 
     fn value(id: u32, at: i64) -> Value {
@@ -2537,6 +2605,256 @@ mod tests {
             step,
             header,
         }
+    }
+
+    fn derived_formula(
+        occurrence: OpOccurrence,
+        by: Arg,
+        offsets: Vec<(Arg, BigInt)>,
+        pointer: Option<Arg>,
+    ) -> Derived {
+        Derived {
+            op: occurrence,
+            of: affine(1, constant(0, 1), constant(1, 1), 1),
+            by,
+            offsets,
+            pointer,
+        }
+    }
+
+    #[test]
+    fn direct_induction_derived_keeps_the_exact_operation_occurrence_and_offset_sequence() {
+        // Python `Derived.op` retains the exact operation object, including
+        // when an immutable body has two structurally equal source ops.  The
+        // offset tuple is likewise not normalized: duplicate terms retain
+        // their order for the later formula consumer.
+        let operation = op(7, Kind::Mul, vec![], vec![]);
+        let body = MirBody::new(
+            0,
+            vec![MirBlock::new(
+                1,
+                vec![],
+                vec![operation.clone(), operation],
+                vec![],
+            )],
+        );
+        let occurrences = operations(&body)
+            .map(|(occurrence, _, _)| occurrence)
+            .collect::<Vec<_>>();
+        let offsets = vec![
+            (Arg::Const(Const::new(3, 1)), BigInt::from(1)),
+            (Arg::Const(Const::new(3, 1)), BigInt::from(-1)),
+        ];
+        let formula = derived_formula(
+            occurrences[1],
+            Arg::Const(Const::new(2, 1)),
+            offsets.clone(),
+            None,
+        );
+
+        assert_ne!(occurrences[0], occurrences[1]);
+        assert_eq!(formula.op, occurrences[1]);
+        assert_eq!(formula.offsets, offsets);
+    }
+
+    #[test]
+    fn direct_induction_derived_map_accepts_constant_scale_and_offsets() {
+        // Direct port of `induction.derived_map`: the scale is signed while
+        // every offset term is its width-masked integer value.
+        let operation = op(0, Kind::Mul, vec![], vec![]);
+        let body = MirBody::new(0, vec![MirBlock::new(0, vec![], vec![operation], vec![])]);
+        let occurrence = operations(&body).next().expect("formula op").0;
+        let formula = derived_formula(
+            occurrence,
+            Arg::Const(Const::new(-2, 1)),
+            vec![(Arg::Const(Const::new(5, 1)), BigInt::from(3))],
+            None,
+        );
+
+        assert_eq!(
+            derived_map(&formula, &BTreeMap::new()),
+            Some(AffineMap {
+                scale: BigInt::from(-2),
+                offset: BigInt::from(15),
+                width: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn direct_induction_derived_map_reads_wider_held_facts_but_refuses_narrower_ones() {
+        // `_constant` masks a wider known fact down to the formula width;
+        // `_signed` then reinterprets only the scale.  A fact narrower than
+        // the one-byte Held operand remains unknown even when its coefficient
+        // is zero.
+        let operation = op(0, Kind::Mul, vec![], vec![]);
+        let body = MirBody::new(0, vec![MirBlock::new(0, vec![], vec![operation], vec![])]);
+        let occurrence = operations(&body).next().expect("formula op").0;
+        let scale = Held {
+            value: value(310, 0),
+            width: 1,
+        };
+        let offset = Held {
+            value: value(311, 0),
+            width: 1,
+        };
+        let formula = derived_formula(
+            occurrence,
+            Arg::Held(scale),
+            vec![(Arg::Held(offset), BigInt::from(1))],
+            None,
+        );
+        let wide = BTreeMap::from([
+            (scale.value, Known::new(0x01fe, 2)),
+            (offset.value, Known::new(0x0105, 2)),
+        ]);
+
+        assert_eq!(
+            derived_map(&formula, &wide),
+            Some(AffineMap {
+                scale: BigInt::from(-2),
+                offset: BigInt::from(5),
+                width: 1,
+            })
+        );
+        let narrow = BTreeMap::from([
+            (scale.value, Known::new(0xfe, 0)),
+            (offset.value, Known::new(5, 0)),
+        ]);
+        assert_eq!(derived_map(&formula, &narrow), None);
+    }
+
+    #[test]
+    fn direct_induction_derived_map_refuses_nonconstant_zero_pointer_and_wrong_width_terms() {
+        // Each is a separate Python early return: an unknown scale, zero
+        // scale, pointer recurrence, a scale of another width, unknown
+        // offset (including a zero-coefficient one), and offset of another
+        // width.
+        let operation = op(0, Kind::Mul, vec![], vec![]);
+        let body = MirBody::new(0, vec![MirBlock::new(0, vec![], vec![operation], vec![])]);
+        let occurrence = operations(&body).next().expect("formula op").0;
+        let held = Held {
+            value: value(300, 0),
+            width: 1,
+        };
+        let cases = vec![
+            derived_formula(occurrence, Arg::Held(held), vec![], None),
+            derived_formula(occurrence, Arg::Const(Const::new(0, 1)), vec![], None),
+            derived_formula(
+                occurrence,
+                Arg::Const(Const::new(1, 1)),
+                vec![],
+                Some(Arg::Held(held)),
+            ),
+            derived_formula(occurrence, Arg::Const(Const::new(1, 2)), vec![], None),
+            derived_formula(
+                occurrence,
+                Arg::Const(Const::new(1, 1)),
+                vec![(Arg::Held(held), BigInt::from(1))],
+                None,
+            ),
+            derived_formula(
+                occurrence,
+                Arg::Const(Const::new(1, 1)),
+                vec![(Arg::Held(held), BigInt::from(0))],
+                None,
+            ),
+            derived_formula(
+                occurrence,
+                Arg::Const(Const::new(1, 1)),
+                vec![(Arg::Const(Const::new(1, 2)), BigInt::from(1))],
+                None,
+            ),
+        ];
+
+        for formula in cases {
+            assert_eq!(derived_map(&formula, &BTreeMap::new()), None);
+        }
+    }
+
+    #[test]
+    fn direct_induction_derived_map_accumulates_duplicate_negative_offsets_modulo_width() {
+        // Python's `% modulus` is non-negative.  Keep the terms separate:
+        // `250 - 10 + 250` wraps to 234 in an 8-bit formula.
+        let operation = op(0, Kind::Mul, vec![], vec![]);
+        let body = MirBody::new(0, vec![MirBlock::new(0, vec![], vec![operation], vec![])]);
+        let occurrence = operations(&body).next().expect("formula op").0;
+        let formula = derived_formula(
+            occurrence,
+            Arg::Const(Const::new(1, 1)),
+            vec![
+                (Arg::Const(Const::new(250, 1)), BigInt::from(1)),
+                (Arg::Const(Const::new(10, 1)), BigInt::from(-1)),
+                (Arg::Const(Const::new(250, 1)), BigInt::from(1)),
+            ],
+            None,
+        );
+
+        assert_eq!(
+            derived_map(&formula, &BTreeMap::new()),
+            Some(AffineMap {
+                scale: BigInt::from(1),
+                offset: BigInt::from(234),
+                width: 1,
+            })
+        );
+    }
+
+    fn domain_body(start: i64, bound: i64, step: i64, branch_test: Kind) -> (MirBody, Loop, Affine) {
+        let counter = value(400, 1);
+        let flags = Value {
+            flags: true,
+            ..value(401, 1)
+        };
+        let mut compare = op(1, Kind::Sub, vec![flags], vec![counter]);
+        compare.args = vec![
+            Arg::Held(Held { value: counter, width: 2 }),
+            Arg::Const(Const::new(bound, 2)),
+        ];
+        let mut branch = op(1, Kind::Branch, vec![], vec![flags]);
+        branch.test = Some(branch_test);
+        branch.target = Some(3);
+        let body = MirBody::new(
+            0,
+            vec![
+                MirBlock::new(0, vec![], vec![], vec![1]),
+                MirBlock::new(1, vec![], vec![compare, branch], vec![2, 3]),
+                MirBlock::new(2, vec![], vec![], vec![1]),
+                MirBlock::new(3, vec![], vec![], vec![]),
+            ],
+        );
+        let loop_ = Loop {
+            header: 1,
+            latches: BTreeSet::from([2]),
+            body: BTreeSet::from([1, 2]),
+        };
+        (
+            body,
+            loop_,
+            affine(400, constant(start, 2), constant(step, 2), 1),
+        )
+    }
+
+    #[test]
+    fn direct_induction_derived_domain_is_inclusive_for_ascending_descending_and_refused_loops() {
+        // `domain` is exactly `min(start,last), max(start,last)`: inclusive
+        // endpoints for both directions, and no answer when `_last_counter`
+        // cannot prove the loop shape.
+        let (ascending_body, ascending_loop, ascending) = domain_body(1, 5, 2, Kind::Gt);
+        assert_eq!(
+            domain(&ascending_body, &ascending_loop, &ascending, &BTreeMap::new()),
+            Some((BigInt::from(1), BigInt::from(5)))
+        );
+
+        let (descending_body, descending_loop, descending) = domain_body(5, 1, -2, Kind::Lt);
+        assert_eq!(
+            domain(&descending_body, &descending_loop, &descending, &BTreeMap::new()),
+            Some((BigInt::from(1), BigInt::from(5)))
+        );
+
+        let (mut refused_body, refused_loop, refused) = domain_body(1, 5, 2, Kind::Gt);
+        refused_body.blocks[1].ops[1].target = None;
+        assert_eq!(domain(&refused_body, &refused_loop, &refused, &BTreeMap::new()), None);
     }
 
     #[test]
