@@ -2,6 +2,7 @@
 
 mod algebraic;
 mod branches;
+pub(crate) mod cfg;
 mod cse;
 mod dead;
 mod dead_store;

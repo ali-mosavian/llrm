@@ -815,6 +815,13 @@ pub enum OpCode {
     Synth(Synth),
 }
 
+impl OpCode {
+    /// The inert source-ownership operation used by MIR transforms.
+    pub(crate) const fn nothing() -> Self {
+        Self::Operation(Operation::Nothing)
+    }
+}
+
 /// Lowering's identity baseline while general floating allocation is
 /// unfinished.  Direct port of `qbopt.model.mir:FloatingOrigin`.
 #[derive(Clone, Debug, Eq, PartialEq)]
