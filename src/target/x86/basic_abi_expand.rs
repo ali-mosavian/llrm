@@ -90,6 +90,11 @@ pub enum BasicAbiExpansionError {
         block: MachineBlockId,
         instruction: MachineInstructionId,
     },
+    ReturnValueContract {
+        block: MachineBlockId,
+        instruction: MachineInstructionId,
+        operand: usize,
+    },
 }
 
 impl fmt::Display for BasicAbiExpansionError {
@@ -191,6 +196,14 @@ impl fmt::Display for BasicAbiExpansionError {
             Self::LongReturnOrder { block, instruction } => write!(
                 formatter,
                 "block {block} instruction {instruction} LONG return must use AX low then DX high"
+            ),
+            Self::ReturnValueContract {
+                block,
+                instruction,
+                operand,
+            } => write!(
+                formatter,
+                "block {block} instruction {instruction} return operand {operand} must be an AX word use"
             ),
         }
     }
@@ -523,6 +536,26 @@ fn return_cleanup(
 
     match values {
         [] => Ok(cleanup),
+        [word] => {
+            let word_register = register(word, block, instruction, 0)?;
+            if !X86RegisterClass::Word.members().contains(&word_register) {
+                return Err(BasicAbiExpansionError::WrongRegisterWidth {
+                    block,
+                    instruction: instruction.id,
+                    operand: 0,
+                    expected: "word",
+                    actual: word_register,
+                });
+            }
+            if word.role != OperandRole::Use || word_register != X86Register::Ax {
+                return Err(BasicAbiExpansionError::ReturnValueContract {
+                    block,
+                    instruction: instruction.id,
+                    operand: 0,
+                });
+            }
+            Ok(cleanup)
+        }
         [low, high] => {
             let low_register = register(low, block, instruction, 0)?;
             let high_register = register(high, block, instruction, 1)?;
@@ -879,6 +912,35 @@ mod tests {
     }
 
     #[test]
+    fn strips_word_return_metadata_but_keeps_callee_cleanup() {
+        let input = function(vec![pseudo(
+            4,
+            X86Opcode::ReturnFar,
+            vec![
+                register_operand(X86Register::Ax, OperandRole::Use),
+                immediate(2),
+            ],
+        )]);
+        let expanded = expand_allocated_basic_abi(&input).unwrap();
+        assert_eq!(
+            expanded.blocks[0].instructions[0].operands,
+            vec![immediate(2)]
+        );
+
+        let without_cleanup = function(vec![pseudo(
+            5,
+            X86Opcode::ReturnFar,
+            vec![register_operand(X86Register::Ax, OperandRole::Use)],
+        )]);
+        assert!(expand_allocated_basic_abi(&without_cleanup)
+            .unwrap()
+            .blocks[0]
+            .instructions[0]
+            .operands
+            .is_empty());
+    }
+
+    #[test]
     fn strips_long_return_metadata_but_keeps_callee_cleanup() {
         let input = function(vec![pseudo(
             4,
@@ -981,6 +1043,36 @@ mod tests {
         assert!(matches!(
             expand_allocated_basic_abi(&bad_return),
             Err(BasicAbiExpansionError::LongReturnOrder { .. })
+        ));
+
+        let wrong_word_return_register = function(vec![pseudo(
+            0,
+            X86Opcode::ReturnFar,
+            vec![register_operand(X86Register::Bx, OperandRole::Use)],
+        )]);
+        assert!(matches!(
+            expand_allocated_basic_abi(&wrong_word_return_register),
+            Err(BasicAbiExpansionError::ReturnValueContract { .. })
+        ));
+
+        let wrong_word_return_role = function(vec![pseudo(
+            0,
+            X86Opcode::ReturnFar,
+            vec![register_operand(X86Register::Ax, OperandRole::Def)],
+        )]);
+        assert!(matches!(
+            expand_allocated_basic_abi(&wrong_word_return_role),
+            Err(BasicAbiExpansionError::ReturnValueContract { .. })
+        ));
+
+        let wrong_word_return_width = function(vec![pseudo(
+            0,
+            X86Opcode::ReturnFar,
+            vec![register_operand(X86Register::Eax, OperandRole::Use)],
+        )]);
+        assert!(matches!(
+            expand_allocated_basic_abi(&wrong_word_return_width),
+            Err(BasicAbiExpansionError::WrongRegisterWidth { .. })
         ));
 
         let stack_pointer = function(vec![pseudo(

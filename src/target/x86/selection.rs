@@ -935,6 +935,22 @@ impl<'types> FunctionSelector<'types> {
                 )?;
             }
             InstructionKind::Binary { op, left, right } => {
+                if matches!(
+                    op,
+                    BinaryOp::SignedDivide
+                        | BinaryOp::UnsignedDivide
+                        | BinaryOp::SignedRemainder
+                        | BinaryOp::UnsignedRemainder
+                ) {
+                    return self.select_integer_division(
+                        block,
+                        instruction,
+                        *op,
+                        left,
+                        right,
+                        output,
+                    );
+                }
                 let opcode = match op {
                     BinaryOp::Add => X86Opcode::Add,
                     BinaryOp::Subtract => X86Opcode::Sub,
@@ -945,8 +961,8 @@ impl<'types> FunctionSelector<'types> {
                     BinaryOp::SignedDivide
                     | BinaryOp::UnsignedDivide
                     | BinaryOp::SignedRemainder
-                    | BinaryOp::UnsignedRemainder
-                    | BinaryOp::ShiftLeft
+                    | BinaryOp::UnsignedRemainder => unreachable!("handled above"),
+                    BinaryOp::ShiftLeft
                     | BinaryOp::LogicalShiftRight
                     | BinaryOp::ArithmeticShiftRight
                     | BinaryOp::FloatAdd
@@ -1027,6 +1043,95 @@ impl<'types> FunctionSelector<'types> {
         Ok(())
     }
 
+    /// Selects x86's one-operand integer division family.
+    ///
+    /// The Machine operands make all of the architectural effects explicit:
+    /// high and low dividend inputs, the flexible divisor, and both quotient
+    /// and remainder definitions.  Fixed constraints are deliberately local;
+    /// allocation splits them into short ranges rather than pinning source
+    /// values to AX/EAX or DX/EDX for their entire lifetime.
+    fn select_integer_division(
+        &mut self,
+        block: BlockId,
+        instruction: &Instruction,
+        op: BinaryOp,
+        left: &Operand,
+        right: &Operand,
+        output: &mut Vec<MachineInstruction>,
+    ) -> Result<(), SelectionError> {
+        let result = self.result_definition(block, instruction)?;
+        let bits = self.integer_bits(result.type_id)?;
+        if !matches!(bits, 16 | 32) {
+            return Err(SelectionError::UnsupportedBinary {
+                function: self.function.id,
+                block,
+                instruction: instruction.id,
+            });
+        }
+        let signed = matches!(op, BinaryOp::SignedDivide | BinaryOp::SignedRemainder);
+        let remainder = matches!(op, BinaryOp::SignedRemainder | BinaryOp::UnsignedRemainder);
+        let class = self.integer_class(result.type_id)?;
+        let left = self.select_operand(block, instruction.id, left, result.type_id, output)?;
+        let right = self.select_operand(block, instruction.id, right, result.type_id, output)?;
+        let left = self.materialize_register(left, output)?;
+        let divisor = self.materialize_register(right, output)?;
+
+        let low = self.fresh_virtual_register(class)?;
+        let high = self.fresh_virtual_register(class)?;
+        let quotient = self.fresh_virtual_register(class)?;
+        let remainder_value = self.fresh_virtual_register(class)?;
+        let (low_register, high_register) = if bits == 16 {
+            (X86Register::Ax, X86Register::Dx)
+        } else {
+            (X86Register::Eax, X86Register::Edx)
+        };
+
+        self.copy(low, left, output)?;
+        if signed {
+            self.push_instruction(
+                X86Opcode::CwdCdq,
+                vec![
+                    fixed_virtual_operand(high, OperandRole::Def, high_register),
+                    fixed_virtual_operand(low, OperandRole::Use, low_register),
+                ],
+                InstructionFlags::NONE,
+                output,
+            )?;
+        } else {
+            self.push_instruction(
+                X86Opcode::Mov,
+                vec![
+                    fixed_virtual_operand(high, OperandRole::Def, high_register),
+                    immediate_operand(0),
+                ],
+                InstructionFlags::NONE,
+                output,
+            )?;
+        }
+        self.push_instruction(
+            if signed {
+                X86Opcode::Idiv
+            } else {
+                X86Opcode::Div
+            },
+            vec![
+                fixed_virtual_operand(high, OperandRole::Use, high_register),
+                fixed_virtual_operand(low, OperandRole::Use, low_register),
+                virtual_operand(divisor, OperandRole::Use),
+                fixed_virtual_operand(quotient, OperandRole::Def, low_register),
+                fixed_virtual_operand(remainder_value, OperandRole::Def, high_register),
+            ],
+            InstructionFlags::NONE,
+            output,
+        )?;
+        let result = self.define_register_value(result)?;
+        self.copy(
+            result,
+            if remainder { remainder_value } else { quotient },
+            output,
+        )
+    }
+
     /// Selects a byte offset from a pointer.  The portable instruction's
     /// index has already been scaled by its producer.
     fn select_get_element_pointer(
@@ -1092,8 +1197,7 @@ impl<'types> FunctionSelector<'types> {
                 immediate_operand(integer_immediate(*value, 16))
             }
             _ => {
-                let offset =
-                    self.select_operand(block, instruction.id, index, index_type, output)?;
+                let offset = self.select_operand(block, instruction.id, index, index_type, output)?;
                 let offset = self.materialize_register(offset, output)?;
                 virtual_operand(offset, OperandRole::Use)
             }
@@ -1146,7 +1250,8 @@ impl<'types> FunctionSelector<'types> {
                 immediate_operand(integer_immediate(*value, 16))
             }
             _ => {
-                let offset = self.select_operand(block, instruction.id, index, index_type, output)?;
+                let offset =
+                    self.select_operand(block, instruction.id, index, index_type, output)?;
                 let offset = self.materialize_register(offset, output)?;
                 virtual_operand(offset, OperandRole::Use)
             }
@@ -1266,7 +1371,7 @@ impl<'types> FunctionSelector<'types> {
         };
         let left_type = self.operand_type(block, instruction.id, left)?;
         let right_type = self.operand_type(block, instruction.id, right)?;
-        if left_type != right_type || self.integer_bits(left_type)? != 16 {
+        if left_type != right_type || !matches!(self.integer_bits(left_type)?, 16 | 32) {
             return Err(SelectionError::UnsupportedCompare {
                 function: self.function.id,
                 block,
@@ -1326,15 +1431,40 @@ impl<'types> FunctionSelector<'types> {
             });
         }
         let operand_type = self.operand_type(block, instruction.id, operand)?;
-        if op == CastOp::SignExtend {
-            return self.select_sign_extend_word_to_dword(
-                block,
-                instruction,
-                operand,
-                operand_type,
-                to,
-                output,
-            );
+        match op {
+            CastOp::Truncate => {
+                return self.select_truncate_dword_to_word(
+                    block,
+                    instruction,
+                    operand,
+                    operand_type,
+                    to,
+                    output,
+                );
+            }
+            CastOp::SignExtend => {
+                return self.select_extend_word_to_dword(
+                    block,
+                    instruction,
+                    operand,
+                    operand_type,
+                    to,
+                    X86Opcode::SignExtendWordToDword,
+                    output,
+                );
+            }
+            CastOp::ZeroExtend => {
+                return self.select_extend_word_to_dword(
+                    block,
+                    instruction,
+                    operand,
+                    operand_type,
+                    to,
+                    X86Opcode::ZeroExtendWordToDword,
+                    output,
+                );
+            }
+            _ => {}
         }
         if op != CastOp::Bitcast {
             return Err(SelectionError::UnsupportedCast {
@@ -1369,13 +1499,45 @@ impl<'types> FunctionSelector<'types> {
         self.insert_value(result, selected.location)
     }
 
-    fn select_sign_extend_word_to_dword(
+    fn select_truncate_dword_to_word(
         &mut self,
         block: BlockId,
         instruction: &Instruction,
         operand: &Operand,
         source_type: TypeId,
         destination_type: TypeId,
+        output: &mut Vec<MachineInstruction>,
+    ) -> Result<(), SelectionError> {
+        if self.integer_bits(source_type)? != 32 || self.integer_bits(destination_type)? != 16 {
+            return Err(SelectionError::UnsupportedCast {
+                function: self.function.id,
+                block,
+                instruction: instruction.id,
+            });
+        }
+        let source = self.select_operand(block, instruction.id, operand, source_type, output)?;
+        let source = self.materialize_register(source, output)?;
+        let destination =
+            self.define_register_value(self.result_definition(block, instruction)?)?;
+        self.push_instruction(
+            X86Opcode::LowWord,
+            vec![
+                virtual_operand(destination, OperandRole::Def),
+                virtual_operand(source, OperandRole::Use),
+            ],
+            InstructionFlags::NONE,
+            output,
+        )
+    }
+
+    fn select_extend_word_to_dword(
+        &mut self,
+        block: BlockId,
+        instruction: &Instruction,
+        operand: &Operand,
+        source_type: TypeId,
+        destination_type: TypeId,
+        opcode: X86Opcode,
         output: &mut Vec<MachineInstruction>,
     ) -> Result<(), SelectionError> {
         if self.integer_bits(source_type)? != 16 || self.integer_bits(destination_type)? != 32 {
@@ -1390,7 +1552,7 @@ impl<'types> FunctionSelector<'types> {
         let destination =
             self.define_register_value(self.result_definition(block, instruction)?)?;
         self.push_instruction(
-            X86Opcode::SignExtendWordToDword,
+            opcode,
             vec![
                 virtual_operand(destination, OperandRole::Def),
                 virtual_operand(source, OperandRole::Use),
@@ -1649,6 +1811,25 @@ impl<'types> FunctionSelector<'types> {
                         values: instruction.results.len(),
                     });
                 }
+                self.push_instruction(X86Opcode::CallFar, operands, call_flags(effects), output)
+            }
+            TypeKind::Integer { bits: 16 } => {
+                let result = self.result_definition(block, instruction)?;
+                if result.type_id != target.signature.result {
+                    return Err(SelectionError::OperandTypeMismatch {
+                        function: self.function.id,
+                        block,
+                        instruction: instruction.id,
+                        expected: target.signature.result,
+                        actual: result.type_id,
+                    });
+                }
+                let result = self.define_register_value(result)?;
+                operands.push(fixed_virtual_operand(
+                    result,
+                    OperandRole::Def,
+                    X86Register::Ax,
+                ));
                 self.push_instruction(X86Opcode::CallFar, operands, call_flags(effects), output)
             }
             TypeKind::Integer { bits: 32 } => {
@@ -2012,15 +2193,16 @@ impl<'types> FunctionSelector<'types> {
                 ) {
                     return self.select_caller_cleanup_integer_return(block, value, output);
                 }
-                if !matches!(
-                    self.type_kind(self.function.signature.result)?,
-                    TypeKind::Integer { bits: 32 }
-                ) {
-                    return Err(SelectionError::UnsupportedReturnValue {
-                        function: self.function.id,
-                        block: block.id,
-                    });
-                }
+                let bits = match self.type_kind(self.function.signature.result)? {
+                    TypeKind::Integer { bits: 16 } => 16,
+                    TypeKind::Integer { bits: 32 } => 32,
+                    _ => {
+                        return Err(SelectionError::UnsupportedReturnValue {
+                            function: self.function.id,
+                            block: block.id,
+                        });
+                    }
+                };
                 let Operand::Value(value) = value else {
                     return Err(SelectionError::UnsupportedReturnValue {
                         function: self.function.id,
@@ -2040,33 +2222,42 @@ impl<'types> FunctionSelector<'types> {
                     });
                 }
                 let value = self.materialize_register(selected, output)?;
-                let low = self.fresh_virtual_register(X86RegisterClass::Word.machine_class())?;
-                let high = self.fresh_virtual_register(X86RegisterClass::Word.machine_class())?;
-                self.push_instruction(
-                    X86Opcode::LowWord,
-                    vec![
-                        fixed_virtual_operand(low, OperandRole::Def, X86Register::Ax),
-                        virtual_operand(value, OperandRole::Use),
-                    ],
-                    InstructionFlags::NONE,
-                    output,
-                )?;
-                self.push_instruction(
-                    X86Opcode::HighWord,
-                    vec![
-                        fixed_virtual_operand(high, OperandRole::Def, X86Register::Dx),
-                        virtual_operand(value, OperandRole::Use),
-                    ],
-                    InstructionFlags::NONE,
-                    output,
-                )?;
-                let return_far = self.machine_instruction(
-                    X86Opcode::ReturnFar,
+                let mut operands = if bits == 16 {
+                    vec![fixed_virtual_operand(
+                        value,
+                        OperandRole::Use,
+                        X86Register::Ax,
+                    )]
+                } else {
+                    let low = self.fresh_virtual_register(X86RegisterClass::Word.machine_class())?;
+                    let high = self.fresh_virtual_register(X86RegisterClass::Word.machine_class())?;
+                    self.push_instruction(
+                        X86Opcode::LowWord,
+                        vec![
+                            fixed_virtual_operand(low, OperandRole::Def, X86Register::Ax),
+                            virtual_operand(value, OperandRole::Use),
+                        ],
+                        InstructionFlags::NONE,
+                        output,
+                    )?;
+                    self.push_instruction(
+                        X86Opcode::HighWord,
+                        vec![
+                            fixed_virtual_operand(high, OperandRole::Def, X86Register::Dx),
+                            virtual_operand(value, OperandRole::Use),
+                        ],
+                        InstructionFlags::NONE,
+                        output,
+                    )?;
                     vec![
                         fixed_virtual_operand(low, OperandRole::Use, X86Register::Ax),
                         fixed_virtual_operand(high, OperandRole::Use, X86Register::Dx),
-                        immediate_operand(i64::from(self.argument_bytes()?)),
-                    ],
+                    ]
+                };
+                operands.push(immediate_operand(i64::from(self.argument_bytes()?)));
+                let return_far = self.machine_instruction(
+                    X86Opcode::ReturnFar,
+                    operands,
                     InstructionFlags {
                         terminator: true,
                         ..InstructionFlags::NONE
@@ -2856,6 +3047,158 @@ mod tests {
             globals,
             functions: Vec::new(),
         }
+    }
+
+    #[test]
+    fn selects_every_word_and_dword_integer_divide_projection_with_explicit_pair_effects() {
+        // Python's DIVIDE_PAIR contract is quotient in AX/EAX and remainder
+        // in DX/EDX, while the dividend is read high then low.  Each source
+        // projection still has to define both architectural results.
+        for (type_id, bits) in [(I16, 16), (I32, 32)] {
+            for (op, signed, wants_remainder) in [
+                (BinaryOp::SignedDivide, true, false),
+                (BinaryOp::SignedRemainder, true, true),
+                (BinaryOp::UnsignedDivide, false, false),
+                (BinaryOp::UnsignedRemainder, false, true),
+            ] {
+                let left = Value {
+                    id: ValueId::new(0),
+                    type_id,
+                };
+                let right = Value {
+                    id: ValueId::new(1),
+                    type_id,
+                };
+                let result = Value {
+                    id: ValueId::new(2),
+                    type_id,
+                };
+                let input = module(
+                    basic_types(),
+                    vec![function(
+                        vec![Block {
+                            id: BlockId::new(0),
+                            instructions: vec![Instruction {
+                                id: crate::ir::InstructionId::new(0),
+                                results: vec![result],
+                                kind: InstructionKind::Binary {
+                                    op,
+                                    left: Operand::Value(left.id),
+                                    right: Operand::Value(right.id),
+                                },
+                            }],
+                            terminator: Terminator::Return(None),
+                        }],
+                        vec![left, right],
+                    )],
+                );
+                let selected = select_module(&input).expect("integer division selects");
+                super::super::verify_machine(&selected).expect("division Machine IR verifies");
+                let instructions = &selected.functions[0].blocks[0].instructions;
+                let divide = instructions
+                    .iter()
+                    .find(|instruction| {
+                        instruction.opcode
+                            == if signed {
+                                X86Opcode::Idiv.machine_opcode()
+                            } else {
+                                X86Opcode::Div.machine_opcode()
+                            }
+                    })
+                    .expect("selected div/idiv");
+                assert_eq!(divide.operands.len(), 5);
+                let (low, high) = if bits == 16 {
+                    (X86Register::Ax, X86Register::Dx)
+                } else {
+                    (X86Register::Eax, X86Register::Edx)
+                };
+                for (operand, role, fixed) in [
+                    (&divide.operands[0], OperandRole::Use, high),
+                    (&divide.operands[1], OperandRole::Use, low),
+                    (&divide.operands[3], OperandRole::Def, low),
+                    (&divide.operands[4], OperandRole::Def, high),
+                ] {
+                    assert_eq!(operand.role, role);
+                    assert_eq!(
+                        operand.constraint,
+                        Some(RegisterConstraint::Fixed(fixed.physical()))
+                    );
+                }
+                assert_eq!(divide.operands[2].role, OperandRole::Use);
+                assert_eq!(
+                    divide.operands[2].constraint, None,
+                    "divisor stays flexible"
+                );
+                assert!(instructions.iter().any(|instruction| {
+                    instruction.opcode == X86Opcode::Copy.machine_opcode()
+                        && instruction.operands[1].kind
+                            == divide.operands[if wants_remainder { 4 } else { 3 }].kind
+                }));
+                if signed {
+                    assert!(instructions.iter().any(
+                        |instruction| instruction.opcode == X86Opcode::CwdCdq.machine_opcode()
+                    ));
+                } else {
+                    assert!(instructions.iter().any(|instruction| {
+                        instruction.opcode == X86Opcode::Mov.machine_opcode()
+                            && instruction.operands[0].constraint
+                                == Some(RegisterConstraint::Fixed(high.physical()))
+                            && instruction.operands[1] == immediate_operand(0)
+                    }));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn selects_signed_i32_constant_division_as_materialized_divisor_cdq_and_idiv() {
+        // The qlight scale kernel has this ordinary shape: a signed dword
+        // product divided by a positive integer constant.  This is a target
+        // contract test, not a fixture-specific selection rule.
+        let dividend = Value {
+            id: ValueId::new(0),
+            type_id: I32,
+        };
+        let result = Value {
+            id: ValueId::new(1),
+            type_id: I32,
+        };
+        let input = module(
+            basic_types(),
+            vec![function(
+                vec![Block {
+                    id: BlockId::new(0),
+                    instructions: vec![Instruction {
+                        id: crate::ir::InstructionId::new(0),
+                        results: vec![result],
+                        kind: InstructionKind::Binary {
+                            op: BinaryOp::SignedDivide,
+                            left: Operand::Value(dividend.id),
+                            right: Operand::Constant(TypedConstant {
+                                type_id: I32,
+                                value: Constant::Integer(120),
+                            }),
+                        },
+                    }],
+                    terminator: Terminator::Return(None),
+                }],
+                vec![dividend],
+            )],
+        );
+        let selected = select_module(&input).expect("signed i32 division selects");
+        let instructions = &selected.functions[0].blocks[0].instructions;
+        let idiv = instructions
+            .iter()
+            .find(|instruction| instruction.opcode == X86Opcode::Idiv.machine_opcode())
+            .expect("signed dword idiv");
+        assert!(instructions.iter().any(|instruction| {
+            instruction.opcode == X86Opcode::Mov.machine_opcode()
+                && instruction.operands[1] == immediate_operand(120)
+                && instruction.operands[0].kind == idiv.operands[2].kind
+        }));
+        assert!(instructions
+            .iter()
+            .any(|instruction| instruction.opcode == X86Opcode::CwdCdq.machine_opcode()));
     }
 
     fn basic_types() -> Vec<Type> {
@@ -3887,98 +4230,100 @@ mod tests {
     }
 
     #[test]
-    fn selects_i16_integer_branch_predicates_and_scalar_for_bounds() {
+    fn selects_word_and_dword_integer_branch_predicates_and_scalar_for_bounds() {
         // qbopt.backend.lower._BRANCHES is the Python target oracle.  First
         // check each integer predicate it names against x86's condition code.
-        for (predicate, condition) in [
-            (ComparePredicate::Equal, ConditionCode::Equal),
-            (ComparePredicate::NotEqual, ConditionCode::NotEqual),
-            (ComparePredicate::SignedLessThan, ConditionCode::Less),
-            (
-                ComparePredicate::SignedLessEqual,
-                ConditionCode::LessOrEqual,
-            ),
-            (ComparePredicate::SignedGreaterThan, ConditionCode::Greater),
-            (
-                ComparePredicate::SignedGreaterEqual,
-                ConditionCode::GreaterOrEqual,
-            ),
-            (ComparePredicate::UnsignedLessThan, ConditionCode::Below),
-            (
-                ComparePredicate::UnsignedLessEqual,
-                ConditionCode::BelowOrEqual,
-            ),
-            (ComparePredicate::UnsignedGreaterThan, ConditionCode::Above),
-            (
-                ComparePredicate::UnsignedGreaterEqual,
-                ConditionCode::AboveOrEqual,
-            ),
-        ] {
-            let left = Value {
-                id: ValueId::new(0),
-                type_id: I16,
-            };
-            let right = Value {
-                id: ValueId::new(1),
-                type_id: I16,
-            };
-            let compared = Value {
-                id: ValueId::new(2),
-                type_id: I1,
-            };
-            let function = function(
-                vec![
-                    Block {
-                        id: BlockId::new(0),
-                        instructions: vec![Instruction {
-                            id: crate::ir::InstructionId::new(0),
-                            results: vec![compared.clone()],
-                            kind: InstructionKind::Compare {
-                                predicate,
-                                left: Operand::Value(left.id),
-                                right: Operand::Value(right.id),
+        for type_id in [I16, I32] {
+            for (predicate, condition) in [
+                (ComparePredicate::Equal, ConditionCode::Equal),
+                (ComparePredicate::NotEqual, ConditionCode::NotEqual),
+                (ComparePredicate::SignedLessThan, ConditionCode::Less),
+                (
+                    ComparePredicate::SignedLessEqual,
+                    ConditionCode::LessOrEqual,
+                ),
+                (ComparePredicate::SignedGreaterThan, ConditionCode::Greater),
+                (
+                    ComparePredicate::SignedGreaterEqual,
+                    ConditionCode::GreaterOrEqual,
+                ),
+                (ComparePredicate::UnsignedLessThan, ConditionCode::Below),
+                (
+                    ComparePredicate::UnsignedLessEqual,
+                    ConditionCode::BelowOrEqual,
+                ),
+                (ComparePredicate::UnsignedGreaterThan, ConditionCode::Above),
+                (
+                    ComparePredicate::UnsignedGreaterEqual,
+                    ConditionCode::AboveOrEqual,
+                ),
+            ] {
+                let left = Value {
+                    id: ValueId::new(0),
+                    type_id,
+                };
+                let right = Value {
+                    id: ValueId::new(1),
+                    type_id,
+                };
+                let compared = Value {
+                    id: ValueId::new(2),
+                    type_id: I1,
+                };
+                let function = function(
+                    vec![
+                        Block {
+                            id: BlockId::new(0),
+                            instructions: vec![Instruction {
+                                id: crate::ir::InstructionId::new(0),
+                                results: vec![compared.clone()],
+                                kind: InstructionKind::Compare {
+                                    predicate,
+                                    left: Operand::Value(left.id),
+                                    right: Operand::Value(right.id),
+                                },
+                            }],
+                            terminator: Terminator::Branch {
+                                condition: Operand::Value(compared.id),
+                                then_block: BlockId::new(1),
+                                else_block: BlockId::new(2),
                             },
-                        }],
-                        terminator: Terminator::Branch {
-                            condition: Operand::Value(compared.id),
-                            then_block: BlockId::new(1),
-                            else_block: BlockId::new(2),
                         },
-                    },
-                    Block {
-                        id: BlockId::new(1),
-                        instructions: Vec::new(),
-                        terminator: Terminator::Return(None),
-                    },
-                    Block {
-                        id: BlockId::new(2),
-                        instructions: Vec::new(),
-                        terminator: Terminator::Return(None),
-                    },
-                ],
-                vec![left, right],
-            );
+                        Block {
+                            id: BlockId::new(1),
+                            instructions: Vec::new(),
+                            terminator: Terminator::Return(None),
+                        },
+                        Block {
+                            id: BlockId::new(2),
+                            instructions: Vec::new(),
+                            terminator: Terminator::Return(None),
+                        },
+                    ],
+                    vec![left, right],
+                );
 
-            let selected = select_module(&module(basic_types(), vec![function])).unwrap();
-            selected.verify().unwrap();
-            let block = &selected.functions[0].blocks[0];
-            let left_register = block.instructions[0].operands[0].kind.clone();
-            let right_register = block.instructions[1].operands[0].kind.clone();
-            assert_eq!(
-                block.instructions[2]
-                    .operands
-                    .iter()
-                    .map(|operand| operand.kind.clone())
-                    .collect::<Vec<_>>(),
-                vec![left_register, right_register]
-            );
-            assert_eq!(
-                block.instructions[3].operands,
-                vec![
-                    immediate_operand(i64::from(condition as u8)),
-                    block_operand(MachineBlockId::new(1)),
-                ]
-            );
+                let selected = select_module(&module(basic_types(), vec![function])).unwrap();
+                super::super::verify_machine(&selected).unwrap();
+                let block = &selected.functions[0].blocks[0];
+                let left_register = block.instructions[0].operands[0].kind.clone();
+                let right_register = block.instructions[1].operands[0].kind.clone();
+                assert_eq!(
+                    block.instructions[2]
+                        .operands
+                        .iter()
+                        .map(|operand| operand.kind.clone())
+                        .collect::<Vec<_>>(),
+                    vec![left_register, right_register]
+                );
+                assert_eq!(
+                    block.instructions[3].operands,
+                    vec![
+                        immediate_operand(i64::from(condition as u8)),
+                        block_operand(MachineBlockId::new(1)),
+                    ]
+                );
+            }
         }
 
         // bench/parity/scalar.bas has this scalar FOR dispatch: a nonnegative
@@ -4170,15 +4515,15 @@ mod tests {
             Err(SelectionError::UnsupportedCompare { .. })
         ));
 
-        let dword_left = Value {
+        let byte_left = Value {
             id: ValueId::new(0),
-            type_id: I32,
+            type_id: I8,
         };
-        let dword_right = Value {
+        let byte_right = Value {
             id: ValueId::new(1),
-            type_id: I32,
+            type_id: I8,
         };
-        let dword_result = Value {
+        let byte_result = Value {
             id: ValueId::new(2),
             type_id: I1,
         };
@@ -4187,77 +4532,109 @@ mod tests {
                 id: BlockId::new(0),
                 instructions: vec![Instruction {
                     id: crate::ir::InstructionId::new(0),
-                    results: vec![dword_result],
+                    results: vec![byte_result],
                     kind: InstructionKind::Compare {
                         predicate: ComparePredicate::SignedLessEqual,
-                        left: Operand::Value(dword_left.id),
-                        right: Operand::Value(dword_right.id),
+                        left: Operand::Value(byte_left.id),
+                        right: Operand::Value(byte_right.id),
                     },
                 }],
                 terminator: Terminator::Return(None),
             }],
-            vec![dword_left, dword_right],
+            vec![byte_left, byte_right],
         );
+        let mut byte_types = basic_types();
+        byte_types.push(Type {
+            id: I8,
+            kind: TypeKind::Integer { bits: 8 },
+        });
         assert!(matches!(
-            select_module(&module(basic_types(), vec![unsupported_width])),
+            select_module(&module(byte_types, vec![unsupported_width])),
             Err(SelectionError::UnsupportedCompare { .. })
         ));
     }
 
     #[test]
-    fn selects_sign_extend_i16_to_i32_cast_as_movsx() {
-        // Python cfront.raise_hir._Raise.convert creates a signed widening;
-        // backend.lower names it movsx once the destination is wider.
-        let source = Value {
-            id: ValueId::new(0),
-            type_id: I16,
-        };
-        let widened = Value {
-            id: ValueId::new(1),
-            type_id: I32,
-        };
-        let function = function(
-            vec![Block {
-                id: BlockId::new(0),
-                instructions: vec![Instruction {
-                    id: crate::ir::InstructionId::new(0),
-                    results: vec![widened],
-                    kind: InstructionKind::Cast {
-                        op: CastOp::SignExtend,
-                        operand: Operand::Value(source.id),
-                        to: I32,
-                    },
+    fn selects_word_and_dword_integer_casts() {
+        // Python lower represents a truncate as a low-word view, and signed
+        // and unsigned widening as movsx and movzx respectively.
+        for (op, source_type, destination_type, opcode, destination_class, source_class) in [
+            (
+                CastOp::Truncate,
+                I32,
+                I16,
+                X86Opcode::LowWord,
+                X86RegisterClass::Word,
+                X86RegisterClass::Dword,
+            ),
+            (
+                CastOp::SignExtend,
+                I16,
+                I32,
+                X86Opcode::SignExtendWordToDword,
+                X86RegisterClass::Dword,
+                X86RegisterClass::Word,
+            ),
+            (
+                CastOp::ZeroExtend,
+                I16,
+                I32,
+                X86Opcode::ZeroExtendWordToDword,
+                X86RegisterClass::Dword,
+                X86RegisterClass::Word,
+            ),
+        ] {
+            let source = Value {
+                id: ValueId::new(0),
+                type_id: source_type,
+            };
+            let result = Value {
+                id: ValueId::new(1),
+                type_id: destination_type,
+            };
+            let function = function(
+                vec![Block {
+                    id: BlockId::new(0),
+                    instructions: vec![Instruction {
+                        id: crate::ir::InstructionId::new(0),
+                        results: vec![result],
+                        kind: InstructionKind::Cast {
+                            op,
+                            operand: Operand::Value(source.id),
+                            to: destination_type,
+                        },
+                    }],
+                    terminator: Terminator::Return(None),
                 }],
-                terminator: Terminator::Return(None),
-            }],
-            vec![source],
-        );
+                vec![source],
+            );
 
-        let selected = select_module(&module(basic_types(), vec![function])).unwrap();
-        selected.verify().unwrap();
-        let instructions = &selected.functions[0].blocks[0].instructions;
-        assert_eq!(
-            instructions[1].opcode,
-            X86Opcode::SignExtendWordToDword.machine_opcode()
-        );
-        assert!(matches!(
-            instructions[1].operands.as_slice(),
-            [
-                MachineOperand {
-                    kind: MachineOperandKind::Register(MachineRegister::Virtual(destination)),
-                    role: OperandRole::Def,
-                    constraint: None,
-                    tied_to: None,
-                },
-                MachineOperand {
-                    kind: MachineOperandKind::Register(MachineRegister::Virtual(source)),
-                    role: OperandRole::Use,
-                    constraint: None,
-                    tied_to: None,
-                },
-            ] if selected.functions[0].virtual_registers.iter().any(|register| register.id == *destination && register.class == X86RegisterClass::Dword.machine_class())
-                && selected.functions[0].virtual_registers.iter().any(|register| register.id == *source && register.class == X86RegisterClass::Word.machine_class())
-        ));
+            let selected = select_module(&module(basic_types(), vec![function])).unwrap();
+            super::super::verify_machine(&selected).unwrap();
+            let instruction = selected.functions[0].blocks[0]
+                .instructions
+                .iter()
+                .find(|instruction| instruction.opcode == opcode.machine_opcode())
+                .expect("selected cast opcode");
+            assert!(matches!(
+                instruction.operands.as_slice(),
+                [
+                    MachineOperand {
+                        kind: MachineOperandKind::Register(MachineRegister::Virtual(destination)),
+                        role: OperandRole::Def,
+                        constraint: None,
+                        tied_to: None,
+                    },
+                    MachineOperand {
+                        kind: MachineOperandKind::Register(MachineRegister::Virtual(source)),
+                        role: OperandRole::Use,
+                        constraint: None,
+                        tied_to: None,
+                    },
+                ] if selected.functions[0].virtual_registers.iter().any(|register| register.id == *destination && register.class == destination_class.machine_class())
+                    && selected.functions[0].virtual_registers.iter().any(|register| register.id == *source && register.class == source_class.machine_class())
+            ));
+        }
     }
 
     #[test]
@@ -4679,6 +5056,138 @@ mod tests {
     }
 
     #[test]
+    fn selects_far_pascal_i16_call_result_in_ax_without_caller_cleanup() {
+        let callee = Function {
+            id: FunctionId::new(5),
+            name: "sum".into(),
+            signature: Signature {
+                result: I16,
+                parameters: vec![I16, I16],
+                variadic: false,
+                calling_convention: CallingConvention::FarPascal,
+            },
+            linkage: Linkage::Internal,
+            attributes: Vec::new(),
+            parameters: vec![
+                Value {
+                    id: ValueId::new(0),
+                    type_id: I16,
+                },
+                Value {
+                    id: ValueId::new(1),
+                    type_id: I16,
+                },
+            ],
+            blocks: vec![Block {
+                id: BlockId::new(0),
+                instructions: Vec::new(),
+                terminator: Terminator::Return(Some(Operand::Value(ValueId::new(0)))),
+            }],
+        };
+        let caller = Function {
+            id: FunctionId::new(4),
+            name: "main".into(),
+            signature: Signature {
+                result: I16,
+                parameters: Vec::new(),
+                variadic: false,
+                calling_convention: CallingConvention::FarPascal,
+            },
+            linkage: Linkage::Internal,
+            attributes: Vec::new(),
+            parameters: Vec::new(),
+            blocks: vec![Block {
+                id: BlockId::new(0),
+                instructions: vec![Instruction {
+                    id: crate::ir::InstructionId::new(0),
+                    results: vec![Value {
+                        id: ValueId::new(0),
+                        type_id: I16,
+                    }],
+                    kind: InstructionKind::Call {
+                        callee: Callee::Direct(callee.id),
+                        arguments: vec![
+                            Operand::Constant(TypedConstant {
+                                type_id: I16,
+                                value: Constant::Integer(11),
+                            }),
+                            Operand::Constant(TypedConstant {
+                                type_id: I16,
+                                value: Constant::Integer(22),
+                            }),
+                        ],
+                        effects: Effects::NONE,
+                    },
+                }],
+                terminator: Terminator::Return(Some(Operand::Value(ValueId::new(0)))),
+            }],
+        };
+
+        let selected = select_module(&module(basic_types(), vec![caller, callee]))
+            .expect("far Pascal i16 call selects");
+        super::super::verify_machine(&selected).expect("selected Machine IR verifies");
+
+        let caller = &selected.functions[0].blocks[0].instructions;
+        assert_eq!(
+            caller
+                .iter()
+                .map(|instruction| instruction.opcode)
+                .collect::<Vec<_>>(),
+            vec![
+                X86Opcode::Mov.machine_opcode(),
+                X86Opcode::Push.machine_opcode(),
+                X86Opcode::Mov.machine_opcode(),
+                X86Opcode::Push.machine_opcode(),
+                X86Opcode::CallFar.machine_opcode(),
+                X86Opcode::ReturnFar.machine_opcode(),
+            ]
+        );
+        assert_eq!(caller[0].operands[1], immediate_operand(11));
+        assert_eq!(caller[2].operands[1], immediate_operand(22));
+        assert!(matches!(
+            caller[4].operands.as_slice(),
+            [MachineOperand {
+                kind: MachineOperandKind::Function(target),
+                ..
+            }, MachineOperand {
+                role: OperandRole::Def,
+                constraint: Some(RegisterConstraint::Fixed(register)),
+                ..
+            }] if *target == MachineFunctionId::new(5) && *register == X86Register::Ax.physical()
+        ));
+        assert!(matches!(
+            caller[5].operands.as_slice(),
+            [MachineOperand {
+                role: OperandRole::Use,
+                constraint: Some(RegisterConstraint::Fixed(register)),
+                kind,
+                ..
+            }, MachineOperand {
+                kind: MachineOperandKind::Immediate(0),
+                role: OperandRole::None,
+                ..
+            }] if *register == X86Register::Ax.physical() && *kind == caller[4].operands[1].kind
+        ));
+
+        let returned = selected.functions[1].blocks[0]
+            .instructions
+            .last()
+            .expect("callee has return");
+        assert!(matches!(
+            returned.operands.as_slice(),
+            [MachineOperand {
+                role: OperandRole::Use,
+                constraint: Some(RegisterConstraint::Fixed(register)),
+                ..
+            }, MachineOperand {
+                kind: MachineOperandKind::Immediate(4),
+                role: OperandRole::None,
+                ..
+            }] if *register == X86Register::Ax.physical()
+        ));
+    }
+
+    #[test]
     fn selects_far_cdecl_i16_call_return_and_caller_cleanup() {
         let callee = Function {
             id: FunctionId::new(5),
@@ -5029,6 +5538,50 @@ mod tests {
                 .opcode,
             X86Opcode::ReturnNear.machine_opcode()
         );
+    }
+
+    #[test]
+    fn selects_far_pascal_i16_return_in_ax() {
+        // Python's return lowering keeps an ordinary word result as one
+        // value; AX is an ABI boundary occurrence, not the value's lifetime.
+        let value = Value {
+            id: ValueId::new(0),
+            type_id: I16,
+        };
+        let mut function = function(
+            vec![Block {
+                id: BlockId::new(0),
+                instructions: Vec::new(),
+                terminator: Terminator::Return(Some(Operand::Value(value.id))),
+            }],
+            vec![value],
+        );
+        function.signature.result = I16;
+
+        let selected = select_module(&module(basic_types(), vec![function]))
+            .expect("far Pascal i16 return selects");
+        super::super::verify_machine(&selected).expect("selected Machine IR verifies");
+
+        let returned = selected.functions[0].blocks[0]
+            .instructions
+            .last()
+            .expect("function has a return");
+        assert_eq!(returned.opcode, X86Opcode::ReturnFar.machine_opcode());
+        assert!(matches!(
+            returned.operands.as_slice(),
+            [
+                MachineOperand {
+                    role: OperandRole::Use,
+                    constraint: Some(RegisterConstraint::Fixed(register)),
+                    ..
+                },
+                MachineOperand {
+                    kind: MachineOperandKind::Immediate(2),
+                    role: OperandRole::None,
+                    ..
+                }
+            ] if *register == X86Register::Ax.physical()
+        ));
     }
 
     #[test]

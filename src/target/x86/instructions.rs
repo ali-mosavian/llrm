@@ -178,11 +178,17 @@ pub enum X86Opcode {
     SignExtendWordToDword = 33,
     /// Funnel a dword source's upper word into a dword destination's low word.
     ShiftLeftDouble = 34,
+    /// Unsigned division of the implicit DX:AX or EDX:EAX dividend.
+    Div = 35,
+    /// Sign-extend AX into DX or EAX into EDX for a following signed divide.
+    CwdCdq = 36,
+    /// Zero-extend a 16-bit integer register into a 32-bit integer register.
+    ZeroExtendWordToDword = 37,
 }
 
 impl X86Opcode {
     /// Every opcode in stable numeric order.
-    pub const ALL: [Self; 34] = [
+    pub const ALL: [Self; 37] = [
         Self::Copy,
         Self::PhiCopy,
         Self::Mov,
@@ -217,6 +223,9 @@ impl X86Opcode {
         Self::Leave,
         Self::SignExtendWordToDword,
         Self::ShiftLeftDouble,
+        Self::Div,
+        Self::CwdCdq,
+        Self::ZeroExtendWordToDword,
     ];
 
     /// The opaque target-independent Machine IR opcode identifier.
@@ -254,6 +263,7 @@ mod tests {
         assert_eq!(X86Opcode::Copy.machine_opcode().get(), 1);
         assert_eq!(X86Opcode::JumpConditional.machine_opcode().get(), 26);
         assert_eq!(X86Opcode::ShiftLeftDouble.machine_opcode().get(), 34);
+        assert_eq!(X86Opcode::ZeroExtendWordToDword.machine_opcode().get(), 37);
     }
 
     #[test]

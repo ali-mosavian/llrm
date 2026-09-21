@@ -107,8 +107,25 @@ impl Verifier {
                 classes,
                 &[X86RegisterClass::Word],
             ),
-            X86Opcode::SignExtendWordToDword => {
-                self.verify_sign_extend_word_to_dword(function, block, instruction, classes)
+            X86Opcode::SignExtendWordToDword => self.verify_word_to_dword_extension(
+                function,
+                block,
+                instruction,
+                classes,
+                "sign extension",
+            ),
+            X86Opcode::ZeroExtendWordToDword => self.verify_word_to_dword_extension(
+                function,
+                block,
+                instruction,
+                classes,
+                "zero extension",
+            ),
+            X86Opcode::CwdCdq => {
+                self.verify_dividend_extension(function, block, instruction, classes)
+            }
+            X86Opcode::Div | X86Opcode::Idiv => {
+                self.verify_divide(function, block, instruction, classes)
             }
             X86Opcode::ShiftLeftDouble => {
                 self.verify_shift_left_double(function, block, instruction)
@@ -595,19 +612,20 @@ impl Verifier {
         );
     }
 
-    fn verify_sign_extend_word_to_dword(
+    fn verify_word_to_dword_extension(
         &mut self,
         function: &MachineFunction,
         block: &MachineBlock,
         instruction: &MachineInstruction,
         classes: &BTreeMap<VirtualRegisterId, RegisterClass>,
+        name: &str,
     ) {
         let [destination, source] = instruction.operands.as_slice() else {
             self.instruction_error(
                 function,
                 block,
                 instruction,
-                "sign extension requires [dword register def, word register use]",
+                format!("{name} requires [dword register def, word register use]"),
             );
             return;
         };
@@ -636,7 +654,7 @@ impl Verifier {
                 function,
                 block,
                 instruction,
-                "sign extension must have no flags",
+                format!("{name} must have no flags"),
             );
         }
     }
@@ -688,6 +706,268 @@ impl Verifier {
                 block,
                 instruction,
                 "shift-left-double must have no flags",
+            );
+        }
+    }
+
+    fn verify_dividend_extension(
+        &mut self,
+        function: &MachineFunction,
+        block: &MachineBlock,
+        instruction: &MachineInstruction,
+        classes: &BTreeMap<VirtualRegisterId, RegisterClass>,
+    ) {
+        let [high, low] = instruction.operands.as_slice() else {
+            self.instruction_error(
+                function,
+                block,
+                instruction,
+                "cwd/cdq requires [fixed high register def, fixed low register use]",
+            );
+            return;
+        };
+        let Some(width) = self.divide_width(
+            function,
+            block,
+            instruction,
+            high,
+            OperandRole::Def,
+            low,
+            OperandRole::Use,
+            classes,
+        ) else {
+            return;
+        };
+        let (low_register, high_register) = divide_registers(width);
+        self.require_fixed_register(
+            function,
+            block,
+            instruction,
+            0,
+            high,
+            OperandRole::Def,
+            high_register,
+            classes,
+        );
+        self.require_fixed_register(
+            function,
+            block,
+            instruction,
+            1,
+            low,
+            OperandRole::Use,
+            low_register,
+            classes,
+        );
+        if instruction.flags != InstructionFlags::NONE {
+            self.instruction_error(function, block, instruction, "cwd/cdq must have no flags");
+        }
+    }
+
+    fn verify_divide(
+        &mut self,
+        function: &MachineFunction,
+        block: &MachineBlock,
+        instruction: &MachineInstruction,
+        classes: &BTreeMap<VirtualRegisterId, RegisterClass>,
+    ) {
+        let [high, low, divisor, quotient, remainder] = instruction.operands.as_slice() else {
+            self.instruction_error(
+                function,
+                block,
+                instruction,
+                "div/idiv requires [fixed high use, fixed low use, flexible divisor use, fixed quotient def, fixed remainder def]",
+            );
+            return;
+        };
+        let Some(width) = self.divide_width(
+            function,
+            block,
+            instruction,
+            high,
+            OperandRole::Use,
+            low,
+            OperandRole::Use,
+            classes,
+        ) else {
+            return;
+        };
+        let divisor_width = self.require_sized_register(
+            function,
+            block,
+            instruction,
+            2,
+            divisor,
+            OperandRole::Use,
+            classes,
+        );
+        let quotient_width = self.require_sized_register(
+            function,
+            block,
+            instruction,
+            3,
+            quotient,
+            OperandRole::Def,
+            classes,
+        );
+        let remainder_width = self.require_sized_register(
+            function,
+            block,
+            instruction,
+            4,
+            remainder,
+            OperandRole::Def,
+            classes,
+        );
+        for (position, actual) in [
+            (2, divisor_width),
+            (3, quotient_width),
+            (4, remainder_width),
+        ] {
+            if actual != Some(width) {
+                self.operand_error(
+                    function,
+                    block,
+                    instruction,
+                    position,
+                    "must have the dividend width",
+                );
+            }
+        }
+        if divisor.constraint.is_some() || divisor.tied_to.is_some() {
+            self.operand_error(
+                function,
+                block,
+                instruction,
+                2,
+                "divisor must be an unconstrained register use",
+            );
+        }
+        let (low_register, high_register) = divide_registers(width);
+        self.require_fixed_register(
+            function,
+            block,
+            instruction,
+            0,
+            high,
+            OperandRole::Use,
+            high_register,
+            classes,
+        );
+        self.require_fixed_register(
+            function,
+            block,
+            instruction,
+            1,
+            low,
+            OperandRole::Use,
+            low_register,
+            classes,
+        );
+        self.require_fixed_register(
+            function,
+            block,
+            instruction,
+            3,
+            quotient,
+            OperandRole::Def,
+            low_register,
+            classes,
+        );
+        self.require_fixed_register(
+            function,
+            block,
+            instruction,
+            4,
+            remainder,
+            OperandRole::Def,
+            high_register,
+            classes,
+        );
+        if instruction.flags != InstructionFlags::NONE {
+            self.instruction_error(function, block, instruction, "div/idiv must have no flags");
+        }
+    }
+
+    fn divide_width(
+        &mut self,
+        function: &MachineFunction,
+        block: &MachineBlock,
+        instruction: &MachineInstruction,
+        high: &MachineOperand,
+        high_role: OperandRole,
+        low: &MachineOperand,
+        low_role: OperandRole,
+        classes: &BTreeMap<VirtualRegisterId, RegisterClass>,
+    ) -> Option<u32> {
+        let high_width =
+            self.require_sized_register(function, block, instruction, 0, high, high_role, classes);
+        let low_width =
+            self.require_sized_register(function, block, instruction, 1, low, low_role, classes);
+        let width = high_width?;
+        if low_width != Some(width) || !matches!(width, 2 | 4) {
+            self.operand_error(
+                function,
+                block,
+                instruction,
+                1,
+                "must be the matching 16- or 32-bit dividend half",
+            );
+            return None;
+        }
+        Some(width)
+    }
+
+    fn require_fixed_register(
+        &mut self,
+        function: &MachineFunction,
+        block: &MachineBlock,
+        instruction: &MachineInstruction,
+        position: usize,
+        operand: &MachineOperand,
+        role: OperandRole,
+        expected: X86Register,
+        classes: &BTreeMap<VirtualRegisterId, RegisterClass>,
+    ) {
+        let class = if matches!(expected, X86Register::Ax | X86Register::Dx) {
+            X86RegisterClass::Word
+        } else {
+            X86RegisterClass::Dword
+        };
+        self.require_register_class(
+            function,
+            block,
+            instruction,
+            position,
+            operand,
+            role,
+            class,
+            classes,
+        );
+        let valid = matches!(
+            operand,
+            MachineOperand {
+                kind: MachineOperandKind::Register(MachineRegister::Virtual(_)),
+                constraint: Some(RegisterConstraint::Fixed(register)),
+                tied_to: None,
+                ..
+            } if *register == expected.physical()
+        ) || matches!(
+            operand,
+            MachineOperand {
+                kind: MachineOperandKind::Register(MachineRegister::Physical(register)),
+                constraint: None,
+                tied_to: None,
+                ..
+            } if *register == expected.physical()
+        );
+        if !valid {
+            self.operand_error(
+                function,
+                block,
+                instruction,
+                position,
+                format!("must be a fixed virtual or allocated physical {expected:?} register"),
             );
         }
     }
@@ -1256,6 +1536,14 @@ fn is_call_flags(flags: InstructionFlags) -> bool {
         && (!flags.volatile || flags.may_load || flags.may_store)
 }
 
+fn divide_registers(width: u32) -> (X86Register, X86Register) {
+    match width {
+        2 => (X86Register::Ax, X86Register::Dx),
+        4 => (X86Register::Eax, X86Register::Edx),
+        _ => unreachable!("division verifier accepts only word and dword widths"),
+    }
+}
+
 fn class_width(class: X86RegisterClass) -> Option<u32> {
     match class {
         X86RegisterClass::Byte => Some(u32::from(OperandSize::Byte.bits() / 8)),
@@ -1444,6 +1732,106 @@ mod tests {
                 }],
             }],
         }
+    }
+
+    #[test]
+    fn rejects_divide_with_a_wrong_implicit_result_constraint() {
+        let invalid = module(vec![instruction(
+            0,
+            X86Opcode::Idiv,
+            vec![
+                fixed_virtual(2, OperandRole::Use, X86Register::Edx),
+                fixed_virtual(2, OperandRole::Use, X86Register::Eax),
+                virtual_register(2, OperandRole::Use),
+                fixed_virtual(2, OperandRole::Def, X86Register::Edx),
+                fixed_virtual(2, OperandRole::Def, X86Register::Edx),
+            ],
+            InstructionFlags::NONE,
+        )]);
+        let messages = verify_machine(&invalid)
+            .unwrap_err()
+            .into_iter()
+            .map(|diagnostic| diagnostic.message)
+            .collect::<Vec<_>>();
+        assert!(messages
+            .iter()
+            .any(|message| message.contains("allocated physical Eax register")));
+    }
+
+    #[test]
+    fn accepts_allocated_physical_division_pair() {
+        let allocated = module(vec![
+            instruction(
+                0,
+                X86Opcode::CwdCdq,
+                vec![
+                    physical(X86Register::Edx, OperandRole::Def),
+                    physical(X86Register::Eax, OperandRole::Use),
+                ],
+                InstructionFlags::NONE,
+            ),
+            instruction(
+                1,
+                X86Opcode::Idiv,
+                vec![
+                    physical(X86Register::Edx, OperandRole::Use),
+                    physical(X86Register::Eax, OperandRole::Use),
+                    physical(X86Register::Ecx, OperandRole::Use),
+                    physical(X86Register::Eax, OperandRole::Def),
+                    physical(X86Register::Edx, OperandRole::Def),
+                ],
+                InstructionFlags::NONE,
+            ),
+        ]);
+        assert_eq!(verify_machine(&allocated), Ok(()));
+    }
+
+    #[test]
+    fn verifies_zero_extend_word_to_dword_before_and_after_allocation() {
+        let selected = module(vec![instruction(
+            0,
+            X86Opcode::ZeroExtendWordToDword,
+            vec![
+                virtual_register(2, OperandRole::Def),
+                virtual_register(1, OperandRole::Use),
+            ],
+            InstructionFlags::NONE,
+        )]);
+        assert_eq!(verify_machine(&selected), Ok(()));
+
+        let allocated = module(vec![instruction(
+            0,
+            X86Opcode::ZeroExtendWordToDword,
+            vec![
+                physical(X86Register::Eax, OperandRole::Def),
+                physical(X86Register::Cx, OperandRole::Use),
+            ],
+            InstructionFlags::NONE,
+        )]);
+        assert_eq!(verify_machine(&allocated), Ok(()));
+    }
+
+    #[test]
+    fn rejects_zero_extend_with_a_non_word_source() {
+        let invalid = module(vec![instruction(
+            0,
+            X86Opcode::ZeroExtendWordToDword,
+            vec![
+                virtual_register(2, OperandRole::Def),
+                virtual_register(2, OperandRole::Use),
+            ],
+            InstructionFlags::NONE,
+        )]);
+        let messages = verify_machine(&invalid)
+            .unwrap_err()
+            .into_iter()
+            .map(|diagnostic| diagnostic.message)
+            .collect::<Vec<_>>();
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("must be a word x86 register"))
+        );
     }
 
     #[test]

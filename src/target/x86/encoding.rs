@@ -150,6 +150,11 @@ pub fn encode_with_fixups(instruction: &MCInstruction) -> Result<EncodedInstruct
         X86Opcode::SignExtendWordToDword => {
             encode_sign_extend_word_to_dword(opcode, &instruction.operands)
         }
+        X86Opcode::ZeroExtendWordToDword => {
+            encode_zero_extend_word_to_dword(opcode, &instruction.operands)
+        }
+        X86Opcode::CwdCdq => encode_cwd_cdq(opcode, &instruction.operands),
+        X86Opcode::Div | X86Opcode::Idiv => encode_divide(opcode, &instruction.operands),
         X86Opcode::ShiftLeftDouble => encode_shift_left_double(opcode, &instruction.operands),
         X86Opcode::Neg => encode_unary(opcode, &instruction.operands, 3),
         X86Opcode::Not => encode_unary(opcode, &instruction.operands, 2),
@@ -163,8 +168,7 @@ pub fn encode_with_fixups(instruction: &MCInstruction) -> Result<EncodedInstruct
         X86Opcode::Store => encode_store(opcode, &instruction.operands),
         X86Opcode::CallFar => return encode_far_call(opcode, &instruction.operands),
         X86Opcode::CallNear => return encode_near_call(opcode, &instruction.operands),
-        X86Opcode::Idiv
-        | X86Opcode::ShiftLeft
+        X86Opcode::ShiftLeft
         | X86Opcode::ShiftRightLogical
         | X86Opcode::ShiftRightArithmetic
         | X86Opcode::Jump
@@ -630,6 +634,73 @@ fn encode_sign_extend_word_to_dword(
     Ok(vec![0x66, 0x0f, 0xbf, modrm(destination.code, source.code)])
 }
 
+fn encode_zero_extend_word_to_dword(
+    opcode: X86Opcode,
+    operands: &[MCOperand],
+) -> Result<Vec<u8>, EncodeError> {
+    expect_arity(opcode, operands, 2)?;
+    let destination = register_operand(opcode, operands, 0)?;
+    let source = register_operand(opcode, operands, 1)?;
+    if destination.size != OperandSize::Dword || source.size != OperandSize::Word {
+        return Err(EncodeError::UnsupportedForm {
+            opcode,
+            reason: "movzx r32, r16 requires a dword destination and word source",
+        });
+    }
+    Ok(vec![0x66, 0x0f, 0xb7, modrm(destination.code, source.code)])
+}
+
+fn encode_cwd_cdq(opcode: X86Opcode, operands: &[MCOperand]) -> Result<Vec<u8>, EncodeError> {
+    expect_arity(opcode, operands, 2)?;
+    let high = architectural_register(opcode, operands, 0)?;
+    let low = architectural_register(opcode, operands, 1)?;
+    match (high, low) {
+        (X86Register::Dx, X86Register::Ax) => Ok(vec![0x99]),
+        (X86Register::Edx, X86Register::Eax) => Ok(vec![0x66, 0x99]),
+        _ => Err(EncodeError::UnsupportedForm {
+            opcode,
+            reason: "cwd/cdq requires matching AX/DX or EAX/EDX operands",
+        }),
+    }
+}
+
+fn encode_divide(opcode: X86Opcode, operands: &[MCOperand]) -> Result<Vec<u8>, EncodeError> {
+    expect_arity(opcode, operands, 5)?;
+    let high = register_operand(opcode, operands, 0)?;
+    let low = register_operand(opcode, operands, 1)?;
+    let divisor = register_operand(opcode, operands, 2)?;
+    let quotient = register_operand(opcode, operands, 3)?;
+    let remainder = register_operand(opcode, operands, 4)?;
+    let (expected_high, expected_low) = match divisor.size {
+        OperandSize::Word => (X86Register::Dx, X86Register::Ax),
+        OperandSize::Dword => (X86Register::Edx, X86Register::Eax),
+        OperandSize::Byte => {
+            return Err(EncodeError::UnsupportedForm {
+                opcode,
+                reason: "div/idiv has no supported byte form",
+            });
+        }
+    };
+    for (index, register) in [
+        (0, expected_high),
+        (1, expected_low),
+        (3, expected_low),
+        (4, expected_high),
+    ] {
+        exact_register(opcode, operands, index, register)?;
+    }
+    for operand in [high, low, quotient, remainder] {
+        require_matching_width(opcode, divisor, operand)?;
+    }
+    let mut bytes = prefix_for(divisor.size);
+    bytes.push(0xf7);
+    bytes.push(modrm(
+        if opcode == X86Opcode::Div { 6 } else { 7 },
+        divisor.code,
+    ));
+    Ok(bytes)
+}
+
 fn encode_shift_left_double(
     opcode: X86Opcode,
     operands: &[MCOperand],
@@ -768,6 +839,40 @@ fn register_operand(
         });
     };
     register_encoding(register.get())
+}
+
+fn exact_register(
+    opcode: X86Opcode,
+    operands: &[MCOperand],
+    index: usize,
+    expected: X86Register,
+) -> Result<RegisterEncoding, EncodeError> {
+    let register = architectural_register(opcode, operands, index)?;
+    if register != expected {
+        return Err(EncodeError::UnsupportedForm {
+            opcode,
+            reason: "implicit division register does not match its architectural role",
+        });
+    }
+    match operands.get(index) {
+        Some(MCOperand::Register(register)) => register_encoding(register.get()),
+        _ => unreachable!("architectural_register checked the operand kind"),
+    }
+}
+
+fn architectural_register(
+    opcode: X86Opcode,
+    operands: &[MCOperand],
+    index: usize,
+) -> Result<X86Register, EncodeError> {
+    let Some(MCOperand::Register(register)) = operands.get(index) else {
+        return Err(EncodeError::OperandKind {
+            opcode,
+            index,
+            expected: "a register",
+        });
+    };
+    decode_register(register.get())
 }
 
 fn register_encoding(raw: u32) -> Result<RegisterEncoding, EncodeError> {
@@ -1004,6 +1109,71 @@ mod tests {
     }
 
     #[test]
+    fn encodes_exact_word_and_dword_division_family() {
+        for (opcode, high, low, divisor, bytes) in [
+            (
+                X86Opcode::Div,
+                X86Register::Dx,
+                X86Register::Ax,
+                X86Register::Cx,
+                vec![0xf7, 0xf1],
+            ),
+            (
+                X86Opcode::Idiv,
+                X86Register::Dx,
+                X86Register::Ax,
+                X86Register::Cx,
+                vec![0xf7, 0xf9],
+            ),
+            (
+                X86Opcode::Div,
+                X86Register::Edx,
+                X86Register::Eax,
+                X86Register::Ecx,
+                vec![0x66, 0xf7, 0xf1],
+            ),
+            (
+                X86Opcode::Idiv,
+                X86Register::Edx,
+                X86Register::Eax,
+                X86Register::Ecx,
+                vec![0x66, 0xf7, 0xf9],
+            ),
+        ] {
+            assert_eq!(
+                encode(&instruction(
+                    opcode,
+                    vec![
+                        register(high),
+                        register(low),
+                        register(divisor),
+                        register(low),
+                        register(high),
+                    ],
+                ))
+                .unwrap(),
+                bytes
+            );
+        }
+        assert_eq!(
+            encode(&instruction(
+                X86Opcode::CwdCdq,
+                vec![register(X86Register::Dx), register(X86Register::Ax)],
+            ))
+            .unwrap(),
+            vec![0x99]
+        );
+        assert_eq!(
+            encode(&instruction(
+                X86Opcode::CwdCdq,
+                vec![register(X86Register::Edx), register(X86Register::Eax)],
+            ))
+            .unwrap(),
+            vec![0x66, 0x99]
+        );
+    }
+
+    #[test]
     fn encodes_sign_extend_word_to_dword_movsx_and_refuses_other_widths() {
         assert_eq!(
             encode(&instruction(
@@ -1020,6 +1190,28 @@ mod tests {
             )),
             Err(EncodeError::UnsupportedForm {
                 opcode: X86Opcode::SignExtendWordToDword,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn encodes_zero_extend_word_to_dword_movzx_and_refuses_other_widths() {
+        assert_eq!(
+            encode(&instruction(
+                X86Opcode::ZeroExtendWordToDword,
+                vec![register(X86Register::Eax), register(X86Register::Cx)],
+            ))
+            .unwrap(),
+            vec![0x66, 0x0f, 0xb7, 0xc1]
+        );
+        assert!(matches!(
+            encode(&instruction(
+                X86Opcode::ZeroExtendWordToDword,
+                vec![register(X86Register::Ax), register(X86Register::Cx)],
+            )),
+            Err(EncodeError::UnsupportedForm {
+                opcode: X86Opcode::ZeroExtendWordToDword,
                 ..
             })
         ));

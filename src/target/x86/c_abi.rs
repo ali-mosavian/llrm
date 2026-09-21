@@ -541,14 +541,14 @@ pub fn expand_allocated_c_abi(
         for mut original in std::mem::take(&mut block.instructions) {
             match X86Opcode::from_machine_opcode(original.opcode) {
                 Some(X86Opcode::LowWord) => {
-                    let source = dword_source(block.id, &original, &original.operands[1])?;
+                    let (destination, source) = validate_low_word_extraction(block.id, &original)?;
                     let [low] = source.sub_registers() else {
                         unreachable!("preflight validated a dword source")
                     };
-                    if *low != X86Register::Ax {
+                    if destination != *low {
                         original.opcode = X86Opcode::Mov.machine_opcode();
                         original.operands = vec![
-                            physical(X86Register::Ax, OperandRole::Def),
+                            physical(destination, OperandRole::Def),
                             physical(*low, OperandRole::Use),
                         ];
                         original.flags = InstructionFlags::NONE;
@@ -677,11 +677,12 @@ fn preflight(
     Ok(())
 }
 
-/// Validates the two selected pseudos immediately feeding an i32 C return.
+/// Validates `LowWord` generally and the `LowWord`/`HighWord` pair feeding an
+/// i32 C return exactly.
 ///
-/// This is intentionally a terminal ABI shape, rather than a general pseudo
-/// lowering: `shld` changes flags and all but DX's low word. The following
-/// return is the proof that neither effect has a remaining Machine IR user.
+/// `LowWord` is an ordinary truncation and can define any allocated word
+/// register. `HighWord` lowers through `shld`, which changes flags and all but
+/// DX's low word, so it remains a terminal-return-only pseudo.
 fn validate_return_extractions(
     block: MachineBlockId,
     instructions: &[MachineInstruction],
@@ -689,12 +690,11 @@ fn validate_return_extractions(
 ) -> Result<(), CAbiExpansionError> {
     for (position, instruction) in instructions.iter().enumerate() {
         let opcode = X86Opcode::from_machine_opcode(instruction.opcode);
-        if matches!(opcode, Some(X86Opcode::LowWord | X86Opcode::HighWord)) {
-            let return_position = match opcode {
-                Some(X86Opcode::LowWord) => position.checked_add(2),
-                Some(X86Opcode::HighWord) => position.checked_add(1),
-                _ => unreachable!(),
-            };
+        if opcode == Some(X86Opcode::LowWord) {
+            validate_low_word_extraction(block, instruction)?;
+        }
+        if opcode == Some(X86Opcode::HighWord) {
+            let return_position = position.checked_add(1);
             let Some(return_position) = return_position else {
                 return malformed_return(
                     block,
@@ -758,23 +758,69 @@ fn validate_low_extraction(
     block: MachineBlockId,
     instruction: &MachineInstruction,
 ) -> Result<X86Register, CAbiExpansionError> {
-    let [destination, source] = instruction.operands.as_slice() else {
-        return malformed_return(
-            block,
-            instruction,
-            "low word extraction requires AX and one dword source",
-        );
-    };
-    if instruction.flags != InstructionFlags::NONE
-        || *destination != physical(X86Register::Ax, OperandRole::Def)
-    {
+    let (destination, source) = validate_low_word_extraction(block, instruction)?;
+    if destination != X86Register::Ax {
         return malformed_return(
             block,
             instruction,
             "low word extraction must define AX without flags",
         );
     }
-    dword_source(block, instruction, source)
+    Ok(source)
+}
+
+fn validate_low_word_extraction(
+    block: MachineBlockId,
+    instruction: &MachineInstruction,
+) -> Result<(X86Register, X86Register), CAbiExpansionError> {
+    let [destination, source] = instruction.operands.as_slice() else {
+        return malformed_return(
+            block,
+            instruction,
+            "low word extraction requires one word destination and one dword source",
+        );
+    };
+    if instruction.flags != InstructionFlags::NONE {
+        return malformed_return(block, instruction, "low word extraction must have no flags");
+    }
+    let destination = word_destination(block, instruction, destination)?;
+    let source = dword_source(block, instruction, source)?;
+    Ok((destination, source))
+}
+
+fn word_destination(
+    block: MachineBlockId,
+    instruction: &MachineInstruction,
+    operand: &MachineOperand,
+) -> Result<X86Register, CAbiExpansionError> {
+    let MachineOperand {
+        kind: MachineOperandKind::Register(MachineRegister::Physical(physical)),
+        role: OperandRole::Def,
+        constraint: None,
+        tied_to: None,
+    } = operand
+    else {
+        return malformed_return(
+            block,
+            instruction,
+            "low word extraction destination must be an unconstrained physical word definition",
+        );
+    };
+    let Some(register) = X86Register::from_physical(*physical) else {
+        return malformed_return(
+            block,
+            instruction,
+            "low word extraction destination has an unknown physical register",
+        );
+    };
+    if !X86RegisterClass::Word.members().contains(&register) {
+        return malformed_return(
+            block,
+            instruction,
+            "low word extraction destination must be a word register",
+        );
+    }
+    Ok(register)
 }
 
 fn validate_high_extraction(
@@ -1399,6 +1445,62 @@ mod tests {
                 physical(X86Register::Eax, OperandRole::Use),
                 immediate(16),
             ]
+        );
+    }
+
+    #[test]
+    fn expands_ordinary_allocated_low_word_before_an_i16_return() {
+        // A truncation is an ordinary value definition, not part of the
+        // special DX:AX return split. Its allocated destination owns the
+        // selected word register even when the function itself returns AX.
+        let mut input = function(MachineCallingConvention::FarCdecl, vec![], vec![], true);
+        input.blocks[0].instructions.insert(
+            0,
+            instruction(
+                MachineInstructionId::new(6),
+                X86Opcode::LowWord,
+                vec![
+                    physical(X86Register::Cx, OperandRole::Def),
+                    physical(X86Register::Ebx, OperandRole::Use),
+                ],
+            ),
+        );
+
+        let plan = plan_c_frame(&input).unwrap();
+        let expanded = expand_allocated_c_abi(&input, &plan).unwrap();
+        assert_eq!(
+            expanded.blocks[0]
+                .instructions
+                .iter()
+                .map(|instruction| X86Opcode::from_machine_opcode(instruction.opcode))
+                .collect::<Vec<_>>(),
+            vec![Some(X86Opcode::Mov), Some(X86Opcode::ReturnFar)]
+        );
+        assert_eq!(
+            expanded.blocks[0].instructions[0].operands,
+            vec![
+                physical(X86Register::Cx, OperandRole::Def),
+                physical(X86Register::Bx, OperandRole::Use),
+            ]
+        );
+        assert_eq!(
+            expanded.blocks[0].instructions[0].id,
+            MachineInstructionId::new(6)
+        );
+
+        // Ebx's low word already is Bx, so the pseudo contributes no code.
+        let mut same_view = input.clone();
+        same_view.blocks[0].instructions[0].operands[0] =
+            physical(X86Register::Bx, OperandRole::Def);
+        let same_view_plan = plan_c_frame(&same_view).unwrap();
+        let same_view = expand_allocated_c_abi(&same_view, &same_view_plan).unwrap();
+        assert_eq!(
+            same_view.blocks[0]
+                .instructions
+                .iter()
+                .map(|instruction| X86Opcode::from_machine_opcode(instruction.opcode))
+                .collect::<Vec<_>>(),
+            vec![Some(X86Opcode::ReturnFar)]
         );
     }
 
