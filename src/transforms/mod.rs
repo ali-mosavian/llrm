@@ -12,6 +12,7 @@ pub(crate) mod loop_utils;
 mod pass;
 mod rewrite;
 pub(crate) mod rotate;
+pub(crate) mod strength;
 mod unreachable;
 
 pub use algebraic::{AlgebraicError, AlgebraicSimplify};
