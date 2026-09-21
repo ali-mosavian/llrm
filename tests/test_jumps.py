@@ -145,6 +145,32 @@ def test_shared_machine_pipeline_threads_the_final_branch_pair() -> None:
     assert not any(line.startswith("jmp ") for line in emitted), emitted
 
 
+def test_loop_placement_ignores_non_emitting_instruction_markers() -> None:
+    """Optimized QB nbody crashed after scheduling instead of reaching timing.
+
+    Allocation and scheduling may retain ownership markers with no machine
+    semantics. They are not loop tests and must not be dereferenced while
+    identifying a loop header's final branch pair.
+    """
+    marker = lir.Insn(2, (2, 2), None, (), ())
+    body = lir.LirBody(
+        "marker-loop",
+        1,
+        (
+            lir.LirBlock(1, (_jump(1, 2),), (2,)),
+            lir.LirBlock(2, (marker, _compare(2), _branch(2, "je", 4), _jump(2, 3)), (4, 3)),
+            lir.LirBlock(3, (_jump(3, 2),), (2,)),
+            lir.LirBlock(4, (_return(4),), ()),
+        ),
+        {},
+        {},
+    )
+
+    result = jumps.placed(body)
+
+    assert {block.at for block in result.blocks} == {1, 2, 3, 4}
+
+
 def test_jump_to_the_next_block_is_dropped():
     assert _printed(
         lir.LirBlock(1, (_move(1, BX), _jump(2, 4)), (4,)),
