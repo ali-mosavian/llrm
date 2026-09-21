@@ -7,9 +7,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use super::occurrence::{operations, OpOccurrence};
+use super::occurrence::{OpOccurrence, operations};
+use crate::codegen::machine::Operation;
 use crate::model::mir::{
-    consumed as operation_consumed, Arg, Cell, Held, MemRef, MirBody, Op, Value,
+    Arg, Cell, Held, MemRef, MirBody, Op, OpCode, OrderedMap, Value, consumed as operation_consumed,
 };
 
 /// A substitution followed an id-keyed cycle.
@@ -30,6 +31,33 @@ impl fmt::Display for SubstitutionError {
 }
 
 impl std::error::Error for SubstitutionError {}
+
+/// SSA reconstruction could not rebuild the selected variable namespace.
+///
+/// Direct port of Python `ssa.constructed` propagating `mir.resolved`'s
+/// `Unraisable` failure and `ssa.substituted`'s cyclic-substitution failure.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ConstructionError {
+    Resolution(String),
+    Substitution(SubstitutionError),
+}
+
+impl fmt::Display for ConstructionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Resolution(message) => formatter.write_str(message),
+            Self::Substitution(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for ConstructionError {}
+
+impl From<SubstitutionError> for ConstructionError {
+    fn from(error: SubstitutionError) -> Self {
+        Self::Substitution(error)
+    }
+}
 
 /// Each value's operation users, built in one body traversal.
 ///
@@ -187,15 +215,370 @@ pub(crate) fn values(body: &MirBody) -> impl Iterator<Item = Value> + '_ {
     })
 }
 
+/// Reconstruct SSA for only the supplied variable names.
+///
+/// This is the direct Rust port of `qbopt.analysis.ssa:constructed`.  The
+/// isolated skeleton lets the shared MIR renamer place phis and versions;
+/// the second half merges those names back into the original operations.
+/// Unreachable byte-owning blocks remain byte-for-byte present.
+pub(crate) fn constructed(
+    body: &MirBody,
+    variables: &BTreeSet<u32>,
+) -> Result<MirBody, ConstructionError> {
+    let owned = |values: &[Value]| {
+        values
+            .iter()
+            .copied()
+            .filter(|value| variables.contains(&value.variable))
+            .collect::<Vec<_>>()
+    };
+
+    let mut edges = BTreeMap::<i64, OrderedMap<u32, Value>>::new();
+    for block in &body.blocks {
+        for phi in &block.phis {
+            for (predecessor, value) in phi.incoming.iter() {
+                if variables.contains(&value.variable) {
+                    edges
+                        .entry(*predecessor)
+                        .or_default()
+                        .insert(value.variable, *value);
+                }
+            }
+        }
+    }
+
+    // Phi inputs are reads at the predecessor's end, not at the merge block.
+    let probes = edges
+        .iter()
+        .map(|(at, names)| {
+            (
+                *at,
+                Op::new(
+                    *at,
+                    OpCode::Operation(Operation::Move),
+                    "",
+                    Vec::new(),
+                    names.values().copied().collect(),
+                ),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    let mut skeleton = body.clone();
+    for block in &mut skeleton.blocks {
+        block.phis.clear();
+        for operation in &mut block.ops {
+            operation.defines = owned(&operation.defines);
+            operation.uses = owned(&operation.uses);
+            operation.exits = owned(&operation.exits);
+            operation.args.clear();
+            operation.results.clear();
+            operation.loads.clear();
+            operation.stores.clear();
+            operation.merges = OrderedMap::new();
+            operation.raised = None;
+        }
+        if let Some(probe) = probes.get(&block.at) {
+            block.ops.push(probe.clone());
+        }
+    }
+
+    let mut repaired =
+        crate::model::mir::resolved(&skeleton, None).map_err(ConstructionError::Resolution)?;
+
+    // The isolated renamer starts ids at zero; keep its namespace disjoint.
+    let offset = values(body).map(|value| value.id).max().unwrap_or(0) + 1;
+    let mapping = values(&repaired)
+        .map(|value| {
+            (
+                value,
+                Value {
+                    id: value.id + offset,
+                    ..value
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    for block in &mut repaired.blocks {
+        for phi in &mut block.phis {
+            phi.result = mapping[&phi.result];
+            phi.incoming = phi
+                .incoming
+                .iter()
+                .map(|(at, value)| (*at, mapping[value]))
+                .collect();
+        }
+        for operation in &mut block.ops {
+            operation.uses = operation.uses.iter().map(|value| mapping[value]).collect();
+            operation.exits = operation.exits.iter().map(|value| mapping[value]).collect();
+            operation.defines = operation
+                .defines
+                .iter()
+                .map(|value| mapping[value])
+                .collect();
+        }
+    }
+
+    let outgoing = repaired
+        .blocks
+        .iter()
+        .filter(|block| probes.contains_key(&block.at))
+        .filter_map(|block| {
+            block.ops.last().map(|probe| {
+                (
+                    block.at,
+                    probe
+                        .uses
+                        .iter()
+                        .map(|value| (value.variable, *value))
+                        .collect::<BTreeMap<_, _>>(),
+                )
+            })
+        })
+        .collect::<BTreeMap<_, _>>();
+    let repaired_by_at = repaired
+        .blocks
+        .iter()
+        .map(|block| (block.at, block))
+        .collect::<BTreeMap<_, _>>();
+
+    let mut result = body.clone();
+    for block in &mut result.blocks {
+        let Some(fixed) = repaired_by_at.get(&block.at) else {
+            continue;
+        };
+        for phi in &mut block.phis {
+            phi.incoming = phi
+                .incoming
+                .iter()
+                .map(|(at, value)| {
+                    let replacement = outgoing
+                        .get(at)
+                        .and_then(|names| names.get(&value.variable))
+                        .copied()
+                        .unwrap_or(*value);
+                    (*at, replacement)
+                })
+                .collect();
+        }
+        block.phis.extend(fixed.phis.iter().cloned());
+
+        for (operation, renamed) in block.ops.iter_mut().zip(&fixed.ops) {
+            let uses = renamed
+                .uses
+                .iter()
+                .map(|value| (value.variable, *value))
+                .collect::<BTreeMap<_, _>>();
+            let defines = renamed
+                .defines
+                .iter()
+                .map(|value| (value.variable, *value))
+                .collect::<BTreeMap<_, _>>();
+            let swaps = operation
+                .uses
+                .iter()
+                .filter_map(|value| {
+                    uses.get(&value.variable)
+                        .map(|replacement| (value.id, *replacement))
+                })
+                .collect::<BTreeMap<_, _>>();
+            let mut changed = substituted(operation, &swaps)?;
+            changed.uses = operation
+                .uses
+                .iter()
+                .map(|value| uses.get(&value.variable).copied().unwrap_or(*value))
+                .collect();
+            changed.defines = operation
+                .defines
+                .iter()
+                .map(|value| defines.get(&value.variable).copied().unwrap_or(*value))
+                .collect();
+            changed.results = changed
+                .results
+                .iter()
+                .map(|result| match result {
+                    Arg::Held(held) => defines
+                        .get(&held.value.variable)
+                        .map(|value| {
+                            Arg::Held(Held {
+                                value: *value,
+                                width: held.width,
+                            })
+                        })
+                        .unwrap_or_else(|| result.clone()),
+                    _ => result.clone(),
+                })
+                .collect();
+            *operation = changed;
+        }
+    }
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
+    use crate::codegen::machine::Operation;
     use crate::model::mir::{
-        Arg, Cell, Const, Held, Kind, MemRef, MirBlock, MirBody, Op, Phi, Value,
+        Arg, Cell, Const, Held, Kind, MemRef, MirBlock, MirBody, Op, OpCode, OrderedMap, Phi, Value,
     };
 
-    use super::{operations, provider, substituted, use_index, values, SubstitutionError};
+    use super::{
+        SubstitutionError, constructed, operations, provider, substituted, use_index, values,
+    };
+
+    fn value(id: u32, at: i64, variable: u32, version: u32) -> Value {
+        Value {
+            id,
+            at,
+            flags: false,
+            variable,
+            version,
+        }
+    }
+
+    fn copy(at: i64, result: Value, argument: Arg) -> Op {
+        let uses = match argument {
+            Arg::Held(held) => vec![held.value],
+            _ => Vec::new(),
+        };
+        let mut operation = Op::new(
+            at,
+            OpCode::Operation(Operation::Move),
+            "",
+            vec![result],
+            uses,
+        );
+        operation.kind = Kind::Copy;
+        operation.args = vec![argument];
+        operation.results = vec![Arg::Held(Held {
+            value: result,
+            width: 2,
+        })];
+        operation
+    }
+
+    /// FPDEEP crashed in SSA repair after CFG cleanup left an unreachable
+    /// byte owner.  Direct port of
+    /// `tests/test_ssa_unreachable.py:test_reconstruction_matches_blocks_by_identity_not_position`.
+    #[test]
+    fn constructed_matches_blocks_by_identity_not_position() {
+        let original = value(1, 0, 1, 1);
+        let define = copy(0, original, Arg::Const(Const::new(7, 2)));
+        let mut dead = Op::new(
+            5,
+            OpCode::Operation(Operation::Nothing),
+            "",
+            Vec::new(),
+            Vec::new(),
+        );
+        dead.kind = Kind::Nothing;
+        let mut read = Op::new(
+            10,
+            OpCode::Operation(Operation::Push),
+            "push",
+            Vec::new(),
+            vec![original],
+        );
+        read.kind = Kind::Arg;
+        read.args = vec![Arg::Held(Held {
+            value: original,
+            width: 2,
+        })];
+        let body = MirBody::new(
+            0,
+            vec![
+                MirBlock::new(0, Vec::new(), vec![define], vec![10]),
+                MirBlock::new(5, Vec::new(), vec![dead], Vec::new()),
+                MirBlock::new(10, Vec::new(), vec![read], Vec::new()),
+            ],
+        );
+
+        let result = constructed(&body, &BTreeSet::from([1])).expect("SSA reconstruction");
+
+        assert_eq!(
+            result
+                .blocks
+                .iter()
+                .map(|block| block.at)
+                .collect::<Vec<_>>(),
+            vec![0, 5, 10]
+        );
+        assert_eq!(result.block(5), body.block(5));
+        assert_eq!(
+            result.block(10).unwrap().ops[0].uses,
+            result.block(0).unwrap().ops[0].defines
+        );
+        assert_eq!(
+            result.block(10).unwrap().ops[0].args[0],
+            Arg::Held(Held {
+                value: result.block(0).unwrap().ops[0].defines[0],
+                width: 2,
+            })
+        );
+    }
+
+    /// Existing phi arms must name the reconstructed predecessor versions,
+    /// not the value that happened to be present before reconstruction.
+    /// Direct port of `tests/test_induction_identity.py`'s SSA regression.
+    #[test]
+    fn constructed_repairs_existing_phi_inputs_by_predecessor() {
+        let initial = value(10, 0, 7, 0);
+        let updated = value(11, 1, 7, 0);
+        let joined = value(12, 2, 8, 0);
+        let define = copy(0, initial, Arg::Const(Const::new(1, 2)));
+        let mut step = copy(
+            1,
+            updated,
+            Arg::Held(Held {
+                value: initial,
+                width: 2,
+            }),
+        );
+        step.kind = Kind::Add;
+        step.args.push(Arg::Const(Const::new(1, 2)));
+        let mut incoming = OrderedMap::new();
+        incoming.insert(0, initial);
+        incoming.insert(1, initial);
+        let body = MirBody::new(
+            0,
+            vec![
+                MirBlock::new(0, Vec::new(), vec![define], vec![1, 2]),
+                MirBlock::new(1, Vec::new(), vec![step], vec![2]),
+                MirBlock::new(
+                    2,
+                    vec![Phi {
+                        result: joined,
+                        incoming,
+                    }],
+                    Vec::new(),
+                    Vec::new(),
+                ),
+            ],
+        );
+
+        let result = constructed(&body, &BTreeSet::from([7])).expect("SSA reconstruction");
+        let phi = &result.blocks[2].phis[0];
+
+        assert_eq!(phi.result, joined);
+        assert_eq!(
+            phi.incoming.get(&0),
+            Some(&result.blocks[0].ops[0].defines[0])
+        );
+        assert_eq!(
+            phi.incoming.get(&1),
+            Some(&result.blocks[1].ops[0].defines[0])
+        );
+        assert_eq!(
+            result
+                .blocks
+                .iter()
+                .map(|block| block.ops.len())
+                .collect::<Vec<_>>(),
+            vec![1, 1, 0]
+        );
+    }
 
     /// A carried high half is a raw use but not an operation the instruction
     /// consumes.  Direct Rust port of
