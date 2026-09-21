@@ -64,6 +64,13 @@ pub(crate) struct Affine {
     pub header: i64,
 }
 
+/// Python's local `forms` map in `induction._extended`.
+///
+/// It is deliberately insertion-ordered, as are the preceding derived-form
+/// passes.  The offset vector likewise preserves every term and its order;
+/// this proof only reads it and must not normalize it into another analysis.
+type ExtendedForms = OrderedMap<u32, (Affine, BigInt, Vec<(Arg, BigInt)>)>;
+
 /// An operation that computes an affine value from another one.
 ///
 /// Direct port of `qbopt.analysis.induction:Derived`.  Python retains the
@@ -324,6 +331,117 @@ pub(crate) fn domain(
     } else {
         (last, start)
     })
+}
+
+/// Python's `_extended(body, loop, op, forms, facts)`.
+///
+/// An extension carries a narrow affine recurrence into a wider one only
+/// after the exact finite-loop proof establishes that the narrow value cannot
+/// wrap.  This is intentionally the Python case split, not a general range
+/// analysis: `_last_counter` supplies the only loop-end fact, and every
+/// operand must be an exact constant at the narrow recurrence width.
+fn _extended(
+    body: &MirBody,
+    loop_: &Loop,
+    op: &Op,
+    forms: &ExtendedForms,
+    facts: &BTreeMap<Value, Known>,
+) -> Option<(Affine, BigInt, Vec<(Arg, BigInt)>)> {
+    if op.args.len() != 1
+        || op.results.len() != 1
+        || !op.loads.is_empty()
+        || !op.stores.is_empty()
+        || op.barrier()
+        || !op.merges.is_empty()
+    {
+        return None;
+    }
+    let (Arg::Held(source), Arg::Held(result)) = (&op.args[0], &op.results[0]) else {
+        return None;
+    };
+    if source.width >= result.width {
+        return None;
+    }
+    let (counter, scale, offsets) = forms.get(&source.value.id)?;
+    let width = source.width;
+    if counter.start.width() != width {
+        return None;
+    }
+    let raw_start = _constant(&counter.start.as_arg(), facts, width)?;
+    let raw_step = _constant(&counter.step.as_arg(), facts, width)?;
+    let last = _last_counter(body, loop_, counter, facts, width)?;
+    let constants = offsets
+        .iter()
+        .map(|(argument, coefficient)| {
+            Some((_constant(argument, facts, width)?, coefficient.clone()))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let step = _as_signed(&raw_step, width);
+    if step == BigInt::from(0_u8) {
+        return None;
+    }
+    let start = match op.kind {
+        Kind::SignExtend => _as_signed(&raw_start, width),
+        Kind::ZeroExtend if last >= BigInt::from(0_u8) => raw_start.clone(),
+        _ => return None,
+    };
+    let distance = &last - &start;
+    if &distance * &step < BigInt::from(0_u8) || &distance % &step != BigInt::from(0_u8) {
+        return None;
+    }
+    let count = &distance / &step + 1_u8;
+    if count <= BigInt::from(0_u8) {
+        return None;
+    }
+
+    let mask = (BigInt::from(1_u8) << (width * 8)) - 1_u8;
+    let sign = BigInt::from(1_u8) << (width * 8 - 1);
+    let (initial, stride, low, high) = if op.kind == Kind::SignExtend {
+        let signed_scale = _as_signed(&(scale & &mask), width);
+        let initial = &start * &signed_scale
+            + constants
+                .iter()
+                .fold(BigInt::from(0_u8), |sum, (value, coefficient)| {
+                    sum + _as_signed(value, width) * coefficient
+                });
+        (initial, &step * signed_scale, -sign.clone(), sign.clone())
+    } else {
+        let initial = masked(
+            &(raw_start.clone() * scale
+                + constants
+                    .iter()
+                    .fold(BigInt::from(0_u8), |sum, (value, coefficient)| {
+                        sum + value * coefficient
+                    })),
+            width,
+        );
+        let raw_stride = masked(&(raw_step * scale), width);
+        // Half the modulus has two equally valid directions. Without another
+        // semantic fact, choosing either would invent a wide recurrence.
+        if raw_stride == sign && count > BigInt::from(1_u8) {
+            return None;
+        }
+        (
+            initial,
+            _as_signed(&raw_stride, width),
+            BigInt::from(0_u8),
+            mask + 1_u8,
+        )
+    };
+    let final_value = &initial + (&count - 1_u8) * &stride;
+    if initial < low || initial >= high || final_value < low || final_value >= high {
+        return None;
+    }
+    Some((
+        Affine {
+            value: result.value.id,
+            start: AffineOperand::Const(Const::new(masked(&initial, result.width), result.width)),
+            step: AffineOperand::Const(Const::new(masked(&stride, result.width), result.width)),
+            header: loop_.header,
+        },
+        BigInt::from(1_u8),
+        Vec::new(),
+    ))
 }
 
 /// Python's default `counted(body, loop)` invocation.
@@ -1601,8 +1719,8 @@ mod tests {
 
     use super::{
         Affine, AffineMap, AffineOperand, Derived, LoopShape, _as_signed, _constant, _copied,
-        _counter_bound, _quotients, _signed, basics, canonical, control_replacement, counted,
-        counted_with_facts, derived_map, domain, invariant, nonempty, relation, test_only,
+        _counter_bound, _extended, _quotients, _signed, basics, canonical, control_replacement,
+        counted, counted_with_facts, derived_map, domain, invariant, nonempty, relation, test_only,
         transparent_aliases, trip_count, zero_terminating_control,
     };
 
@@ -3013,6 +3131,103 @@ mod tests {
             loop_,
             affine(400, constant(start, 2), constant(step, 2), 1),
         )
+    }
+
+    fn extension(kind: Kind, source: Value, result: Value) -> Op {
+        let mut operation = op(1, kind, vec![result], vec![source]);
+        operation.args = vec![Arg::Held(Held {
+            value: source,
+            width: 2,
+        })];
+        operation.results = vec![Arg::Held(Held {
+            value: result,
+            width: 4,
+        })];
+        operation
+    }
+
+    #[test]
+    fn direct_induction_sign_extended_recurrence_requires_no_narrow_wrap() {
+        // Direct port of
+        // `tests/test_induction_identity.py:test_sign_extended_recurrence_requires_no_narrow_wrap`.
+        // A 16-bit index crossing 32767 must not become a steadily increasing
+        // 32-bit stride.  The accepted forms retain the exact wide constants.
+        for (offset, accepted_start) in [
+            (4, Some(4)),
+            (-2, Some(0xffff_fffe)),
+            (32767, None),
+            (-32769, None),
+        ] {
+            let (body, loop_, counter) = domain_body(0, 1, 1, Kind::Gt);
+            let source = value(9000, 0);
+            let result = value(9001, 0);
+            let mut forms = OrderedMap::new();
+            forms.insert(
+                source.id,
+                (
+                    counter,
+                    BigInt::from(1_u8),
+                    vec![(Arg::Const(Const::new(offset, 2)), BigInt::from(1_u8))],
+                ),
+            );
+
+            let got = _extended(
+                &body,
+                &loop_,
+                &extension(Kind::SignExtend, source, result),
+                &forms,
+                &BTreeMap::new(),
+            );
+            assert_eq!(
+                got,
+                accepted_start.map(|start| {
+                    (
+                        affine(result.id, constant(start, 4), constant(1, 4), loop_.header),
+                        BigInt::from(1_u8),
+                        Vec::new(),
+                    )
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn direct_induction_zero_extended_recurrence_cannot_cross_unsigned_wrap() {
+        // Direct port of
+        // `tests/test_induction_identity.py:test_zero_extended_recurrence_cannot_cross_unsigned_wrap`.
+        // Widening 65535,0 is not the wide recurrence 65535,65536.
+        for (offset, accepted_start) in [(-2, Some(65534)), (-1, None)] {
+            let (body, loop_, counter) = domain_body(0, 1, 1, Kind::Gt);
+            let source = value(9000, 0);
+            let result = value(9001, 0);
+            let mut forms = OrderedMap::new();
+            forms.insert(
+                source.id,
+                (
+                    counter,
+                    BigInt::from(1_u8),
+                    vec![(Arg::Const(Const::new(offset, 2)), BigInt::from(1_u8))],
+                ),
+            );
+
+            let got = _extended(
+                &body,
+                &loop_,
+                &extension(Kind::ZeroExtend, source, result),
+                &forms,
+                &BTreeMap::new(),
+            );
+            assert_eq!(
+                got,
+                accepted_start.map(|start| {
+                    (
+                        affine(result.id, constant(start, 4), constant(1, 4), loop_.header),
+                        BigInt::from(1_u8),
+                        Vec::new(),
+                    )
+                })
+            );
+        }
     }
 
     #[test]
