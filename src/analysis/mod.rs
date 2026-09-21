@@ -1,8 +1,9 @@
-//! Side-effect-free analyses over portable IR.
+//! Side-effect-free analyses over portable IR and source-neutral MIR.
 
 mod cfg;
 mod def_use;
 mod dominators;
+pub(crate) mod induction;
 mod loops;
 mod postorder;
 
