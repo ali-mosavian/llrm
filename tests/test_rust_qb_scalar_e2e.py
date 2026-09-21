@@ -21,6 +21,8 @@ BRANCH_SOURCE = ROOT / "bench" / "parity" / "branch.bas"
 BRANCH_GOLDEN = ROOT / "bench" / "parity" / "golden" / "branch.txt"
 MEMORY_SOURCE = ROOT / "bench" / "parity" / "memory.bas"
 MEMORY_GOLDEN = ROOT / "bench" / "parity" / "golden" / "memory.txt"
+LOOP_SOURCE = ROOT / "bench" / "parity" / "loop.bas"
+LOOP_GOLDEN = ROOT / "bench" / "parity" / "golden" / "loop.txt"
 CFG = CONFIGS["v-g3"]
 
 pytestmark = [
@@ -132,3 +134,8 @@ def test_rust_qb_branch_matches_its_program_level_oracle(tmp_path: Path) -> None
 def test_rust_qb_memory_matches_its_program_level_oracle(tmp_path: Path) -> None:
     """The by-reference INTEGER update must print memory's 361001/DONE oracle."""
     _assert_program_matches_oracle(tmp_path, MEMORY_SOURCE, MEMORY_GOLDEN, "MEMORY")
+
+
+def test_rust_qb_loop_matches_its_program_level_oracle(tmp_path: Path) -> None:
+    """The loop-carried LONG total must print loop's 130991/DONE oracle."""
+    _assert_program_matches_oracle(tmp_path, LOOP_SOURCE, LOOP_GOLDEN, "LOOP")

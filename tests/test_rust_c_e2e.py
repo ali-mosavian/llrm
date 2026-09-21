@@ -22,6 +22,8 @@ BRANCH_SOURCE = ROOT / "fixtures" / "c" / "parity" / "branch.cgs"
 BRANCH_HARNESS = ROOT / "fixtures" / "c" / "parity" / "branch-start.asm"
 MEMORY_SOURCE = ROOT / "fixtures" / "c" / "parity" / "memory.cgs"
 MEMORY_HARNESS = ROOT / "fixtures" / "c" / "parity" / "memory-start.asm"
+LOOP_SOURCE = ROOT / "fixtures" / "c" / "parity" / "loop.cgs"
+LOOP_HARNESS = ROOT / "fixtures" / "c" / "parity" / "loop-start.asm"
 CELLS_SOURCE = ROOT / "fixtures" / "c" / "cells.cgs"
 CELLS_HARNESS = ROOT / "fixtures" / "c" / "cells-start.asm"
 JWASM = shutil.which("jwasm") or str(Path.home() / "work/other/d32x/toolchains/native/bin/jwasm")
@@ -147,3 +149,12 @@ def test_rust_c_memory_returns_the_existing_python_oracle(tmp_path: Path) -> Non
     cell twice as a LONG, and keeps the two far-cdecl calls on the DOS path.
     """
     assert _compile_and_run(MEMORY_SOURCE, MEMORY_HARNESS, tmp_path, timeout=20) == 361001
+
+
+def test_rust_c_loop_returns_the_existing_python_oracle(tmp_path: Path) -> None:
+    """A backedge and loop-carried LONG total must retain 130991.
+
+    The real WCC capture combines a local INTEGER induction value, signed exit
+    comparison, loop-carried LONG arithmetic, and two far-cdecl calls.
+    """
+    assert _compile_and_run(LOOP_SOURCE, LOOP_HARNESS, tmp_path, timeout=20) == 130991
