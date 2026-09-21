@@ -264,6 +264,11 @@ class _Machine:
                 result = int(not args[0]) if type_.kind is model.TypeKind.BOOLEAN else ~_whole(args[0])
                 define(instruction, (result,))
                 return
+            if op in (model.Op.FIXED_MUL, model.Op.FIXED_DIV):
+                left, right, fraction = map(_whole, args)
+                result = (left * right) >> fraction if op is model.Op.FIXED_MUL else _trunc_div(left << fraction, right)
+                define(instruction, (result,))
+                return
             binary = {
                 model.Op.ADD: lambda a, b: a + b,
                 model.Op.SUB: lambda a, b: a - b,

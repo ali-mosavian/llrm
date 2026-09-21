@@ -191,18 +191,28 @@ def constrained(
                     return operand
                 return ir.mapped(operand, lambda value: ir.Held(swap.get(value.value, value.value), value.width))
 
+            rewritten = (
+                what
+                if what is None
+                else replace(
+                    what,
+                    dests=tuple(map(address, dests)),
+                    sources=tuple(map(address, sources)),
+                )
+            )
+            # A fixed-register requirement belongs to one occurrence.  If
+            # the original value also occurs elsewhere in the instruction,
+            # that occurrence still has to remain live: widening ``imul x,
+            # x`` pins only its first source to EAX and leaves the encoded
+            # multiplier free.  Reconcile against the rewritten semantics
+            # instead of assuming that replacing one use replaced them all.
+            explicit_uses = () if rewritten is None else _semantic_reads(rewritten)
             insns.append(
                 replace(
                     one,
-                    what=what
-                    if what is None
-                    else replace(
-                        what,
-                        dests=tuple(map(address, dests)),
-                        sources=tuple(map(address, sources)),
-                    ),
+                    what=rewritten,
                     defines=tuple(defines),
-                    uses=tuple(uses),
+                    uses=tuple(dict.fromkeys((*uses, *explicit_uses))),
                     # Rewritten onto the fresh values rather than
                     # dropped. `_already_there` makes asking again a
                     # no-op, and the requirement has to survive because
@@ -393,6 +403,13 @@ def _wanted(one: lir.Insn) -> dict:
             places.append((where.side, where.index))
         out[operand.value] = (register, places)
     return out
+
+
+def _semantic_reads(what: ir.Semantics) -> tuple[int, ...]:
+    """Values still read by a rewritten instruction's explicit operands."""
+    sources = (one.value for operand in what.sources for one in ir.values(operand))
+    addresses = (one.value for operand in what.dests if not isinstance(operand, ir.Held) for one in ir.values(operand))
+    return tuple(dict.fromkeys((*sources, *addresses)))
 
 
 def _move(beside: lir.Insn, into: "ir.Held", out_of: "ir.Held | ir.Imm") -> lir.Insn:

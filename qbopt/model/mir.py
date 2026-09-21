@@ -386,6 +386,11 @@ class Kind(StrEnum):
     DECREMENT = "decrement"
     MUL = "mul"
     SMULHI = "smulhi"  # Signed product's upper half, at the operands' common width.
+    # Stored-width fixed arithmetic, args (left, right, fractional bits).
+    # These remain semantic until target lowering: on a 386, fixed i32 MUL
+    # is a native 32x32->64 IMUL plus rescale, not a generic i64 operation.
+    FIXED_MUL = "fixed_mul"
+    FIXED_DIV = "fixed_div"
     DIV = "div"
     REM = "rem"
     # One computation with two results, quotient then remainder. BC calls

@@ -184,6 +184,11 @@ class Op(StrEnum):
     ADD = "add"
     SUB = "sub"
     MUL = "mul"
+    # Fixed-point scaling stays semantic through MIR.  Expanding fixed i32
+    # here into generic i64 arithmetic loses that both inputs are narrow and
+    # makes the target legalize a 32x32 product as an arbitrary 64x64 one.
+    FIXED_MUL = "fixed_mul"
+    FIXED_DIV = "fixed_div"
     DIV = "div"
     REM = "rem"
     DIVMOD = "divmod"

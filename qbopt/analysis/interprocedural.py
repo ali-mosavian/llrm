@@ -18,7 +18,7 @@ from qbopt.objectfile.module import Space
 Returns = dict[str, tuple[mir.Const, ...]]
 Parameters = dict[str, tuple[mir.Const | None, ...]]
 
-_MAY_TRAP = frozenset({mir.Kind.DIV, mir.Kind.REM, mir.Kind.DIVMOD, mir.Kind.UDIVMOD})
+_MAY_TRAP = frozenset({mir.Kind.DIV, mir.Kind.REM, mir.Kind.DIVMOD, mir.Kind.UDIVMOD, mir.Kind.FIXED_DIV})
 _FLOATING = frozenset(
     {
         mir.Kind.FADD,

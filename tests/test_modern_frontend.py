@@ -124,7 +124,7 @@ def test_unsigned_and_floating_operations_keep_their_semantics_in_mir() -> None:
     assert branch.test is mir.Kind.BELOW
 
 
-def test_fixed_point_types_scale_literals_and_lower_through_wide_integer_mir() -> None:
+def test_fixed_point_types_scale_literals_and_keep_storage_width_in_mir() -> None:
     program = driver.parsed(FIXED)
     module = program.modules[0]
     types = {one.name: one for one in module.types}
@@ -161,61 +161,50 @@ def test_fixed_point_types_scale_literals_and_lower_through_wide_integer_mir() -
     assert all(not mir.verify(body) for body in lowered.values())
     product_kinds = {operation.kind for block in lowered["fixed.product"].blocks for operation in block.ops}
     quotient_kinds = {operation.kind for block in lowered["fixed.quotient"].blocks for operation in block.ops}
+    # fixed8 uses a 32-bit intermediate; fixed16 is already based on i32 and
+    # stays one semantic operation until target lowering selects EDX:EAX.
     assert {mir.Kind.SIGN_EXTEND, mir.Kind.MUL, mir.Kind.SAR} <= product_kinds
-    assert {mir.Kind.SIGN_EXTEND, mir.Kind.SHL, mir.Kind.DIVMOD} <= quotient_kinds
+    assert mir.Kind.FIXED_DIV in quotient_kinds
+    assert not {mir.Kind.SIGN_EXTEND, mir.Kind.SHL, mir.Kind.DIVMOD} & quotient_kinds
 
 
-def test_narrow_view_of_legalized_fixed_product_uses_its_low_dword() -> None:
-    """Native nbody printed every initial position unchanged after one step.
+def test_fixed_i32_product_stays_a_storage_width_operation_through_physicalization() -> None:
+    """Native nbody used to route every Q23.9 product through generic i64 MIR."""
+    program = driver.parsed(NBODY)
+    function = next(one for one in program.modules[0].functions if one.name == "nbody")
+    lowered = next(one for one in hir.lower(program) if one.name == "nbody.nbody")
+    physical = physicalize(program, function, lowered)
+    fixed = [
+        operation
+        for block in physical.lowered.body.blocks
+        for operation in block.ops
+        if operation.kind in (mir.Kind.FIXED_MUL, mir.Kind.FIXED_DIV)
+    ]
 
-    Fixed multiplication computes an i64 product, shifts that wide value, and
-    then takes its narrow i32 view.  Int64 legalization must redirect that
-    view to the low dword it just made, rather than leave a use of the removed
-    wide value for lowering to interpret as an unrelated live-in.
+    assert fixed
+    assert all(operation.results[0].width == 4 for operation in fixed)
+    assert all(all(argument.width <= 4 for argument in operation.args) for operation in fixed)
+
+
+def test_fixed_i32_arithmetic_never_enters_generic_int64_legalization() -> None:
+    """nbody's Q23.9 inner loop expanded one division to 311 inline bytes.
+
+    A fixed i32 product needs the 386's native 32x32->64 IMUL result, and a
+    scaled dividend already fits IDIV's EDX:EAX input.  Neither operation is
+    an arbitrary i64 operation and neither may acquire an int64 helper blob.
     """
     program = driver.parsed(NBODY)
     function = next(one for one in program.modules[0].functions if one.name == "nbody")
     lowered = next(one for one in hir.lower(program) if one.name == "nbody.nbody")
     physical = physicalize(program, function, lowered)
-
-    source_shift = next(
-        operation
-        for block in physical.lowered.body.blocks
-        for operation in block.ops
-        if operation.kind is mir.Kind.SAR
-        and isinstance(operation.args[0], mir.Held)
-        and operation.args[0].width == 8
-        and operation.results[0].width == 8
-    )
-    narrow = next(
-        operation
-        for block in physical.lowered.body.blocks
-        for operation in block.ops
-        if operation.kind is mir.Kind.COPY
-        and isinstance(operation.args[0], mir.Held)
-        and operation.args[0].value == source_shift.results[0].value
-        and operation.args[0].width == 4
-    )
-
     legalized = lower_int64.expanded(
         physical.lowered.body,
         physical.calls,
         physical.contracts,
         physical.hints,
-    ).body
-    low_result = next(
-        operation.results[0]
-        for block in legalized.blocks
-        for operation in block.ops
-        if operation.at == source_shift.at and operation.kind is mir.Kind.OR
     )
-    legalized_narrow = next(
-        operation
-        for block in legalized.blocks
-        for operation in block.ops
-        if operation.at == narrow.at and operation.kind is mir.Kind.COPY
-    )
-    assert legalized_narrow.args == (low_result,)
+
+    assert legalized.inline == {}
 
 
 def test_nbody_arrays_strings_and_print_cross_hir_and_verify_in_mir() -> None:
@@ -259,7 +248,8 @@ def test_nbody_arrays_strings_and_print_cross_hir_and_verify_in_mir() -> None:
         mir.Kind.ADDRESS,
         mir.Kind.BRANCH,
         mir.Kind.CALL,
-        mir.Kind.DIVMOD,
+        mir.Kind.FIXED_DIV,
+        mir.Kind.FIXED_MUL,
         mir.Kind.LOAD,
         mir.Kind.MUL,
         mir.Kind.STORE,
@@ -333,11 +323,16 @@ def test_nbody_identity_uses_the_paired_byte_recurrences() -> None:
     """
     assembly = masm.text(modern_compile.assembled(driver.parsed(NBODY), entry="main"))
     interaction = assembly.split("L0_7:\n", 1)[1].split("L0_2:\n", 1)[0]
+    force_loops = assembly.split("L0_3:\n", 1)[1].split("L0_9:\n", 1)[0]
 
     assert re.search(r"    shl (?:[sd]i|word ptr \[[^]]+\]), 4\n", interaction) is None
     assert ", 96\n" not in interaction
-    assert len(re.findall(r"    add word ptr \[[^]]+\], 16\nL\d+_\d+:\n    jne L\d+_\d+\n", interaction)) == 2
-    assert len(re.findall(r"    mov word ptr \[[^]]+\], 65440\n", assembly.split("L0_2:\n", 1)[0])) == 2
+    recurrences = re.findall(
+        r"    add (?:[sd]i|word ptr \[[^]]+\]), 16\nL\d+_\d+:\n    jne L\d+_\d+\n",
+        force_loops,
+    )
+    assert len(recurrences) == 2
+    assert len(re.findall(r"    mov (?:[sd]i|word ptr \[[^]]+\]), 65440\n", force_loops)) == 2
 
 
 def test_nbody_velocity_updates_write_the_array_cells_in_place() -> None:
@@ -350,12 +345,7 @@ def test_nbody_velocity_updates_write_the_array_cells_in_place() -> None:
     assembly = masm.text(modern_compile.assembled(driver.parsed(NBODY), entry="main"))
     interaction = assembly.split("L0_7:\n", 1)[1].split("L0_2:\n", 1)[0]
 
-    source = re.search(r"    mov (?P<register>e(?:ax|bx|cx|dx|si|di)), dword ptr \[bp-114\]\n", interaction)
-    assert source is not None
-    assert re.search(
-        rf"    add dword ptr \[bp\+[sd]i\+8\], {source.group('register')}\n",
-        interaction,
-    )
+    assert re.search(r"    add dword ptr \[bp\+[sd]i\+8\], e(?:ax|bx|cx|dx|si|di)\n", interaction)
     assert re.search(r"    add dword ptr \[bp\+[sd]i\+12\], e(?:ax|bx|cx|dx|si|di)\n", interaction)
     assert not re.search(
         r"    mov (?P<temporary>e(?:ax|bx|cx|dx|si|di)), dword ptr \[bp\+[sd]i\+(?:8|12)\]\n"

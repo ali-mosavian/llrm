@@ -32,6 +32,8 @@ _INTEGER = {
     model.Op.ADD,
     model.Op.SUB,
     model.Op.MUL,
+    model.Op.FIXED_MUL,
+    model.Op.FIXED_DIV,
     model.Op.DIV,
     model.Op.REM,
     model.Op.DIVMOD,
@@ -285,6 +287,24 @@ def _function(module: model.Module, function: model.Function, types: dict[int, m
                 involved = [*(values[one].type for one in instruction.results), *operand_types]
                 if any(types[one].kind not in (model.TypeKind.INTEGER, model.TypeKind.BOOLEAN) for one in involved):
                     raise InvalidHIR(f"{prefix}: {instruction.op} has a non-integer operand")
+            if instruction.op in (model.Op.FIXED_MUL, model.Op.FIXED_DIV):
+                if len(result_types) != 1 or len(operand_types) != 3:
+                    raise InvalidHIR(f"{prefix}: {instruction.op} has the wrong arity")
+                value_type = types[result_types[0]]
+                left_type, right_type, fraction_type = (types[one] for one in operand_types)
+                fraction = instruction.operands[2]
+                if (
+                    value_type.kind is not model.TypeKind.INTEGER
+                    or value_type.width != 4
+                    or value_type.signed is not True
+                    or left_type != value_type
+                    or right_type != value_type
+                    or fraction_type.kind is not model.TypeKind.INTEGER
+                    or fraction_type.width != 1
+                    or not isinstance(fraction, model.Constant)
+                    or not 1 <= fraction.value < 32
+                ):
+                    raise InvalidHIR(f"{prefix}: {instruction.op} is not fixed i32 arithmetic")
             if instruction.op in _COMPARE:
                 if len(result_types) != 1 or types[result_types[0]].kind is not model.TypeKind.BOOLEAN:
                     raise InvalidHIR(f"{prefix}: comparison does not produce a boolean")

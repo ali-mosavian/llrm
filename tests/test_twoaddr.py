@@ -42,6 +42,27 @@ def test_multiply_reuses_the_dying_operand() -> None:
     assert chosen.what.sources == tuple(reversed(one.what.sources))
 
 
+def test_funnel_shift_copies_its_low_source_into_the_destructive_destination() -> None:
+    """Modern fixed multiply shifted its multiplier instead of its product.
+
+    SHRD encodes its destination, high source, and count; the low source is
+    the old destination value.  A three-address LIR occurrence therefore
+    needs the same tie as ordinary binary arithmetic.
+    """
+    what = ir.Semantics(
+        ir.Operation.FUNNEL,
+        "shrd",
+        (ir.Held(3, 4),),
+        (ir.Held(1, 4), ir.Held(2, 4), ir.Imm(9, 1)),
+    )
+    one = lir.Insn(at=0, covers=(0, 0), defines=(3,), uses=(1, 2), what=what)
+
+    copy, tied = twoaddr._untied(one, iter(range(1000, 2000)).__next__)
+
+    assert copy.what.sources == (ir.Held(1, 4),)
+    assert tied.what.sources == (ir.Held(3, 4), ir.Held(2, 4), ir.Imm(9, 1))
+
+
 @pytest.mark.parametrize("name", ["sub", "adc", "sbb", "shl"])
 def test_noncommutative_or_implicit_arithmetic_is_not_swapped(name):
     one = addition(name)

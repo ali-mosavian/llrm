@@ -2286,6 +2286,34 @@ impl<'a> FunctionCompiler<'a> {
                 "'%' is not defined for fixed-point values",
             ));
         }
+        // Keep fixed i32 arithmetic intact through HIR.  Its widened
+        // intermediate is a machine operand pair, not a first-class i64:
+        // expanding it here made the generic int64 legalizer select complete
+        // 64x64 multiply and 64/64 divide helpers for a 32-bit stored value.
+        // Target lowering can instead use the native 32x32->64 product and
+        // EDX:EAX dividend while preserving the language's wrapping result.
+        if storage == FixedStorage::I32 {
+            let result = self.value(fixed_type);
+            let operation = match operation {
+                BinaryOp::Multiply => "fixed_mul",
+                BinaryOp::Divide => "fixed_div",
+                _ => unreachable!("only scaling fixed operations reach this helper"),
+            };
+            self.emit(
+                operation,
+                vec![result],
+                vec![
+                    required(left, span)?,
+                    required(right, span)?,
+                    hir::Operand::Constant(U8, i64::from(fraction)),
+                ],
+                None,
+            );
+            return Ok(TypedOperand {
+                operand: Some(hir::Operand::Value(result)),
+                type_name: fixed_type,
+            });
+        }
         let wide_type = match storage {
             FixedStorage::I16 => TypeName::I32,
             FixedStorage::I32 => TypeName::I64,
@@ -3199,6 +3227,24 @@ mod tests {
         assert!(json.contains(&format!("\"type\":{},\"value\":576", FIXED_START)));
         for operation in ["convert", "mul", "sar", "shl", "div"] {
             assert!(json.contains(&format!("\"op\":\"{operation}\"")));
+        }
+    }
+
+    #[test]
+    fn i32_fixed_arithmetic_stays_out_of_generic_i64_hir() {
+        let json = compile_source(
+            "type scalar = fixed i32, fraction=9\n\
+             fn product(a: scalar, b: scalar) -> scalar:\n\
+             \x20\x20\x20\x20return a * b\n\
+             fn quotient(a: scalar, b: scalar) -> scalar:\n\
+             \x20\x20\x20\x20return a / b\n",
+        )
+        .unwrap();
+
+        assert!(json.contains("\"op\":\"fixed_mul\""));
+        assert!(json.contains("\"op\":\"fixed_div\""));
+        for operation in ["convert", "mul", "sar", "shl", "div"] {
+            assert!(!json.contains(&format!("\"op\":\"{operation}\"")));
         }
     }
 

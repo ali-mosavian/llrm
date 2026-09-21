@@ -42,15 +42,19 @@ representable quantum, with ties away from zero. There are no implicit
 conversions between fixed types, integers, or floats.
 
 Addition, subtraction, negation, and comparison use the signed stored
-representation directly. Multiplication and division widen first (`i16` to
-`i32`, `i32` to an internal `i64`) and then rescale, so storage-width overflow
-cannot destroy the intermediate product. Multiplication discards low
-fractional bits with an arithmetic shift; division shifts the widened
-numerator before signed division. Narrowing back to storage follows the
-language's current wrapping integer policy. No descriptor, heap object, or
-fixed-point arithmetic runtime routine is generated. Printing uses the
-existing output boundary with the raw value and a compile-time fractional-bit
-argument. Both direct `print(value)` and fixed values inside f-strings render
+representation directly. Multiplication and division use a double-width
+mathematical intermediate and then rescale, so storage-width overflow cannot
+destroy the intermediate product. For `i16` storage that intermediate is an
+ordinary `i32`; an `i32`-based fixed operation stays intact until target
+lowering uses the 386's native EDX:EAX product or dividend pair. It never
+becomes a first-class `i64` operation or a generic 64-bit helper.
+Multiplication discards low fractional bits with an arithmetic shift;
+division shifts the widened numerator before signed division. Narrowing back
+to storage follows the language's current wrapping integer policy. No
+descriptor, heap object, or fixed-point arithmetic runtime routine is
+generated. Printing uses the existing output boundary with the raw value and
+a compile-time fractional-bit argument. Both direct `print(value)` and fixed
+values inside f-strings render
 canonical signed base-10 `integer.fraction`: at least one digit appears on
 each side of the decimal point, and redundant trailing fractional zeroes are
 removed. Thus Q8 raw values `384`, `-64`, and `512` print as `1.5`, `-0.25`,

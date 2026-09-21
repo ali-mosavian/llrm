@@ -39,3 +39,29 @@ def test_native_nbody_matches_hir_through_bootstrap_runtime_and_main(tmp_path: P
 
     assert made.size < 5 * 1024
     assert made.output == expected
+
+
+def test_native_dynamic_fixed_i32_arithmetic_preserves_wrapping_results(tmp_path: Path) -> None:
+    """The helper-free two-DIV path must agree at signs and wrapped overflow."""
+    source = tmp_path / "fixed_i32.mod"
+    source.write_text(
+        "type scalar = fixed i32, fraction=9\n"
+        "fn product(left: scalar, right: scalar) -> scalar:\n"
+        "    return left * right\n"
+        "fn quotient(left: scalar, right: scalar) -> scalar:\n"
+        "    return left / right\n"
+        "fn main() -> i16:\n"
+        "    print(quotient(1, 0.001953125))\n"
+        "    print(quotient(-1, 0.001953125))\n"
+        "    print(quotient(4194303.998046875, 0.001953125))\n"
+        "    print(quotient(-4194304, -1))\n"
+        "    print(product(100000, 0.5))\n"
+        "    return 0\n"
+    )
+
+    expected = execute.run(driver.parsed(source), "main").output
+    assert expected == "512.0\n-512.0\n-1.0\n-4194304.0\n50000.0\n"
+
+    made = build(source, tmp_path / "FIXED32.EXE", run=True)
+
+    assert made.output == expected
