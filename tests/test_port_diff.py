@@ -137,3 +137,10 @@ def test_the_recorded_corpus_keeps_each_compiles_flags(tmp_path: Path) -> None:
     [written] = tmp_path.glob("*/*.bas")
     assert written.read_bytes() == parity.read_bytes()
     assert port_diff.qb_flags(written) == [*defaults, "--unchecked-bounds"]
+
+
+def test_the_select_sweep_is_what_this_checkouts_select_emits() -> None:
+    """Run as a script, the sweep read the main checkout's select: Rust's `rol ax,ecx` failed a stale expectation."""
+    import select_sweep
+
+    assert select_sweep.OUT.read_text() == select_sweep.rendered(select_sweep.sweep())
