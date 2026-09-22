@@ -215,7 +215,7 @@ pub enum Node {
 }
 
 impl Node {
-    fn semantics(&self) -> &Semantics {
+    pub fn semantics(&self) -> &Semantics {
         match self {
             Self::Opaque(node) => &node.semantics,
             Self::Long(node) => &node.semantics,
