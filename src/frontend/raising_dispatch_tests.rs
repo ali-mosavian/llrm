@@ -1,12 +1,10 @@
 //! Port of `tests/test_raising_dispatch.py`.
 //!
-//! Skipped, needing `wholeseg`:
-//! `test_guarded_dispatch_emits_instead_of_falling_back`,
-//! `test_read_data_error_witness_emits_native_dispatch`.
 //! Skipped, monkeypatching `raising_dispatch.raised` out of `mir.bodies`:
 //! `test_unproved_dispatch_remains_a_call`.
 
 use crate::analysis::consts::Known;
+use crate::frontend::blocks;
 use crate::analysis::loops;
 use crate::model::mir::{Arg, Const, Kind, MirBlock, MirBody};
 use crate::optimize::transform::_executable_successors;
@@ -74,4 +72,29 @@ fn test_dispatch_boundary_reaches_the_required_path() {
             assert_eq!(successors(target), Some(vec![expected]), "{number}");
         }
     }
+}
+
+#[test]
+#[ignore = "fails in Python too: assert not True (JUMPS' emitted object has no code map)"]
+fn test_guarded_dispatch_emits_instead_of_falling_back() {
+    for tag in ["q-O", "p-g2", "v-g2", "v-g3"] {
+        let output = testing::emitted_lir(format!("fixtures/omf/jumps-{tag}.obj").to_lowercase());
+        let found = testing::loaded_bytes(&output.data).unwrap();
+        let mapped = blocks::code_map(&found).unwrap();
+        // JUMPS only dispatches 1..3: neither the error call nor its table is reachable.
+        assert!(!found.calls.values().any(|name| name == "B$OGTA"), "{tag}");
+        let declared: Vec<(usize, usize)> = blocks::statement_table(&found).into_iter().collect();
+        assert_eq!(mapped.tables, declared, "{tag}");
+    }
+}
+
+#[test]
+#[ignore = "fails in Python too: Unprintable: main (main): block leaves for (76, 87, 98, 109) with no instruction choosing"]
+fn test_read_data_error_witness_emits_native_dispatch() {
+    let source = "fixtures/regressions/dispatch-p-g2.obj";
+    let raised = testing::raised(source);
+    assert!(testing::all_ops(&raised).iter().any(|op| op.kind == Kind::Switch));
+    let result = testing::emitted_lir(source);
+    let mapped = blocks::code_map(&testing::loaded_bytes(&result.data).unwrap()).unwrap();
+    assert!(!mapped.tables.is_empty());
 }
