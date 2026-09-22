@@ -4,6 +4,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::model::mir::{self, MirBlock, MirBody, Value};
+use crate::support::bits::Bits;
+use crate::support::hash::HashMap;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Liveness {
@@ -103,57 +105,111 @@ pub fn phi_inputs(body: &MirBody, found: Option<&Liveness>) -> BTreeSet<Value> {
 }
 
 /// What is live at each block's entry and exit, to a fixed point.
+///
+/// Run on bit sets over dense value indices; the sets, and the order they
+/// are updated in, are Python's.
 pub fn live(body: &MirBody) -> Liveness {
-    let mut op_defines: BTreeMap<i64, BTreeSet<Value>> = body
-        .blocks
-        .iter()
-        .map(|block| (block.at, block.ops.iter().flat_map(|op| op.defines.iter().copied()).collect()))
-        .collect();
-    let phi_defines: BTreeMap<i64, BTreeSet<Value>> =
-        body.blocks.iter().map(|block| (block.at, block.phis.iter().map(|phi| phi.result).collect())).collect();
-    let mut exposed: BTreeMap<i64, BTreeSet<Value>> =
-        body.blocks.iter().map(|block| (block.at, _exposed(block))).collect();
-    if !body.blocks.is_empty() {
-        let arriving = entry_values(body);
-        op_defines.entry(body.entry).or_default().extend(arriving.iter().copied());
-        if let Some(exposed) = exposed.get_mut(&body.entry) {
-            exposed.retain(|one| !arriving.contains(one));
+    let mut index: HashMap<Value, usize> = HashMap::default();
+    let mut values: Vec<Value> = Vec::new();
+    for block in &body.blocks {
+        let phis = block.phis.iter().flat_map(|phi| std::iter::once(&phi.result).chain(phi.incoming.values()));
+        let ops = block.ops.iter().flat_map(|op| op.defines.iter().chain(&op.uses).chain(mir::exit_values(op)));
+        for one in phis.chain(ops) {
+            index.entry(*one).or_insert_with(|| {
+                values.push(*one);
+                values.len() - 1
+            });
         }
     }
-    let empty = || body.blocks.iter().map(|block| (block.at, BTreeSet::new())).collect::<BTreeMap<_, _>>();
-    let mut live_in = empty();
-    let mut live_out = empty();
-    let mut after_phis = empty();
+    let bits = |ones: &mut dyn Iterator<Item = &Value>| {
+        let mut set = Bits::new(values.len());
+        for one in ones {
+            set.insert(index[one]);
+        }
+        set
+    };
+    let at_index: HashMap<i64, usize> =
+        body.blocks.iter().enumerate().rev().map(|(position, block)| (block.at, position)).collect();
+
+    let mut op_defines: Vec<Bits> =
+        body.blocks.iter().map(|block| bits(&mut block.ops.iter().flat_map(|op| &op.defines))).collect();
+    let phi_defines: Vec<Bits> =
+        body.blocks.iter().map(|block| bits(&mut block.phis.iter().map(|phi| &phi.result))).collect();
+    let mut exposed: Vec<Bits> = body.blocks.iter().map(|block| bits(&mut _exposed(block).iter())).collect();
+    let exits: Vec<Bits> = body
+        .blocks
+        .iter()
+        .map(|block| bits(&mut block.ops.iter().flat_map(|op| mir::exit_values(op))))
+        .collect();
+    if !body.blocks.is_empty() {
+        let arriving = bits(&mut entry_values(body).iter());
+        if let Some(&entry) = at_index.get(&body.entry) {
+            op_defines[entry].union_with(&arriving);
+            exposed[entry].subtract(&arriving);
+        }
+    }
+    // Each successor as its position and, per phi, (result, this block's arm).
+    let successors: Vec<Vec<(usize, Vec<(usize, usize)>)>> = body
+        .blocks
+        .iter()
+        .map(|block| {
+            block
+                .succ
+                .iter()
+                .filter_map(|successor| at_index.get(successor))
+                .map(|&position| {
+                    let arms = body.blocks[position]
+                        .phis
+                        .iter()
+                        .filter_map(|phi| phi.incoming.get(&block.at).map(|arm| (index[&phi.result], index[arm])))
+                        .collect();
+                    (position, arms)
+                })
+                .collect()
+        })
+        .collect();
+    let empty = Bits::new(values.len());
+    let mut live_in = vec![empty.clone(); body.blocks.len()];
+    let mut live_out = vec![empty.clone(); body.blocks.len()];
+    let mut after_phis = vec![empty; body.blocks.len()];
 
     let mut changing = true;
     while changing {
         changing = false;
-        for block in &body.blocks {
-            let mut out: BTreeSet<Value> =
-                block.ops.iter().flat_map(|op| mir::exit_values(op).iter().copied()).collect();
-            for successor in &block.succ {
-                let Some(found) = body.block(*successor) else {
-                    continue;
-                };
-                out.extend(live_in[successor].iter().copied());
-                for phi in &found.phis {
-                    if after_phis[successor].contains(&phi.result) {
-                        out.extend(phi.incoming.get(&block.at).copied());
+        for position in 0..body.blocks.len() {
+            let mut out = exits[position].clone();
+            for (successor, arms) in &successors[position] {
+                out.union_with(&live_in[*successor]);
+                for &(result, arm) in arms {
+                    if after_phis[*successor].contains(result) {
+                        out.insert(arm);
                     }
                 }
             }
-            let mut after: BTreeSet<Value> = out.difference(&op_defines[&block.at]).copied().collect();
-            after.extend(exposed[&block.at].iter().copied());
-            let inside: BTreeSet<Value> = after.difference(&phi_defines[&block.at]).copied().collect();
-            if out != live_out[&block.at] || inside != live_in[&block.at] || after != after_phis[&block.at] {
-                live_out.insert(block.at, out);
-                live_in.insert(block.at, inside);
-                after_phis.insert(block.at, after);
+            let mut after = out.clone();
+            after.subtract(&op_defines[position]);
+            after.union_with(&exposed[position]);
+            let mut inside = after.clone();
+            inside.subtract(&phi_defines[position]);
+            if out != live_out[position] || inside != live_in[position] || after != after_phis[position] {
+                live_out[position] = out;
+                live_in[position] = inside;
+                after_phis[position] = after;
                 changing = true;
             }
         }
     }
-    Liveness { live_in, live_out }
+    let sets = |found: &[Bits]| -> BTreeMap<i64, BTreeSet<Value>> {
+        body.blocks
+            .iter()
+            .zip(found)
+            .map(|(block, set)| (block.at, set.iter().map(|one| values[one]).collect()))
+            .collect()
+    };
+    Liveness {
+        live_in: sets(&live_in),
+        live_out: sets(&live_out),
+    }
 }
 
 #[cfg(test)]
