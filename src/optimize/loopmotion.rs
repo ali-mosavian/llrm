@@ -217,7 +217,7 @@ pub fn sunk_stores(
                 .collect();
             updates.insert(block.at, changed);
         }
-        let mut changed = exit_block.clone();
+        let mut changed = exit_block.with_ops(Vec::new());
         let anchor = exit_block.ops[0].at;
         changed.ops = moved
             .iter()

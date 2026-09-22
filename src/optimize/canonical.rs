@@ -83,9 +83,7 @@ pub(crate) fn compares(body: Rc<MirBody>) -> Rc<MirBody> {
                 ops.push(op.clone());
             }
         }
-        let mut block = block.clone();
-        block.ops = ops;
-        blocks.push(block);
+        blocks.push(block.with_ops(ops));
     }
     Rc::new(MirBody { blocks, ..MirBody::clone(&body) })
 }

@@ -312,9 +312,7 @@ pub(crate) fn propagate_returns(
             completed.insert(op.at);
             changed = true;
         }
-        let mut made = block.clone();
-        made.ops = ops;
-        blocks.push(made);
+        blocks.push(block.with_ops(ops));
     }
     let made = if changed {
         let mut made = MirBody::clone(body);

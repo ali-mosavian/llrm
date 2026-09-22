@@ -1037,9 +1037,7 @@ pub(crate) fn forwarded(
             }
             ops.push(next);
         }
-        let mut next = block.clone();
-        next.ops = ops;
-        out.push(next);
+        out.push(block.with_ops(ops));
     }
     let mut result = MirBody::clone(body);
     result.blocks = out;
@@ -3422,9 +3420,7 @@ pub(crate) fn hoisted(
             let index = index.min(ops.len());
             ops.splice(index..index, lifted);
         }
-        let mut changed = block.clone();
-        changed.ops = ops;
-        out.push(changed);
+        out.push(block.with_ops(ops));
     }
 
     // What crossed the loop edge is its own variable now, so re-deriving SSA

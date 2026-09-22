@@ -157,9 +157,7 @@ pub fn checks(body: &MirBody) -> MirBody {
             observed = after;
             ops.push(op);
         }
-        let mut block = block.clone();
-        block.ops = ops;
-        blocks.push(block);
+        blocks.push(block.with_ops(ops));
     }
     body.with_blocks(blocks)
 }
@@ -222,9 +220,7 @@ pub fn stored(body: &Rc<MirBody>, facts: &IndexMap<Value, Finite>) -> Rc<MirBody
             }
             ops.push(op.clone());
         }
-        let mut block = block.clone();
-        block.ops = ops;
-        blocks.push(block);
+        blocks.push(block.with_ops(ops));
     }
     Rc::new(_dead_values(
         body.with_blocks(blocks),
@@ -253,9 +249,7 @@ fn _dead_values(mut changed: MirBody, facts: &IndexMap<Value, Finite>) -> MirBod
                 }
                 ops.push(op);
             }
-            let mut block = block.clone();
-            block.ops = ops;
-            blocks.push(block);
+            blocks.push(block.with_ops(ops));
         }
         changed = MirBody {
             blocks,
@@ -326,9 +320,7 @@ pub fn discarded(body: &Rc<MirBody>, converted: &IndexMap<Value, Known>) -> Rc<M
                 }
             }
         }
-        let mut block = block.clone();
-        block.ops = ops;
-        blocks.push(block);
+        blocks.push(block.with_ops(ops));
     }
     Rc::new(body.with_blocks(blocks))
 }
