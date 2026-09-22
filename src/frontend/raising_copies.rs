@@ -307,3 +307,7 @@ fn _pointers(
     }
     Some(pointers)
 }
+
+#[cfg(test)]
+#[path = "raising_copies_tests.rs"]
+mod tests;
