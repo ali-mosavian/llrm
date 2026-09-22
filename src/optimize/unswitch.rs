@@ -3,8 +3,8 @@
 //!
 //! Python's `ValueError`s are the `Err` text.
 //!
-//! Every test in `tests/test_unswitch.py` is skipped: each needs the corpus,
-//! `transform.applied` or `optimized`.
+//! Every test in `tests/test_unswitch.py` is skipped: each needs the corpus
+//! or a monkeypatched pipeline.
 
 use std::collections::{BTreeMap, BTreeSet};
 

@@ -1,6 +1,5 @@
 //! Port of `tests/test_transform.py`.
 
-// ==== BEGIN preheader tests (primary) ====
 mod preheader_tests {
     use std::collections::BTreeSet;
 
@@ -61,9 +60,6 @@ mod preheader_tests {
         assert_eq!(preheader(&body, &loop_(20, &[20])), None);
     }
 }
-// ==== END preheader tests ====
-
-// ==== BEGIN tests A ====
 /// Skipped, needing .obj fixtures or wholeseg:
 /// test_place_takes_a_store_out_of_a_push_run,
 /// test_place_keeps_the_frame_pointer_behind_the_push_that_saves_it,
@@ -162,9 +158,6 @@ mod subexpressions_tests {
         assert!(_computation(&fake, &IndexMap::new(), &whole(2)).is_some());
     }
 }
-// ==== END tests A ====
-
-// ==== BEGIN tests B ====
 // Skipped: test_a_served_read_names_the_value_and_not_a_register (corpus fixture).
 mod b_tests {
     use std::collections::BTreeSet;
@@ -246,9 +239,6 @@ mod b_tests {
         assert_eq!(done[3], neighbor);
     }
 }
-// ==== END tests B ====
-
-// ==== BEGIN tests C ====
 mod hoist_tests {
     use std::collections::BTreeSet;
 
@@ -410,9 +400,6 @@ mod hoist_tests {
         assert_eq!(result.integer_ranges, OrderedMap::from_iter([(renamed, interval)]));
     }
 }
-// ==== END tests C ====
-
-// ==== BEGIN tests D ====
 mod d_tests {
     use std::collections::BTreeSet;
 
@@ -491,9 +478,6 @@ mod d_tests {
         assert_eq!(dead(&body).expect("dead"), body, "and stays when the body holds a barrier");
     }
 }
-// ==== END tests D ====
-
-// ==== BEGIN tests E ====
 mod folded_tests {
     use indexmap::IndexMap;
 
@@ -505,7 +489,7 @@ mod folded_tests {
     /// LNGMXX retained invariant division by 7 because its constant divisor stayed opaque to LICM.
     #[test]
     fn divisor_constants_propagate_without_reordering() {
-        for (number, _safe) in [(7_i64, true), (0, false), (0xFFFF_FFFF, false)] {
+        for (number, safe) in [(7_i64, true), (0, false), (0xFFFF_FFFF, false)] {
             let [dividend, divisor, quotient, remainder] = [1, 2, 3, 4].map(|index| Value::new(index, 0));
             let mut op = Op::new(
                 0,
@@ -529,9 +513,7 @@ mod folded_tests {
                 vec![Arg::Held(Held { value: dividend, width: 4 }), Arg::Const(Const::new(number, 4))]
             );
             assert_eq!(done.uses, vec![dividend]);
-            // needs _cannot_fault, which section C ports.
-            #[cfg(any())]
-            assert_eq!(crate::optimize::transform::_cannot_fault(&done), _safe);
+            assert_eq!(crate::optimize::transform::_cannot_fault(&done), safe);
             assert_eq!(
                 _constant_operands(&op, &IndexMap::from([(divisor, Known::new(number, 2))]), None, None),
                 op
@@ -539,8 +521,102 @@ mod folded_tests {
         }
     }
 }
-// ==== END tests E ====
+mod pipeline_tests {
+    use std::collections::BTreeSet;
 
-// ==== BEGIN tests F ====
-// ==== END tests F ====
+    use indexmap::IndexMap;
+    use num_bigint::BigInt;
+
+    use crate::model::ir::Operation;
+    use crate::model::mir::{Arg, Const, Kind, MirBlock, MirBody, Op, OpCode};
+    use crate::optimize::transform::{_absorb, applied, Applied, PASSES};
+
+    fn move_(at: i64, kind: Kind, args: Vec<Arg>) -> Op {
+        let mut op = Op::new(at, OpCode::Operation(Operation::Move), "mov", vec![], vec![]);
+        op.kind = kind;
+        op.args = args;
+        op
+    }
+
+    #[test]
+    fn test_final_pipeline_inerts_unreachable_executable_blocks() {
+        let dead_store = move_(9, Kind::Store, vec![]);
+        let body = MirBody::new(
+            0,
+            vec![MirBlock::new(0, vec![], vec![], vec![]), MirBlock::new(0x3100_0000_2B, vec![], vec![dead_store], vec![])],
+        );
+
+        let result = applied(
+            &body,
+            &BTreeSet::new(),
+            &IndexMap::new(),
+            Applied { only: Some("no-such-pass".to_owned()), ..Default::default() },
+        )
+        .unwrap();
+
+        let orphan = result.block(0x3100_0000_2B).expect("the orphan stays");
+        assert!(orphan.succ.is_empty());
+        assert!(orphan.ops.iter().all(|op| op.kind == Kind::Nothing && op.stores.is_empty()));
+    }
+
+    #[test]
+    fn test_final_pipeline_drops_unreachable_empty_blocks() {
+        let body = MirBody::new(
+            0,
+            vec![MirBlock::new(0, vec![], vec![], vec![]), MirBlock::new(0x3100_0000_2B, vec![], vec![], vec![])],
+        );
+
+        let result = applied(
+            &body,
+            &BTreeSet::new(),
+            &IndexMap::new(),
+            Applied { only: Some("no-such-pass".to_owned()), ..Default::default() },
+        )
+        .unwrap();
+
+        assert!(result.block(0x3100_0000_2B).is_none());
+    }
+
+    #[test]
+    fn test_leading_deletion_does_not_delete_its_survivor() {
+        let constant = |n: i64| vec![Arg::Const(Const::new(BigInt::from(n), 2))];
+        let first = move_(0, Kind::Copy, constant(3));
+        let survivor = move_(3, Kind::Copy, constant(21));
+        let last = move_(6, Kind::Copy, constant(5));
+        let done = _absorb(&[first, survivor.clone(), last.clone()], &BTreeSet::from([0]));
+        assert_eq!(done.iter().map(|op| op.args.clone()).collect::<Vec<_>>(), vec![survivor.args, last.args]);
+    }
+
+    #[test]
+    fn test_long_pair_recognition_is_not_an_optimizer_pass() {
+        let defaults = Applied::default();
+        assert!(defaults.drop_loads);
+        assert!(defaults.drop_stores);
+
+        assert!(!PASSES.iter().any(|one| one == "widen"));
+        assert!(PASSES.iter().any(|one| one == "drop_stores"));
+    }
+
+    #[test]
+    fn test_value_reuse_is_one_gvn_pre_pass() {
+        assert!(PASSES.iter().any(|one| one == "gvn"));
+        assert!(!PASSES.iter().any(|one| ["forward", "drop_loads", "reuse", "cse"].contains(&one.as_str())));
+    }
+
+    #[test]
+    fn test_scalar_replacement_precedes_scalar_and_cfg_simplification() {
+        let index = |name: &str| PASSES.iter().position(|one| one == name).expect("a pipeline pass");
+        assert!(index("sroa") < ["fold", "decide", "loopsimplify"].iter().map(|name| index(name)).min().unwrap());
+    }
+
+    #[test]
+    fn test_the_rename_alone_is_what_was_unsound() {
+        use crate::model::ir::root;
+        use iced_x86::Register;
+
+        assert_eq!(root(Register::AX), Register::EAX);
+        assert_eq!(root(Register::DX), Register::EDX);
+        assert_ne!(root(Register::AX), root(Register::DX));
+    }
+}
 

@@ -6,7 +6,6 @@
 //! fixed point prove the residual unreachable.
 
 // Its callers live in transform.py, not yet ported.
-#![allow(dead_code)]
 
 use std::collections::{BTreeMap, BTreeSet};
 

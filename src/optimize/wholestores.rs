@@ -21,7 +21,6 @@ pub(crate) fn _word(op: &Op) -> bool {
         && op.stores[0].addr.is_some()
 }
 
-#[allow(dead_code)] // Wired by the transform port.
 pub(crate) fn joined(body: &MirBody) -> MirBody {
     let definitions = body
         .blocks

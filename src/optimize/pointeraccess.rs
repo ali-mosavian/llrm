@@ -38,7 +38,6 @@ pub(crate) fn _reference(r#ref: &MemRef, pieces: &BTreeMap<Value, (Value, Value)
 }
 
 /// Name each packed access's offset and selector as word SSA values.
-#[allow(dead_code)] // Wired by the transform port.
 pub(crate) fn split(body: MirBody) -> MirBody {
     if !body
         .blocks

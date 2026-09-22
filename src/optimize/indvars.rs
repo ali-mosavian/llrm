@@ -34,7 +34,6 @@ use super::{loopexit, rotate, strength, transform};
 /// in frame cells, the old form is a load plus a store and the new form is a
 /// memory update.  The 386/486/P5 profiles price the latter higher and retain
 /// the copy.  Later profiles may take it.  Nothing here names either form.
-#[allow(dead_code)] // Called by the strength port.
 pub(crate) fn rewound(body: &MirBody, registers: i64, costs: Option<&OperationCosts>) -> MirBody {
     let default_costs;
     let costs = match costs {
@@ -258,7 +257,6 @@ pub(crate) fn rewound(body: &MirBody, registers: i64, costs: Option<&OperationCo
     body.clone()
 }
 
-#[allow(dead_code)] // Called by the strength port.
 pub(crate) fn simplified(body: &MirBody) -> Result<MirBody, SubstitutionError> {
     let facts = consts::known(body, None, None, None, None);
     let blocks = body.blocks.iter().enumerate().map(|(index, block)| (block.at, index)).collect::<BTreeMap<_, _>>();
@@ -673,7 +671,6 @@ impl _SeedBuilder {
 /// original unit counter disappears.  The proof is target-independent:
 /// the source frontend supplies an integer bound for `n` and
 /// `AffineMap.period` supplies the modular safety condition.
-#[allow(dead_code)] // Called by the strength port.
 pub(crate) fn symbolically_zeroed(body: &MirBody) -> Result<MirBody, SubstitutionError> {
     let facts = consts::known(body, None, None, None, None);
     let blocks = body.blocks.iter().enumerate().map(|(index, block)| (block.at, index)).collect::<BTreeMap<_, _>>();
@@ -970,7 +967,6 @@ pub(crate) fn symbolically_zeroed(body: &MirBody) -> Result<MirBody, Substitutio
 /// read is an invariant plus the counter, or plus the counter shifted, and
 /// the invariant takes `final`, shifted the same, once before the loop:
 /// both sides wrap at the add's own width, so the sum is unchanged.
-#[allow(dead_code)] // Called by the strength port.
 pub(crate) fn zeroed(body: &MirBody, address_offsets: bool) -> Result<MirBody, SubstitutionError> {
     let facts = consts::known(body, None, None, None, None);
     let blocks = body.blocks.iter().enumerate().map(|(index, block)| (block.at, index)).collect::<BTreeMap<_, _>>();

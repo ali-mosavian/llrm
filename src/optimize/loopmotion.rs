@@ -3,7 +3,6 @@
 //! Port of `qbopt/optimize/loopmotion.py`.
 
 // Its callers live in transform.py, not yet ported.
-#![allow(dead_code)]
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 

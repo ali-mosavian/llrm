@@ -278,13 +278,11 @@ pub(crate) fn _aggregate_objects<'a>(
         .collect()
 }
 
-#[allow(dead_code)] // Wired by the transform port.
 pub(crate) struct Promote {
     pub r#where: Where,
 }
 
 impl Promote {
-    #[allow(dead_code)] // Wired by the transform port.
     pub(crate) fn new(r#where: Where) -> Self {
         Self { r#where }
     }
@@ -312,13 +310,11 @@ impl MIRTransform for Promote {
 }
 
 /// Scalarize proven aggregate leaves before scalar simplification.
-#[allow(dead_code)] // Wired by the transform port.
 pub(crate) struct Sroa {
     pub r#where: Where,
 }
 
 impl Sroa {
-    #[allow(dead_code)] // Wired by the transform port.
     pub(crate) fn new(r#where: Where) -> Self {
         Self { r#where }
     }

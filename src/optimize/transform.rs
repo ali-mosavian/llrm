@@ -10,7 +10,6 @@ use crate::analysis::occurrence::OpOccurrence;
 use crate::analysis::ssa::{provider as _provider, substituted as _substituted};
 use crate::model::mir::{self, Arg, Held, Kind, MirBlock, MirBody, Op, OrderedMap, Phi, Value};
 
-// ==== BEGIN S0: transform.py 60-129 (primary) ====
 /// Erase the operations whose address is in `gone`.
 pub(crate) fn _absorb(ops: &[Op], gone: &BTreeSet<i64>) -> Vec<Op> {
     _without(ops, |one| gone.contains(&one.at))
@@ -79,10 +78,6 @@ pub(crate) const _PURE: [Kind; 30] = [
     Kind::Below,
     Kind::Above,
 ];
-
-// ==== END S0 ====
-
-// ==== BEGIN A: transform.py 130-784 (agent A) ====
 
 /// One operation where two computed the same thing from the same values.
 pub(crate) fn subexpressions(body: &MirBody, dgroup: &BTreeSet<i64>, avoid_store_crossing: bool) -> Result<MirBody, String> {
@@ -837,8 +832,6 @@ pub(crate) fn _meets(one: Option<&BTreeSet<String>>, other: Option<&BTreeSet<Str
     }
 }
 
-// ==== END A ====
-
 /// Keep opaque source ownership, but no computation or memory effect.
 pub(crate) fn _empty_operation(op: &crate::model::mir::Op) -> crate::model::mir::Op {
     use crate::model::mir::{Kind, OpCode, OrderedMap};
@@ -873,7 +866,6 @@ pub(crate) fn _empty_operation(op: &crate::model::mir::Op) -> crate::model::mir:
     result
 }
 
-// ==== BEGIN B: transform.py 819-1004 (agent B) ====
 /// Every store overwritten, or never observable, before anything read it, removed.
 pub(crate) fn without_dead_stores(
     body: &MirBody,
@@ -1102,8 +1094,6 @@ pub(crate) fn _served(op: &Op, holder: &crate::analysis::avail::Holder) -> Optio
     };
     Some(op.args.iter().enumerate().map(|(index, one)| if index == at { replacement.clone() } else { one.clone() }).collect())
 }
-// ==== END B ====
-
 /// Direct port of `qbopt.optimize.transform:_preheader`.
 ///
 /// The one block entering `loop_` from outside it, if exactly one source
@@ -1123,8 +1113,6 @@ pub(crate) fn _preheader(body: &MirBody, loop_: &Loop) -> Option<i64> {
         None
     }
 }
-
-// ==== BEGIN C1: transform.py 1018-1396 (agent C) ====
 
 /// Every value some instruction reads, rather than merely preserves.
 ///
@@ -1460,8 +1448,6 @@ pub(crate) fn _crossed_values(
         .collect()
 }
 
-// ==== END C1 ====
-
 /// Direct port of `qbopt/optimize/transform.py:_OBSERVED`.
 pub(crate) const _OBSERVED: [crate::model::mir::Kind; 20] = {
     use crate::model::mir::Kind;
@@ -1498,7 +1484,6 @@ pub(crate) fn _leaving(body: &MirBody) -> std::collections::BTreeSet<crate::mode
 pub(crate) const LOW: u8 = 0;
 pub(crate) const HIGH: u8 = 1;
 
-// ==== BEGIN S1: transform.py 1433-1447 (primary) ====
 type _HalvesReuse = std::collections::HashMap<usize, (MirBody, BTreeSet<(Value, u8)>)>;
 
 thread_local! {
@@ -1515,8 +1500,6 @@ pub(crate) fn _reusing_halves<T>(inside: impl FnOnce() -> T) -> T {
     _halves_reuse.with(|reuse| *reuse.borrow_mut() = token);
     result
 }
-// ==== END S1 ====
-
 /// Which half of which value something reads, to a fixed point.
 ///
 /// Both halves of everything reaching an exit are live.
@@ -1626,7 +1609,6 @@ pub(crate) fn live(body: &MirBody) -> std::collections::BTreeSet<crate::model::m
     halves(body).into_iter().map(|(one, _)| one).collect()
 }
 
-// ==== BEGIN D: transform.py 1551-2090 (agent D) ====
 /// Whether each branch test is taken, given (a, b, unsigned view).
 #[allow(clippy::type_complexity)]
 pub(crate) const _TAKEN: [(
@@ -2330,9 +2312,6 @@ pub(crate) fn _removable(op: &Op, alive: &BTreeSet<Value>) -> bool {
     }
     !op.defines.iter().any(|one| alive.contains(one))
 }
-// ==== END D ====
-
-// ==== BEGIN E: transform.py 2091-2563 (agent E) ====
 /// Values that are a symbol's address, with the op owning its fixup.
 type _SymbolCopies<'a> = IndexMap<Value, (crate::model::mir::Symbol, &'a Op)>;
 
@@ -3001,10 +2980,6 @@ pub(crate) fn _folded_op(op: &Op, facts: &IndexMap<Value, crate::analysis::const
     result.raised = None;
     result
 }
-// ==== END E ====
-
-// ==== BEGIN C2: transform.py 2564-2869 (agent C) ====
-
 /// The latest place in the preheader every value the run reads is defined.
 pub(crate) fn _placement(block: &MirBlock, run: &[&Op], alive: &crate::analysis::liveness::Liveness) -> Option<usize> {
     let made = run.iter().flat_map(|one| one.defines.iter().copied()).collect::<BTreeSet<_>>();
@@ -3185,7 +3160,6 @@ pub(crate) fn _literal(op: &Op) -> bool {
 ///
 /// The whole run moves, so implicit operands are used inside it in the
 /// preheader and only its result crosses into the loop.
-#[allow(dead_code)] // Called by section F's pass table.
 pub(crate) fn hoisted(
     body: &MirBody,
     dgroup: &BTreeSet<i64>,
@@ -3384,9 +3358,6 @@ pub(crate) fn hoisted(
     Ok(moved_out)
 }
 
-// ==== END C2 ====
-
-// ==== BEGIN F: transform.py 2870-3297 (primary) ====
 // Every transform, as the one thing a transform is. The functions above stay
 // because they are what each class does and are what the tests name; what
 // changes is that the pipeline can only reach them through `transform`.
@@ -3994,8 +3965,6 @@ fn _applied(
     }
     Ok(_unreachable(&body))
 }
-// ==== END F ====
-
 #[cfg(test)]
 #[path = "transform_tests.rs"]
 mod transform_tests;
