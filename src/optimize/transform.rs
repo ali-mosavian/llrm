@@ -1510,8 +1510,22 @@ pub(crate) fn halves(body: &Rc<MirBody>) -> BTreeSet<(Value, u8)> {
             .map(|saved| saved.1.clone())
     });
     if let Some(saved) = saved {
+        if !crate::support::checking_caches() {
+            return saved;
+        }
+        assert!(saved == _halved(body), "transform.halves: a cache hit disagrees with its recomputation");
         return saved;
     }
+    let out = _halved(body);
+    _halves_reuse.with(|reuse| {
+        if let Some(reused) = reuse.borrow_mut().as_mut() {
+            reused.insert(key, (Rc::clone(body), out.clone()));
+        }
+    });
+    out
+}
+
+fn _halved(body: &MirBody) -> BTreeSet<(Value, u8)> {
     #[cfg(test)]
     HALVED.with(|halved| halved.set(halved.get() + 1));
 
@@ -1592,11 +1606,6 @@ pub(crate) fn halves(body: &Rc<MirBody>) -> BTreeSet<(Value, u8)> {
         }
         changing = out.len() != before;
     }
-    _halves_reuse.with(|reuse| {
-        if let Some(reused) = reuse.borrow_mut().as_mut() {
-            reused.insert(key, (Rc::clone(body), out.clone()));
-        }
-    });
     out
 }
 
