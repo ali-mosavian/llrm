@@ -248,7 +248,7 @@ does not emit bytecode, p-code, machine instructions, or target registers.
 Run it with:
 
 ```text
-cargo run --bin llrm-modern -- program.mod
+cargo run --bin modernfront -- program.mod
 ```
 
 `--tokens` and `--syntax` expose the two earlier stages without performing

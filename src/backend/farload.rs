@@ -267,4 +267,23 @@ mod tests {
 
         assert_eq!(selected(&original, &BTreeSet::from([2])), original);
     }
+
+    fn _procedure(listing: &str, name: &str) -> String {
+        listing[listing.find(&format!("{name} proc")).unwrap()..listing.find(&format!("{name} endp")).unwrap()].to_owned()
+    }
+
+    fn _modern(fixture: &str, name: &str) -> String {
+        use crate::frontend::modern::test_modern_frontend as modern;
+
+        let program = modern::parsed(&modern::fixture(&format!("{fixture}.mod")));
+        _procedure(&modern::listing(&program, "main", &crate::model::passes::O2()), name)
+    }
+
+    #[test]
+    fn test_a_dword_read_only_as_offset_and_selector_is_one_far_load() {
+        // modern sum split each far pointer through the stack.
+        let function = _modern("sum", "_sum");
+        assert_eq!(function.matches("les ").count(), 2);
+        assert!(!function.contains("pop es"));
+    }
 }

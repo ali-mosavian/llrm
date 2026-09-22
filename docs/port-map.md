@@ -102,7 +102,7 @@ only for a module still `todo`, and never after cutover.
 | 3 | `qbopt/optimize/cfg.py` | 77 | `src/optimize/cfg.rs` | ported (C path) | - |
 | 3 | `qbopt/optimize/edges.py` | 40 | `src/optimize/edges.rs` | ported (C path) | - |
 | 3 | `qbopt/optimize/exitsink.py` | 107 | `src/optimize/exitsink.rs` | ported (C path) | - |
-| 3 | `qbopt/optimize/fill.py` | 301 | `src/optimize/fill.rs` | ported (C path) | - |
+| 3 | `qbopt/optimize/fill.py` | 279 | `src/optimize/fill.rs` | ported (C path) | test_modern_frontend |
 | 3 | `qbopt/optimize/floatfold.py` | 234 | `src/optimize/floatfold.rs` | ported (C path) | test_floatfold, test_unroll |
 | 3 | `qbopt/optimize/floatloop.py` | 140 | `src/optimize/floatloop.rs` | ported (C path) | test_float_loop_exit |
 | 3 | `qbopt/optimize/gvn.py` | 206 | `src/optimize/gvn.rs` | ported (C path) | test_mir_alias |
@@ -129,8 +129,8 @@ only for a module still `todo`, and never after cutover.
 | 3 | `qbopt/optimize/wholestores.py` | 37 | `src/optimize/wholestores.rs` | ported (C path) | - |
 | 3 | `qbopt/analysis/peelsize.py` | 102 | `src/analysis/peelsize.rs` | ported (C path) | - |
 | 3 | `qbopt/optimize/canonical.py` | 80 | `src/optimize/canonical.rs` | ported (C path) | - |
-| 4 | `qbopt/frontend/modern/compile.py` | 200 | `src/frontend/modern/compile.rs` | todo | test_hir_execute |
-| 4 | `qbopt/frontend/modern/driver.py` | 53 | `src/frontend/modern/driver.rs` | todo | - |
+| 4 | `qbopt/frontend/modern/compile.py` | 187 | `src/frontend/modern/compile.rs` (+ `tools/modernstages.py` as `modernstages.rs`) | ported | test_farload, test_hir_execute, test_modern_frontend, test_modernstages |
+| 4 | `qbopt/frontend/modern/driver.py` | 53 | `src/frontend/modern/driver.rs` | ported | test_modern_frontend |
 | 4 | `qbopt/frontend/qb/__init__.py` | 23 | `src/frontend/qbc/mod.rs` | ported | test_hir, test_modern_frontend, test_qb_frontend_command, test_qbstages |
 | 4 | `qbopt/frontend/qb/__main__.py` | 64 | `src/frontend/qbc/main.rs` (`llrm-qb`) | ported | - |
 | 4 | `qbopt/frontend/qb/abi.py` | 1339 | `src/frontend/qbc/abi.rs` | ported | test_hir |
