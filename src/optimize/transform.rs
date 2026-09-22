@@ -86,3 +86,91 @@ mod tests {
         assert_eq!(preheader(&body, &loop_(20, &[20])), None);
     }
 }
+
+// ---- early port (agent G) ----
+
+/// Remove selected computation while retaining exact source ownership.
+///
+/// Direct port of `qbopt.optimize.transform:_without`.
+pub(crate) fn _without(ops: &[crate::model::mir::Op], drop: impl Fn(&crate::model::mir::Op) -> bool) -> Vec<crate::model::mir::Op> {
+    let mut out = Vec::new();
+    for op in ops {
+        if !drop(op) {
+            out.push(op.clone());
+        } else if !op.absorbed.is_empty() || op.floating_origin.is_some() {
+            out.push(_empty_operation(op));
+        }
+    }
+    out
+}
+
+/// Keep opaque source ownership, but no computation or memory effect.
+///
+/// Direct port of `qbopt.optimize.transform:_empty_operation`.
+pub(crate) fn _empty_operation(op: &crate::model::mir::Op) -> crate::model::mir::Op {
+    use crate::model::mir::{Kind, OpCode, OrderedMap};
+    let mut result = op.clone();
+    result.op = Some(OpCode::nothing());
+    result.name.clear();
+    result.kind = Kind::Nothing;
+    result.defines.clear();
+    result.uses.clear();
+    result.array = None;
+    result.memory_values.clear();
+    result.floating = None;
+    result.floating_origin = None;
+    result.args.clear();
+    result.results.clear();
+    result.loads.clear();
+    result.stores.clear();
+    result.merges = OrderedMap::new();
+    result.source_backed = false;
+    result.raised = None;
+    result.target = None;
+    result.cases.clear();
+    result.symbol = Some(false);
+    result.args_known = true;
+    result.memory_complete = true;
+    result.reads_complete = true;
+    result.opaque_defs = Some(std::collections::BTreeSet::new());
+    result.opaque_uses = Some(std::collections::BTreeSet::new());
+    result.stack = None;
+    result.test = None;
+    result.indirect = false;
+    result
+}
+
+/// Dead blocks retain byte ownership, but no instructions or outgoing edges.
+///
+/// Direct port of `qbopt.optimize.transform:_unreachable`.
+pub(crate) fn _unreachable(body: &MirBody) -> MirBody {
+    use std::collections::{BTreeMap, BTreeSet};
+    let blocks = body.blocks.iter().map(|block| (block.at, block)).collect::<BTreeMap<_, _>>();
+    let mut reached = BTreeSet::new();
+    let mut pending = vec![body.entry];
+    while let Some(at) = pending.pop() {
+        if reached.contains(&at) || !blocks.contains_key(&at) {
+            continue;
+        }
+        reached.insert(at);
+        pending.extend(blocks[&at].succ.iter().copied());
+    }
+    let mut made = body.clone();
+    made.blocks = body
+        .blocks
+        .iter()
+        .filter(|block| reached.contains(&block.at) || !block.ops.is_empty())
+        .map(|block| {
+            if reached.contains(&block.at) {
+                block.clone()
+            } else {
+                let mut normalized = block.clone();
+                normalized.succ = Vec::new();
+                normalized.phis = Vec::new();
+                normalized.ops = block.ops.iter().map(_empty_operation).collect();
+                normalized
+            }
+        })
+        .collect();
+    made
+}
