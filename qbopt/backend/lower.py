@@ -728,6 +728,7 @@ def lowered(
                     for phi in block.phis
                     if not phi.result.flags and phi.result.id in live
                 ),
+                cold=block.cold,
             )
             for block in body.blocks
         ),

@@ -355,7 +355,7 @@ def _at(
             return_edges.append((labels[callee_block.at], returned))
             succ = (continuation,)
             ops.append(_jump(call.at, continuation))
-        cloned.append(mir.MirBlock(labels[callee_block.at], phis, tuple(ops), succ))
+        cloned.append(mir.MirBlock(labels[callee_block.at], phis, tuple(ops), succ, callee_block.cold))
 
     if not return_edges:
         return None

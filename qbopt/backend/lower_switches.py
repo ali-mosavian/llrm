@@ -108,6 +108,7 @@ def expanded(body: mir.MirBody) -> mir.MirBody:
                     block.phis if index == 0 else (),
                     (*(block.ops[:-1] if index == 0 else ()), compare, branch),
                     tuple(dict.fromkeys((target, fallback))),
+                    block.cold,
                 )
             )
             incoming.setdefault((target, block.at), []).append(at)

@@ -158,6 +158,8 @@ struct Block {
     id: u32,
     instructions: Vec<Instruction>,
     terminator: Option<Terminator>,
+    // Expected never to run, such as a path that only raises an error.
+    cold: bool,
 }
 
 #[derive(Clone)]
@@ -847,6 +849,7 @@ impl Compiler {
                 id: 1,
                 instructions: Vec::new(),
                 terminator: None,
+                cold: false,
             }],
             calls: Vec::new(),
             current_block: 0,
@@ -901,6 +904,7 @@ impl Compiler {
             id: 1,
             instructions: Vec::new(),
             terminator: None,
+            cold: false,
         }];
         self.calls.clear();
         self.current_block = 0;
@@ -3921,6 +3925,8 @@ impl Compiler {
         let ranked = self.new_block();
         let call = self.new_block();
         let done = self.new_block();
+        // The runtime is called only to raise "Subscript out of range".
+        self.mark_cold(call);
 
         let data = self.descriptor_field(descriptor, 2, INTEGER);
         let allocated = self.value(BOOLEAN);
@@ -6769,8 +6775,15 @@ impl Compiler {
             id,
             instructions: Vec::new(),
             terminator: None,
+            cold: false,
         });
         id
+    }
+
+    fn mark_cold(&mut self, id: u32) {
+        if let Some(block) = self.blocks.iter_mut().find(|block| block.id == id) {
+            block.cold = true;
+        }
     }
 
     fn select_block(&mut self, id: u32) {
@@ -7031,7 +7044,11 @@ impl Compiler {
                 }
                 out.push_str("],\"targets\":[");
                 numbers(&mut out, &terminator.targets);
-                out.push_str("]}}");
+                out.push_str("]}");
+                if block.cold {
+                    out.push_str(",\"cold\":true");
+                }
+                out.push('}');
             }
             write!(
                 out,

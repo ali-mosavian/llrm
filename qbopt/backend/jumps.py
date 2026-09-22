@@ -78,8 +78,11 @@ def placed(body: lir.LirBody) -> lir.LirBody:
     current: int | None = body.entry
     source: int | None = None
     while len(order) < len(explicit):
+        if current in by_at and by_at[current].cold and any(not one.cold and one.at not in done for one in explicit):
+            current = None  # after the hot blocks
         if current is None or current in done or current not in by_at:
-            current, source = next(block.at for block in explicit if block.at not in done), None
+            waiting = [block for block in explicit if block.at not in done]
+            current, source = next((block for block in waiting if not block.cold), waiting[0]).at, None
         if current in tests and source not in tests[current][1] and tests[current][0] not in done:
             # Reached from outside the loop: the body goes here, and the test after the latch
             # that jumps back to it, so a pass takes one branch.
@@ -119,6 +122,9 @@ def _onward(
         join = jump_target if passage is None else passage
         if arm is not None and arm.succ == (join,):
             targets = [branch_target, jump_target]
+    # A cold successor goes last; see mir.MirBlock.cold.
+    if by_at is not None:
+        targets = sorted(targets, key=lambda target: target in by_at and by_at[target].cold)
     # Keep a loop chain together before following an exit.  The final jump is
     # still preferred when both edges stay in the loop, preserving the source
     # fall-through unless doing so would strand the rest of the loop.
@@ -136,11 +142,7 @@ def _tests(natural: list, entry: int, by_at: dict) -> dict[int, tuple[int, froze
     found = {}
     for loop in natural:
         block = by_at[loop.header]
-        real = [
-            one.what
-            for one in block.insns
-            if one.what is not None and one.what.op is not ir.Operation.NOTHING
-        ]
+        real = [one.what for one in block.insns if one.what is not None and one.what.op is not ir.Operation.NOTHING]
         inner = [at for at in block.succ if at in loop.body and at != loop.header]
         if (
             loop.header != entry
