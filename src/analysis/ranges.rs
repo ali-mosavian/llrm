@@ -551,6 +551,47 @@ pub(crate) fn bounded(body: &MirBody) -> Result<IndexMap<i64, IndexMap<Value, In
     Ok(result)
 }
 
+/// Facts established by unavoidable branch edges at each block.
+///
+/// Direct port of `qbopt.analysis.ranges:dominated_edges`.  An edge counts
+/// only when its destination has that one predecessor and dominates the
+/// queried block: a join is a second way around the check.
+pub(crate) fn dominated_edges(body: &MirBody) -> Result<IndexMap<i64, IndexMap<Value, Interval>>, String> {
+    let facts = consts::known(body);
+    let predecessors = loops::predecessors(&body.blocks);
+    let dominators = loops::dominators(&body.blocks, body.entry);
+    let mut edges = body
+        .blocks
+        .iter()
+        .flat_map(|block| block.succ.iter().map(move |&successor| (block, successor)))
+        .filter(|(block, successor)| {
+            predecessors
+                .get(successor)
+                .is_some_and(|parents| parents.len() == 1 && parents.contains(&block.at))
+        })
+        .collect::<Vec<_>>();
+    edges.sort_by_key(|(_, successor)| dominators.get(successor).map_or(0, BTreeSet::len));
+    let mut result: IndexMap<i64, IndexMap<Value, Interval>> = IndexMap::new();
+    for block in &body.blocks {
+        let mut known: IndexMap<Value, Interval> = IndexMap::new();
+        // Apply the path from outermost to innermost dominator once. Repeating
+        // a relational `a < b` constraint would falsely walk both open
+        // intervals inward rather than intersecting with one original fact.
+        for &(parent, successor) in &edges {
+            if !dominators.get(&block.at).is_some_and(|dominating| dominating.contains(&successor)) {
+                continue;
+            }
+            if let Some(narrowed) = on_edge(parent, successor, &known, Some(&facts))? {
+                known = narrowed;
+            }
+        }
+        if !known.is_empty() {
+            result.insert(block.at, known);
+        }
+    }
+    Ok(result)
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use std::collections::BTreeMap;
