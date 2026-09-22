@@ -128,6 +128,7 @@ pub(crate) fn specialized(
         };
         let entry = blocks[&entry_at];
         let last = entry.ops.len().checked_sub(1).expect("the entry has an operation");
+        let mut asked = consts::memory_queries(body, &facts, dgroup);
         let initial = consts::_kills(
             &memory[&(entry_at, last)],
             &entry.ops[last],
@@ -137,8 +138,9 @@ pub(crate) fn specialized(
             None,
             None,
             false,
-            None,
+            Some(&mut asked),
         );
+        // `asked` goes to `repeated` too once floatfacts takes it (agent A).
         let before_last = floatfacts::repeated(
             &latch.ops,
             &(&proof.count - BigInt::from(1)),

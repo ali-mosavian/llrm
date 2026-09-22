@@ -1122,6 +1122,7 @@ pub(crate) fn _initializers(
         .collect::<IndexMap<_, _>>();
     let memory = consts::cells(body, dgroup, &calls, None, None, None, None, None);
     let nothing = IndexMap::new();
+    let mut asked = consts::memory_queries(body, &nothing, dgroup);
     let mut initialized = HashMap::new();
     for (block_index, block) in body.blocks.iter().enumerate() {
         for (index, op) in block.ops.iter().enumerate() {
@@ -1137,7 +1138,7 @@ pub(crate) fn _initializers(
             };
             let before = memory.get(&(block.at, index)).cloned().unwrap_or_default();
             let after = consts::_kills(
-                &before, op, &nothing, dgroup, &calls, None, None, false, None,
+                &before, op, &nothing, dgroup, &calls, None, None, false, Some(&mut asked),
             );
             let mut facts = IndexMap::new();
             for (addr, width) in cells {

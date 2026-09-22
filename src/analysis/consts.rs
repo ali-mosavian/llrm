@@ -1006,3 +1006,18 @@ fn _solved(
 #[cfg(test)]
 #[path = "consts_tests.rs"]
 mod tests;
+
+// ---- early port (agent B) ----
+
+/// Alias questions about `body`'s cells, each cell carrying the object its references name.
+///
+/// `alias.named_bytes` and `_MemoryQueries.named` are agent A's; until they
+/// land this asks what `_kills` asked on its own before.
+pub(crate) fn memory_queries<'a>(
+    body: &MirBody,
+    known: &'a IndexMap<Value, Known>,
+    dgroup: &'a BTreeSet<i64>,
+) -> _MemoryQueries<'a> {
+    let _ = body;
+    _MemoryQueries::new(known, dgroup)
+}

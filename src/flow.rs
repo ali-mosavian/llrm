@@ -1,7 +1,10 @@
-//! Port of `qbopt/flow.py`: so far the machine phases and their gate.
+//! Port of `qbopt/flow.py`: so far the MIR fixed point, the machine phases and their gate.
 
+use std::any::Any;
 use std::cell::RefCell;
+use std::collections::BTreeSet;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use indexmap::IndexMap;
 use iced_x86::Register;
@@ -14,7 +17,9 @@ use crate::backend::{
 
 use crate::backend::verify::{self, Malformed};
 use crate::model::lir::LirBody;
-use crate::model::passes::LIRTransform;
+use crate::model::mir::MirBody;
+use crate::model::passes::{LIRTransform, Options, LEVELS};
+use crate::optimize::transform;
 
 /// Every phase between lowering and emission, in order.
 pub fn machine<'a>(
@@ -49,6 +54,58 @@ pub fn machine<'a>(
         // Last: this physical order decides which explicit edge is now fall-through.
         Box::new(jumps::ControlFlow),
     ])
+}
+
+/// The MIR fixed point every driver runs, configured by target and options alone.
+///
+/// A switch one frontend sets and another does not makes the same program
+/// compile differently by spelling: sum_three took three paths here.
+/// Promotion needs dominators, which an irreducible CFG -- QB's RESUME
+/// entering a loop -- does not have; that is a fact about the body.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn optimized<'a>(
+    body: &MirBody,
+    dgroup: &BTreeSet<i64>,
+    calls: &IndexMap<i64, String>,
+    cpu: impl Into<ProfileOrName<'a>>,
+    options: Options,
+    blocks: Option<Vec<Arc<dyn Any + Send + Sync>>>,
+    found: Option<Arc<dyn Any + Send + Sync>>,
+    only: Option<String>,
+    watch: Option<&mut dyn FnMut(&str, &MirBody)>,
+) -> Result<MirBody, String> {
+    use crate::analysis::loops;
+
+    let target = targets::profile(cpu)?;
+    let mut options = options;
+    if !loops::irreducible(&body.blocks, Some(body.entry)).is_empty() {
+        options = Options { promote: false, ..options };
+    }
+    transform::applied(
+        body,
+        dgroup,
+        calls,
+        transform::Applied {
+            blocks,
+            found,
+            only,
+            options,
+            registers: Some(target.register_capacity),
+            call_registers: target.call_register_capacity,
+            index_scales: Some(target.address_scales.clone()),
+            address_forms: Some(target.address_forms.clone()),
+            costs: Some(target.operations.clone()),
+            watch,
+        },
+    )
+}
+
+/// GCC's spelling, `-Os` or `-O2`: `level_option`'s `named`.
+pub fn level_option(text: &str) -> Result<Options, String> {
+    LEVELS()
+        .get(format!("O{text}").as_str())
+        .cloned()
+        .ok_or_else(|| format!("unknown level -O{text}; choose -Os or -O2"))
 }
 
 /// Return a well-formed body or name the phase boundary that is not.
