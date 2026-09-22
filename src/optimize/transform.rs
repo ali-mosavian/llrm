@@ -79,6 +79,234 @@ pub(crate) fn _empty_operation(op: &crate::model::mir::Op) -> crate::model::mir:
 }
 
 // ==== BEGIN B: transform.py 819-1004 (agent B) ====
+/// Every store overwritten, or never observable, before anything read it, removed.
+pub(crate) fn without_dead_stores(
+    body: &MirBody,
+    _dgroup: &BTreeSet<i64>,
+    calls: &IndexMap<i64, String>,
+    private: Option<&dyn Fn(&mir::MemRef) -> bool>,
+    bounds: Option<&IndexMap<(crate::objectfile::module::Space, i64), Vec<i64>>>,
+    handles_errors: bool,
+) -> Result<MirBody, String> {
+    let gone: BTreeSet<*const Op> =
+        crate::analysis::avail::dead_stores(body, None, calls, private, bounds, handles_errors)
+            .into_iter()
+            .map(|op| op as *const Op)
+            .collect();
+    if gone.is_empty() {
+        return Ok(body.clone());
+    }
+    let mut out = body.clone();
+    out.blocks = body
+        .blocks
+        .iter()
+        .map(|one| {
+            let mut block = one.clone();
+            block.ops = _without(&one.ops, |op| gone.contains(&(op as *const Op)));
+            block
+        })
+        .collect();
+    Ok(out)
+}
+
+// A root register at the width an operand reads it. ir.ROOT maps the narrow
+// name to the wide one; this is the way back, and only for the general
+// registers -- a segment register has no narrower form and is never a
+// provider here.
+
+/// Replace known memory operands with SSA values, extending their uses.
+pub(crate) fn forwarded(
+    body: &MirBody,
+    _dgroup: &BTreeSet<i64>,
+    calls: &IndexMap<i64, String>,
+    avoid_store_crossing: bool,
+) -> Result<MirBody, String> {
+    use crate::analysis::avail::{self, Holder};
+
+    let want: BTreeSet<i64> =
+        body.blocks.iter().flat_map(|block| &block.ops).filter(|op| !op.loads.is_empty()).map(|op| op.at).collect();
+    if want.is_empty() {
+        return Ok(body.clone());
+    }
+    let mut served: IndexMap<*const Op, Holder> = IndexMap::new();
+    for one in avail::forwardable(body, None, calls, &want) {
+        if let Some(op) = one.op {
+            served.insert(op as *const Op, one.value);
+        }
+    }
+    if avoid_store_crossing {
+        let mut locations: IndexMap<*const Op, (i64, usize)> = IndexMap::new();
+        let mut definitions: IndexMap<Value, (i64, usize)> = IndexMap::new();
+        let mut by_at: IndexMap<i64, &MirBlock> = IndexMap::new();
+        let mut op_by_id: IndexMap<*const Op, &Op> = IndexMap::new();
+        for block in &body.blocks {
+            by_at.insert(block.at, block);
+            for (index, op) in block.ops.iter().enumerate() {
+                locations.insert(op as *const Op, (block.at, index));
+                for value in &op.defines {
+                    definitions.insert(*value, (block.at, index));
+                }
+                op_by_id.insert(op as *const Op, op);
+            }
+        }
+        let predecessors = loopy::predecessors(&body.blocks);
+
+        let blocks_reaching = |destination: i64| -> BTreeSet<i64> {
+            let mut reached = BTreeSet::from([destination]);
+            let mut work = vec![destination];
+            while let Some(at) = work.pop() {
+                let new: Vec<i64> = predecessors[&at].difference(&reached).copied().collect();
+                reached.extend(new.iter().copied());
+                work.extend(new);
+            }
+            reached
+        };
+
+        // Python's slice `ops[low:high]`: clamped, empty when inverted.
+        let stores_in = |block: &MirBlock, low: usize, high: usize| -> bool {
+            let high = high.min(block.ops.len());
+            low < high && block.ops[low..high].iter().any(|one| !one.stores.is_empty())
+        };
+
+        let crosses_store = |op: &Op, holder: &Holder| -> bool {
+            let Holder::Value(holder) = holder else {
+                return false;
+            };
+            let source = definitions.get(holder).copied();
+            let destination = locations[&(op as *const Op)];
+            let Some(source) = source else {
+                return true;
+            };
+            if source.0 == destination.0 {
+                return source.1 >= destination.1 || stores_in(by_at[&source.0], source.1 + 1, destination.1);
+            }
+            let reaching = blocks_reaching(destination.0);
+            if !reaching.contains(&source.0) {
+                return true;
+            }
+            let mut seen: BTreeSet<i64> = BTreeSet::new();
+            let mut work = vec![source.0];
+            let mut arrived = false;
+            while let Some(at) = work.pop() {
+                if seen.contains(&at) || !reaching.contains(&at) {
+                    continue;
+                }
+                seen.insert(at);
+                let block = by_at[&at];
+                let low = if at == source.0 { source.1 + 1 } else { 0 };
+                let high = if at == destination.0 { destination.1 } else { block.ops.len() };
+                if stores_in(block, low, high) {
+                    return true;
+                }
+                if at == destination.0 {
+                    arrived = true;
+                } else {
+                    work.extend(block.succ.iter().copied());
+                }
+            }
+            !arrived
+        };
+
+        served = served
+            .into_iter()
+            .filter(|(identity, holder)| !crosses_store(op_by_id[identity], holder))
+            .collect();
+    }
+    if served.is_empty() {
+        return Ok(body.clone());
+    }
+
+    let mut out = Vec::new();
+    for block in &body.blocks {
+        let mut ops: Vec<Op> = Vec::new();
+        for op in &block.ops {
+            let mut holder = served.get(&(op as *const Op));
+            if matches!(holder, Some(Holder::Const(_) | Holder::Symbol(_))) && op.kind != Kind::Load {
+                holder = None;
+            }
+            let args = holder.and_then(|holder| _served(op, holder));
+            let (Some(holder), Some(args)) = (holder, args) else {
+                ops.push(op.clone());
+                continue;
+            };
+            let mut next = op.clone();
+            next.args = args;
+            next.loads = Vec::new();
+            match holder {
+                Holder::Const(_) | Holder::Symbol(_) => {
+                    // Only a load, which becomes the constant itself. An
+                    // arithmetic operand is a machine question this is not
+                    // allowed to answer: `idiv [x]` has no immediate form.
+                    // A constant is not a value either, so `uses` does not grow.
+                    next.kind = Kind::Copy;
+                    next.op = Some(mir::OpCode::Operation(crate::model::ir::Operation::Move));
+                    next.name = "mov".to_owned();
+                    next.source_backed = false;
+                    next.raised = None;
+                    next.symbol = Some(false);
+                }
+                Holder::Value(value) if op.kind == Kind::Load => {
+                    // A load served by a value is a copy of it. Left a load, the
+                    // counter's `mov ax,[x]` hid PLASMA's x from induction.
+                    next.kind = Kind::Copy;
+                    next.op = Some(mir::OpCode::Operation(crate::model::ir::Operation::Move));
+                    next.name = "mov".to_owned();
+                    next.uses.push(*value);
+                    next.source_backed = false;
+                    next.raised = None;
+                    next.symbol = Some(false);
+                }
+                Holder::Value(value) => next.uses.push(*value),
+            }
+            ops.push(next);
+        }
+        let mut next = block.clone();
+        next.ops = ops;
+        out.push(next);
+    }
+    let mut result = body.clone();
+    result.blocks = out;
+    Ok(result)
+}
+
+/// `op`'s one memory source read from whatever holds `holder` instead.
+///
+/// A value, not a register: which one holds it is the allocator's answer.
+pub(crate) fn _served(op: &Op, holder: &crate::analysis::avail::Holder) -> Option<Vec<Arg>> {
+    use crate::analysis::avail::Holder;
+
+    if op.floating.is_some() {
+        return None;
+    }
+    let cells: Vec<usize> =
+        op.args.iter().enumerate().filter(|(_, one)| matches!(one, Arg::Cell(_))).map(|(index, _)| index).collect();
+    if cells.len() != 1 {
+        return None;
+    }
+    let at = cells[0];
+    let Arg::Cell(cell) = &op.args[at] else { unreachable!("a cell") };
+    if op.results.contains(&op.args[at]) {
+        // An update in place: the read is the write's own operand, and serving
+        // it turns one instruction into a load, the operation and a store.
+        return None;
+    }
+    let replacement = match holder {
+        Holder::Const(one) => {
+            if one.width != cell.r#ref.width {
+                return None;
+            }
+            Arg::Const(one.clone())
+        }
+        Holder::Symbol(one) => {
+            if one.width != cell.r#ref.width {
+                return None;
+            }
+            Arg::Symbol(*one)
+        }
+        Holder::Value(value) => Arg::Held(Held { value: *value, width: cell.r#ref.width }),
+    };
+    Some(op.args.iter().enumerate().map(|(index, one)| if index == at { replacement.clone() } else { one.clone() }).collect())
+}
 // ==== END B ====
 
 /// Direct port of `qbopt.optimize.transform:_preheader`.
