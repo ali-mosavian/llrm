@@ -1,32 +1,38 @@
-//! Sparse value propagation through cyclic MIR definitions.
+//! Sparse value propagation with distinct pending and overdefined states.
 //!
-//! Direct port of `qbopt.analysis.constant_cycles:State`, `_meet`, and the
-//! `successors=None` path of `propagated`.  The default constant analysis has
-//! no executable-edge question: every block participates, and a phi is a
-//! number only when every incoming value reaches the identical fact.
+//! Port of `qbopt/analysis/constant_cycles.py`.  An optional successor
+//! evaluator discovers executable edges.  Pending values are never
+//! interpreted as LLVM undef: unresolved reachable values become overdefined
+//! before the final result, and unresolved branches retain every successor.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeSet, VecDeque};
+
+use indexmap::IndexMap;
 
 use super::consts::{self, Known};
-use crate::model::mir::{Arg, Kind, MirBody, Op, Phi, Value};
+use crate::model::mir::{Arg, Kind, MirBlock, MirBody, Op, Phi, Value};
+use crate::support::pyset::PySet;
 
-/// A definition not yet solved, or one which cannot be a constant.
+/// Python's `State | Known`: a value's lattice cell.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) enum State {
+pub(crate) enum State {
     Pending,
     Overdefined,
     Known(Known),
 }
 
-/// Python's `_meet(first, second)`.
+/// The successor evaluator: `None` defers the block's branch.
+pub(crate) type Successors<'a> =
+    &'a dyn Fn(&MirBlock, &IndexMap<Value, Known>, &IndexMap<Value, State>) -> Option<Vec<i64>>;
+
 fn _meet(first: State, second: State) -> State {
     if first == State::Pending {
-        second
-    } else if second == State::Pending || first == second {
-        first
-    } else {
-        State::Overdefined
+        return second;
     }
+    if second == State::Pending || first == second {
+        return first;
+    }
+    State::Overdefined
 }
 
 enum Recipe<'a> {
@@ -34,302 +40,237 @@ enum Recipe<'a> {
     Op(&'a Op),
 }
 
-fn known(states: &BTreeMap<Value, State>) -> BTreeMap<Value, Known> {
-    states
-        .iter()
-        .filter_map(|(value, state)| match state {
-            State::Known(fact) => Some((*value, fact.clone())),
-            State::Pending | State::Overdefined => None,
-        })
-        .collect()
-}
-
-/// Python's `propagated(body, seeds, successors=None)`.
-pub(super) fn propagated(body: &MirBody, seeds: BTreeMap<Value, Known>) -> BTreeMap<Value, Known> {
-    // Python's dict comprehensions retain the last definition when an
-    // hand-built body repeats a value.  Keep that order-dependent source
-    // contract rather than treating duplicate definitions as a new error.
-    let mut recipes = BTreeMap::new();
-    let mut owners = BTreeMap::new();
+pub(crate) fn propagated(
+    body: &MirBody,
+    seeds: &IndexMap<Value, Known>,
+    successors: Option<Successors<'_>>,
+) -> IndexMap<Value, Known> {
+    let mut recipes = IndexMap::new();
     for block in &body.blocks {
         for phi in &block.phis {
             recipes.insert(phi.result, Recipe::Phi(phi));
-            owners.insert(phi.result, block.at);
         }
     }
     for block in &body.blocks {
         for op in &block.ops {
             if let Some(value) = consts::_defined(op) {
                 recipes.insert(value, Recipe::Op(op));
-                owners.insert(value, block.at);
             }
         }
     }
-
     let mut states = recipes
         .keys()
         .map(|value| {
             (
                 *value,
-                seeds
-                    .get(value)
-                    .cloned()
-                    .map(State::Known)
-                    .unwrap_or(State::Pending),
+                seeds.get(value).cloned().map_or(State::Pending, State::Known),
             )
         })
-        .collect::<BTreeMap<_, _>>();
-    for (value, fact) in &seeds {
+        .collect::<IndexMap<_, _>>();
+    for (value, fact) in seeds {
         states.insert(*value, State::Known(fact.clone()));
     }
-
-    let mut consumers = BTreeMap::<Value, BTreeSet<Value>>::new();
+    let mut consumers = IndexMap::<Value, PySet<Value>>::new();
     for (value, recipe) in &recipes {
-        let inputs: Vec<Value> = match recipe {
-            Recipe::Phi(phi) => phi.incoming.values().copied().collect(),
+        let inputs = match recipe {
+            Recipe::Phi(phi) => phi.incoming.values().copied().collect::<Vec<_>>(),
             Recipe::Op(op) => op
                 .args
                 .iter()
                 .filter_map(|arg| match arg {
                     Arg::Held(held) => Some(held.value),
-                    Arg::Const(_)
-                    | Arg::Symbol(_)
-                    | Arg::FrameAddress(_)
-                    | Arg::FrameSelector(_)
-                    | Arg::Cell(_)
-                    | Arg::Opaque(_) => None,
+                    _ => None,
                 })
                 .collect(),
         };
-        for input in inputs {
-            consumers.entry(input).or_default().insert(*value);
+        for incoming in inputs {
+            consumers.entry(incoming).or_default().add(*value);
         }
     }
-
-    let live = body
-        .blocks
-        .iter()
-        .map(|block| block.at)
-        .collect::<BTreeSet<_>>();
+    let blocks = body.blocks.iter().map(|block| (block.at, block)).collect::<IndexMap<_, _>>();
+    let mut owners = IndexMap::new();
+    for block in &body.blocks {
+        for phi in &block.phis {
+            owners.insert(phi.result, block.at);
+        }
+    }
+    for block in &body.blocks {
+        for op in &block.ops {
+            if let Some(value) = consts::_defined(op) {
+                owners.insert(value, block.at);
+            }
+        }
+    }
+    let mut live = match successors {
+        None => blocks.keys().copied().collect::<PySet<i64>>(),
+        Some(_) => [body.entry].into_iter().collect(),
+    };
+    let mut edges = BTreeSet::<(i64, i64)>::new();
     let mut pending = recipes
         .keys()
         .copied()
         .filter(|value| live.contains(&owners[value]))
         .collect::<VecDeque<_>>();
     let mut queued = pending.iter().copied().collect::<BTreeSet<_>>();
+
+    let enqueue = |values: Vec<Value>,
+                   live: &PySet<i64>,
+                   pending: &mut VecDeque<Value>,
+                   queued: &mut BTreeSet<Value>| {
+        for value in values {
+            if !queued.contains(&value) && live.contains(&owners[&value]) {
+                pending.push_back(value);
+                queued.insert(value);
+            }
+        }
+    };
+    let consumers_of = |value: &Value| {
+        consumers
+            .get(value)
+            .map(|users| users.iter().copied().collect::<Vec<_>>())
+            .unwrap_or_default()
+    };
+
+    let activate = |source: i64,
+                    target: i64,
+                    live: &mut PySet<i64>,
+                    edges: &mut BTreeSet<(i64, i64)>,
+                    pending: &mut VecDeque<Value>,
+                    queued: &mut BTreeSet<Value>| {
+        if !blocks.contains_key(&target) || edges.contains(&(source, target)) {
+            return false;
+        }
+        edges.insert((source, target));
+        if !live.contains(&target) {
+            live.add(target);
+            let values = recipes.keys().copied().filter(|value| owners[value] == target).collect();
+            enqueue(values, live, pending, queued);
+        } else {
+            let values = blocks[&target].phis.iter().map(|phi| phi.result).collect();
+            enqueue(values, live, pending, queued);
+        }
+        true
+    };
+    let supported = |kind: Kind| {
+        consts::ARITH.iter().any(|(one, _)| *one == kind)
+            || consts::UNARY.iter().any(|(one, _)| *one == kind)
+            || matches!(kind, Kind::Copy | Kind::Extract | Kind::SignExtend | Kind::Concat | Kind::Smulhi)
+    };
+    let knowns = |states: &IndexMap<Value, State>| {
+        states
+            .iter()
+            .filter_map(|(value, state)| match state {
+                State::Known(fact) => Some((*value, fact.clone())),
+                _ => None,
+            })
+            .collect::<IndexMap<_, _>>()
+    };
     loop {
         let Some(value) = pending.pop_front() else {
+            let facts = knowns(&states);
+            let mut changed = false;
+            let mut deferred = Vec::new();
+            if let Some(successors) = successors {
+                for at in live.iter().copied().collect::<Vec<_>>() {
+                    let Some(selected) = successors(blocks[&at], &facts, &states) else {
+                        deferred.push(at);
+                        continue;
+                    };
+                    for target in selected {
+                        changed |= activate(at, target, &mut live, &mut edges, &mut pending, &mut queued);
+                    }
+                }
+            }
+            if !pending.is_empty() || changed {
+                continue;
+            }
             let unresolved = recipes
                 .keys()
                 .copied()
-                .filter(|value| {
-                    live.contains(&owners[value]) && states.get(value) == Some(&State::Pending)
-                })
+                .filter(|value| live.contains(&owners[value]) && states[value] == State::Pending)
                 .collect::<Vec<_>>();
-            if unresolved.is_empty() {
-                return known(&states);
+            for value in &unresolved {
+                states.insert(*value, State::Overdefined);
+                enqueue(consumers_of(value), &live, &mut pending, &mut queued);
             }
-            for value in unresolved {
-                states.insert(value, State::Overdefined);
-                if let Some(users) = consumers.get(&value) {
-                    for user in users {
-                        if queued.insert(*user) {
-                            pending.push_back(*user);
-                        }
-                    }
+            if !unresolved.is_empty() {
+                continue;
+            }
+            for at in deferred {
+                for target in blocks[&at].succ.clone() {
+                    changed |= activate(at, target, &mut live, &mut edges, &mut pending, &mut queued);
                 }
             }
-            continue;
+            if changed || !pending.is_empty() {
+                continue;
+            }
+            return facts;
         };
         queued.remove(&value);
-        if seeds.contains_key(&value) || states.get(&value) == Some(&State::Overdefined) {
+        if seeds.contains_key(&value) || states[&value] == State::Overdefined {
             continue;
         }
         let recipe = &recipes[&value];
-        let candidate = match recipe {
-            Recipe::Phi(phi) => phi
-                .incoming
-                .values()
-                .fold(State::Pending, |state, incoming| {
-                    _meet(
-                        state,
-                        states.get(incoming).cloned().unwrap_or(State::Overdefined),
-                    )
-                }),
-            Recipe::Op(op)
-                if !matches!(
-                    op.kind,
-                    Kind::Add
-                        | Kind::Sub
-                        | Kind::And
-                        | Kind::Or
-                        | Kind::Xor
-                        | Kind::Shl
-                        | Kind::Shr
-                        | Kind::Mul
-                        | Kind::Neg
-                        | Kind::Not
-                        | Kind::Copy
-                        | Kind::Extract
-                        | Kind::SignExtend
-                        | Kind::Concat
-                        | Kind::Smulhi
-                ) || !op.loads.is_empty()
-                    || !op.stores.is_empty()
-                    || op.barrier() =>
-            {
-                State::Overdefined
-            }
-            Recipe::Op(op) => {
-                let facts = known(&states);
-                if let Some(fact) = consts::_result(op, &facts, None) {
-                    State::Known(fact)
-                } else {
-                    let inputs = op
-                        .args
-                        .iter()
-                        .filter_map(|arg| match arg {
-                            Arg::Held(held) => Some(
-                                states
-                                    .get(&held.value)
-                                    .cloned()
-                                    .unwrap_or(State::Overdefined),
-                            ),
-                            Arg::Const(_)
-                            | Arg::Symbol(_)
-                            | Arg::FrameAddress(_)
-                            | Arg::FrameSelector(_)
-                            | Arg::Cell(_)
-                            | Arg::Opaque(_) => None,
-                        })
-                        .collect::<Vec<_>>();
-                    if inputs.contains(&State::Pending) && !inputs.contains(&State::Overdefined) {
-                        State::Pending
-                    } else {
-                        State::Overdefined
+        let mut candidate = State::Pending;
+        match recipe {
+            Recipe::Phi(phi) => {
+                if successors.is_some() && owners[&value] == body.entry {
+                    // entry also executes before any backedge
+                    candidate = State::Overdefined;
+                }
+                for (predecessor, incoming) in phi.incoming.iter() {
+                    if successors.is_some() && !edges.contains(&(*predecessor, owners[&value])) {
+                        continue;
                     }
+                    candidate = _meet(candidate, states.get(incoming).cloned().unwrap_or(State::Overdefined));
                 }
             }
-        };
-        let state = states.get(&value).cloned().unwrap_or(State::Overdefined);
-        let merged = _meet(state.clone(), candidate);
-        if merged == state {
+            Recipe::Op(op)
+                if !supported(op.kind) || !op.loads.is_empty() || !op.stores.is_empty() || op.barrier() =>
+            {
+                candidate = State::Overdefined;
+            }
+            Recipe::Op(op) => {
+                let facts = op
+                    .args
+                    .iter()
+                    .filter_map(|arg| match arg {
+                        Arg::Held(held) => match states.get(&held.value) {
+                            Some(State::Known(fact)) => Some((held.value, fact.clone())),
+                            _ => None,
+                        },
+                        _ => None,
+                    })
+                    .collect::<IndexMap<_, _>>();
+                candidate = match consts::_result(op, &facts, None, None) {
+                    Some(fact) => State::Known(fact),
+                    None => {
+                        let inputs = op
+                            .args
+                            .iter()
+                            .filter_map(|arg| match arg {
+                                Arg::Held(held) => Some(states.get(&held.value).cloned().unwrap_or(State::Overdefined)),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>();
+                        if inputs.contains(&State::Pending) && !inputs.contains(&State::Overdefined) {
+                            State::Pending
+                        } else {
+                            State::Overdefined
+                        }
+                    }
+                };
+            }
+        }
+        let merged = _meet(states[&value].clone(), candidate);
+        if merged == states[&value] {
             continue;
         }
         states.insert(value, merged);
-        if let Some(users) = consumers.get(&value) {
-            for user in users {
-                if queued.insert(*user) {
-                    pending.push_back(*user);
-                }
-            }
-        }
+        enqueue(consumers_of(&value), &live, &mut pending, &mut queued);
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::super::consts::{Known, known};
-    use crate::model::mir::{Arg, Const, Held, Kind, MirBlock, MirBody, Op, Phi, Value};
-
-    fn value(id: u32, at: i64) -> Value {
-        Value::new(id, at)
-    }
-
-    /// Direct port of `tests/test_constant_cycles.py:body_with_cycle`.
-    fn body_with_cycle(step: i64, external: bool) -> (MirBody, Value, Value) {
-        let (start, joined, carried, incoming) =
-            (value(1, 0), value(2, 10), value(3, 10), value(4, 10));
-        let mut seed = Op::new(0, None, "", vec![start], vec![]);
-        seed.kind = Kind::Copy;
-        seed.args = vec![Arg::Const(Const::new(7, 4))];
-        seed.results = vec![Arg::Held(Held {
-            value: start,
-            width: 4,
-        })];
-        let source = if external { incoming } else { joined };
-        let mut update = Op::new(10, None, "", vec![carried], vec![source]);
-        update.kind = Kind::Add;
-        update.args = vec![
-            Arg::Held(Held {
-                value: source,
-                width: 4,
-            }),
-            Arg::Const(Const::new(step, 4)),
-        ];
-        update.results = vec![Arg::Held(Held {
-            value: carried,
-            width: 4,
-        })];
-        let mut incoming_values = crate::model::mir::OrderedMap::new();
-        incoming_values.insert(0, start);
-        incoming_values.insert(10, carried);
-        (
-            MirBody::new(
-                0,
-                vec![
-                    MirBlock::new(0, vec![], vec![seed], vec![10]),
-                    MirBlock::new(
-                        10,
-                        vec![Phi {
-                            result: joined,
-                            incoming: incoming_values,
-                        }],
-                        vec![update],
-                        vec![10, 20],
-                    ),
-                    MirBlock::new(20, vec![], vec![], vec![]),
-                ],
-            ),
-            joined,
-            carried,
-        )
-    }
-
-    #[test]
-    fn direct_constant_cycles_unchanged_loop_value_is_constant_through_backedge() {
-        let (body, joined, carried) = body_with_cycle(0, false);
-        let facts = known(&body);
-        assert_eq!(facts.get(&joined), Some(&Known::new(7, 4)));
-        assert_eq!(facts.get(&carried), Some(&Known::new(7, 4)));
-    }
-
-    #[test]
-    fn direct_constant_cycles_changed_runtime_and_unanchored_cycles_remain_unknown() {
-        for (step, external) in [(1, false), (0, true)] {
-            let (body, joined, carried) = body_with_cycle(step, external);
-            let facts = known(&body);
-            assert!(!facts.contains_key(&joined));
-            assert!(!facts.contains_key(&carried));
-        }
-        let (mut body, joined, carried) = body_with_cycle(0, false);
-        body.blocks[1].phis[0].incoming.remove(&0);
-        let facts = known(&body);
-        assert!(!facts.contains_key(&joined));
-        assert!(!facts.contains_key(&carried));
-    }
-
-    #[test]
-    fn direct_constant_cycles_do_not_widen_a_known_word() {
-        // Direct port of
-        // `tests/test_constant_cycles.py:test_cyclic_propagation_does_not_widen_a_known_word`.
-        let (mut body, joined, carried) = body_with_cycle(0, false);
-        let seed = &mut body.blocks[0].ops[0];
-        seed.args = vec![Arg::Const(Const::new(7, 2))];
-        seed.results = vec![Arg::Held(Held {
-            value: seed.defines[0],
-            width: 2,
-        })];
-        let facts = known(&body);
-        assert!(!facts.contains_key(&joined));
-        assert!(!facts.contains_key(&carried));
-    }
-
-    #[test]
-    fn direct_constant_cycles_are_independent_of_block_order() {
-        let (body, _, _) = body_with_cycle(0, false);
-        let mut reordered = body.clone();
-        reordered.blocks.reverse();
-        assert_eq!(known(&body), known(&reordered));
-    }
-}
+#[path = "constant_cycles_tests.rs"]
+mod tests;

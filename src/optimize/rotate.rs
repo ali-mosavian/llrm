@@ -52,14 +52,14 @@ pub(crate) fn _counted_down(body: &MirBody) -> Result<MirBody, SubstitutionError
         .enumerate()
         .map(|(index, block)| (block.at, index))
         .collect::<BTreeMap<_, _>>();
-    let facts = consts::known(body);
+    let facts = consts::known(body, None, None, None, None);
     let made = occurrence::operations(body)
         .flat_map(|(occurrence, _, op)| op.defines.iter().map(move |value| (value.id, occurrence)))
         .collect::<BTreeMap<_, _>>();
     let all_values = ssa::values(body).collect::<Vec<_>>();
 
     for loop_ in loops::loops(&body.blocks, Some(body.entry)) {
-        let proofs = induction::counted_with_facts(body, &loop_, &facts);
+        let proofs = induction::counted(body, &loop_, Some(&facts));
         if proofs.len() != 1 {
             continue;
         }
@@ -399,7 +399,7 @@ pub(crate) fn _step_test(body: &MirBody, loop_: &Loop, header: &MirBlock) -> Mir
             }
         }
     }
-    let facts = consts::known(body);
+    let facts = consts::known(body, None, None, None, None);
     // `header` is one of `body`'s blocks: `op is compare` and `op is branch`
     // are positions in it.
     let header_index = body

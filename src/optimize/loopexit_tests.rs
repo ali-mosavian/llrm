@@ -172,7 +172,7 @@ fn listing(body: &MirBody) -> Vec<String> {
 }
 
 fn known(body: &MirBody, id: u32) -> Option<(i64, u32)> {
-    consts::known(body)
+    consts::known(body, None, None, None, None)
         .iter()
         .find(|(value, _)| value.id == id)
         .map(|(_, fact)| (i64::try_from(&fact.n).expect("small"), fact.width))

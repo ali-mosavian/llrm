@@ -1449,15 +1449,13 @@ pub fn consumed(op: &Op) -> BTreeSet<Value> {
         .copied()
         .filter(|value| !op.merges.contains_key(value))
         .collect::<BTreeSet<_>>();
+    result.extend(op.args.iter().filter_map(|arg| match arg {
+        Arg::Held(held) => Some(held.value),
+        _ => None,
+    }));
     for arg in op.args.iter().chain(&op.results) {
-        match arg {
-            Arg::Held(held) => {
-                result.insert(held.value);
-            }
-            Arg::Cell(cell) => {
-                result.extend([cell.r#ref.base, cell.r#ref.segment].into_iter().flatten());
-            }
-            Arg::Const(_) | Arg::Symbol(_) | Arg::FrameAddress(_) | Arg::FrameSelector(_) | Arg::Opaque(_) => {}
+        if let Arg::Cell(cell) = arg {
+            result.extend([cell.r#ref.base, cell.r#ref.segment].into_iter().flatten());
         }
     }
     result
@@ -1757,7 +1755,7 @@ fn outside(reach: &BTreeSet<(i64, i64)>) -> Vec<(Addr, u32)> {
 }
 
 /// Python `_through_frame`.
-fn through_frame(body: MirBody, framed: &BTreeMap<Value, BTreeSet<(i64, i64)>>) -> MirBody {
+fn through_frame(body: MirBody, framed: &indexmap::IndexMap<Value, BTreeSet<(i64, i64)>>) -> MirBody {
     if framed.is_empty() {
         return body;
     }
@@ -2039,7 +2037,7 @@ pub fn resolved(body: &MirBody, _calls: Option<&BTreeMap<i64, String>>) -> Resul
         .filter(|block| reachable.contains(&block.at))
         .cloned()
         .collect::<Vec<_>>();
-    if !loops::irreducible(&blocks, start).is_empty() {
+    if !loops::irreducible(&blocks, Some(start)).is_empty() {
         return Err(
             "the body's control flow is irreducible, so it has no dominator tree".to_owned(),
         );
@@ -2049,7 +2047,7 @@ pub fn resolved(body: &MirBody, _calls: Option<&BTreeMap<i64, String>>) -> Resul
         .iter()
         .map(|block| (block.at, block))
         .collect::<BTreeMap<_, _>>();
-    let immediate = loops::immediate_dominators(&blocks, start);
+    let immediate = loops::immediate_dominators(&blocks, Some(start));
     let mut children = blocks
         .iter()
         .map(|block| (block.at, Vec::new()))
@@ -2062,7 +2060,7 @@ pub fn resolved(body: &MirBody, _calls: Option<&BTreeMap<i64, String>>) -> Resul
                 .push(block.at);
         }
     }
-    let frontier = loops::frontiers(&blocks, start);
+    let frontier = loops::frontiers(&blocks, Some(start));
     let mut where_defined = BTreeMap::<u32, BTreeSet<i64>>::new();
     for block in &blocks {
         for operation in &block.ops {
@@ -2219,7 +2217,7 @@ pub fn resolved(body: &MirBody, _calls: Option<&BTreeMap<i64, String>>) -> Resul
 /// incoming value per predecessor.  This is intentionally not a structural
 /// or type verifier.
 pub fn verify(body: &MirBody) -> Vec<String> {
-    let dominators = loops::dominators(&body.blocks, body.entry);
+    let dominators = loops::dominators(&body.blocks, Some(body.entry));
     let mut problems = Vec::new();
 
     let mut defined_at = BTreeMap::<Value, i64>::new();
@@ -3556,6 +3554,16 @@ mod tests {
         );
     }
 
+    /// A held result is written, not read; counting it kept dead pure calls
+    /// and refused inlining a call whose result was otherwise unused.
+    #[test]
+    fn consumed_does_not_read_a_held_result() {
+        let written = Value::new(1, 0);
+        let mut op = Op::new(0, OpCode::Operation(Operation::Move), "mov", vec![], vec![]);
+        op.results = vec![Arg::Held(Held { value: written, width: 2 })];
+        assert!(consumed(&op).is_empty());
+    }
+
     #[test]
     fn rewritten_requires_a_raised_snapshot_and_changed_operands() {
         let value = Value::new(1, 0);
@@ -4074,4 +4082,80 @@ mod tests {
             ]
         );
     }
+}
+
+// ---- early port (agent D) ----
+
+/// Follow only exact word copies to their common source.
+///
+/// Direct port of `qbopt.model.mir:_copied_word`.
+pub(crate) fn _copied_word(arg: &Arg, definitions: &BTreeMap<Value, &Op>) -> Arg {
+    let mut arg = arg.clone();
+    let mut seen = BTreeSet::new();
+    loop {
+        let Arg::Held(held) = &arg else { break };
+        if held.width != 2 || !seen.insert(held.value) {
+            break;
+        }
+        let Some(copy) = definitions.get(&held.value) else { break };
+        if copy.kind != Kind::Copy
+            || !copy.loads.is_empty()
+            || !copy.stores.is_empty()
+            || copy.barrier()
+            || copy.results != [arg.clone()]
+            || copy.args.len() != 1
+            || !matches!(&copy.args[0], Arg::Held(source) if source.width == held.width)
+        {
+            break;
+        }
+        arg = copy.args[0].clone();
+    }
+    arg
+}
+
+/// The scalar whose exact high and low words are these operands.
+///
+/// Direct port of `qbopt.model.mir:extracted_whole`.
+pub(crate) fn extracted_whole(high: &Arg, low: &Arg, definitions: &BTreeMap<Value, &Op>) -> Option<Held> {
+    let mut original: Option<Held> = None;
+    for (arg, offset) in [(high, 16), (low, 0)] {
+        let arg = _copied_word(arg, definitions);
+        let Arg::Held(held) = arg else { return None };
+        if held.width != 2 {
+            return None;
+        }
+        if offset == 0 {
+            if let Some(whole) = original {
+                if let Some(extension) = definitions.get(&whole.value) {
+                    if extension.kind == Kind::SignExtend
+                        && extension.args.len() == 1
+                        && _copied_word(&extension.args[0], definitions) == Arg::Held(held)
+                        && extension.results == [Arg::Held(whole)]
+                        && extension.loads.is_empty()
+                        && extension.stores.is_empty()
+                        && !extension.barrier()
+                    {
+                        return Some(whole);
+                    }
+                }
+            }
+        }
+        let op = definitions.get(&held.value)?;
+        let source = match op.args.as_slice() {
+            [Arg::Held(source), Arg::Const(constant)]
+                if op.kind == Kind::Extract
+                    && op.results == [Arg::Held(held)]
+                    && source.width == 4
+                    && constant.n == BigInt::from(offset) =>
+            {
+                *source
+            }
+            _ => return None,
+        };
+        if original.is_some_and(|one| one != source) {
+            return None;
+        }
+        original = Some(source);
+    }
+    original
 }

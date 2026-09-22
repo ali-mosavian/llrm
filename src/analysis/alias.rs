@@ -6,7 +6,7 @@
 //! phis and through exact pointer spill slots.  Unknown stores kill spill
 //! facts; they never manufacture a disjointness proof.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::sync::LazyLock;
 
 use indexmap::{IndexMap, IndexSet};
@@ -752,7 +752,7 @@ pub fn points_to(
     }
     // A pointer value is otherwise an exact byte slice.  Natural-loop joins
     // are the one place those exact facts can grow without a program bound.
-    let dominators = loops::dominators(&body.blocks, body.entry);
+    let dominators = loops::dominators(&body.blocks, Some(body.entry));
     let back_edges = body
         .blocks
         .iter()
@@ -1015,12 +1015,12 @@ fn _keys_overlap(one: Option<&CellKey>, other: Option<&CellKey>) -> bool {
 
 /// Known `value == residue (mod modulus)` facts; modulus zero is exact.
 pub fn congruences(body: &MirBody) -> IndexMap<Value, (BigInt, BigInt)> {
-    let constants = consts::known(body);
+    let constants = consts::known(body, None, None, None, None);
     let values = body.values().into_iter().map(|value| (value.id, value)).collect::<IndexMap<_, _>>();
     let mut result: IndexMap<Value, (BigInt, BigInt)> = IndexMap::new();
     let zero = BigInt::from(0_u8);
 
-    fn number(arg: &Arg, constants: &BTreeMap<Value, Known>) -> Option<BigInt> {
+    fn number(arg: &Arg, constants: &indexmap::IndexMap<Value, Known>) -> Option<BigInt> {
         match arg {
             Arg::Const(constant) => Some(constant.n.clone()),
             Arg::Held(held) => constants.get(&held.value).map(|fact| fact.n.clone()),
@@ -1048,7 +1048,7 @@ pub fn congruences(body: &MirBody) -> IndexMap<Value, (BigInt, BigInt)> {
     fn computed(
         op: &Op,
         result: &IndexMap<Value, (BigInt, BigInt)>,
-        constants: &BTreeMap<Value, Known>,
+        constants: &indexmap::IndexMap<Value, Known>,
     ) -> Option<(BigInt, BigInt)> {
         let zero = BigInt::from(0_u8);
         let Some(Arg::Held(held)) = op.results.first().filter(|_| op.results.len() == 1) else {
@@ -1142,7 +1142,7 @@ pub fn congruences(body: &MirBody) -> IndexMap<Value, (BigInt, BigInt)> {
 pub fn annotated(body: &MirBody) -> Result<MirBody, String> {
     let facts = points_to(body, None, None)?;
     let bounded = ranges::bounded(body)?;
-    let constants = ranges::constants(body);
+    let constants = ranges::constants(body, None, None);
     let strides = congruences(body);
 
     let tag = |reference: &MemRef, at: i64, outgoing: bool| -> Result<MemRef, String> {

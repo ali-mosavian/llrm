@@ -87,32 +87,30 @@ mod tests {
     }
 }
 
-// ---- early port (agent F) ----
+// ---- early port (agent C) ----
 
 /// Keep opaque source ownership, but no computation or memory effect.
-///
-/// Direct port of `qbopt/optimize/transform.py:_empty_operation`.
 pub(crate) fn _empty_operation(op: &crate::model::mir::Op) -> crate::model::mir::Op {
     use crate::model::mir::{Kind, OpCode, OrderedMap};
     let mut result = op.clone();
     result.op = Some(OpCode::nothing());
-    result.name.clear();
+    result.name = String::new();
     result.kind = Kind::Nothing;
-    result.defines.clear();
-    result.uses.clear();
+    result.defines = Vec::new();
+    result.uses = Vec::new();
     result.array = None;
-    result.memory_values.clear();
+    result.memory_values = Vec::new();
     result.floating = None;
     result.floating_origin = None;
-    result.args.clear();
-    result.results.clear();
-    result.loads.clear();
-    result.stores.clear();
+    result.args = Vec::new();
+    result.results = Vec::new();
+    result.loads = Vec::new();
+    result.stores = Vec::new();
     result.merges = OrderedMap::new();
     result.source_backed = false;
     result.raised = None;
     result.target = None;
-    result.cases.clear();
+    result.cases = Vec::new();
     result.symbol = Some(false);
     result.args_known = true;
     result.memory_complete = true;
@@ -124,6 +122,166 @@ pub(crate) fn _empty_operation(op: &crate::model::mir::Op) -> crate::model::mir:
     result.indirect = false;
     result
 }
+
+/// Whether each branch test is taken, given (a, b, unsigned view).
+#[allow(clippy::type_complexity)]
+pub(crate) const _TAKEN: [(
+    crate::model::mir::Kind,
+    fn(&num_bigint::BigInt, &num_bigint::BigInt, &dyn Fn(&num_bigint::BigInt) -> num_bigint::BigInt) -> bool,
+); 10] = {
+    use crate::model::mir::Kind;
+    [
+        (Kind::Eq, |a, b, _| a == b),
+        (Kind::Ne, |a, b, _| a != b),
+        (Kind::Lt, |a, b, _| a < b),
+        (Kind::Le, |a, b, _| a <= b),
+        (Kind::Gt, |a, b, _| a > b),
+        (Kind::Ge, |a, b, _| a >= b),
+        (Kind::Below, |a, b, u| u(a) < u(b)),
+        (Kind::BelowEq, |a, b, u| u(a) <= u(b)),
+        (Kind::Above, |a, b, u| u(a) > u(b)),
+        (Kind::AboveEq, |a, b, u| u(a) >= u(b)),
+    ]
+};
+
+/// The modeled comparison supplying this branch's condition value.
+pub(crate) fn _comparison<'a>(
+    block: &'a crate::model::mir::MirBlock,
+    op: &crate::model::mir::Op,
+) -> Option<(usize, &'a crate::model::mir::Op)> {
+    use crate::model::mir::{Arg, Kind};
+    if op.kind != Kind::Branch || !op.test.is_some_and(|test| _TAKEN.iter().any(|(kind, _)| *kind == test)) {
+        return None;
+    }
+    let reads = op.uses.iter().filter(|one| one.flags).collect::<Vec<_>>();
+    if reads.len() != 1 {
+        return None;
+    }
+
+    // The comparison this branch reads, which must be the last thing to
+    // write the flags before it -- SSA says so by naming the value.
+    let (index, compare) = block.ops.iter().enumerate().find(|(_, one)| one.defines.contains(reads[0]))?;
+    if compare.kind == Kind::Sub && compare.args.len() == 2 && compare.results.is_empty() {
+        return Some((index, compare));
+    }
+    if matches!(compare.kind, Kind::And | Kind::Or | Kind::Xor)
+        && matches!(op.test, Some(Kind::Eq | Kind::Ne))
+        && !compare.barrier()
+        && compare.args.len() == 2
+        && compare.results.len() == 1
+    {
+        if let Arg::Held(result) = &compare.results[0] {
+            if [2, 4, 8].contains(&result.width)
+                && compare.args.iter().all(|arg| match arg {
+                    Arg::Held(held) => held.width == result.width,
+                    Arg::Const(constant) => constant.width == result.width,
+                    _ => false,
+                })
+            {
+                return Some((index, compare));
+            }
+        }
+    }
+    None
+}
+
+/// Dead blocks retain byte ownership, but no instructions or outgoing edges.
+pub(crate) fn _unreachable(body: &MirBody) -> MirBody {
+    use std::collections::{BTreeMap, BTreeSet};
+    let blocks = body.blocks.iter().map(|block| (block.at, block)).collect::<BTreeMap<_, _>>();
+    let (mut reached, mut pending) = (BTreeSet::new(), vec![body.entry]);
+    while let Some(at) = pending.pop() {
+        if reached.contains(&at) || !blocks.contains_key(&at) {
+            continue;
+        }
+        reached.insert(at);
+        pending.extend(blocks[&at].succ.iter().copied());
+    }
+    let kept = body
+        .blocks
+        .iter()
+        .filter(|block| reached.contains(&block.at) || !block.ops.is_empty())
+        .map(|block| {
+            if reached.contains(&block.at) {
+                block.clone()
+            } else {
+                crate::model::mir::MirBlock {
+                    succ: Vec::new(),
+                    phis: Vec::new(),
+                    ops: block.ops.iter().map(_empty_operation).collect(),
+                    ..block.clone()
+                }
+            }
+        })
+        .collect();
+    MirBody { blocks: kept, ..body.clone() }
+}
+
+/// Resolve single-valued joins after an edge disappears, without discarding
+/// byte ownership.  Python's `ValueError` is the `Err` text.
+pub(crate) fn _trivial_phis(body: &MirBody) -> Result<MirBody, String> {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use crate::analysis::{loops as loopy, ssa};
+    use crate::model::mir::{MirBlock, Phi};
+    let mut body = body.clone();
+    let predecessors = loopy::predecessors(&body.blocks);
+    let mut swaps = BTreeMap::new();
+    loop {
+        let mut changed = false;
+        let mut out = Vec::new();
+        for block in &body.blocks {
+            let mut phis = Vec::new();
+            for phi in &block.phis {
+                let incoming = phi
+                    .incoming
+                    .iter()
+                    .filter(|(at, _)| predecessors[&block.at].contains(at))
+                    .map(|(&at, &value)| ssa::provider(value, &swaps).map(|one| (at, one)))
+                    .collect::<Result<crate::model::mir::OrderedMap<_, _>, _>>()
+                    .map_err(|error| error.to_string())?;
+                let mut values = incoming.values().copied().collect::<BTreeSet<_>>();
+                values.remove(&phi.result);
+                if values.len() == 1 {
+                    swaps.insert(phi.result.id, *values.iter().next().expect("one"));
+                    changed = true;
+                } else {
+                    phis.push(Phi { result: phi.result, incoming });
+                }
+            }
+            let ops = block
+                .ops
+                .iter()
+                .map(|op| ssa::substituted(op, &swaps))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| error.to_string())?;
+            out.push(MirBlock { phis, ops, ..block.clone() });
+        }
+        body = MirBody { blocks: out, ..body };
+        if !changed {
+            return Ok(body);
+        }
+    }
+}
+
+// ---- early port (agent G) ----
+
+/// Remove selected computation while retaining exact source ownership.
+///
+/// Direct port of `qbopt.optimize.transform:_without`.
+pub(crate) fn _without(ops: &[crate::model::mir::Op], drop: impl Fn(&crate::model::mir::Op) -> bool) -> Vec<crate::model::mir::Op> {
+    let mut out = Vec::new();
+    for op in ops {
+        if !drop(op) {
+            out.push(op.clone());
+        } else if !op.absorbed.is_empty() || op.floating_origin.is_some() {
+            out.push(_empty_operation(op));
+        }
+    }
+    out
+}
+
+// ---- early port (agent F) ----
 
 /// Direct port of `qbopt/optimize/transform.py:_OBSERVED`.
 pub(crate) const _OBSERVED: [crate::model::mir::Kind; 20] = {
@@ -273,93 +431,4 @@ pub(crate) fn _kept(op: &crate::model::mir::Op) -> bool {
         return false;
     }
     op.defines.iter().all(|one| one.flags)
-}
-
-/// Direct port of `qbopt.optimize.transform:_unreachable`.
-pub(crate) fn _unreachable(body: &MirBody) -> MirBody {
-    use std::collections::{BTreeMap, BTreeSet};
-    let blocks = body
-        .blocks
-        .iter()
-        .map(|block| (block.at, block))
-        .collect::<BTreeMap<_, _>>();
-    let mut reached = BTreeSet::new();
-    let mut pending = vec![body.entry];
-    while let Some(at) = pending.pop() {
-        if reached.contains(&at) || !blocks.contains_key(&at) {
-            continue;
-        }
-        reached.insert(at);
-        pending.extend(blocks[&at].succ.iter().copied());
-    }
-    let mut result = body.clone();
-    result.blocks = body
-        .blocks
-        .iter()
-        .filter(|block| reached.contains(&block.at) || !block.ops.is_empty())
-        .map(|block| {
-            if reached.contains(&block.at) {
-                block.clone()
-            } else {
-                let mut normalized = block.clone();
-                normalized.succ = Vec::new();
-                normalized.phis = Vec::new();
-                normalized.ops = block.ops.iter().map(_empty_operation).collect();
-                normalized
-            }
-        })
-        .collect();
-    result
-}
-
-/// Direct port of `qbopt.optimize.transform:_trivial_phis`.
-pub(crate) fn _trivial_phis(
-    body: &MirBody,
-) -> Result<MirBody, crate::analysis::ssa::SubstitutionError> {
-    use crate::analysis::ssa::{provider as _provider, substituted as _substituted};
-    use crate::model::mir::{OrderedMap, Phi, Value};
-    use std::collections::{BTreeMap, BTreeSet};
-
-    let predecessors = crate::analysis::loops::predecessors(&body.blocks);
-    let mut swaps = BTreeMap::<u32, Value>::new();
-    let mut body = body.clone();
-    loop {
-        let mut changed = false;
-        let mut out = Vec::new();
-        for block in &body.blocks {
-            let mut phis = Vec::new();
-            for phi in &block.phis {
-                let mut incoming = OrderedMap::new();
-                for (at, value) in phi.incoming.iter() {
-                    if predecessors[&block.at].contains(at) {
-                        incoming.insert(*at, _provider(*value, &swaps)?);
-                    }
-                }
-                let mut values = incoming.values().copied().collect::<BTreeSet<_>>();
-                values.remove(&phi.result);
-                if values.len() == 1 {
-                    let only = *values.iter().next().expect("one remaining value");
-                    swaps.insert(phi.result.id, only);
-                    changed = true;
-                } else {
-                    phis.push(Phi {
-                        result: phi.result,
-                        incoming,
-                    });
-                }
-            }
-            let mut replaced = block.clone();
-            replaced.phis = phis;
-            replaced.ops = block
-                .ops
-                .iter()
-                .map(|op| _substituted(op, &swaps))
-                .collect::<Result<_, _>>()?;
-            out.push(replaced);
-        }
-        body.blocks = out;
-        if !changed {
-            return Ok(body);
-        }
-    }
 }

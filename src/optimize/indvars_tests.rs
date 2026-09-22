@@ -144,12 +144,12 @@ fn test_symbolic_control_refuses_a_nonzero_terminal_recurrence() {
     let body = _symbolic_control_body(5);
     let found = loops::loops(&body.blocks, Some(body.entry));
     let [loop_] = &found[..] else { panic!("one loop") };
-    let proofs = induction::counted(&body, loop_);
+    let proofs = induction::counted(&body, loop_, None);
     let [proof] = &proofs[..] else { panic!("one proof") };
     let basics = induction::basics(&body, loop_);
     let candidate = basics.values().find(|one| **one != proof.counter).expect("a second recurrence");
 
-    assert!(induction::zero_terminating_control(&body, loop_, proof, candidate).is_none());
+    assert!(induction::zero_terminating_control(&body, loop_, proof, candidate, None).is_none());
     assert_eq!(symbolically_zeroed(&body).unwrap(), body);
 }
 
@@ -159,12 +159,12 @@ fn test_symbolic_control_proves_a_zero_terminal_recurrence() {
     let body = _symbolic_control_body(0);
     let found = loops::loops(&body.blocks, Some(body.entry));
     let [loop_] = &found[..] else { panic!("one loop") };
-    let proofs = induction::counted(&body, loop_);
+    let proofs = induction::counted(&body, loop_, None);
     let [proof] = &proofs[..] else { panic!("one proof") };
     let basics = induction::basics(&body, loop_);
     let candidate = basics.values().find(|one| **one != proof.counter).expect("a second recurrence");
 
-    let got = induction::zero_terminating_control(&body, loop_, proof, candidate).expect("a proof");
+    let got = induction::zero_terminating_control(&body, loop_, proof, candidate, None).expect("a proof");
 
     assert!(std::ptr::eq(got.replacement.counted, proof));
     assert_eq!(
@@ -383,7 +383,7 @@ fn test_cross_width_recurrence_replaces_counter_only_for_its_full_period(
         assert_eq!(condition.args[0], held(coordinate, coordinate_width));
         assert!(matches!(&condition.args[1], Arg::Held(bound) if bound.width == coordinate_width));
         let loop_ = loops::loops(&changed.blocks, Some(changed.entry)).remove(0);
-        assert_eq!(induction::trip_count(&changed, &loop_, &consts::known(&changed)), Some(4.into()));
+        assert_eq!(induction::trip_count(&changed, &loop_, &consts::known(&changed, None, None, None, None)), Some(4.into()));
         assert!(induction::nonempty(&changed, &loop_));
         assert_eq!(rotate::rotated(&changed).unwrap().block(0).expect("the entry").succ, vec![2]);
     } else {
@@ -487,7 +487,7 @@ fn test_exact_nested_recurrence_rewinds_before_reloading_its_start() {
         .into_iter()
         .find(|loop_| loop_.header == 3)
         .expect("the inner loop");
-    assert_eq!(induction::trip_count(&changed, &changed_inner, &consts::known(&changed)), Some(4.into()));
+    assert_eq!(induction::trip_count(&changed, &changed_inner, &consts::known(&changed, None, None, None, None)), Some(4.into()));
     assert_eq!(rotate::rotated(&changed).unwrap().loop_trip_counts, vec![(4, 4)]);
     assert_eq!(outer_header.phis.len(), 2);
     assert_ne!(inner_header.phis[0].incoming.get(&2), Some(&start));

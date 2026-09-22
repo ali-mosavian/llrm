@@ -8,6 +8,7 @@
 //! `ivshare.shared`, `transform.dead`, `exitsink.sunk`, `loopexit.evaluated`
 //! and four `indvars` rewrites that have no Rust port.
 
+use indexmap::IndexMap;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::sync::LazyLock;
@@ -79,6 +80,7 @@ impl From<ConstructionError> for StrengthError {
 #[allow(dead_code)] // `Strength.transform` is its caller once indvars is ported.
 pub(crate) fn reduced(
     body: &MirBody,
+    dgroup: &BTreeSet<i64>,
     layout: Option<&RegionLayout>,
     registers: i64,
     scales: &BTreeSet<i64>,
@@ -88,7 +90,7 @@ pub(crate) fn reduced(
     control_recurrences: bool,
 ) -> Result<MirBody, StrengthError> {
     let op_at = |at: OpOccurrence| &body.blocks[at.block_index()].ops[at.operation_index()];
-    let found = induction::of(body, layout)?;
+    let found = induction::of(body, dgroup, layout)?;
     if found.is_empty() {
         return Ok(body.clone());
     }
@@ -131,9 +133,9 @@ pub(crate) fn reduced(
     let mut pointer_bindings = Vec::<(OpOccurrence, Value, Value)>::new();
     let mut wide = BTreeSet::<Value>::new();
     let facts = if !scales.is_empty() || !address_forms.is_empty() {
-        consts::known(body)
+        consts::known(body, None, None, None, None)
     } else {
-        BTreeMap::new()
+        IndexMap::new()
     };
     for (loop_, _basics, _derived) in &found {
         let preheader = passes::preheader(body, loop_);
@@ -653,11 +655,11 @@ fn _control_credits(
         Some(Arg::Held(held)) => Some(held.value),
         _ => None,
     };
-    let facts = consts::known(body);
+    let facts = consts::known(body, None, None, None, None);
     let mut selected = BTreeMap::<u32, ((i64, i64, i64), Derived)>::new();
 
     for (loop_, _basics, _derived) in found {
-        let proofs = induction::counted_with_facts(body, loop_, &facts);
+        let proofs = induction::counted(body, loop_, Some(&facts));
         if proofs.len() != 1 {
             continue;
         }
@@ -713,7 +715,7 @@ fn _replacement_credits(
         Some(Arg::Held(held)) => Some(held.value),
         _ => None,
     };
-    let facts = consts::known(body);
+    let facts = consts::known(body, None, None, None, None);
     let blocks = body
         .blocks
         .iter()
@@ -1612,7 +1614,7 @@ fn _local_pointer_rebases(
     let place = operations(body)
         .map(|(at, block, _)| (at, (block.at, at.operation_index())))
         .collect::<BTreeMap<_, _>>();
-    let dominators = loopy::dominators(&body.blocks, body.entry);
+    let dominators = loopy::dominators(&body.blocks, Some(body.entry));
     let mut users = BTreeMap::<u32, Vec<OpOccurrence>>::new();
     for (at, _, op) in operations(body) {
         for value in &op.uses {
@@ -1667,7 +1669,7 @@ fn _legal_form(
     loop_: &Loop,
     one: &Derived,
     form: &AddressForm,
-    facts: &BTreeMap<Value, Known>,
+    facts: &IndexMap<Value, Known>,
     widened: &mut BTreeMap<u32, Option<Vec<(OpOccurrence, Op)>>>,
 ) -> Option<(i64, AddressForm)> {
     let scale = _indexable(body, loop_, one, &form.scales, facts)?;
@@ -1689,7 +1691,7 @@ fn _indexable(
     _loop: &Loop,
     one: &Derived,
     scales: &BTreeSet<i64>,
-    facts: &BTreeMap<Value, Known>,
+    facts: &IndexMap<Value, Known>,
 ) -> Option<i64> {
     let op_at = |at: OpOccurrence| &body.blocks[at.block_index()].ops[at.operation_index()];
     let zero = Some(BigInt::from(0_u8));
@@ -1824,7 +1826,7 @@ fn _addressed(body: &MirBody, value: Value) -> Option<Vec<MemRef>> {
 fn _widened(
     body: &MirBody,
     loop_: &Loop,
-    facts: &BTreeMap<Value, Known>,
+    facts: &IndexMap<Value, Known>,
     value: Option<u32>,
 ) -> Option<Vec<(OpOccurrence, Op)>> {
     let at_of = body

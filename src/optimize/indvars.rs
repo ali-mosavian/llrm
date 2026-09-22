@@ -54,8 +54,8 @@ pub(crate) fn rewound(body: &MirBody, registers: i64, costs: Option<&OperationCo
     }
     let blocks = body.blocks.iter().map(|block| (block.at, block)).collect::<BTreeMap<_, _>>();
     let predecessors = loops::predecessors(&body.blocks);
-    let dominators = loops::dominators(&body.blocks, body.entry);
-    let facts = consts::known(body);
+    let dominators = loops::dominators(&body.blocks, Some(body.entry));
+    let facts = consts::known(body, None, None, None, None);
     let live = liveness::live(body);
     let values = ssa::values(body).collect::<Vec<_>>();
     let definitions = body
@@ -260,7 +260,7 @@ pub(crate) fn rewound(body: &MirBody, registers: i64, costs: Option<&OperationCo
 
 #[allow(dead_code)] // Called by the strength port.
 pub(crate) fn simplified(body: &MirBody) -> Result<MirBody, SubstitutionError> {
-    let facts = consts::known(body);
+    let facts = consts::known(body, None, None, None, None);
     let blocks = body.blocks.iter().enumerate().map(|(index, block)| (block.at, index)).collect::<BTreeMap<_, _>>();
     let made = body
         .blocks
@@ -268,7 +268,7 @@ pub(crate) fn simplified(body: &MirBody) -> Result<MirBody, SubstitutionError> {
         .flat_map(|block| &block.ops)
         .flat_map(|op| op.defines.iter().map(move |value| (value.id, op)))
         .collect::<BTreeMap<_, _>>();
-    let dominators = loops::dominators(&body.blocks, body.entry);
+    let dominators = loops::dominators(&body.blocks, Some(body.entry));
     let predecessors = loops::predecessors(&body.blocks);
     for loop_ in loops::loops(&body.blocks, Some(body.entry)) {
         if loop_.latches.len() != 1 {
@@ -479,7 +479,7 @@ pub(crate) fn simplified(body: &MirBody) -> Result<MirBody, SubstitutionError> {
 /// Every basic recurrence, with its width and proven domain when finite.
 fn _recurrences(
     body: &MirBody,
-    facts: &BTreeMap<Value, Known>,
+    facts: &IndexMap<Value, Known>,
 ) -> IndexMap<u32, (Affine, u32, Option<BigInt>, Option<BigInt>)> {
     let mut out = IndexMap::new();
     for loop_ in loops::loops(&body.blocks, Some(body.entry)) {
@@ -525,7 +525,7 @@ fn _rebased_equalities(
         // purpose.  No affine relationship between them is required.
         return Some(BTreeMap::new());
     }
-    let facts = consts::known(body);
+    let facts = consts::known(body, None, None, None, None);
     let recurrences = _recurrences(body, &facts);
     let source = recurrences.get(&counter.id)?;
     let target = recurrences.get(&alternative.id)?;
@@ -675,7 +675,7 @@ impl _SeedBuilder {
 /// `AffineMap.period` supplies the modular safety condition.
 #[allow(dead_code)] // Called by the strength port.
 pub(crate) fn symbolically_zeroed(body: &MirBody) -> Result<MirBody, SubstitutionError> {
-    let facts = consts::known(body);
+    let facts = consts::known(body, None, None, None, None);
     let blocks = body.blocks.iter().enumerate().map(|(index, block)| (block.at, index)).collect::<BTreeMap<_, _>>();
     let operation = |at: (usize, usize)| &body.blocks[at.0].ops[at.1];
     let mut made = BTreeMap::new();
@@ -699,7 +699,7 @@ pub(crate) fn symbolically_zeroed(body: &MirBody) -> Result<MirBody, Substitutio
     let values = ssa::values(body).collect::<Vec<_>>();
 
     for loop_ in loops::loops(&body.blocks, Some(body.entry)) {
-        let proofs = induction::counted_with_facts(body, &loop_, &facts);
+        let proofs = induction::counted(body, &loop_, Some(&facts));
         if proofs.len() != 1 {
             continue;
         }
@@ -709,7 +709,7 @@ pub(crate) fn symbolically_zeroed(body: &MirBody) -> Result<MirBody, Substitutio
         let candidates = induction::basics(body, &loop_);
         for candidate in candidates.values() {
             let Some(symbolic) =
-                induction::zero_terminating_control_with_facts(body, &loop_, proof, candidate, &facts)
+                induction::zero_terminating_control(body, &loop_, proof, candidate, Some(&facts))
             else {
                 continue;
             };
@@ -972,9 +972,9 @@ pub(crate) fn symbolically_zeroed(body: &MirBody) -> Result<MirBody, Substitutio
 /// both sides wrap at the add's own width, so the sum is unchanged.
 #[allow(dead_code)] // Called by the strength port.
 pub(crate) fn zeroed(body: &MirBody, address_offsets: bool) -> Result<MirBody, SubstitutionError> {
-    let facts = consts::known(body);
+    let facts = consts::known(body, None, None, None, None);
     let blocks = body.blocks.iter().enumerate().map(|(index, block)| (block.at, index)).collect::<BTreeMap<_, _>>();
-    let dominators = loops::dominators(&body.blocks, body.entry);
+    let dominators = loops::dominators(&body.blocks, Some(body.entry));
     let predecessors = loops::predecessors(&body.blocks);
     let operation = |at: (usize, usize)| &body.blocks[at.0].ops[at.1];
     let mut made = BTreeMap::new();
@@ -1447,7 +1447,7 @@ fn _offsets(
                         unreachable!("added checked the result");
                     };
                     let result = result.value;
-                    let constant = induction::_signed(&Arg::Const(invariant.clone()), &BTreeMap::new(), invariant.width)
+                    let constant = induction::_signed(&Arg::Const(invariant.clone()), &IndexMap::new(), invariant.width)
                         .expect("a constant is known");
                     let forms = readers
                         .get(&result)
@@ -1498,7 +1498,7 @@ fn _offsets(
                 && constants[0].width == held[0].width
                 && held[0].width == result_width(op)
             {
-                scale = induction::_signed(&Arg::Const(constants[0].clone()), &BTreeMap::new(), constants[0].width);
+                scale = induction::_signed(&Arg::Const(constants[0].clone()), &IndexMap::new(), constants[0].width);
             }
         }
         if form.is_none() {

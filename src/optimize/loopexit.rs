@@ -25,7 +25,7 @@ type Terms = Vec<(AffineOperand, BigInt)>;
 /// Python `evaluated`.  Python returns `body` itself when nothing changes;
 /// Rust returns an equal clone.
 pub(crate) fn evaluated(body: &MirBody) -> Result<MirBody, String> {
-    let facts = consts::known(body);
+    let facts = consts::known(body, None, None, None, None);
     let blocks = body
         .blocks
         .iter()
@@ -219,7 +219,7 @@ fn _exit_terms(
     loop_: &Loop,
     counters: &OrderedMap<u32, Affine>,
     count: &BigInt,
-    facts: &BTreeMap<Value, Known>,
+    facts: &IndexMap<Value, Known>,
 ) -> Result<IndexMap<u32, Terms>, String> {
     let header = body
         .blocks
@@ -364,7 +364,7 @@ fn _widened_counters(
     body: &MirBody,
     loop_: &Loop,
     counters: &OrderedMap<u32, Affine>,
-    facts: &BTreeMap<Value, Known>,
+    facts: &IndexMap<Value, Known>,
 ) -> Result<IndexMap<Value, Affine>, String> {
     if !body
         .blocks
@@ -432,13 +432,13 @@ fn _constant_exits(
     loop_: &Loop,
     exits: &IndexMap<u32, Terms>,
     exit_at: i64,
-    facts: &BTreeMap<Value, Known>,
+    facts: &IndexMap<Value, Known>,
 ) -> Result<Option<MirBody>, String> {
     let predecessors = loops::predecessors(&body.blocks);
     if predecessors.get(&exit_at).cloned().unwrap_or_default() != BTreeSet::from([loop_.header]) {
         return Ok(None);
     }
-    let dominators = loops::dominators(&body.blocks, body.entry);
+    let dominators = loops::dominators(&body.blocks, Some(body.entry));
     let following = body
         .blocks
         .iter()
