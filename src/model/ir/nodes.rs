@@ -225,7 +225,7 @@ impl Node {
         }
     }
 
-    fn effects(&self) -> &Effects {
+    pub fn effects(&self) -> &Effects {
         match self {
             Self::Opaque(node) => &node.effects,
             Self::Long(node) => &node.effects,

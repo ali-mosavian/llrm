@@ -23,6 +23,11 @@ use crate::objectfile::module::{Addr, Space};
 use crate::support::pyrepr::{self, Repr};
 use iced_x86::Register;
 
+mod raise;
+pub use raise::*;
+mod sites;
+pub use sites::*;
+
 /// The registers that become values, rooted.
 pub const TRACKED: [Register; 6] =
     [Register::EAX, Register::EBX, Register::ECX, Register::EDX, Register::ESI, Register::EDI];
@@ -1085,6 +1090,18 @@ pub struct Op {
     pub absorbed: Vec<u32>,
     pub indirect: bool,
     pub exits: Vec<Value>,
+    /// Python's `_RaisedOp` subclass: `Some` is an occurrence still inside the
+    /// raise, carrying its decoded node and byte ranges.  `_externalized`
+    /// clears it, so no completed body has one.
+    pub raising: Option<Box<Raising>>,
+}
+
+/// The fields Python's private `_RaisedOp(Op)` adds.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Raising {
+    pub node: Option<std::sync::Arc<crate::model::ir::nodes::Node>>,
+    pub covers: Option<(i64, i64)>,
+    pub extra_covers: Vec<(i64, i64)>,
 }
 
 impl Op {
@@ -1130,7 +1147,14 @@ impl Op {
             absorbed: Vec::new(),
             indirect: false,
             exits: Vec::new(),
+            raising: None,
         }
+    }
+
+    /// Python `getattr(op, "node", None)`: the decoded node of a raising
+    /// occurrence.
+    pub fn node(&self) -> Option<&std::sync::Arc<crate::model::ir::nodes::Node>> {
+        self.raising.as_ref().and_then(|raising| raising.node.as_ref())
     }
 
     /// Python `Op.barrier`.
@@ -1140,8 +1164,16 @@ impl Op {
 
     /// Python `Op.inserted`: public MIR operations own no source occurrence
     /// precisely when their opaque ownership identity list is empty.
+    /// `_RaisedOp.inserted` overrides it for a raising occurrence.
     pub fn inserted(&self) -> bool {
-        self.absorbed.is_empty()
+        match &self.raising {
+            Some(raising) => {
+                !self.source_backed
+                    && raising.extra_covers.is_empty()
+                    && raising.covers.is_some_and(|(low, high)| low == high)
+            }
+            None => self.absorbed.is_empty(),
+        }
     }
 }
 
@@ -1358,7 +1390,7 @@ const _: () = {
 /// keeping the two additional maps private to raising.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[allow(dead_code)] // Constructed by the direct raiser port; model tests exercise it meanwhile.
-pub(crate) struct RaisedBody {
+pub struct RaisedBody {
     pub body: MirBody,
     pub origin: OrderedMap<Value, iced_x86::Register>,
     pub pins: OrderedMap<Value, iced_x86::Register>,
@@ -1366,7 +1398,7 @@ pub(crate) struct RaisedBody {
 
 impl RaisedBody {
     #[allow(dead_code)] // Constructed by the direct raiser port; model tests exercise it meanwhile.
-    pub(crate) fn new(body: MirBody) -> Self {
+    pub fn new(body: MirBody) -> Self {
         Self {
             body,
             origin: OrderedMap::new(),
