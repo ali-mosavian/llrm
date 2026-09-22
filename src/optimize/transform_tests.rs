@@ -76,6 +76,51 @@ mod preheader_tests {
 // ==== END tests D ====
 
 // ==== BEGIN tests E ====
+mod folded_tests {
+    use indexmap::IndexMap;
+
+    use crate::analysis::consts::Known;
+    use crate::model::ir::Operation;
+    use crate::model::mir::{Arg, Const, Held, Kind, Op, OpCode, Value};
+    use crate::optimize::transform::_constant_operands;
+
+    /// LNGMXX retained invariant division by 7 because its constant divisor stayed opaque to LICM.
+    #[test]
+    fn divisor_constants_propagate_without_reordering() {
+        for (number, _safe) in [(7_i64, true), (0, false), (0xFFFF_FFFF, false)] {
+            let [dividend, divisor, quotient, remainder] = [1, 2, 3, 4].map(|index| Value::new(index, 0));
+            let mut op = Op::new(
+                0,
+                OpCode::Operation(Operation::Divide),
+                "idiv",
+                vec![quotient, remainder],
+                vec![dividend, divisor],
+            );
+            op.kind = Kind::Divmod;
+            op.args = vec![
+                Arg::Held(Held { value: dividend, width: 4 }),
+                Arg::Held(Held { value: divisor, width: 4 }),
+            ];
+            op.results = vec![
+                Arg::Held(Held { value: quotient, width: 4 }),
+                Arg::Held(Held { value: remainder, width: 4 }),
+            ];
+            let done = _constant_operands(&op, &IndexMap::from([(divisor, Known::new(number, 4))]), None, None);
+            assert_eq!(
+                done.args,
+                vec![Arg::Held(Held { value: dividend, width: 4 }), Arg::Const(Const::new(number, 4))]
+            );
+            assert_eq!(done.uses, vec![dividend]);
+            // needs _cannot_fault, which section C ports.
+            #[cfg(any())]
+            assert_eq!(crate::optimize::transform::_cannot_fault(&done), _safe);
+            assert_eq!(
+                _constant_operands(&op, &IndexMap::from([(divisor, Known::new(number, 2))]), None, None),
+                op
+            );
+        }
+    }
+}
 // ==== END tests E ====
 
 // ==== BEGIN tests F ====
