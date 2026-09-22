@@ -82,7 +82,8 @@ _AUDITED_GRAPHICS_STACK: dict[str, int] = {
     "B$CSTT": 4,
     "B$CSTO": 4,
     "B$CASP": 4,
-    "B$CIRC": 10,
+    # circle.asm: parmD Radius, parmW Color.
+    "B$CIRC": 6,
     "B$LINE": 6,
     "B$PAIN": 4,
     "B$PSTC": 2,

@@ -2817,13 +2817,7 @@ impl Compiler {
                         } else {
                             Operand::Constant(INTEGER, Number::Integer(-1))
                         };
-                        // BC passes the radius twice. The runtime applies the
-                        // independently latched aspect ratio to the two axes.
-                        self.emit_runtime_call(
-                            "B$CIRC",
-                            Vec::new(),
-                            vec![radius.clone(), radius, color],
-                        );
+                        self.emit_runtime_call("B$CIRC", Vec::new(), vec![radius, color]);
                     }
                     "LINE" => {
                         if !(4..=6).contains(&arguments.len()) {

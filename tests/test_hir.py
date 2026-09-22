@@ -2933,3 +2933,24 @@ def test_rnd_without_an_argument_compiles(tmp_path: Path) -> None:
     basic.write_bytes(b"x! = rnd\r\nprint x!\r\n")
     source = qb_driver.parsed(basic, dialect="qb45", runtime="qb45")
     assert "B$RND0" in masm.text(qb_compile.assembled(source))
+
+
+def test_circle_pushes_one_radius(tmp_path: Path) -> None:
+    """oimad froze after a few hundred frames: CIRCLE pushed its radius twice,
+    four stack bytes B$CIRC never pops. QB45 circle.asm and the VBDOS /A
+    listing both take one parmD radius and one color word."""
+    basic = tmp_path / "CIRC.BAS"
+    basic.write_bytes(b"screen 13\r\nr! = 16\r\ncircle (10, 100), r!, 5\r\n")
+    source = qb_driver.parsed(basic, dialect="qb45", runtime="qb45")
+    lines = [" ".join(line.split(";")[0].split()) for line in masm.text(qb_compile.assembled(source)).splitlines()]
+    start = lines.index("call far ptr B$N1I2")
+    end = lines.index("call far ptr B$CIRC")
+    widths = {"pushd": 4, "pushw": 2}
+    pushed = 0
+    for line in lines[start + 1 : end]:
+        mnemonic, _, operand = line.partition(" ")
+        if mnemonic in widths:
+            pushed += widths[mnemonic]
+        elif mnemonic == "push":
+            pushed += 4 if operand.startswith(("dword", "e")) else 2
+    assert pushed == 6, lines[start:end + 1]
