@@ -289,6 +289,15 @@ pub fn _index(b: &[u8], i: usize) -> (i64, usize) {
     (b[i] as i64, i + 1)
 }
 
+/// `_index`, or None where Python's raises `IndexError` on a short body.
+pub fn _index_checked(b: &[u8], i: usize) -> Option<(i64, usize)> {
+    let first = *b.get(i)?;
+    if first & 0x80 != 0 {
+        return Some(((((first & 0x7F) as i64) << 8) | *b.get(i + 1)? as i64, i + 2));
+    }
+    Some((first as i64, i + 1))
+}
+
 /// The LNAMES strings, 1-based as every other record refers to them.
 pub fn names(recs: &[Rc<Record>]) -> Vec<String> {
     let mut out = vec![String::new()];
