@@ -711,6 +711,674 @@ pub(crate) fn _kept(op: &crate::model::mir::Op) -> bool {
 // ==== END D ====
 
 // ==== BEGIN E: transform.py 2091-2563 (agent E) ====
+/// Values that are a symbol's address, with the op owning its fixup.
+type _SymbolCopies<'a> = IndexMap<Value, (crate::model::mir::Symbol, &'a Op)>;
+
+pub(crate) fn _folded_division(op: &Op, numbers: (num_bigint::BigInt, num_bigint::BigInt), wanted: &BTreeSet<Value>) -> Vec<Op> {
+    use crate::model::ir::Operation;
+    use crate::model::mir::{Const, OpCode};
+
+    let results = op
+        .results
+        .iter()
+        .filter_map(|result| match result {
+            Arg::Held(held) => Some(held.value),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    if op.defines.iter().any(|value| wanted.contains(value) && !results.contains(value)) {
+        return vec![op.clone()];
+    }
+    let numbers = [numbers.0, numbers.1];
+    assert_eq!(op.results.len(), numbers.len(), "zip() argument 2 is shorter than argument 1");
+    op.results
+        .iter()
+        .zip(numbers)
+        .enumerate()
+        .map(|(index, (result, number))| {
+            let Arg::Held(held) = result else {
+                unreachable!("consts.division answers only for held results")
+            };
+            let mut one = op.clone();
+            one.op = Some(OpCode::Operation(Operation::Move));
+            one.name = "mov".to_string();
+            one.kind = Kind::Copy;
+            one.args = vec![Arg::Const(Const::new(number, 4))];
+            one.results = vec![result.clone()];
+            one.defines = vec![held.value];
+            one.uses = Vec::new();
+            one.loads = Vec::new();
+            one.merges = OrderedMap::new();
+            one.raised = None;
+            one.symbol = Some(false);
+            one.source_backed = false;
+            one.id = if index == 0 { op.id } else { None };
+            one.absorbed = if index == 0 { op.absorbed.clone() } else { Vec::new() };
+            one
+        })
+        .collect()
+}
+
+/// `_PURE` less copies, provenance carriers and trapping division.
+pub(crate) const _EDGE_FOLDABLE: [Kind; 25] = {
+    // A copy removes no computation.  Addresses and pointer offsets carry
+    // provenance, while division and remainder may trap.  None is a pure
+    // integer expression that this first, deliberately strict form may
+    // speculate separately on incoming edges.
+    const EXCLUDED: [Kind; 5] = [Kind::Copy, Kind::Address, Kind::PtrOffset, Kind::Div, Kind::Rem];
+    let mut out = [Kind::Add; 25];
+    let (mut index, mut count) = (0, 0);
+    while index < _PURE.len() {
+        let mut excluded = false;
+        let mut other = 0;
+        while other < EXCLUDED.len() {
+            excluded |= _PURE[index] as u16 == EXCLUDED[other] as u16;
+            other += 1;
+        }
+        if !excluded {
+            out[count] = _PURE[index];
+            count += 1;
+        }
+        index += 1;
+    }
+    assert!(count == out.len());
+    out
+};
+
+/// Fold one pure join expression independently on every incoming edge.
+pub(crate) fn _folded_phi_edges(
+    body: &MirBody,
+    facts: &IndexMap<Value, crate::analysis::consts::Known>,
+    wanted: &BTreeSet<Value>,
+) -> Result<MirBody, String> {
+    use crate::analysis::consts;
+    use crate::model::ir::Operation;
+    use crate::model::mir::{Const, OpCode};
+
+    let predecessors = loopy::predecessors(&body.blocks);
+    let by_at = body.blocks.iter().map(|block| (block.at, block)).collect::<IndexMap<_, _>>();
+    let pointer_values = &body.pointer_values;
+    let values = crate::analysis::ssa::values(body).collect::<Vec<_>>();
+    let serial = values.iter().map(|value| value.id).max().unwrap_or(0) + 1;
+    let variable = values.iter().map(|value| value.variable).max().unwrap_or(0) + 1;
+    let none = BTreeSet::new();
+
+    for block in &body.blocks {
+        let parents = predecessors.get(&block.at).unwrap_or(&none);
+        if parents.len() < 2 || block.phis.is_empty() {
+            continue;
+        }
+        let parent_blocks = parents
+            .iter()
+            .map(|at| (*at, by_at.get(at).copied()))
+            .collect::<IndexMap<_, _>>();
+        if parent_blocks
+            .values()
+            .any(|parent| parent.is_none_or(|parent| parent.succ != [block.at]))
+        {
+            continue;
+        }
+        let parent_blocks = parent_blocks
+            .into_iter()
+            .map(|(at, parent)| (at, parent.expect("checked")))
+            .collect::<IndexMap<_, _>>();
+        // A terminal conditional with one surviving CFG successor still has
+        // path semantics which are not represented by that tuple alone.
+        if parent_blocks.values().any(|parent| {
+            parent
+                .ops
+                .last()
+                .is_some_and(|last| matches!(last.kind, Kind::Branch | Kind::Switch | Kind::Return))
+        }) {
+            continue;
+        }
+        let phis = block
+            .phis
+            .iter()
+            .filter(|phi| phi.incoming.keys().copied().collect::<BTreeSet<_>>() == *parents)
+            .map(|phi| (phi.result, phi))
+            .collect::<IndexMap<_, _>>();
+        if phis.is_empty() {
+            continue;
+        }
+
+        let mut corridor = vec![block];
+        let mut seen = BTreeSet::from([block.at]);
+        while corridor.last().expect("nonempty").succ.len() == 1 {
+            let last = *corridor.last().expect("nonempty");
+            let Some(successor) = by_at.get(&last.succ[0]).copied() else {
+                break;
+            };
+            if seen.contains(&successor.at)
+                || predecessors.get(&successor.at).unwrap_or(&none) != &BTreeSet::from([last.at])
+            {
+                break;
+            }
+            corridor.push(successor);
+            seen.insert(successor.at);
+        }
+
+        for operation_block in &corridor {
+            for (index, op) in operation_block.ops.iter().enumerate() {
+                if !_EDGE_FOLDABLE.contains(&op.kind)
+                    || op.kind == Kind::Nothing
+                    || op.barrier()
+                    || !op.loads.is_empty()
+                    || !op.stores.is_empty()
+                    || op.floating.is_some()
+                    || op.stack.is_some()
+                    || !op.merges.is_empty()
+                    || op.opaque_defs != Some(BTreeSet::new())
+                    || op.opaque_uses != Some(BTreeSet::new())
+                    || mir::partial(op)
+                {
+                    continue;
+                }
+                let target = consts::_defined(op);
+                let results = op
+                    .results
+                    .iter()
+                    .filter_map(|result| match result {
+                        Arg::Held(held) => Some(held),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                let Some(target) = target else {
+                    continue;
+                };
+                if results.len() != 1
+                    || results[0].value != target
+                    || pointer_values.contains(&target)
+                    || op.defines.iter().any(|value| *value != target && wanted.contains(value))
+                {
+                    continue;
+                }
+                let used = op
+                    .args
+                    .iter()
+                    .filter_map(|arg| match arg {
+                        Arg::Held(held) => Some(held.value),
+                        _ => None,
+                    })
+                    .collect::<BTreeSet<_>>();
+                if !used.iter().any(|value| phis.contains_key(value)) {
+                    continue;
+                }
+
+                let width = results[0].width;
+                let mut numbers: IndexMap<i64, num_bigint::BigInt> = IndexMap::new();
+                for &parent in parents {
+                    let swap = phis
+                        .iter()
+                        .map(|(result, phi)| (result.id, *phi.incoming.get(&parent).expect("complete phi")))
+                        .collect::<BTreeMap<_, _>>();
+                    let substituted = _substituted(op, &swap).map_err(|error| error.to_string())?;
+                    let fact = consts::_result(&substituted, facts, None, None);
+                    let Some(fact) = fact.filter(|fact| fact.width >= width) else {
+                        break;
+                    };
+                    numbers.insert(parent, consts::masked(&fact.n, width));
+                }
+                if numbers.len() != parents.len() {
+                    continue;
+                }
+
+                let mut changed = by_at
+                    .iter()
+                    .map(|(at, one)| (*at, (*one).clone()))
+                    .collect::<IndexMap<_, _>>();
+                let mut incoming = OrderedMap::new();
+                for (offset, &parent_at) in parents.iter().enumerate() {
+                    let parent = parent_blocks[&parent_at];
+                    let offset = u32::try_from(offset).expect("few parents");
+                    let edge_value = Value {
+                        id: serial + offset,
+                        at: parent.at,
+                        flags: false,
+                        variable: variable + offset,
+                        version: 1,
+                    };
+                    incoming.insert(parent_at, edge_value);
+                    let mut copy = Op::new(
+                        parent.at,
+                        OpCode::Operation(Operation::Move),
+                        "mov",
+                        vec![edge_value],
+                        Vec::new(),
+                    );
+                    copy.kind = Kind::Copy;
+                    copy.args = vec![Arg::Const(Const::new(numbers[&parent_at].clone(), width))];
+                    copy.results = vec![Arg::Held(Held { value: edge_value, width })];
+                    copy.source_backed = false;
+                    let mut ops = parent.ops.clone();
+                    let position = if ops.last().is_some_and(|last| last.kind == Kind::Jump) {
+                        ops.len() - 1
+                    } else {
+                        ops.len()
+                    };
+                    ops.insert(position, copy);
+                    changed[&parent_at] = MirBlock { ops, ..parent.clone() };
+                }
+
+                changed[&block.at].phis.push(Phi { result: target, incoming });
+                changed[&operation_block.at].ops[index] = _empty_operation(op);
+                return Ok(MirBody {
+                    blocks: body.blocks.iter().map(|one| changed[&one.at].clone()).collect(),
+                    ..body.clone()
+                });
+            }
+        }
+    }
+    Ok(body.clone())
+}
+
+/// An operation whose result is a number, replaced by that number.
+pub(crate) fn folded(body: &MirBody, dgroup: &BTreeSet<i64>, calls: &IndexMap<i64, String>) -> Result<MirBody, String> {
+    use crate::analysis::{consts, floatfacts};
+    use crate::optimize::floatfold;
+
+    let edges = floatfacts::exit_cells(body, dgroup, calls);
+    let facts = consts::known(body, Some(dgroup), Some(calls), Some(&edges), None);
+    let floating_facts = if body.blocks.iter().any(|block| block.ops.iter().any(|op| op.floating.is_some())) {
+        floatfacts::known(body, dgroup, calls, None)
+    } else {
+        IndexMap::new()
+    };
+    let conversions = floatfacts::converted(body, dgroup, calls, Some(&floating_facts));
+    let mut argument_facts = facts.clone();
+    argument_facts.extend(conversions.iter().map(|(value, fact)| (*value, fact.clone())));
+    let memory = if body
+        .blocks
+        .iter()
+        .any(|block| block.ops.iter().any(|op| !op.loads.is_empty() || op.kind == Kind::Divmod))
+    {
+        consts::cells(body, dgroup, calls, Some(&facts), None, Some(&edges), None, None)
+    } else {
+        IndexMap::new()
+    };
+    let symbols = _symbol_copies(body);
+    if facts.is_empty() && memory.is_empty() && argument_facts.is_empty() && symbols.is_empty() {
+        return Ok(body.clone());
+    }
+
+    // Live, not merely mentioned: see live()'s own note on hotlop's dx.
+    let wanted = live(body);
+
+    let nothing = consts::Cells::new();
+    let mut out = Vec::new();
+    for block in &body.blocks {
+        let mut ops = Vec::new();
+        for (index, op) in block.ops.iter().enumerate() {
+            let here = memory.get(&(block.at, index)).unwrap_or(&nothing);
+            if let Some(numbers) = consts::division(op, &facts, here) {
+                ops.extend(_folded_division(op, numbers, &wanted));
+                continue;
+            }
+            let updated = _constant_update(op, &facts, here, &wanted);
+            let made = _constant_operands(
+                &_folded_op(&updated, &facts, &wanted),
+                if op.kind == Kind::Arg { &argument_facts } else { &facts },
+                Some(here),
+                Some(&symbols),
+            );
+            ops.push(made);
+        }
+        out.push(MirBlock { ops, ..block.clone() });
+    }
+
+    let result = MirBody { blocks: out, ..body.clone() };
+    let result = _folded_phi_edges(&result, &facts, &wanted)?;
+    // An exact exit fact describes only the path leaving a numeric loop.  It
+    // may fold a successor load, but it is not permission for ordinary
+    // constant folding to replace the loop's strict x87 operations and their
+    // observation points with stores.  That belongs to the dedicated FP loop
+    // specialization, which retains its final checked iteration.
+    if !loopy::loops(&result.blocks, Some(result.entry)).is_empty() {
+        return Ok(result);
+    }
+    Ok(floatfold::stored(&floatfold::discarded(&result, &conversions), &floating_facts))
+}
+
+pub(crate) fn _constant_update(
+    op: &Op,
+    facts: &IndexMap<Value, crate::analysis::consts::Known>,
+    memory: &crate::analysis::consts::Cells,
+    wanted: &BTreeSet<Value>,
+) -> Op {
+    use crate::model::ir::Operation;
+    use crate::model::mir::{Const, OpCode};
+
+    if op.defines.iter().any(|value| wanted.contains(value)) {
+        return op.clone();
+    }
+    let Some(fact) = crate::analysis::consts::updated(op, facts, memory) else {
+        return op.clone();
+    };
+    let address_values = op
+        .stores
+        .iter()
+        .flat_map(|reference| [reference.base, reference.segment])
+        .flatten()
+        .collect::<BTreeSet<_>>();
+    let mut result = op.clone();
+    result.op = Some(OpCode::Operation(Operation::Move));
+    result.kind = Kind::Store;
+    result.name = "mov".to_string();
+    result.defines = Vec::new();
+    result.uses = op.uses.iter().copied().filter(|value| address_values.contains(value)).collect();
+    result.loads = Vec::new();
+    result.args = vec![Arg::Const(Const::new(fact.n, fact.width))];
+    result.source_backed = false;
+    result.raised = None;
+    result.symbol = Some(false);
+    result
+}
+
+/// Values that are a symbol's address, with the op that owns its fixup.
+pub(crate) fn _symbol_copies(body: &MirBody) -> _SymbolCopies<'_> {
+    body.blocks
+        .iter()
+        .flat_map(|block| &block.ops)
+        .filter(|op| {
+            op.kind == Kind::Copy
+                && op.args.len() == op.defines.len()
+                && op.defines.len() == 1
+                && matches!(op.args[0], Arg::Symbol(_))
+                && op.loads.is_empty()
+                && op.merges.is_empty()
+        })
+        .map(|op| {
+            let Arg::Symbol(symbol) = &op.args[0] else {
+                unreachable!("filtered")
+            };
+            (op.defines[0], (*symbol, op))
+        })
+        .collect()
+}
+
+/// A register operand as the literal it holds, a number or a symbol's address.
+pub(crate) fn _literal_of(
+    arg: &Arg,
+    facts: &IndexMap<Value, crate::analysis::consts::Known>,
+    symbols: &_SymbolCopies<'_>,
+) -> Option<Arg> {
+    use crate::model::mir::Const;
+
+    let Arg::Held(arg) = arg else {
+        return None;
+    };
+    if let Some(fact) = facts.get(&arg.value).filter(|fact| fact.width >= arg.width) {
+        return Some(Arg::Const(Const::new(
+            crate::analysis::consts::masked(&fact.n, arg.width),
+            arg.width,
+        )));
+    }
+    let symbol = symbols.get(&arg.value).map(|known| known.0)?;
+    (symbol.width == arg.width).then_some(Arg::Symbol(symbol))
+}
+
+/// Propagate width-proven constants without reversing ordered operands.
+pub(crate) fn _constant_operands(
+    op: &Op,
+    facts: &IndexMap<Value, crate::analysis::consts::Known>,
+    memory: Option<&crate::analysis::consts::Cells>,
+    symbols: Option<&_SymbolCopies<'_>>,
+) -> Op {
+    use crate::analysis::consts;
+    use crate::model::mir::Const;
+
+    let no_memory = consts::Cells::new();
+    let no_symbols = _SymbolCopies::new();
+    let memory = memory.unwrap_or(&no_memory);
+    let symbols = symbols.unwrap_or(&no_symbols);
+    if op.kind == Kind::Arg {
+        return _constant_argument(op, facts, memory, Some(symbols));
+    }
+    if op.kind == Kind::Store
+        && op.args.len() == op.stores.len()
+        && op.stores.len() == 1
+        && op.defines.is_empty()
+        && op.merges.is_empty()
+        && op.loads.is_empty()
+        && !op.barrier()
+        && op.floating.is_none()
+    {
+        if let Arg::Held(arg) = &op.args[0] {
+            if arg.width == op.stores[0].width {
+                if let Some(literal) = _literal_of(&op.args[0], facts, symbols) {
+                    let address_values = op
+                        .stores
+                        .iter()
+                        .flat_map(|reference| [reference.base, reference.segment])
+                        .flatten()
+                        .collect::<BTreeSet<_>>();
+                    // The node and its field stay: the destination is still this op's,
+                    // and segld's `mov [x],ax` folded to `mov [x],6` counted its fixup
+                    // as gone while emitting a new one.
+                    let mut result = op.clone();
+                    result.args = vec![literal];
+                    result.uses = op
+                        .uses
+                        .iter()
+                        .copied()
+                        .filter(|value| *value != arg.value || address_values.contains(value))
+                        .collect();
+                    result.raised = None;
+                    return result;
+                }
+            }
+        }
+    }
+    if !matches!(
+        op.kind,
+        Kind::Add
+            | Kind::AddCarry
+            | Kind::And
+            | Kind::Or
+            | Kind::Xor
+            | Kind::Mul
+            | Kind::Sub
+            | Kind::SubBorrow
+            | Kind::Divmod
+            | Kind::PtrOffset
+    ) || op.args.len() != 2
+    {
+        return op.clone();
+    }
+    if op.kind == Kind::Mul && op.results.len() != 1 {
+        return op.clone();
+    }
+    let mut replaced = BTreeSet::new();
+    let mut removed = Vec::new();
+    let mut args = Vec::new();
+    let ordered = matches!(op.kind, Kind::Sub | Kind::SubBorrow | Kind::Divmod | Kind::PtrOffset);
+    for (index, arg) in op.args.iter().enumerate() {
+        let position = !ordered || index == 1;
+        if let (true, Arg::Held(held)) = (position, arg) {
+            if let Some(fact) = facts.get(&held.value).filter(|fact| fact.width >= held.width) {
+                args.push(Arg::Const(Const::new(consts::masked(&fact.n, held.width), held.width)));
+                replaced.insert(held.value);
+                continue;
+            }
+        }
+        if let (true, Arg::Cell(cell)) = (position, arg) {
+            if op.stores.is_empty() && !op.barrier() && op.loads.contains(&cell.r#ref) {
+                if let Some(fact) = consts::_cell(memory, &cell.r#ref) {
+                    args.push(Arg::Const(Const::new(fact.n, cell.r#ref.width)));
+                    removed.push(cell.r#ref.clone());
+                    continue;
+                }
+            }
+        }
+        args.push(arg.clone());
+    }
+    if replaced.is_empty() && removed.is_empty() {
+        return op.clone();
+    }
+    if !ordered && matches!(args[0], Arg::Const(_)) && matches!(args[1], Arg::Held(_)) {
+        args.reverse();
+    }
+    let mut retained = args
+        .iter()
+        .filter_map(|arg| match arg {
+            Arg::Held(held) => Some(held.value),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    retained.extend(
+        op.loads
+            .iter()
+            .chain(&op.stores)
+            .flat_map(|reference| [reference.base, reference.segment])
+            .flatten(),
+    );
+    let mut result = op.clone();
+    result.args = args;
+    result.loads = op.loads.iter().filter(|reference| !removed.contains(reference)).cloned().collect();
+    if !removed.is_empty() {
+        result.source_backed = false;
+        result.raised = None;
+    }
+    result.uses = op
+        .uses
+        .iter()
+        .copied()
+        .filter(|value| !replaced.contains(value) || op.merges.contains_key(value) || retained.contains(value))
+        .collect();
+    result
+}
+
+/// Substitute the value read for an argument, keeping its stack write.
+pub(crate) fn _constant_argument(
+    op: &Op,
+    facts: &IndexMap<Value, crate::analysis::consts::Known>,
+    memory: &crate::analysis::consts::Cells,
+    symbols: Option<&_SymbolCopies<'_>>,
+) -> Op {
+    use crate::analysis::consts;
+    use crate::model::mir::Const;
+
+    if op.args.len() != 1 || !op.defines.is_empty() || !op.merges.is_empty() || op.barrier() {
+        return op.clone();
+    }
+    let arg = &op.args[0];
+    let width = match arg {
+        Arg::Held(held) => {
+            if !op.loads.is_empty() {
+                return op.clone();
+            }
+            held.width
+        }
+        Arg::Cell(cell) => {
+            if op.loads != [cell.r#ref.clone()] || op.stores.contains(&cell.r#ref) {
+                return op.clone();
+            }
+            cell.r#ref.width
+        }
+        _ => return op.clone(),
+    };
+    let mut owner = None;
+    let literal = match consts::_operand(op, arg, facts, Some(memory)).filter(|fact| fact.width >= width) {
+        Some(fact) => Arg::Const(Const::new(consts::masked(&fact.n, width), width)),
+        None => {
+            let known = match (symbols, arg) {
+                (Some(symbols), Arg::Held(held)) => symbols.get(&held.value),
+                _ => None,
+            };
+            let Some((symbol, defining)) = known.filter(|known| known.0.width == width) else {
+                return op.clone();
+            };
+            owner = Some(*defining);
+            Arg::Symbol(*symbol)
+        }
+    };
+    let kept = op
+        .loads
+        .iter()
+        .filter(|reference| match arg {
+            Arg::Cell(cell) => **reference != cell.r#ref,
+            _ => true,
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut uses = Vec::new();
+    for value in kept
+        .iter()
+        .chain(&op.stores)
+        .flat_map(|reference| [reference.base, reference.segment])
+        .flatten()
+    {
+        if !uses.contains(&value) {
+            uses.push(value);
+        }
+    }
+    let mut result = op.clone();
+    result.args = vec![literal];
+    result.uses = uses;
+    result.loads = kept;
+    result.source_backed = false;
+    result.raised = None;
+    // A number owns no relocation.  A symbol takes the defining copy's
+    // identity as well as its value: that is how emission moves the
+    // original fixup, including its frame, onto this argument.  Keeping
+    // the argument's id instead emitted `push 0`; inventing a fresh
+    // fixup instead mistook DIVMOD's CS-relative handler for DGROUP data.
+    result.id = owner.map_or(op.id, |owner| owner.id);
+    result.symbol = Some(owner.is_some());
+    result
+}
+
+/// The operation as a move of its own answer, where that is possible.
+pub(crate) fn _folded_op(op: &Op, facts: &IndexMap<Value, crate::analysis::consts::Known>, wanted: &BTreeSet<Value>) -> Op {
+    use crate::model::mir::Const;
+
+    if op.kind == Kind::Nothing || !op.stores.is_empty() {
+        return op.clone();
+    }
+    // Not a register move. Rewriting `mov ax,cx` to `mov ax,3` removes no
+    // work, and it undoes an allocation: a live range split is exactly that
+    // move, so folding it puts the computation back inside the loop the
+    // hoist took it out of, and the hoist lifts it again next round.
+    if op.kind == Kind::Copy {
+        return op.clone();
+    }
+    if matches!(op.kind, Kind::Jump | Kind::Branch | Kind::Call | Kind::Return) {
+        return op.clone();
+    }
+    // It has to write a value. A widening multiply writes two -- and its
+    // answer is the first, which the operation says itself.
+    let Some(Arg::Held(into)) = op.results.first() else {
+        return op.clone();
+    };
+
+    let Some(target) = crate::analysis::consts::_defined(op).filter(|target| facts.contains_key(target)) else {
+        return op.clone();
+    };
+    // A second result that something reads is not expressible as one move.
+    if op.defines.iter().any(|one| *one != target && wanted.contains(one)) {
+        return op.clone();
+    }
+
+    let fact = &facts[&target];
+    if fact.width < into.width {
+        return op.clone();
+    }
+    if op.kind == Kind::Copy && op.args.iter().any(|one| matches!(one, Arg::Const(_))) {
+        return op.clone(); // already says so
+    }
+
+    let mut result = op.clone();
+    result.kind = Kind::Copy;
+    result.defines = vec![target];
+    result.uses = Vec::new();
+    result.loads = Vec::new();
+    result.args = vec![Arg::Const(Const::new(fact.n.clone(), into.width))];
+    result.results = vec![Arg::Held(Held { value: target, width: into.width })];
+    result.symbol = Some(false);
+    result.source_backed = false;
+    result.raised = None;
+    result
+}
 // ==== END E ====
 
 // ==== BEGIN C2: transform.py 2564-2869 (agent C) ====
