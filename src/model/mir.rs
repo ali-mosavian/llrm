@@ -1487,6 +1487,235 @@ fn renamed_arg(argument: &Arg, swap: &BTreeMap<u32, Value>, refs: &[(MemRef, Mem
     }
 }
 
+/// Python `_IDS = itertools.count(1)`.
+static IDS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+
+/// `next(_IDS)`.
+pub fn next_id() -> u32 {
+    IDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Python `_live_outs`: the source values observable at each machine exit.
+fn live_outs(body: &RaisedBody) -> BTreeMap<i64, BTreeSet<Value>> {
+    use crate::analysis::liveness as alive_at;
+    use crate::model::ir::root;
+
+    type Registers = BTreeMap<iced_x86::Register, BTreeSet<Value>>;
+    let predecessors = loops::predecessors(&body.blocks);
+    let mut arriving = Registers::new();
+    for value in alive_at::entry_values(body) {
+        if value.flags {
+            continue;
+        }
+        if let Some(register) = body.origin.get(&value) {
+            arriving.entry(root(*register)).or_default().insert(value);
+        }
+    }
+
+    let mut outof: BTreeMap<i64, Registers> = body.blocks.iter().map(|block| (block.at, Registers::new())).collect();
+    let mut changing = true;
+    while changing {
+        changing = false;
+        for block in &body.blocks {
+            let mut here = Registers::new();
+            let mut incoming: Vec<&Registers> =
+                predecessors.get(&block.at).into_iter().flatten().map(|one| &outof[one]).collect();
+            if block.at == body.entry {
+                incoming.push(&arriving);
+            }
+            for state in incoming {
+                for (register, values) in state {
+                    here.entry(*register).or_default().extend(values.iter().copied());
+                }
+            }
+            for phi in &block.phis {
+                if phi.result.flags {
+                    continue;
+                }
+                if let Some(register) = body.origin.get(&phi.result) {
+                    here.insert(root(*register), BTreeSet::from([phi.result]));
+                }
+            }
+            for op in &block.ops {
+                for value in &op.defines {
+                    if value.flags {
+                        continue;
+                    }
+                    if let Some(register) = body.origin.get(value) {
+                        here.insert(root(*register), BTreeSet::from([*value]));
+                    }
+                }
+            }
+            if here != outof[&block.at] {
+                outof.insert(block.at, here);
+                changing = true;
+            }
+        }
+    }
+
+    let mut result = BTreeMap::new();
+    for block in &body.blocks {
+        if !block.succ.is_empty() {
+            continue;
+        }
+        let leaving = match block.ops.last() {
+            Some(last) if last.kind == Kind::Return => {
+                consumed(last).into_iter().filter(|value| !value.flags).collect()
+            }
+            _ => outof[&block.at].values().flatten().copied().collect(),
+        };
+        result.insert(block.at, leaving);
+    }
+    result
+}
+
+/// Python `_with_live_outs`: exit visibility as machine-free MIR uses.
+pub(crate) fn with_live_outs(body: RaisedBody) -> RaisedBody {
+    let live = live_outs(&body);
+    let mut blocks = Vec::new();
+    for block in &body.blocks {
+        let leaving = live.get(&block.at).cloned().unwrap_or_default();
+        if leaving.is_empty() {
+            blocks.push(block.clone());
+            continue;
+        }
+        let mut ordered: Vec<Value> = leaving.into_iter().collect();
+        ordered.sort_by_key(|value| (value.variable, value.version, value.id));
+        let mut block = block.clone();
+        if let Some(last) = block.ops.last_mut() {
+            last.exits = ordered;
+        } else {
+            let mut marker = Op::new(block.at, OpCode::nothing(), "", Vec::new(), Vec::new());
+            marker.kind = Kind::Nothing;
+            marker.source_backed = false;
+            marker.id = Some(next_id());
+            marker.exits = ordered;
+            block.ops = vec![marker];
+        }
+        blocks.push(block);
+    }
+    let mut body = body;
+    body.body.blocks = blocks;
+    body
+}
+
+/// Python `_public`: drop the raise-only machine view.
+pub(crate) fn public(body: RaisedBody) -> MirBody {
+    body.body
+}
+
+/// Python `WHOLE_FRAME`.
+pub fn whole_frame() -> (Addr, i64) {
+    (Addr::new(Space::Frame, -(1 << 15)), 1 << 16)
+}
+
+/// Python `_outside`: the frame's bytes no range in `reach` covers, as exclusions.
+fn outside(reach: &BTreeSet<(i64, i64)>) -> Vec<(Addr, u32)> {
+    let (start, size) = whole_frame();
+    let (low, high) = (start.disp, start.disp + size);
+    let mut out = Vec::new();
+    let mut at = low;
+    for &(start, end) in reach {
+        if start > at {
+            out.push((Addr::new(Space::Frame, at), (start - at) as u32));
+        }
+        at = at.max(end);
+    }
+    if at < high {
+        out.push((Addr::new(Space::Frame, at), (high - at) as u32));
+    }
+    out
+}
+
+/// Python `_through_frame`.
+fn through_frame(body: MirBody, framed: &BTreeMap<Value, BTreeSet<(i64, i64)>>) -> MirBody {
+    if framed.is_empty() {
+        return body;
+    }
+    let reaches = |one: &MemRef| one.base.is_some_and(|base| framed.contains_key(&base));
+    let tag = |one: &MemRef| {
+        match one.base.and_then(|base| framed.get(&base)) {
+            Some(extents)
+                if one.segment.is_none()
+                    && !one.pointer
+                    && one.addr.is_some_and(|addr| addr.space == Space::Literal) =>
+            {
+                let mut tagged = one.clone();
+                tagged.within = Some(extents.iter().copied().collect());
+                tagged
+            }
+            _ => one.clone(),
+        }
+    };
+    let operand = |one: &Arg| match one {
+        Arg::Cell(cell) => Arg::Cell(Cell { r#ref: tag(&cell.r#ref) }),
+        other => other.clone(),
+    };
+    let mut body = body;
+    for block in &mut body.blocks {
+        for op in &mut block.ops {
+            if op.loads.iter().chain(&op.stores).any(reaches) {
+                op.loads = op.loads.iter().map(tag).collect();
+                op.stores = op.stores.iter().map(tag).collect();
+                op.args = op.args.iter().map(operand).collect();
+                op.results = op.results.iter().map(operand).collect();
+            }
+        }
+    }
+    body
+}
+
+/// Python `_frame_bounded`: exclude this body's frame slots from every bounded effect.
+pub(crate) fn frame_bounded(body: MirBody, pointers: bool) -> MirBody {
+    use crate::analysis::frameescape;
+
+    let body = if pointers {
+        let framed = frameescape::framed(&body);
+        through_frame(body, &framed)
+    } else {
+        body
+    };
+    let escapes = frameescape::analysed(&body);
+    let Some(reach) = escapes.reach.as_ref().filter(|_| escapes.opaque_addresses.is_empty()) else {
+        return body;
+    };
+    let holes = outside(reach);
+    if holes.is_empty() {
+        return body;
+    }
+    let bounded = |one: &MemRef| {
+        if one.excludes.contains(&holes[0]) {
+            return false;
+        }
+        if one.beyond.is_some() {
+            return true;
+        }
+        let reached = one.base.is_some() || one.segment.is_some() || one.pointer || one.addr.is_none();
+        pointers
+            && reached
+            && !matches!(one.where_(), Some(Space::Frame | Space::Segment | Space::External | Space::Stack))
+    };
+    let bound = |one: &MemRef| {
+        if bounded(one) {
+            let mut bound = one.clone();
+            bound.excludes.extend(holes.iter().copied());
+            bound
+        } else {
+            one.clone()
+        }
+    };
+    let mut body = body;
+    for block in &mut body.blocks {
+        for op in &mut block.ops {
+            if op.loads.iter().chain(&op.stores).any(|one| bounded(one)) {
+                op.loads = op.loads.iter().map(bound).collect();
+                op.stores = op.stores.iter().map(bound).collect();
+            }
+        }
+    }
+    body
+}
+
 /// Direct port of Python `qbopt.model.mir:_rehomed`.
 fn rehomed(reference: &MemRef, namer: &mut Renamer, at: i64) -> MemRef {
     let base = reference.base.map(|value| namer.current(value, at));

@@ -3,7 +3,9 @@
 pub(crate) mod constant_cycles;
 pub mod flags;
 pub(crate) mod consts;
+pub mod frameescape;
 pub(crate) mod induction;
+pub mod liveness;
 pub(crate) mod loops;
 pub(crate) mod occurrence;
 pub(crate) mod ranges;
