@@ -3458,7 +3458,8 @@ impl<'a> FunctionCompiler<'a> {
             return Err(type_mismatch(span, expected.expect("checked"), target));
         }
         // A number literal takes the target type, so `u8(300)` is rejected rather than wrapped.
-        let typed = (is_integer_literal(value) && conversions::implicit(target))
+        let typed = ((is_integer_literal(value) || is_float_literal(value)) && is_fixed(target))
+            || (is_integer_literal(value) && conversions::implicit(target))
             || (is_float_literal(value) && is_float(target));
         let value = if typed {
             self.coerced(value, target)?
@@ -3477,6 +3478,9 @@ impl<'a> FunctionCompiler<'a> {
         let source = value.type_name;
         if source == target {
             return Ok(value);
+        }
+        if is_fixed(source) || is_fixed(target) {
+            return self.fixed_converted(value, target, span);
         }
         let op = match (source, target) {
             (from, to) if is_float(from) && is_integer(to) => "truncate",
@@ -3525,6 +3529,138 @@ impl<'a> FunctionCompiler<'a> {
             operand: Some(hir::Operand::Value(bit)),
             type_name: target,
         })
+    }
+
+    /// A conversion to or from a fixed-point type, done on its storage integer.
+    fn fixed_converted(
+        &mut self,
+        value: TypedOperand,
+        target: TypeName,
+        span: Span,
+    ) -> Result<TypedOperand, Diagnostic> {
+        let source = value.type_name;
+        if !(is_integer(source) || is_fixed(source)) || !(is_integer(target) || is_fixed(target)) {
+            return Err(Diagnostic::new(
+                span,
+                format!(
+                    "no conversion from {} to {}",
+                    type_name_text(source),
+                    type_name_text(target)
+                ),
+            ));
+        }
+        let (stored, from) = self.fixed_storage(value);
+        let (to_storage, to) = match target {
+            TypeName::Fixed { storage, fraction, .. } => (storage_type(storage), fraction),
+            integer => (integer, 0),
+        };
+        // Scale in the wider storage, so rescaling up loses nothing it keeps.
+        let work = if width(to_storage) > width(stored.type_name) {
+            to_storage
+        } else {
+            stored.type_name
+        };
+        let stored = self.converted(stored, work, span)?;
+        let scaled = if to >= from {
+            self.shifted("shl", stored, to - from, span)?
+        } else {
+            self.toward_zero(stored, from - to, span)?
+        };
+        let narrowed = self.converted(scaled, to_storage, span)?;
+        if to_storage == target {
+            return Ok(narrowed);
+        }
+        let result = self.value(target);
+        self.emit("convert", vec![result], vec![required(narrowed, span)?], None);
+        Ok(TypedOperand {
+            operand: Some(hir::Operand::Value(result)),
+            type_name: target,
+        })
+    }
+
+    /// A fixed-point value as its storage integer and fraction; an integer as itself.
+    fn fixed_storage(&mut self, value: TypedOperand) -> (TypedOperand, u8) {
+        let TypeName::Fixed { storage, fraction, .. } = value.type_name else {
+            return (value, 0);
+        };
+        let storage = storage_type(storage);
+        let result = self.value(storage);
+        let operand = value.operand.expect("a fixed-point value has an operand");
+        self.emit("convert", vec![result], vec![operand], None);
+        (
+            TypedOperand {
+                operand: Some(hir::Operand::Value(result)),
+                type_name: storage,
+            },
+            fraction,
+        )
+    }
+
+    fn shifted(
+        &mut self,
+        op: &'static str,
+        value: TypedOperand,
+        count: u8,
+        span: Span,
+    ) -> Result<TypedOperand, Diagnostic> {
+        if count == 0 {
+            return Ok(value);
+        }
+        let result = self.value(value.type_name);
+        self.emit(
+            op,
+            vec![result],
+            vec![
+                required(value.clone(), span)?,
+                hir::Operand::Constant(U8, i64::from(count)),
+            ],
+            None,
+        );
+        Ok(TypedOperand {
+            operand: Some(hir::Operand::Value(result)),
+            type_name: value.type_name,
+        })
+    }
+
+    /// `value >> count`, rounded toward zero: a negative value is first biased by `2^count - 1`.
+    fn toward_zero(
+        &mut self,
+        value: TypedOperand,
+        count: u8,
+        span: Span,
+    ) -> Result<TypedOperand, Diagnostic> {
+        if !is_signed(value.type_name) {
+            return self.shifted("shr", value, count, span);
+        }
+        let type_name = value.type_name;
+        let bits = u8::try_from(8 * width(type_name) - 1).expect("an integer is under 256 bits");
+        let sign = self.shifted("sar", value.clone(), bits, span)?;
+        let bias = self.value(type_name);
+        self.emit(
+            "and",
+            vec![bias],
+            vec![
+                required(sign, span)?,
+                hir::Operand::Constant(type_id(type_name), (1_i64 << count) - 1),
+            ],
+            None,
+        );
+        let biased = self.value(type_name);
+        self.emit(
+            "add",
+            vec![biased],
+            vec![required(value, span)?, hir::Operand::Value(bias)],
+            None,
+        );
+        self.shifted(
+            "sar",
+            TypedOperand {
+                operand: Some(hir::Operand::Value(biased)),
+                type_name,
+            },
+            count,
+            span,
+        )
     }
 
     /// Both operands evaluated: the usual arithmetic conversions, then the operation.
@@ -5048,6 +5184,13 @@ fn is_literal(expression: &Expr) -> bool {
             expression,
             Expr::Character(..) | Expr::Boolean(..) | Expr::String(..)
         )
+}
+
+fn storage_type(storage: FixedStorage) -> TypeName {
+    match storage {
+        FixedStorage::I16 => TypeName::I16,
+        FixedStorage::I32 => TypeName::I32,
+    }
 }
 
 fn is_integer_literal(expression: &Expr) -> bool {

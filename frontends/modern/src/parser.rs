@@ -552,6 +552,8 @@ impl Parser {
                 if matches!(self.peek().kind, TokenKind::LeftBrace) {
                     self.bump();
                     self.struct_literal(Some(name), token.span)
+                } else if let Some(&target) = self.fixed_types.get(&name) {
+                    self.conversion(target, token.span)
                 } else {
                     Ok(Expr::Name(name, token.span))
                 }
@@ -668,20 +670,7 @@ impl Parser {
                 })
             }
             kind if primitive(&kind).is_some() => {
-                self.expect(
-                    |kind| matches!(kind, TokenKind::LeftParen),
-                    "expected '(' after a conversion's type",
-                )?;
-                let value = self.expression(0)?;
-                let close = self.expect(
-                    |kind| matches!(kind, TokenKind::RightParen),
-                    "expected ')' after a conversion's value",
-                )?;
-                Ok(Expr::Conversion {
-                    target: primitive(&kind).expect("matched"),
-                    value: Box::new(value),
-                    span: Span::new(token.span.line, token.span.column, close.span.end_column),
-                })
+                self.conversion(primitive(&kind).expect("matched"), token.span)
             }
             TokenKind::LeftParen => {
                 let expression = self.expression(0)?;
@@ -707,6 +696,24 @@ impl Parser {
             }
             _ => Err(Diagnostic::new(token.span, "expected expression")),
         }
+    }
+
+    /// `T(value)`, after the type's name.
+    fn conversion(&mut self, target: TypeName, start: Span) -> Result<Expr, Diagnostic> {
+        self.expect(
+            |kind| matches!(kind, TokenKind::LeftParen),
+            "expected '(' after a conversion's type",
+        )?;
+        let value = self.expression(0)?;
+        let close = self.expect(
+            |kind| matches!(kind, TokenKind::RightParen),
+            "expected ')' after a conversion's value",
+        )?;
+        Ok(Expr::Conversion {
+            target,
+            value: Box::new(value),
+            span: Span::new(start.line, start.column, close.span.end_column),
+        })
     }
 
     fn comprehension_clause(&mut self) -> Result<(String, IterationMode, Expr), Diagnostic> {
@@ -931,7 +938,7 @@ impl Parser {
                             "f-string interpolation cannot be empty",
                         ));
                     }
-                    parts.push(FStringPart::Value(parse_inline_expression(source, span)?));
+                    parts.push(FStringPart::Value(parse_inline_expression(source, span, &self.fixed_types)?));
                     at = close + 1;
                 }
                 b'}' => return Err(Diagnostic::new(span, "f-string has an unmatched '}'")),
@@ -1069,11 +1076,15 @@ impl Parser {
     }
 }
 
-fn parse_inline_expression(source: &str, outer: Span) -> Result<Expr, Diagnostic> {
+fn parse_inline_expression(
+    source: &str,
+    outer: Span,
+    fixed_types: &BTreeMap<String, TypeName>,
+) -> Result<Expr, Diagnostic> {
     let mut parser = Parser {
         tokens: lex(source).map_err(|error| Diagnostic::new(outer, error.message))?,
         at: 0,
-        fixed_types: BTreeMap::new(),
+        fixed_types: fixed_types.clone(),
     };
     let expression = parser
         .expression(0)

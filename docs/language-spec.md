@@ -125,6 +125,9 @@ let ratio = f32(count)
 | float | float | The nearest representable value. |
 | `bool` | integer | `0` or `1`. |
 | `char` | `u8`, and back | The code unit unchanged. |
+| integer | fixed-point | Converted to the storage type, then scaled; the scaled value wraps as arithmetic does. |
+| fixed-point | integer | Truncated toward zero, then as integer to integer. |
+| fixed-point | fixed-point | Rescaled; lost fraction bits truncate toward zero. |
 
 There is no conversion to `bool`; compare instead (`count != 0`). A
 conversion that must not lose information is a named library method,

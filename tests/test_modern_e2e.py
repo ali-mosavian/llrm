@@ -170,3 +170,30 @@ def test_native_operators_conversions_and_repeats_match_hir(tmp_path: Path) -> N
     expected = execute.run(driver.parsed(source), "main").output
     assert expected == "49149 -812500 3203125\n1 0 1 0\n447 254 224 121\n"
     assert build(source, tmp_path / "OPS.EXE", run=True).output == expected
+
+
+def test_native_fixed_matmul_matches_hir_and_exact_arithmetic(tmp_path: Path) -> None:
+    """Quarter-step inputs keep 24.8 exact; 56974 is the rational checksum."""
+    source = ROOT / "frontends" / "modern" / "fixtures" / "matmul_fixed.mod"
+    expected = execute.run(driver.parsed(source), "main").output
+    assert expected == "matmul: 56974.0\n"
+    assert build(source, tmp_path / "MMFIX.EXE", run=True).output == expected
+
+
+def test_native_fixed_conversions_and_i16_fixed_print(tmp_path: Path) -> None:
+    """Printing an i16-backed fixed value failed to link on `_pf2`."""
+    source = tmp_path / "fixed_conversions.mod"
+    source.write_text(
+        "type fix = fixed i32, fraction=8\n"
+        "type small = fixed i16, fraction=4\n"
+        "fn main() -> i16:\n"
+        "    let n: i16 = 3\n"
+        "    let b: fix = -2.75\n"
+        "    let c: small = small(fix(5.5) + b)\n"
+        "    let d: u8 = 200\n"
+        '    print(f"{fix(n)} {i16(b)} {i32(fix(-0.5))} {c} {fix(d)} {i16(small(7.9375))}")\n'
+        "    return 0\n"
+    )
+    expected = execute.run(driver.parsed(source), "main").output
+    assert expected == "3.0 -2 0 2.75 200.0 7\n"
+    assert build(source, tmp_path / "FIXCONV.EXE", run=True).output == expected

@@ -994,3 +994,35 @@ def test_integers_and_floats_convert_implicitly_as_in_c(
     """Every one of these was a type mismatch: operands and destinations had to agree exactly."""
     text = f"fn half(x: f64) -> f64:\n    return x / 2\nfn value() -> {type_}:\n" + body
     assert _returned(tmp_path, text) == expected
+
+
+@pytest.mark.parametrize(
+    ("type_", "expression", "expected"),
+    [
+        ("i16", "i16(fix(3)) + i16(fix(2.75))", 5),
+        ("i16", "i16(fix(-2.75))", -2),
+        ("i32", "i32(fix(-0.5))", 0),
+        ("i16", "i16(small(fix(5.5) - fix(2.75)) * 4)", 11),
+        ("i16", "i16(fix(small(7.9375)) * 16)", 127),
+        ("i16", "i16(fix(u8(200)))", 200),
+    ],
+)
+def test_fixed_point_converts_explicitly_toward_zero(
+    tmp_path: Path, type_: str, expression: str, expected: int
+) -> None:
+    """`fix(n)` was a call to an unknown function: fixed types had no conversions."""
+    text = (
+        "type fix = fixed i32, fraction=8\n"
+        "type small = fixed i16, fraction=4\n"
+        f"fn value() -> {type_}:\n    return {expression}\n"
+    )
+    assert _returned(tmp_path, text) == expected
+
+
+def test_a_float_does_not_convert_to_fixed_point(tmp_path: Path) -> None:
+    source = tmp_path / "float_fixed.mod"
+    source.write_text(
+        "type fix = fixed i32, fraction=8\nfn value() -> i16:\n    let x: f64 = 1.5\n    return i16(fix(x))\n"
+    )
+    with pytest.raises(driver.FrontendError):
+        driver.parsed(source)

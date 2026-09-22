@@ -107,3 +107,5 @@ void pf4(i32 raw, u8 fraction)
     }
     rt_write(fixed_buffer, (u16)(out - fixed_buffer));
 }
+
+void pf2(i16 raw, u8 fraction) { pf4(raw, fraction); }

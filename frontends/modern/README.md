@@ -50,7 +50,10 @@ one less than the storage width. Distinct declarations are distinct types,
 even when their storage and fraction match. Integer literals are scaled
 exactly at compile time. Decimal literals are rounded once to the nearest
 representable quantum, with ties away from zero. There are no implicit
-conversions between fixed types, integers, or floats.
+conversions between fixed types, integers, or floats. An explicit one names
+the type, `fixed16(count)`: integers scale in exactly, and fixed values leave
+or rescale truncating toward zero. Floats do not yet convert to or from fixed
+point.
 
 Addition, subtraction, negation, and comparison use the signed stored
 representation directly. Multiplication and division use a double-width
