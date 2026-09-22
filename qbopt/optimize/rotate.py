@@ -24,8 +24,9 @@ def entered(body: mir.MirBody) -> mir.MirBody:
     unrolling it in a later round found no loop to work on.
     """
     from qbopt.optimize import cfg
+    from qbopt.optimize import canonical
 
-    return cfg.merged(rotated(_counted_down(body)))
+    return cfg.merged(canonical.identities(rotated(_counted_down(body))))
 
 
 def _counted_down(body: mir.MirBody) -> mir.MirBody:
@@ -73,7 +74,6 @@ def _counted_down(body: mir.MirBody) -> mir.MirBody:
             at,
             width,
             [],
-            facts,
         )
         count = induction.trips(proof, seeds.computed)
         # A constant count is handled more profitably by the ordinary

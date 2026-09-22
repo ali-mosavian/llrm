@@ -4,21 +4,18 @@ Built only from `induction.CountedLoop`, so every pass that replaces a loop's
 counter enters and leaves the loop the same way.
 """
 
-from dataclasses import field
 from dataclasses import replace
 from dataclasses import dataclass
 
 from qbopt.model import mir
-from qbopt.analysis import consts
 from qbopt.analysis import induction
 
 
 @dataclass
 class Seeds:
-    """Preheader values, constructed after the symbolic proof is complete.
+    """Preheader values, placed after the symbolic proof is complete.
 
-    An operand the body proves constant is that constant, and `x+0`, `x-0`
-    and `x*1` are `x`: no pass spells a zero start as a separate case.
+    Stated in full: `canonical.identities` folds the neutral terms.
     """
 
     serial: int
@@ -26,27 +23,8 @@ class Seeds:
     at: int
     width: int
     ops: list[mir.Op]
-    facts: dict = field(default_factory=dict)
 
-    def _known(self, arg: mir.Arg) -> mir.Arg:
-        fact = self.facts.get(arg.value) if isinstance(arg, mir.Held) else None
-        return (
-            mir.Const(consts.masked(fact.n, arg.width), arg.width)
-            if fact is not None and fact.width >= arg.width
-            else arg
-        )
-
-    def computed(self, kind: mir.Kind, args: tuple[mir.Arg, ...]) -> mir.Held | mir.Const:
-        known = tuple(self._known(arg) for arg in args)
-        match kind, known:
-            case mir.Kind.ADD | mir.Kind.SUB, (_, mir.Const(n=n)) if consts.masked(n, self.width) == 0:
-                return args[0]
-            case mir.Kind.ADD, (mir.Const(n=n), _) if consts.masked(n, self.width) == 0:
-                return args[1]
-            case mir.Kind.MUL, (_, mir.Const(n=1)):
-                return args[0]
-            case mir.Kind.MUL, (mir.Const(n=1), _):
-                return args[1]
+    def computed(self, kind: mir.Kind, args: tuple[mir.Arg, ...]) -> mir.Held:
         value = mir.Value(self.serial, self.at, variable=self.variable)
         self.serial += 1
         self.variable += 1

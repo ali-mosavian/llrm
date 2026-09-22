@@ -149,10 +149,7 @@ def skipped(proof: CountedLoop) -> tuple[tuple[mir.Held | mir.Const, mir.Held | 
     """The preheader comparison, and the test on it, under which the loop runs no trips."""
     if proof.posttested:
         return None
-    test = _SKIPPED[proof.test]
-    if test is mir.Kind.BELOW_EQ and proof.start == mir.Const(0, proof.start.width):
-        test = mir.Kind.EQ  # nothing is below zero
-    return (proof.bound, proof.start), test
+    return (proof.bound, proof.start), _SKIPPED[proof.test]
 
 
 def trips(proof: CountedLoop, computed: Computed) -> mir.Held | mir.Const | None:

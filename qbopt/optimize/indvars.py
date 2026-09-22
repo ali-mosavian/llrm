@@ -576,7 +576,6 @@ def symbolically_zeroed(body: mir.MirBody) -> mir.MirBody:
                 ending.at,
                 width,
                 [],
-                facts,
             )
 
             count = induction.trips(proof, builder.computed)
