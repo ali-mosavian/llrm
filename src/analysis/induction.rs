@@ -2009,7 +2009,7 @@ pub(crate) fn test_only(op: &Op) -> bool {
 
 /// Python's `invariant(body, inside)`.
 pub(crate) fn invariant(body: &MirBody, inside: &BTreeSet<i64>) -> BTreeSet<u32> {
-    let mut written = BTreeSet::new();
+    let mut written = crate::support::hash::HashSet::<u32>::default();
     for block in &body.blocks {
         if !inside.contains(&block.at) {
             continue;
@@ -2022,17 +2022,16 @@ pub(crate) fn invariant(body: &MirBody, inside: &BTreeSet<i64>) -> BTreeSet<u32>
         );
         written.extend(block.phis.iter().map(|phi| phi.result.id));
     }
-    body.blocks
+    let mut still = body
+        .blocks
         .iter()
         .flat_map(|block| block.ops.iter())
-        .flat_map(|op| {
-            op.defines
-                .iter()
-                .chain(op.uses.iter())
-                .map(|value| value.id)
-        })
+        .flat_map(|op| op.defines.iter().chain(op.uses.iter()).map(|value| value.id))
         .filter(|value| !written.contains(value))
-        .collect()
+        .collect::<Vec<_>>();
+    still.sort_unstable();
+    still.dedup();
+    still.into_iter().collect()
 }
 
 /// Python's `basics(body, loop)`.
