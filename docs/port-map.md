@@ -50,7 +50,7 @@ only for a module still `todo`, and never after cutover.
 | 2 | `qbopt/backend/parcopy.py` | 258 | `src/backend/parcopy.rs` | todo | test_lir_verify, test_parcopy, test_wholeseg |
 | 2 | `qbopt/backend/peephole.py` | 2683 | `src/backend/peephole.rs` | todo | test_addressforms, test_dead_address_arithmetic, test_lir_emission_order, test_liveness, test_machine_copyprop, test_prologue |
 | 2 | `qbopt/backend/phielim.py` | 508 | `src/backend/phielim.rs` | todo | test_floatalloc, test_flow, test_lir, test_spiller |
-| 2 | `qbopt/backend/pointers.py` | 55 | `src/backend/pointers.rs` | todo | test_pointer_offset |
+| 2 | `qbopt/backend/pointers.py` | 55 | `src/backend/pointers.rs` | draft | test_pointer_offset |
 | 2 | `qbopt/backend/prologue.py` | 198 | `src/backend/prologue.rs` | todo | test_flow, test_parcopy |
 | 2 | `qbopt/backend/reencode.py` | 225 | `src/backend/reencode.rs` | n/a (unused) | test_reencode |
 | 2 | `qbopt/backend/regthrash.py` | 255 | `src/backend/regthrash.rs` | todo | - |
