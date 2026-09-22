@@ -1754,7 +1754,7 @@ mod tests {
 
     use super::*;
     use crate::analysis::intervals::Segment;
-    use crate::backend::{cpu, verify};
+    use crate::backend::{cpu, parcopy, select, verify};
     use crate::model::ir::Imm;
 
     fn semantics(op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>) -> Semantics {
@@ -2174,6 +2174,22 @@ mod tests {
         LirBody { pins: pins(&[(2, Register::EDI)]), ..body_of("call-copy", 0, vec![define, copy, used]) }
     }
 
+    /// Excess call copies grew SCREEN and contributed to E1M1's BASIC error 14.
+    #[test]
+    fn test_call_input_is_computed_in_its_available_required_register() {
+        let body = call_copy();
+        let assignment = allocated(&body, Some(&body.pins)).expect("allocates");
+        let result = applied(&body, &assignment).expect("applies");
+        assert!(assignment.spilled.is_empty());
+        let mut emitted: Vec<u8> = Vec::new();
+        for one in result.insns() {
+            let what = one.what.as_ref().expect("semantics");
+            let encoded = select::emit(what, 0, None, false, false, None).expect("encodes");
+            emitted.extend(encoded.code);
+        }
+        assert_eq!(emitted, [0xBF, 0x2A, 0x00, 0x57]);
+    }
+
     #[test]
     fn test_fixed_result_can_remain_in_its_return_register() {
         let body = call_copy();
@@ -2262,6 +2278,40 @@ mod tests {
 
     fn _load(at: i64, into: u32, cell: Mem, uses: Vec<u32>) -> Insn {
         _instruction(at, semantics(Operation::Move, "mov", vec![held(into, 2)], vec![Loc::Mem(cell)]), vec![into], uses)
+    }
+
+    /// QCport's far_put could not allocate two live pointer bases.
+    #[test]
+    fn test_shared_word_index_takes_bx_instead_of_spilling_a_base() {
+        let index =
+            _instruction(3, semantics(Operation::Move, "mov", vec![held(3, 2)], vec![imm(1, 2)]), vec![3], vec![]);
+        let source = Mem {
+            base: Some(Held { value: 1, width: 2 }),
+            index: Some(Held { value: 3, width: 2 }),
+            scale: 1,
+            ..Mem::new(Some(Addr::new(Space::Literal, 0)), 2)
+        };
+        let destination = Mem {
+            base: Some(Held { value: 2, width: 2 }),
+            index: Some(Held { value: 3, width: 2 }),
+            scale: 1,
+            ..Mem::new(Some(Addr { segment: Register::ES, ..Addr::new(Space::Far, 0) }), 2)
+        };
+        let read = _load(4, 4, source, vec![1, 3]);
+        let write = _instruction(
+            5,
+            semantics(Operation::Move, "mov", vec![Loc::Mem(destination)], vec![held(4, 2)]),
+            vec![],
+            vec![2, 3, 4],
+        );
+        let body = body_of("shared-index", 0, vec![_frame_load(1, 1, 4), _frame_load(2, 2, 6), index, read, write]);
+
+        let assignment = allocated(&body, None).expect("allocates");
+        assert!(assignment.spilled.is_empty(), "{assignment:?}");
+        let placed = applied(&body, &assignment).expect("applies");
+        let accesses: Vec<Semantics> =
+            placed.insns().iter().filter(|one| [4, 5].contains(&one.at)).filter_map(|one| one.what.clone()).collect();
+        assert!(accesses.iter().all(|what| select::emit(what, 0, None, false, false, None).is_some()), "{accesses:?}");
     }
 
     #[test]
@@ -2418,6 +2468,31 @@ mod tests {
             assert_eq!(first.what.as_ref().expect("semantics").op, Operation::Nothing, "{covers:?}");
             assert_ne!(first.symbol, Some(true), "{covers:?}");
         }
+    }
+
+    /// C sieve read value#126 after its identity phi copy disappeared.
+    #[test]
+    fn test_parallel_copy_identity_keeps_its_virtual_definition() {
+        let identity = Insn {
+            group: Some(7),
+            ..Insn::new(
+                1,
+                Some((1, 1)),
+                Some(semantics(Operation::Move, "mov", vec![held(2, 2)], vec![held(1, 2)])),
+                vec![2],
+                vec![1],
+            )
+        };
+        let consumed =
+            Insn::new(2, Some((2, 2)), Some(semantics(Operation::Push, "push", vec![], vec![held(2, 2)])), vec![], vec![2]);
+        let body = LirBody { inputs: values(&[1]), ..body_of("parallel-identity", 1, vec![identity, consumed]) };
+        let assignment = assignment(pins(&[(1, Register::AX), (2, Register::AX)]));
+
+        let placed = applied(&body, &assignment).expect("applies");
+        let scheduled = parcopy::scheduled(&placed).expect("schedules");
+
+        assert!(verify::verify(&placed, false).is_empty(), "{:?}", verify::verify(&placed, false));
+        assert!(verify::verify(&scheduled, false).is_empty(), "{:?}", verify::verify(&scheduled, false));
     }
 
     // ------------------------------------------ tests/test_lower_arguments.py

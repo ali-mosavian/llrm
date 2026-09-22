@@ -2382,6 +2382,24 @@ mod tests {
     }
 
     #[test]
+    fn test_lowered_switch_comparisons_encode_after_allocation() {
+        let body = lower("switch", &switched()).unwrap();
+        let pins: IndexMap<u32, Register> = [(1, Register::EAX)].into_iter().collect();
+        let assignment = super::super::allocate::allocate(&body, Some(&pins), None, None, None, "386".into()).unwrap();
+        assert!(assignment.spilled.is_empty());
+        let body = super::super::allocate::applied(&body, &assignment).unwrap();
+        let mut encoded: Vec<Vec<u8>> = Vec::new();
+        for insn in body.insns() {
+            if let Some(what) = insn.what.as_ref().filter(|what| what.name.as_deref() == Some("cmp")) {
+                let result = super::super::select::emit(what, 0, None, false, false, None);
+                assert!(result.is_some());
+                encoded.push(result.unwrap().code);
+            }
+        }
+        assert_eq!(encoded, [vec![0x83, 0xF8, 0x01], vec![0x83, 0xF8, 0x02]]);
+    }
+
+    #[test]
     fn test_constant_switch_emits_only_a_jump() {
         for (value, target) in [(1, 20), (2, 20), (3, 30), (0, 30), (65537, 20)] {
             let mut body = switched();
