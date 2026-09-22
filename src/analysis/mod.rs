@@ -5,6 +5,7 @@ pub(crate) mod constant_cycles;
 pub mod flags;
 pub(crate) mod consts;
 pub mod effects;
+pub(crate) mod floatfacts;
 pub mod frameescape;
 pub(crate) mod induction;
 pub mod intervals;
