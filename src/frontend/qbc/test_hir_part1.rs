@@ -261,6 +261,17 @@ fn test_procedure_dim_shadows_implicit_module_variable() {
     assert!(program.modules[0].functions.iter().any(|function| function.name == "PROBE"));
 }
 
+const STATIC_LOCAL: &[u8] = b"DECLARE FUNCTION F& ()\r\nDIM total AS LONG\r\ntotal = F&\r\nPRINT total\r\n\
+FUNCTION F& STATIC\r\nDIM total AS LONG\r\ntotal = 3\r\nF& = total\r\nEND FUNCTION\r\n";
+
+/// A STATIC FUNCTION's DIM total was refused as a duplicate of the module's total.
+#[test]
+fn test_static_procedure_dim_shadows_module_variable() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let source = written(&tmp, "STATLOC.BAS", STATIC_LOCAL);
+    assert!(!object_bytes(&parsed(&source), "STATLOC.BAS").expect("emits").is_empty());
+}
+
 /// Nibbles stored x87 status 16384 as arena(3,1).sister, then COLOR failed on 8224.
 #[test]
 fn test_integer_floor_division_stays_integer_until_its_qb_single_result() {
