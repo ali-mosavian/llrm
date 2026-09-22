@@ -408,4 +408,98 @@ mod tests {
 
         assert_eq!(sources(&chosen), reversed(&one));
     }
+
+    // ------------------------------------------------------ tests/test_lir.py
+
+    fn imm(value: i64, width: u32) -> Loc {
+        Loc::Imm(Imm { value, width, address: None })
+    }
+
+    fn fixed(one: &Insn) -> Option<Vec<std::sync::Arc<Insn>>> {
+        let mut counter = 1000..2000;
+        _untied(one, &mut || counter.next().unwrap())
+    }
+
+    /// hotlop printed 420 for 630 when 21 + accumulator lost its 21.
+    #[test]
+    fn test_two_address_materializes_a_constant_first_operand() {
+        let (result, source) = (held(900, 2), held(901, 2));
+        let what = Semantics {
+            name: Some("add".to_owned()),
+            dests: vec![result.clone()],
+            sources: vec![imm(21, 2), source.clone()],
+            ..Semantics::new(Operation::Binary)
+        };
+        let insn = Insn::new(0, Some((0, 3)), Some(what), vec![900], vec![901]);
+        let fixed = fixed(&insn).expect("untied");
+        assert_eq!(sources(&fixed[0]), [imm(21, 2)]);
+        assert!(fixed[0].uses.is_empty());
+        assert_eq!(sources(&fixed[1]), [result, source]);
+    }
+
+    /// Experimental matrix setup emitted 20 * 20 for 0 * 20 without a destination copy.
+    #[test]
+    fn test_two_address_multiply_preserves_its_first_factor() {
+        let (result, first, second) = (held(900, 2), held(901, 2), held(902, 2));
+        let what = Semantics {
+            name: Some("imul".to_owned()),
+            dests: vec![result.clone()],
+            sources: vec![first.clone(), second.clone()],
+            ..Semantics::new(Operation::Multiply)
+        };
+        let insn = Insn::new(0, Some((0, 3)), Some(what), vec![900], vec![901, 902]);
+        let fixed = fixed(&insn).expect("untied");
+        assert_eq!(sources(&fixed[0]), [first]);
+        assert_eq!(sources(&fixed[1]), [result, second]);
+        assert_eq!(fixed[1].uses.iter().copied().collect::<BTreeSet<u32>>(), BTreeSet::from([900, 902]));
+    }
+
+    #[test]
+    fn test_constant_multiply_lowers_without_a_destination_tie() {
+        use crate::backend::lower::{self, Place, Placed};
+        use crate::model::mir;
+
+        let (source, result) = (mir::Value::new(900, 0), mir::Value::new(901, 1));
+        let mut op = mir::Op::new(1, mir::OpCode::Operation(Operation::Multiply), "", vec![result], vec![source]);
+        op.kind = mir::Kind::Mul;
+        op.args =
+            vec![mir::Arg::Held(mir::Held { value: source, width: 2 }), mir::Arg::Const(mir::Const::new(20, 2))];
+        op.results = vec![mir::Arg::Held(mir::Held { value: result, width: 2 })];
+        let made = lower::semantics(&op, None, Place::AsAValue).unwrap().expect("semantics");
+        let located = |places: Vec<Placed>| -> Vec<Loc> {
+            places
+                .into_iter()
+                .map(|place| match place {
+                    Placed::Loc(one) => one,
+                    other => panic!("not located: {other:?}"),
+                })
+                .collect()
+        };
+        let what = Semantics {
+            name: made.name,
+            dests: located(made.dests),
+            sources: located(made.sources),
+            target: made.target,
+            indirect: made.indirect,
+            ..Semantics::new(made.op)
+        };
+        assert_eq!(what.sources[1..], [held(source.id, 2), imm(20, 2)]);
+        let insn = Insn::new(1, Some((1, 1)), Some(what), vec![result.id], vec![source.id]);
+        assert!(fixed(&insn).is_none());
+    }
+
+    /// hotlop kept its old accumulator live through the add after copying it.
+    #[test]
+    fn test_two_address_copy_ends_the_original_source_use() {
+        let (result, source) = (held(900, 2), held(901, 2));
+        let what = Semantics {
+            name: Some("add".to_owned()),
+            dests: vec![result],
+            sources: vec![source, imm(21, 2)],
+            ..Semantics::new(Operation::Binary)
+        };
+        let insn = Insn::new(0, Some((0, 3)), Some(what), vec![900], vec![901]);
+        let fixed = fixed(&insn).expect("untied");
+        assert_eq!(fixed[1].uses, [900]);
+    }
 }

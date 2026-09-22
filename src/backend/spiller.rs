@@ -2010,7 +2010,8 @@ mod tests {
 
     use super::{_color_slots, _constants, spilled};
     use crate::backend::frame::{Frame, SlotKey};
-    use crate::model::ir::{Addr, Address, Held, Imm, Loc, Mem, Operation, Semantics, Space};
+    use crate::backend::omfwrite;
+    use crate::model::ir::{Addr, Address, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
     use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::model::memory::{Identity, MemoryKind, MemoryObject, Provenance};
     use crate::model::mir::{self, MemRef, OpCode};
@@ -2450,7 +2451,6 @@ mod tests {
         assert!(last.uses.is_empty());
     }
 
-    /// The `omfwrite._encoded` half of the Python test is deferred: no OMF writer is ported.
     #[test]
     fn test_spilled_relocatable_address_is_rematerialized_without_a_frame_slot() {
         for space in [Space::Segment, Space::External] {
@@ -2462,8 +2462,20 @@ mod tests {
             let insns = result.insns();
             let recreated = _recreated(&insns);
             assert_eq!(recreated.len(), 1);
-            assert_eq!(what(recreated[0]).sources, [Loc::Address(source)]);
+            assert_eq!(what(recreated[0]).sources, [Loc::Address(source.clone())]);
             assert!(recreated[0].rematerialized);
+            // The rematerialized spelling is not an unrelocated literal zero: fresh
+            // OMF emission places the original symbol fixup on its new displacement.
+            let lea = semantics(
+                Operation::Address,
+                "lea",
+                vec![Loc::Reg(Reg { register: Register::BX, width: 2 })],
+                vec![Loc::Address(source)],
+            );
+            let names: IndexMap<(Space, i64), String> = IndexMap::from([((space, 7), "_descriptor".to_owned())]);
+            let emitted = omfwrite::_encoded(&lea, &names).expect("encodes");
+            assert_eq!(emitted.code, [0x8D, 0x1E, 0x0C, 0x00]);
+            assert_eq!(emitted.fixups, [omfwrite::Fixup::new(2, omfwrite::OFFSET, "_descriptor")]);
         }
     }
 
@@ -2867,5 +2879,389 @@ mod tests {
             out.iter().flat_map(|one| one.uses.iter()).filter(|value| **value != 2).all(|value| defined.contains(value)),
             "{out:?}"
         );
+    }
+
+    /// snd_mix_frame stored four bytes of a value first seen as a word, over the saved BP.
+    #[test]
+    fn test_slot_is_as_wide_as_the_widest_use_of_its_value() {
+        let op = |name: &str, into: u32, width: u32, sources: &[u32]| {
+            let operation = if name == "mov" { Operation::Move } else { Operation::Binary };
+            let what = semantics(
+                operation,
+                name,
+                vec![held(into, width)],
+                sources.iter().map(|one| held(*one, width)).collect(),
+            );
+            let mut uses: Vec<u32> = Vec::new();
+            for one in sources {
+                if !uses.contains(one) {
+                    uses.push(*one);
+                }
+            }
+            insn(0x100, (0x100, 0x100), what, &[into], &uses)
+        };
+        let body =
+            _body(vec![op("mov", 1, 2, &[3]), op("mov", 2, 2, &[3]), op("add", 1, 4, &[1, 3]), op("add", 2, 2, &[2, 3])]);
+        let mut frame = Frame::new(0);
+        let (got, _made) = spilled(&body, &set(&[1, 2]), Some(&mut frame)).expect("spills");
+        let cells: BTreeSet<(i64, u32)> = got
+            .insns()
+            .iter()
+            .filter_map(|one| one.what.clone())
+            .flat_map(|what| what.dests.into_iter().chain(what.sources))
+            .filter_map(|place| match place {
+                Loc::Mem(cell) => cell.addr.filter(|addr| addr.space == Space::Frame).map(|addr| (addr.disp, cell.width)),
+                _ => None,
+            })
+            .collect();
+        let size = frame.size();
+        assert!(
+            !cells.is_empty() && cells.iter().all(|(disp, width)| -size <= *disp && disp + i64::from(*width) <= 0),
+            "{cells:?} {size}"
+        );
+        let spans: IndexMap<i64, i64> = cells
+            .iter()
+            .map(|(disp, _)| {
+                let widest = cells.iter().filter(|(other, _)| other == disp).map(|(_, width)| i64::from(*width)).max();
+                (*disp, widest.unwrap())
+            })
+            .collect();
+        for (a, a_span) in &spans {
+            for (b, b_span) in &spans {
+                if a != b {
+                    assert!(a + a_span <= *b || b + b_span <= *a, "{spans:?}");
+                }
+            }
+        }
+    }
+
+    /// LNGMXX printed 169330 instead of 142900 after a tied spill discarded its loaded accumulator.
+    #[test]
+    fn test_two_spilled_operands_keep_the_accumulator_value() {
+        for (name, expected) in
+            [("add", 15000), ("sub", 9000), ("and", 12000 & 3000), ("or", 12000 | 3000), ("xor", 12000 ^ 3000)]
+        {
+            let mut frame = Frame::new(0);
+            let op = _add(1, 2, 0x100);
+            let op = Insn { what: Some(Semantics { name: Some(name.to_owned()), ..what(&op).clone() }), ..op };
+            let (body, _) = spilled(&_body(vec![op]), &set(&[1, 2]), Some(&mut frame)).expect("spills");
+            let first = Loc::Mem(frame.cell(1u32, 2).unwrap());
+            let second = Loc::Mem(frame.cell(2u32, 2).unwrap());
+            let mut values: Vec<(Loc, i64)> = vec![(first.clone(), 12000), (second.clone(), 3000)];
+            let value = |values: &Vec<(Loc, i64)>, arg: &Loc| {
+                values.iter().rev().find(|(key, _)| key == arg).map(|(_, value)| *value).expect("a value")
+            };
+            for one in body.insns() {
+                let args: Vec<i64> = what(&one).sources.iter().map(|arg| value(&values, arg)).collect();
+                let result = match name_of(&one) {
+                    "mov" => args[0],
+                    "add" => args[0] + args[1],
+                    "sub" => args[0] - args[1],
+                    "and" => args[0] & args[1],
+                    "or" => args[0] | args[1],
+                    "xor" => args[0] ^ args[1],
+                    _ => panic!("{:?}", one.what),
+                };
+                values.push((what(&one).dests[0].clone(), result & 0xFFFF));
+            }
+            assert_eq!(value(&values, &first), expected, "{name}");
+            assert_eq!(value(&values, &second), 3000, "{name}");
+        }
+    }
+
+    fn name_of(one: &Insn) -> &str {
+        name(one).expect("a name")
+    }
+
+    /// LNGMXX's two spilled operands must retain the accumulator but need only one scratch.
+    #[test]
+    fn test_two_spilled_operands_do_not_need_two_scratch_registers() {
+        let result = _out(&_body(vec![_add(1, 2, 0x100)]), &[1, 2]);
+        assert_eq!(result.len(), 2);
+        assert!(is_mem(&what(result.last().unwrap()).dests[0]));
+    }
+
+    #[test]
+    fn test_constant_reload_precedes_an_in_place_spilled_update() {
+        let constant =
+            insn(0, (0, 3), semantics(Operation::Move, "mov", vec![held(1, 2)], vec![imm(20, 2)]), &[1], &[]);
+        let result = _out(&_body(vec![constant, _add(2, 1, 0x100)]), &[1, 2]);
+        assert!(result.iter().all(|one| !one.uses.contains(&1)));
+        let adds: Vec<&Arc<Insn>> = result.iter().filter(|one| name(one) == Some("add")).collect();
+        let [add] = adds.as_slice() else { panic!("{} adds", adds.len()) };
+        let mut made: IndexMap<u32, &Arc<Insn>> = IndexMap::new();
+        for one in &result[..index_of(&result, add)] {
+            for value in &one.defines {
+                made.insert(*value, one);
+            }
+        }
+        let added: Vec<Loc> = add.uses.iter().map(|value| what(made[value]).sources[0].clone()).collect();
+        assert!(added.contains(&imm(20, 2)));
+        assert!(is_mem(&what(add).dests[0]));
+        assert_eq!(what(add).sources[0], what(add).dests[0]);
+        assert!(!result.iter().any(|one| one.spill_store));
+    }
+
+    /// The fixup names the operand, so it goes where the operand goes.
+    #[test]
+    fn test_a_lifted_memory_operand_takes_the_fixup_with_it() {
+        let cell = Mem::new(Some(Addr::new(Space::Segment, 0xA)), 2);
+        let what_ = semantics(Operation::Binary, "add", vec![held(1, 2)], vec![held(1, 2), Loc::Mem(cell)]);
+        let add = insn(0x100, (0x100, 0x104), what_, &[1], &[1]);
+        let got = _out(&_body(vec![add]), &[1]);
+        let symbolic = |one: &Insn| {
+            one.what.as_ref().is_some_and(|what| {
+                operands(what).any(|x| {
+                    matches!(x, Loc::Mem(Mem { addr: Some(addr), .. }) if addr.space == Space::Segment)
+                })
+            })
+        };
+        let lifted: Vec<&Arc<Insn>> = got.iter().filter(|one| symbolic(one)).collect();
+        assert_eq!(lifted.len(), 1, "{got:?}");
+        assert_eq!(lifted[0].symbol, Some(true), "the load does not claim the operand it now holds");
+        let kept: Vec<&Arc<Insn>> =
+            got.iter().filter(|one| !Arc::ptr_eq(one, lifted[0]) && name(one) == Some("add")).collect();
+        assert!(
+            !kept.is_empty() && kept[0].symbol == Some(false),
+            "the survivor still claims a fixup for an operand it lost"
+        );
+    }
+
+    fn _binary(name: &str, into: u32, other: u32, at: i64) -> Insn {
+        let what = semantics(Operation::Binary, name, vec![held(into, 2)], vec![held(into, 2), held(other, 2)]);
+        insn(at, (at, at + 2), what, &[into], &[into, other])
+    }
+
+    /// pressx spilled 207, then 212, then 215, at one `add`, two instructions added every round.
+    #[test]
+    fn test_a_tied_value_is_spilled_into_the_operand_itself() {
+        let got = _out(&_body(vec![_binary("add", 1, 2, 0x200)]), &[1]);
+        assert_eq!(got.len(), 1, "{got:?}");
+        let what = what(&got[0]);
+        assert!(is_mem(&what.dests[0]) && what.dests[0] == what.sources[0]);
+        assert_eq!(what.sources[1], held(2, 2));
+        assert!(got[0].defines.is_empty() && got[0].uses == [2]);
+    }
+
+    /// One memory operand is all an instruction has.
+    #[test]
+    fn test_a_second_memory_operand_keeps_the_reload() {
+        let what = semantics(Operation::Binary, "add", vec![held(1, 2)], vec![held(1, 2), held(2, 2)]);
+        let both = insn(0x200, (0x200, 0x202), what, &[1], &[1, 2]);
+        let got = _out(&_body(vec![both]), &[1, 2]);
+        assert!(got.len() > 1, "two spilled operands took the in-place path");
+    }
+
+    /// `ir.Mem(Addr(Space.FAR, disp, segment=Register.ES), 2, base=ir.Held(5, 2), index=...)`.
+    fn _far(disp: i64, index: Option<u32>) -> Mem {
+        Mem {
+            base: Some(Held { value: 5, width: 2 }),
+            index: index.map(|value| Held { value, width: 2 }),
+            ..Mem::new(Some(Addr { segment: Register::ES, ..Addr::new(Space::Far, disp) }), 2)
+        }
+    }
+
+    fn _read(at: i64, into: u32, cell: Mem, uses: &[u32]) -> Insn {
+        insn(at, (at, at + 2), semantics(Operation::Move, "mov", vec![held(into, 2)], vec![Loc::Mem(cell)]), &[into], uses)
+    }
+
+    fn _folded_add(one: &Insn) -> bool {
+        one.what.as_ref().is_some_and(|what| {
+            what.name.as_deref() == Some("add") && what.sources.len() == 2 && is_mem(&what.sources[1])
+        })
+    }
+
+    /// farloadloop reloaded a carried word index solely to address one cell.
+    #[test]
+    fn test_a_spilled_word_index_folds_into_a_dead_address_base() {
+        let read = _read(0x102, 4, _far(0, Some(1)), &[5, 1]);
+        let result = _out(&_body(vec![_add(1, 2, 0x100), read]), &[1]);
+        let folded: Vec<&Arc<Insn>> = result.iter().filter(|one| _folded_add(one)).collect();
+        assert_eq!(folded.len(), 1, "{result:?}");
+        let addressed = result
+            .iter()
+            .find(|one| {
+                name(one) == Some("mov")
+                    && matches!(&what(one).sources[0], Loc::Mem(Mem { addr: Some(addr), .. }) if addr.space == Space::Far)
+            })
+            .unwrap();
+        assert!(as_mem(&what(addressed).sources[0]).index.is_none(), "{:?}", addressed.what);
+        assert!(!result.iter().any(|one| one.spill_reload), "{result:?}");
+    }
+
+    /// The index fold may not move a second access through the same base.
+    #[test]
+    fn test_a_spilled_word_index_does_not_mutate_a_base_used_later() {
+        let first = _read(0x102, 4, _far(0, Some(1)), &[5, 1]);
+        let later = _read(0x104, 6, _far(2, None), &[5]);
+        let result = _out(&_body(vec![_add(1, 2, 0x100), first, later]), &[1]);
+        assert!(!result.iter().any(|one| _folded_add(one)), "{result:?}");
+    }
+
+    /// A base used later outside a memory operand was omitted from the death proof.
+    #[test]
+    fn test_a_spilled_word_index_does_not_mutate_a_base_read_later_as_a_value() {
+        let read = _read(0x102, 4, _far(0, Some(1)), &[5, 1]);
+        let result = _out(&_body(vec![_add(1, 2, 0x100), read, _move(6, 5, None, 0x100)]), &[1]);
+        assert!(!result.iter().any(|one| _folded_add(one)), "{result:?}");
+    }
+
+    /// A destructive address fold also changed a base/index data operand.
+    #[test]
+    fn test_a_spilled_word_index_does_not_mutate_an_address_operand_used_as_data() {
+        for data_value in [1, 5] {
+            let cell = Loc::Mem(_far(0, Some(1)));
+            let write = insn(
+                0x102,
+                (0x102, 0x104),
+                semantics(Operation::Binary, "add", vec![cell.clone()], vec![cell, held(data_value, 2)]),
+                &[],
+                &[5, 1],
+            );
+            let result = _out(&_body(vec![_add(1, 2, 0x100), write]), &[1]);
+            assert!(!result.iter().any(|one| _folded_add(one)), "{data_value}: {result:?}");
+        }
+    }
+
+    /// UNWHITEFADE's frame counter, coalesced with its initial zero, lost its increment.
+    #[test]
+    fn test_a_value_defined_twice_keeps_its_increment_in_its_home() {
+        let home = mem(Addr::new(Space::Frame, -0x2A), 2, Register::BP, -0x2A, 1);
+        let at = |at: i64, what: Semantics, defines: &[u32], uses: &[u32]| insn(at, (at, at + 2), what, defines, uses);
+        let block = |at: i64, insns: Vec<Insn>, succ: Vec<i64>| LirBlock {
+            succ,
+            ..LirBlock::new(at, insns.into_iter().map(Arc::new).collect())
+        };
+        let jump = Semantics { target: Some(0x20), ..semantics(Operation::Jump, "jmp", vec![], vec![]) };
+        let branch = Semantics { target: Some(0x10), ..semantics(Operation::Branch, "jl", vec![], vec![]) };
+        let body = LirBody::new(
+            "one",
+            0,
+            vec![
+                block(
+                    0,
+                    vec![
+                        at(0, semantics(Operation::Move, "mov", vec![held(1, 2)], vec![imm(0, 2)]), &[1], &[]),
+                        at(2, jump, &[], &[]),
+                    ],
+                    vec![0x20],
+                ),
+                block(
+                    0x10,
+                    vec![
+                        at(0x10, semantics(Operation::Push, "push", vec![], vec![held(1, 2)]), &[], &[1]),
+                        at(
+                            0x12,
+                            semantics(Operation::Binary, "add", vec![held(1, 2)], vec![held(1, 2), imm(1, 2)]),
+                            &[1],
+                            &[1],
+                        ),
+                    ],
+                    vec![0x20],
+                ),
+                block(
+                    0x20,
+                    vec![
+                        at(0x20, semantics(Operation::Move, "mov", vec![Loc::Mem(home)], vec![held(1, 2)]), &[], &[1]),
+                        at(0x22, semantics(Operation::Compare, "cmp", vec![], vec![held(1, 2), imm(5, 2)]), &[9], &[1]),
+                        at(0x24, branch, &[], &[9]),
+                    ],
+                    vec![0x10, 0x30],
+                ),
+                block(0x30, vec![at(0x30, semantics(Operation::Return, "ret", vec![], vec![]), &[], &[])], vec![]),
+            ],
+            IndexMap::new(),
+            IndexMap::new(),
+        );
+        let (done, _made) = spilled(&body, &set(&[1]), Some(&mut Frame::new(0))).expect("spills");
+        let mut held_: IndexMap<u32, i64> = IndexMap::new();
+        let mut memory: IndexMap<i64, i64> = IndexMap::new();
+        let mut pushed: Vec<i64> = Vec::new();
+        let read = |held_: &IndexMap<u32, i64>, memory: &IndexMap<i64, i64>, operand: &Loc| match operand {
+            Loc::Imm(one) => one.value,
+            Loc::Mem(one) => memory[&one.addr.unwrap().disp],
+            Loc::Held(one) => held_[&one.value],
+            other => panic!("{other:?}"),
+        };
+        let blocks: IndexMap<i64, &LirBlock> = done.blocks.iter().map(|block| (block.at, block)).collect();
+        for at in [0, 0x20, 0x10, 0x20, 0x10, 0x20] {
+            for one in &blocks[&at].insns {
+                let what = what(one);
+                if matches!(what.op, Operation::Move | Operation::Binary) {
+                    let result: i64 = what.sources.iter().map(|source| read(&held_, &memory, source)).sum();
+                    match &what.dests[0] {
+                        Loc::Mem(dest) => {
+                            memory.insert(dest.addr.unwrap().disp, result);
+                        }
+                        dest => {
+                            held_.insert(as_held(dest).value, result);
+                        }
+                    }
+                } else if what.op == Operation::Push {
+                    pushed.push(read(&held_, &memory, &what.sources[0]));
+                }
+            }
+        }
+        assert_eq!(pushed, [0, 1]);
+        assert_eq!(memory[&-0x2A], 2);
+    }
+
+    // ------------------------------------------- tests/test_rematerialized_definitions.py
+
+    fn _remat_constant() -> Insn {
+        insn(0, (0, 3), semantics(Operation::Move, "mov", vec![held(1, 2)], vec![imm(64, 2)]), &[1], &[])
+    }
+
+    fn _push(at: i64, covers: (i64, i64), source: Loc, uses: &[u32]) -> Insn {
+        insn(at, covers, semantics(Operation::Push, "push", vec![], vec![source]), &[], uses)
+    }
+
+    fn _spilled_one(name: &str, insns: Vec<Insn>) -> LirBody {
+        let body = LirBody::new(name, 0, vec![LirBlock::new(0, insns.into_iter().map(Arc::new).collect())], IndexMap::new(), IndexMap::new());
+        spilled(&body, &set(&[1]), Some(&mut Frame::new(0))).expect("spills").0
+    }
+
+    /// MODEL's MOD_OPEN kept mov bx,40h after rematerializing 40h at its call.
+    #[test]
+    fn test_rematerialization_does_not_keep_the_abandoned_constant() {
+        let result = _spilled_one("rematerialized", vec![_remat_constant(), _push(3, (3, 4), held(1, 2), &[1])]);
+        let insns = result.insns();
+        let moves = insns.iter().filter(|one| one.what.as_ref().is_some_and(|w| w.op == Operation::Move)).count();
+        assert_eq!(moves, 1);
+        assert_eq!(insns.last().unwrap().covers, Some((0, 4)));
+    }
+
+    #[test]
+    fn test_reordered_definition_retains_a_byte_ownership_anchor() {
+        let prefix = _push(0, (0, 1), imm(0, 2), &[]);
+        let constant =
+            insn(3, (3, 6), semantics(Operation::Move, "mov", vec![held(1, 2)], vec![imm(64, 2)]), &[1], &[]);
+        let moved = Insn { at: 1, covers: Some((1, 3)), ..prefix.clone() };
+        let use_ = _push(6, (6, 7), held(1, 2), &[1]);
+        let result = _spilled_one("reordered", vec![prefix, constant, moved, use_]);
+        let insns = result.insns();
+        let owner = insns.iter().find(|one| one.covers == Some((3, 6))).unwrap();
+        assert_eq!(owner.what, Some(Semantics { name: Some("nop".to_owned()), ..Semantics::new(Operation::Nothing) }));
+        assert!(owner.defines.is_empty() && owner.uses.is_empty());
+    }
+
+    #[test]
+    fn test_rematerialized_definition_with_unresolved_obligations_is_kept() {
+        for constraint in ["requires", "delivers", "symbol"] {
+            let mut constant = _remat_constant();
+            match constraint {
+                "requires" => constant.requires = vec![(Held { value: 1, width: 2 }, Register::AX)],
+                "delivers" => constant.delivers = vec![(Held { value: 1, width: 2 }, Register::AX)],
+                _ => constant.symbol = Some(true),
+            }
+            let result = _spilled_one("guarded", vec![constant, _push(3, (3, 4), held(1, 2), &[1])]);
+            assert!(
+                result
+                    .insns()
+                    .iter()
+                    .any(|one| one.at == 0 && one.what.as_ref().is_some_and(|w| w.op == Operation::Move)),
+                "{constraint}"
+            );
+        }
     }
 }

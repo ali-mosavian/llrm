@@ -433,9 +433,9 @@ mod tests {
     use iced_x86::Register;
     use indexmap::IndexMap;
 
-    use super::{_interference, joined};
+    use super::{_interference, _merged, joined};
     use crate::analysis::intervals;
-    use crate::backend::{allocate, cpu::ProfileOrName, target};
+    use crate::backend::{allocate, cpu::ProfileOrName, select, target};
     use crate::model::ir::{self, Held, Imm, Loc, Mem, Operation, Reg, Semantics, St};
     use crate::model::lir::{Insn, LirBlock, LirBody};
 
@@ -488,6 +488,37 @@ mod tests {
 
     fn allocated(body: &LirBody, pins: &IndexMap<u32, Register>) -> allocate::Assignment {
         allocate::allocate(body, Some(pins), None, None, None, ProfileOrName::Name("386")).expect("allocates")
+    }
+
+    /// HARR's hoisted selector copy became unencodable mov es,es across a coverage gap.
+    #[test]
+    fn test_retained_resource_identity_has_a_legal_encoding() {
+        let body = body("resource-copy", vec![_move(3, 1, 1)], &[(1, Register::ES)]);
+        let result = allocate::applied(&body, &allocated(&body, &body.pins)).expect("applies");
+        let insns = result.insns();
+        assert_eq!(insns.len(), 1);
+        assert_eq!(insns[0].covers, body.insns()[0].covers);
+        let emitted = select::emit(insns[0].what.as_ref().expect("semantics"), 3, None, false, false, None);
+        assert!(emitted.is_some());
+        assert!(emitted.unwrap().code.is_empty());
+    }
+
+    // ---------------------------------------------------- tests/test_flow.py
+
+    /// lngmix joins v3 with v9 and then, through the rename, v9 with v20.
+    #[test]
+    fn test_the_coalescer_joins_the_intervals_it_merges() {
+        let segment = |start, end| intervals::Segment { start, end };
+        let one = intervals::Interval::new(1, vec![segment(15, 16), segment(59, 60)]);
+        let other = intervals::Interval::new(2, vec![segment(0, 15)]);
+        assert!(!one.overlaps(&other), "these abut and must not read as overlapping");
+
+        let both = _merged(&one, &other);
+        assert_eq!(both.segments, [segment(0, 16), segment(59, 60)]);
+        // And a third value inside the union is now correctly refused.
+        let third = intervals::Interval::new(3, vec![segment(4, 9)]);
+        assert!(!one.overlaps(&third), "the original said nothing about this range");
+        assert!(both.overlaps(&third), "the merged interval must cover what it swallowed");
     }
 
     #[test]
