@@ -7,6 +7,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use indexmap::IndexMap;
+
 use crate::analysis::{liveness, loops};
 use crate::model::mir::{Arg, Kind, MirBlock, MirBody, Op, Value};
 use crate::model::passes::OperationCosts;
@@ -116,9 +118,9 @@ pub(crate) fn r#static(body: &MirBody, costs: &OperationCosts) -> Option<i64> {
 }
 
 /// Profile-free block frequencies, or `None` for conflicting proofs.
-pub(crate) fn _frequencies(body: &MirBody, trips: Option<&BTreeMap<i64, i64>>) -> Option<BTreeMap<i64, i64>> {
+pub(crate) fn _frequencies(body: &MirBody, trips: Option<&IndexMap<i64, i64>>) -> Option<BTreeMap<i64, i64>> {
     let mut frequency = body.blocks.iter().map(|block| (block.at, 1_i64)).collect::<BTreeMap<_, _>>();
-    let empty = BTreeMap::new();
+    let empty = IndexMap::new();
     let trips = trips.unwrap_or(&empty);
     for loop_ in loops::loops(&body.blocks, Some(body.entry)) {
         let exact = loop_.latches.iter().filter_map(|at| trips.get(at).copied()).collect::<BTreeSet<_>>();
@@ -139,7 +141,7 @@ pub(crate) fn _frequencies(body: &MirBody, trips: Option<&BTreeMap<i64, i64>>) -
 ///
 /// `trips` keys a proven count by latch address; every other loop retains
 /// the conventional factor of ten.
-pub(crate) fn weighted(body: &MirBody, costs: &OperationCosts, trips: Option<&BTreeMap<i64, i64>>) -> Option<i64> {
+pub(crate) fn weighted(body: &MirBody, costs: &OperationCosts, trips: Option<&IndexMap<i64, i64>>) -> Option<i64> {
     let frequency = _frequencies(body, trips)?;
     let mut total = 0;
     for block in &body.blocks {
@@ -159,7 +161,7 @@ pub(crate) fn spill_risk(
     body: &MirBody,
     costs: &OperationCosts,
     capacity: i64,
-    trips: Option<&BTreeMap<i64, i64>>,
+    trips: Option<&IndexMap<i64, i64>>,
 ) -> Option<i64> {
     if capacity <= 0 {
         return Some(0);
@@ -281,7 +283,7 @@ pub(crate) fn pressure_adjusted(
     body: &MirBody,
     costs: &OperationCosts,
     capacity: i64,
-    trips: Option<&BTreeMap<i64, i64>>,
+    trips: Option<&IndexMap<i64, i64>>,
 ) -> Option<i64> {
     let work = weighted(body, costs, trips);
     let pressure = spill_risk(body, costs, capacity, trips);

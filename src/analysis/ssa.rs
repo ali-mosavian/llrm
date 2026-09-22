@@ -6,6 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+
 use super::occurrence::{OpOccurrence, operations};
 use crate::model::ir::Operation;
 use crate::model::memory::Provenance;
@@ -239,9 +240,9 @@ pub(crate) fn substituted(op: &Op, swap: &BTreeMap<u32, Value>) -> Result<Op, Su
 ///
 /// Structural transformations clone values by id; every clone needs the
 /// original's side-table entry before alias analysis runs again.
-pub(crate) fn cloned_pointer_metadata<'a>(
+pub(crate) fn cloned_pointer_metadata<'a, M: IntoIterator<Item = (&'a u32, &'a Value)>>(
     body: &MirBody,
-    mappings: impl Iterator<Item = &'a BTreeMap<u32, Value>>,
+    mappings: impl Iterator<Item = M>,
 ) -> (BTreeSet<Value>, OrderedMap<Value, Provenance>) {
     let pointer_ids = body.pointer_values.iter().map(|value| value.id).collect::<BTreeSet<_>>();
     let seeds = body.pointer_seeds.iter().map(|(value, provenance)| (value.id, provenance)).collect::<BTreeMap<_, _>>();
@@ -261,9 +262,9 @@ pub(crate) fn cloned_pointer_metadata<'a>(
 }
 
 /// Carry frontend integer facts onto structurally cloned values.
-pub(crate) fn cloned_integer_ranges<'a>(
+pub(crate) fn cloned_integer_ranges<'a, M: IntoIterator<Item = (&'a u32, &'a Value)>>(
     body: &MirBody,
-    mappings: impl Iterator<Item = &'a BTreeMap<u32, Value>>,
+    mappings: impl Iterator<Item = M>,
 ) -> OrderedMap<Value, IntegerRange> {
     let ranges = body.integer_ranges.iter().map(|(value, interval)| (value.id, interval)).collect::<BTreeMap<_, _>>();
     let mut cloned_ranges = body.integer_ranges.clone();
