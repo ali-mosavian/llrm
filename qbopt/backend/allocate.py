@@ -483,6 +483,25 @@ def _copy_hints(body: lir.LirBody) -> dict[int, list[int]]:
     return hints
 
 
+def _wanted(hints: dict[int, list[int]], fixed: "dict[int, Register_]") -> "dict[int, Register_]":
+    """The fixed register each value reaches through the fewest copies.
+
+    A loop's sum placed before the return's copy to AX is otherwise seated
+    where nothing asked, and whatever took AX leaves a move on the exit.
+    """
+    wanted = {value: _whole(register) for value, register in fixed.items()}
+    frontier = list(wanted)
+    while frontier:
+        reached = []
+        for value in frontier:
+            for other in hints.get(value, ()):
+                if other not in wanted:
+                    wanted[other] = wanted[value]
+                    reached.append(other)
+        frontier = reached
+    return {value: register for value, register in wanted.items() if value not in fixed}
+
+
 def allocate(
     body: lir.LirBody,
     pinned: dict[int, Register_] | None = None,
@@ -548,6 +567,10 @@ def allocate(
     confined = classes(body, frozenset(protected or ()))
     fixed = dict(pinned or {})
     hints = _copy_hints(body)
+    wanted = _wanted(hints, fixed)
+    claims: dict[Register_, list[int]] = {}
+    for one, register in wanted.items():
+        claims.setdefault(register, []).append(one)
 
     # What is assigned to each register, as intervals. LLVM's
     # LiveIntervalUnion: the question an allocator asks a thousand times is
@@ -603,7 +626,17 @@ def allocate(
                 for other in hints.get(value, ())
                 if (register := fixed.get(other, where.get(other))) is not None
             )
-            order = tuple(sorted(order, key=lambda register: -votes[_whole(register)]))
+            if not votes and value in wanted:
+                votes[wanted[value]] += 1
+            claimed = {
+                register
+                for register, others in claims.items()
+                if any(
+                    other != value and other not in where and other in live and live[other].overlaps(mine)
+                    for other in others
+                )
+            }
+            order = tuple(sorted(order, key=lambda register: (-votes[_whole(register)], _whole(register) in claimed)))
             # A preference is an explicit allocation-order vote, unlike a
             # copy hint and unlike `pinned`: it cannot make an otherwise
             # legal plan unplaceable, but ordinary coalescing taste must not
