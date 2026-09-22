@@ -1272,7 +1272,6 @@ mod tests {
     /// first FIXUPP defines THREAD state; a serializer built from decoded
     /// relocations emits every relocation explicitly.
     #[test]
-    #[ignore = "needs BC raise"]
     fn test_the_bc_frontend_uses_the_fresh_object_writer() {
         let source = std::fs::read("fixtures/omf/hotlop-p-g2.obj").unwrap();
         let got = bc_emitted("fixtures/omf/hotlop-p-g2.obj");

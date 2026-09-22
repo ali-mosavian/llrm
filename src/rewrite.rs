@@ -684,7 +684,7 @@ mod tests {
     /// Every accepted corpus object is a self-contained OMF module whose live
     /// external fixups all resolve.
     #[test]
-    #[ignore = "needs BC raise"]
+    #[ignore = "fails in Python too: 0x00a7: 6 bytes between the ops are not instructions"]
     fn test_a_real_pass_writes_a_complete_fresh_object() {
         for obj in objects() {
             let out = once(&std::fs::read(&obj).unwrap(), true).unwrap();
@@ -704,7 +704,7 @@ mod tests {
 
     /// A finalized program is returned byte-for-byte without being raised.
     #[test]
-    #[ignore = "needs BC raise"]
+    #[ignore = "fails in Python too: 0x00a7: 6 bytes between the ops are not instructions, and on four more objects"]
     fn test_rewriting_reaches_a_fixed_point() {
         for obj in objects() {
             let out = once(&std::fs::read(&obj).unwrap(), true).unwrap();
@@ -715,7 +715,6 @@ mod tests {
     /// Raising the LIR emitter's program again read `sub sp,4` as a subtract
     /// and reserved a second frame: S= 0 for 630.
     #[test]
-    #[ignore = "needs BC raise"]
     fn test_a_finalised_object_is_given_back_before_anything_decodes_it() {
         let raw = std::fs::read(HOTLOP).unwrap();
         let first = once(&raw, false).unwrap();
@@ -724,7 +723,6 @@ mod tests {
 
     /// Bytes produced for one set of options do not mean the same thing under another.
     #[test]
-    #[ignore = "needs BC raise"]
     fn test_the_same_object_asked_for_other_options_is_refused() {
         let raw = std::fs::read(HOTLOP).unwrap();
         let first = once(&raw, false).unwrap();
@@ -734,7 +732,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs BC raise"]
     fn test_exactly_one_marker_and_one_frame() {
         let raw = std::fs::read(HOTLOP).unwrap();
         let out = once(&raw, false).unwrap();
@@ -750,7 +747,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs BC raise"]
     fn test_default_marker_means_386_not_unspecified() {
         let data = once(&std::fs::read(FIXTURE).unwrap(), true).unwrap();
         assert_eq!(with_cpu(&data, "386").unwrap(), data);

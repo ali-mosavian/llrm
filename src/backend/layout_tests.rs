@@ -207,7 +207,6 @@ fn test_a_jump_given_to_an_empty_block_does_not_steal_its_predecessors_fallthrou
 
 /// PRESSX retained an unconditional jump to its exit immediately after loop elimination.
 #[test]
-#[ignore = "needs BC raise"]
 fn test_pressx_has_no_jump_to_the_following_instruction() {
     let result = emitted("fixtures/omf/pressx-p-g2.obj");
     assert_eq!(result.outcome, wholeseg::Emission::Lir, "{}", result.reason);
@@ -319,7 +318,7 @@ fn test_a_jump_to_the_block_placed_next_emits_nothing() {
 /// BC's dead `jmp short` after a WEND reached by GOTO must not survive a
 /// dropped jump: wrapping the angle ran it into the middle of an `add`.
 #[test]
-#[ignore = "needs BC raise"]
+#[ignore = "fails in Python too: 0x0085: 12 bytes between the ops are not instructions"]
 fn test_no_branch_lands_inside_an_instruction_after_a_dropped_jump() {
     let result = emitted("fixtures/omf/wendgo-q-o.obj");
     assert_eq!(result.outcome, wholeseg::Emission::Lir, "{}", result.reason);
@@ -344,7 +343,7 @@ fn test_no_branch_lands_inside_an_instruction_after_a_dropped_jump() {
 /// deedlines' plasmablobs: a THEN block emptied in MIR still held the phi's
 /// `mov cx,-1`, and dropping the `jmp` over it inverted the plasma ramp.
 #[test]
-#[ignore = "needs BC raise"]
+#[ignore = "fails in Python too: 0x007a: 18 bytes between the ops are not instructions"]
 fn test_a_jump_over_a_block_holding_a_phi_copy_is_kept() {
     let result = emitted("fixtures/omf/rcflip-q-o.obj");
     assert_eq!(result.outcome, wholeseg::Emission::Lir, "{}", result.reason);
@@ -393,7 +392,6 @@ fn test_linear_placement_requires_one_complete_acyclic_chain() {
 
 /// FPCSE's removed loop still took three unconditional jumps through its old block layout.
 #[test]
-#[ignore = "needs BC raise"]
 fn test_removed_floating_loop_is_emitted_in_execution_order() {
     for tag in ["p-g2", "q-o", "v-g3"] {
         let result = emitted(&format!("fixtures/omf/fpcse-{tag}.obj"));
