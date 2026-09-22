@@ -16,25 +16,6 @@ use crate::model::mir::{
 use crate::model::passes::MIRTransform;
 use crate::support::pyset::PySet;
 
-// The test that keeps the loop going, by whether the bound itself runs.
-const _INCLUSIVE: [(Kind, bool); 4] = [
-    (Kind::Lt, false),
-    (Kind::Below, false),
-    (Kind::Le, true),
-    (Kind::BelowEq, true),
-];
-const _INVERSE: [(Kind, Kind); 4] = [
-    (Kind::Ge, Kind::Lt),
-    (Kind::AboveEq, Kind::Below),
-    (Kind::Gt, Kind::Le),
-    (Kind::Above, Kind::BelowEq),
-];
-
-fn lookup<K: PartialEq + Copy, V: Copy>(table: &[(K, V)], key: Option<K>) -> Option<V> {
-    let key = key?;
-    table.iter().find(|(one, _)| *one == key).map(|(_, value)| *value)
-}
-
 pub struct Fill;
 
 impl MIRTransform for Fill {
@@ -74,7 +55,7 @@ fn held_values(args: &[Arg]) -> Vec<Value> {
         .collect()
 }
 
-fn _filled(body: &MirBody, loop_: &Loop) -> Option<MirBody> {
+fn _filled(body: &Rc<MirBody>, loop_: &Loop) -> Option<MirBody> {
     let at_of = body
         .blocks
         .iter()
@@ -101,47 +82,20 @@ fn _filled(body: &MirBody, loop_: &Loop) -> Option<MirBody> {
         return None;
     }
 
+    // How many trips is `induction`'s to prove, whatever the counter's step or test.
     let tested = _work(&header.ops);
-    if tested.len() != 2 {
-        return None;
-    }
-    let (compare, branch) = (tested[0], tested[1]);
-    if branch.kind != Kind::Branch || !branch.target.is_some_and(|to| header.succ.contains(&to)) {
-        return None;
-    }
-    let test = if branch.target == Some(latch.at) {
-        branch.test
-    } else {
-        lookup(&_INVERSE, branch.test)
-    };
-    lookup(&_INCLUSIVE, test)?;
-    let test = test?;
-    let flags = compare
-        .defines
-        .iter()
-        .filter(|value| value.flags)
-        .copied()
+    let proofs = induction::counted(body, loop_, None, false)
+        .into_iter()
+        .filter(|proof| {
+            !proof.posttested
+                && tested.len() == 2
+                && *tested[0] == *proof.compare_in(body)
+                && *tested[1] == *proof.branch_in(body)
+        })
         .collect::<Vec<_>>();
-    if compare.kind != Kind::Sub
-        || !compare.results.is_empty()
-        || compare.args.len() != 2
-        || !compare.loads.is_empty()
-        || !compare.stores.is_empty()
-        || compare.barrier()
-        || flags.is_empty()
-        || !flags.iter().any(|value| branch.uses.contains(value))
-    {
-        return None;
-    }
-    let (counter, bound) = (&compare.args[0], &compare.args[1]);
+    let proof = proofs.into_iter().next()?;
     let counters = induction::basics(body, loop_);
-    let Arg::Held(counter) = counter else {
-        return None;
-    };
-    if counters.len() != header.phis.len() || !counters.contains_key(&counter.value.id) {
-        return None;
-    }
-    if !_stepping(counters.get(&counter.value.id)?, 1) {
+    if counters.len() != header.phis.len() {
         return None;
     }
 
@@ -154,14 +108,6 @@ fn _filled(body: &MirBody, loop_: &Loop) -> Option<MirBody> {
             .iter()
             .flat_map(|at| at_of[at].ops.iter().flat_map(|op| op.defines.iter().copied())),
     );
-    let bound_width = match bound {
-        Arg::Const(constant) => constant.width,
-        Arg::Held(held) if !defined.contains(&held.value) => held.width,
-        _ => return None,
-    };
-    if bound_width != counter.width {
-        return None;
-    }
 
     let work = _work(&latch.ops);
     let last = *work.last()?;
@@ -213,7 +159,6 @@ fn _filled(body: &MirBody, loop_: &Loop) -> Option<MirBody> {
         || reference.symbolic.is_some()
         || reference.allocation.is_some()
         || reference.base_width != 2
-        || addr.space == Space::Frame
     {
         return None;
     }
@@ -264,7 +209,7 @@ fn _filled(body: &MirBody, loop_: &Loop) -> Option<MirBody> {
     }
     if left.iter().any(|one| {
         let found = &counters.get(&one.id).expect("left holds counters");
-        !matches!(found.step, AffineOperand::Const(_)) || found.start.width() != counter.width
+        !matches!(found.step, AffineOperand::Const(_)) || found.start.width() != proof.width()
     }) {
         return None;
     }
@@ -273,10 +218,11 @@ fn _filled(body: &MirBody, loop_: &Loop) -> Option<MirBody> {
     let at = store.at;
     let mut prefix = Vec::<Op>::new();
 
-    let mut emit = |kind: Kind, operation: Operation, args: Vec<Arg>, width: u32| -> Held {
+    let mut emit = |kind: Kind, operation: Operation, args: Vec<Arg>, width: u32, name: &str| -> Held {
         let result = fresh.held(at, width);
         let uses = held_values(&args);
-        let mut op = Op::new(at, OpCode::Operation(operation), kind.as_str(), vec![result.value], uses);
+        let name = if name.is_empty() { kind.as_str() } else { name };
+        let mut op = Op::new(at, OpCode::Operation(operation), name, vec![result.value], uses);
         op.kind = kind;
         op.args = args;
         op.results = vec![Arg::Held(result)];
@@ -284,56 +230,43 @@ fn _filled(body: &MirBody, loop_: &Loop) -> Option<MirBody> {
         result
     };
 
-    let width = counter.width;
-    let inclusive = lookup(&_INCLUSIVE, Some(test)).expect("test is inclusive or not");
-    let mut count = match bound {
-        Arg::Const(bound) => {
-            let negated = emit(Kind::Neg, Operation::Unary, vec![Arg::Held(*counter)], width);
-            emit(
-                Kind::Add,
-                Operation::Binary,
-                vec![
-                    Arg::Held(negated),
-                    Arg::Const(Const::new(&bound.n + BigInt::from(u8::from(inclusive)), width)),
-                ],
-                width,
-            )
-        }
-        _ => emit(Kind::Sub, Operation::Binary, vec![bound.clone(), Arg::Held(*counter)], width),
-    };
-    if !matches!(bound, Arg::Const(_)) && inclusive {
-        count = emit(
-            Kind::Add,
-            Operation::Binary,
-            vec![Arg::Held(count), Arg::Const(Const::new(1, width))],
-            width,
-        );
-    }
+    let count = induction::trips(&proof, &mut |kind, args| {
+        let width = match &args[0] {
+            Arg::Held(held) => held.width,
+            Arg::Const(constant) => constant.width,
+            _ => unreachable!("trips computes on counter operands"),
+        };
+        AffineOperand::Held(emit(kind, Operation::Binary, args, width, ""))
+    })?;
+    let width = count.width();
+    let count = count.as_arg();
     let mut finals = BTreeMap::<Value, Value>::new();
     for one in left.iter() {
         let AffineOperand::Const(step) = &counters.get(&one.id).expect("left holds counters").step else {
             unreachable!("left counters step by constants");
         };
         let moved = if step.n == BigInt::from(1) {
-            count
+            count.clone()
         } else {
-            emit(
+            Arg::Held(emit(
                 Kind::Mul,
                 Operation::Binary,
-                vec![Arg::Held(count), Arg::Const(Const::new(step.n.clone(), width))],
+                vec![count.clone(), Arg::Const(Const::new(step.n.clone(), width))],
                 width,
-            )
+                "",
+            ))
         };
-        let sum = emit(
-            Kind::Add,
-            Operation::Binary,
-            vec![Arg::Held(Held { value: *one, width }), Arg::Held(moved)],
-            width,
-        );
+        let sum = emit(Kind::Add, Operation::Binary, vec![Arg::Held(Held { value: *one, width }), moved], width, "");
         finals.insert(*one, sum.value);
     }
     let first = if matches!(addr.space, Space::Far | Space::Literal) {
         Arg::Const(Const::new(addr.disp, 2))
+    } else if addr.space == Space::Frame {
+        // The frame is reached through bp, which no immediate names.
+        let mut frame = reference.clone();
+        frame.base = None;
+        frame.width = 2;
+        Arg::Held(emit(Kind::Address, Operation::Address, vec![Arg::Cell(mir::Cell { r#ref: frame })], 2, "lea"))
     } else {
         Arg::Symbol(mir::Symbol::new(addr.space, addr.index, addr.disp, 2))
     };
@@ -342,8 +275,9 @@ fn _filled(body: &MirBody, loop_: &Loop) -> Option<MirBody> {
         Operation::Binary,
         vec![Arg::Held(Held { value: base, width: 2 }), first],
         2,
+        "",
     );
-    let mut args = vec![value.clone(), Arg::Held(count), Arg::Held(address)];
+    let mut args = vec![value.clone(), count, Arg::Held(address)];
     if let Some(segment) = reference.segment {
         args.push(Arg::Held(Held { value: segment, width: 2 }));
     }

@@ -811,6 +811,22 @@ fn test_fixed_point_arithmetic_has_a_price() {
 }
 
 #[test]
+fn test_a_repeat_literal_in_the_frame_is_one_string_fill() {
+    // The fill loop stepped its byte address to zero under `!=`, which `fill` missed: 64 stores in a loop.
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "frame_fill.mod",
+        "fn value(k: i16) -> i32:\n    var a: [i32; 64] = [0; 64]\n    a[k] = 5\n    return a[k] + a[k + 1]\nfn main() -> i16:\n    return i16(value(3))\n",
+    );
+    let assembly = listing(&parsed(&source), "main", &O2());
+    let body = &assembly[assembly.find("_value proc").unwrap()..assembly.find("_value endp").unwrap()];
+
+    assert!(body.contains("rep stosd"));
+    assert!(!Regex::new(r"\bj\w+\s").unwrap().is_match(body));
+}
+
+#[test]
 fn test_ill_formed_operators_conversions_and_repeats_are_rejected() {
     for body in [
         "    return i16(1 < 2 < 3)\n",
