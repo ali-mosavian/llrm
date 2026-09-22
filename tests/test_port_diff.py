@@ -1,6 +1,7 @@
 """The port's instrument: a stage diff that misses a divergence proves nothing."""
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -91,3 +92,13 @@ def test_a_qb_dump_diverges_first_at_its_hir_although_it_sorts_after_the_mir(tmp
     matched, total, first = port_diff.compare(python, rust, qb=True)
     assert (matched, total) == (3, 5)
     assert first == port_diff.Divergence("01-hir.json", 1, "{}", "[]")
+
+
+def test_the_python_oracle_is_this_checkouts_qbopt(tmp_path: Path) -> None:
+    """A script run as tools/qbstages.py imported the main checkout's qbopt, so QB diffs ran a stale compiler."""
+    script = tmp_path / "where.py"
+    script.write_text("import qbopt\nprint(qbopt.__file__)\n")
+    found = subprocess.run(
+        [sys.executable, str(script)], env=port_diff.oracle_env(), capture_output=True, text=True, check=True
+    )
+    assert Path(found.stdout.strip()).parent.parent == port_diff.ROOT

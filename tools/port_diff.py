@@ -171,11 +171,17 @@ def qb_corpus() -> list[Path]:
     return found
 
 
+def oracle_env() -> dict[str, str]:
+    """This checkout's qbopt first: a script's own folder does not make the checkout importable."""
+    path = os.pathsep.join(filter(None, (str(ROOT), os.environ.get("PYTHONPATH"))))
+    return {**os.environ, "PYTHONHASHSEED": "0", "PYTHONPATH": path}
+
+
 def run_qb(source: Path, work: Path, rust: Path) -> Result:
     python_dir, rust_dir = work / "python", work / "rust"
     for one in (python_dir, rust_dir):
         one.mkdir(parents=True, exist_ok=True)
-    env = {**os.environ, "PYTHONHASHSEED": "0"}
+    env = oracle_env()
     if QBFRONT.is_file():
         env.setdefault("QBOPT_QBFRONT", str(QBFRONT))
     python = [sys.executable, "-m"]
@@ -214,7 +220,7 @@ def run(source: Path, work: Path, rust: Path, opt: bool) -> Result:
     for one in (python_dir, rust_dir):
         one.mkdir(parents=True, exist_ok=True)
     flags = ["--opt"] if opt else []
-    env = {**os.environ, "PYTHONHASHSEED": "0"}
+    env = oracle_env()
     made = subprocess.run(
         [
             sys.executable,
