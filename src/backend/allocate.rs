@@ -8,6 +8,7 @@ use std::cell::RefCell;
 use std::cmp::{Ordering, Reverse};
 use std::collections::{BTreeSet, BinaryHeap};
 use std::fmt;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use iced_x86::Register;
@@ -997,7 +998,8 @@ fn _evict(
 /// Assign, then rewrite. LLVM's two halves, in one phase.
 pub struct RegAlloc {
     pub pinned: IndexMap<u32, Register>,
-    pub frame: Option<Frame>,
+    /// One frame, shared with the phases around this one, as Python shares it.
+    pub frame: Option<Rc<RefCell<Frame>>>,
     pub cpu: Profile,
 }
 
@@ -1009,7 +1011,7 @@ impl RegAlloc {
 
     pub fn new(
         pinned: Option<&IndexMap<u32, Register>>,
-        frame: Option<Frame>,
+        frame: Option<Rc<RefCell<Frame>>>,
         cpu: ProfileOrName<'_>,
     ) -> Result<Self, String> {
         Ok(Self { pinned: pinned.cloned().unwrap_or_default(), frame, cpu: targets::profile(cpu)?.clone() })
@@ -1018,7 +1020,7 @@ impl RegAlloc {
     /// Assign; where that spills, make the spill real and assign again.
     pub fn transform(&mut self, body: LirBody) -> Result<LirBody, Error> {
         if self.frame.is_none() {
-            self.frame = Some(frames::of(&body, None, "", None)?);
+            self.frame = Some(Rc::new(RefCell::new(frames::of(&body, None, "", None)?)));
         }
         let cpu = self.cpu.clone();
         let mut body = explicit_selectors(&body, Some(&self.pinned));
@@ -1135,7 +1137,7 @@ impl RegAlloc {
                             let rematerializable = spiller::rematerializable(&opened_body, &found.spilled);
                             if !rematerializable.is_empty() {
                                 let (remade, made) =
-                                    spiller::spilled(&opened_body, &rematerializable, self.frame.as_mut())?;
+                                    spiller::spilled(&opened_body, &rematerializable, self.frame.as_ref().map(|one| one.borrow_mut()).as_deref_mut())?;
                                 if remade != opened_body {
                                     opened_body = remade;
                                     opened_reloads.extend(made);
@@ -1158,7 +1160,7 @@ impl RegAlloc {
                         let (prepared, made) = if folded.is_empty() {
                             (scoped.clone(), BTreeSet::new())
                         } else {
-                            spiller::spilled(&scoped, &folded, self.frame.as_mut())?
+                            spiller::spilled(&scoped, &folded, self.frame.as_ref().map(|one| one.borrow_mut()).as_deref_mut())?
                         };
                         let with: BTreeSet<u32> = reloads.union(&made).copied().collect();
                         let trial = trial_of(&prepared, &with, &keep)?;
@@ -1205,7 +1207,7 @@ impl RegAlloc {
                 return applied(&body, &got);
             }
             if !retained.is_empty() {
-                let (spilt, made) = spiller::spilled(&body, &got.spilled, self.frame.as_mut())?;
+                let (spilt, made) = spiller::spilled(&body, &got.spilled, self.frame.as_ref().map(|one| one.borrow_mut()).as_deref_mut())?;
                 body = spilt;
                 reloads.extend(made);
                 continue;
@@ -1243,7 +1245,7 @@ impl RegAlloc {
             }
             let rematerializable = spiller::rematerializable(&body, &got.spilled);
             if !rematerializable.is_empty() {
-                let (remade, made) = spiller::spilled(&body, &rematerializable, self.frame.as_mut())?;
+                let (remade, made) = spiller::spilled(&body, &rematerializable, self.frame.as_ref().map(|one| one.borrow_mut()).as_deref_mut())?;
                 if remade != body {
                     body = remade;
                     reloads.extend(made);
@@ -1258,8 +1260,8 @@ impl RegAlloc {
                 .chain(retained.iter().copied())
                 .collect();
             let mut chosen = got.spilled.clone();
-            chosen.extend(spiller::siblings(&body, &got.spilled, self.frame.as_mut(), &fixed)?);
-            let (spilt, made) = spiller::spilled(&body, &chosen, self.frame.as_mut())?;
+            chosen.extend(spiller::siblings(&body, &got.spilled, self.frame.as_ref().map(|one| one.borrow_mut()).as_deref_mut(), &fixed)?);
+            let (spilt, made) = spiller::spilled(&body, &chosen, self.frame.as_ref().map(|one| one.borrow_mut()).as_deref_mut())?;
             body = spilt;
             reloads.extend(made);
         }
@@ -1809,10 +1811,38 @@ mod tests {
             .collect()
     }
 
+    /// Python's phases share one frame object; an owned copy lost every
+    /// spill slot RegAlloc made, so the prologue reserved too little.
+    #[test]
+    fn test_spill_slots_land_in_the_shared_frame() {
+        let mut insns = vec![];
+        let mut at = 0x100;
+        for value in 1..=8u32 {
+            insns.push(_mov(value, i64::from(value), at));
+            at += 2;
+        }
+        for value in 1..=8u32 {
+            let what = semantics(Operation::Binary, "add", vec![held(value, 2)], vec![held(value, 2), held(value, 2)]);
+            insns.push(Insn::new(at, Some((at, at + 2)), Some(what), vec![value], vec![value]));
+            at += 2;
+        }
+        for value in 1..=8u32 {
+            let what = semantics(Operation::Push, "push", vec![], vec![held(value, 2)]);
+            insns.push(Insn::new(at, Some((at, at + 2)), Some(what), vec![], vec![value]));
+            at += 2;
+        }
+        let body = _one_block(insns);
+        let frame = Rc::new(RefCell::new(frames::of(&body, None, "", None).expect("a frame")));
+        let mut phase =
+            RegAlloc::new(None, Some(Rc::clone(&frame)), ProfileOrName::Name("386")).expect("a cpu");
+        RegAlloc::transform(&mut phase, body).expect("allocates");
+        assert!(!frame.borrow().slots.is_empty());
+    }
+
     fn _through_regalloc(body: LirBody, pinned: &[(u32, Register)]) -> LirBody {
         let pinned = pins(pinned);
         let frame = frames::of(&body, None, "", None).expect("a frame");
-        let mut phase = RegAlloc::new(Some(&pinned), Some(frame), ProfileOrName::Name("386")).expect("a cpu");
+        let mut phase = RegAlloc::new(Some(&pinned), Some(Rc::new(RefCell::new(frame))), ProfileOrName::Name("386")).expect("a cpu");
         RegAlloc::transform(&mut phase, body).expect("allocates")
     }
 
