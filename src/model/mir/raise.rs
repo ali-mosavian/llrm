@@ -11,7 +11,8 @@ use iced_x86::{Code, Register};
 use super::{FLAGS, MirBlock, MirBody, Op, RaisedBody, Raising, TRACKED};
 use crate::support::hash::IndexMap;
 use crate::abi::runtime;
-use crate::model::ir::nodes::Node;
+use crate::model::ir::nodes::{Node, span};
+use crate::objectfile::module::Module;
 use crate::model::ir::root;
 
 /// Python `PHYSICAL`: the frame, the stack and the segment registers.
@@ -172,6 +173,36 @@ pub fn touched(
         uses.insert(FLAGS);
     }
     (defines, uses)
+}
+
+/// Python `_referenced`: which fixup each operation's own operand carries, by op id.
+pub fn _referenced(body: &MirBody, found: &Module) -> IndexMap<u32, Vec<i64>> {
+    let known: BTreeSet<i64> = found.fixup_at.keys().copied().collect();
+    let mut out = IndexMap::default();
+    if known.is_empty() {
+        return out;
+    }
+    let owned = |op: &Op| -> Option<i64> {
+        let node = op.node()?;
+        if matches!(**node, Node::Restore(_)) {
+            return None;
+        }
+        let first = found.code.get(op.at as usize).copied();
+        if matches!(first, Some(0x9a | 0xea)) && known.contains(&(op.at + 1)) {
+            return Some(op.at + 1);
+        }
+        let (lo, hi) = span(node);
+        let inside: Vec<i64> = known.iter().copied().filter(|&one| lo as i64 <= one && one < hi as i64).collect();
+        if inside.len() == 1 { Some(inside[0]) } else { None }
+    };
+    for block in &body.blocks {
+        for op in &block.ops {
+            if let (Some(id), Some(at)) = (op.id, owned(op)) {
+                out.insert(id, vec![at]);
+            }
+        }
+    }
+    out
 }
 
 impl RaisedBody {
