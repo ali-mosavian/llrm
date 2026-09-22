@@ -446,7 +446,7 @@ pub fn assembled(
             }
             low = flow::checked(low, phase.as_mut(), in_ssa).map_err(|error| {
                 hir::Unsupported(match error {
-                    flow::Checked::Refused(message) => message,
+                    flow::Checked::Refused(raised) => raised.message,
                     flow::Checked::Malformed(malformed) => malformed.0,
                 })
             })?;

@@ -44,6 +44,29 @@ pub trait MIRTransform {
     }
 }
 
+/// A Python exception crossing a boundary: `type(error).__name__` and
+/// `str(error)`. A caller that catches by class, as `wholeseg` does, reads
+/// `kind`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Exception {
+    pub kind: &'static str,
+    pub message: String,
+}
+
+impl Exception {
+    pub fn new(kind: &'static str, message: impl Into<String>) -> Self {
+        Exception { kind, message: message.into() }
+    }
+}
+
+impl std::fmt::Display for Exception {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for Exception {}
+
 /// One transformation over a lowered body.
 ///
 /// The same contract as MIRTransform, one form down.
@@ -58,6 +81,12 @@ pub trait LIRTransform {
     fn transform(&mut self, body: LirBody) -> Result<LirBody, String> {
         let _ = body;
         Err(format!("{} has no transform", self.class_name()))
+    }
+
+    /// `transform`, with the class of what it raised. A phase whose Python
+    /// raises no class of its own says `Exception`, which nothing catches.
+    fn transform_raising(&mut self, body: LirBody) -> Result<LirBody, Exception> {
+        self.transform(body).map_err(|message| Exception::new("Exception", message))
     }
 
     /// `__repr__`.

@@ -21,7 +21,7 @@ use crate::backend::frame::{self as frames, Frame, Refused};
 use crate::backend::{coalesce, constrain, spiller, splitkit, target};
 use crate::model::ir::{self, Addr, Held, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
-use crate::model::passes::LIRTransform;
+use crate::model::passes::{Exception, LIRTransform};
 use crate::support::pyrepr::Repr;
 
 /// Maximum queue visits before the remaining values are spilled.
@@ -80,6 +80,20 @@ impl fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+impl Error {
+    /// Python's class name and message, for a caller that catches by class.
+    pub fn raised(&self) -> Exception {
+        let kind = match self {
+            Self::Unplaced(_) => "Unplaced",
+            Self::Spilled(_) => "Spilled",
+            Self::Impossible(_) => "Impossible",
+            Self::Refused(_) => "Refused",
+            Self::Value(_) => "ValueError",
+        };
+        Exception::new(kind, self.to_string())
+    }
+}
 
 impl From<Unplaced> for Error {
     fn from(one: Unplaced) -> Self {
@@ -1309,6 +1323,10 @@ impl LIRTransform for RegAlloc {
 
     fn transform(&mut self, body: LirBody) -> Result<LirBody, String> {
         RegAlloc::transform(self, body).map_err(|error| error.to_string())
+    }
+
+    fn transform_raising(&mut self, body: LirBody) -> Result<LirBody, Exception> {
+        RegAlloc::transform(self, body).map_err(|error| error.raised())
     }
 }
 

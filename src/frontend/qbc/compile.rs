@@ -1382,7 +1382,7 @@ fn _graphics_dependencies(module: &model::Module) -> BTreeSet<String> {
 
 fn _checked(error: flow::Checked) -> CompileError {
     CompileError::Value(match error {
-        flow::Checked::Refused(message) => message,
+        flow::Checked::Refused(raised) => raised.message,
         flow::Checked::Malformed(malformed) => malformed.0,
     })
 }
