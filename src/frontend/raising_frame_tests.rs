@@ -1,7 +1,5 @@
 //! Port of `tests/test_raising_frame.py`.
 //!
-//! Skipped, needing `mir.bodies`:
-//! `test_pl_move_memory_push_reads_the_pointer_not_its_stack_destination`.
 //! Skipped, needing `wholeseg`: `test_chain_constant_divisors_survive_argument_setup`.
 
 use super::*;
@@ -10,6 +8,7 @@ use crate::frontend::blocks::Ends;
 use crate::frontend::declen;
 use crate::model::ir::Operation;
 use crate::model::mir::{MirBlock, MirBody};
+use crate::support::testing;
 
 fn load(path: &str) -> Module {
     module::load(path).unwrap().unwrap()
@@ -138,4 +137,25 @@ fn test_push_pop_frame_operand_is_not_its_implicit_stack_access() {
         assert!(overlapping(explicit, &local, None, None, None).unwrap(), "{pushing}");
         assert!(!implicit.excludes.is_empty(), "{pushing}");
     }
+}
+
+/// PL_MOVE refused emission at 2337: PUSH dword [BX] became a read of [SP-8].
+#[test]
+fn test_pl_move_memory_push_reads_the_pointer_not_its_stack_destination() {
+    let path = "fixtures/regressions/qrender-pl-move-v-g3.obj";
+    let found = testing::loaded(path).unwrap();
+    let mut contracts = runtime::for_module(&found, None).unwrap();
+    let raised = crate::model::mir::bodies(&found, &testing::partitioned(path), Some(&mut contracts), false, false).unwrap();
+    let op = raised
+        .values
+        .iter()
+        .flat_map(|(_, body)| body.blocks.iter().flat_map(|block| block.ops.clone()).collect::<Vec<_>>())
+        .find(|op| op.at == 0x2337)
+        .unwrap();
+    let source = &op.loads[0];
+    assert_eq!(source.addr, None);
+    assert_ne!(source.space, Some(Space::Stack));
+    assert!(source.base.is_some() && source.width == 4);
+    assert_eq!(op.args, [Arg::Cell(Cell { r#ref: source.clone() })]);
+    assert_eq!(op.stores[0].addr, Some(Addr::new(Space::Stack, -8)));
 }

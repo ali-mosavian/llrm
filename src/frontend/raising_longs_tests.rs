@@ -1,28 +1,26 @@
 //! Port of `tests/test_raising_longs.py` and `tests/test_raising_unary.py`.
 //!
-//! Skipped, needing `mir.bodies`, `corpus.loaded` or `wholeseg`:
+//! Skipped, needing `wholeseg`:
 //! `test_event_arithmetic_keeps_a_pair_when_its_flags_cross_the_machine_exit`,
-//! `test_udtacc_second_field_is_a_whole_long`,
-//! `test_nbody_timing_helper_stores_the_signed_whole_value`,
-//! `test_nbody_counter_seed_has_a_known_high_word`,
-//! `test_whole_negation_requires_exact_carry_chain`,
+//! `test_removed_half_flags_do_not_become_machine_exit_inputs`,
+//! `test_production_does_not_recognize_long_pairs_after_optimization`,
+//! `test_nots_stores_whole_unary_results_without_stack_splitting`,
+//! `test_arith_passes_whole_results_without_splitting_them`.
+//! Skipped, needing `transform.applied`:
 //! `test_addrm_stores_and_reuses_the_signed_whole_value`,
+//! `test_nbody_whole_position_loads_leave_the_inner_loop`.
+//! Skipped, monkeypatching a `raising_longs` stage out of `mir.bodies`
+//! (`scalar`, directly or through the `nbody` fixture; `_negated_whole`,
+//! `sign_fills`, `arguments` or `unary`):
+//! `test_whole_negation_requires_exact_carry_chain`,
 //! `test_signed_store_requires_the_matching_sign_word`,
 //! `test_accumulator_initializers_are_whole_values`,
 //! `test_constant_stores_require_identical_adjacent_addresses`,
 //! `test_position_arithmetic_is_scalar_before_optimization`,
-//! `test_nbody_whole_position_loads_leave_the_inner_loop`,
 //! `test_nbody_scalar_results_feed_constant_and_accumulator_arithmetic`,
 //! `test_nbody_stores_whole_results_through_half_copies`,
 //! `test_live_half_flags_prevent_scalar_arithmetic`,
 //! `test_same_machine_address_with_different_ssa_base_is_not_a_pair`,
-//! `test_localp_signed_index_addition_is_a_whole_long`,
-//! `test_control_branch_updates_are_whole_longs_before_optimization`,
-//! `test_removed_half_flags_do_not_become_machine_exit_inputs`,
-//! `test_production_does_not_recognize_long_pairs_after_optimization`;
-//! `test_negnot_raises_printed_long_negations`,
-//! `test_nots_stores_whole_unary_results_without_stack_splitting`,
-//! `test_arith_passes_whole_results_without_splitting_them`,
 //! `test_argument_join_requires_ordered_adjacent_halves`,
 //! `test_long_negation_keeps_observed_intermediate_results`.
 //!
@@ -40,6 +38,7 @@ use crate::model::mir::MirBlock;
 use crate::model::mir::MirBody;
 use crate::objectfile::module::Addr;
 use crate::support::pyrepr::Repr;
+use crate::support::testing::{self, all_ops, nth, ops, width};
 
 const AX: Loc = Loc::Reg(Reg { register: Register::AX, width: 2 });
 const DX: Loc = Loc::Reg(Reg { register: Register::DX, width: 2 });
@@ -256,4 +255,91 @@ fn unary_and_scalar_widen_bc_long_negation_as_python_does() {
         .collect::<Vec<_>>()
         .join("\n");
     assert_eq!(summary(&scalar(negation()).unwrap()), scalar_expected);
+}
+
+/// UDTACC emitted two-word loads and ADD/ADC for y because its zero-offset access was unnamed.
+#[test]
+fn test_udtacc_second_field_is_a_whole_long() {
+    let body = nth(&testing::raised("fixtures/regressions/udtacc-p-g2.obj"), 0);
+    let load = ops(&body).into_iter().find(|op| op.at == 0xB1 && !op.loads.is_empty()).unwrap();
+    assert_eq!(load.loads[0].width, 4);
+    assert!(!ops(&body).iter().any(|op| op.kind == Kind::AddCarry));
+}
+
+/// PITSNAP split its signed byte into two stores and reloaded it, raising NBODY cost by 20.
+#[test]
+fn test_nbody_timing_helper_stores_the_signed_whole_value() {
+    let body = nth(&testing::raised("fixtures/bench/nbody-v-g3.obj"), 1);
+    let stores: Vec<Op> =
+        ops(&body).into_iter().filter(|op| [0x47B, 0x47E].contains(&op.at) && !op.stores.is_empty()).collect();
+    assert_eq!(stores.len(), 1);
+    assert_eq!(stores[0].stores[0].width, 4);
+    assert_eq!(stores[0].stores[0].addr.unwrap().disp, -0x22);
+    assert_eq!(width(&stores[0].args[0]), 4);
+}
+
+/// NBODY's initial long 1 had an opaque high word, blocking whole-value loop phis.
+#[test]
+fn test_nbody_counter_seed_has_a_known_high_word() {
+    use crate::analysis::consts::{self, Known};
+    let path = "fixtures/bench/nbody-v-g3.obj";
+    let found = testing::loaded(path).unwrap();
+    let raised = nth(&testing::raised(path), 0);
+    for (seed, expected) in [(0, 0), (1, 0), (0x7FFF, 0), (0x8000, 0xFFFF), (-1, 0xFFFF)] {
+        let mut body = raised.clone();
+        for block in &mut body.blocks {
+            for op in &mut block.ops {
+                if op.at == 0xE0 && op.kind == Kind::Copy {
+                    op.args = vec![Arg::Const(Const::new(seed, 2))];
+                }
+            }
+        }
+        let body = std::rc::Rc::new(body);
+        let facts = consts::known(&body, Some(&found.dgroup.members), Some(&found.calls), None, None);
+        let high = ops(&body)
+            .into_iter()
+            .find(|op| op.at == 0xE3 && !op.results.is_empty() && width(&op.results[0]) == 2)
+            .unwrap();
+        let Arg::Held(result) = &high.results[0] else { panic!("{:?}", high.results) };
+        assert_eq!(facts.get(&result.value), Some(&Known::new(expected, 2)), "{seed}");
+    }
+}
+
+/// LOCALP kept ADD/ADC halves because sign extension was exposed after pair recognition.
+#[test]
+fn test_localp_signed_index_addition_is_a_whole_long() {
+    for tag in ["q-O", "p-g2", "v-g3"] {
+        let ops = all_ops(&testing::raised(format!("fixtures/regressions/localp-{tag}.obj").to_lowercase()));
+        assert!(
+            ops.iter().any(|op| op.kind == Kind::Add
+                && op.results.len() == 1
+                && matches!(&op.results[0], Arg::Held(one) if one.width == 4)),
+            "{tag}"
+        );
+        assert!(!ops.iter().any(|op| op.kind == Kind::AddCarry), "{tag}");
+    }
+}
+
+/// PARITYCONTROL retained split ADD/ADC accumulator updates in both arms: its
+/// branch join's unused flag phis must not change the optimizer's path.
+#[test]
+fn test_control_branch_updates_are_whole_longs_before_optimization() {
+    let raised = testing::raised("fixtures/parity/control-v-g3.obj");
+    let body = &raised.values.iter().find(|(name, _)| name == "procedure PARITYCONTROL").unwrap().1;
+    assert!(!ops(body).iter().any(|op| op.kind == Kind::AddCarry));
+    let updates: Vec<Op> =
+        ops(body).into_iter().filter(|op| [0x9D, 0xC9].contains(&op.at) && op.kind == Kind::Add).collect();
+    assert_eq!(updates.len(), 2);
+    assert!(updates.iter().all(|op| width(&op.results[0]) == 4));
+}
+
+/// NEGNOT passed split NEG/ADC/NEG chains to PRINT, blocking whole-value folding.
+#[test]
+fn test_negnot_raises_printed_long_negations() {
+    for tag in ["p-g2", "q-O", "v-g3"] {
+        let body = nth(&testing::raised(format!("fixtures/omf/negnot-{tag}.obj").to_lowercase()), 0);
+        let ops = ops(&body);
+        assert!(!ops.iter().any(|op| op.kind == Kind::AddCarry), "{tag}");
+        assert_eq!(ops.iter().filter(|op| op.kind == Kind::Neg && width(&op.results[0]) == 4).count(), 3, "{tag}");
+    }
 }

@@ -1,16 +1,33 @@
 //! Port of `tests/test_raising_bytes.py`.
 //!
-//! Skipped, needing `mir.bodies` and `corpus.loaded` (NBODY's op at 0x464):
-//! `test_nbody_high_byte_clear_defines_the_word_its_consumer_reads`,
-//! `test_high_byte_clear_keeps_observable_flags`. The second is rebuilt below
-//! on a synthetic `xor bh,bh`; its expected values come from the same inputs
-//! run through Python.
+//! Skipped, monkeypatching `raising_bytes.scalar` out of `mir.bodies`:
+//! `test_high_byte_clear_keeps_observable_flags`. It is rebuilt below on a
+//! synthetic `xor bh,bh`; its expected values come from the same inputs run
+//! through Python.
 
 use iced_x86::Register;
 
 use super::*;
 use crate::model::ir::{Operation, Reg};
 use crate::model::mir::{MirBlock, MirBody, OpCode, Opaque};
+use crate::support::testing;
+
+#[test]
+fn test_nbody_high_byte_clear_defines_the_word_its_consumer_reads() {
+    let raised = testing::raised("fixtures/bench/nbody-v-g3.obj");
+    let op = raised
+        .values
+        .iter()
+        .flat_map(|(_, body)| body.blocks.iter().flat_map(|block| block.ops.clone()).collect::<Vec<_>>())
+        .find(|op| op.at == 0x464)
+        .unwrap();
+    assert_eq!(op.results.len(), 1);
+    let Arg::Held(result) = &op.results[0] else { panic!("{:?}", op.results) };
+    assert_eq!(result.width, 2);
+    assert_eq!(op.args[1], Arg::Const(Const::new(255, 2)));
+    let Arg::Held(source) = &op.args[0] else { panic!("{:?}", op.args) };
+    assert_eq!(op.merges, [(source.value, result.value)].into_iter().collect());
+}
 
 #[test]
 fn test_high_byte_clear_keeps_observable_flags_synthetic() {

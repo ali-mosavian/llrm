@@ -1,8 +1,6 @@
 //! Port of `tests/test_pairs.py`.
-//!
-//! Skipped, needing `mir.bodies`:
-//! `test_raised_longs_leave_no_consumer_without_a_producer`.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use super::*;
@@ -10,6 +8,7 @@ use crate::model::ir::nodes::{Data, Node, TableKind};
 use crate::model::ir::{Effects, Imm, Reg, Semantics};
 use crate::model::mir::{OpCode, Raising};
 use crate::objectfile::module::{Addr, Space};
+use crate::support::testing;
 
 /// Python's `SimpleNamespace(semantics=...)` node.
 fn node(semantics: Semantics) -> Arc<Node> {
@@ -136,4 +135,25 @@ fn test_two_negates_without_the_borrow_are_not_one_long_negate() {
         _negate(&ops, 0, &origin).unwrap().is_none(),
         "without the borrow folded in, these are two independent negates"
     );
+}
+
+/// negnot pushed a stale high word: every raised long consumer needs a producer.
+#[test]
+fn test_raised_longs_leave_no_consumer_without_a_producer() {
+    for stem in ["negnot-q-O", "arith-v-g3"] {
+        for (_name, body) in testing::raised(format!("fixtures/omf/{stem}.obj").to_lowercase()).values {
+            let ops = || body.blocks.iter().flat_map(|block| &block.ops);
+            let defined: BTreeSet<u32> = ops().flat_map(|op| &op.defines).map(|one| one.id).collect();
+            let mut made = defined.clone();
+            made.extend(body.blocks.iter().flat_map(|block| &block.phis).map(|phi| phi.result.id));
+            let entry: BTreeSet<u32> =
+                ops().flat_map(|op| &op.uses).map(|one| one.id).filter(|id| !defined.contains(id)).collect();
+            let orphans: Vec<String> = ops()
+                .flat_map(|op| op.uses.iter().map(move |one| (op.at, one)))
+                .filter(|(_, one)| !one.flags && !made.contains(&one.id) && !entry.contains(&one.id))
+                .map(|(at, one)| format!("{at:#06x} reads {one:?}"))
+                .collect();
+            assert!(orphans.is_empty(), "{stem}: {}", orphans[..orphans.len().min(3)].join("; "));
+        }
+    }
 }
