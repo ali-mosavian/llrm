@@ -234,7 +234,7 @@ impl Slice {
     }
 }
 
-fn gcd(mut one: i64, mut other: i64) -> i64 {
+pub(crate) fn gcd(mut one: i64, mut other: i64) -> i64 {
     while other != 0 {
         (one, other) = (other, one % other);
     }

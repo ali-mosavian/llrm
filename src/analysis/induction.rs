@@ -40,14 +40,14 @@ pub(crate) enum AffineOperand {
 }
 
 impl AffineOperand {
-    const fn width(&self) -> u32 {
+    pub(crate) const fn width(&self) -> u32 {
         match self {
             Self::Held(held) => held.width,
             Self::Const(constant) => constant.width,
         }
     }
 
-    fn as_arg(&self) -> Arg {
+    pub(crate) fn as_arg(&self) -> Arg {
         match self {
             Self::Held(held) => Arg::Held(*held),
             Self::Const(constant) => Arg::Const(constant.clone()),
@@ -1242,7 +1242,7 @@ pub(crate) fn _signed(
 /// generalized range solver.  It proves the update after the last observed
 /// value remains representable; an otherwise plausible wrapping recurrence is
 /// not a finite loop proof.
-fn _last_counter(
+pub(crate) fn _last_counter(
     body: &MirBody,
     loop_: &Loop,
     counter: &Affine,
@@ -1718,7 +1718,7 @@ fn abs(value: &BigInt) -> BigInt {
 
 /// Python floor division for a nonzero divisor.  `BigInt` truncates toward
 /// zero, while the sentinel modular proof uses Python's `//` for negatives.
-fn floor_div(numerator: &BigInt, denominator: &BigInt) -> BigInt {
+pub(crate) fn floor_div(numerator: &BigInt, denominator: &BigInt) -> BigInt {
     let quotient = numerator / denominator;
     let remainder = numerator % denominator;
     if remainder != BigInt::from(0_u8)
@@ -1731,7 +1731,7 @@ fn floor_div(numerator: &BigInt, denominator: &BigInt) -> BigInt {
 }
 
 /// Python's modulo sign rule, used with the positive modular period.
-fn mod_floor(value: &BigInt, modulus: &BigInt) -> BigInt {
+pub(crate) fn mod_floor(value: &BigInt, modulus: &BigInt) -> BigInt {
     let remainder = value % modulus;
     if remainder < BigInt::from(0_u8) {
         remainder + modulus
@@ -1758,7 +1758,7 @@ fn modular_inverse(value: &BigInt, modulus: &BigInt) -> Option<BigInt> {
     (old_r == BigInt::from(1_u8)).then(|| mod_floor(&old_s, modulus))
 }
 
-fn gcd(mut one: BigInt, mut other: BigInt) -> BigInt {
+pub(crate) fn gcd(mut one: BigInt, mut other: BigInt) -> BigInt {
     while other != BigInt::from(0_u8) {
         let remainder = one % &other;
         one = other;
