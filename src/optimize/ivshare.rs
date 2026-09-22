@@ -6,9 +6,12 @@
 use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};
 
+use num_bigint::BigInt;
+
+use crate::analysis::consts::masked;
 use crate::analysis::induction::{self, Affine, AffineOperand};
 use crate::analysis::loops;
-use crate::model::mir::{Arg, Held, Kind, MirBody, MirBlock, Op, OrderedMap, Value};
+use crate::model::mir::{Arg, Const, Held, Kind, MirBody, MirBlock, Op, OrderedMap, Value};
 use crate::optimize::strength::_made;
 use crate::optimize::transform;
 
@@ -36,35 +39,10 @@ pub(crate) fn shared(body: &Rc<MirBody>) -> Rc<MirBody> {
             if let Some(twin) = twin {
                 return Rc::new(_replacing(body, header_index, derived, twin, derived.start.width()));
             }
-            let AffineOperand::Held(start) = &derived.start else {
+            let Some((base, offset, seed)) = _offset(&counters, derived, &definitions) else {
                 continue;
-            };
-            if !matches!(derived.step, AffineOperand::Const(_)) {
-                continue;
-            }
-            let Some(seed) = definitions.get(&start.value.id).copied() else {
-                continue;
-            };
-            if seed.kind != Kind::Add || !seed.loads.is_empty() || !seed.stores.is_empty() || seed.barrier() {
-                continue;
-            }
-            let (source, offset) = match seed.args.as_slice() {
-                [Arg::Held(source), Arg::Const(offset)] => (*source, offset.clone()),
-                [Arg::Const(offset), Arg::Held(source)] => (*source, offset.clone()),
-                _ => continue,
             };
             let width = derived.start.width();
-            if source.width != width || offset.width != width {
-                continue;
-            }
-            let base = counters.values().find(|one| {
-                one.value != derived.value
-                    && one.start == AffineOperand::Held(source)
-                    && one.step == derived.step
-            });
-            let Some(base) = base else {
-                continue;
-            };
             let phi_index = header
                 .phis
                 .iter()
@@ -110,7 +88,7 @@ pub(crate) fn shared(body: &Rc<MirBody>) -> Rc<MirBody> {
                 phi.result,
                 vec![Arg::Held(Held { value: root, width }), Arg::Const(offset)],
                 header.at,
-                seed,
+                seed.unwrap_or(&header.ops[0]),
             );
             if let Some(upper) = upper {
                 let mut merges = OrderedMap::new();
@@ -127,6 +105,88 @@ pub(crate) fn shared(body: &Rc<MirBody>) -> Rc<MirBody> {
         }
     }
     body.clone()
+}
+
+/// Another counter stepping as `derived` does a constant distance behind it, the distance, and a seed.
+///
+/// Two starts are that far apart when both are one root plus a constant:
+/// `add source,c` over the other's start, or strength reduction's `a[i].x`
+/// and `a[i].y`, starting 4 apart from the same or no root. Otherwise the
+/// canonical counter is the lower id, so the pair converges.
+fn _offset<'a, 'b>(
+    counters: &'a OrderedMap<u32, Affine>,
+    derived: &Affine,
+    definitions: &BTreeMap<u32, &'b Op>,
+) -> Option<(&'a Affine, Const, Option<&'b Op>)> {
+    if !matches!(derived.step, AffineOperand::Const(_)) {
+        return None;
+    }
+    let width = derived.start.width();
+    let (root, at) = _anchor(&derived.start.as_arg(), definitions, width);
+    let seed = match &derived.start {
+        AffineOperand::Held(start) => definitions.get(&start.value.id).copied(),
+        AffineOperand::Const(_) => None,
+    };
+    let direct: &[Arg] = match seed {
+        Some(seed) if seed.kind == Kind::Add => &seed.args,
+        _ => &[],
+    };
+    let mut ordered: Vec<&Affine> = counters.values().collect();
+    ordered.sort_by_key(|one| (!direct.contains(&one.start.as_arg()), one.value));
+    for one in ordered {
+        if one.value == derived.value || one.step != derived.step {
+            continue;
+        }
+        if !direct.contains(&one.start.as_arg()) && one.value > derived.value {
+            continue;
+        }
+        let (other_root, other_at) = _anchor(&one.start.as_arg(), definitions, width);
+        if one.start.width() != width || other_root != root {
+            continue;
+        }
+        let distance = &at - other_at;
+        return Some((one, Const::new(masked(&distance, width), width), seed));
+    }
+    None
+}
+
+/// `arg` as a root value plus a constant, through copies and constant adds; a constant has no root.
+fn _anchor(arg: &Arg, definitions: &BTreeMap<u32, &Op>, width: u32) -> (Option<Value>, BigInt) {
+    let mut arg = arg.clone();
+    let mut offset = BigInt::from(0);
+    while let Arg::Held(held) = &arg {
+        if held.width != width {
+            break;
+        }
+        let Some(op) = definitions.get(&held.value.id).copied() else {
+            break;
+        };
+        if !op.loads.is_empty()
+            || !op.stores.is_empty()
+            || op.barrier()
+            || !op.merges.is_empty()
+            || op.results != [arg.clone()]
+        {
+            break;
+        }
+        let constants = op.args.iter().filter(|one| matches!(one, Arg::Const(_))).count();
+        if op.kind == Kind::Copy && op.args.len() == 1 && matches!(op.args[0], Arg::Held(_) | Arg::Const(_)) {
+            arg = op.args[0].clone();
+        } else if op.kind == Kind::Add && op.args.len() == 2 && constants == 1 {
+            let (constant, other) =
+                if matches!(op.args[0], Arg::Const(_)) { (&op.args[0], &op.args[1]) } else { (&op.args[1], &op.args[0]) };
+            let Arg::Const(constant) = constant else { unreachable!("one constant") };
+            offset += &constant.n;
+            arg = other.clone();
+        } else {
+            break;
+        }
+    }
+    match arg {
+        Arg::Const(constant) => (None, masked(&(&constant.n + offset), width)),
+        Arg::Held(held) => (Some(held.value), offset),
+        other => panic!("AttributeError: {other:?} has no attribute 'value'"),
+    }
 }
 
 /// Another counter of this loop that advances identically, or None.

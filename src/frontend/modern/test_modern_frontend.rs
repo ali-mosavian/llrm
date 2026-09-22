@@ -465,9 +465,41 @@ fn test_counted_struct_loop_uses_its_record_width_as_the_byte_stride() {
 
 #[test]
 fn test_os_copies_no_loop_into_larger_code() {
-    // -O2 unrolls the five-record update from 54 instructions to 81.
+    // -O2 unrolls the five-record update from 65 lines to 83.
     let directory = tempfile::tempdir().expect("a directory");
-    let source = written(&directory, "stride.mod", STRIDE);
+    let source = written(
+        &directory,
+        "stride.mod",
+        "\
+struct sample:
+    tag: i16
+    value: i32
+    delta: i32
+
+fn total(samples: &[sample]) -> i32:
+    var sum: i32 = 0
+    for one in &samples:
+        sum += one.value
+    return sum
+
+fn update(v: &[i32]) -> i32:
+    var samples: [sample; 5] = [
+        sample { tag: 0, value: v[0], delta: v[1] },
+        sample { tag: 0, value: v[1], delta: v[2] },
+        sample { tag: 0, value: v[2], delta: v[3] },
+        sample { tag: 0, value: v[3], delta: v[4] },
+        sample { tag: 0, value: v[4], delta: v[5] },
+    ]
+    for current in &mut samples:
+        current.value += current.delta
+    return total(&samples)
+
+fn main() -> i16:
+    let v: [i32; 6] = [1, 2, 3, 4, 5, 6]
+    update(&v)
+    return 0
+",
+    );
     let size = |options: &Options| -> usize {
         listing(&parsed(&source), "main", options).lines().filter(|line| line.starts_with("    ")).count()
     };
@@ -607,11 +639,16 @@ fn test_three_array_initializer_keeps_the_fixed_frame_address_component() {
     // sum_three wrote locals through EAX+SI after a secondary-base rewrite lost BP.
     let assembly = listing(&parsed(&fixture("sum_three.mod")), "main", &O2());
     let main = between(&assembly, "_main proc far", "call far ptr _sum_three");
-    let initializer = Regex::new(r"mov word ptr \[[^\]]+-(?:8|22|36)\],").unwrap();
-    let initializers: Vec<&str> = main.lines().filter(|line| initializer.is_match(line)).map(str::trim).collect();
+    let cells: BTreeSet<String> =
+        [-8, -22, -36].iter().flat_map(|payload| (0..4).map(move |index| format!("[bp{}]", payload + 2 * index))).collect();
+    let initializers: BTreeSet<String> = Regex::new(r"mov word ptr (\[[^\]]+\]), \d+")
+        .unwrap()
+        .captures_iter(main)
+        .map(|found| found[1].to_owned())
+        .filter(|one| cells.contains(one))
+        .collect();
 
-    assert_eq!(initializers.len(), 12);
-    assert!(initializers.iter().all(|line| line.contains("bp")));
+    assert_eq!(initializers, cells);
 }
 
 /// `sum.sum`'s optimized physical body, from `semantic` in place of its semantic MIR.
@@ -824,6 +861,24 @@ fn test_a_repeat_literal_in_the_frame_is_one_string_fill() {
 
     assert!(body.contains("rep stosd"));
     assert!(!Regex::new(r"\bj\w+\s").unwrap().is_match(body));
+}
+
+#[test]
+fn test_an_unrolled_fill_stores_to_fixed_frame_cells() {
+    // Each unrolled store of `[0; 8, 8]` loaded its constant offset into a register first: 64 extra movs.
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "unrolled_fill.mod",
+        "fn value(k: i16) -> i32:\n    var a: [i32; 8, 8] = [0; 8, 8]\n    a[k, 1] = 5\n    return a[k, 2]\nfn main() -> i16:\n    return i16(value(3))\n",
+    );
+    let assembly = listing(&parsed(&source), "main", &O2());
+    let body = &assembly[assembly.find("_value proc").unwrap()..assembly.find("_value endp").unwrap()];
+    let zeroes: Vec<String> =
+        Regex::new(r"mov dword ptr \[(.*?)\], 0\n").unwrap().captures_iter(body).map(|one| one[1].to_owned()).collect();
+
+    assert_eq!(zeroes.len(), 64);
+    assert!(zeroes.iter().all(|one| Regex::new(r"^bp-\d+$").unwrap().is_match(one)));
 }
 
 #[test]
