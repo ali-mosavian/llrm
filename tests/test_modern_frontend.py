@@ -925,6 +925,24 @@ def test_a_repeat_literal_fills_a_fixed_array(tmp_path: Path) -> None:
     assert _returned(tmp_path, text) == 29
 
 
+def test_a_repeat_literal_in_the_frame_is_one_string_fill(tmp_path: Path) -> None:
+    """The fill loop stepped its byte address to zero under `!=`, which `fill` missed: 64 stores in a loop."""
+    source = tmp_path / "frame_fill.mod"
+    source.write_text(
+        "fn value(k: i16) -> i32:\n"
+        "    var a: [i32; 64] = [0; 64]\n"
+        "    a[k] = 5\n"
+        "    return a[k] + a[k + 1]\n"
+        "fn main() -> i16:\n"
+        "    return i16(value(3))\n"
+    )
+    assembly = masm.text(modern_compile.assembled(driver.parsed(source), entry="main"))
+    body = assembly[assembly.index("_value proc") : assembly.index("_value endp")]
+
+    assert "rep stosd" in body
+    assert not re.search(r"\bj\w+\s", body)
+
+
 @pytest.mark.parametrize(
     "body",
     [

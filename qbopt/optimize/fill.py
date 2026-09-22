@@ -6,11 +6,10 @@ guard: the body runs once, fills from the cell the first pass would have
 stored, and leaves for the exit.
 
 The shape is narrow on purpose: a header holding only its exit test, and a
-body holding the store, the counters' steps and work with no effect. The
-counter the test reads steps by one, so the count is the bound less the
-counter, and one more where the bound itself runs; the cell is reached through
-a counter stepping by the cell's width, or such a counter plus something the
-loop does not change. A far cell's selector goes with it. No value the loop
+body holding the store, the counters' steps and work with no effect. The trip
+count is `induction`'s proof; the cell is reached through a counter stepping
+by the cell's width, or such a counter plus something the loop does not
+change. A far cell's selector goes with it. No value the loop
 computes may be read after it but a counter the exit takes from the header,
 which leaves the body as its start plus the count of its steps.
 """
@@ -23,15 +22,6 @@ from qbopt.analysis import loops as loopy
 from qbopt.analysis import induction
 from qbopt.objectfile.module import Space
 from qbopt.model.passes import MIRTransform
-
-# The test that keeps the loop going, by whether the bound itself runs.
-_INCLUSIVE = {mir.Kind.LT: False, mir.Kind.BELOW: False, mir.Kind.LE: True, mir.Kind.BELOW_EQ: True}
-_INVERSE = {
-    mir.Kind.GE: mir.Kind.LT,
-    mir.Kind.ABOVE_EQ: mir.Kind.BELOW,
-    mir.Kind.GT: mir.Kind.LE,
-    mir.Kind.ABOVE: mir.Kind.BELOW_EQ,
-}
 
 
 class Fill(MIRTransform):
@@ -69,41 +59,21 @@ def _filled(body: mir.MirBody, loop) -> mir.MirBody | None:
     if leaving is None or exit_at in inside:
         return None
 
-    tested = _work(header.ops)
-    if len(tested) != 2:
+    # How many trips is `induction`'s to prove, whatever the counter's step or test.
+    proofs = [
+        proof
+        for proof in induction.counted(body, loop)
+        if not proof.posttested and _work(header.ops) == [proof.compare, proof.branch]
+    ]
+    if not proofs:
         return None
-    compare, branch = tested
-    if branch.kind is not mir.Kind.BRANCH or branch.target not in header.succ:
-        return None
-    test = branch.test if branch.target == latch.at else _INVERSE.get(branch.test)
-    if test not in _INCLUSIVE:
-        return None
-    flags = [value for value in compare.defines if value.flags]
-    if (
-        compare.kind is not mir.Kind.SUB
-        or compare.results
-        or len(compare.args) != 2
-        or compare.loads
-        or compare.stores
-        or compare.barrier
-        or not flags
-        or not set(flags) & set(branch.uses)
-    ):
-        return None
-    counter, bound = compare.args
+    proof = proofs[0]
     counters = induction.basics(body, loop)
-    if len(counters) != len(header.phis) or not isinstance(counter, mir.Held) or counter.value.id not in counters:
-        return None
-    if not _stepping(counters[counter.value.id], 1):
+    if len(counters) != len(header.phis):
         return None
 
     defined = {phi.result for at in inside for phi in at_of[at].phis}
     defined |= {value for at in inside for op in at_of[at].ops for value in op.defines}
-    if not (isinstance(bound, mir.Const) or isinstance(bound, mir.Held) and bound.value not in defined):
-        return None
-    if bound.width != counter.width:
-        return None
-
     work = _work(latch.ops)
     if not work or work[-1].kind is not mir.Kind.JUMP or work[-1].target != header.at:
         return None
@@ -131,7 +101,6 @@ def _filled(body: mir.MirBody, loop) -> mir.MirBody | None:
         or ref.symbolic is not None
         or ref.allocation is not None
         or ref.base_width != 2
-        or ref.addr.space is Space.FRAME
     ):
         return None
     made = {value.id: op for op in work for value in op.defines}
@@ -156,38 +125,40 @@ def _filled(body: mir.MirBody, loop) -> mir.MirBody | None:
                 if block.at != exit_at or where != header.at or one.id not in counters:
                     return None
                 left.add(one)
-    if any(not isinstance(counters[one.id].step, mir.Const) or counters[one.id].start.width != counter.width for one in left):
+    if any(
+        not isinstance(counters[one.id].step, mir.Const) or counters[one.id].start.width != proof.width for one in left
+    ):
         return None
 
     fresh = _Fresh(body)
     at = store.at
     prefix: list[mir.Op] = []
 
-    def emit(kind: mir.Kind, operation: ir.Operation, args: tuple, width: int) -> mir.Held:
+    def emit(kind: mir.Kind, operation: ir.Operation, args: tuple, width: int, name: str = "") -> mir.Held:
         result = fresh.held(at, width)
         prefix.append(mir.Op(
-            at, operation, kind.value, (result.value,),
+            at, operation, name or kind.value, (result.value,),
             tuple(arg.value for arg in args if isinstance(arg, mir.Held)),
             kind=kind, args=args, results=(result,),
         ))  # fmt: skip
         return result
 
-    width = counter.width
-    inclusive = _INCLUSIVE[test]
-    if isinstance(bound, mir.Const):
-        negated = emit(mir.Kind.NEG, ir.Operation.UNARY, (counter,), width)
-        count = emit(mir.Kind.ADD, ir.Operation.BINARY, (negated, mir.Const(bound.n + inclusive, width)), width)
-    else:
-        count = emit(mir.Kind.SUB, ir.Operation.BINARY, (bound, counter), width)
-        if inclusive:
-            count = emit(mir.Kind.ADD, ir.Operation.BINARY, (count, mir.Const(1, width)), width)
+    count = induction.trips(proof, lambda kind, args: emit(kind, ir.Operation.BINARY, args, args[0].width))
+    if count is None:
+        return None
+    width = count.width
     finals = {}
     for one in left:
         step = counters[one.id].step
-        moved = count if step.n == 1 else emit(mir.Kind.MUL, ir.Operation.BINARY, (count, mir.Const(step.n, width)), width)
+        moved = (
+            count if step.n == 1 else emit(mir.Kind.MUL, ir.Operation.BINARY, (count, mir.Const(step.n, width)), width)
+        )
         finals[one] = emit(mir.Kind.ADD, ir.Operation.BINARY, (mir.Held(one, width), moved), width).value
     if ref.addr.space in (Space.FAR, Space.LITERAL):
         first = mir.Const(ref.addr.disp, 2)
+    elif ref.addr.space is Space.FRAME:
+        # The frame is reached through bp, which no immediate names.
+        first = emit(mir.Kind.ADDRESS, ir.Operation.ADDRESS, (mir.Cell(replace(ref, base=None, width=2)),), 2, "lea")
     else:
         first = mir.Symbol(ref.addr.space, ref.addr.index, ref.addr.disp, 2)
     address = emit(mir.Kind.ADD, ir.Operation.BINARY, (mir.Held(ref.base, 2), first), 2)
@@ -228,7 +199,10 @@ def _filled(body: mir.MirBody, loop) -> mir.MirBody | None:
             block = replace(block, phis=phis)
         elif block.at == exit_at:
             phis = tuple(
-                replace(phi, incoming={**phi.incoming, latch.at: finals.get(phi.incoming[header.at], phi.incoming[header.at])})
+                replace(
+                    phi,
+                    incoming={**phi.incoming, latch.at: finals.get(phi.incoming[header.at], phi.incoming[header.at])},
+                )
                 for phi in block.phis
             )
             block = replace(block, phis=phis)
@@ -245,7 +219,9 @@ def _offset(op: mir.Op | None, counters: dict[int, induction.Affine], defined: s
     if op is None or op.kind is not mir.Kind.ADD or op.loads or op.stores or op.barrier or len(op.args) != 2:
         return None
     for one, other in (op.args, op.args[::-1]):
-        unchanged = isinstance(other, (mir.Const, mir.Symbol)) or isinstance(other, mir.Held) and other.value not in defined
+        unchanged = (
+            isinstance(other, (mir.Const, mir.Symbol)) or isinstance(other, mir.Held) and other.value not in defined
+        )
         if isinstance(one, mir.Held) and one.value.id in counters and unchanged:
             return counters[one.value.id]
     return None
@@ -291,7 +267,9 @@ class _Fresh:
 
     def __init__(self, body: mir.MirBody) -> None:
         values = {value for block in body.blocks for op in block.ops for value in (*op.defines, *op.uses)}
-        values |= {value for block in body.blocks for phi in block.phis for value in (phi.result, *phi.incoming.values())}
+        values |= {
+            value for block in body.blocks for phi in block.phis for value in (phi.result, *phi.incoming.values())
+        }
         self.serial = max((value.id for value in values), default=0)
         self.variable = max((value.variable for value in values), default=0)
 
