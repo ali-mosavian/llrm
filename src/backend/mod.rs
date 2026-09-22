@@ -14,3 +14,4 @@ pub mod pointers;
 pub mod rmw;
 pub mod target;
 pub mod timing;
+pub mod verify;
