@@ -1,10 +1,6 @@
 //! Port of `tests/test_raising_copies.py`.
 //!
-//! Skipped, needing `flow.machine` or `transform`:
-//! `test_copy_selects_without_clobbering_arithmetic_flags`,
-//! `test_proven_copy_unlocks_strict_floating_cse`.
-//!
-//! Meanwhile a synthetic `cld / mov si / mov di / push ds / pop es / movsw`
+//! A synthetic `cld / mov si / mov di / push ds / pop es / movsw`
 //! covers `scalar`; its expected text is the same body run through Python.
 
 use std::collections::BTreeSet;
@@ -308,4 +304,60 @@ fn test_unproved_copy_environment_is_not_assumed() {
         let body = body.with_blocks(vec![body.blocks[0].with_ops(ops)]);
         assert_eq!(scalar(body.clone(), &found), body, "{change}");
     }
+}
+
+fn lowered(body: &MirBody) -> crate::model::lir::LirBody {
+    lower::lowered("copy", body, Some(&IndexMap::default()), BTreeSet::new(), Some(&IndexMap::default()), "386", Default::default())
+        .unwrap()
+}
+
+/// MOVSW preserves arithmetic flags even though its pointer offsets change.
+#[test]
+#[ignore = "fails in Python too: 0x014b: no instruction for opaque"]
+fn test_copy_selects_without_clobbering_arithmetic_flags() {
+    let (found, body) = _copy(Some(0xfc));
+    let mut low = lowered(&scalar(body, &found));
+    let frame = crate::backend::frame::of(&low, Some(&IndexMap::default()), "", None).unwrap();
+    let frame = Rc::new(std::cell::RefCell::new(frame));
+    for mut stage in crate::flow::machine(&IndexMap::default(), Some(frame), Some(&IndexMap::default()), false, "386").unwrap() {
+        low = stage.transform(low).unwrap();
+    }
+    for op in low.insns() {
+        if let Some(what) = op.what.as_ref().filter(|what| what.op == Operation::Move) {
+            let encoded = crate::backend::select::emit(what, 0, None, false, false, None).unwrap();
+            assert_eq!(declen::decode(&encoded.code, 0).unwrap().writes(), 0);
+        }
+    }
+}
+
+/// FPDEEP's repeated DOUBLE load becomes one value once d=12 is represented.
+#[test]
+#[ignore = "fails in Python too: 0x014b: no instruction for opaque"]
+fn test_proven_copy_unlocks_strict_floating_cse() {
+    let (found, body) = _copy(Some(0xfc));
+    let original = testing::nth(&testing::raised("fixtures/omf/fpdeep-p-g2.obj"), 0);
+    let floating: Vec<Op> = testing::ops(&original).into_iter().filter(|op| (0x158..=0x174).contains(&op.at)).collect();
+    let sequence: Vec<i64> = floating.iter().filter_map(|op| op.floating_origin.as_ref().map(|origin| origin.at)).collect();
+    let floating = floating.into_iter().map(|mut op| {
+        if let Some(origin) = op.floating_origin.as_mut() {
+            origin.block = body.entry;
+            origin.sequence = sequence.clone();
+        }
+        op
+    });
+    let mut ops = body.blocks[0].ops.clone();
+    ops.extend(floating);
+    let body = body.with_blocks(vec![body.blocks[0].with_ops(ops)]);
+    let body = raising_literals::initialized(scalar(body, &found), &found, None).unwrap();
+    let result = crate::optimize::transform::subexpressions(&Rc::new(body.body), &found.dgroup.members, false).unwrap();
+    assert_eq!(testing::ops(&result).iter().filter(|op| op.kind == Kind::Fload).count(), 1);
+    let low = crate::backend::floatalloc::allocated(&lowered(&result), None, false, "386").unwrap();
+    let memory_arithmetic: Vec<String> = low
+        .insns()
+        .iter()
+        .filter_map(|one| one.what.as_ref())
+        .filter(|what| what.op == Operation::FloatArith && what.sources.iter().any(|source| matches!(source, crate::model::ir::Loc::Mem(_))))
+        .map(|what| what.name.clone().unwrap_or_default())
+        .collect();
+    assert_eq!(memory_arithmetic, ["fdivr", "fmul"]);
 }
