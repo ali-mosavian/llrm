@@ -350,9 +350,7 @@ def _through_lir(
         pointer_model = pointers.Model(ir.Mem(Addr(Space.EXTERNAL, 0, index), 1, disp_width=2))
 
     symbols = {name: at for at, name in omf.pubdef_names(records, found.seg).items()}
-    terminal_calls = frozenset(
-        at for at, contract in contracts.items() if contract.established and contract.control is runtime.Control.NEVER
-    )
+    terminal_calls = noreturn.terminal_sites(contracts)
     local_calls = {at: symbols[name] for at, name in found.calls.items() if name in symbols}
     no_return = noreturn.inferred(
         {body.entry: body for _, body in bodies},
@@ -384,6 +382,7 @@ def _through_lir(
                     hints=hints[body.entry],
                     pointer_model=pointer_model,
                     noreturn=body.entry in no_return,
+                    terminal=terminal_sites,
                 ),
                 "lower",
                 in_ssa=True,

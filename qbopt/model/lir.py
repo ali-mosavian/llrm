@@ -229,7 +229,7 @@ class LirBlock:
     # allocation for the same reason, replacing each with a copy at the end
     # of the predecessor it came from.
     phis: tuple["Phi", ...] = ()
-    # See mir.MirBlock.cold.
+    # The frontend's mark (mir.MirBlock.cold) or noreturn.cold's.
     cold: bool = False
 
     @property

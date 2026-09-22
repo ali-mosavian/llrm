@@ -679,3 +679,37 @@ def test_loop_trace_is_kept_before_its_exit():
         and printed[index + 1].startswith("jmp ")
         for index in range(len(printed) - 1)
     )
+
+
+def test_a_block_that_only_reaches_a_terminal_call_is_placed_after_the_return() -> None:
+    """An error call on the branch's fall-through edge was laid out before the return.
+
+    No frontend marked it cold; the call's NEVER contract is what says so.
+    """
+    from qbopt.abi import runtime
+    from qbopt.model import mir
+    from qbopt.backend import lower
+
+    x, flags = mir.Value(1, 0), mir.Value(2, 0, flags=True)
+    compare = mir.Op(
+        1, ir.Operation.COMPARE, "", (flags,), (x,), kind=mir.Kind.SUB, args=(mir.Held(x, 2), mir.Const(0, 2))
+    )
+    branch = mir.Op(2, ir.Operation.BRANCH, "", (), (flags,), kind=mir.Kind.BRANCH, test=mir.Kind.GE, target=20)
+    raised = mir.Op(10, ir.Operation.CALL, "call", (), (), kind=mir.Kind.CALL, args_known=True)
+    returned = mir.Op(20, ir.Operation.RETURN, "ret", (), (), kind=mir.Kind.RETURN)
+    body = mir.MirBody(
+        0,
+        (
+            mir.MirBlock(0, (), (compare, branch), (10, 20)),
+            mir.MirBlock(10, (), (raised,), ()),
+            mir.MirBlock(20, (), (returned,), ()),
+        ),
+        sealed=True,
+    )
+    never = replace(
+        runtime.worst("B$RUNERR"), cleanup=0, control=runtime.Control.NEVER, established=True, inputs=frozenset()
+    )
+
+    low = lower.lowered("checked", body, {10: "B$RUNERR"}, {}, {10: never})
+
+    assert [block.at for block in jumps.placed(low).blocks] == [0, 20, 10]

@@ -568,6 +568,7 @@ def lowered(
     hints: "mir.AllocationHints | None" = None,
     pointer_model=None,
     noreturn: bool = False,
+    terminal: frozenset[int] = frozenset(),
 ) -> "lir.LirBody":
     """One MIR body as machine instructions, and nothing else.
 
@@ -581,11 +582,15 @@ def lowered(
     carry the original bytes rather than re-encode them -- a re-encode that
     lands on a longer form for the same instruction is how a rebuild grows
     without anything having been optimised.
+
+    `terminal` names calls proven not to return beyond their contracts, such
+    as calls to a local body that cannot return.
     """
     from qbopt.model import lir
     from qbopt.backend import rmw
     from qbopt.analysis import ssa
     from qbopt.backend import narrow
+    from qbopt.analysis import noreturn as noreturn_analysis
     from qbopt.backend import farload
     from qbopt.backend import comparefold
     from qbopt.backend import addressforms
@@ -704,6 +709,7 @@ def lowered(
     made = {at: _rematerialized_arguments(insns, uses, making._exposed) for at, insns in made.items()}
     live = _phis_worth_keeping(body, made)
     facts = consts.known(body)
+    cold = noreturn_analysis.cold(body, terminal | noreturn_analysis.terminal_sites(contracts))
     trip_counts = tuple(
         sorted(
             (loop.header, count)
@@ -728,7 +734,7 @@ def lowered(
                     for phi in block.phis
                     if not phi.result.flags and phi.result.id in live
                 ),
-                cold=block.cold,
+                cold=block.at in cold or block.cold,
             )
             for block in body.blocks
         ),

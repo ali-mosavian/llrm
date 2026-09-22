@@ -2803,6 +2803,22 @@ def test_the_bound_error_call_is_placed_after_the_hot_path() -> None:
     assert procedure.index("B$UBND") > returned
 
 
+def test_an_error_statement_is_placed_after_the_hot_path(tmp_path: Path) -> None:
+    """An ELSE that only raises an error was laid out before the return.
+
+    Nothing marks it cold: B$SERR never returns, and that is enough.
+    """
+    source = tmp_path / "RAISE.BAS"
+    source.write_text(
+        "DEFINT A-Z\nDECLARE SUB Check (n)\nCheck 3\nSUB Check (n)\n"
+        "  IF n >= 0 THEN\n    PRINT n\n  ELSE\n    ERROR 5\n  END IF\nEND SUB\n"
+    )
+    text = masm.text(qb_compile.assembled(qb_driver.parsed(source)))
+    procedure = text[text.index("CHECK proc") : text.index("CHECK endp")]
+
+    assert procedure.index("B$SERR") > procedure.index("retf")
+
+
 def test_the_first_dimension_is_not_rank_checked() -> None:
     """LBOUND(a, 1) compared the rank against 1 before reading the descriptor.
 

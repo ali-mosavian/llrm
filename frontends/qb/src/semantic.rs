@@ -3934,12 +3934,11 @@ impl Compiler {
         let first = matches!(dimension, Operand::Constant(_, Number::Integer(1)));
         let read = self.new_block();
         let ranking = self.new_block();
-        let call = checked.then(|| self.new_block());
+        // The runtime is called only to raise "Subscript out of range".
+        let call = checked.then(|| self.error_block());
         let done = self.new_block();
 
         if let Some(call) = call {
-            // The runtime is called only to raise "Subscript out of range".
-            self.mark_cold(call);
             let data = self.descriptor_field(descriptor, 2, INTEGER);
             let allocated = self.value(BOOLEAN);
             let zero = Operand::Constant(INTEGER, Number::Integer(0));
@@ -6803,10 +6802,12 @@ impl Compiler {
         id
     }
 
-    fn mark_cold(&mut self, id: u32) {
-        if let Some(block) = self.blocks.iter_mut().find(|block| block.id == id) {
-            block.cold = true;
-        }
+    /// A block that exists only to raise a runtime error. A call that never
+    /// returns is cold without this; it is for one that returns in general.
+    fn error_block(&mut self) -> u32 {
+        let id = self.new_block();
+        self.blocks.last_mut().expect("new_block pushed it").cold = true;
+        id
     }
 
     fn select_block(&mut self, id: u32) {
