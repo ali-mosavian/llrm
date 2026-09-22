@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::support::hash::IndexMap;
+use crate::support::hash::{HashMap, HashSet, IndexMap};
 
 use crate::analysis::{liveness, loops};
 use crate::model::mir::{Arg, Kind, MirBlock, MirBody, Op, Value};
@@ -252,18 +252,17 @@ pub(crate) fn spill_risk(
     }
 
     let found = liveness::live(body);
-    let mut spilled: BTreeSet<Value> = BTreeSet::new();
     let mut risk = 0;
 
+    let floating: HashSet<Value> = floating.into_iter().collect();
+    let traffic: HashMap<Value, i64> = traffic.into_iter().collect();
+    let mut spilled: HashSet<Value> = HashSet::default();
     let mut account = |alive: &BTreeSet<Value>| {
-        let values = alive
-            .iter()
-            .filter(|value| !value.flags && !floating.contains(value) && !spilled.contains(value))
-            .copied()
-            .collect::<Vec<_>>();
-        let excess = values.len() as i64 - capacity;
+        let resident = |value: &&Value| !value.flags && !floating.contains(*value) && !spilled.contains(*value);
+        // Counted first: most points fit, and then nothing is collected.
+        let excess = alive.iter().filter(resident).count() as i64 - capacity;
         if excess > 0 {
-            let mut selected = values;
+            let mut selected = alive.iter().filter(resident).copied().collect::<Vec<_>>();
             selected.sort_by_key(|value| (traffic.get(value).copied().unwrap_or(0), value.id));
             selected.truncate(excess as usize);
             risk += selected.iter().map(|value| traffic.get(value).copied().unwrap_or(0)).sum::<i64>();
