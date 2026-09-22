@@ -6,8 +6,6 @@
 use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};
 
-use num_bigint::BigInt;
-
 use crate::analysis::consts::masked;
 use crate::analysis::induction::{self, Affine, AffineOperand};
 use crate::analysis::loops;
@@ -122,7 +120,7 @@ fn _offset<'a, 'b>(
         return None;
     }
     let width = derived.start.width();
-    let (root, at) = _anchor(&derived.start.as_arg(), definitions, width);
+    let (root, at) = induction::anchored(&derived.start.as_arg(), definitions, width, None);
     let seed = match &derived.start {
         AffineOperand::Held(start) => definitions.get(&start.value.id).copied(),
         AffineOperand::Const(_) => None,
@@ -140,7 +138,7 @@ fn _offset<'a, 'b>(
         if !direct.contains(&one.start.as_arg()) && one.value > derived.value {
             continue;
         }
-        let (other_root, other_at) = _anchor(&one.start.as_arg(), definitions, width);
+        let (other_root, other_at) = induction::anchored(&one.start.as_arg(), definitions, width, None);
         if one.start.width() != width || other_root != root {
             continue;
         }
@@ -148,45 +146,6 @@ fn _offset<'a, 'b>(
         return Some((one, Const::new(masked(&distance, width), width), seed));
     }
     None
-}
-
-/// `arg` as a root value plus a constant, through copies and constant adds; a constant has no root.
-fn _anchor(arg: &Arg, definitions: &BTreeMap<u32, &Op>, width: u32) -> (Option<Value>, BigInt) {
-    let mut arg = arg.clone();
-    let mut offset = BigInt::from(0);
-    while let Arg::Held(held) = &arg {
-        if held.width != width {
-            break;
-        }
-        let Some(op) = definitions.get(&held.value.id).copied() else {
-            break;
-        };
-        if !op.loads.is_empty()
-            || !op.stores.is_empty()
-            || op.barrier()
-            || !op.merges.is_empty()
-            || op.results != [arg.clone()]
-        {
-            break;
-        }
-        let constants = op.args.iter().filter(|one| matches!(one, Arg::Const(_))).count();
-        if op.kind == Kind::Copy && op.args.len() == 1 && matches!(op.args[0], Arg::Held(_) | Arg::Const(_)) {
-            arg = op.args[0].clone();
-        } else if op.kind == Kind::Add && op.args.len() == 2 && constants == 1 {
-            let (constant, other) =
-                if matches!(op.args[0], Arg::Const(_)) { (&op.args[0], &op.args[1]) } else { (&op.args[1], &op.args[0]) };
-            let Arg::Const(constant) = constant else { unreachable!("one constant") };
-            offset += &constant.n;
-            arg = other.clone();
-        } else {
-            break;
-        }
-    }
-    match arg {
-        Arg::Const(constant) => (None, masked(&(&constant.n + offset), width)),
-        Arg::Held(held) => (Some(held.value), offset),
-        other => panic!("AttributeError: {other:?} has no attribute 'value'"),
-    }
 }
 
 /// Another counter of this loop that advances identically, or None.

@@ -880,6 +880,23 @@ fn test_a_fill_leaves_the_rest_of_its_function_priceable() {
 }
 
 #[test]
+fn test_a_ranked_repeat_literal_at_os_is_one_string_fill() {
+    // `[0; 8, 8]` at -Os was an 8-trip loop around an 8-cell loop: its count was unproved and nested fills never merged.
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "nested_fill.mod",
+        "fn value(k: i16) -> i32:\n    var a: [i32; 8, 8] = [0; 8, 8]\n    a[k, 1] = 5\n    return a[k, 2]\nfn main() -> i16:\n    return i16(value(3))\n",
+    );
+    let assembly = listing(&parsed(&source), "main", &level("Os"));
+    let body = &assembly[assembly.find("_value proc").unwrap()..assembly.find("_value endp").unwrap()];
+
+    assert_eq!(body.matches("rep stosd").count(), 1);
+    assert!(body.contains("mov cx, 64"));
+    assert!(!Regex::new(r"\bj\w+\s").unwrap().is_match(body));
+}
+
+#[test]
 fn test_an_unrolled_fill_stores_to_fixed_frame_cells() {
     // Each unrolled store of `[0; 8, 8]` loaded its constant offset into a register first: 64 extra movs.
     let directory = tempfile::tempdir().expect("a directory");

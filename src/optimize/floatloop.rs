@@ -13,7 +13,7 @@ use crate::support::hash::IndexMap;
 use num_bigint::BigInt;
 
 use crate::analysis::{consts, floatfacts, induction, loops, regions, ssa};
-use crate::model::mir::{self, Arg, Cell, Const, Held, Kind, MemRef, MirBlock, MirBody, Op, OrderedMap, Value};
+use crate::model::mir::{self, Arg, Cell, Const, Held, Kind, MemRef, MirBlock, MirBody, Op, Value};
 use crate::optimize::{strength, transform};
 
 /// Direct port of `qbopt/optimize/floatloop.py:specialized`.
@@ -214,24 +214,6 @@ fn _store(beside: &Op, reference: &MemRef, value: Const) -> Op {
 }
 
 /// Direct port of `qbopt/optimize/floatloop.py:_jump`.
-fn _jump(beside: &Op, destination: i64) -> Op {
-    let mut op = beside.clone();
-    op.kind = Kind::Jump;
-    op.name = String::new();
-    op.args = Vec::new();
-    op.results = Vec::new();
-    op.uses = Vec::new();
-    op.defines = Vec::new();
-    op.loads = Vec::new();
-    op.stores = Vec::new();
-    op.merges = OrderedMap::new();
-    op.source_backed = false;
-    op.raised = Some((Vec::new(), Vec::new()));
-    op.target = Some(destination);
-    op.test = None;
-    op
-}
-
 /// Direct port of `qbopt/optimize/floatloop.py:_rewritten`.
 #[allow(clippy::too_many_arguments)]
 fn _rewritten(
@@ -272,7 +254,7 @@ fn _rewritten(
         let mut block = block.clone();
         if block.at == header.at {
             let last = block.ops.pop().expect("the header ends in a branch");
-            block.ops.push(_jump(&last, latch.at));
+            block.ops.push(mir::jump(&last, latch.at));
             block.succ = vec![latch.at];
         } else if block.at == latch.at {
             let mut ops = Vec::new();
@@ -283,7 +265,7 @@ fn _rewritten(
                 }
             }
             let end = block.ops.last().expect("the latch has an operation").at;
-            let mut jump = _jump(header.ops.last().expect("the header ends in a branch"), exit_at);
+            let mut jump = mir::jump(header.ops.last().expect("the header ends in a branch"), exit_at);
             jump.at = end;
             jump.absorbed = Vec::new();
             ops.push(jump);
