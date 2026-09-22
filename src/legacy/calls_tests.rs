@@ -39,7 +39,8 @@ fn constant_operand(value: i64) -> Operand {
 }
 
 fn encoded(instruction: Instruction) -> Instruction {
-    let block = InstructionBlock::new(&[instruction], 0);
+    let instructions = [instruction];
+    let block = InstructionBlock::new(&instructions, 0);
     let code = BlockEncoder::encode(BITNESS, block, BlockEncoderOptions::NONE).unwrap().code_buffer;
     decoded(&code)[0]
 }

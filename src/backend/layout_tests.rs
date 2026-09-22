@@ -358,7 +358,7 @@ fn test_a_jump_over_a_block_holding_a_phi_copy_is_kept() {
             pair[0].insn.flow_control() == FlowControl::ConditionalBranch
                 && pair[0].insn.near_branch_target() == pair[1].at as u64
         })
-        .map(|pair| format!("{:#x}: {}", pair[0].at, pair[0].insn))
+        .map(|pair| format!("{:#x}: {:?}", pair[0].at, pair[0].insn.mnemonic()))
         .collect();
     assert!(collapsed.is_empty(), "{collapsed:?}");
 }
