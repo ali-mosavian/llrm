@@ -311,7 +311,7 @@ fn offsets(
                     };
                     let constant = induction::_signed(
                         &Arg::Const(invariant.clone()),
-                        &BTreeMap::new(),
+                        &indexmap::IndexMap::new(),
                         invariant.width,
                     )
                     .expect("a constant has its signed form");
@@ -375,7 +375,7 @@ fn offsets(
                 {
                     induction::_signed(
                         &Arg::Const((*constant).clone()),
-                        &BTreeMap::new(),
+                        &indexmap::IndexMap::new(),
                         constant.width,
                     )
                 }
@@ -413,7 +413,7 @@ fn offsets(
 ///
 /// Direct port of `qbopt/optimize/indvars.py:symbolically_zeroed`.
 pub(crate) fn symbolically_zeroed(body: &MirBody) -> Result<MirBody, SubstitutionError> {
-    let facts = consts::known(body);
+    let facts = consts::known(body, None, None, None, None);
     let blocks = body
         .blocks
         .iter()
@@ -443,7 +443,7 @@ pub(crate) fn symbolically_zeroed(body: &MirBody) -> Result<MirBody, Substitutio
     let values = ssa::values(body).collect::<Vec<_>>();
 
     for loop_ in loops::loops(&body.blocks, Some(body.entry)) {
-        let proofs = induction::counted_with_facts(body, &loop_, &facts);
+        let proofs = induction::counted(body, &loop_, Some(&facts));
         if proofs.len() != 1 {
             continue;
         }
@@ -452,8 +452,8 @@ pub(crate) fn symbolically_zeroed(body: &MirBody) -> Result<MirBody, Substitutio
         let header = &body.blocks[header_index];
         let inside = loop_.body.clone();
         for candidate in induction::basics(body, &loop_).values() {
-            let Some(symbolic) = induction::zero_terminating_control_with_facts(
-                body, &loop_, proof, candidate, &facts,
+            let Some(symbolic) = induction::zero_terminating_control(
+                body, &loop_, proof, candidate, Some(&facts),
             ) else {
                 continue;
             };
@@ -1007,14 +1007,14 @@ mod tests {
         let body = symbolic_control_body(5);
         let mut found = loops::loops(&body.blocks, Some(body.entry));
         let loop_ = found.remove(0);
-        let proof = induction::counted(&body, &loop_).remove(0);
+        let proof = induction::counted(&body, &loop_, None).remove(0);
         let basics = induction::basics(&body, &loop_);
         let candidate = basics
             .values()
             .find(|candidate| *candidate != &proof.counter)
             .expect("the second affine recurrence exists");
 
-        assert!(induction::zero_terminating_control(&body, &loop_, &proof, candidate).is_none());
+        assert!(induction::zero_terminating_control(&body, &loop_, &proof, candidate, None).is_none());
         assert_eq!(symbolically_zeroed(&body).unwrap(), body);
     }
 
@@ -1024,14 +1024,14 @@ mod tests {
         let body = symbolic_control_body(0);
         let mut found = loops::loops(&body.blocks, Some(body.entry));
         let loop_ = found.remove(0);
-        let proof = induction::counted(&body, &loop_).remove(0);
+        let proof = induction::counted(&body, &loop_, None).remove(0);
         let basics = induction::basics(&body, &loop_);
         let candidate = basics
             .values()
             .find(|candidate| *candidate != &proof.counter)
             .expect("the second affine recurrence exists");
 
-        let proven = induction::zero_terminating_control(&body, &loop_, &proof, candidate)
+        let proven = induction::zero_terminating_control(&body, &loop_, &proof, candidate, None)
             .expect("zero-seeded recurrence has the proven final zero");
         assert_eq!(proven.replacement.counted, &proof);
         assert_eq!(proven.candidate, *candidate);

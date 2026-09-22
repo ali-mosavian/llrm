@@ -60,7 +60,7 @@ pub(crate) fn reduced_direct(
     body: &MirBody,
     layout: Option<&RegionLayout>,
 ) -> Result<MirBody, StrengthError> {
-    let found = induction::of(body, layout)?;
+    let found = induction::of(body, &std::collections::BTreeSet::new(), layout)?;
     if found.is_empty() {
         return Ok(body.clone());
     }

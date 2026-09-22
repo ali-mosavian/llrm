@@ -98,7 +98,7 @@ pub(crate) fn current_call_constants(
     arguments: &IndexMap<i64, BTreeSet<i64>>,
     parameters: &IndexMap<String, Vec<MemRef>>,
 ) -> IndexMap<i64, Vec<Option<Const>>> {
-    let facts = consts::known(body);
+    let facts = consts::known(body, None, None, None, None);
     let mut out = IndexMap::new();
     for block in &body.blocks {
         for (index, call) in block.ops.iter().enumerate() {
@@ -129,7 +129,7 @@ pub(crate) fn current_call_constants(
     out
 }
 
-fn _constant_argument(argument: &Arg, facts: &BTreeMap<Value, consts::Known>) -> Option<Const> {
+fn _constant_argument(argument: &Arg, facts: &IndexMap<Value, consts::Known>) -> Option<Const> {
     if let Arg::Const(argument) = argument {
         return Some(Const::new(consts::masked(&argument.n, argument.width), argument.width));
     }
@@ -191,7 +191,7 @@ pub(crate) fn specialize_parameters(body: &MirBody, parameters: &[MemRef], const
 pub(crate) fn constant_returns(bodies: &IndexMap<String, MirBody>) -> Returns {
     let mut out = Returns::new();
     for (name, body) in bodies {
-        let facts = consts::known(body);
+        let facts = consts::known(body, None, None, None, None);
         let mut returned = Vec::new();
         let mut complete = true;
         for block in &body.blocks {

@@ -2253,7 +2253,7 @@ pub fn lowered(
         .map(|(at, insns)| (at, _rematerialized_arguments(&insns, &uses, &making._exposed)))
         .collect();
     let live = _phis_worth_keeping(&body, &made);
-    let facts = consts::known(&body);
+    let facts = consts::known(&body, None, None, None, None);
     let mut trip_counts: Vec<(i64, i64)> = loops::loops(&body.blocks, Some(body.entry))
         .iter()
         .filter_map(|one| {
