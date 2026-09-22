@@ -1,16 +1,8 @@
 //! Port of `tests/test_raising_copies.py`.
 //!
-//! Skipped, needing `mir.bodies` on FPDEEP (`_copy`), `lower.lowered`,
-//! `raising_literals`, `consts.known`, `flow.machine` or `transform`:
-//! `test_copy_has_explicit_memory_and_pointer_results`,
-//! `test_only_observed_pointer_results_cross_the_raise_boundary`,
-//! `test_pointer_used_on_a_successor_edge_survives`,
-//! `test_forward_copy_propagates_the_double_literal`,
-//! `test_copy_environment_survives_only_agreeing_predecessors`,
+//! Skipped, needing `flow.machine` or `transform`:
 //! `test_copy_selects_without_clobbering_arithmetic_flags`,
-//! `test_copy_does_not_advance_a_symbol_beyond_its_segment`,
-//! `test_proven_copy_unlocks_strict_floating_cse`,
-//! `test_unproved_copy_environment_is_not_assumed`.
+//! `test_proven_copy_unlocks_strict_floating_cse`.
 //!
 //! Meanwhile a synthetic `cld / mov si / mov di / push ds / pop es / movsw`
 //! covers `scalar`; its expected text is the same body run through Python.
@@ -23,8 +15,19 @@ use crate::frontend::declen;
 use crate::model::ir::nodes::Opaque;
 use crate::model::ir::Effects;
 use crate::model::mir::{MirBlock, MirBody};
+use std::rc::Rc;
+
+use num_bigint::BigInt;
+
+use crate::analysis::consts;
+use crate::backend::lower;
+use crate::frontend::raising_literals;
+use crate::model::ir::semantics::instruction_effects;
+use crate::model::mir::Phi;
+use crate::objectfile::module::literal_only;
 use crate::objectfile::module::tests::{fixtures, loaded};
 use crate::support::pyrepr::Repr;
+use crate::support::testing;
 
 fn occurrence(at: usize, raw: &[u8], defs: &[Register], op: Op) -> Op {
     let mut code = vec![0; at];
@@ -120,4 +123,189 @@ fn scalar_copies_a_proven_movsw_as_python_does() {
     assert_eq!(summary(&scalar(body(5, 0x10, true), &found)), expected);
     // Without `push ds / pop es` the selector is unproved and nothing changes.
     assert_eq!(scalar(body(5, 0x10, false), &found), body(5, 0x10, false));
+}
+
+fn _instruction(raw: &[u8]) -> Op {
+    let mut code = vec![0; 0x14b];
+    code.extend_from_slice(raw);
+    let decoded = declen::decode(&code, 0x14b).unwrap();
+    let effects = instruction_effects(&decoded, &literal_only);
+    let covers = (decoded.at as i64, decoded.end() as i64);
+    let mut op = Op::new(decoded.at as i64, OpCode::Operation(Operation::Barrier), "", vec![], vec![]);
+    op.memory_complete = effects.memory_complete;
+    op.loads = effects.loads.iter().map(|cell| MemRef::new(cell.addr, cell.width)).collect();
+    op.stores = effects.stores.iter().map(|cell| MemRef::new(cell.addr, cell.width)).collect();
+    mir::raising_occurrence(&op, covers, Vec::new(), Some(Arc::new(Node::Opaque(Opaque::new(decoded, effects)))))
+}
+
+/// FPDEEP's `d = 12` copy, alone in one block, after `byte` (a direction flag setter) if any.
+fn _copy(byte: Option<u8>) -> (Module, RaisedBody) {
+    let path = "fixtures/omf/fpdeep-p-g2.obj";
+    let found = testing::loaded(path).unwrap();
+    let raised = mir::bodies(&found, &testing::partitioned(path), None, false, false).unwrap();
+    let public = &raised.values[0].1;
+    let body = mir::_with_hints(public, &raised.hints[&public.entry]);
+    let with_node = |op: &Op| {
+        let mut op = op.clone();
+        let node = op.id.and_then(|id| raised.source.nodes.get(&id)).cloned();
+        op.raising = Some(Box::new(mir::Raising { node, covers: None, extra_covers: Vec::new() }));
+        op
+    };
+    let mut ops: Vec<Op> =
+        body.blocks.iter().flat_map(|block| &block.ops).filter(|op| (0x14c..=0x157).contains(&op.at)).map(with_node).collect();
+    if let Some(byte) = byte {
+        ops.insert(0, _instruction(&[byte]));
+    }
+    let mut body = body.with_blocks(vec![MirBlock::new(body.entry, vec![], ops, vec![])]);
+    body.body.initial = vec![];
+    (found, body)
+}
+
+fn kinds(block: &MirBlock, kind: Kind) -> Vec<Op> {
+    block.ops.iter().filter(|op| op.kind == kind).cloned().collect()
+}
+
+/// FPDEEP's d=12 needs memory effects, not eight unused pointer definitions.
+#[test]
+#[ignore = "fails in Python too: lowered refuses the cld, 'no instruction for opaque'"]
+fn test_copy_has_explicit_memory_and_pointer_results() {
+    for (byte, step) in [(0xfc, 2), (0xfd, -2)] {
+        let (found, body) = _copy(Some(byte));
+        let raised = scalar(body, &found);
+        let (reads, writes) = (kinds(&raised.blocks[0], Kind::Load), kinds(&raised.blocks[0], Kind::Store));
+        let disps = |ops: &[Op], stores: bool| -> Vec<i64> {
+            ops.iter().map(|op| if stores { &op.stores[0] } else { &op.loads[0] }.addr.unwrap().disp).collect()
+        };
+        assert_eq!(disps(&reads, false), (0..4).map(|index| 0x22 + step * index).collect::<Vec<_>>());
+        assert_eq!(disps(&writes, true), (0..4).map(|index| 0x1a + step * index).collect::<Vec<_>>());
+        assert!(reads.iter().zip(&writes).all(|(load, store)| store.args == load.results));
+        assert!(!raised.blocks[0].ops.iter().any(|op| !op.merges.is_empty() && op.at >= 0x154));
+        let lowered = lower::lowered("copy", &raised, Some(&IndexMap::default()), BTreeSet::new(), Some(&IndexMap::default()), "386", Default::default())
+            .unwrap();
+        let moves = lowered.insns().into_iter().filter(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Move));
+        assert_eq!(moves.count(), 8, "{byte:#x}");
+    }
+}
+
+/// Reading the last copy's pointer must not resurrect its three intermediate updates.
+#[test]
+fn test_only_observed_pointer_results_cross_the_raise_boundary() {
+    let (found, body) = _copy(Some(0xfc));
+    let original = body.blocks[0].ops.clone();
+    let last = original.last().unwrap().defines[0];
+    let cell = MemRef::new(None, 4);
+    let mut observe = Op::new(0x158, OpCode::Operation(Operation::Move), "mov", vec![], vec![last]);
+    observe.kind = Kind::Store;
+    observe.args = vec![Arg::Held(Held { value: last, width: 4 })];
+    observe.stores = vec![cell.clone()];
+    observe.results = vec![Arg::Cell(Cell { r#ref: cell })];
+    let mut ops = original.clone();
+    ops.push(observe);
+    let body = body.with_blocks(vec![body.blocks[0].with_ops(ops)]);
+    let result = scalar(body.clone(), &found);
+    let updates: Vec<Op> = kinds(&result.blocks[0], Kind::Copy).into_iter().filter(|op| op.at >= 0x154).collect();
+    assert!(updates.len() == 1 && updates[0].defines == [last]);
+    let first = original.iter().find(|op| op.at == 0x154).unwrap();
+    let before = *first.uses.iter().find(|value| body.origin.get(value) == body.origin.get(&last)).unwrap();
+    assert_eq!(updates[0].merges, [(before, last)].into_iter().collect());
+    assert_eq!(updates[0].results, [Arg::Held(Held { value: last, width: 2 })]);
+}
+
+/// Copy outputs consumed by a phi are uses even without a local reader.
+#[test]
+fn test_pointer_used_on_a_successor_edge_survives() {
+    let (found, body) = _copy(Some(0xfc));
+    let entry = body.blocks[0].clone();
+    let last = entry.ops.last().unwrap().defines[0];
+    let joined = Value { id: last.id + 1000, at: 0x200, version: last.version + 1, ..last };
+    let mut phi = Phi::new(joined);
+    phi.incoming.insert(entry.at, last);
+    let successor = MirBlock::new(0x200, vec![phi], vec![], vec![]);
+    let mut head = entry.clone();
+    head.succ = vec![successor.at];
+    let result = scalar(body.with_blocks(vec![head, successor]), &found);
+    let updates: Vec<Op> = kinds(&result.blocks[0], Kind::Copy).into_iter().filter(|op| op.at >= 0x154).collect();
+    assert!(updates.len() == 1 && updates[0].defines == [last]);
+}
+
+/// The FPDEEP initializer is binary64 12, not an unknown write or an entry value of d.
+#[test]
+fn test_forward_copy_propagates_the_double_literal() {
+    let (found, body) = _copy(Some(0xfc));
+    let body = raising_literals::initialized(scalar(body, &found), &found, None).unwrap();
+    let known = consts::known(&Rc::new(body.body.clone()), Some(&found.dgroup.members), Some(&IndexMap::default()), None, None);
+    let values: Vec<BigInt> = kinds(&body.blocks[0], Kind::Store)
+        .iter()
+        .map(|op| {
+            let Arg::Held(held) = &op.args[0] else { panic!("{:?}", op.args) };
+            known[&held.value].n.clone()
+        })
+        .collect();
+    assert_eq!(values, [0, 0, 0, 0x4028].map(BigInt::from));
+}
+
+/// FPDEEP's d=12 copy must not become unknown just because setup crosses an
+/// edge; a backwards incoming path must still prevent folding it.
+#[test]
+fn test_copy_environment_survives_only_agreeing_predecessors() {
+    for conflict in [&b""[..], b"\xfd", b"\x1f", b"\x9a\x00\x00\x00\x00"] {
+        let (found, body) = _copy(Some(0xfc));
+        let entry = body.blocks[0].clone();
+        let (setup, copying) = entry.ops.split_at(5);
+        let left = MirBlock::new(0x180, vec![], vec![], vec![0x200]);
+        let right = MirBlock::new(
+            0x190,
+            vec![],
+            if conflict.is_empty() { vec![] } else { vec![_instruction(conflict)] },
+            vec![0x200],
+        );
+        let join = MirBlock::new(0x200, vec![], copying.to_vec(), vec![]);
+        let mut head = entry.with_ops(setup.to_vec());
+        head.succ = vec![left.at, right.at];
+        let body = body.with_blocks(vec![head.clone(), left.clone(), right.clone(), join.clone()]);
+        let raised = scalar(body.clone(), &found);
+        let stores = kinds(raised.blocks.last().unwrap(), Kind::Store);
+        assert_eq!(stores.len(), if conflict.is_empty() { 4 } else { 0 }, "{conflict:x?}");
+        let reordered = body.with_blocks(vec![join, right, left, head]);
+        let raised = scalar(reordered, &found);
+        assert_eq!(kinds(&raised.blocks[0], Kind::Store).len(), stores.len(), "{conflict:x?}");
+    }
+}
+
+/// A near-pointer wrap is not an address in the next relocated segment.
+#[test]
+fn test_copy_does_not_advance_a_symbol_beyond_its_segment() {
+    let (found, body) = _copy(Some(0xfc));
+    let limits = omf::segments(&found.records);
+    let ops = body.blocks[0]
+        .ops
+        .iter()
+        .map(|op| {
+            let mut op = op.clone();
+            if op.at == 0x14f {
+                let Arg::Symbol(symbol) = &op.args[0] else { panic!("{:?}", op.args) };
+                let size = limits[symbol.index as usize].as_ref().unwrap().1;
+                op.args = vec![Arg::Symbol(Symbol { offset: size - 2, ..symbol.clone() })];
+            }
+            op
+        })
+        .collect();
+    let body = body.with_blocks(vec![body.blocks[0].with_ops(ops)]);
+    assert_eq!(scalar(body.clone(), &found), body);
+}
+
+#[test]
+fn test_unproved_copy_environment_is_not_assumed() {
+    for change in ["unknown_direction", "unknown_selector", "changed_data_segment", "call"] {
+        let (found, body) = _copy(if change == "unknown_direction" { None } else { Some(0xfc) });
+        let mut ops = body.blocks[0].ops.clone();
+        match change {
+            "unknown_selector" => ops.retain(|op| op.at != 0x152),
+            "changed_data_segment" => ops.insert(1, _instruction(b"\x1f")),
+            "call" => ops.insert(1, _instruction(b"\x9a\x00\x00\x00\x00")),
+            _ => {}
+        }
+        let body = body.with_blocks(vec![body.blocks[0].with_ops(ops)]);
+        assert_eq!(scalar(body.clone(), &found), body, "{change}");
+    }
 }
