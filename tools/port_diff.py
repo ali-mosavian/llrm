@@ -22,6 +22,7 @@ hash order, not a fact of the compiler.
 
 import os
 import sys
+import shutil
 import argparse
 import subprocess
 from pathlib import Path
@@ -196,6 +197,15 @@ def qb_flags(source: Path) -> list[str]:
     return sidecar.read_text().split() if sidecar.is_file() else []
 
 
+def _fresh(work: Path) -> tuple[Path, Path]:
+    """Empty `python` and `rust` dump folders: a file an earlier run left is not this run's stage."""
+    made = work / "python", work / "rust"
+    for one in made:
+        shutil.rmtree(one, ignore_errors=True)
+        one.mkdir(parents=True)
+    return made
+
+
 def oracle_env() -> dict[str, str]:
     """This checkout's qbopt first: a script's own folder does not make the checkout importable."""
     path = os.pathsep.join(filter(None, (str(ROOT), os.environ.get("PYTHONPATH"))))
@@ -203,9 +213,7 @@ def oracle_env() -> dict[str, str]:
 
 
 def run_qb(source: Path, work: Path, rust: Path) -> Result:
-    python_dir, rust_dir = work / "python", work / "rust"
-    for one in (python_dir, rust_dir):
-        one.mkdir(parents=True, exist_ok=True)
+    python_dir, rust_dir = _fresh(work)
     env = oracle_env()
     if QBFRONT.is_file():
         env.setdefault("QBOPT_QBFRONT", str(QBFRONT))
@@ -254,9 +262,7 @@ def _level(flags: list[str]) -> list[str]:
 
 
 def run_modern(source: Path, work: Path, rust: Path, frontend: Path) -> Result:
-    python_dir, rust_dir = work / "python", work / "rust"
-    for one in (python_dir, rust_dir):
-        one.mkdir(parents=True, exist_ok=True)
+    python_dir, rust_dir = _fresh(work)
     env = {**oracle_env(), "QBOPT_MODERNFRONT": str(frontend)}
     flags = qb_flags(source)
     made = subprocess.run(
@@ -290,9 +296,7 @@ def run_modern(source: Path, work: Path, rust: Path, frontend: Path) -> Result:
 
 
 def run(source: Path, work: Path, rust: Path, opt: bool) -> Result:
-    python_dir, rust_dir = work / "python", work / "rust"
-    for one in (python_dir, rust_dir):
-        one.mkdir(parents=True, exist_ok=True)
+    python_dir, rust_dir = _fresh(work)
     flags = ["--opt"] if opt else []
     env = oracle_env()
     made = subprocess.run(

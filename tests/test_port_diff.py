@@ -145,6 +145,20 @@ def test_a_modern_source_reaches_both_compilers_through_one_frontend(
     assert frontends == ["modernfront"] * 3
 
 
+def test_an_earlier_runs_refusal_is_not_this_runs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """bench/c failed 0/8 on a refusal left by a run without wccq, though every stage now matched."""
+    work = tmp_path / "work"
+    _dump(work / "python", {"refusal": "gone\n"})
+    _dump(work / "rust", {"refusal": "gone too\n"})
+
+    def run(command: list[str], **_: object) -> subprocess.CompletedProcess:
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(port_diff.subprocess, "run", run)
+    result = port_diff.run(tmp_path / "one.c", work, Path("llrm-c"), opt=False)
+    assert (result.total, result.first) == (0, None)
+
+
 def test_the_recorded_corpus_keeps_each_compiles_flags(tmp_path: Path) -> None:
     """A parity source at default flags is already diffed; the same source at other flags is not."""
     import qb_port_corpus
