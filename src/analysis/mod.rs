@@ -17,6 +17,7 @@ pub(crate) mod loops;
 pub mod memoryssa;
 pub(crate) mod noreturn;
 pub mod observers;
+pub(crate) mod peelsize;
 pub(crate) mod occurrence;
 pub mod pointerfacts;
 pub(crate) mod ranges;

@@ -212,22 +212,6 @@ fn inverse(kind: Kind) -> Kind {
     }
 }
 
-fn swapped(kind: Kind) -> Kind {
-    match kind {
-        Kind::Eq => Kind::Eq,
-        Kind::Ne => Kind::Ne,
-        Kind::Lt => Kind::Gt,
-        Kind::Gt => Kind::Lt,
-        Kind::Le => Kind::Ge,
-        Kind::Ge => Kind::Le,
-        Kind::Below => Kind::Above,
-        Kind::Above => Kind::Below,
-        Kind::BelowEq => Kind::AboveEq,
-        Kind::AboveEq => Kind::BelowEq,
-        _ => panic!("KeyError: {kind}"),
-    }
-}
-
 /// `ARITHMETIC`: the kind, and whether it commutes.
 fn arithmetic_kind(cg_op: &str) -> Option<(Kind, bool)> {
     Some(match cg_op {
@@ -1141,17 +1125,11 @@ impl<'a> _Raise<'a> {
         let width = 2.max(self.width(type_)?);
         let got = self.eval(left)?;
         let coerced = self.coerced(got, left, type_)?;
-        let mut a = self.narrowed(coerced, width)?;
+        let a = self.narrowed(coerced, width)?;
         let got = self.eval(right)?;
         let coerced = self.coerced(got, right, type_)?;
-        let mut b = self.narrowed(coerced, width)?;
-        let mut test = if signed(type_) { tests(cg_op).0 } else { tests(cg_op).1 };
-        if let Operand::Const(_) = a {
-            (a, b, test) = (b, a, swapped(test));
-        }
-        if let Operand::Const(_) = a {
-            a = Operand::Held(held(self.copy(&a), width));
-        }
+        let b = self.narrowed(coerced, width)?;
+        let test = if signed(type_) { tests(cg_op).0 } else { tests(cg_op).1 };
         let flags = self.fresh_value(true);
         self.op(Kind::Sub, vec![], vec![a.arg(), b.arg()], Some(vec![flags]), None, Extra::default());
         Ok((flags, test))
