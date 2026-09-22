@@ -3,6 +3,7 @@
 //! test_integer_pressure_does_not_consume_x87_values. The rest need `unroll`.
 
 use super::spill_risk;
+use std::rc::Rc;
 use crate::model::ir::Operation;
 use crate::model::mir::{Arg, Const, Held, Kind, MirBlock, MirBody, Op, OpCode, Value};
 use crate::model::passes::OperationCosts;
@@ -50,12 +51,12 @@ fn _floating_pressure() -> MirBody {
 fn test_pressure_prices_independent_spill_waves() {
     let costs = OperationCosts { load: 10, store: 10, ..OperationCosts::default() };
 
-    assert_eq!(spill_risk(&_pressure_waves(), &costs, 2, None), Some(40));
+    assert_eq!(spill_risk(&Rc::new(_pressure_waves()), &costs, 2, None), Some(40));
 }
 
 #[test]
 fn test_integer_pressure_does_not_consume_x87_values() {
     let costs = OperationCosts { load: 10, store: 10, ..OperationCosts::default() };
 
-    assert_eq!(spill_risk(&_floating_pressure(), &costs, 1, None), Some(0));
+    assert_eq!(spill_risk(&Rc::new(_floating_pressure()), &costs, 1, None), Some(0));
 }

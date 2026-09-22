@@ -91,7 +91,7 @@ def test_a_qb_dump_diverges_first_at_its_hir_although_it_sorts_after_the_mir(tmp
     """QB dumps name no pipeline folder: ranking them by C's folders raised ValueError on 00-input.bas."""
     python = _dump(tmp_path / "python", QB)
     rust = _dump(tmp_path / "rust", {**QB, "01-hir.json": "[]\n", "01-__main-02-mir.txt": "n\n"})
-    matched, total, first = port_diff.compare(python, rust, qb=True)
+    matched, total, first = port_diff.compare(python, rust, flat=True)
     assert (matched, total) == (3, 5)
     assert first == port_diff.Divergence("01-hir.json", 1, "{}", "[]")
 
@@ -121,6 +121,42 @@ def test_a_sources_flags_reach_every_compiler(tmp_path: Path, monkeypatch: pytes
     port_diff.run_qb(source, tmp_path / "work", Path("llrm-qb"))
     assert len(commands) == 3
     assert all(command[-3:] == ["--dialect", "qb45", "--unchecked-bounds"] for command in commands)
+
+
+def test_a_modern_source_reaches_both_compilers_through_one_frontend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--modern did not exist: the modern compile path had no instrument at all."""
+    source = tmp_path / "one.mod"
+    source.write_text("fn main() -> i16:\n    return 0\n")
+    source.with_suffix(".flags").write_text("--entry\nmain\n-O\ns\n")
+    commands, frontends = [], []
+
+    def run(command: list[str], env: dict[str, str], **_: object) -> subprocess.CompletedProcess:
+        commands.append(command)
+        frontends.append(env["QBOPT_MODERNFRONT"])
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(port_diff.subprocess, "run", run)
+    port_diff.run_modern(source, tmp_path / "work", Path("llrm-modern"), Path("modernfront"))
+    stages, python, rust = commands
+    assert stages[1].endswith("tools/modernstages.py") and stages[-2:] == ["-O", "s"]
+    assert python[-4:] == rust[-4:] == ["--entry", "main", "-O", "s"]
+    assert frontends == ["modernfront"] * 3
+
+
+def test_an_earlier_runs_refusal_is_not_this_runs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """bench/c failed 0/8 on a refusal left by a run without wccq, though every stage now matched."""
+    work = tmp_path / "work"
+    _dump(work / "python", {"refusal": "gone\n"})
+    _dump(work / "rust", {"refusal": "gone too\n"})
+
+    def run(command: list[str], **_: object) -> subprocess.CompletedProcess:
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(port_diff.subprocess, "run", run)
+    result = port_diff.run(tmp_path / "one.c", work, Path("llrm-c"), opt=False)
+    assert (result.total, result.first) == (0, None)
 
 
 def test_the_recorded_corpus_keeps_each_compiles_flags(tmp_path: Path) -> None:

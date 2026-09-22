@@ -275,19 +275,25 @@ fn _expanded_operations(before: &MirBody, after: &MirBody, latch: i64, count: i6
 }
 
 /// Whether exact dynamic savings pay for the optimized straight-line body.
-fn _profitable(before: &MirBody, after: &MirBody, latch: i64, count: i64, r#where: &Where) -> bool {
-    _rejection(before, after, latch, count, r#where).is_none()
+fn _profitable(before: &Rc<MirBody>, after: &Rc<MirBody>, latch: i64, count: i64, r#where: &Where) -> bool {
+    _rejection(before, after, latch, count, r#where, None).is_none()
 }
 
 /// Why a structural candidate loses, or `None` when it wins.
+///
+/// `before` is what the candidate is priced against; `copied`, the body the
+/// loop was copied from, is what must have lost that loop. A settled
+/// `before` may already have turned it into a fill.
 pub(crate) fn _rejection(
-    before: &MirBody,
-    after: &MirBody,
+    before: &Rc<MirBody>,
+    after: &Rc<MirBody>,
     latch: i64,
     count: i64,
     r#where: &Where,
+    copied: Option<&Rc<MirBody>>,
 ) -> Option<&'static str> {
-    if loops::loops(&after.blocks, Some(after.entry)).len() >= loops::loops(&before.blocks, Some(before.entry)).len() {
+    let copied = copied.unwrap_or(before);
+    if loops::loops(&after.blocks, Some(after.entry)).len() >= loops::loops(&copied.blocks, Some(copied.entry)).len() {
         return Some("residual-loops");
     }
     if !r#where.options.grows && _size(after) > _size(before) {
@@ -319,7 +325,7 @@ pub(crate) fn _rejection(
     };
     let total_before = dynamic_before + pressure_before;
     let total_after = dynamic_after + pressure_after;
-    let sequence = _expanded_operations(before, after, latch, count);
+    let sequence = _expanded_operations(copied, after, latch, count);
     if pressure_after > 0
         && r#where.options.max_unrolled_operations != 0
         && sequence > r#where.options.max_unrolled_operations
@@ -363,24 +369,34 @@ pub fn optimized(
     }
     let mut body = body.clone();
     let mut rejected = BTreeSet::<i64>::new();
+    // Once settled for pricing, the loop left alone is where the fixed point is
+    // going anyway; handing it back saves redoing that work round by round.
+    let mut baseline: Option<Rc<MirBody>> = None;
     loop {
         let candidate = expanded(&body, r#where, &r#where.named(), &rejected, Some(&tried.borrow()))?;
         if Rc::ptr_eq(&candidate, &body) {
-            return Ok(body);
+            return Ok(baseline.unwrap_or(body));
         }
         let additions = &candidate.repetitions[body.repetitions.len()..];
         if additions.len() != 1 {
-            return Ok(body);
+            return Ok(baseline.unwrap_or(body));
         }
         let (latch, count) = additions[0];
         if rejected.contains(&latch) {
-            return Ok(body);
+            return Ok(baseline.unwrap_or(body));
         }
         if let Some(watch) = watch.as_deref_mut() {
             watch("unroll-candidate", &candidate);
         }
         let result = optimize(candidate)?;
-        if let Some(rejection) = _rejection(&body, &result, latch, count, r#where) {
+        // Both sides settled: the loop left as it is gets the same passes the
+        // copy does. Pricing the copy against the loop mid-round let `[0; 8, 8]`
+        // unroll into eight fills that, left alone, merge into one.
+        if baseline.is_none() {
+            baseline = Some(optimize(body.clone())?);
+        }
+        let settled = baseline.as_ref().expect("settled above");
+        if let Some(rejection) = _rejection(settled, &result, latch, count, r#where, Some(&body)) {
             if let Some(watch) = watch.as_deref_mut() {
                 watch(&format!("unroll-rejected-{rejection}"), &result);
             }
@@ -389,6 +405,7 @@ pub fn optimized(
             continue;
         }
         body = result;
+        baseline = None;
         if let Some(watch) = watch.as_deref_mut() {
             watch("unroll-accepted", &body);
         }

@@ -10,6 +10,7 @@ from qbopt.model import mir
 from qbopt.hir import execute
 from qbopt.backend import masm
 from qbopt.analysis import loops
+from qbopt.optimize import profit
 from qbopt.analysis import induction
 from qbopt.backend import lower_int64
 from qbopt.model.passes import LEVELS
@@ -409,9 +410,11 @@ fn main() -> i16:
 
 
 def test_os_copies_no_loop_into_larger_code(tmp_path: Path) -> None:
-    """-O2 unrolls the five-record update from 54 instructions to 81.
+    """-O2 unrolls the five-record update from 65 lines to 83.
 
-    -Os is GCC's UL_NO_GROWTH: never larger than not copying at all.
+    -Os is GCC's UL_NO_GROWTH: never larger than not copying at all. The
+    records come from a parameter and leave through `total`, so unrolling
+    cannot fold them away.
     """
     source = tmp_path / "stride.mod"
     source.write_text(
@@ -421,20 +424,27 @@ struct sample:
     value: i32
     delta: i32
 
-fn update() -> i32:
+fn total(samples: &[sample]) -> i32:
+    var sum: i32 = 0
+    for one in &samples:
+        sum += one.value
+    return sum
+
+fn update(v: &[i32]) -> i32:
     var samples: [sample; 5] = [
-        sample { tag: 0, value: 1, delta: 2 },
-        sample { tag: 0, value: 2, delta: 3 },
-        sample { tag: 0, value: 3, delta: 4 },
-        sample { tag: 0, value: 4, delta: 5 },
-        sample { tag: 0, value: 5, delta: 6 },
+        sample { tag: 0, value: v[0], delta: v[1] },
+        sample { tag: 0, value: v[1], delta: v[2] },
+        sample { tag: 0, value: v[2], delta: v[3] },
+        sample { tag: 0, value: v[3], delta: v[4] },
+        sample { tag: 0, value: v[4], delta: v[5] },
     ]
     for current in &mut samples:
         current.value += current.delta
-    return samples[0].value + samples[4].value
+    return total(&samples)
 
 fn main() -> i16:
-    update()
+    let v: [i32; 6] = [1, 2, 3, 4, 5, 6]
+    update(&v)
     return 0
 """
     )
@@ -578,12 +588,10 @@ def test_three_array_initializer_keeps_the_fixed_frame_address_component() -> No
     """sum_three wrote locals through EAX+SI after a secondary-base rewrite lost BP."""
     assembly = masm.text(modern_compile.assembled(driver.parsed(SUM_THREE), entry="main"))
     main = assembly.split("_main proc far", 1)[1].split("call far ptr _sum_three", 1)[0]
-    initializers = [
-        line.strip() for line in main.splitlines() if re.search(r"mov word ptr \[[^]]+-(?:8|20|32)\],", line)
-    ]
+    cells = {f"[bp{payload + 2 * index}]" for payload in (-8, -20, -32) for index in range(4)}
+    initializers = {one for one in re.findall(r"mov word ptr (\[[^]]+\]), \d+", main) if one in cells}
 
-    assert len(initializers) == 12
-    assert all("bp" in line for line in initializers)
+    assert initializers == cells
 
 
 def test_runtime_bounded_array_loop_has_a_symbolic_count_proof() -> None:
@@ -818,10 +826,10 @@ def test_a_rejected_loop_copy_is_not_rebuilt_in_a_later_round(monkeypatch: pytes
     real = unroll._rejection
     rejected: Counter = Counter()
 
-    def recording(before, after, latch, count, where):
-        why = real(before, after, latch, count, where)
+    def recording(before, after, latch, count, where, copied=None):
+        why = real(before, after, latch, count, where, copied)
         if why is not None:
-            rejected[unroll._signature(before, latch, count, where)] += 1
+            rejected[unroll._signature(before if copied is None else copied, latch, count, where)] += 1
         return why
 
     monkeypatch.setattr(unroll, "_rejection", recording)
@@ -922,6 +930,170 @@ def test_a_repeat_literal_fills_a_fixed_array(tmp_path: Path) -> None:
         "    return total\n"
     )
     assert _returned(tmp_path, text) == 29
+
+
+def test_a_repeat_literal_in_the_frame_is_one_string_fill(tmp_path: Path) -> None:
+    """The fill loop stepped its byte address to zero under `!=`, which `fill` missed: 64 stores in a loop."""
+    source = tmp_path / "frame_fill.mod"
+    source.write_text(
+        "fn value(k: i16) -> i32:\n"
+        "    var a: [i32; 64] = [0; 64]\n"
+        "    a[k] = 5\n"
+        "    return a[k] + a[k + 1]\n"
+        "fn main() -> i16:\n"
+        "    return i16(value(3))\n"
+    )
+    assembly = masm.text(modern_compile.assembled(driver.parsed(source), entry="main"))
+    body = assembly[assembly.index("_value proc") : assembly.index("_value endp")]
+
+    assert "rep stosd" in body
+    assert not re.search(r"\bj\w+\s", body)
+
+
+def test_a_fill_leaves_the_rest_of_its_function_priceable(tmp_path: Path) -> None:
+    """FILL had no price, so any function holding one refused every unroll: the 4-trip sum stayed a loop."""
+    source = tmp_path / "priced_fill.mod"
+    source.write_text(
+        "fn value(v: &[i16]) -> i32:\n"
+        "    var a: [i32; 64] = [0; 64]\n"
+        "    var total: i16 = 0\n"
+        "    for i in 0..4:\n"
+        "        total += v[i]\n"
+        "    a[total] = 5\n"
+        "    return a[1]\n"
+        "fn main() -> i16:\n"
+        "    let v: [i16; 4] = [1, 2, 3, 4]\n"
+        "    return i16(value(&v))\n"
+    )
+    assembly = masm.text(modern_compile.assembled(driver.parsed(source), entry="main"))
+    body = assembly[assembly.index("_value proc") : assembly.index("_value endp")]
+
+    assert "rep stosd" in body
+    assert not re.search(r"\bj\w+\s", body)
+
+
+def test_a_ranked_repeat_literal_at_os_is_one_string_fill(tmp_path: Path) -> None:
+    """`[0; 8, 8]` at -Os was an 8-trip loop around an 8-cell loop: its count was unproved and nested fills never merged."""
+    source = tmp_path / "nested_fill.mod"
+    source.write_text(
+        "fn value(k: i16) -> i32:\n"
+        "    var a: [i32; 8, 8] = [0; 8, 8]\n"
+        "    a[k, 1] = 5\n"
+        "    return a[k, 2]\n"
+        "fn main() -> i16:\n"
+        "    return i16(value(3))\n"
+    )
+    assembly = masm.text(modern_compile.assembled(driver.parsed(source), entry="main", options=LEVELS["Os"]))
+    body = assembly[assembly.index("_value proc") : assembly.index("_value endp")]
+
+    assert body.count("rep stosd") == 1
+    assert "mov cx, 64" in body
+    assert not re.search(r"\bj\w+\s", body)
+
+
+def test_unroll_is_priced_against_the_loop_as_optimized(tmp_path: Path) -> None:
+    """Unroll compared its settled copy with the loop mid-round: `b`'s fill became eight at -Os, not one."""
+    source = tmp_path / "priced_unroll.mod"
+    source.write_text(
+        "type fix = fixed i32, fraction=8\n"
+        "fn value(k: i16) -> fix:\n"
+        "    var a: [fix; 8, 8] = [0; 8, 8]\n"
+        "    var b: [fix; 8, 8] = [0; 8, 8]\n"
+        "    for i in 0..8:\n"
+        "        for j in 0..8:\n"
+        "            a[i, j] = fix(i * 3 + j + 1) / 4\n"
+        "            if i == j:\n"
+        "                b[i, j] = 2\n"
+        "            else:\n"
+        "                b[i, j] = fix((i + j) % 3) / 2\n"
+        "    return a[k, 1] + b[k, 2]\n"
+        "fn main() -> i16:\n"
+        "    value(3)\n"
+        "    return 0\n"
+    )
+    program = driver.parsed(source)
+    assembly = masm.text(modern_compile.assembled(program, entry="main", options=LEVELS["Os"], cpu="486"))
+    body = assembly[assembly.index("_value proc") : assembly.index("_value endp")]
+
+    assert body.count("rep stosd") == 2
+    assert body.count("mov cx, 64") == 2
+
+
+def _settled(tmp_path: Path, text: str, options: Options) -> mir.MirBody:
+    source = tmp_path / "settled.mod"
+    source.write_text(text)
+    program = driver.parsed(source)
+    function = next(one for one in program.modules[0].functions if one.name == "value")
+    semantic = next(one for one in modern_compile.semantic_lowered(program) if one.name.endswith(".value"))
+    return modern_compile.optimized(program, function, semantic, targets.profile("486"), options=options).body
+
+
+def test_a_fill_count_that_is_a_number_is_written_as_one(tmp_path: Path) -> None:
+    """A merged fill's count stayed a held 64, which pricing read as an unknown ten cells."""
+    text = "fn value(k: i16) -> i32:\n    var a: [i32; 8, 8] = [0; 8, 8]\n    a[k, 1] = 5\n    return a[k, 2]\n"
+    body = _settled(tmp_path, text, LEVELS["Os"])
+    fills = [op for block in body.blocks for op in block.ops if op.kind is mir.Kind.FILL]
+
+    assert [op.args[1] for op in fills] == [mir.Const(64, 2)]
+
+
+def test_an_unnamed_loop_is_priced_at_its_proven_trip_count(tmp_path: Path) -> None:
+    """Every loop but the one asked about was priced at ten trips, so an 8-trip outer loop cost 25% too much."""
+    text = (
+        "fn value(v: &[i16]) -> i16:\n"
+        "    var total: i16 = 0\n"
+        "    for i in 0..8:\n"
+        "        total += v[i]\n"
+        "    return total\n"
+    )
+    body = _settled(tmp_path, text, Options(unroll=False, peel=False))
+    (loop,) = loops.loops(body.blocks, body.entry)
+    frequency = profit._frequencies(body)
+
+    assert {frequency[at] for at in loop.body} == {8}
+
+
+def test_a_new_counter_steps_where_no_condition_is_live(tmp_path: Path) -> None:
+    """A rotated loop branches on flags its body set; the pointer step went between them: Unlowered."""
+    source = tmp_path / "struct_view.mod"
+    source.write_text(
+        "struct sample:\n"
+        "    tag: i16\n"
+        "    value: i32\n"
+        "    delta: i32\n"
+        "fn total(samples: &[sample]) -> i32:\n"
+        "    var sum: i32 = 0\n"
+        "    for one in &samples:\n"
+        "        sum += one.value\n"
+        "    return sum\n"
+        "fn main() -> i16:\n"
+        "    let s: [sample; 2] = [sample { tag: 0, value: 1, delta: 2 }, sample { tag: 0, value: 2, delta: 3 }]\n"
+        "    return i16(total(&s))\n"
+    )
+    assembly = masm.text(modern_compile.assembled(driver.parsed(source), entry="main"))
+    body = assembly[assembly.index("_total proc") : assembly.index("_total endp")]
+
+    assert re.search(r"add (?:si|di|bx), 10\n    add (?:si|di|bx|cx|dx|ax), 10\n(?:L\w+:\n)?    jne", body)
+
+
+def test_an_unrolled_fill_stores_to_fixed_frame_cells(tmp_path: Path) -> None:
+    """Each unrolled store of `[0; 8, 8]` loaded its constant offset into a register first: 64 extra movs."""
+    source = tmp_path / "unrolled_fill.mod"
+    source.write_text(
+        "fn value(k: i16) -> i32:\n"
+        "    var a: [i32; 8, 8] = [0; 8, 8]\n"
+        "    a[k, 1] = 5\n"
+        "    return a[k, 2]\n"
+        "fn main() -> i16:\n"
+        "    return i16(value(3))\n"
+    )
+    # The 486 unrolls it: a dword store is one clock, `rep stosd` 7+4n.
+    assembly = masm.text(modern_compile.assembled(driver.parsed(source), entry="main", cpu="486"))
+    body = assembly[assembly.index("_value proc") : assembly.index("_value endp")]
+    zeroes = re.findall(r"mov dword ptr \[(.*?)\], 0\n", body)
+
+    assert len(zeroes) == 64
+    assert all(re.fullmatch(r"bp-\d+", one) for one in zeroes)
 
 
 @pytest.mark.parametrize(
@@ -1026,3 +1198,44 @@ def test_a_float_does_not_convert_to_fixed_point(tmp_path: Path) -> None:
     )
     with pytest.raises(driver.FrontendError):
         driver.parsed(source)
+
+
+def test_ranked_arrays_index_fill_and_borrow_row_major() -> None:
+    """Only rank one existed; `[T; 3, 3]`, `a[i, j]` and `&[T, 2]` were rejected."""
+    program = driver.parsed(ROOT / "fixtures" / "modern" / "ranked.mod")
+    assert program.array_order is hir.ArrayOrder.ROW_MAJOR
+    assert execute.run(program, "main").output == "15 106 162 42 9 3 4\n"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "    let a: [i16; 2, 2] = [0; 2, 2]\n    return a[0]\n",
+        "    let a: [i16; 2, 2, 2, 2, 2] = [0; 2, 2, 2, 2, 2]\n    return 0\n",
+        "    let a: [i16; 2, 2] = [[1, 2], [3]]\n    return 0\n",
+        "    let a: [i16; 2, 2] = [0; 2, 3]\n    return 0\n",
+        "    let a: [i16; 2, 2] = [0; 2, 2]\n    return a.dim(2)\n",
+        "    let a: [i16; 2, 2] = [0; 2, 2]\n    return first(&a)\n",
+        "    let a: [i16; 2, 2] = [0; 2, 2]\n    var t: i16 = 0\n    for x in a:\n        t += x\n    return t\n",
+    ],
+)
+def test_ranked_arrays_reject_the_wrong_rank_or_shape(tmp_path: Path, body: str) -> None:
+    source = tmp_path / "ranked_rejected.mod"
+    source.write_text("fn first(values: &[i16]) -> i16:\n    return values[0]\nfn value() -> i16:\n" + body)
+    with pytest.raises(driver.FrontendError):
+        driver.parsed(source)
+
+
+@pytest.mark.parametrize("through", ["a[i, 1]", "at(&a, i)"])
+def test_a_ranked_index_is_not_computed_in_a_narrow_index_type(tmp_path: Path, through: str) -> None:
+    """A u8 first index made 19 * 20 + 1 wrap to 125 in u8 and read the wrong element."""
+    text = (
+        "fn at(m: &[i16, 2], i: u8) -> i16:\n"
+        "    return m[i, 1]\n"
+        "fn value() -> i16:\n"
+        "    var a: [i16; 20, 20] = [0; 20, 20]\n"
+        "    a[19, 1] = 7\n"
+        "    let i: u8 = 19\n"
+        f"    return {through}\n"
+    )
+    assert _returned(tmp_path, text) == 7

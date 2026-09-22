@@ -131,13 +131,18 @@ pub fn optimized(
     }
     let mut body = body.clone();
     let mut rejected = BTreeSet::<i64>::new();
+    let mut baseline: Option<Rc<MirBody>> = None;
     loop {
         let found = _candidate(&body, r#where, &rejected, &tried.borrow())?;
         let Some((candidate, latch, count, signature)) = found else {
-            return Ok(body);
+            return Ok(baseline.unwrap_or(body));
         };
         let result = optimize(candidate.clone())?;
-        if let Some(rejection) = unroll::_rejection(&body, &result, latch, count, r#where) {
+        if baseline.is_none() {
+            baseline = Some(optimize(body.clone())?); // settled as the copy is: see unroll::optimized
+        }
+        let settled = baseline.as_ref().expect("settled above");
+        if let Some(rejection) = unroll::_rejection(settled, &result, latch, count, r#where, Some(&body)) {
             if let Some(watch) = watch.as_deref_mut() {
                 watch(&format!("peel-rejected-{rejection}"), &result);
             }
@@ -150,6 +155,7 @@ pub fn optimized(
             watch("peel-accepted", &result);
         }
         body = result;
+        baseline = None;
         rejected.clear();
     }
 }

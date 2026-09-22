@@ -22,6 +22,7 @@ buildprs = { path = "tools/buildprs" }
 
 [dev-dependencies]
 buildprs = { path = "tools/buildprs" }
+regex = "1"
 
 [[bin]]
 name = "llrm-qb"
@@ -54,6 +55,10 @@ path = "src/bin/llrm-opt.rs"
 [[bin]]
 name = "llrm-modern"
 path = "src/bin/llrm-modern.rs"
+
+[[bin]]
+name = "modernfront"
+path = "src/bin/modernfront.rs"
 
 [[bin]]
 name = "qbfront"

@@ -23,6 +23,7 @@ use super::syntax::TypeAnnotation;
 use super::syntax::TypeName;
 use super::syntax::TypeSpec;
 use super::syntax::UnaryOp;
+use super::syntax::MAX_RANK;
 
 const VOID: u32 = 1;
 const BOOL: u32 = 2;
@@ -90,11 +91,11 @@ impl LiteralPool {
 
 struct TypeRegistry {
     types: Vec<hir::Type>,
-    arrays: BTreeMap<(u32, u32), u32>,
+    arrays: BTreeMap<(u32, Shape), u32>,
     structs: BTreeMap<String, StructLayout>,
     fixed_names: BTreeMap<String, TypeName>,
     pointers: BTreeMap<(u32, u32), u32>,
-    slice_descriptors: BTreeMap<u32, u32>,
+    slice_descriptors: BTreeMap<(u32, u8), u32>,
 }
 
 #[derive(Clone, Debug)]
@@ -299,28 +300,38 @@ impl TypeRegistry {
         }
     }
 
-    fn array(&mut self, element: ElementType, length: u32) -> u32 {
+    fn array(&mut self, element: ElementType, shape: Shape) -> u32 {
         let element_id = element.id();
-        if let Some(id) = self.arrays.get(&(element_id, length)) {
+        if let Some(id) = self.arrays.get(&(element_id, shape)) {
             return *id;
         }
         let element_type = &self.types[(element_id - 1) as usize];
         let element_name = element_type.name.clone();
         let element_width = element_type.width;
         let id = self.types.len() as u32 + 1;
+        let dims = shape
+            .dims()
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
         self.types.push(hir::Type {
             id,
-            name: format!("[{element_name}; {length}]"),
+            name: format!("[{element_name}; {dims}]"),
             kind: "array",
-            width: element_width * length,
+            width: element_width * shape.len(),
             signed: None,
             evaluation: "none",
             element: Some(element_id),
-            rank: 1,
-            bounds: vec![(0, i32::try_from(length - 1).expect("array length checked"))],
+            rank: u32::from(shape.rank),
+            bounds: shape
+                .dims()
+                .iter()
+                .map(|one| (0, i32::try_from(one - 1).expect("array length checked")))
+                .collect(),
             address: "near",
         });
-        self.arrays.insert((element_id, length), id);
+        self.arrays.insert((element_id, shape), id);
         id
     }
 
@@ -350,18 +361,23 @@ impl TypeRegistry {
         id
     }
 
-    fn slice_descriptor(&mut self, element: ElementType) -> u32 {
+    fn slice_descriptor(&mut self, element: ElementType, rank: u8) -> u32 {
         let element_id = element.id();
-        if let Some(id) = self.slice_descriptors.get(&element_id) {
+        if let Some(id) = self.slice_descriptors.get(&(element_id, rank)) {
             return *id;
         }
         let id = self.types.len() as u32 + 1;
         let element_name = self.types[(element_id - 1) as usize].name.clone();
+        let name = if rank == 1 {
+            format!("$slice[{element_name}]")
+        } else {
+            format!("$slice[{element_name}, {rank}]")
+        };
         self.types.push(hir::Type {
             id,
-            name: format!("$slice[{element_name}]"),
+            name,
             kind: "opaque",
-            width: 8,
+            width: descriptor::size(rank) + 4,
             signed: None,
             evaluation: "none",
             element: Some(element_id),
@@ -369,12 +385,12 @@ impl TypeRegistry {
             bounds: Vec::new(),
             address: "none",
         });
-        self.slice_descriptors.insert(element_id, id);
+        self.slice_descriptors.insert((element_id, rank), id);
         id
     }
 
-    fn slice_pointer(&mut self, element: ElementType) -> u32 {
-        let descriptor = self.slice_descriptor(element);
+    fn slice_pointer(&mut self, element: ElementType, rank: u8) -> u32 {
+        let descriptor = self.slice_descriptor(element, rank);
         self.pointer(descriptor, 1)
     }
 
@@ -394,20 +410,21 @@ impl TypeRegistry {
                     element.id(),
                 ))
             }
-            TypeAnnotation::Slice { element } => {
+            TypeAnnotation::Slice { element, rank } => {
                 let element = self.resolve_element(element, span)?;
-                Ok((BindingType::Slice { element }, element.id()))
-            }
-            TypeAnnotation::Array { element, length } => {
-                let element = self.resolve_element(element, span)?;
-                let id = self.array(element, *length);
                 Ok((
-                    BindingType::Array {
+                    BindingType::Slice {
                         element,
-                        length: *length,
+                        rank: *rank,
                     },
-                    id,
+                    element.id(),
                 ))
+            }
+            TypeAnnotation::Array { element, dims } => {
+                let element = self.resolve_element(element, span)?;
+                let shape = Shape::new(dims);
+                let id = self.array(element, shape);
+                Ok((BindingType::Array { element, shape }, id))
             }
         }
     }
@@ -504,15 +521,109 @@ enum AssignmentPlace {
     Struct(StructView),
 }
 
+/// Where an indexed element lives.
+enum ElementAt {
+    Element(u32, Vec<hir::Operand>),
+    Pointer(u32),
+}
+
+impl ElementAt {
+    fn operand(self, type_id: u32) -> hir::Operand {
+        match self {
+            Self::Element(place, indices) => hir::Operand::ArrayElement(place, indices),
+            Self::Pointer(base) => hir::Operand::IndirectPlace {
+                base,
+                offset: 0,
+                type_id,
+                inbounds: true,
+            },
+        }
+    }
+
+    /// A struct view's place, pointer, and indices.
+    fn parts(self) -> (u32, Option<u32>, Vec<hir::Operand>) {
+        match self {
+            Self::Element(place, indices) => (place, None, indices),
+            Self::Pointer(pointer) => (0, Some(pointer), Vec::new()),
+        }
+    }
+}
+
+/// A fixed array's dimensions, row-major: the last index is contiguous.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct Shape {
+    rank: u8,
+    dims: [u32; MAX_RANK],
+}
+
+impl Shape {
+    fn new(dims: &[u32]) -> Self {
+        let mut all = [1; MAX_RANK];
+        all[..dims.len()].copy_from_slice(dims);
+        Self {
+            rank: dims.len() as u8,
+            dims: all,
+        }
+    }
+
+    fn dims(&self) -> &[u32] {
+        &self.dims[..self.rank as usize]
+    }
+
+    fn len(&self) -> u32 {
+        self.dims().iter().product()
+    }
+
+    /// Each dimension's stride in elements; the last one is 1.
+    fn strides(&self) -> Vec<u32> {
+        let dims = self.dims();
+        (0..dims.len()).map(|axis| dims[axis + 1..].iter().product()).collect()
+    }
+
+    /// The descriptor's words, in order, with their names.
+    fn descriptor(&self) -> Vec<(String, u32)> {
+        let mut words = Vec::new();
+        for (axis, length) in self.dims().iter().enumerate() {
+            let name = if self.rank == 1 {
+                "length".into()
+            } else {
+                format!("dim{axis}")
+            };
+            words.push((name, *length));
+        }
+        words.push(("capacity".into(), self.len()));
+        words
+    }
+}
+
+/// The descriptor before an array's data, or in a view before its data
+/// pointer: the dimensions, then the capacity, each a u16 word. Storage is
+/// row-major and contiguous, so the strides follow from the dimensions.
+mod descriptor {
+    pub fn dim(axis: u8) -> u32 {
+        2 * u32::from(axis)
+    }
+
+    pub fn capacity(rank: u8) -> u32 {
+        dim(rank)
+    }
+
+    /// The descriptor's size, and so a view's data pointer offset.
+    pub fn size(rank: u8) -> u32 {
+        capacity(rank) + 2
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BindingType {
     Scalar(TypeName),
     Slice {
         element: ElementType,
+        rank: u8,
     },
     Array {
         element: ElementType,
-        length: u32,
+        shape: Shape,
     },
     Struct(u32),
     Dictionary {
@@ -523,10 +634,20 @@ enum BindingType {
 }
 
 impl BindingType {
+    /// A one-dimensional sequence's element and, when fixed, its length.
     fn array(self) -> Option<(ElementType, Option<u32>)> {
         match self {
-            Self::Slice { element } => Some((element, None)),
-            Self::Array { element, length } => Some((element, Some(length))),
+            Self::Slice { element, rank: 1 } => Some((element, None)),
+            Self::Array { element, shape } if shape.rank == 1 => Some((element, Some(shape.len()))),
+            _ => None,
+        }
+    }
+
+    /// Any array's element, rank, and shape when fixed.
+    fn ranked(self) -> Option<(ElementType, u8, Option<Shape>)> {
+        match self {
+            Self::Slice { element, rank } => Some((element, rank, None)),
+            Self::Array { element, shape } => Some((element, shape.rank, Some(shape))),
             Self::Scalar(_) | Self::Struct(_) | Self::Dictionary { .. } => None,
         }
     }
@@ -574,7 +695,7 @@ pub fn compile(module: &Module, module_name: &str) -> Result<String, Diagnostic>
                 ParameterType::Borrowed { mutable, target } => {
                     let (target, target_id) = types.parameter_target(target, parameter.span)?;
                     let pointer = match target {
-                        BindingType::Slice { element } => types.slice_pointer(element),
+                        BindingType::Slice { element, rank } => types.slice_pointer(element, rank),
                         _ => types.pointer(target_id, 0),
                     };
                     Ok(SignatureParameter::Borrowed {
@@ -940,10 +1061,23 @@ impl<'a> FunctionCompiler<'a> {
                         *comprehension_span,
                     );
                 }
-                if let Some(TypeAnnotation::Array { element, length }) = annotation {
-                    let count = match value {
-                        Expr::Array(items, _) => items.len(),
-                        Expr::Repeat { counts, .. } => repeat_count(counts)?,
+                if let Some(TypeAnnotation::Array { element, dims }) = annotation {
+                    let shape = Shape::new(dims);
+                    let items = match value {
+                        Expr::Array(..) => literal_elements(value, shape.dims(), *span)?,
+                        Expr::Repeat { counts, .. } => {
+                            let counts = repeat_counts(counts)?;
+                            if counts != shape.dims() {
+                                return Err(Diagnostic::new(
+                                    *span,
+                                    format!(
+                                        "array expects dimensions {:?}, got {counts:?}",
+                                        shape.dims()
+                                    ),
+                                ));
+                            }
+                            Vec::new()
+                        }
                         _ => {
                             return Err(Diagnostic::new(
                                 *span,
@@ -951,12 +1085,6 @@ impl<'a> FunctionCompiler<'a> {
                             ))
                         }
                     };
-                    if count != *length as usize {
-                        return Err(Diagnostic::new(
-                            *span,
-                            format!("array expects {length} elements, got {count}"),
-                        ));
-                    }
                     if let Expr::Repeat { value, .. } = value {
                         // Evaluated before the new name exists, which it may shadow.
                         self.statement(&Statement::Bind {
@@ -968,13 +1096,10 @@ impl<'a> FunctionCompiler<'a> {
                         })?;
                     }
                     let element = self.types.resolve_element(element, *span)?;
-                    let type_id = self.types.array(element, *length);
-                    let place = self.array_place(name, type_id, element, *length, *mutable);
+                    let type_id = self.types.array(element, shape);
+                    let place = self.array_place(name, type_id, element, shape, *mutable);
                     let binding = |mutable| Binding {
-                        type_: BindingType::Array {
-                            element,
-                            length: *length,
-                        },
+                        type_: BindingType::Array { element, shape },
                         mutable,
                         storage: Storage::Place(place),
                     };
@@ -984,14 +1109,13 @@ impl<'a> FunctionCompiler<'a> {
                             .last_mut()
                             .expect("scope")
                             .insert(name.clone(), binding(true));
-                        self.fill(name, *length, *span)?;
+                        self.fill(name, shape, *span)?;
                     }
-                    let items = match value {
-                        Expr::Array(items, _) => items.as_slice(),
-                        _ => &[],
-                    };
-                    for (index, item) in items.iter().enumerate() {
-                        let index = hir::Operand::Constant(U16, index as i64);
+                    for (at, item) in items {
+                        let indices = at
+                            .iter()
+                            .map(|one| hir::Operand::Constant(U16, i64::from(*one)))
+                            .collect::<Vec<_>>();
                         match element {
                             ElementType::Scalar(type_name) => {
                                 let value = self.coerced(item, type_name)?;
@@ -999,14 +1123,14 @@ impl<'a> FunctionCompiler<'a> {
                                     "store",
                                     Vec::new(),
                                     vec![
-                                        hir::Operand::ArrayElement(place, vec![index]),
+                                        hir::Operand::ArrayElement(place, indices),
                                         required(value, item.span())?,
                                     ],
                                     None,
                                 );
                             }
                             ElementType::Struct(struct_id) => {
-                                self.initialize_struct(place, index, struct_id, item)?;
+                                self.initialize_struct(place, indices, struct_id, item)?;
                             }
                         }
                     }
@@ -1213,45 +1337,30 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     /// Stores `$name_fill`, bound beforehand, to each of `name`'s `length` elements.
-    fn fill(&mut self, name: &str, length: u32, span: Span) -> Result<(), Diagnostic> {
-        let fill_name = format!("${name}_fill");
-        let at_name = format!("${name}_at");
-        let at = Expr::Name(at_name.clone(), span);
-        self.scoped(&[
-            Statement::Bind {
-                mutable: true,
-                name: at_name.clone(),
-                annotation: Some(TypeAnnotation::Value(TypeSpec::Primitive(TypeName::U16))),
-                value: Expr::Integer(0, span),
-                span,
+    fn fill(&mut self, name: &str, shape: Shape, span: Span) -> Result<(), Diagnostic> {
+        let at = |axis: usize| format!("${name}_at{axis}");
+        let indices = (0..shape.dims().len())
+            .map(|axis| Expr::Name(at(axis), span))
+            .collect();
+        let mut body = vec![Statement::Assign {
+            target: AssignTarget::Index {
+                base: name.into(),
+                indices,
             },
-            Statement::While {
-                condition: Expr::Binary {
-                    op: BinaryOp::Less,
-                    left: Box::new(at.clone()),
-                    right: Box::new(Expr::Integer(i64::from(length), span)),
-                    span,
-                },
-                body: vec![
-                    Statement::Assign {
-                        target: AssignTarget::Index {
-                            base: name.into(),
-                            index: at,
-                        },
-                        operation: None,
-                        value: Expr::Name(fill_name, span),
-                        span,
-                    },
-                    Statement::Assign {
-                        target: AssignTarget::Name(at_name),
-                        operation: Some(BinaryOp::Add),
-                        value: Expr::Integer(1, span),
-                        span,
-                    },
-                ],
+            operation: None,
+            value: Expr::Name(format!("${name}_fill"), span),
+            span,
+        }];
+        for (axis, length) in shape.dims().iter().enumerate().rev() {
+            body = vec![Statement::ForRange {
+                name: at(axis),
+                start: Expr::Integer(0, span),
+                end: Expr::Integer(i64::from(*length), span),
+                body,
                 span,
-            },
-        ])
+            }];
+        }
+        self.scoped(&body)
     }
 
     fn if_statement(
@@ -1351,14 +1460,15 @@ impl<'a> FunctionCompiler<'a> {
             ));
         }
         let source = self.binding(source_name, iterable.span())?.clone();
-        let BindingType::Array {
-            element: source_element,
-            length,
-        } = source.type_
-        else {
+        let Some((source_element, Some(length))) = source.type_.array() else {
+            let ranked = source.type_.ranked().is_some_and(|(_, rank, _)| rank > 1);
             return Err(Diagnostic::new(
                 iterable.span(),
-                "a materialized comprehension needs a statically bounded source",
+                if ranked {
+                    "a comprehension reads a one-dimensional array"
+                } else {
+                    "a materialized comprehension needs a statically bounded source"
+                },
             ));
         };
         let source_scalar = match source_element {
@@ -1390,11 +1500,9 @@ impl<'a> FunctionCompiler<'a> {
 
         let annotated = match annotation {
             None => None,
-            Some(TypeAnnotation::Array {
-                element,
-                length: annotated_length,
-            }) => {
-                if *annotated_length != length {
+            Some(TypeAnnotation::Array { element, dims }) => {
+                let annotated_length = dims.iter().product::<u32>();
+                if dims.len() != 1 || annotated_length != length {
                     return Err(Diagnostic::new(
                         span,
                         format!(
@@ -1430,14 +1538,15 @@ impl<'a> FunctionCompiler<'a> {
             }
         };
         let result_element = ElementType::Scalar(result_type);
-        let type_id = self.types.array(result_element, length);
-        let place = self.array_place(name, type_id, result_element, length, mutable);
+        let shape = Shape::new(&[length]);
+        let type_id = self.types.array(result_element, shape);
+        let place = self.array_place(name, type_id, result_element, shape, mutable);
         self.scopes.last_mut().expect("scope").insert(
             name.into(),
             Binding {
                 type_: BindingType::Array {
                     element: result_element,
-                    length,
+                    shape: Shape::new(&[length]),
                 },
                 mutable: true,
                 storage: Storage::Place(place),
@@ -1463,7 +1572,7 @@ impl<'a> FunctionCompiler<'a> {
             Statement::Assign {
                 target: AssignTarget::Index {
                     base: name.into(),
-                    index: Expr::Name(counter_name.clone(), span),
+                    indices: vec![Expr::Name(counter_name.clone(), span)],
                 },
                 operation: None,
                 value: expression.clone(),
@@ -1505,11 +1614,7 @@ impl<'a> FunctionCompiler<'a> {
             ));
         };
         let source = self.binding(source_name, iterable.span())?.clone();
-        let BindingType::Array {
-            element: ElementType::Scalar(source_type),
-            length: capacity,
-        } = source.type_
-        else {
+        let Some((ElementType::Scalar(source_type), Some(capacity))) = source.type_.array() else {
             return Err(Diagnostic::new(
                 iterable.span(),
                 "a dictionary comprehension needs a scalar fixed-array source",
@@ -1565,10 +1670,11 @@ impl<'a> FunctionCompiler<'a> {
         let length_name = format!("$dict_{name}_length");
         let key_element = ElementType::Scalar(key_type);
         let value_element = ElementType::Scalar(value_type);
-        let keys_type = self.types.array(key_element, capacity);
-        let values_type = self.types.array(value_element, capacity);
-        let keys = self.array_place(&keys_name, keys_type, key_element, capacity, true);
-        let values = self.array_place(&values_name, values_type, value_element, capacity, true);
+        let shape = Shape::new(&[capacity]);
+        let keys_type = self.types.array(key_element, shape);
+        let values_type = self.types.array(value_element, shape);
+        let keys = self.array_place(&keys_name, keys_type, key_element, shape, true);
+        let values = self.array_place(&values_name, values_type, value_element, shape, true);
         let length = self.place(&length_name, TypeName::U16, true);
         self.emit(
             "store",
@@ -1582,7 +1688,7 @@ impl<'a> FunctionCompiler<'a> {
             Binding {
                 type_: BindingType::Array {
                     element: key_element,
-                    length: capacity,
+                    shape: Shape::new(&[capacity]),
                 },
                 mutable: true,
                 storage: Storage::Place(keys),
@@ -1593,7 +1699,7 @@ impl<'a> FunctionCompiler<'a> {
             Binding {
                 type_: BindingType::Array {
                     element: value_element,
-                    length: capacity,
+                    shape: Shape::new(&[capacity]),
                 },
                 mutable: true,
                 storage: Storage::Place(values),
@@ -1658,7 +1764,7 @@ impl<'a> FunctionCompiler<'a> {
                             op: BinaryOp::Equal,
                             left: Box::new(Expr::Index {
                                 base: Box::new(Expr::Name(keys_name.clone(), span)),
-                                index: Box::new(scan.clone()),
+                                indices: vec![scan.clone()],
                                 span,
                             }),
                             right: Box::new(key.clone()),
@@ -1668,7 +1774,7 @@ impl<'a> FunctionCompiler<'a> {
                             Statement::Assign {
                                 target: AssignTarget::Index {
                                     base: values_name.clone(),
-                                    index: scan.clone(),
+                                    indices: vec![scan.clone()],
                                 },
                                 operation: None,
                                 value: value.clone(),
@@ -1704,7 +1810,7 @@ impl<'a> FunctionCompiler<'a> {
                     Statement::Assign {
                         target: AssignTarget::Index {
                             base: keys_name.clone(),
-                            index: length_expr.clone(),
+                            indices: vec![length_expr.clone()],
                         },
                         operation: None,
                         value: key,
@@ -1713,7 +1819,7 @@ impl<'a> FunctionCompiler<'a> {
                     Statement::Assign {
                         target: AssignTarget::Index {
                             base: values_name.clone(),
-                            index: length_expr.clone(),
+                            indices: vec![length_expr.clone()],
                         },
                         operation: None,
                         value,
@@ -1815,7 +1921,15 @@ impl<'a> FunctionCompiler<'a> {
             (ElementType::Scalar(TypeName::Char), None)
         } else {
             array.type_.array().ok_or_else(|| {
-                Diagnostic::new(iterable.span(), "for requires an array or string")
+                let ranked = array.type_.ranked().is_some();
+                Diagnostic::new(
+                    iterable.span(),
+                    if ranked {
+                        "a ranked array is iterated by index"
+                    } else {
+                        "for requires an array or string"
+                    },
+                )
             })?
         };
         if string && range.is_some() {
@@ -1964,15 +2078,13 @@ impl<'a> FunctionCompiler<'a> {
                     place,
                     index: hir::Operand::Value(index),
                 },
-                Storage::Slice(descriptor) => {
-                    let pointer = self.slice_data_pointer(descriptor, element);
-                    Storage::Reference(self.indexed_pointer(
-                        pointer,
-                        hir::Operand::Value(index),
-                        element_width,
-                        span,
-                    )?)
-                }
+                Storage::Slice(descriptor) => Storage::Reference(self.view_element(
+                    descriptor,
+                    element,
+                    1,
+                    vec![hir::Operand::Value(index)],
+                    span,
+                )?),
                 Storage::Parameter(_) | Storage::Reference(_) | Storage::ArrayView { .. } => {
                     unreachable!("checked above")
                 }
@@ -2168,7 +2280,7 @@ impl<'a> FunctionCompiler<'a> {
     fn initialize_struct(
         &mut self,
         place: u32,
-        index: hir::Operand,
+        indices: Vec<hir::Operand>,
         struct_id: u32,
         expression: &Expr,
     ) -> Result<(), Diagnostic> {
@@ -2177,7 +2289,7 @@ impl<'a> FunctionCompiler<'a> {
                 struct_id,
                 place,
                 pointer: None,
-                indices: vec![index],
+                indices,
                 offset: 0,
                 mutable: true,
                 owner: "array initializer".into(),
@@ -2418,6 +2530,7 @@ impl<'a> FunctionCompiler<'a> {
                     }
                     | BindingType::Slice {
                         element: ElementType::Struct(struct_id),
+                        ..
                     } => Some(struct_id),
                     _ => None,
                 })
@@ -2543,7 +2656,7 @@ impl<'a> FunctionCompiler<'a> {
                     )),
                 }
             }
-            AssignTarget::Index { base, index } => {
+            AssignTarget::Index { base, indices } => {
                 let binding = self.binding(base, span)?.clone();
                 if !binding.mutable {
                     return Err(Diagnostic::new(
@@ -2551,44 +2664,13 @@ impl<'a> FunctionCompiler<'a> {
                         format!("binding {base:?} is immutable"),
                     ));
                 }
-                let Some((element, length)) = binding.type_.array() else {
-                    return Err(Diagnostic::new(
-                        span,
-                        format!("binding {base:?} is not an array"),
-                    ));
-                };
-                let index = self.array_index(index, length)?;
+                let (element, at) = self.element_at(&binding, base, indices, span)?;
                 Ok(match element {
-                    ElementType::Scalar(type_name) => AssignmentPlace::Scalar(
-                        self.indexed_place(
-                            &binding.storage,
-                            index,
-                            ElementType::Scalar(type_name),
-                            width(type_name),
-                            span,
-                        )?,
-                        type_name,
-                    ),
+                    ElementType::Scalar(type_name) => {
+                        AssignmentPlace::Scalar(at.operand(type_id(type_name)), type_name)
+                    }
                     ElementType::Struct(struct_id) => {
-                        let (place, pointer, indices) = match binding.storage {
-                            Storage::Place(place) => (place, None, vec![index]),
-                            Storage::Reference(pointer) => {
-                                let width = self.types.width(struct_id);
-                                let pointer = self.indexed_pointer(pointer, index, width, span)?;
-                                (0, Some(pointer), Vec::new())
-                            }
-                            Storage::Slice(descriptor) => {
-                                let width = self.types.width(struct_id);
-                                let pointer = self
-                                    .slice_data_pointer(descriptor, ElementType::Struct(struct_id));
-                                let pointer = self.indexed_pointer(pointer, index, width, span)?;
-                                (0, Some(pointer), Vec::new())
-                            }
-                            Storage::Parameter(_) | Storage::ArrayView { .. } => {
-                                return Err(Diagnostic::new(span, "array has no storage"))
-                            }
-                            Storage::Dictionary { .. } => unreachable!("array is not a dictionary"),
-                        };
+                        let (place, pointer, indices) = at.parts();
                         AssignmentPlace::Struct(StructView {
                             struct_id,
                             place,
@@ -2664,40 +2746,16 @@ impl<'a> FunctionCompiler<'a> {
                     owner: name.clone(),
                 })
             }
-            Expr::Index { base, index, .. } => {
+            Expr::Index { base, indices, .. } => {
                 let Expr::Name(name, _) = base.as_ref() else {
                     return Err(Diagnostic::new(span, "array base must be a named binding"));
                 };
                 let binding = self.binding(name, span)?.clone();
-                let Some((element, length)) = binding.type_.array() else {
-                    return Err(Diagnostic::new(
-                        span,
-                        format!("binding {name:?} is not an array"),
-                    ));
-                };
+                let (element, at) = self.element_at(&binding, name, indices, span)?;
                 let ElementType::Struct(struct_id) = element else {
                     return Err(Diagnostic::new(span, "array element is not a struct"));
                 };
-                let index = self.array_index(index, length)?;
-                let (place, pointer, indices) = match binding.storage {
-                    Storage::Place(place) => (place, None, vec![index]),
-                    Storage::Reference(pointer) => {
-                        let width = self.types.width(struct_id);
-                        let pointer = self.indexed_pointer(pointer, index, width, span)?;
-                        (0, Some(pointer), Vec::new())
-                    }
-                    Storage::Slice(descriptor) => {
-                        let width = self.types.width(struct_id);
-                        let pointer =
-                            self.slice_data_pointer(descriptor, ElementType::Struct(struct_id));
-                        let pointer = self.indexed_pointer(pointer, index, width, span)?;
-                        (0, Some(pointer), Vec::new())
-                    }
-                    Storage::Parameter(_) | Storage::ArrayView { .. } => {
-                        return Err(Diagnostic::new(span, "array has no storage"))
-                    }
-                    Storage::Dictionary { .. } => unreachable!("array is not a dictionary"),
-                };
+                let (place, pointer, indices) = at.parts();
                 Ok(StructView {
                     struct_id,
                     place,
@@ -2868,9 +2926,11 @@ impl<'a> FunctionCompiler<'a> {
                     type_name,
                 })
             }
-            Expr::Index { base, index, span } => {
-                self.index_expression(base, index, expected, *span)
-            }
+            Expr::Index {
+                base,
+                indices,
+                span,
+            } => self.index_expression(base, indices, expected, *span),
             Expr::Slice { span, .. } => Err(Diagnostic::new(
                 *span,
                 "a slice is a scoped view and cannot be used as a scalar value",
@@ -3133,10 +3193,179 @@ impl<'a> FunctionCompiler<'a> {
         required(index, expression.span())
     }
 
+    /// Where `name[indices]` lives: an element of an owned array, or an
+    /// address reached through a reference or view.
+    fn element_at(
+        &mut self,
+        binding: &Binding,
+        name: &str,
+        indices: &[Expr],
+        span: Span,
+    ) -> Result<(ElementType, ElementAt), Diagnostic> {
+        let Some((element, rank, shape)) = binding.type_.ranked() else {
+            return Err(Diagnostic::new(
+                span,
+                format!("binding {name:?} is not an array"),
+            ));
+        };
+        if indices.len() != usize::from(rank) {
+            return Err(Diagnostic::new(
+                span,
+                format!(
+                    "{name:?} has {rank} dimension{}, indexed with {}",
+                    if rank == 1 { "" } else { "s" },
+                    indices.len()
+                ),
+            ));
+        }
+        let indices = indices
+            .iter()
+            .enumerate()
+            .map(|(axis, index)| self.array_index(index, shape.map(|one| one.dims[axis])))
+            .collect::<Result<Vec<_>, _>>()?;
+        let element_width = self.types.width(element.id());
+        let at = match binding.storage {
+            Storage::Place(place) => ElementAt::Element(place, indices),
+            Storage::Reference(pointer) => {
+                let Some(shape) = shape else {
+                    return Err(Diagnostic::new(span, "a reference to an array needs its shape"));
+                };
+                let strides = shape
+                    .strides()
+                    .into_iter()
+                    .map(|one| hir::Operand::Constant(U16, i64::from(one)))
+                    .collect();
+                let flat = self.linear(indices, strides, span)?;
+                ElementAt::Pointer(self.indexed_pointer(pointer, flat, element_width, span)?)
+            }
+            Storage::Slice(descriptor) => {
+                ElementAt::Pointer(self.view_element(descriptor, element, rank, indices, span)?)
+            }
+            Storage::Parameter(_) | Storage::ArrayView { .. } => {
+                return Err(Diagnostic::new(span, "array has no indexable storage"))
+            }
+            Storage::Dictionary { .. } => unreachable!("array is not a dictionary"),
+        };
+        Ok((element, at))
+    }
+
+    /// The address of a view's element: row-major, so the last stride is one
+    /// and each other is the product of the dimensions after it.
+    fn view_element(
+        &mut self,
+        descriptor: u32,
+        element: ElementType,
+        rank: u8,
+        indices: Vec<hir::Operand>,
+        span: Span,
+    ) -> Result<u32, Diagnostic> {
+        let mut strides = vec![hir::Operand::Constant(U16, 1)];
+        for axis in (1..rank).rev() {
+            let dim = self.value(TypeName::U16);
+            self.emit(
+                "load",
+                vec![dim],
+                vec![hir::Operand::IndirectPlace {
+                    base: descriptor,
+                    offset: descriptor::dim(axis),
+                    type_id: U16,
+                    inbounds: false,
+                }],
+                None,
+            );
+            let inner = TypedOperand {
+                operand: Some(strides[0].clone()),
+                type_name: TypeName::U16,
+            };
+            let dim = TypedOperand {
+                operand: Some(hir::Operand::Value(dim)),
+                type_name: TypeName::U16,
+            };
+            strides.insert(0, self.folded("mul", dim, inner, TypeName::U16));
+        }
+        let flat = self.linear(indices, strides, span)?;
+        let data = self.slice_data_pointer(descriptor, element, rank);
+        self.indexed_pointer(data, flat, self.types.width(element.id()), span)
+    }
+
+    /// `sum(indices[k] * strides[k])` as a u16: a descriptor's u16 counts bound it.
+    fn linear(
+        &mut self,
+        indices: Vec<hir::Operand>,
+        strides: Vec<hir::Operand>,
+        span: Span,
+    ) -> Result<hir::Operand, Diagnostic> {
+        if let ([index], [hir::Operand::Constant(_, 1)]) = (indices.as_slice(), strides.as_slice()) {
+            return Ok(index.clone());
+        }
+        let typed = |this: &Self, operand: &hir::Operand| match operand {
+            hir::Operand::Constant(type_id, _) => *type_id,
+            hir::Operand::Value(value) => this
+                .values
+                .iter()
+                .find(|one| one.id == *value)
+                .map(|one| one.type_id)
+                .expect("an index value has a type"),
+            _ => U16,
+        };
+        let index_name = TypeName::U16;
+        let mut total: Option<hir::Operand> = None;
+        for (index, stride) in indices.into_iter().zip(strides) {
+            let index = TypedOperand {
+                type_name: type_name_of(typed(self, &index)),
+                operand: Some(index),
+            };
+            let stride = TypedOperand {
+                type_name: type_name_of(typed(self, &stride)),
+                operand: Some(stride),
+            };
+            let index = self.converted(index, index_name, span)?;
+            let stride = self.converted(stride, index_name, span)?;
+            let term = self.folded("mul", index, stride, index_name);
+            total = Some(match total {
+                None => term,
+                Some(sum) => self.folded(
+                    "add",
+                    TypedOperand {
+                        operand: Some(sum),
+                        type_name: index_name,
+                    },
+                    TypedOperand {
+                        operand: Some(term),
+                        type_name: index_name,
+                    },
+                    index_name,
+                ),
+            });
+        }
+        Ok(total.expect("at least one index"))
+    }
+
+    /// `left op right`, folded when both are constants.
+    fn folded(
+        &mut self,
+        op: &'static str,
+        left: TypedOperand,
+        right: TypedOperand,
+        type_name: TypeName,
+    ) -> hir::Operand {
+        let (left, right) = (
+            left.operand.expect("an operand"),
+            right.operand.expect("an operand"),
+        );
+        if let (hir::Operand::Constant(_, a), hir::Operand::Constant(_, b)) = (&left, &right) {
+            let value = if op == "mul" { a * b } else { a + b };
+            return hir::Operand::Constant(type_id(type_name), wrapped(value, type_name));
+        }
+        let result = self.value(type_name);
+        self.emit(op, vec![result], vec![left, right], None);
+        hir::Operand::Value(result)
+    }
+
     fn index_expression(
         &mut self,
         base: &Expr,
-        index: &Expr,
+        indices: &[Expr],
         expected: Option<TypeName>,
         span: Span,
     ) -> Result<TypedOperand, Diagnostic> {
@@ -3144,12 +3373,7 @@ impl<'a> FunctionCompiler<'a> {
             return Err(Diagnostic::new(span, "array base must be a named binding"));
         };
         let binding = self.binding(name, span)?.clone();
-        let Some((element, length)) = binding.type_.array() else {
-            return Err(Diagnostic::new(
-                span,
-                format!("binding {name:?} is not an array"),
-            ));
-        };
+        let (element, at) = self.element_at(&binding, name, indices, span)?;
         let ElementType::Scalar(element) = element else {
             return Err(Diagnostic::new(
                 span,
@@ -3159,57 +3383,12 @@ impl<'a> FunctionCompiler<'a> {
         if expected.is_some_and(|one| one != element) {
             return Err(type_mismatch(span, expected.expect("checked"), element));
         }
-        let index = self.array_index(index, length)?;
-        let place = self.indexed_place(
-            &binding.storage,
-            index,
-            ElementType::Scalar(element),
-            width(element),
-            span,
-        )?;
         let result = self.value(element);
-        self.emit("load", vec![result], vec![place], None);
+        self.emit("load", vec![result], vec![at.operand(type_id(element))], None);
         Ok(TypedOperand {
             operand: Some(hir::Operand::Value(result)),
             type_name: element,
         })
-    }
-
-    fn indexed_place(
-        &mut self,
-        storage: &Storage,
-        index: hir::Operand,
-        element: ElementType,
-        element_width: u32,
-        span: Span,
-    ) -> Result<hir::Operand, Diagnostic> {
-        let element_type = element.id();
-        match storage {
-            Storage::Place(place) => Ok(hir::Operand::ArrayElement(*place, vec![index])),
-            Storage::Slice(descriptor) => {
-                let pointer = self.slice_data_pointer(*descriptor, element);
-                let address = self.indexed_pointer(pointer, index, element_width, span)?;
-                Ok(hir::Operand::IndirectPlace {
-                    base: address,
-                    offset: 0,
-                    type_id: element_type,
-                    inbounds: true,
-                })
-            }
-            Storage::Reference(pointer) => {
-                let address = self.indexed_pointer(*pointer, index, element_width, span)?;
-                Ok(hir::Operand::IndirectPlace {
-                    base: address,
-                    offset: 0,
-                    type_id: element_type,
-                    inbounds: true,
-                })
-            }
-            Storage::Parameter(_) | Storage::ArrayView { .. } => {
-                Err(Diagnostic::new(span, "array has no indexable storage"))
-            }
-            Storage::Dictionary { .. } => unreachable!("array is not a dictionary"),
-        }
     }
 
     fn string_pointer(&mut self, binding: &Binding, span: Span) -> Result<u32, Diagnostic> {
@@ -3224,7 +3403,7 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
-    fn slice_data_pointer(&mut self, descriptor: u32, element: ElementType) -> u32 {
+    fn slice_data_pointer(&mut self, descriptor: u32, element: ElementType, rank: u8) -> u32 {
         let pointer_type = self.types.pointer(element.id(), 0);
         let pointer = self.value_type(pointer_type);
         self.emit(
@@ -3232,7 +3411,7 @@ impl<'a> FunctionCompiler<'a> {
             vec![pointer],
             vec![hir::Operand::IndirectPlace {
                 base: descriptor,
-                offset: 4,
+                offset: descriptor::size(rank),
                 type_id: pointer_type,
                 inbounds: false,
             }],
@@ -3989,6 +4168,7 @@ impl<'a> FunctionCompiler<'a> {
                     }
                     | BindingType::Slice {
                         element: ElementType::Struct(id),
+                        ..
                     } => id,
                     _ => return None,
                 }
@@ -4044,6 +4224,7 @@ impl<'a> FunctionCompiler<'a> {
                         }
                         | BindingType::Slice {
                             element: ElementType::Scalar(element),
+                            ..
                         } => Some(element),
                         BindingType::Array {
                             element: ElementType::Struct(_),
@@ -4051,6 +4232,7 @@ impl<'a> FunctionCompiler<'a> {
                         }
                         | BindingType::Slice {
                             element: ElementType::Struct(_),
+                            ..
                         }
                         | BindingType::Scalar(_)
                         | BindingType::Struct(_)
@@ -4129,16 +4311,16 @@ impl<'a> FunctionCompiler<'a> {
             );
         }
         let string = binding.type_ == BindingType::Scalar(TypeName::String);
-        let length = if string {
-            None
+        let (rank, shape) = if string {
+            (1, None)
         } else {
-            let Some((_element, length)) = binding.type_.array() else {
+            let Some((_element, rank, shape)) = binding.type_.ranked() else {
                 return Err(Diagnostic::new(
                     receiver.span(),
                     format!("{array_name:?} is not an array or string"),
                 ));
             };
-            length
+            (rank, shape)
         };
         if name == "data" {
             if !arguments.is_empty() {
@@ -4177,10 +4359,10 @@ impl<'a> FunctionCompiler<'a> {
                     result
                 }
                 Storage::Slice(descriptor) => {
-                    let BindingType::Slice { element } = binding.type_ else {
+                    let BindingType::Slice { element, rank } = binding.type_ else {
                         unreachable!("slice storage has slice type")
                     };
-                    let typed = self.slice_data_pointer(descriptor, element);
+                    let typed = self.slice_data_pointer(descriptor, element, rank);
                     let result = self.value(TypeName::Addr);
                     self.emit("copy", vec![result], vec![hir::Operand::Value(typed)], None);
                     result
@@ -4199,9 +4381,11 @@ impl<'a> FunctionCompiler<'a> {
                 TypeName::U16,
             ));
         }
-        let offset = match name {
-            "len" if arguments.is_empty() => 0,
-            "capacity" if arguments.is_empty() => 2,
+        // A dimension, or past them all the capacity. A ranked array's length
+        // is its element count, which is its capacity.
+        let word = match name {
+            "len" if arguments.is_empty() => if rank == 1 { 0 } else { rank },
+            "capacity" if arguments.is_empty() => rank,
             "dim" if arguments.len() == 1 => {
                 let Expr::Integer(axis, axis_span) = arguments[0] else {
                     return Err(Diagnostic::new(
@@ -4209,13 +4393,13 @@ impl<'a> FunctionCompiler<'a> {
                         "dimension index must be an integer literal",
                     ));
                 };
-                if axis != 0 {
+                if !(0..i64::from(rank)).contains(&axis) {
                     return Err(Diagnostic::new(
                         axis_span,
-                        "one-dimensional array has only dimension 0",
+                        format!("{array_name:?} has dimensions 0..{rank}"),
                     ));
                 }
-                0
+                axis as u8
             }
             "len" | "capacity" => {
                 return Err(Diagnostic::new(
@@ -4231,8 +4415,30 @@ impl<'a> FunctionCompiler<'a> {
                 ))
             }
         };
-        let operand = if let Some(length) = length {
-            hir::Operand::Constant(U16, i64::from(length))
+        let operand = if let Some(shape) = shape {
+            let value = if word < rank {
+                shape.dims[word as usize]
+            } else {
+                shape.len()
+            };
+            hir::Operand::Constant(U16, i64::from(value))
+        } else if rank > 1 {
+            let Storage::Slice(pointer) = binding.storage else {
+                return Err(Diagnostic::new(receiver.span(), "view has no descriptor"));
+            };
+            let value = self.value(TypeName::U16);
+            self.emit(
+                "load",
+                vec![value],
+                vec![hir::Operand::IndirectPlace {
+                    base: pointer,
+                    offset: descriptor::dim(word),
+                    type_id: U16,
+                    inbounds: false,
+                }],
+                None,
+            );
+            hir::Operand::Value(value)
         } else {
             let pointer = if string {
                 self.string_pointer(&binding, receiver.span())?
@@ -4247,7 +4453,7 @@ impl<'a> FunctionCompiler<'a> {
                 vec![value],
                 vec![hir::Operand::DescriptorPlace {
                     base: pointer,
-                    field: if offset == 0 { "length" } else { "capacity" },
+                    field: if word == 0 { "length" } else { "capacity" },
                     type_id: U16,
                 }],
                 None,
@@ -4596,9 +4802,9 @@ impl<'a> FunctionCompiler<'a> {
             || matches!(
                 (binding.type_, target),
                 (
-                    BindingType::Array { element: actual, .. },
-                    BindingType::Slice { element: expected }
-                ) if actual == expected
+                    BindingType::Array { element: actual, shape },
+                    BindingType::Slice { element: expected, rank }
+                ) if actual == expected && shape.rank == rank
             );
         if !compatible {
             return Err(Diagnostic::new(
@@ -4612,7 +4818,7 @@ impl<'a> FunctionCompiler<'a> {
                 format!("cannot mutably borrow immutable binding {name:?}"),
             ));
         }
-        if let BindingType::Slice { element } = target {
+        if let BindingType::Slice { element, rank } = target {
             if range.is_none() {
                 if let Storage::Slice(pointer) = binding.storage {
                     return Ok((hir::Operand::Value(pointer), name.clone()));
@@ -4620,7 +4826,7 @@ impl<'a> FunctionCompiler<'a> {
             }
             let BindingType::Array {
                 element: actual,
-                length,
+                shape,
             } = binding.type_
             else {
                 return Err(Diagnostic::new(
@@ -4629,7 +4835,13 @@ impl<'a> FunctionCompiler<'a> {
                 ));
             };
             debug_assert_eq!(actual, element);
-            let (start, end) = self.slice_bounds(range, length, operand.span())?;
+            if range.is_some() && rank != 1 {
+                return Err(Diagnostic::new(
+                    operand.span(),
+                    "only a one-dimensional array can be sliced",
+                ));
+            }
+            let (start, end) = self.slice_bounds(range, shape.len(), operand.span())?;
             let Storage::Place(place) = binding.storage else {
                 return Err(Diagnostic::new(
                     operand.span(),
@@ -4661,9 +4873,21 @@ impl<'a> FunctionCompiler<'a> {
                 .find(|one| one.id == pointer_type)
                 .and_then(|one| one.element)
                 .expect("slice pointer has a descriptor pointee");
-            let descriptor = self.local_place(&format!("$slice_{name}"), descriptor_type, 8, false);
-            let view_length = end - start;
-            for (offset, value) in [(0, view_length), (2, view_length)] {
+            let size = descriptor::size(rank);
+            let descriptor = self.local_place(
+                &format!("$slice_{name}"),
+                descriptor_type,
+                size + 4,
+                false,
+            );
+            // A one-dimensional view describes its range; a ranked one, the whole array.
+            let viewed = if rank == 1 {
+                Shape::new(&[end - start])
+            } else {
+                shape
+            };
+            let values = viewed.descriptor().into_iter().map(|(_, value)| value);
+            for (word, value) in values.into_iter().enumerate() {
                 self.emit(
                     "store",
                     Vec::new(),
@@ -4671,7 +4895,7 @@ impl<'a> FunctionCompiler<'a> {
                         hir::Operand::ProjectedPlace {
                             place: descriptor,
                             indices: Vec::new(),
-                            offset,
+                            offset: 2 * word as u32,
                             type_id: U16,
                         },
                         hir::Operand::Constant(U16, i64::from(value)),
@@ -4686,7 +4910,7 @@ impl<'a> FunctionCompiler<'a> {
                     hir::Operand::ProjectedPlace {
                         place: descriptor,
                         indices: Vec::new(),
-                        offset: 4,
+                        offset: size,
                         type_id: data_type,
                     },
                     hir::Operand::Value(data),
@@ -4896,39 +5120,38 @@ impl<'a> FunctionCompiler<'a> {
         name: &str,
         type_id: u32,
         element: ElementType,
-        length: u32,
+        shape: Shape,
         mutable: bool,
     ) -> u32 {
-        let extent = self.types.width(element.id()) * length;
-        self.next_frame_offset -= extent as i32 + 4;
+        let extent = self.types.width(element.id()) * shape.len();
+        let size = descriptor::size(shape.rank);
+        self.next_frame_offset -= (extent + size) as i32;
         let descriptor_offset = self.next_frame_offset;
-
-        let length_place = self.next_place;
-        self.next_place += 1;
-        self.places.push(hir::Place {
-            id: length_place,
-            name: format!("${name}.length"),
-            type_id: U16,
-            mutable: false,
-            offset: descriptor_offset,
-            extent: 2,
-            storage: "local",
-            symbol: 0,
-            volatile: true,
-        });
-        let capacity_place = self.next_place;
-        self.next_place += 1;
-        self.places.push(hir::Place {
-            id: capacity_place,
-            name: format!("${name}.capacity"),
-            type_id: U16,
-            mutable: false,
-            offset: descriptor_offset + 2,
-            extent: 2,
-            storage: "local",
-            symbol: 0,
-            volatile: true,
-        });
+        let descriptor = shape.descriptor();
+        for (word, (label, value)) in descriptor.into_iter().enumerate() {
+            let place = self.next_place;
+            self.next_place += 1;
+            self.places.push(hir::Place {
+                id: place,
+                name: format!("${name}.{label}"),
+                type_id: U16,
+                mutable: false,
+                offset: descriptor_offset + 2 * word as i32,
+                extent: 2,
+                storage: "local",
+                symbol: 0,
+                volatile: true,
+            });
+            self.emit(
+                "store",
+                Vec::new(),
+                vec![
+                    hir::Operand::Place(place),
+                    hir::Operand::Constant(U16, i64::from(value)),
+                ],
+                None,
+            );
+        }
         let id = self.next_place;
         self.next_place += 1;
         self.places.push(hir::Place {
@@ -4936,23 +5159,12 @@ impl<'a> FunctionCompiler<'a> {
             name: name.into(),
             type_id,
             mutable,
-            offset: descriptor_offset + 4,
+            offset: descriptor_offset + size as i32,
             extent,
             storage: "local",
             symbol: 0,
             volatile: false,
         });
-        for descriptor in [length_place, capacity_place] {
-            self.emit(
-                "store",
-                Vec::new(),
-                vec![
-                    hir::Operand::Place(descriptor),
-                    hir::Operand::Constant(U16, i64::from(length)),
-                ],
-                None,
-            );
-        }
         id
     }
 
@@ -5160,20 +5372,50 @@ fn is_ordered(type_name: TypeName) -> bool {
 }
 
 /// A repeat literal's element count; only rank one is implemented.
-fn repeat_count(counts: &[Expr]) -> Result<usize, Diagnostic> {
-    match counts {
-        [Expr::Integer(count, at)] => usize::try_from(*count)
-            .map_err(|_| Diagnostic::new(*at, "a repeat count must be non-negative")),
-        [count] => Err(Diagnostic::new(
-            count.span(),
-            "a repeat count must be a compile-time integer",
-        )),
-        [_, second, ..] => Err(Diagnostic::new(
-            second.span(),
-            "only rank-one repeat literals are implemented",
-        )),
-        [] => unreachable!("the parser requires a count"),
+/// A repeat literal's counts, which are compile-time integers.
+fn repeat_counts(counts: &[Expr]) -> Result<Vec<u32>, Diagnostic> {
+    counts
+        .iter()
+        .map(|count| match count {
+            Expr::Integer(value, at) => u32::try_from(*value)
+                .map_err(|_| Diagnostic::new(*at, "a repeat count must be non-negative")),
+            other => Err(Diagnostic::new(
+                other.span(),
+                "a repeat count must be a compile-time integer",
+            )),
+        })
+        .collect()
+}
+
+/// A nested array literal's elements with their indices, checked against `dims`.
+fn literal_elements<'e>(
+    literal: &'e Expr,
+    dims: &[u32],
+    span: Span,
+) -> Result<Vec<(Vec<u32>, &'e Expr)>, Diagnostic> {
+    let Some((&length, inner)) = dims.split_first() else {
+        return Ok(vec![(Vec::new(), literal)]);
+    };
+    let Expr::Array(items, at) = literal else {
+        return Err(Diagnostic::new(
+            literal.span(),
+            format!("expected a nested array literal of {length} elements"),
+        ));
+    };
+    if items.len() != length as usize {
+        return Err(Diagnostic::new(
+            if inner.len() + 1 == dims.len() { span } else { *at },
+            format!("array expects {length} elements, got {}", items.len()),
+        ));
     }
+    let mut out = Vec::new();
+    for (index, item) in items.iter().enumerate() {
+        for (mut at, element) in literal_elements(item, inner, span)? {
+            at.insert(0, index as u32);
+            out.push((at, element));
+        }
+    }
+    Ok(out)
 }
 
 /// An expression whose type comes from its context.
@@ -5280,6 +5522,20 @@ fn operand_rule(operation: BinaryOp, type_name: TypeName, span: Span) -> Result<
 
 fn is_fixed(type_name: TypeName) -> bool {
     matches!(type_name, TypeName::Fixed { .. })
+}
+
+/// The integer type a primitive HIR type id names.
+fn type_name_of(id: u32) -> TypeName {
+    match id {
+        I8 => TypeName::I8,
+        U8 => TypeName::U8,
+        I16 => TypeName::I16,
+        U16 => TypeName::U16,
+        I32 => TypeName::I32,
+        U32 => TypeName::U32,
+        I64 => TypeName::I64,
+        _ => unreachable!("an index is a primitive integer"),
+    }
 }
 
 fn type_id(type_name: TypeName) -> u32 {

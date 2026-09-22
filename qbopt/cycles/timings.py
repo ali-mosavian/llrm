@@ -164,6 +164,15 @@ LATENCY["lea"] = (2, 1, 1, 1, 1, 1, 1)
 #                      486   P5    P6    K5    K6    K7   Core
 PREFIX = (1, 1, 0, 0, 0, 0, 0)
 
+# REP STOS: a setup, then a clock count per cell. The 386 and 486 figures
+# are Intel's (5+5n, 7+4n); the rest are Agner Fog's small-count rankings,
+# where fast strings have not yet paid for their startup.
+#                      486   P5    P6    K5    K6    K7   Core
+COST["rep_stos"] = (7, 9, 30, 10, 10, 15, 30)
+COST["rep_stos_cell"] = (4, 1, 1, 1, 1, 1, 1)
+LATENCY["rep_stos"] = COST["rep_stos"]
+LATENCY["rep_stos_cell"] = COST["rep_stos_cell"]
+
 # 32-bit multiply, for telling it from the 16-bit one
 #                      486   P5    P6    K5    K6    K7   Core
 COST["mul_r32"] = (26, 10, 4, 4, 3, 5, 3)

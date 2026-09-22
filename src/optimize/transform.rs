@@ -2697,6 +2697,7 @@ pub(crate) fn folded(body: &Rc<MirBody>, dgroup: &BTreeSet<i64>, calls: &IndexMa
                 Some(here),
                 Some(&symbols),
             );
+            let made = _constant_based(made, &facts);
             // Python's `made is not op`: every helper returns its input or a rewrite.
             changed = changed || made != *op;
             ops.push(made);
@@ -2715,6 +2716,119 @@ pub(crate) fn folded(body: &Rc<MirBody>, dgroup: &BTreeSet<i64>, calls: &IndexMa
         return Ok(result);
     }
     Ok(floatfold::stored(&floatfold::discarded(&result, &conversions), &floating_facts))
+}
+
+/// A fill's value and count, where they are numbers: a held count was priced as unknown.
+pub(crate) fn _constant_fill(op: &Op, facts: &IndexMap<Value, crate::analysis::consts::Known>) -> Op {
+    use crate::analysis::consts;
+    use crate::model::mir::Const;
+
+    let known = |arg: &Arg| -> Arg {
+        if let Arg::Held(held) = arg {
+            if let Some(fact) = facts.get(&held.value).filter(|fact| fact.width >= held.width) {
+                return Arg::Const(Const::new(consts::masked(&fact.n, held.width), held.width));
+            }
+        }
+        arg.clone()
+    };
+    let args = op.args.iter().take(2).map(known).chain(op.args.iter().skip(2).cloned()).collect::<Vec<_>>();
+    if args == op.args {
+        return op.clone();
+    }
+    let kept = args
+        .iter()
+        .filter_map(|arg| if let Arg::Held(held) = arg { Some(held.value) } else { None })
+        .chain(op.merges.keys().copied())
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut result = op.clone();
+    result.uses = op.uses.iter().copied().filter(|value| kept.contains(value)).collect();
+    result.args = args;
+    result.raised = None;
+    result
+}
+
+/// A near cell reached through a proven constant, as the fixed cell it is.
+///
+/// Full unrolling leaves `L[k]` with `k` a number; kept based, each copy paid
+/// a register load of `k` to address one fixed byte.
+pub(crate) fn _constant_based(op: Op, facts: &IndexMap<Value, crate::analysis::consts::Known>) -> Op {
+    use crate::objectfile::module::Space;
+    use num_bigint::BigInt;
+    use num_traits::ToPrimitive;
+
+    let fixed = |r#ref: &mir::MemRef| -> mir::MemRef {
+        let (Some(base), Some(addr)) = (r#ref.base, r#ref.addr) else {
+            return r#ref.clone();
+        };
+        let fact = facts.get(&base);
+        if r#ref.segment.is_some()
+            || !matches!(addr.space, Space::Frame | Space::Segment)
+            || r#ref.base_width != 2
+            || r#ref.symbolic.is_some()
+            || r#ref.allocation.is_some()
+            || fact.is_none_or(|fact| fact.width < r#ref.base_width)
+        {
+            return r#ref.clone();
+        }
+        let fact = fact.expect("checked above");
+        let mut disp = ((BigInt::from(addr.disp) + &fact.n) & BigInt::from(0xFFFF)).to_i64().expect("a word");
+        if addr.space == Space::Frame {
+            disp = (disp ^ 0x8000) - 0x8000;
+        }
+        mir::MemRef {
+            addr: Some(crate::objectfile::module::Addr { disp, base: iced_x86::Register::None, ..addr }),
+            base: None,
+            ..r#ref.clone()
+        }
+    };
+
+    let mut refs: Vec<(mir::MemRef, mir::MemRef)> = Vec::new();
+    // A dict: an equal key keeps its first spelling and takes the last value.
+    let mut add = |r#ref: &mir::MemRef| match refs.iter_mut().find(|(old, _)| old == r#ref) {
+        Some(found) => found.1 = fixed(r#ref),
+        None => refs.push((r#ref.clone(), fixed(r#ref))),
+    };
+    op.loads.iter().chain(&op.stores).for_each(&mut add);
+    for one in op.args.iter().chain(&op.results) {
+        if let Arg::Cell(cell) = one {
+            add(&cell.r#ref);
+        }
+    }
+    if refs.iter().all(|(old, new)| new == old) {
+        return op;
+    }
+    let mapped = |r#ref: &mir::MemRef| refs.iter().find(|(old, _)| old == r#ref).expect("every ref is mapped").1.clone();
+    let cell = |one: &Arg| match one {
+        Arg::Cell(cell) => Arg::Cell(mir::Cell { r#ref: mapped(&cell.r#ref) }),
+        other => other.clone(),
+    };
+
+    let mut kept: BTreeSet<Value> = op
+        .args
+        .iter()
+        .chain(&op.results)
+        .filter_map(|one| match one {
+            Arg::Held(held) => Some(held.value),
+            _ => None,
+        })
+        .collect();
+    kept.extend(refs.iter().flat_map(|(_, new)| [new.base, new.segment]).flatten());
+    let dropped: BTreeSet<Value> = refs
+        .iter()
+        .filter(|(old, new)| new != old)
+        .filter_map(|(old, _)| old.base)
+        .filter(|value| !kept.contains(value) && !op.merges.contains_key(value))
+        .collect();
+    Op {
+        loads: op.loads.iter().map(mapped).collect(),
+        stores: op.stores.iter().map(mapped).collect(),
+        args: op.args.iter().map(cell).collect(),
+        results: op.results.iter().map(cell).collect(),
+        uses: op.uses.iter().copied().filter(|value| !dropped.contains(value)).collect(),
+        source_backed: false,
+        raised: None,
+        ..op.clone()
+    }
 }
 
 pub(crate) fn _constant_update(
@@ -2811,6 +2925,9 @@ pub(crate) fn _constant_operands(
     let symbols = symbols.unwrap_or(&no_symbols);
     if op.kind == Kind::Arg {
         return _constant_argument(op, facts, memory, Some(symbols));
+    }
+    if op.kind == Kind::Fill {
+        return _constant_fill(op, facts);
     }
     if op.kind == Kind::Store
         && op.args.len() == op.stores.len()

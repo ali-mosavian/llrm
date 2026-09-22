@@ -173,6 +173,7 @@ pub(crate) fn reduced(
     let first = taken + 1;
     let mut ahead = BTreeMap::<i64, Vec<Op>>::new();
     let mut behind = BTreeMap::<i64, Vec<Op>>::new();
+    let mut cuts = BTreeMap::<i64, usize>::new();
     let mut replacements = BTreeMap::<OpOccurrence, Vec<Op>>::new();
     // A carried pointer replaces an address expression with a copy from the
     // loop phi.  Its immediately-following memory use should name that phi
@@ -200,6 +201,9 @@ pub(crate) fn reduced(
         if at_of[&preheader].succ != [loop_.header] || latches.len() != 1 {
             continue;
         }
+        let Some((step_at, cut, later)) = _stepping_point(body, loop_, latches[0], &at_of) else {
+            continue;
+        };
         let mut candidates = candidate_groups[&loop_.header].clone();
         // Priced against the recurrences the loop drives, not against
         // pressure; see strength.py for the measurements.
@@ -461,6 +465,15 @@ pub(crate) fn reduced(
         candidates.retain(|one| !indexes.contains_key(&one.op));
         // Every remaining formula is a value live around the loop; the
         // pressure-priced choices of `_formula_set` stand as made.
+        // A counter's reads must come before its step: nothing it replaces may
+        // follow the step point on the way back to the header.
+        let index_of = body.blocks.iter().enumerate().map(|(index, block)| (block.at, index)).collect::<BTreeMap<_, _>>();
+        let later_blocks = later.iter().map(|at| index_of[at]).collect::<BTreeSet<_>>();
+        let stepped = |at: OpOccurrence| {
+            (at.block_index() == index_of[&step_at] && at.operation_index() >= cut)
+                || later_blocks.contains(&at.block_index())
+        };
+        candidates.retain(|one| !stepped(one.op));
         let mut added = 0;
         // One counter an expression.
         let mut shared = HashMap::<
@@ -545,7 +558,7 @@ pub(crate) fn reduced(
             };
             let step = Value {
                 id: start.id + 1,
-                at: latches[0],
+                at: step_at,
                 flags: false,
                 variable: taken,
                 version: 2,
@@ -556,7 +569,7 @@ pub(crate) fn reduced(
                 .or_default()
                 .extend(_starts(body, start, &one, preheader, true));
             taken += _start_temporary_count(&one, true);
-            behind.entry(latches[0]).or_default().push(_made(
+            behind.entry(step_at).or_default().push(_made(
                 if one.pointer.is_some() {
                     Kind::PtrOffset
                 } else {
@@ -571,9 +584,10 @@ pub(crate) fn reduced(
                     }),
                     stride,
                 ],
-                latches[0],
+                step_at,
                 op,
             ));
+            cuts.insert(step_at, cut);
             replacements.insert(one.op, vec![_copying(op, start, answer, width)]);
             if one.pointer.is_some() {
                 pointer_bindings.push((one.op, answer, start));
@@ -602,6 +616,7 @@ pub(crate) fn reduced(
             ahead.get(&block.at).map_or(&[][..], Vec::as_slice),
             behind.get(&block.at).map_or(&[][..], Vec::as_slice),
             &replacements,
+            cuts.get(&block.at).copied(),
         ) {
             let swap = at.and_then(|at| pointer_rebases.get(&at)).unwrap_or(&none);
             ops.push(_rebased(&ssa::substituted(&op, swap)?, &wide));
@@ -1636,8 +1651,9 @@ fn _answer(reads: &_Reads, op: OpOccurrence) -> Option<Value> {
 
 /// The block with the new counter set up and advanced, and the multiply out.
 ///
-/// `ahead` goes at the end of the preheader, `behind` before whatever leaves
-/// the latch, because a branch reads the flags something before it set.
+/// `ahead` goes at the end of the preheader, after everything it may read.
+/// `behind` goes at `cut`, where `_stepping_point` found no condition live,
+/// or else before whatever leaves the block.
 /// Each kept operation carries its input occurrence, `None` if it is new.
 fn _woven(
     block: &MirBlock,
@@ -1645,6 +1661,7 @@ fn _woven(
     ahead: &[Op],
     behind: &[Op],
     replacements: &BTreeMap<OpOccurrence, Vec<Op>>,
+    cut: Option<usize>,
 ) -> Vec<(Option<OpOccurrence>, Op)> {
     let mut kept = Vec::new();
     for (at, op) in ops {
@@ -1656,10 +1673,19 @@ fn _woven(
         }
     }
     if !ahead.is_empty() || !behind.is_empty() {
-        let mut cut = kept.len();
-        while cut > 0 && matches!(kept[cut - 1].1.kind, Kind::Jump | Kind::Branch) {
-            cut -= 1;
-        }
+        let cut = match cut {
+            None => {
+                let mut cut = kept.len();
+                while cut > 0 && matches!(kept[cut - 1].1.kind, Kind::Jump | Kind::Branch) {
+                    cut -= 1;
+                }
+                cut
+            }
+            Some(cut) => ops[..cut]
+                .iter()
+                .map(|(at, _)| replacements.get(at).map_or(1, |replacement| _replaced(replacement).len()))
+                .sum(),
+        };
         let at = if cut < kept.len() {
             kept[cut].1.at
         } else if let Some((_, last)) = kept.last() {
@@ -1676,6 +1702,58 @@ fn _woven(
         kept.splice(cut..cut, inserted);
     }
     kept
+}
+
+/// Where a new counter steps, and the blocks after it: the latest point back to the header with no condition live.
+///
+/// An add there sets the flags, so it may not fall between a compare and the
+/// branch reading it -- which, in a rotated loop, is in the block before the
+/// latch.
+fn _stepping_point(
+    body: &MirBody,
+    loop_: &Loop,
+    latch: i64,
+    at_of: &BTreeMap<i64, &MirBlock>,
+) -> Option<(i64, usize, BTreeSet<i64>)> {
+    let predecessors = loopy::predecessors(&body.blocks);
+    let (mut at, mut live, mut later) = (latch, BTreeSet::<Value>::new(), BTreeSet::<i64>::new());
+    loop {
+        let ops = &at_of[&at].ops;
+        let positions = _live_conditions(ops, &live);
+        let mut end = ops.len();
+        while end > 0 && matches!(ops[end - 1].kind, Kind::Jump | Kind::Branch) {
+            end -= 1;
+        }
+        if let Some(quiet) = (0..=end).filter(|index| positions[*index].is_empty()).last() {
+            return Some((at, quiet, later));
+        }
+        let before = predecessors
+            .get(&at)
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|one| loop_.body.contains(one))
+            .collect::<Vec<_>>();
+        if at == loop_.header || before.len() != 1 || at_of[&before[0]].succ != [at] {
+            return None;
+        }
+        later.insert(at);
+        at = before[0];
+        live = positions.into_iter().next().expect("one position per operation and one after");
+    }
+}
+
+/// The flag values live before each operation, and after the last.
+fn _live_conditions(ops: &[Op], live_out: &BTreeSet<Value>) -> Vec<BTreeSet<Value>> {
+    let mut live = vec![BTreeSet::new(); ops.len()];
+    live.push(live_out.clone());
+    for index in (0..ops.len()).rev() {
+        let op = &ops[index];
+        let mut here = live[index + 1].iter().copied().filter(|value| !op.defines.contains(value)).collect::<BTreeSet<_>>();
+        here.extend(op.uses.iter().copied().filter(|value| value.flags));
+        live[index] = here;
+    }
+    live
 }
 
 /// The same-block memory users that may name a new pointer phi directly.

@@ -559,13 +559,26 @@ explicit fallible builders from the allocator library.
 An owned vector allocation places its descriptor immediately before its data:
 
 ```text
-[dimensions][capacity][strides][data...]
-                              ^ data pointer
+[dimensions][capacity][data...]
+                     ^ data pointer
 ```
 
 Rank is part of the static type, so `vec[T, 2]` need not store a runtime rank.
-A borrowed view carries a data pointer plus the required dimensions and
-strides. Slicing aliases storage and never copies implicitly.
+A borrowed view carries a data pointer plus the dimensions. Slicing aliases
+storage and never copies implicitly.
+
+Ranks are one to four. Arrays are row-major: the last index is contiguous, so
+`a[i, j]` and `a[i, j + 1]` are neighbours. Every array and view is
+contiguous, so no stride is stored: each follows from the dimensions after
+it. A fixed array's descriptor has the same words as a vector's,
+`[dimensions][capacity]`, and a borrowed `&[T, N]` view holds them followed
+by the data pointer. At rank one these are `[length][capacity]`.
+
+A ranked literal nests one bracket per dimension:
+
+```text
+let identity: [f32; 2, 2] = [[1, 0], [0, 1]]
+```
 
 A slice is spelled as in Python and selects a half-open range:
 
@@ -753,7 +766,8 @@ Version 0.1 has no:
 - runtime reflection or RTTI;
 - dynamic protocol dispatch;
 - function or operator overloading;
-- implicit conversions or implicit cloning;
+- implicit conversions beyond C's between integers and floats, or implicit
+  cloning;
 - `null`;
 - `defer`;
 - UFCS or extension methods;

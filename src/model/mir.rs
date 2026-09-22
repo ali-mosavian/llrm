@@ -1157,6 +1157,25 @@ impl Op {
     }
 }
 
+/// `beside`, a block's last operation, as an unconditional jump to `destination`.
+pub fn jump(beside: &Op, destination: i64) -> Op {
+    let mut op = beside.clone();
+    op.kind = Kind::Jump;
+    op.name = String::new();
+    op.args = Vec::new();
+    op.results = Vec::new();
+    op.uses = Vec::new();
+    op.defines = Vec::new();
+    op.loads = Vec::new();
+    op.stores = Vec::new();
+    op.merges = OrderedMap::new();
+    op.source_backed = false;
+    op.raised = Some((Vec::new(), Vec::new()));
+    op.target = Some(destination);
+    op.test = None;
+    op
+}
+
 /// A source-free MIR computation invented by a semantic transform.
 ///
 /// Direct port of `qbopt.model.mir:computed`.  The operation names only its

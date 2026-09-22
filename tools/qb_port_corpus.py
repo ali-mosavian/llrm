@@ -33,6 +33,9 @@ DEFAULTS = {
 class Recorder:
     """A pytest plugin recording each source and flag set the QB driver compiles."""
 
+    # port_diff runs these sources at default flags already.
+    already = ROOT / "bench/parity"
+
     def __init__(self) -> None:
         self.compiled: dict[str, tuple[str, bytes, tuple[str, ...]]] = {}
 
@@ -51,7 +54,7 @@ class Recorder:
 
     def record(self, source: Path, flags: tuple[str, ...], defaults: tuple[str, ...]) -> None:
         source = Path(source).resolve()
-        if source.parent == ROOT / "bench/parity" and flags == defaults:
+        if source.parent == self.already and flags == defaults:
             return
         text = source.read_bytes()
         key = hashlib.sha256(text + b"\0" + source.name.encode() + b"\0" + " ".join(flags).encode()).hexdigest()[:10]

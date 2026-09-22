@@ -113,7 +113,7 @@ only for a module still `todo`, and never after cutover.
 | 3 | `qbopt/optimize/cfg.py` | 77 | `src/optimize/cfg.rs` | ported (C path) | - |
 | 3 | `qbopt/optimize/edges.py` | 40 | `src/optimize/edges.rs` | ported (C path) | - |
 | 3 | `qbopt/optimize/exitsink.py` | 107 | `src/optimize/exitsink.rs` | ported (C path) | - |
-| 3 | `qbopt/optimize/fill.py` | 301 | `src/optimize/fill.rs` | ported (C path) | - |
+| 3 | `qbopt/optimize/fill.py` | 367 | `src/optimize/fill.rs` | ported (C path) | test_modern_frontend |
 | 3 | `qbopt/optimize/floatfold.py` | 234 | `src/optimize/floatfold.rs` | ported (C path) | test_floatfold, test_unroll |
 | 3 | `qbopt/optimize/floatloop.py` | 140 | `src/optimize/floatloop.rs` | ported (C path) | test_float_loop_exit |
 | 3 | `qbopt/optimize/gvn.py` | 206 | `src/optimize/gvn.rs` | ported (C path) | test_mir_alias |
@@ -127,21 +127,21 @@ only for a module still `todo`, and never after cutover.
 | 3 | `qbopt/optimize/loopexit.py` | 399 | `src/optimize/loopexit.rs` | ported (C path) | test_induction_identity, test_loopexit |
 | 3 | `qbopt/optimize/loopmotion.py` | 251 | `src/optimize/loopmotion.rs` | ported (C path) | test_float_loop_exit, test_laststore |
 | 3 | `qbopt/optimize/loopsimplify.py` | 122 | `src/optimize/loopsimplify.rs` | ported (C path) | - |
-| 3 | `qbopt/optimize/peel.py` | 123 | `src/optimize/peel.rs` | ported (C path) | test_transform, test_unroll |
+| 3 | `qbopt/optimize/peel.py` | 122 | `src/optimize/peel.rs` | ported (C path) | test_transform, test_unroll |
 | 3 | `qbopt/optimize/pointeraccess.py` | 133 | `src/optimize/pointeraccess.rs` | ported (C path) | - |
-| 3 | `qbopt/optimize/profit.py` | 264 | `src/optimize/profit.rs` | ported (C path) | test_unroll_budget |
+| 3 | `qbopt/optimize/profit.py` | 275 | `src/optimize/profit.rs` | ported (C path) | test_unroll_budget |
 | 3 | `qbopt/optimize/promote.py` | 1105 | `src/optimize/promote.rs` | ported (C path) | test_flow, test_mir_alias, test_promote, test_transform, test_unary_promotion |
 | 3 | `qbopt/optimize/rotate.py` | 406 | `src/optimize/rotate.rs` | ported (C path) | test_countdown, test_induction_identity, test_rewind |
-| 3 | `qbopt/optimize/strength.py` | 1359 | `src/optimize/strength.rs` | ported (C path) | test_cpu_profile, test_flow, test_ivshare, test_ranges |
-| 3 | `qbopt/optimize/transform.py` | 3297 | `src/optimize/transform.rs` | ported (C path) | test_cfront, test_constant_arguments, test_constant_stores, test_consts, test_copy_values, test_cpu_driver, test_dead_ownership, test_far_memory_identity, test_float_cse_paths, test_float_loop_exit, test_float_recurrences, test_float_values, test_flow, test_hoist_selector, test_induction_inequality, test_invariant_argument, test_ivshare, test_laststore, test_licm_operand_dependencies, test_loopexit, test_loopmotion, test_loopsimplify, test_lower_switches, test_memory_cse, test_mir, test_native_float_licm, test_parcopy, test_phi_widths, test_pointer_memory, test_promote, test_qgldiff_forwarding, test_quotient_recurrence, test_raising_calls, test_raising_copies, test_raising_dispatch, test_ranges, test_rule5, test_scalar_division, test_sccp, test_transform, test_unroll |
-| 3 | `qbopt/optimize/unroll.py` | 449 | `src/optimize/unroll.rs` | ported (C path) | test_transform, test_unroll |
+| 3 | `qbopt/optimize/strength.py` | 1410 | `src/optimize/strength.rs` | ported (C path) | test_cpu_profile, test_flow, test_ivshare, test_ranges |
+| 3 | `qbopt/optimize/transform.py` | 3353 | `src/optimize/transform.rs` | ported (C path) | test_cfront, test_constant_arguments, test_constant_stores, test_consts, test_copy_values, test_cpu_driver, test_dead_ownership, test_far_memory_identity, test_float_cse_paths, test_float_loop_exit, test_float_recurrences, test_float_values, test_flow, test_hoist_selector, test_induction_inequality, test_invariant_argument, test_ivshare, test_laststore, test_licm_operand_dependencies, test_loopexit, test_loopmotion, test_loopsimplify, test_lower_switches, test_memory_cse, test_mir, test_native_float_licm, test_parcopy, test_phi_widths, test_pointer_memory, test_promote, test_qgldiff_forwarding, test_quotient_recurrence, test_raising_calls, test_raising_copies, test_raising_dispatch, test_ranges, test_rule5, test_scalar_division, test_sccp, test_transform, test_unroll |
+| 3 | `qbopt/optimize/unroll.py` | 486 | `src/optimize/unroll.rs` | ported (C path) | test_transform, test_unroll |
 | 3 | `qbopt/optimize/unswitch.py` | 218 | `src/optimize/unswitch.rs` | ported (C path) | test_indvars, test_unswitch |
 | 3 | `qbopt/optimize/wholephis.py` | 100 | `src/optimize/wholephis.rs` | ported (C path) | test_algebraic |
 | 3 | `qbopt/optimize/wholestores.py` | 37 | `src/optimize/wholestores.rs` | ported (C path) | - |
 | 3 | `qbopt/analysis/peelsize.py` | 102 | `src/analysis/peelsize.rs` | ported (C path) | - |
 | 3 | `qbopt/optimize/canonical.py` | 80 | `src/optimize/canonical.rs` | ported (C path) | - |
-| 4 | `qbopt/frontend/modern/compile.py` | 200 | `src/frontend/modern/compile.rs` | todo | test_hir_execute |
-| 4 | `qbopt/frontend/modern/driver.py` | 53 | `src/frontend/modern/driver.rs` | todo | - |
+| 4 | `qbopt/frontend/modern/compile.py` | 187 | `src/frontend/modern/compile.rs` (+ `tools/modernstages.py` as `modernstages.rs`) | ported | test_farload, test_hir_execute, test_modern_frontend, test_modernstages |
+| 4 | `qbopt/frontend/modern/driver.py` | 53 | `src/frontend/modern/driver.rs` | ported | test_modern_frontend |
 | 4 | `qbopt/frontend/qb/__init__.py` | 23 | `src/frontend/qbc/mod.rs` | ported | test_hir, test_modern_frontend, test_qb_frontend_command, test_qbstages |
 | 4 | `qbopt/frontend/qb/__main__.py` | 64 | `src/frontend/qbc/main.rs` (`llrm-qb`) | ported | - |
 | 4 | `qbopt/frontend/qb/abi.py` | 1339 | `src/frontend/qbc/abi.rs` | ported | test_hir |

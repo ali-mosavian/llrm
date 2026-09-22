@@ -17,13 +17,13 @@ This root-package frontend implements the first source-language slice:
   bitwise operators and shifts, non-chaining comparisons, and short-circuit
   `and`/`or`;
 - conversions written `T(x)`;
-- fixed one-dimensional arrays, written `[T; length]`, with prefix descriptors,
-  literals, rank-one repeat literals `[value; length]`, indexed loads and
+- fixed arrays of rank one to four, written `[T; length]` or `[T; 4, 4]`,
+  with prefix descriptors, nested and repeat literals, indexed loads and
   stores, and intrinsic metadata methods;
 - source-ordered, nested `struct` layouts, local struct values, struct literals
   and copies, plus allocation-free array iteration through explicit references;
 - scoped `&T` and `&mut T` parameters, including unsized array views written
-  `&[T]` and `&mut [T]`;
+  `&[T]` and `&mut [T]`, or ranked `&[T, 2]`;
 - fixed-range slices, bounded list and dictionary comprehensions, and fused
   non-escaping generators; and
 - byte strings, allocation-free f-strings, and `print`.
@@ -83,9 +83,9 @@ valid only as a direct `print` argument; it streams literal and interpolated
 pieces to short typed runtime calls (`_pt`, `_pi2`, `_pf4`, and so on), so
 formatting introduces no allocation or hidden general-purpose runtime.
 
-Every array object has the same prefix representation as a string: two
-little-endian 16-bit words, `length` and `capacity`, immediately before the
-payload. A fixed `[T; N]` array has `length == capacity == N`; its value and its
+Every array object has a descriptor of little-endian 16-bit words
+immediately before its payload: for `[T; N]`, `length` and `capacity`,
+with `length == capacity == N`. Its value and its
 systems ABI address both point at element zero, not at the descriptor. Thus C
 and assembly receive a conventional direct `T *`, while code that owns an
 array can recover its metadata at pointer offsets `-4` and `-2`. The descriptor
@@ -109,8 +109,14 @@ all three values and folds them without emitting a helper or descriptor load;
 the physical descriptor remains available to interop. On a borrowed `[T]`
 view metadata loads through the scoped descriptor and indexing loads its data
 pointer. Strings provide `len()`, `capacity()`, and byte-value iteration over
-`char`. Only rank one is implemented, so any other dimension is currently
-rejected.
+`char`.
+
+Fixed arrays and borrowed views have one to four dimensions: `[T; 4, 4]` and
+`&[T, 2]`, indexed `a[i, j]`, row-major and contiguous. Their descriptor is
+the dimensions, then the capacity, so rank one is `[length][capacity]`. `len()` and `capacity()` count elements and `dim(k)`
+gives one dimension. A ranked array is initialized by a nested or repeat
+literal and iterated by index; only rank one can be sliced or iterated
+directly.
 
 Struct fields stay in source order, with at most two-byte alignment for the
 16-bit target. Indexing and field selection are structural HIR and lower to
@@ -241,11 +247,12 @@ does not emit bytecode, p-code, machine instructions, or target registers.
 Run it with:
 
 ```text
-cargo run --bin llrm-modern -- program.mod
+cargo run --bin modernfront -- program.mod
 ```
 
 `--tokens` and `--syntax` expose the two earlier stages without performing
-semantic analysis.
+semantic analysis. `cargo run --bin llrm-modern -- program.mod -o program.obj`
+compiles to an OMF object; `--dump DIR` writes `tools/modernstages.py`'s stages.
 
 The common-HIR reference executor provides an executable semantic oracle:
 
