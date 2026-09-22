@@ -20,6 +20,7 @@ use num_bigint::BigInt;
 use super::{hir, libfunc, raise_hir, stream};
 use crate::analysis::alias;
 use crate::backend::lower_int64;
+use crate::model::lir;
 use crate::model::mir::{self, Arg, Const, MemRef, MirBody};
 use crate::objectfile::module::{Addr, Space};
 use crate::support::pyrepr::{self, Repr};
@@ -100,6 +101,24 @@ pub fn assembled(
     // ported it is written here so the raise can be diffed.
     write(dump, "mir", &mirs.join("\n"))?;
     Err(CompileError::NotPorted("qbopt.backend.lower.lowered"))
+}
+
+pub fn _lir_text(name: &str, body: &lir::LirBody) -> String {
+    let mut out = vec![format!("== {name}")];
+    for block in &body.blocks {
+        out.push(format!("block {} -> {}", block.at, pyrepr::tuple(&block.succ)));
+        out.extend(block.phis.iter().map(|phi| format!("  phi {}", phi.repr())));
+        out.extend(block.insns.iter().map(|one| {
+            format!(
+                "  {:4} {} req={} del={}",
+                one.at,
+                one.what.repr(),
+                pyrepr::tuple(&one.requires),
+                pyrepr::tuple(&one.delivers)
+            )
+        }));
+    }
+    out.join("\n") + "\n"
 }
 
 /// Each named data object's `(segment, first item, after item)` span.
