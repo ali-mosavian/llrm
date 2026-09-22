@@ -6,6 +6,7 @@ pub mod comparefold;
 pub mod cpu;
 pub mod division;
 pub mod farload;
+pub mod fpu;
 pub mod lower;
 pub mod lower_floats;
 pub mod lower_int64;
