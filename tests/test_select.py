@@ -1170,3 +1170,17 @@ def test_an_instruction_holding_a_moved_operand_is_not_the_site_it_came_from() -
         "one of two fixups was picked"
     )
     raised.source.refs[site] = was
+
+
+@pytest.mark.parametrize(("count", "width"), [(Register.CL, 1), (Register.CX, 2), (Register.ECX, 4)])
+def test_a_shift_counts_from_cl_whatever_width_holds_the_count(count: Register_, width: int) -> None:
+    """A u16 count held in cx selected nothing: `sar eax,cx` had no encoding. The shift reads only cl."""
+    eax = ir.Reg(Register.EAX, 4)
+    made = select.emit(ir.Semantics(ir.Operation.BINARY, "sar", (eax,), (eax, ir.Reg(count, width))))
+    assert made is not None
+    assert made.code.hex() == "66d3f8"
+
+
+def test_a_count_in_ch_is_not_one_in_cl() -> None:
+    eax = ir.Reg(Register.EAX, 4)
+    assert select.emit(ir.Semantics(ir.Operation.BINARY, "sar", (eax,), (eax, ir.Reg(Register.CH, 1)))) is None
