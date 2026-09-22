@@ -156,6 +156,9 @@ pub struct MemRef {
     pub within: Option<Vec<(i64, i64)>>,
     pub provenance: Option<Provenance>,
     pub volatile: bool,
+    /// The source language promises this access stays inside one object.
+    /// Not part of equality or hashing, as Python's `compare=False`.
+    pub inbounds: bool,
 }
 
 impl MemRef {
@@ -176,6 +179,7 @@ impl MemRef {
             within: None,
             provenance: None,
             volatile: false,
+            inbounds: false,
         }
     }
 
@@ -819,6 +823,24 @@ pub fn MIRRORED(test: Kind) -> Option<Kind> {
         Kind::Above => Kind::Below,
         Kind::BelowEq => Kind::AboveEq,
         Kind::AboveEq => Kind::BelowEq,
+        _ => return None,
+    })
+}
+
+/// `not (a test b)` is `a NEGATED[test] b`.  `NEGATED.get(test)`.
+#[allow(non_snake_case)]
+pub fn NEGATED(test: Kind) -> Option<Kind> {
+    Some(match test {
+        Kind::Eq => Kind::Ne,
+        Kind::Ne => Kind::Eq,
+        Kind::Lt => Kind::Ge,
+        Kind::Ge => Kind::Lt,
+        Kind::Le => Kind::Gt,
+        Kind::Gt => Kind::Le,
+        Kind::Below => Kind::AboveEq,
+        Kind::AboveEq => Kind::Below,
+        Kind::BelowEq => Kind::Above,
+        Kind::Above => Kind::BelowEq,
         _ => return None,
     })
 }
@@ -2466,6 +2488,7 @@ impl Repr for MemRef {
                 ("within", self.within.as_ref().map_or_else(|| "None".to_owned(), |one| pyrepr::tuple(one))),
                 ("provenance", self.provenance.repr()),
                 ("volatile", self.volatile.repr()),
+                ("inbounds", self.inbounds.repr()),
             ],
         )
     }

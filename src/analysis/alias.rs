@@ -1933,7 +1933,7 @@ mod tests {
              allocation=None, base_width=2, pointer=False, excludes=(), typed=None, within=None, \
              provenance=Provenance(slices=frozenset({Slice(object=Object(kind=<Kind.GLOBAL: 'global'>, \
              identity=(<Space.SEGMENT: 'seg'>, 3), generation=0, extent=64, addressed=True, captured=True), low=4, high=11, stride=2, width=2)}), \
-             restrict=frozenset()), volatile=False)"
+             restrict=frozenset()), volatile=False, inbounds=False)"
         );
     }
 

@@ -450,6 +450,14 @@ fn _function(
                     invalid!("{prefix}: {} has a non-floating operand", instruction.op);
                 }
             }
+            if instruction.op == model::Op::Truncate
+                && (operand_types.len() != 1
+                    || result_types.len() != 1
+                    || types[&operand_types[0]].kind != model::TypeKind::Float
+                    || types[&result_types[0]].kind != model::TypeKind::Integer)
+            {
+                invalid!("{prefix}: truncate does not take a float to an integer");
+            }
             if _INTEGER.contains(&instruction.op) {
                 let involved: Vec<i64> = instruction
                     .results

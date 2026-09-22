@@ -140,7 +140,7 @@ plain_record!(ArrayElement, Some("array_element"), place => "place", indices => 
 plain_record!(ProjectedPlace, Some("projection"), place => "place", indices => "indices", offset => "offset",
     r#type => "type");
 plain_record!(IndirectPlace, Some("indirect"), base => "base", offset => "offset", r#type => "type",
-    volatile => "volatile");
+    volatile => "volatile", inbounds => "inbounds");
 plain_record!(DescriptorPlace, Some("descriptor"), base => "base", field => "field", r#type => "type");
 plain_record!(Instruction, None, id => "id", op => "op", results => "results", operands => "operands",
     callee => "callee", pure => "pure");
@@ -674,6 +674,7 @@ static INDIRECT_PLACE: _Record = _Record {
         ("offset", _Hint::Int, true),
         ("type", _Hint::Int, true),
         ("volatile", _Hint::Bool, false),
+        ("inbounds", _Hint::Bool, false),
     ],
     build: |args| {
         _object(model::IndirectPlace {
@@ -681,6 +682,7 @@ static INDIRECT_PLACE: _Record = _Record {
             offset: _required(args, "offset")?,
             r#type: _required(args, "type")?,
             volatile: _default(args, "volatile", false)?,
+            inbounds: _default(args, "inbounds", false)?,
         })
     },
 };

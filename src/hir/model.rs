@@ -252,6 +252,8 @@ pub struct IndirectPlace {
     pub offset: i64,
     pub r#type: i64,
     pub volatile: bool,
+    /// The language promises the access stays inside one object.
+    pub inbounds: bool,
 }
 
 str_enum!(DescriptorField {
@@ -305,6 +307,8 @@ str_enum!(Op {
     PointerOffset("POINTER_OFFSET") = "pointer_offset",
     Concat("CONCAT") = "concat",
     Convert("CONVERT") = "convert",
+    // A float to an integer, rounded toward zero; CONVERT rounds as the environment does.
+    Truncate("TRUNCATE") = "truncate",
     SignExtend("SIGN_EXTEND") = "sign_extend",
     ZeroExtend("ZERO_EXTEND") = "zero_extend",
     Add("ADD") = "add",

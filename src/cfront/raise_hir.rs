@@ -2692,7 +2692,8 @@ impl<'a> _Raise<'a> {
     fn cell(&self, address: &Address, width: u32, type_: Option<&str>) -> MemRef {
         let declared = address.declared().cloned();
         let access = self.aliasing(type_).unwrap_or_else(|error| panic!("{}", error.0));
-        let mut reference = self.placed(address, width);
+        // C: every access stays inside the object it names.
+        let mut reference = MemRef { inbounds: true, ..self.placed(address, width) };
         if address.is_volatile() {
             reference.volatile = true;
         }

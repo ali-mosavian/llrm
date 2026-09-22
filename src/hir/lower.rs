@@ -469,6 +469,7 @@ impl<'a> _Scope<'a> {
                     base_width: offset.width,
                     provenance: Some(provenance),
                     volatile: place.volatile,
+                    inbounds: true,
                     ..MemRef::new(Some(_addr(space, place.offset, index)), element.width as u32)
                 };
                 Ok(Arg::Cell(Cell { r#ref }))
@@ -560,11 +561,12 @@ impl<'a> _Scope<'a> {
                         base_width: offset.width,
                         provenance: Some(provenance),
                         volatile: place.volatile,
+                        inbounds: true,
                         ..MemRef::new(Some(_addr(space, place.offset, segment)), field_type.width as u32)
                     },
                 }))
             }
-            model::Operand::IndirectPlace(model::IndirectPlace { base, offset, r#type: type_id, volatile }) => {
+            model::Operand::IndirectPlace(model::IndirectPlace { base, offset, r#type: type_id, volatile, inbounds }) => {
                 let type_ = self.types[type_id];
                 let pointer_type = self.value_types[base];
                 let parameter = self.parameter_numbers.get(base).copied();
@@ -581,6 +583,7 @@ impl<'a> _Scope<'a> {
                             space: Some(Space::Literal),
                             base_width: pointer_type.width as u32,
                             provenance,
+                            inbounds: *inbounds,
                             volatile: *volatile,
                             ..MemRef::new(Some(Addr::new(Space::Literal, *offset)), type_.width as u32)
                         },
@@ -645,6 +648,7 @@ impl<'a> _Scope<'a> {
                             space: Some(Space::Far),
                             base_width: 2,
                             provenance,
+                            inbounds: *inbounds,
                             volatile: *volatile,
                             ..MemRef::new(Some(Addr::new(Space::Far, 0)), type_.width as u32)
                         },
@@ -691,6 +695,7 @@ impl<'a> _Scope<'a> {
                             space: Some(Space::Far),
                             base_width: 2,
                             provenance,
+                            inbounds: *inbounds,
                             ..MemRef::new(Some(Addr::new(Space::Far, 0)), type_.width as u32)
                         },
                     }));
@@ -701,6 +706,7 @@ impl<'a> _Scope<'a> {
                         base_width: pointer_type.width as u32,
                         pointer: true,
                         provenance,
+                        inbounds: *inbounds,
                         volatile: *volatile,
                         ..MemRef::new(None, type_.width as u32)
                     },
@@ -724,6 +730,7 @@ impl<'a> _Scope<'a> {
                         offset,
                         r#type: *type_id,
                         volatile: false,
+                        inbounds: false,
                     }),
                     before,
                 )
@@ -1122,6 +1129,8 @@ impl<'a> _Scope<'a> {
             mir::Kind::Fsqrt
         } else if matches!(instruction.op, model::Op::Udiv | model::Op::Urem | model::Op::Udivmod) {
             mir::Kind::Udivmod
+        } else if instruction.op == model::Op::Truncate {
+            mir::Kind::Fstore
         } else {
             _KINDS(instruction.op.value())
         };
@@ -1237,7 +1246,7 @@ impl<'a> _Scope<'a> {
                 kind = mir::Kind::Add;
             }
         }
-        if instruction.op == model::Op::Convert {
+        if matches!(instruction.op, model::Op::Convert | model::Op::Truncate) {
             let source_id = match &instruction.operands[0] {
                 model::Operand::ValueRef(one) => self.value_types[&one.value],
                 model::Operand::PlaceRef(one) => self.types[&self.places[&one.place].r#type],
@@ -1291,7 +1300,11 @@ impl<'a> _Scope<'a> {
                     vec![floating::Format::Extended80],
                     _stored_format(target_type)?,
                     floating::Precision::Destination,
-                    floating::Rounding::Dynamic,
+                    if instruction.op == model::Op::Truncate {
+                        floating::Rounding::TowardZero
+                    } else {
+                        floating::Rounding::Dynamic
+                    },
                 ));
             } else if source_id.kind == model::TypeKind::Float && target_type.kind == model::TypeKind::Float {
                 if target_type.width >= source_id.width {
