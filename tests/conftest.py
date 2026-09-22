@@ -46,6 +46,7 @@ FAST_MODULES = frozenset(
         "test_addressforms.py",
         "test_constant_carry.py",
         "test_countdown.py",
+        "test_mir_execute.py",
         "test_cpu_profile.py",
         "test_farload.py",
         "test_dump_tool.py",
