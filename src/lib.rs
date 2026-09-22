@@ -2,6 +2,7 @@
 
 pub mod analysis;
 pub mod cfront;
+pub mod cycles;
 pub mod frontend;
 pub mod legacy;
 pub mod model;
