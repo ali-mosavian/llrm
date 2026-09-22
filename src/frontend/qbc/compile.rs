@@ -1341,7 +1341,7 @@ fn _basic_segment_classes(data: &[u8], code: &str) -> Result<Vec<u8>, CompileErr
 }
 
 /// Apply the shared source-level call-graph mod/ref fixed point.
-fn _alias_annotated(
+pub(crate) fn _alias_annotated(
     module: &model::Module,
     functions: &[model::Function],
     semantic: &[Lowered],
