@@ -4,18 +4,25 @@ An oracle for pass tests: run a body before and after a transform on the
 same inputs and compare what each returns and stores. Anything not modelled
 raises rather than guessing.
 
-Memory is bytes keyed by region and 16-bit offset. A far cell's region is its
-selector's value; any other cell's is its address space and index, offset by
-its base's value. Two spellings of one byte through different regions are
-not unified.
+Memory is bytes keyed by segment and 16-bit offset, as the machine keys
+them; `_where` derives both for every reference. A far reference's segment
+is its selector's value. Otherwise the frame is SS, with `bp` zero, and a
+near reference is DS -- or SS where it says it points into the frame. With
+the stack in data, SS is DS. A named segment in DGROUP is DS at its base
+offset; any other named cell is its own segment.
 """
 
 from dataclasses import field
 from dataclasses import dataclass
+from collections.abc import Mapping
 from collections.abc import Callable
 
 from qbopt.model import mir
 from qbopt.objectfile.module import Space
+from iced_x86 import Register
+
+# DS and SS. A far selector is a number, so neither is ever mistaken for one.
+DS, SS = "ds", "ss"
 
 
 class ExecutionError(ValueError):
@@ -36,6 +43,9 @@ class State:
     values: dict[mir.Value, int | _Flags] = field(default_factory=dict)
     memory: dict[tuple[object, int], int] = field(default_factory=dict)
     steps: int = 0
+    stack: str = SS
+    # A DGROUP segment's index and where it starts in DS.
+    dgroup: Mapping[int, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,15 +104,26 @@ def _taken(flags: _Flags, test: mir.Kind) -> bool:
 
 
 def _where(ref: mir.MemRef, state: State) -> tuple[object, int]:
-    if ref.addr is None:
+    """The segment and offset of the first byte `ref` names."""
+    addr = ref.addr
+    if addr is None:
         raise ExecutionError(f"no address for {ref}")
-    offset = ref.addr.disp
-    if ref.base is not None:
-        offset += _integer(state, ref.base)
+    offset = addr.disp + (_integer(state, ref.base) if ref.base is not None else 0)
     if ref.segment is not None:
-        return ("selector", _integer(state, ref.segment)), _mask(offset, 2)
-    index = ref.addr.index if ref.addr.space in (Space.SEGMENT, Space.EXTERNAL) else 0
-    return (ref.addr.space, index), _mask(offset, 2)
+        return _integer(state, ref.segment), _mask(offset, 2)
+    match addr.space:
+        case Space.FRAME:
+            segment = state.stack
+        case Space.LITERAL:
+            framed = ref.space is Space.FRAME or addr.segment == Register.SS
+            segment = state.stack if framed else DS
+        case Space.SEGMENT if addr.index in state.dgroup:
+            segment, offset = DS, offset + state.dgroup[addr.index]
+        case Space.SEGMENT | Space.EXTERNAL:
+            segment = (addr.space, addr.index)
+        case _:
+            raise ExecutionError(f"no segment for {ref}")
+    return segment, _mask(offset, 2)
 
 
 def _load(state: State, ref: mir.MemRef, width: int) -> int:
@@ -133,6 +154,8 @@ def _read(state: State, arg: mir.Arg) -> int:
             return _mask(n, width)
         case mir.Cell(ref):
             return _load(state, ref, ref.width)
+        case mir.FrameAddress(offset, width):
+            return _mask(offset, width)  # bp is zero
     raise ExecutionError(f"cannot read {arg!r}")
 
 
@@ -149,7 +172,7 @@ def _computed(op: mir.Op, args: tuple[int, ...], width: int) -> tuple[int, ...]:
     kind = op.kind
     bits = 8 * width
     match kind, args:
-        case mir.Kind.COPY | mir.Kind.CONVERT | mir.Kind.ZERO_EXTEND | mir.Kind.LOAD, (a,):
+        case mir.Kind.COPY | mir.Kind.CONVERT | mir.Kind.ZERO_EXTEND | mir.Kind.LOAD | mir.Kind.ADDRESS, (a,):
             return (a,)
         case mir.Kind.SIGN_EXTEND, (a,):
             source = op.args[0]
@@ -204,7 +227,10 @@ def _computed(op: mir.Op, args: tuple[int, ...], width: int) -> tuple[int, ...]:
 
 
 def _executed(op: mir.Op, state: State, call: Call | None) -> None:
-    args = tuple(_read(state, arg) for arg in op.args)
+    if op.kind is mir.Kind.ADDRESS and len(op.args) == 1 and isinstance(op.args[0], mir.Cell):
+        args = (_where(op.args[0].ref, state)[1],)
+    else:
+        args = tuple(_read(state, arg) for arg in op.args)
     if op.kind is mir.Kind.STORE:
         (target,) = op.results
         if not isinstance(target, mir.Cell):
@@ -240,13 +266,15 @@ def run(
     *,
     call: Call | None = None,
     limit: int = 1_000_000,
+    dgroup: Mapping[int, int] | None = None,
 ) -> Result:
     """Execute `body` from its entry until it returns.
 
     `values` are the live-in values; `memory` the bytes it starts with,
-    keyed as `_where` keys them.
+    keyed as `_where` keys them; `dgroup` each DGROUP segment's base in DS.
     """
-    state = State(dict(values or {}), dict(memory or {}))
+    stack = DS if body.stack_in_data else SS
+    state = State(dict(values or {}), dict(memory or {}), stack=stack, dgroup=dict(dgroup or {}))
     blocks = {block.at: block for block in body.blocks}
     for ref, constant in body.initial:
         _store(state, ref, constant.n, ref.width)
