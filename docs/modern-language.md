@@ -252,7 +252,8 @@ cargo run --bin modernfront -- program.mod
 ```
 
 `--tokens` and `--syntax` expose the two earlier stages without performing
-semantic analysis.
+semantic analysis. `cargo run --bin llrm-modern -- program.mod -o program.obj`
+compiles to an OMF object; `--dump DIR` writes `tools/modernstages.py`'s stages.
 
 The common-HIR reference executor provides an executable semantic oracle:
 

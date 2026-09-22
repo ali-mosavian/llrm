@@ -3,13 +3,18 @@
     uv run python tools/port_diff.py fixtures/c/parity/scalar.cgs [--opt]
     uv run python tools/port_diff.py --corpus [--opt]
     uv run python tools/port_diff.py --qb [bench/parity/algebra.bas ...]
+    uv run python tools/port_diff.py --modern [fixtures/modern/sum.mod ...]
 
 Python writes the reference dump (`python -m qbopt.cfront --dump`); the Rust
 port writes the same tree (`llrm-c --dump`). With `--qb`, Python's is
 `tools/qbstages.py` and Rust's `llrm-qb --dump`; with no sources it runs
 `bench/parity/*.bas` and `fixtures/qb/port`, every source and flag set the QB
 tests compile (`tools/qb_port_corpus.py`). A source's `.flags` sidecar holds
-the options both compilers get. Stages are
+the options both compilers get. With `--modern`, Python's dump is
+`tools/modernstages.py` and its object `compile.written`; Rust's is
+`llrm-modern --dump`. With no sources it runs `fixtures/modern/*.mod` and
+`fixtures/modern/port`, every source the modern tests compile
+(`tools/modern_port_corpus.py`). Stages are
 compared in the order Python wrote them, so the first mismatch is the first
 stage the port gets wrong. `frozenset` elements are sorted on both sides: their order is Python's
 hash order, not a fact of the compiler.
@@ -25,6 +30,21 @@ from dataclasses import dataclass
 ROOT = Path(__file__).resolve().parents[1]
 CORPUS = ("fixtures/c/*.cgs", "fixtures/c/mir/*.cgs", "fixtures/c/parity/*.cgs")
 QBFRONT = ROOT / "frontends/qb/target/release/qbfront"
+MODERN_OBJECT = """
+import argparse
+from pathlib import Path
+from qbopt import flow
+from qbopt.frontend.modern import driver
+from qbopt.frontend.modern import compile as modern
+parser = argparse.ArgumentParser()
+parser.add_argument("source", type=Path)
+parser.add_argument("-o", "--output", type=Path, required=True)
+parser.add_argument("--entry", default="main")
+flow.level_option(parser)
+args = parser.parse_args()
+program = driver.parsed(args.source)
+args.output.write_bytes(modern.written(program, entry=args.entry, source=args.source, options=args.options))
+"""
 OBJECT = "out.obj"
 REFUSAL = "refusal"
 
@@ -103,15 +123,15 @@ def normalized(text: str) -> str:
 PIPELINE = ("stream", "hir", "mir", "passes", "phases", "lir", "asm")
 
 
-def _stages(python: Path, qb: bool = False) -> list[str]:
+def _stages(python: Path, flat: bool = False) -> list[str]:
     """Python's dump files in pipeline order, then write order; the object last.
 
     Python writes the whole-unit `mir` after every procedure's phases, so
     write order alone would rank the raise after register allocation. A QB
-    dump is flat and written in pipeline order: write order is the order.
+    or modern dump is flat and written in pipeline order: write order is the order.
     """
     files = [one for one in python.rglob("*") if one.is_file() and one.name not in (OBJECT, REFUSAL)]
-    if qb:
+    if flat:
         files.sort(key=lambda one: (one.stat().st_mtime_ns, one.name))
     else:
         files.sort(key=lambda one: (PIPELINE.index(one.relative_to(python).parts[0]), one.stat().st_mtime_ns))
@@ -119,9 +139,9 @@ def _stages(python: Path, qb: bool = False) -> list[str]:
     return staged + [one for one in (OBJECT, REFUSAL) if (python / one).exists()]
 
 
-def compare(python: Path, rust: Path, qb: bool = False) -> tuple[int, int, Divergence | None]:
+def compare(python: Path, rust: Path, flat: bool = False) -> tuple[int, int, Divergence | None]:
     """How many of Python's stages Rust reproduces, and the first it does not."""
-    stages = _stages(python, qb)
+    stages = _stages(python, flat)
     matched, first = 0, None
     for stage in stages:
         want, got = python / stage, rust / stage
@@ -217,7 +237,55 @@ def run_qb(source: Path, work: Path, rust: Path) -> Result:
     )
     if done.returncode:
         (rust_dir / REFUSAL).write_text(_message(done.stderr, "llrm-qb: ") + "\n")
-    matched, total, first = compare(python_dir, rust_dir, qb=True)
+    matched, total, first = compare(python_dir, rust_dir, flat=True)
+    return Result(source, matched, total, first, done.stderr.strip() if done.returncode else "")
+
+
+def modern_corpus() -> list[Path]:
+    """`fixtures/modern/*.mod`, then every source the modern tests compile."""
+    found = sorted(ROOT.glob("fixtures/modern/*.mod"))
+    return found + sorted((ROOT / "fixtures/modern/port").glob("*/*.mod"))
+
+
+def _level(flags: list[str]) -> list[str]:
+    """The `-O` of a flag list: the only option the stage tool takes."""
+    at = next((n for n, one in enumerate(flags) if one == "-O"), None)
+    return [] if at is None else flags[at : at + 2]
+
+
+def run_modern(source: Path, work: Path, rust: Path, frontend: Path) -> Result:
+    python_dir, rust_dir = work / "python", work / "rust"
+    for one in (python_dir, rust_dir):
+        one.mkdir(parents=True, exist_ok=True)
+    env = {**oracle_env(), "QBOPT_MODERNFRONT": str(frontend)}
+    flags = qb_flags(source)
+    made = subprocess.run(
+        [sys.executable, str(ROOT / "tools/modernstages.py"), str(source), "--output", str(python_dir), *_level(flags)],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    if not made.returncode:
+        made = subprocess.run(
+            [sys.executable, "-c", MODERN_OBJECT, str(source), "-o", str(python_dir / OBJECT), *flags],
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+    if made.returncode:
+        (python_dir / REFUSAL).write_text(_message(made.stderr, ": ") + "\n")
+    done = subprocess.run(
+        [str(rust), str(source), "--dump", str(rust_dir), "-o", str(rust_dir / OBJECT), *flags],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    if done.returncode:
+        (rust_dir / REFUSAL).write_text(_message(done.stderr, "llrm-modern: ") + "\n")
+    matched, total, first = compare(python_dir, rust_dir, flat=True)
     return Result(source, matched, total, first, done.stderr.strip() if done.returncode else "")
 
 
@@ -275,6 +343,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--corpus", action="store_true", help="every C fixture")
     parser.add_argument("--opt", action="store_true")
     parser.add_argument("--qb", action="store_true", help="QB sources through llrm-qb; no sources: the QB corpus")
+    parser.add_argument(
+        "--modern", action="store_true", help="modern sources through llrm-modern; no sources: the modern corpus"
+    )
     parser.add_argument("--work", type=Path, default=ROOT / "build" / "port_diff")
     args = parser.parse_args(argv)
     sources = list(args.sources)
@@ -282,14 +353,19 @@ def main(argv: list[str] | None = None) -> int:
         sources += sorted(path for pattern in CORPUS for path in ROOT.glob(pattern))
     if args.qb and not sources:
         sources = qb_corpus()
+    if args.modern and not sources:
+        sources = modern_corpus()
     if not sources:
         parser.error("no sources")
-    rust = _rust_binary("llrm-qb" if args.qb else "llrm-c")
+    rust = _rust_binary("llrm-qb" if args.qb else "llrm-modern" if args.modern else "llrm-c")
+    frontend = _rust_binary("modernfront") if args.modern else None
     failed = 0
     for source in sources:
         work = _workdir(args.work, source)
         if args.qb:
             result = run_qb(source.resolve(), work, rust)
+        elif args.modern:
+            result = run_modern(source.resolve(), work, rust, frontend)
         else:
             result = run(source.resolve(), work, rust, args.opt)
         name = _display(source)
