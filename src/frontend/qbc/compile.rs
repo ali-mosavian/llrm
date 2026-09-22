@@ -1171,7 +1171,7 @@ pub fn lowering_target() -> &'static targets::Profile {
 /// unconstrained entry value and a real semantic switch so every machine
 /// phase sees valid control flow.  The switch and every comparison block its
 /// lowering creates are discarded before source ABI emission.
-fn _machine_side_entry(body: &mir::MirBody, entries: &[i64]) -> Result<(mir::MirBody, Option<i64>), CompileError> {
+pub(crate) fn _machine_side_entry(body: &mir::MirBody, entries: &[i64]) -> Result<(mir::MirBody, Option<i64>), CompileError> {
     // A statement's original block may have been merged into an earlier block
     // by MIR optimization.  This root exists only to retain independently
     // reachable blocks which are still physical CFG roots.
