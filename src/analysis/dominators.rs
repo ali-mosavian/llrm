@@ -351,9 +351,11 @@ mod tests {
         assert_eq!(single.entry(), Some(BlockId::new(4)));
         assert!(single.is_reachable(BlockId::new(4)));
         assert_eq!(single.immediate_dominator(BlockId::new(4)), None);
-        assert!(single
-            .children(BlockId::new(4))
-            .is_some_and(BTreeSet::is_empty));
+        assert!(
+            single
+                .children(BlockId::new(4))
+                .is_some_and(BTreeSet::is_empty)
+        );
         assert_eq!(
             single
                 .dominator_chain(BlockId::new(4))

@@ -515,7 +515,8 @@ impl X86Register {
         }
     }
 
-    const fn root(self) -> Option<Self> {
+    /// The architectural root used by target-local byte-lane analyses.
+    pub(crate) const fn root(self) -> Option<Self> {
         match self {
             Self::Al | Self::Ah | Self::Ax | Self::Eax => Some(Self::Eax),
             Self::Cl | Self::Ch | Self::Cx | Self::Ecx => Some(Self::Ecx),
@@ -542,7 +543,8 @@ impl X86Register {
         }
     }
 
-    const fn lanes(self) -> u8 {
+    /// The occupied byte lanes within [`Self::root`].
+    pub(crate) const fn lanes(self) -> u8 {
         match self {
             Self::Al | Self::Cl | Self::Dl | Self::Bl => 0b0001,
             Self::Ah | Self::Ch | Self::Dh | Self::Bh => 0b0010,
@@ -576,6 +578,53 @@ impl X86Register {
             | Self::St5
             | Self::St6
             | Self::St7 => u8::MAX,
+        }
+    }
+
+    /// The encoded byte width of an integer or segment register view.
+    ///
+    /// x87 stack registers have no fixed integer byte width, so callers that
+    /// reason about integer frame loads must reject them rather than guess.
+    pub(crate) const fn byte_width(self) -> Option<u8> {
+        match self {
+            Self::Al
+            | Self::Cl
+            | Self::Dl
+            | Self::Bl
+            | Self::Ah
+            | Self::Ch
+            | Self::Dh
+            | Self::Bh => Some(1),
+            Self::Ax
+            | Self::Cx
+            | Self::Dx
+            | Self::Bx
+            | Self::Sp
+            | Self::Bp
+            | Self::Si
+            | Self::Di
+            | Self::Es
+            | Self::Cs
+            | Self::Ss
+            | Self::Ds
+            | Self::Fs
+            | Self::Gs => Some(2),
+            Self::Eax
+            | Self::Ecx
+            | Self::Edx
+            | Self::Ebx
+            | Self::Esp
+            | Self::Ebp
+            | Self::Esi
+            | Self::Edi => Some(4),
+            Self::St0
+            | Self::St1
+            | Self::St2
+            | Self::St3
+            | Self::St4
+            | Self::St5
+            | Self::St6
+            | Self::St7 => None,
         }
     }
 }

@@ -1,0 +1,231 @@
+INIT sw=0x808000 target=0xec size=50 rev=0x23
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=2
+SEG 3 attr=0xc name="CONST2" align=2
+SEG 4 attr=0x6 name="_DATA" align=2
+START
+TYPE T25 size=12 align=1
+f1 DBSrcFile "/Users/alim/work/personal/qbopt/bench/parity/qmove.c"
+- DBSrcCue f1 10 1
+SYM y1 name="pl_ground_accel" base="pl_ground_accel" pattern="_*" attr=0x7 seg=1
+CALLCONV y1 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y1 TY_INTEGER
+SYM y2 name="vel" base="vel" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y2 TY_POINTER
+SYM y3 name="wishdir" base="wishdir" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y3 TY_POINTER
+SYM y4 name="wishspeed" base="wishspeed" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y4 TY_SINGLE
+SYM y5 name="dt" base="dt" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y5 TY_SINGLE
+l2 CGLastParm
+t3 CGTemp TY_INTEGER
+SYM y6 name="currentspeed" base="currentspeed" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y6 TY_SINGLE
+SYM y7 name="addspeed" base="addspeed" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y7 TY_SINGLE
+SYM y8 name="accelspeed" base="accelspeed" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y8 TY_SINGLE
+l4 BENewLabel
+l5 BENewLabel
+l6 BENewLabel
+- DBSrcCue f1 16 1
+n7 CGFEName y6 TY_SINGLE
+n8 CGFEName y2 TY_POINTER
+n9 CGUnary O_POINTS n8 TY_POINTER
+n10 CGInteger 0 TY_UNSIGNED
+n11 CGBinary O_PLUS n9 n10 TY_POINTER
+n12 CGUnary O_POINTS n11 TY_SINGLE
+n13 CGFEName y3 TY_POINTER
+n14 CGUnary O_POINTS n13 TY_POINTER
+n15 CGInteger 0 TY_UNSIGNED
+n16 CGBinary O_PLUS n14 n15 TY_POINTER
+n17 CGUnary O_POINTS n16 TY_SINGLE
+n18 CGBinary O_TIMES n12 n17 TY_SINGLE
+n19 CGFEName y2 TY_POINTER
+n20 CGUnary O_POINTS n19 TY_POINTER
+n21 CGInteger 4 TY_UNSIGNED
+n22 CGBinary O_PLUS n20 n21 TY_POINTER
+n23 CGUnary O_POINTS n22 TY_SINGLE
+n24 CGFEName y3 TY_POINTER
+n25 CGUnary O_POINTS n24 TY_POINTER
+n26 CGInteger 4 TY_UNSIGNED
+n27 CGBinary O_PLUS n25 n26 TY_POINTER
+n28 CGUnary O_POINTS n27 TY_SINGLE
+n29 CGBinary O_TIMES n23 n28 TY_SINGLE
+n30 CGBinary O_PLUS n18 n29 TY_SINGLE
+n31 CGAssign n7 n30 TY_SINGLE
+- CGDone n31
+- DBSrcCue f1 17 1
+n32 CGFEName y7 TY_SINGLE
+n33 CGFEName y4 TY_SINGLE
+n34 CGUnary O_POINTS n33 TY_SINGLE
+n35 CGFEName y6 TY_SINGLE
+n36 CGUnary O_POINTS n35 TY_SINGLE
+n37 CGBinary O_MINUS n34 n36 TY_SINGLE
+n38 CGAssign n32 n37 TY_SINGLE
+- CGDone n38
+- DBSrcCue f1 18 1
+n39 CGFEName y7 TY_SINGLE
+n40 CGUnary O_POINTS n39 TY_SINGLE
+n41 CGFloat "0.0000000000000000000e+00" TY_SINGLE
+n42 CGCompare O_LE n40 n41 TY_SINGLE
+- CGControl O_IF_FALSE n42 l4
+- CGControl O_GOTO n0 l5
+- CGControl O_LABEL n0 l4
+- DBSrcCue f1 20 1
+n43 CGFEName y8 TY_SINGLE
+n44 CGFloat "1.0000000000000000000e+01" TY_SINGLE
+n45 CGFEName y4 TY_SINGLE
+n46 CGUnary O_POINTS n45 TY_SINGLE
+n47 CGBinary O_TIMES n44 n46 TY_SINGLE
+n48 CGFEName y5 TY_SINGLE
+n49 CGUnary O_POINTS n48 TY_SINGLE
+n50 CGBinary O_TIMES n47 n49 TY_SINGLE
+n51 CGAssign n43 n50 TY_SINGLE
+- CGDone n51
+- DBSrcCue f1 21 1
+n52 CGFEName y8 TY_SINGLE
+n53 CGUnary O_POINTS n52 TY_SINGLE
+n54 CGFEName y7 TY_SINGLE
+n55 CGUnary O_POINTS n54 TY_SINGLE
+n56 CGCompare O_GT n53 n55 TY_SINGLE
+- CGControl O_IF_FALSE n56 l6
+n57 CGFEName y8 TY_SINGLE
+n58 CGFEName y7 TY_SINGLE
+n59 CGUnary O_POINTS n58 TY_SINGLE
+n60 CGAssign n57 n59 TY_SINGLE
+- CGDone n60
+- CGControl O_LABEL n0 l6
+- DBSrcCue f1 23 1
+n61 CGFEName y2 TY_POINTER
+n62 CGUnary O_POINTS n61 TY_POINTER
+n63 CGInteger 0 TY_UNSIGNED
+n64 CGBinary O_PLUS n62 n63 TY_POINTER
+n65 CGFEName y8 TY_SINGLE
+n66 CGUnary O_POINTS n65 TY_SINGLE
+n67 CGFEName y3 TY_POINTER
+n68 CGUnary O_POINTS n67 TY_POINTER
+n69 CGInteger 0 TY_UNSIGNED
+n70 CGBinary O_PLUS n68 n69 TY_POINTER
+n71 CGUnary O_POINTS n70 TY_SINGLE
+n72 CGBinary O_TIMES n66 n71 TY_SINGLE
+n73 CGPreGets O_PLUS n64 n72 TY_SINGLE
+- CGDone n73
+- DBSrcCue f1 24 1
+n74 CGFEName y2 TY_POINTER
+n75 CGUnary O_POINTS n74 TY_POINTER
+n76 CGInteger 4 TY_UNSIGNED
+n77 CGBinary O_PLUS n75 n76 TY_POINTER
+n78 CGFEName y8 TY_SINGLE
+n79 CGUnary O_POINTS n78 TY_SINGLE
+n80 CGFEName y3 TY_POINTER
+n81 CGUnary O_POINTS n80 TY_POINTER
+n82 CGInteger 4 TY_UNSIGNED
+n83 CGBinary O_PLUS n81 n82 TY_POINTER
+n84 CGUnary O_POINTS n83 TY_SINGLE
+n85 CGBinary O_TIMES n79 n84 TY_SINGLE
+n86 CGPreGets O_PLUS n77 n85 TY_SINGLE
+- CGDone n86
+- DBSrcCue f1 25 1
+- CGControl O_LABEL n0 l5
+- CGReturn n0 TY_INTEGER
+- DBSrcCue f1 27 1
+SYM y9 name="quake_move_demo" base="quake_move_demo" pattern="_*" attr=0x7 seg=1
+CALLCONV y9 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y9 TY_INT_4
+l87 CGLastParm
+t88 CGTemp TY_INT_4
+SYM y10 name="vel" base="vel" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y10 T25
+SYM y11 name="wishdir" base="wishdir" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y11 T25
+- DBSrcCue f1 32 1
+n89 CGFEName y10 T25
+n90 CGInteger 0 TY_UNSIGNED
+n91 CGBinary O_PLUS n89 n90 TY_POINTER
+n92 CGFloat "3.0000000000000000000e+00" TY_SINGLE
+n93 CGAssign n91 n92 TY_SINGLE
+- CGDone n93
+- DBSrcCue f1 33 1
+n94 CGFEName y10 T25
+n95 CGInteger 4 TY_UNSIGNED
+n96 CGBinary O_PLUS n94 n95 TY_POINTER
+n97 CGFloat "4.0000000000000000000e+00" TY_SINGLE
+n98 CGAssign n96 n97 TY_SINGLE
+- CGDone n98
+- DBSrcCue f1 34 1
+n99 CGFEName y10 T25
+n100 CGInteger 8 TY_UNSIGNED
+n101 CGBinary O_PLUS n99 n100 TY_POINTER
+n102 CGFloat "5.0000000000000000000e+00" TY_SINGLE
+n103 CGAssign n101 n102 TY_SINGLE
+- CGDone n103
+- DBSrcCue f1 35 1
+n104 CGFEName y11 T25
+n105 CGInteger 0 TY_UNSIGNED
+n106 CGBinary O_PLUS n104 n105 TY_POINTER
+n107 CGFloat "1.0000000000000000000e+00" TY_SINGLE
+n108 CGAssign n106 n107 TY_SINGLE
+- CGDone n108
+- DBSrcCue f1 36 1
+n109 CGFEName y11 T25
+n110 CGInteger 4 TY_UNSIGNED
+n111 CGBinary O_PLUS n109 n110 TY_POINTER
+n112 CGFloat "0.0000000000000000000e+00" TY_SINGLE
+n113 CGAssign n111 n112 TY_SINGLE
+- CGDone n113
+- DBSrcCue f1 37 1
+n114 CGFEName y11 T25
+n115 CGInteger 8 TY_UNSIGNED
+n116 CGBinary O_PLUS n114 n115 TY_POINTER
+n117 CGFloat "0.0000000000000000000e+00" TY_SINGLE
+n118 CGAssign n116 n117 TY_SINGLE
+- CGDone n118
+- DBSrcCue f1 38 1
+n119 CGFEName y1 TY_CODE_PTR
+c120 CGInitCall n119 TY_INTEGER y1
+n121 CGFloat "2.5000000000000000000e-01" TY_SINGLE
+- CGAddParm c120 n121 TY_SINGLE
+n122 CGFloat "1.0000000000000000000e+01" TY_SINGLE
+- CGAddParm c120 n122 TY_SINGLE
+n123 CGFEName y11 T25
+n124 CGUnary O_CONVERT n123 TY_POINTER
+- CGAddParm c120 n124 TY_POINTER
+n125 CGFEName y10 T25
+n126 CGUnary O_CONVERT n125 TY_POINTER
+- CGAddParm c120 n126 TY_POINTER
+n127 CGCall c120
+- CGDone n127
+- DBSrcCue f1 40 1
+n128 CGFEName y10 T25
+n129 CGInteger 0 TY_UNSIGNED
+n130 CGBinary O_PLUS n128 n129 TY_POINTER
+n131 CGUnary O_POINTS n130 TY_SINGLE
+n132 CGUnary O_CONVERT n131 TY_INT_4
+n133 CGInteger 10000 TY_INT_4
+n134 CGBinary O_TIMES n132 n133 TY_INT_4
+n135 CGFEName y10 T25
+n136 CGInteger 4 TY_UNSIGNED
+n137 CGBinary O_PLUS n135 n136 TY_POINTER
+n138 CGUnary O_POINTS n137 TY_SINGLE
+n139 CGUnary O_CONVERT n138 TY_INT_4
+n140 CGInteger 100 TY_INT_4
+n141 CGBinary O_TIMES n139 n140 TY_INT_4
+n142 CGBinary O_PLUS n134 n141 TY_INT_4
+n143 CGFEName y10 T25
+n144 CGInteger 8 TY_UNSIGNED
+n145 CGBinary O_PLUS n143 n144 TY_POINTER
+n146 CGUnary O_POINTS n145 TY_SINGLE
+n147 CGUnary O_CONVERT n146 TY_INT_4
+n148 CGBinary O_PLUS n142 n147 TY_INT_4
+n149 CGUnary O_CONVERT n148 TY_INT_4
+n150 CGTempName t88 TY_INT_4
+n151 CGAssign n150 n149 TY_INT_4
+- CGDone n151
+- DBSrcCue f1 41 1
+n152 CGTempName t88 TY_INT_4
+n153 CGUnary O_POINTS n152 TY_INT_4
+- CGReturn n153 TY_INT_4
+STOP
+FINI

@@ -5,6 +5,7 @@
 //! register classes; this module deliberately assigns no architecture-specific
 //! meaning to those numbers.
 
+use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
 
@@ -122,6 +123,29 @@ pub struct MachineFunction {
     pub frame_objects: Vec<FrameObject>,
 }
 
+impl MachineFunction {
+    /// Virtual registers retained solely as logical lineage by zero-byte anchors.
+    ///
+    /// Allocation removes every encodable virtual operand.  An anchor is the
+    /// deliberate exception: it keeps its virtual def/use identity while MC
+    /// emits no instruction bytes for it.
+    pub(crate) fn anchor_virtual_registers(
+        &self,
+        nothing_opcode: TargetOpcode,
+    ) -> BTreeSet<VirtualRegisterId> {
+        self.blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .filter(|instruction| instruction.is_logical_anchor(nothing_opcode))
+            .flat_map(|instruction| &instruction.operands)
+            .filter_map(|operand| match operand.kind {
+                MachineOperandKind::Register(MachineRegister::Virtual(register)) => Some(register),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
 /// Source-level ABI facts attached to a selected function.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MachineSignature {
@@ -208,8 +232,13 @@ pub struct FrameObject {
 pub enum FrameObjectKind {
     Local,
     Spill,
+    /// Target-created scratch storage which is neither source-visible local
+    /// state nor an allocator spill slot.
+    Temporary,
     OutgoingArgument,
-    IncomingArgument { parameter: u32 },
+    IncomingArgument {
+        parameter: u32,
+    },
 }
 
 /// One target instruction and its target-independent operand contract.
@@ -276,6 +305,60 @@ impl MachineInstruction {
             operands,
             flags,
         })
+    }
+
+    /// Replaces this selected instruction with a non-emitting dataflow anchor.
+    ///
+    /// The Rust Machine IR has no source-byte ownership record.  Its stable
+    /// instruction ID is the ownership position carried into the MC fragment
+    /// map, while virtual register operands are its only logical value
+    /// lineage.  Keep exactly those operands and discard every selected
+    /// machine effect.  `nothing_opcode` is target-owned so this generic
+    /// representation does not assign an architecture meaning to it.
+    pub fn anchor(&self, nothing_opcode: TargetOpcode) -> Self {
+        Self {
+            id: self.id,
+            opcode: nothing_opcode,
+            operands: self
+                .operands
+                .iter()
+                .filter_map(|operand| match operand.kind {
+                    MachineOperandKind::Register(MachineRegister::Virtual(_)) => {
+                        Some(MachineOperand {
+                            kind: operand.kind.clone(),
+                            role: operand.role,
+                            constraint: None,
+                            tied_to: None,
+                        })
+                    }
+                    _ => None,
+                })
+                .collect(),
+            flags: InstructionFlags {
+                anchor: true,
+                ..InstructionFlags::NONE
+            },
+        }
+    }
+
+    /// Whether this is the canonical non-emitting logical-lineage form.
+    pub(crate) fn is_logical_anchor(&self, nothing_opcode: TargetOpcode) -> bool {
+        self.opcode == nothing_opcode
+            && self.flags
+                == InstructionFlags {
+                    anchor: true,
+                    ..InstructionFlags::NONE
+                }
+            && self.operands.iter().all(|operand| {
+                matches!(
+                    operand.kind,
+                    MachineOperandKind::Register(MachineRegister::Virtual(_))
+                ) && matches!(
+                    operand.role,
+                    OperandRole::Use | OperandRole::Def | OperandRole::UseDef
+                ) && operand.constraint.is_none()
+                    && operand.tied_to.is_none()
+            })
     }
 }
 
@@ -356,6 +439,16 @@ pub struct InstructionFlags {
     pub may_load: bool,
     pub may_store: bool,
     pub volatile: bool,
+    /// This load was inserted by spill materialization, rather than selected
+    /// from the source program.  A later forwarding pass may delete it only
+    /// because the allocator owns its provenance.
+    pub spill_reload: bool,
+    /// This store was inserted by spill materialization, rather than selected
+    /// from the source program.
+    pub spill_store: bool,
+    /// A zero-byte instruction-fragment anchor retaining logical virtual
+    /// def/use lineage after its selected machine operation was eliminated.
+    pub anchor: bool,
 }
 
 impl InstructionFlags {
@@ -367,6 +460,9 @@ impl InstructionFlags {
         may_load: false,
         may_store: false,
         volatile: false,
+        spill_reload: false,
+        spill_store: false,
+        anchor: false,
     };
 }
 

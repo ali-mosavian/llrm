@@ -3,6 +3,30 @@
 These are independent compiler comparisons, not executable DOS targets and
 not replacements for the complete listings in `docs/targets.md`.
 
+## Fixed-point square root
+
+`fixed_sqrt.py` is an independent value experiment for an unsigned fixed-point
+square root. It compares a normalized table seed plus exactly two integer
+Newton divisions and exact rounding against an exact `isqrt` oracle and an
+actual x87 `FILD`/`FSQRT`/`FISTP` helper. On Apple Silicon the helper is built
+as x86_64 and run through Rosetta; other non-x86 hosts use a clearly labelled
+binary64 fallback unless `--require-x87` is supplied.
+
+```sh
+uv run python -m tools.references.fixed_sqrt --require-x87
+uv run python -m tools.references.fixed_sqrt --matrix --require-x87
+```
+
+Matrix mode writes `fixed-sqrt-matrix.svg` and `fixed-sqrt-errors.svg`; use
+`--plot PATH` and `--error-plot PATH` to select different destinations. The
+first figure shows worst pre-correction distance and the share already at the
+floor root. The error figure shows maximum and mean absolute percentage error
+against the mathematical square root, the 99th-percentile correction distance,
+and final correctly rounded error in output LSBs.
+
+The default format is unsigned Q16.16. This experiment changes no compiler,
+runtime, optimizer, or scoreboard code.
+
 ## FPDEEP PDS reference
 
 `fpdeep.asm` is a hand-written JWasm listing retaining source-visible numeric

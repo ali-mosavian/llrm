@@ -11,8 +11,8 @@ use std::error::Error;
 use std::fmt;
 
 use crate::codegen::machine::{
-    FrameIndex, FrameObjectKind, MachineAddressSpace, MachineCallingConvention, MachineFunction,
-    MachineFunctionId, MachineValueType,
+    FrameIndex, FrameObjectKind, MachineAddressSpace, MachineCallingConvention, MachineFloatKind,
+    MachineFunction, MachineFunctionId, MachineValueType,
 };
 
 const FAR_PASCAL_FIRST_ARGUMENT: u32 = 6;
@@ -340,7 +340,7 @@ pub fn plan_basic_frame(
     for frame in &function.frame_objects {
         match frame.kind {
             FrameObjectKind::IncomingArgument { .. } => {}
-            FrameObjectKind::Local | FrameObjectKind::Spill => {
+            FrameObjectKind::Local | FrameObjectKind::Spill | FrameObjectKind::Temporary => {
                 let capacity = frame.size.max(2);
                 let end = depth
                     .checked_add(capacity)
@@ -380,6 +380,10 @@ pub fn plan_basic_frame(
 }
 
 fn abi_width(parameter: usize, value_type: MachineValueType) -> Result<u32, BasicFramePlanError> {
+    // Python `qbopt/frontend/qb/abi.py::physicalize` uses
+    // `max(2, type_.width)` for every source formal. BASIC source floats are
+    // stored as SINGLE (four bytes) or DOUBLE (eight bytes); Extended80 is
+    // only the x87 evaluation format, not a BASIC stored-parameter format.
     match value_type {
         MachineValueType::Integer { bits: 8 | 16 } => Ok(2),
         MachineValueType::Integer { bits: 32 } => Ok(4),
@@ -387,6 +391,12 @@ fn abi_width(parameter: usize, value_type: MachineValueType) -> Result<u32, Basi
             bits: 16,
             address_space: MachineAddressSpace::NearData,
         } => Ok(2),
+        MachineValueType::Float {
+            kind: MachineFloatKind::Binary32,
+        } => Ok(4),
+        MachineValueType::Float {
+            kind: MachineFloatKind::Binary64,
+        } => Ok(8),
         _ => Err(BasicFramePlanError::UnsupportedParameter {
             parameter,
             value_type,
@@ -524,6 +534,42 @@ mod tests {
     }
 
     #[test]
+    fn lays_out_stored_float_formals_with_python_widths() {
+        // `qbopt/frontend/qb/abi.py::physicalize` assigns each source formal
+        // `max(2, type_.width)` bytes, then walks those widths backward from
+        // BP+6. This is a mixed signature so changing either the float widths
+        // or BASIC's left-to-right push order changes every offset.
+        let near_pointer = MachineValueType::Pointer {
+            bits: 16,
+            address_space: MachineAddressSpace::NearData,
+        };
+        let single = MachineValueType::Float {
+            kind: MachineFloatKind::Binary32,
+        };
+        let double = MachineValueType::Float {
+            kind: MachineFloatKind::Binary64,
+        };
+        let long = MachineValueType::Integer { bits: 32 };
+        let procedure = function(
+            vec![near_pointer, single, double, long],
+            vec![
+                incoming(4, 0, 2),
+                incoming(5, 1, 4),
+                incoming(6, 2, 8),
+                incoming(7, 3, 4),
+            ],
+        );
+
+        let plan = plan_basic_frame(&procedure, BasicRuntime::Qb45, 0).unwrap();
+
+        assert_eq!(plan.parameter_bytes(), 18);
+        assert_eq!(plan.offset(FrameIndex::new(4)), Some(22));
+        assert_eq!(plan.offset(FrameIndex::new(5)), Some(18));
+        assert_eq!(plan.offset(FrameIndex::new(6)), Some(10));
+        assert_eq!(plan.offset(FrameIndex::new(7)), Some(6));
+    }
+
+    #[test]
     fn gives_small_and_odd_objects_owned_word_rounded_storage() {
         let procedure = function(Vec::new(), vec![local(2, 1, 1), local(3, 3, 1)]);
 
@@ -552,6 +598,21 @@ mod tests {
             Err(BasicFramePlanError::IncomingArgumentSize {
                 expected: 4,
                 actual: 2,
+                ..
+            })
+        ));
+
+        let double_mismatch = function(
+            vec![MachineValueType::Float {
+                kind: MachineFloatKind::Binary64,
+            }],
+            vec![incoming(0, 0, 4)],
+        );
+        assert!(matches!(
+            plan_basic_frame(&double_mismatch, BasicRuntime::Qb45, 0),
+            Err(BasicFramePlanError::IncomingArgumentSize {
+                expected: 8,
+                actual: 4,
                 ..
             })
         ));
@@ -604,6 +665,17 @@ mod tests {
         );
         assert!(matches!(
             plan_basic_frame(&far_pointer, BasicRuntime::Qb45, 0),
+            Err(BasicFramePlanError::UnsupportedParameter { parameter: 0, .. })
+        ));
+
+        let extended = function(
+            vec![MachineValueType::Float {
+                kind: MachineFloatKind::Extended80,
+            }],
+            vec![incoming(0, 0, 10)],
+        );
+        assert!(matches!(
+            plan_basic_frame(&extended, BasicRuntime::Qb45, 0),
             Err(BasicFramePlanError::UnsupportedParameter { parameter: 0, .. })
         ));
     }

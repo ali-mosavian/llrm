@@ -44,14 +44,6 @@ pub enum FrameIndexMaterializationError {
         instruction: MachineInstructionId,
         operand: usize,
     },
-    /// Selected x86 frame references currently carry no secondary addend.
-    UnsupportedFrameAddend {
-        block: MachineBlockId,
-        instruction: MachineInstructionId,
-        operand: usize,
-        frame: FrameIndex,
-        addend: i64,
-    },
     /// The x86 BP-plus-immediate tuple is already present.
     ///
     /// There is no per-function pass marker in Machine IR.  Treating this
@@ -97,16 +89,6 @@ impl fmt::Display for FrameIndexMaterializationError {
                 formatter,
                 "block {block} instruction {instruction} operand {operand} has an invalid frame-index contract"
             ),
-            Self::UnsupportedFrameAddend {
-                block,
-                instruction,
-                operand,
-                frame,
-                addend,
-            } => write!(
-                formatter,
-                "block {block} instruction {instruction} operand {operand} frame index {frame} has unsupported addend {addend}"
-            ),
             Self::AlreadyMaterialized { block, instruction } => write!(
                 formatter,
                 "block {block} instruction {instruction} already has a materialized x86 frame address"
@@ -121,11 +103,12 @@ impl Error for FrameIndexMaterializationError {}
 ///
 /// The result uses `[destination, BP, displacement]` for `Load` and `Lea`,
 /// and `[BP, displacement, source]` for `Store`.  `BP` is a physical use and
-/// the displacement is a role-less immediate. The plan is the sole source of
-/// that displacement: selected frame addends remain unsupported so the offset
-/// cannot be applied twice. Choosing a 16-bit modular encoding belongs to the
-/// later encoding form, not frame planning. The input is never modified; all
-/// refusals happen before the returned copy is changed.
+/// the displacement is a role-less immediate. The materialized displacement
+/// combines the plan's slot position with the selected frame addend exactly
+/// once, using the same wrapping signed-word spelling as Python's `Mem.offset`.
+/// Choosing the final ModR/M width belongs to the later encoding form. The
+/// input is never modified; all refusals happen before the returned copy is
+/// changed.
 pub fn materialize_frame_indices(
     function: &MachineFunction,
     plan: &BasicFramePlan,
@@ -151,12 +134,14 @@ pub fn materialize_frame_indices_with_layout(
             let Some(position) = frame_address_position(instruction) else {
                 continue;
             };
-            let MachineOperandKind::FrameIndex { index, .. } = &instruction.operands[position].kind
+            let MachineOperandKind::FrameIndex { index, addend } =
+                &instruction.operands[position].kind
             else {
                 continue;
             };
-            let displacement =
-                frame_displacement(layout, *index, block.id, instruction.id, position)?;
+            let displacement = signed_i16(
+                frame_displacement(layout, *index, block.id, instruction.id, position)? + *addend,
+            );
             instruction.operands[position] = bp_operand();
             instruction
                 .operands
@@ -185,7 +170,7 @@ fn validate(
                 });
             }
             for (position, operand) in instruction.operands.iter().enumerate() {
-                let MachineOperandKind::FrameIndex { index, addend } = &operand.kind else {
+                let MachineOperandKind::FrameIndex { index, addend: _ } = &operand.kind else {
                     continue;
                 };
                 if frame_address_position(instruction) != Some(position) {
@@ -206,15 +191,6 @@ fn validate(
                         operand: position,
                     });
                 }
-                if *addend != 0 {
-                    return Err(FrameIndexMaterializationError::UnsupportedFrameAddend {
-                        block: block.id,
-                        instruction: instruction.id,
-                        operand: position,
-                        frame: *index,
-                        addend: *addend,
-                    });
-                }
                 frame_displacement(layout, *index, block.id, instruction.id, position)?;
             }
         }
@@ -225,7 +201,58 @@ fn validate(
 fn frame_address_position(instruction: &MachineInstruction) -> Option<usize> {
     match X86Opcode::from_machine_opcode(instruction.opcode) {
         Some(X86Opcode::Load | X86Opcode::Lea) if instruction.operands.len() == 2 => Some(1),
-        Some(X86Opcode::Store) if instruction.operands.len() == 2 => Some(0),
+        Some(X86Opcode::Store)
+            if instruction.operands.len() == 2
+                || (instruction.operands.len() == 3
+                    && matches!(
+                        instruction.operands.get(1).map(|operand| &operand.kind),
+                        Some(MachineOperandKind::Immediate(8 | 16 | 32))
+                    )
+                    && matches!(
+                        instruction.operands.get(2).map(|operand| &operand.kind),
+                        Some(MachineOperandKind::Immediate(_))
+                    )) =>
+        {
+            Some(0)
+        }
+        Some(X86Opcode::Push)
+            if instruction.operands.len() == 2
+                && matches!(
+                    instruction.operands.first().map(|operand| &operand.kind),
+                    Some(MachineOperandKind::Immediate(16 | 32))
+                ) =>
+        {
+            Some(1)
+        }
+        Some(
+            X86Opcode::X87Load
+            | X86Opcode::X87Store
+            | X86Opcode::X87StorePop
+            | X86Opcode::X87IntegerLoad
+            | X86Opcode::X87IntegerStore
+            | X86Opcode::X87IntegerStorePop
+            | X86Opcode::X87IntegerStoreTrunc
+            | X86Opcode::X87Add
+            | X86Opcode::X87Subtract
+            | X86Opcode::X87SubtractReverse
+            | X86Opcode::X87Multiply
+            | X86Opcode::X87Divide
+            | X86Opcode::X87DivideReverse
+            | X86Opcode::X87Compare
+            | X86Opcode::X87ComparePop,
+        ) if instruction.operands.len() >= 3
+            && matches!(
+                instruction.operands.get(1).map(|operand| &operand.kind),
+                Some(MachineOperandKind::Immediate(_))
+            ) =>
+        {
+            Some(2)
+        }
+        Some(X86Opcode::X87StoreControlWord | X86Opcode::X87LoadControlWord)
+            if instruction.operands.len() >= 2 =>
+        {
+            Some(1)
+        }
         _ => None,
     }
 }
@@ -233,8 +260,33 @@ fn frame_address_position(instruction: &MachineInstruction) -> Option<usize> {
 fn is_materialized_frame_address(instruction: &MachineInstruction) -> bool {
     let position = match X86Opcode::from_machine_opcode(instruction.opcode) {
         Some(X86Opcode::Load | X86Opcode::Lea) if instruction.operands.len() == 3 => 1,
-        Some(X86Opcode::Store) if instruction.operands.len() == 3 => 0,
-        _ => return false,
+        Some(X86Opcode::Store)
+            if instruction.operands.len() == 3
+                || (instruction.operands.len() == 4
+                    && matches!(
+                        instruction.operands.get(2).map(|operand| &operand.kind),
+                        Some(MachineOperandKind::Immediate(8 | 16 | 32))
+                    )
+                    && matches!(
+                        instruction.operands.get(3).map(|operand| &operand.kind),
+                        Some(MachineOperandKind::Immediate(_))
+                    )) =>
+        {
+            0
+        }
+        Some(X86Opcode::Push)
+            if instruction.operands.len() == 3
+                && matches!(
+                    instruction.operands.first().map(|operand| &operand.kind),
+                    Some(MachineOperandKind::Immediate(16 | 32))
+                ) =>
+        {
+            1
+        }
+        _ => match frame_address_position_for_materialized(instruction) {
+            Some(position) => position,
+            None => return false,
+        },
     };
     matches!(
         instruction.operands.get(position),
@@ -255,6 +307,41 @@ fn is_materialized_frame_address(instruction: &MachineInstruction) -> bool {
     )
 }
 
+fn frame_address_position_for_materialized(instruction: &MachineInstruction) -> Option<usize> {
+    match X86Opcode::from_machine_opcode(instruction.opcode) {
+        Some(
+            X86Opcode::X87Load
+            | X86Opcode::X87Store
+            | X86Opcode::X87StorePop
+            | X86Opcode::X87IntegerLoad
+            | X86Opcode::X87IntegerStore
+            | X86Opcode::X87IntegerStorePop
+            | X86Opcode::X87IntegerStoreTrunc
+            | X86Opcode::X87Add
+            | X86Opcode::X87Subtract
+            | X86Opcode::X87SubtractReverse
+            | X86Opcode::X87Multiply
+            | X86Opcode::X87Divide
+            | X86Opcode::X87DivideReverse
+            | X86Opcode::X87Compare
+            | X86Opcode::X87ComparePop,
+        ) if instruction.operands.len() >= 4
+            && matches!(
+                instruction.operands.get(1).map(|operand| &operand.kind),
+                Some(MachineOperandKind::Immediate(_))
+            ) =>
+        {
+            Some(2)
+        }
+        Some(X86Opcode::X87StoreControlWord | X86Opcode::X87LoadControlWord)
+            if instruction.operands.len() >= 3 =>
+        {
+            Some(1)
+        }
+        _ => None,
+    }
+}
+
 fn frame_displacement(
     layout: &X86FrameLayout,
     frame: FrameIndex,
@@ -271,6 +358,12 @@ fn frame_displacement(
             operand,
             frame,
         })
+}
+
+/// x86 frame displacements, like Python's folded `Mem.offset`, retain the
+/// low word when an address expression crosses the signed boundary.
+fn signed_i16(value: i64) -> i64 {
+    (value + 32_768).rem_euclid(65_536) - 32_768
 }
 
 fn bp_operand() -> MachineOperand {
@@ -442,6 +535,91 @@ mod tests {
         let operands = &materialized.blocks[0].instructions[0].operands;
         assert_bp_displacement(operands, 1, 6);
         assert_eq!(operands.len(), 3);
+    }
+
+    #[test]
+    fn materializes_dword_push_frame_source_at_bp_plus_six() {
+        // A pushed LONG argument retains its explicit width while its selected
+        // frame source becomes the exact BP tuple the encoder consumes.
+        let function = function(
+            vec![MachineValueType::Integer { bits: 32 }],
+            vec![FrameObject {
+                index: FrameIndex::new(0),
+                size: 4,
+                alignment: 2,
+                kind: FrameObjectKind::IncomingArgument { parameter: 0 },
+            }],
+            vec![instruction(
+                X86Opcode::Push,
+                vec![
+                    MachineOperand {
+                        kind: MachineOperandKind::Immediate(32),
+                        role: OperandRole::None,
+                        constraint: None,
+                        tied_to: None,
+                    },
+                    frame_operand(0, 0),
+                ],
+            )],
+        );
+        let materialized = materialize_frame_indices(
+            &function,
+            &plan(&function, super::super::BasicRuntime::Qb45),
+        )
+        .unwrap();
+
+        let operands = &materialized.blocks[0].instructions[0].operands;
+        assert!(matches!(
+            operands[0].kind,
+            MachineOperandKind::Immediate(32)
+        ));
+        assert_bp_displacement(operands, 1, 6);
+        assert_eq!(operands.len(), 3);
+    }
+
+    #[test]
+    fn materializes_dword_immediate_store_at_bp_minus_twenty_four() {
+        // `0x4040_0000` is the binary32 storage form of 3.0. Frame
+        // materialization changes only its address, never the stored bits.
+        let function = function(
+            Vec::new(),
+            vec![local(0, 4)],
+            vec![instruction(
+                X86Opcode::Store,
+                vec![
+                    frame_operand(0, 0),
+                    MachineOperand {
+                        kind: MachineOperandKind::Immediate(32),
+                        role: OperandRole::None,
+                        constraint: None,
+                        tied_to: None,
+                    },
+                    MachineOperand {
+                        kind: MachineOperandKind::Immediate(0x4040_0000),
+                        role: OperandRole::None,
+                        constraint: None,
+                        tied_to: None,
+                    },
+                ],
+            )],
+        );
+        let materialized = materialize_frame_indices(
+            &function,
+            &plan(&function, super::super::BasicRuntime::Vbdos),
+        )
+        .unwrap();
+
+        let operands = &materialized.blocks[0].instructions[0].operands;
+        assert_bp_displacement(operands, 0, -24);
+        assert!(matches!(
+            operands[2].kind,
+            MachineOperandKind::Immediate(32)
+        ));
+        assert!(matches!(
+            operands[3].kind,
+            MachineOperandKind::Immediate(0x4040_0000)
+        ));
+        assert_eq!(operands.len(), 4);
     }
 
     #[test]
@@ -627,7 +805,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_a_secondary_frame_addend() {
+    fn combines_a_folded_frame_addend_once() {
         let function = function(
             vec![MachineValueType::Integer { bits: 16 }],
             vec![incoming(0, 0)],
@@ -636,19 +814,13 @@ mod tests {
                 vec![virtual_operand(OperandRole::Def), frame_operand(0, 4)],
             )],
         );
-        let error = materialize_frame_indices(
+        let materialized = materialize_frame_indices(
             &function,
             &plan(&function, super::super::BasicRuntime::Qb45),
-        );
+        )
+        .expect("a folded field address materializes");
 
-        assert!(matches!(
-            error,
-            Err(FrameIndexMaterializationError::UnsupportedFrameAddend {
-                frame,
-                addend: 4,
-                ..
-            }) if frame == FrameIndex::new(0)
-        ));
+        assert_bp_displacement(&materialized.blocks[0].instructions[0].operands, 1, 10);
     }
 
     #[test]

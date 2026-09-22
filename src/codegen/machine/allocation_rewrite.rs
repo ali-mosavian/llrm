@@ -106,6 +106,7 @@ pub fn apply_assignment(
     validate_rewrite(function, assignment)?;
 
     let mut rewritten = function.clone();
+    let mut anchor_registers = BTreeSet::new();
     for block in &mut rewritten.blocks {
         for instruction in &mut block.instructions {
             for (position, operand) in instruction.operands.iter_mut().enumerate() {
@@ -114,6 +115,15 @@ pub fn apply_assignment(
                 else {
                     continue;
                 };
+                if instruction.flags.anchor {
+                    // An anchor is deliberately run after allocation has
+                    // chosen its lanes but before virtual def/use lineage is
+                    // erased.  Its virtuals remain as opaque logical facts;
+                    // MC lowers its retained instruction position directly
+                    // to a zero-byte fragment.
+                    anchor_registers.insert(*register);
+                    continue;
+                }
                 let physical =
                     assignment
                         .get(*register)
@@ -128,7 +138,9 @@ pub fn apply_assignment(
             }
         }
     }
-    rewritten.virtual_registers.clear();
+    rewritten
+        .virtual_registers
+        .retain(|register| anchor_registers.contains(&register.id));
 
     Ok(rewritten)
 }
@@ -351,6 +363,36 @@ mod tests {
             rewritten.blocks[0].instructions[0].operands[2],
             original.blocks[0].instructions[0].operands[2]
         );
+    }
+
+    #[test]
+    fn anchor_keeps_its_logical_virtual_definition_after_assignment() {
+        // Python test_peephole.py::test_forwarded_spill_reload_retains_its_virtual_definition:
+        // a deleted allocator reload still owns the virtual value its later
+        // consumer names.  The actual x86 NOTHING opcode is introduced with
+        // the anchor representation; use its reserved stable opcode here so
+        // this regression fails against the old unconditional rewrite.
+        let anchor = instruction(0, vec![virtual_register(0, OperandRole::Def)])
+            .anchor(TargetOpcode::new(73));
+        let original = function(
+            vec![MachineBlock {
+                id: MachineBlockId::new(0),
+                instructions: vec![anchor],
+                successors: Vec::new(),
+            }],
+            &[0],
+        );
+        let assignment = allocated(&original);
+
+        let rewritten = apply_assignment(&original, &assignment)
+            .expect("the completed assignment still covers an anchor's virtual value");
+
+        assert!(matches!(
+            rewritten.blocks[0].instructions[0].operands[0].kind,
+            MachineOperandKind::Register(MachineRegister::Virtual(register))
+                if register == VirtualRegisterId::new(0)
+        ));
+        assert_eq!(rewritten.virtual_registers.len(), 1);
     }
 
     #[test]

@@ -17,7 +17,7 @@ use crate::mc::{
 use crate::support::diagnostic::Diagnostic;
 
 use super::{
-    encode_mc_module, encoded_size, ConditionCode, EncodeError, X86McEncodeError, X86Opcode,
+    ConditionCode, EncodeError, X86McEncodeError, X86Opcode, encode_mc_module, encoded_size,
 };
 
 /// Which immutable boundary failed MC verification.

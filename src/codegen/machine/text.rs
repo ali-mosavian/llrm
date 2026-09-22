@@ -18,7 +18,7 @@ use super::{
 };
 
 /// Version of the `.qmir` textual format.
-pub const FORMAT_VERSION: u32 = 7;
+pub const FORMAT_VERSION: u32 = 9;
 
 /// A syntax or value error in `.qmir` text.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -235,19 +235,22 @@ fn write_operand(text: &mut String, operand: &MachineOperand) {
     line(text, &fields);
 }
 
-fn flags_bits(flags: InstructionFlags) -> u8 {
-    u8::from(flags.terminator)
-        | (u8::from(flags.call) << 1)
-        | (u8::from(flags.copy) << 2)
-        | (u8::from(flags.side_effects) << 3)
-        | (u8::from(flags.may_load) << 4)
-        | (u8::from(flags.may_store) << 5)
-        | (u8::from(flags.volatile) << 6)
+fn flags_bits(flags: InstructionFlags) -> u16 {
+    u16::from(flags.terminator)
+        | (u16::from(flags.call) << 1)
+        | (u16::from(flags.copy) << 2)
+        | (u16::from(flags.side_effects) << 3)
+        | (u16::from(flags.may_load) << 4)
+        | (u16::from(flags.may_store) << 5)
+        | (u16::from(flags.volatile) << 6)
+        | (u16::from(flags.spill_reload) << 7)
+        | (u16::from(flags.spill_store) << 8)
+        | (u16::from(flags.anchor) << 9)
 }
 
 fn parse_flags(token: Token<'_>) -> Result<InstructionFlags, TextError> {
-    let bits = number::<u8>(token)?;
-    if bits & !0x7f != 0 {
+    let bits = number::<u16>(token)?;
+    if bits & !0x03ff != 0 {
         return Err(error(
             token.line,
             token.column,
@@ -262,6 +265,9 @@ fn parse_flags(token: Token<'_>) -> Result<InstructionFlags, TextError> {
         may_load: bits & 16 != 0,
         may_store: bits & 32 != 0,
         volatile: bits & 64 != 0,
+        spill_reload: bits & 128 != 0,
+        spill_store: bits & 256 != 0,
+        anchor: bits & 512 != 0,
     })
 }
 
@@ -269,6 +275,7 @@ fn frame_kind_name(kind: FrameObjectKind) -> String {
     match kind {
         FrameObjectKind::Local => "local".to_owned(),
         FrameObjectKind::Spill => "spill".to_owned(),
+        FrameObjectKind::Temporary => "temporary".to_owned(),
         FrameObjectKind::OutgoingArgument => "outgoing-argument".to_owned(),
         FrameObjectKind::IncomingArgument { parameter } => {
             format!("incoming-argument:{parameter}")
@@ -653,6 +660,7 @@ fn parse_frame(tokens: &[Token<'_>]) -> Result<FrameObject, TextError> {
     let kind = match tokens[4].value {
         "local" => FrameObjectKind::Local,
         "spill" => FrameObjectKind::Spill,
+        "temporary" => FrameObjectKind::Temporary,
         "outgoing-argument" => FrameObjectKind::OutgoingArgument,
         value => {
             let Some(parameter) = value.strip_prefix("incoming-argument:") else {
@@ -1079,6 +1087,12 @@ mod tests {
                         kind: FrameObjectKind::Spill,
                     },
                     FrameObject {
+                        index: FrameIndex::new(6),
+                        size: 10,
+                        alignment: 2,
+                        kind: FrameObjectKind::Temporary,
+                    },
+                    FrameObject {
                         index: FrameIndex::new(8),
                         size: 2,
                         alignment: 2,
@@ -1100,6 +1114,9 @@ mod tests {
                                 may_load: true,
                                 may_store: true,
                                 volatile: true,
+                                spill_reload: false,
+                                spill_store: false,
+                                anchor: false,
                             },
                             operands: vec![
                                 MachineOperand {
@@ -1199,7 +1216,7 @@ mod tests {
     #[test]
     fn reports_the_malformed_operand_location() {
         let error =
-            parse_text("qmir 7\nfunction 0 0 66 internal c - 0 0\nblock 0 0\ninst 0 0 0 1\noperand use - - wat\n")
+            parse_text("qmir 9\nfunction 0 0 66 internal c - 0 0\nblock 0 0\ninst 0 0 0 1\noperand use - - wat\n")
                 .expect_err("unknown operand kind must be rejected");
         assert_eq!(error.line, 5);
         assert_eq!(error.column, 17);
@@ -1207,13 +1224,13 @@ mod tests {
     }
 
     #[test]
-    fn accepts_only_the_version_seven_schema() {
-        let error = parse_text("qmir 6\n").expect_err("qmir version six is not accepted");
+    fn accepts_only_the_version_nine_schema() {
+        let error = parse_text("qmir 8\n").expect_err("qmir version eight is not accepted");
         assert_eq!(error.line, 1);
         assert!(error.message.contains("invalid qmir format header"));
 
         for obsolete in ["basic", "runtime"] {
-            let source = format!("qmir 7\nfunction 0 0 66 internal {obsolete} - 0 0\n");
+            let source = format!("qmir 9\nfunction 0 0 66 internal {obsolete} - 0 0\n");
             let error = parse_text(&source)
                 .expect_err("source-language ABI labels must not enter Machine IR");
             assert!(error.message.contains("calling convention"));
@@ -1253,7 +1270,7 @@ mod tests {
 
     #[test]
     fn float_signature_types_round_trip_with_canonical_names() {
-        let source = "qmir 7\nfunction 0 0 66 external c f80 0 2 f32 f64\nblock 0 0\nendblock\nendfunction\n";
+        let source = "qmir 9\nfunction 0 0 66 external c f80 0 2 f32 f64\nblock 0 0\nendblock\nendfunction\n";
 
         let module = parse_text(source).expect("portable float signature types must parse");
 

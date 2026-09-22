@@ -172,13 +172,7 @@ pub(crate) fn merged(body: &MirBody) -> Result<MirBody, SubstitutionError> {
 
             let mut moved = ops;
             moved.extend(between.iter().flat_map(|block| block.ops.iter().cloned()));
-            let mut marker = Op::new(
-                target,
-                OpCode::nothing(),
-                "",
-                Vec::new(),
-                Vec::new(),
-            );
+            let mut marker = Op::new(target, OpCode::nothing(), "", Vec::new(), Vec::new());
             marker.kind = Kind::Nothing;
             moved.push(marker);
             moved.extend(second.ops.iter().cloned());

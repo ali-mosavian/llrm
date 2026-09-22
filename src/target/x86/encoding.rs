@@ -12,6 +12,7 @@ use std::fmt;
 
 use crate::mc::{Fixup, MCInstruction, MCOperand};
 
+use super::instructions::X87MemoryFormat;
 use super::{OperandSize, X86FixupKind, X86Opcode, X86Register};
 
 /// The bytes and relocations selected for one x86 instruction.
@@ -30,8 +31,6 @@ pub enum EncodeError {
     UnknownRegister { raw: u32 },
     /// The architectural view exists but is outside this register-form subset.
     UnsupportedRegister { raw: u32 },
-    /// A materialized frame address does not use 16-bit BP as its base.
-    UnsupportedFrameBase { opcode: X86Opcode, raw: u32 },
     /// The operand count does not match the selected instruction form.
     Arity {
         opcode: X86Opcode,
@@ -70,12 +69,6 @@ impl fmt::Display for EncodeError {
                 write!(
                     formatter,
                     "x86 register {raw} is not a general-purpose register view"
-                )
-            }
-            Self::UnsupportedFrameBase { opcode, raw } => {
-                write!(
-                    formatter,
-                    "{opcode:?} frame address uses x86 register {raw}, not BP"
                 )
             }
             Self::Arity {
@@ -142,7 +135,7 @@ pub fn encode_with_fixups(instruction: &MCInstruction) -> Result<EncodedInstruct
         X86Opcode::Add => encode_add_sub(opcode, &instruction.operands, 0, 0x00, 0x01),
         X86Opcode::Sub => encode_add_sub(opcode, &instruction.operands, 5, 0x28, 0x29),
         X86Opcode::And => encode_register_operands(opcode, &instruction.operands, 0x20, 0x21),
-        X86Opcode::Or => encode_register_operands(opcode, &instruction.operands, 0x08, 0x09),
+        X86Opcode::Or => encode_group_one_binary(opcode, &instruction.operands, 1, 0x08, 0x09),
         X86Opcode::Xor => encode_register_operands(opcode, &instruction.operands, 0x30, 0x31),
         X86Opcode::Cmp => encode_register_operands(opcode, &instruction.operands, 0x38, 0x39),
         X86Opcode::Test => encode_register_operands(opcode, &instruction.operands, 0x84, 0x85),
@@ -158,16 +151,60 @@ pub fn encode_with_fixups(instruction: &MCInstruction) -> Result<EncodedInstruct
         X86Opcode::ShiftLeftDouble => encode_shift_left_double(opcode, &instruction.operands),
         X86Opcode::Neg => encode_unary(opcode, &instruction.operands, 3),
         X86Opcode::Not => encode_unary(opcode, &instruction.operands, 2),
-        X86Opcode::Push => encode_push_pop(opcode, &instruction.operands, 0x50),
+        X86Opcode::Push => return encode_push(opcode, &instruction.operands),
         X86Opcode::Pop => encode_push_pop(opcode, &instruction.operands, 0x58),
         X86Opcode::Leave => encode_return(opcode, &instruction.operands, 0xc9),
         X86Opcode::ReturnNear => encode_return(opcode, &instruction.operands, 0xc3),
         X86Opcode::ReturnFar => encode_far_return(opcode, &instruction.operands),
         X86Opcode::Lea => return encode_lea(opcode, &instruction.operands),
-        X86Opcode::Load => encode_load(opcode, &instruction.operands),
-        X86Opcode::Store => encode_store(opcode, &instruction.operands),
+        X86Opcode::Load => return encode_load_with_fixups(opcode, &instruction.operands),
+        X86Opcode::Store => return encode_store(opcode, &instruction.operands),
         X86Opcode::CallFar => return encode_far_call(opcode, &instruction.operands),
         X86Opcode::CallNear => return encode_near_call(opcode, &instruction.operands),
+        X86Opcode::X87Load
+        | X86Opcode::X87Store
+        | X86Opcode::X87StorePop
+        | X86Opcode::X87IntegerLoad
+        | X86Opcode::X87IntegerStore
+        | X86Opcode::X87IntegerStorePop
+        | X86Opcode::X87Add
+        | X86Opcode::X87Subtract
+        | X86Opcode::X87SubtractReverse
+        | X86Opcode::X87Multiply
+        | X86Opcode::X87Divide
+        | X86Opcode::X87DivideReverse
+        | X86Opcode::X87Compare
+        | X86Opcode::X87ComparePop
+        | X86Opcode::X87StoreControlWord
+        | X86Opcode::X87LoadControlWord => {
+            return encode_x87_memory_or_stack(opcode, &instruction.operands);
+        }
+        X86Opcode::X87IntegerStoreTrunc => Err(EncodeError::UnsupportedForm {
+            opcode,
+            reason: "x87 truncating integer stores must be expanded to a control-word sequence before MC",
+        }),
+        X86Opcode::X87AddPop
+        | X86Opcode::X87SubtractPop
+        | X86Opcode::X87SubtractReversePop
+        | X86Opcode::X87MultiplyPop
+        | X86Opcode::X87DividePop
+        | X86Opcode::X87DivideReversePop => {
+            encode_x87_pop_arithmetic(opcode, &instruction.operands)
+        }
+        X86Opcode::X87ComparePop2 => encode_x87_compare_pop2(opcode, &instruction.operands),
+        X86Opcode::X87StackLoad => encode_x87_stack_load(opcode, &instruction.operands),
+        X86Opcode::X87StackStorePop => encode_x87_stack_store_pop(opcode, &instruction.operands),
+        X86Opcode::X87Exchange => encode_x87_exchange(opcode, &instruction.operands),
+        X86Opcode::X87LoadZero => encode_x87_unary(opcode, &instruction.operands, 0xd9, 0xee),
+        X86Opcode::X87LoadOne => encode_x87_unary(opcode, &instruction.operands, 0xd9, 0xe8),
+        X86Opcode::X87ChangeSign => encode_x87_unary(opcode, &instruction.operands, 0xd9, 0xe0),
+        X86Opcode::X87Absolute => encode_x87_unary(opcode, &instruction.operands, 0xd9, 0xe1),
+        X86Opcode::X87SquareRoot => encode_x87_unary(opcode, &instruction.operands, 0xd9, 0xfa),
+        X86Opcode::X87StoreStatusWord => {
+            encode_x87_store_status_word(opcode, &instruction.operands)
+        }
+        X86Opcode::Wait => encode_return(opcode, &instruction.operands, 0x9b),
+        X86Opcode::Sahf => encode_return(opcode, &instruction.operands, 0x9e),
         X86Opcode::ShiftLeft
         | X86Opcode::ShiftRightLogical
         | X86Opcode::ShiftRightArithmetic
@@ -175,7 +212,8 @@ pub fn encode_with_fixups(instruction: &MCInstruction) -> Result<EncodedInstruct
         | X86Opcode::JumpConditional
         | X86Opcode::MergeWords
         | X86Opcode::LowWord
-        | X86Opcode::HighWord => Err(EncodeError::UnsupportedForm {
+        | X86Opcode::HighWord
+        | X86Opcode::Nothing => Err(EncodeError::UnsupportedForm {
             opcode,
             reason: "this initial encoder accepts only exact register forms",
         }),
@@ -279,17 +317,20 @@ fn encode_lea(
         });
     }
 
-    let bytes = encode_frame_lea(opcode, operands)?;
+    let bytes = encode_displacement_lea(opcode, operands)?;
     Ok(EncodedInstruction {
         bytes,
         fixups: Vec::new(),
     })
 }
 
-fn encode_frame_load(opcode: X86Opcode, operands: &[MCOperand]) -> Result<Vec<u8>, EncodeError> {
+fn encode_displacement_load(
+    opcode: X86Opcode,
+    operands: &[MCOperand],
+) -> Result<Vec<u8>, EncodeError> {
     expect_arity(opcode, operands, 3)?;
     let destination = register_operand(opcode, operands, 0)?;
-    let displacement = frame_displacement(opcode, operands, 1, 2)?;
+    let displacement = address16_displacement(opcode, operands, 1, 2)?;
     let mut bytes = prefix_for(destination.size);
     bytes.push(match destination.size {
         OperandSize::Byte => 0x8a,
@@ -301,7 +342,7 @@ fn encode_frame_load(opcode: X86Opcode, operands: &[MCOperand]) -> Result<Vec<u8
 
 fn encode_load(opcode: X86Opcode, operands: &[MCOperand]) -> Result<Vec<u8>, EncodeError> {
     if operands.len() == 3 && matches!(operands.get(2), Some(MCOperand::Immediate(_))) {
-        return encode_frame_load(opcode, operands);
+        return encode_displacement_load(opcode, operands);
     }
     if operands.len() == 3 {
         return encode_segmented_load(opcode, operands);
@@ -316,6 +357,37 @@ fn encode_load(opcode: X86Opcode, operands: &[MCOperand]) -> Result<Vec<u8>, Enc
     });
     bytes.extend(address.with_register(destination.code));
     Ok(bytes)
+}
+
+fn encode_load_with_fixups(
+    opcode: X86Opcode,
+    operands: &[MCOperand],
+) -> Result<EncodedInstruction, EncodeError> {
+    if let [MCOperand::Register(_), MCOperand::Expression(expression)] = operands {
+        let destination = register_operand(opcode, operands, 0)?;
+        let mut bytes = prefix_for(destination.size);
+        bytes.push(match destination.size {
+            OperandSize::Byte => 0x8a,
+            OperandSize::Word | OperandSize::Dword => 0x8b,
+        });
+        bytes.push((destination.code << 3) | 0b110);
+        let offset = bytes.len() as u32;
+        bytes.extend([0, 0]);
+        return Ok(EncodedInstruction {
+            bytes,
+            fixups: vec![Fixup {
+                offset,
+                kind: X86FixupKind::NearData16.into(),
+                expression: *expression,
+                pc_relative: false,
+            }],
+        });
+    }
+
+    Ok(EncodedInstruction {
+        bytes: encode_load(opcode, operands)?,
+        fixups: Vec::new(),
+    })
 }
 
 fn encode_segmented_load(
@@ -336,9 +408,12 @@ fn encode_segmented_load(
     Ok(bytes)
 }
 
-fn encode_frame_store(opcode: X86Opcode, operands: &[MCOperand]) -> Result<Vec<u8>, EncodeError> {
+fn encode_displacement_store(
+    opcode: X86Opcode,
+    operands: &[MCOperand],
+) -> Result<Vec<u8>, EncodeError> {
     expect_arity(opcode, operands, 3)?;
-    let displacement = frame_displacement(opcode, operands, 0, 1)?;
+    let displacement = address16_displacement(opcode, operands, 0, 1)?;
     let source = register_operand(opcode, operands, 2)?;
     let mut bytes = prefix_for(source.size);
     bytes.push(match source.size {
@@ -349,23 +424,100 @@ fn encode_frame_store(opcode: X86Opcode, operands: &[MCOperand]) -> Result<Vec<u
     Ok(bytes)
 }
 
-fn encode_store(opcode: X86Opcode, operands: &[MCOperand]) -> Result<Vec<u8>, EncodeError> {
-    if operands.len() == 3 && matches!(operands.get(1), Some(MCOperand::Immediate(_))) {
-        return encode_frame_store(opcode, operands);
+fn encode_store(
+    opcode: X86Opcode,
+    operands: &[MCOperand],
+) -> Result<EncodedInstruction, EncodeError> {
+    if matches!(
+        operands.get(operands.len().saturating_sub(2)),
+        Some(MCOperand::Immediate(_))
+    ) && matches!(operands.last(), Some(MCOperand::Immediate(_)))
+    {
+        return encode_immediate_store(opcode, operands);
     }
-    if operands.len() == 3 {
-        return encode_segmented_store(opcode, operands);
+    if let [MCOperand::Expression(expression), MCOperand::Register(_)] = operands {
+        let source = register_operand(opcode, operands, 1)?;
+        let mut bytes = prefix_for(source.size);
+        bytes.push(match source.size {
+            OperandSize::Byte => 0x88,
+            OperandSize::Word | OperandSize::Dword => 0x89,
+        });
+        bytes.push((source.code << 3) | 0b110);
+        let offset = bytes.len() as u32;
+        bytes.extend([0, 0]);
+        return Ok(EncodedInstruction {
+            bytes,
+            fixups: vec![Fixup {
+                offset,
+                kind: X86FixupKind::NearData16.into(),
+                expression: *expression,
+                pc_relative: false,
+            }],
+        });
     }
-    expect_arity(opcode, operands, 2)?;
-    let address = address16_operand(opcode, operands, 0)?;
-    let source = register_operand(opcode, operands, 1)?;
-    let mut bytes = prefix_for(source.size);
-    bytes.push(match source.size {
-        OperandSize::Byte => 0x88,
-        OperandSize::Word | OperandSize::Dword => 0x89,
-    });
-    bytes.extend(address.with_register(source.code));
-    Ok(bytes)
+    let bytes = if operands.len() == 3 && matches!(operands.get(1), Some(MCOperand::Immediate(_))) {
+        encode_displacement_store(opcode, operands)?
+    } else if operands.len() == 3 {
+        encode_segmented_store(opcode, operands)?
+    } else {
+        expect_arity(opcode, operands, 2)?;
+        let address = address16_operand(opcode, operands, 0)?;
+        let source = register_operand(opcode, operands, 1)?;
+        let mut bytes = prefix_for(source.size);
+        bytes.push(match source.size {
+            OperandSize::Byte => 0x88,
+            OperandSize::Word | OperandSize::Dword => 0x89,
+        });
+        bytes.extend(address.with_register(source.code));
+        bytes
+    };
+    Ok(EncodedInstruction {
+        bytes,
+        fixups: Vec::new(),
+    })
+}
+
+fn encode_immediate_store(
+    opcode: X86Opcode,
+    operands: &[MCOperand],
+) -> Result<EncodedInstruction, EncodeError> {
+    let address_end = operands.len().checked_sub(2).ok_or(EncodeError::Arity {
+        opcode,
+        expected: 3,
+        actual: operands.len(),
+    })?;
+    let [MCOperand::Immediate(bits), MCOperand::Immediate(value)] = &operands[address_end..] else {
+        unreachable!("the caller identified two trailing immediates")
+    };
+    let size = store_immediate_size(opcode, *bits)?;
+    let lead = if size == OperandSize::Byte {
+        0xc6
+    } else {
+        0xc7
+    };
+    let mut encoded = encode_memory(opcode, &operands[..address_end], 0, lead, 0)?;
+    let prefix = prefix_for(size);
+    if !prefix.is_empty() {
+        encoded.bytes.splice(0..0, prefix.iter().copied());
+        let adjustment = u32::try_from(prefix.len()).expect("x86 prefix count fits u32");
+        for fixup in &mut encoded.fixups {
+            fixup.offset += adjustment;
+        }
+    }
+    encoded.bytes.extend(encode_immediate(*value, size)?);
+    Ok(encoded)
+}
+
+fn store_immediate_size(opcode: X86Opcode, bits: i64) -> Result<OperandSize, EncodeError> {
+    match bits {
+        8 => Ok(OperandSize::Byte),
+        16 => Ok(OperandSize::Word),
+        32 => Ok(OperandSize::Dword),
+        _ => Err(EncodeError::UnsupportedForm {
+            opcode,
+            reason: "store immediate width must be 8, 16, or 32 bits",
+        }),
+    }
 }
 
 fn encode_segmented_store(
@@ -384,6 +536,418 @@ fn encode_segmented_store(
     });
     bytes.extend(address.with_register(source.code));
     Ok(bytes)
+}
+
+/// Encodes the target-owned x87 surface without changing generic MC address
+/// operands.  Memory forms are `[st(0), format, address...]`; control-word
+/// forms omit the stack register and are `[format, address...]`.  A format is
+/// deliberately an immediate so the physical byte representation is not
+/// inferred from an SSA or Machine-IR type.
+fn encode_x87_memory_or_stack(
+    opcode: X86Opcode,
+    operands: &[MCOperand],
+) -> Result<EncodedInstruction, EncodeError> {
+    match opcode {
+        X86Opcode::X87StoreControlWord | X86Opcode::X87LoadControlWord => {
+            let format = x87_memory_format(opcode, operands, 0)?;
+            let extension = if opcode == X86Opcode::X87StoreControlWord {
+                7
+            } else {
+                5
+            };
+            require_x87_format(opcode, format, &[X87MemoryFormat::Control16])?;
+            encode_memory(opcode, operands, 1, 0xd9, extension)
+        }
+        X86Opcode::X87Load
+        | X86Opcode::X87Store
+        | X86Opcode::X87StorePop
+        | X86Opcode::X87IntegerLoad
+        | X86Opcode::X87IntegerStore
+        | X86Opcode::X87IntegerStorePop => {
+            expect_x87_st0(opcode, operands, 0)?;
+            let format = x87_memory_format(opcode, operands, 1)?;
+            let (byte, extension) = match opcode {
+                X86Opcode::X87Load => match format {
+                    X87MemoryFormat::Float32 => (0xd9, 0),
+                    X87MemoryFormat::Float64 => (0xdd, 0),
+                    X87MemoryFormat::Float80 => (0xdb, 5),
+                    _ => return unsupported_x87_format(opcode, format),
+                },
+                X86Opcode::X87Store => match format {
+                    X87MemoryFormat::Float32 => (0xd9, 2),
+                    X87MemoryFormat::Float64 => (0xdd, 2),
+                    _ => return unsupported_x87_format(opcode, format),
+                },
+                X86Opcode::X87StorePop => match format {
+                    X87MemoryFormat::Float32 => (0xd9, 3),
+                    X87MemoryFormat::Float64 => (0xdd, 3),
+                    X87MemoryFormat::Float80 => (0xdb, 7),
+                    _ => return unsupported_x87_format(opcode, format),
+                },
+                X86Opcode::X87IntegerLoad => match format {
+                    X87MemoryFormat::Signed16 => (0xdf, 0),
+                    X87MemoryFormat::Signed32 => (0xdb, 0),
+                    X87MemoryFormat::Signed64 => (0xdf, 5),
+                    _ => return unsupported_x87_format(opcode, format),
+                },
+                X86Opcode::X87IntegerStore => match format {
+                    X87MemoryFormat::Signed16 => (0xdf, 2),
+                    X87MemoryFormat::Signed32 => (0xdb, 2),
+                    _ => return unsupported_x87_format(opcode, format),
+                },
+                X86Opcode::X87IntegerStorePop => match format {
+                    X87MemoryFormat::Signed16 => (0xdf, 3),
+                    X87MemoryFormat::Signed32 => (0xdb, 3),
+                    X87MemoryFormat::Signed64 => (0xdf, 7),
+                    _ => return unsupported_x87_format(opcode, format),
+                },
+                _ => unreachable!("the outer match lists every x87 memory opcode"),
+            };
+            encode_memory(opcode, operands, 2, byte, extension)
+        }
+        X86Opcode::X87Add
+        | X86Opcode::X87Subtract
+        | X86Opcode::X87SubtractReverse
+        | X86Opcode::X87Multiply
+        | X86Opcode::X87Divide
+        | X86Opcode::X87DivideReverse
+        | X86Opcode::X87Compare
+        | X86Opcode::X87ComparePop => {
+            if matches!(operands.get(1), Some(MCOperand::Immediate(_))) {
+                expect_x87_st0(opcode, operands, 0)?;
+                let format = x87_memory_format(opcode, operands, 1)?;
+                let extension = x87_memory_arithmetic_extension(opcode)?;
+                let byte = match format {
+                    X87MemoryFormat::Float32 => 0xd8,
+                    X87MemoryFormat::Float64 => 0xdc,
+                    X87MemoryFormat::Signed16
+                        if !matches!(opcode, X86Opcode::X87Compare | X86Opcode::X87ComparePop) =>
+                    {
+                        0xde
+                    }
+                    X87MemoryFormat::Signed32
+                        if !matches!(opcode, X86Opcode::X87Compare | X86Opcode::X87ComparePop) =>
+                    {
+                        0xda
+                    }
+                    _ => return unsupported_x87_format(opcode, format),
+                };
+                encode_memory(opcode, operands, 2, byte, extension)
+            } else {
+                encode_x87_stack_arithmetic(opcode, operands)
+            }
+        }
+        _ => unreachable!("the outer match lists only x87 memory or stack opcodes"),
+    }
+}
+
+fn x87_memory_arithmetic_extension(opcode: X86Opcode) -> Result<u8, EncodeError> {
+    match opcode {
+        X86Opcode::X87Add => Ok(0),
+        X86Opcode::X87Multiply => Ok(1),
+        X86Opcode::X87Compare => Ok(2),
+        X86Opcode::X87ComparePop => Ok(3),
+        X86Opcode::X87Subtract => Ok(4),
+        X86Opcode::X87SubtractReverse => Ok(5),
+        X86Opcode::X87Divide => Ok(6),
+        X86Opcode::X87DivideReverse => Ok(7),
+        _ => Err(EncodeError::UnsupportedForm {
+            opcode,
+            reason: "not an x87 memory arithmetic operation",
+        }),
+    }
+}
+
+fn encode_x87_stack_arithmetic(
+    opcode: X86Opcode,
+    operands: &[MCOperand],
+) -> Result<EncodedInstruction, EncodeError> {
+    expect_arity(opcode, operands, 2)?;
+    let destination = x87_stack_operand(opcode, operands, 0)?;
+    let source = x87_stack_operand(opcode, operands, 1)?;
+    let byte = match opcode {
+        X86Opcode::X87Add => x87_binary_byte(opcode, destination, source, 0xc0, 0xc0)?,
+        X86Opcode::X87Subtract => x87_binary_byte(opcode, destination, source, 0xe0, 0xe8)?,
+        X86Opcode::X87SubtractReverse => x87_binary_byte(opcode, destination, source, 0xe8, 0xe0)?,
+        X86Opcode::X87Multiply => x87_binary_byte(opcode, destination, source, 0xc8, 0xc8)?,
+        X86Opcode::X87Divide => x87_binary_byte(opcode, destination, source, 0xf0, 0xf8)?,
+        X86Opcode::X87DivideReverse => x87_binary_byte(opcode, destination, source, 0xf8, 0xf0)?,
+        X86Opcode::X87Compare => {
+            require_x87_stack_zero(opcode, destination)?;
+            0xd0 + source
+        }
+        X86Opcode::X87ComparePop => {
+            require_x87_stack_zero(opcode, destination)?;
+            0xd8 + source
+        }
+        _ => unreachable!("the caller passes only x87 stack arithmetic opcodes"),
+    };
+    let lead = if destination == 0 { 0xd8 } else { 0xdc };
+    let lead = match opcode {
+        X86Opcode::X87Compare | X86Opcode::X87ComparePop => 0xd8,
+        _ => lead,
+    };
+    Ok(EncodedInstruction {
+        bytes: vec![lead, byte],
+        fixups: Vec::new(),
+    })
+}
+
+fn x87_binary_byte(
+    opcode: X86Opcode,
+    destination: u8,
+    source: u8,
+    st0_destination: u8,
+    sti_destination: u8,
+) -> Result<u8, EncodeError> {
+    if destination == 0 {
+        Ok(st0_destination + source)
+    } else if source == 0 {
+        Ok(sti_destination + destination)
+    } else {
+        Err(EncodeError::UnsupportedForm {
+            opcode,
+            reason: "x87 register arithmetic requires st(0) as one operand",
+        })
+    }
+}
+
+fn encode_x87_pop_arithmetic(
+    opcode: X86Opcode,
+    operands: &[MCOperand],
+) -> Result<Vec<u8>, EncodeError> {
+    expect_arity(opcode, operands, 2)?;
+    let destination = x87_stack_operand(opcode, operands, 0)?;
+    expect_x87_st0(opcode, operands, 1)?;
+    let byte = match opcode {
+        X86Opcode::X87AddPop => 0xc0,
+        X86Opcode::X87MultiplyPop => 0xc8,
+        X86Opcode::X87SubtractReversePop => 0xe0,
+        X86Opcode::X87SubtractPop => 0xe8,
+        X86Opcode::X87DivideReversePop => 0xf0,
+        X86Opcode::X87DividePop => 0xf8,
+        _ => unreachable!("the caller passes only x87 pop arithmetic opcodes"),
+    };
+    Ok(vec![0xde, byte + destination])
+}
+
+fn encode_x87_compare_pop2(
+    opcode: X86Opcode,
+    operands: &[MCOperand],
+) -> Result<Vec<u8>, EncodeError> {
+    expect_arity(opcode, operands, 2)?;
+    expect_x87_st0(opcode, operands, 0)?;
+    if x87_stack_operand(opcode, operands, 1)? != 1 {
+        return Err(EncodeError::UnsupportedForm {
+            opcode,
+            reason: "fcompp requires st(0) and st(1)",
+        });
+    }
+    Ok(vec![0xde, 0xd9])
+}
+
+fn encode_x87_stack_load(
+    opcode: X86Opcode,
+    operands: &[MCOperand],
+) -> Result<Vec<u8>, EncodeError> {
+    expect_arity(opcode, operands, 2)?;
+    expect_x87_st0(opcode, operands, 0)?;
+    Ok(vec![0xd9, 0xc0 + x87_stack_operand(opcode, operands, 1)?])
+}
+
+fn encode_x87_stack_store_pop(
+    opcode: X86Opcode,
+    operands: &[MCOperand],
+) -> Result<Vec<u8>, EncodeError> {
+    expect_arity(opcode, operands, 2)?;
+    let destination = x87_stack_operand(opcode, operands, 0)?;
+    expect_x87_st0(opcode, operands, 1)?;
+    Ok(vec![0xdd, 0xd8 + destination])
+}
+
+fn encode_x87_exchange(opcode: X86Opcode, operands: &[MCOperand]) -> Result<Vec<u8>, EncodeError> {
+    expect_arity(opcode, operands, 2)?;
+    expect_x87_st0(opcode, operands, 0)?;
+    Ok(vec![0xd9, 0xc8 + x87_stack_operand(opcode, operands, 1)?])
+}
+
+fn encode_x87_unary(
+    opcode: X86Opcode,
+    operands: &[MCOperand],
+    lead: u8,
+    byte: u8,
+) -> Result<Vec<u8>, EncodeError> {
+    expect_arity(opcode, operands, 1)?;
+    expect_x87_st0(opcode, operands, 0)?;
+    Ok(vec![lead, byte])
+}
+
+fn encode_x87_store_status_word(
+    opcode: X86Opcode,
+    operands: &[MCOperand],
+) -> Result<Vec<u8>, EncodeError> {
+    expect_arity(opcode, operands, 1)?;
+    exact_x87_register(opcode, operands, 0, X86Register::Ax)?;
+    Ok(vec![0xdf, 0xe0])
+}
+
+fn x87_memory_format(
+    opcode: X86Opcode,
+    operands: &[MCOperand],
+    index: usize,
+) -> Result<X87MemoryFormat, EncodeError> {
+    let Some(MCOperand::Immediate(raw)) = operands.get(index) else {
+        return Err(EncodeError::OperandKind {
+            opcode,
+            index,
+            expected: "an x87 memory-format immediate",
+        });
+    };
+    let Ok(raw) = u8::try_from(*raw) else {
+        return Err(EncodeError::OperandKind {
+            opcode,
+            index,
+            expected: "a valid x87 memory-format immediate",
+        });
+    };
+    X87MemoryFormat::from_raw(raw).ok_or(EncodeError::OperandKind {
+        opcode,
+        index,
+        expected: "a valid x87 memory-format immediate",
+    })
+}
+
+fn require_x87_format(
+    opcode: X86Opcode,
+    format: X87MemoryFormat,
+    allowed: &[X87MemoryFormat],
+) -> Result<(), EncodeError> {
+    if allowed.contains(&format) {
+        Ok(())
+    } else {
+        unsupported_x87_format(opcode, format)
+    }
+}
+
+fn unsupported_x87_format<T>(
+    opcode: X86Opcode,
+    _format: X87MemoryFormat,
+) -> Result<T, EncodeError> {
+    Err(EncodeError::UnsupportedForm {
+        opcode,
+        reason: "the x87 instruction has no encoding for this memory format",
+    })
+}
+
+fn encode_memory(
+    opcode: X86Opcode,
+    operands: &[MCOperand],
+    address_index: usize,
+    lead: u8,
+    extension: u8,
+) -> Result<EncodedInstruction, EncodeError> {
+    let tail = operands.get(address_index..).unwrap_or_default();
+    match tail {
+        [MCOperand::Register(_)] => {
+            let address = address16_operand(opcode, operands, address_index)?;
+            let mut bytes = vec![lead];
+            bytes.extend(address.with_register(extension));
+            Ok(EncodedInstruction {
+                bytes,
+                fixups: Vec::new(),
+            })
+        }
+        [MCOperand::Register(_), MCOperand::Immediate(_)] => {
+            let displacement =
+                address16_displacement(opcode, operands, address_index, address_index + 1)?;
+            let mut bytes = vec![lead];
+            bytes.extend(displacement.with_register(extension));
+            Ok(EncodedInstruction {
+                bytes,
+                fixups: Vec::new(),
+            })
+        }
+        [MCOperand::Register(_), MCOperand::Register(_)] => {
+            require_es_override(opcode, operands, address_index + 1)?;
+            let address = address16_operand(opcode, operands, address_index)?;
+            let mut bytes = vec![0x26, lead];
+            bytes.extend(address.with_register(extension));
+            Ok(EncodedInstruction {
+                bytes,
+                fixups: Vec::new(),
+            })
+        }
+        [MCOperand::Expression(expression)] => Ok(EncodedInstruction {
+            bytes: vec![lead, extension << 3 | 0b110, 0, 0],
+            fixups: vec![Fixup {
+                offset: 2,
+                kind: X86FixupKind::NearData16.into(),
+                expression: *expression,
+                pc_relative: false,
+            }],
+        }),
+        _ => Err(EncodeError::UnsupportedForm {
+            opcode,
+            reason: "memory operand requires one address16 register, address16 plus displacement, address16 plus ES, or one symbolic near-data address",
+        }),
+    }
+}
+
+fn x87_stack_operand(
+    opcode: X86Opcode,
+    operands: &[MCOperand],
+    index: usize,
+) -> Result<u8, EncodeError> {
+    let register = architectural_register(opcode, operands, index)?;
+    match register {
+        X86Register::St0 => Ok(0),
+        X86Register::St1 => Ok(1),
+        X86Register::St2 => Ok(2),
+        X86Register::St3 => Ok(3),
+        X86Register::St4 => Ok(4),
+        X86Register::St5 => Ok(5),
+        X86Register::St6 => Ok(6),
+        X86Register::St7 => Ok(7),
+        _ => Err(EncodeError::UnsupportedRegister {
+            raw: register as u32,
+        }),
+    }
+}
+
+fn expect_x87_st0(
+    opcode: X86Opcode,
+    operands: &[MCOperand],
+    index: usize,
+) -> Result<(), EncodeError> {
+    require_x87_stack_zero(opcode, x87_stack_operand(opcode, operands, index)?)
+}
+
+fn require_x87_stack_zero(opcode: X86Opcode, stack: u8) -> Result<(), EncodeError> {
+    if stack == 0 {
+        Ok(())
+    } else {
+        Err(EncodeError::UnsupportedForm {
+            opcode,
+            reason: "this x87 form requires st(0)",
+        })
+    }
+}
+
+fn exact_x87_register(
+    opcode: X86Opcode,
+    operands: &[MCOperand],
+    index: usize,
+    expected: X86Register,
+) -> Result<(), EncodeError> {
+    let actual = architectural_register(opcode, operands, index)?;
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(EncodeError::UnsupportedForm {
+            opcode,
+            reason: "the x87 instruction's explicit register does not match its architectural role",
+        })
+    }
 }
 
 fn require_es_override(
@@ -421,22 +985,22 @@ fn address16_operand(
         X86Register::Bx => Ok(Address16Encoding {
             mode: 0,
             rm: 0b111,
-            displacement: None,
+            displacement: Vec::new(),
         }),
         X86Register::Bp => Ok(Address16Encoding {
             mode: 0b01,
             rm: 0b110,
-            displacement: Some(0),
+            displacement: vec![0],
         }),
         X86Register::Si => Ok(Address16Encoding {
             mode: 0,
             rm: 0b100,
-            displacement: None,
+            displacement: Vec::new(),
         }),
         X86Register::Di => Ok(Address16Encoding {
             mode: 0,
             rm: 0b101,
-            displacement: None,
+            displacement: Vec::new(),
         }),
         _ => Err(EncodeError::UnsupportedRegister {
             raw: register as u32,
@@ -444,7 +1008,43 @@ fn address16_operand(
     }
 }
 
-fn encode_frame_lea(opcode: X86Opcode, operands: &[MCOperand]) -> Result<Vec<u8>, EncodeError> {
+fn address16_displacement(
+    opcode: X86Opcode,
+    operands: &[MCOperand],
+    base_index: usize,
+    displacement_index: usize,
+) -> Result<Address16Encoding, EncodeError> {
+    let base = address16_operand(opcode, operands, base_index)?;
+    let Some(MCOperand::Immediate(displacement)) = operands.get(displacement_index) else {
+        return Err(EncodeError::OperandKind {
+            opcode,
+            index: displacement_index,
+            expected: "an immediate address displacement",
+        });
+    };
+    if *displacement == 0 && base.rm != 0b110 {
+        return Ok(Address16Encoding {
+            mode: 0,
+            rm: base.rm,
+            displacement: Vec::new(),
+        });
+    }
+    let (mode, bytes) = if (-128..=127).contains(displacement) {
+        (0b01, vec![*displacement as i8 as u8])
+    } else {
+        (0b10, (*displacement as u16).to_le_bytes().to_vec())
+    };
+    Ok(Address16Encoding {
+        mode,
+        rm: base.rm,
+        displacement: bytes,
+    })
+}
+
+fn encode_displacement_lea(
+    opcode: X86Opcode,
+    operands: &[MCOperand],
+) -> Result<Vec<u8>, EncodeError> {
     expect_arity(opcode, operands, 3)?;
     let destination = register_operand(opcode, operands, 0)?;
     if destination.size == OperandSize::Byte {
@@ -453,38 +1053,11 @@ fn encode_frame_lea(opcode: X86Opcode, operands: &[MCOperand]) -> Result<Vec<u8>
             reason: "lea has no byte-register destination",
         });
     }
-    let displacement = frame_displacement(opcode, operands, 1, 2)?;
+    let displacement = address16_displacement(opcode, operands, 1, 2)?;
     let mut bytes = prefix_for(destination.size);
     bytes.push(0x8d);
     bytes.extend(displacement.with_register(destination.code));
     Ok(bytes)
-}
-
-fn frame_displacement(
-    opcode: X86Opcode,
-    operands: &[MCOperand],
-    base_index: usize,
-    displacement_index: usize,
-) -> Result<FrameDisplacement, EncodeError> {
-    let base = register_operand(opcode, operands, base_index)?;
-    let base_register = decode_register(match operands[base_index] {
-        MCOperand::Register(register) => register.get(),
-        _ => unreachable!("register_operand accepted the frame base"),
-    })?;
-    if base_register != X86Register::Bp || base.size != OperandSize::Word {
-        return Err(EncodeError::UnsupportedFrameBase {
-            opcode,
-            raw: base_register as u32,
-        });
-    }
-    let Some(MCOperand::Immediate(displacement)) = operands.get(displacement_index) else {
-        return Err(EncodeError::OperandKind {
-            opcode,
-            index: displacement_index,
-            expected: "an immediate frame displacement",
-        });
-    };
-    Ok(FrameDisplacement::new(*displacement))
 }
 
 /// Returns the exact encoded size for one instruction.
@@ -522,6 +1095,22 @@ fn encode_register_operands(
 }
 
 fn encode_add_sub(
+    opcode: X86Opcode,
+    operands: &[MCOperand],
+    immediate_extension: u8,
+    byte_opcode: u8,
+    wide_opcode: u8,
+) -> Result<Vec<u8>, EncodeError> {
+    encode_group_one_binary(
+        opcode,
+        operands,
+        immediate_extension,
+        byte_opcode,
+        wide_opcode,
+    )
+}
+
+fn encode_group_one_binary(
     opcode: X86Opcode,
     operands: &[MCOperand],
     immediate_extension: u8,
@@ -769,6 +1358,60 @@ fn encode_push_pop(
     Ok(bytes)
 }
 
+fn encode_push(
+    opcode: X86Opcode,
+    operands: &[MCOperand],
+) -> Result<EncodedInstruction, EncodeError> {
+    match operands {
+        [MCOperand::Register(_)] => Ok(EncodedInstruction {
+            bytes: encode_push_pop(opcode, operands, 0x50)?,
+            fixups: Vec::new(),
+        }),
+        [MCOperand::Immediate(bits), MCOperand::Immediate(value)] => {
+            let size = push_size(opcode, *bits)?;
+            let mut bytes = prefix_for(size);
+            if i64::from(*value as i8) == *value {
+                bytes.extend([0x6a, *value as u8]);
+            } else {
+                bytes.push(0x68);
+                bytes.extend(encode_immediate(*value, size)?);
+            }
+            Ok(EncodedInstruction {
+                bytes,
+                fixups: Vec::new(),
+            })
+        }
+        [MCOperand::Immediate(bits), ..] => {
+            let size = push_size(opcode, *bits)?;
+            let mut encoded = encode_memory(opcode, operands, 1, 0xff, 6)?;
+            let prefix = prefix_for(size);
+            if !prefix.is_empty() {
+                encoded.bytes.splice(0..0, prefix.iter().copied());
+                let adjustment = u32::try_from(prefix.len()).expect("x86 prefix count fits u32");
+                for fixup in &mut encoded.fixups {
+                    fixup.offset += adjustment;
+                }
+            }
+            Ok(encoded)
+        }
+        _ => Err(EncodeError::UnsupportedForm {
+            opcode,
+            reason: "push requires a register or an explicit 16/32-bit immediate or memory source",
+        }),
+    }
+}
+
+fn push_size(opcode: X86Opcode, bits: i64) -> Result<OperandSize, EncodeError> {
+    match bits {
+        16 => Ok(OperandSize::Word),
+        32 => Ok(OperandSize::Dword),
+        _ => Err(EncodeError::UnsupportedForm {
+            opcode,
+            reason: "push source width must be 16 or 32 bits",
+        }),
+    }
+}
+
 fn encode_return(
     opcode: X86Opcode,
     operands: &[MCOperand],
@@ -958,55 +1601,17 @@ fn modrm(reg: u8, rm: u8) -> u8 {
     0xc0 | (reg << 3) | rm
 }
 
-/// The 16-bit ModR/M spelling of `[bp+displacement]`.
-///
-/// Effective offsets wrap at 16 bits.  The conceptual frame depth may be just
-/// below -32768 because the measured runtime header sits below a legal
-/// 0x7ffe-byte reservation, so the word form deliberately retains the low
-/// sixteen bits instead of imposing a signed-i16 source restriction.
-struct FrameDisplacement {
-    mode: u8,
-    bytes: Vec<u8>,
-}
-
 struct Address16Encoding {
     mode: u8,
     rm: u8,
-    displacement: Option<u8>,
+    displacement: Vec<u8>,
 }
 
 impl Address16Encoding {
     fn with_register(self, register: u8) -> Vec<u8> {
         let mut bytes = vec![(self.mode << 6) | (register << 3) | self.rm];
-        if let Some(displacement) = self.displacement {
-            bytes.push(displacement);
-        }
+        bytes.extend(self.displacement);
         bytes
-    }
-}
-
-impl FrameDisplacement {
-    fn new(value: i64) -> Self {
-        if (-128..=127).contains(&value) {
-            Self {
-                mode: 0b01,
-                bytes: vec![value as i8 as u8],
-            }
-        } else {
-            Self {
-                mode: 0b10,
-                bytes: (value as u16).to_le_bytes().to_vec(),
-            }
-        }
-    }
-
-    fn with_register(self, register: u8) -> Vec<u8> {
-        let mut encoded = Vec::with_capacity(1 + self.bytes.len());
-        // In 16-bit addressing r/m=110 denotes BP when mod is nonzero.  The
-        // mod=00 spelling is an absolute disp16, so even `[bp]` uses disp8=0.
-        encoded.push((self.mode << 6) | (register << 3) | 0b110);
-        encoded.extend(self.bytes);
-        encoded
     }
 }
 
@@ -1044,6 +1649,590 @@ mod tests {
 
     fn register(register: X86Register) -> MCOperand {
         MCOperand::Register(PhysicalRegister::new(register as u32))
+    }
+
+    fn x87_memory(format: X87MemoryFormat, address: X86Register) -> Vec<MCOperand> {
+        vec![
+            register(X86Register::St0),
+            MCOperand::Immediate(i64::from(format.raw())),
+            register(address),
+        ]
+    }
+
+    #[test]
+    fn encodes_x87_memory_load_store_and_integer_formats() {
+        for (opcode, format, bytes) in [
+            (
+                X86Opcode::X87Load,
+                X87MemoryFormat::Float32,
+                vec![0xd9, 0x07],
+            ),
+            (
+                X86Opcode::X87Load,
+                X87MemoryFormat::Float64,
+                vec![0xdd, 0x07],
+            ),
+            (
+                X86Opcode::X87Load,
+                X87MemoryFormat::Float80,
+                vec![0xdb, 0x2f],
+            ),
+            (
+                X86Opcode::X87Store,
+                X87MemoryFormat::Float32,
+                vec![0xd9, 0x17],
+            ),
+            (
+                X86Opcode::X87Store,
+                X87MemoryFormat::Float64,
+                vec![0xdd, 0x17],
+            ),
+            (
+                X86Opcode::X87StorePop,
+                X87MemoryFormat::Float32,
+                vec![0xd9, 0x1f],
+            ),
+            (
+                X86Opcode::X87StorePop,
+                X87MemoryFormat::Float64,
+                vec![0xdd, 0x1f],
+            ),
+            (
+                X86Opcode::X87StorePop,
+                X87MemoryFormat::Float80,
+                vec![0xdb, 0x3f],
+            ),
+            (
+                X86Opcode::X87IntegerLoad,
+                X87MemoryFormat::Signed16,
+                vec![0xdf, 0x07],
+            ),
+            (
+                X86Opcode::X87IntegerLoad,
+                X87MemoryFormat::Signed32,
+                vec![0xdb, 0x07],
+            ),
+            (
+                X86Opcode::X87IntegerLoad,
+                X87MemoryFormat::Signed64,
+                vec![0xdf, 0x2f],
+            ),
+            (
+                X86Opcode::X87IntegerStore,
+                X87MemoryFormat::Signed16,
+                vec![0xdf, 0x17],
+            ),
+            (
+                X86Opcode::X87IntegerStore,
+                X87MemoryFormat::Signed32,
+                vec![0xdb, 0x17],
+            ),
+            (
+                X86Opcode::X87IntegerStorePop,
+                X87MemoryFormat::Signed16,
+                vec![0xdf, 0x1f],
+            ),
+            (
+                X86Opcode::X87IntegerStorePop,
+                X87MemoryFormat::Signed32,
+                vec![0xdb, 0x1f],
+            ),
+            (
+                X86Opcode::X87IntegerStorePop,
+                X87MemoryFormat::Signed64,
+                vec![0xdf, 0x3f],
+            ),
+        ] {
+            assert_eq!(
+                encode(&instruction(opcode, x87_memory(format, X86Register::Bx))).unwrap(),
+                bytes
+            );
+        }
+    }
+
+    #[test]
+    fn encodes_x87_memory_arithmetic_comparisons_and_bp_zero() {
+        for (opcode, bytes) in [
+            (X86Opcode::X87Add, vec![0xd8, 0x07]),
+            (X86Opcode::X87Subtract, vec![0xd8, 0x27]),
+            (X86Opcode::X87SubtractReverse, vec![0xd8, 0x2f]),
+            (X86Opcode::X87Multiply, vec![0xd8, 0x0f]),
+            (X86Opcode::X87Divide, vec![0xd8, 0x37]),
+            (X86Opcode::X87DivideReverse, vec![0xd8, 0x3f]),
+            (X86Opcode::X87Compare, vec![0xd8, 0x17]),
+            (X86Opcode::X87ComparePop, vec![0xd8, 0x1f]),
+        ] {
+            assert_eq!(
+                encode(&instruction(
+                    opcode,
+                    x87_memory(X87MemoryFormat::Float32, X86Register::Bx)
+                ))
+                .unwrap(),
+                bytes
+            );
+        }
+        assert_eq!(
+            encode(&instruction(
+                X86Opcode::X87Add,
+                x87_memory(X87MemoryFormat::Float64, X86Register::Bx),
+            ))
+            .unwrap(),
+            vec![0xdc, 0x07]
+        );
+        for (opcode, signed16, signed32) in [
+            (X86Opcode::X87Add, vec![0xde, 0x07], vec![0xda, 0x07]),
+            (X86Opcode::X87Subtract, vec![0xde, 0x27], vec![0xda, 0x27]),
+            (
+                X86Opcode::X87SubtractReverse,
+                vec![0xde, 0x2f],
+                vec![0xda, 0x2f],
+            ),
+            (X86Opcode::X87Multiply, vec![0xde, 0x0f], vec![0xda, 0x0f]),
+            (X86Opcode::X87Divide, vec![0xde, 0x37], vec![0xda, 0x37]),
+            (
+                X86Opcode::X87DivideReverse,
+                vec![0xde, 0x3f],
+                vec![0xda, 0x3f],
+            ),
+        ] {
+            assert_eq!(
+                encode(&instruction(
+                    opcode,
+                    x87_memory(X87MemoryFormat::Signed16, X86Register::Bx),
+                ))
+                .unwrap(),
+                signed16
+            );
+            assert_eq!(
+                encode(&instruction(
+                    opcode,
+                    x87_memory(X87MemoryFormat::Signed32, X86Register::Bx),
+                ))
+                .unwrap(),
+                signed32
+            );
+        }
+        assert_eq!(
+            encode(&instruction(
+                X86Opcode::X87Load,
+                vec![
+                    register(X86Register::St0),
+                    MCOperand::Immediate(i64::from(X87MemoryFormat::Float32.raw())),
+                    register(X86Register::Bp),
+                    MCOperand::Immediate(0),
+                ],
+            ))
+            .unwrap(),
+            vec![0xd9, 0x46, 0x00]
+        );
+    }
+
+    #[test]
+    fn encodes_x87_stack_directions_pop_and_status_forms() {
+        for (opcode, operands, bytes) in [
+            (
+                X86Opcode::X87Add,
+                vec![register(X86Register::St0), register(X86Register::St3)],
+                vec![0xd8, 0xc3],
+            ),
+            (
+                X86Opcode::X87Add,
+                vec![register(X86Register::St3), register(X86Register::St0)],
+                vec![0xdc, 0xc3],
+            ),
+            (
+                X86Opcode::X87Subtract,
+                vec![register(X86Register::St3), register(X86Register::St0)],
+                vec![0xdc, 0xeb],
+            ),
+            (
+                X86Opcode::X87SubtractReverse,
+                vec![register(X86Register::St3), register(X86Register::St0)],
+                vec![0xdc, 0xe3],
+            ),
+            (
+                X86Opcode::X87Multiply,
+                vec![register(X86Register::St3), register(X86Register::St0)],
+                vec![0xdc, 0xcb],
+            ),
+            (
+                X86Opcode::X87Divide,
+                vec![register(X86Register::St3), register(X86Register::St0)],
+                vec![0xdc, 0xfb],
+            ),
+            (
+                X86Opcode::X87DivideReverse,
+                vec![register(X86Register::St3), register(X86Register::St0)],
+                vec![0xdc, 0xf3],
+            ),
+            (
+                X86Opcode::X87AddPop,
+                vec![register(X86Register::St3), register(X86Register::St0)],
+                vec![0xde, 0xc3],
+            ),
+            (
+                X86Opcode::X87SubtractPop,
+                vec![register(X86Register::St3), register(X86Register::St0)],
+                vec![0xde, 0xeb],
+            ),
+            (
+                X86Opcode::X87SubtractReversePop,
+                vec![register(X86Register::St3), register(X86Register::St0)],
+                vec![0xde, 0xe3],
+            ),
+            (
+                X86Opcode::X87MultiplyPop,
+                vec![register(X86Register::St3), register(X86Register::St0)],
+                vec![0xde, 0xcb],
+            ),
+            (
+                X86Opcode::X87DividePop,
+                vec![register(X86Register::St3), register(X86Register::St0)],
+                vec![0xde, 0xfb],
+            ),
+            (
+                X86Opcode::X87DivideReversePop,
+                vec![register(X86Register::St3), register(X86Register::St0)],
+                vec![0xde, 0xf3],
+            ),
+            (
+                X86Opcode::X87Compare,
+                vec![register(X86Register::St0), register(X86Register::St3)],
+                vec![0xd8, 0xd3],
+            ),
+            (
+                X86Opcode::X87ComparePop,
+                vec![register(X86Register::St0), register(X86Register::St3)],
+                vec![0xd8, 0xdb],
+            ),
+            (
+                X86Opcode::X87ComparePop2,
+                vec![register(X86Register::St0), register(X86Register::St1)],
+                vec![0xde, 0xd9],
+            ),
+            (
+                X86Opcode::X87StackLoad,
+                vec![register(X86Register::St0), register(X86Register::St3)],
+                vec![0xd9, 0xc3],
+            ),
+            (
+                X86Opcode::X87StackStorePop,
+                vec![register(X86Register::St3), register(X86Register::St0)],
+                vec![0xdd, 0xdb],
+            ),
+            (
+                X86Opcode::X87Exchange,
+                vec![register(X86Register::St0), register(X86Register::St3)],
+                vec![0xd9, 0xcb],
+            ),
+        ] {
+            assert_eq!(encode(&instruction(opcode, operands)).unwrap(), bytes);
+        }
+        for (opcode, bytes) in [
+            (X86Opcode::X87LoadZero, vec![0xd9, 0xee]),
+            (X86Opcode::X87LoadOne, vec![0xd9, 0xe8]),
+            (X86Opcode::X87ChangeSign, vec![0xd9, 0xe0]),
+            (X86Opcode::X87Absolute, vec![0xd9, 0xe1]),
+            (X86Opcode::X87SquareRoot, vec![0xd9, 0xfa]),
+        ] {
+            assert_eq!(
+                encode(&instruction(opcode, vec![register(X86Register::St0)])).unwrap(),
+                bytes
+            );
+        }
+        assert_eq!(
+            encode(&instruction(
+                X86Opcode::X87StoreStatusWord,
+                vec![register(X86Register::Ax)]
+            ))
+            .unwrap(),
+            vec![0xdf, 0xe0]
+        );
+        assert_eq!(
+            encode(&instruction(X86Opcode::Wait, vec![])).unwrap(),
+            vec![0x9b]
+        );
+        assert_eq!(
+            encode(&instruction(X86Opcode::Sahf, vec![])).unwrap(),
+            vec![0x9e]
+        );
+    }
+
+    #[test]
+    fn encodes_x87_control_words_and_symbolic_memory_fixups() {
+        for (opcode, bytes) in [
+            (X86Opcode::X87StoreControlWord, vec![0xd9, 0x7e, 0x00]),
+            (X86Opcode::X87LoadControlWord, vec![0xd9, 0x6e, 0x00]),
+        ] {
+            assert_eq!(
+                encode(&instruction(
+                    opcode,
+                    vec![
+                        MCOperand::Immediate(i64::from(X87MemoryFormat::Control16.raw())),
+                        register(X86Register::Bp),
+                        MCOperand::Immediate(0),
+                    ],
+                ))
+                .unwrap(),
+                bytes
+            );
+        }
+        let expression = MCExpression {
+            symbol: SymbolId::new(9),
+            addend: 4,
+        };
+        let encoded = encode_with_fixups(&instruction(
+            X86Opcode::X87Load,
+            vec![
+                register(X86Register::St0),
+                MCOperand::Immediate(i64::from(X87MemoryFormat::Float32.raw())),
+                MCOperand::Expression(expression),
+            ],
+        ))
+        .unwrap();
+        assert_eq!(encoded.bytes, vec![0xd9, 0x06, 0, 0]);
+        assert_eq!(
+            encoded.fixups,
+            vec![Fixup {
+                offset: 2,
+                kind: X86FixupKind::NearData16.into(),
+                expression,
+                pc_relative: false
+            }]
+        );
+    }
+
+    #[test]
+    fn refuses_invalid_x87_formats_operands_and_truncating_pseudo() {
+        assert!(matches!(
+            encode(&instruction(
+                X86Opcode::X87Add,
+                x87_memory(X87MemoryFormat::Float80, X86Register::Bx)
+            )),
+            Err(EncodeError::UnsupportedForm {
+                opcode: X86Opcode::X87Add,
+                ..
+            })
+        ));
+        assert!(matches!(
+            encode(&instruction(
+                X86Opcode::X87Add,
+                x87_memory(X87MemoryFormat::Signed64, X86Register::Bx)
+            )),
+            Err(EncodeError::UnsupportedForm {
+                opcode: X86Opcode::X87Add,
+                ..
+            })
+        ));
+        assert!(matches!(
+            encode(&instruction(
+                X86Opcode::X87Compare,
+                x87_memory(X87MemoryFormat::Signed16, X86Register::Bx)
+            )),
+            Err(EncodeError::UnsupportedForm {
+                opcode: X86Opcode::X87Compare,
+                ..
+            })
+        ));
+        assert!(matches!(
+            encode(&instruction(
+                X86Opcode::X87IntegerStore,
+                x87_memory(X87MemoryFormat::Signed64, X86Register::Bx)
+            )),
+            Err(EncodeError::UnsupportedForm {
+                opcode: X86Opcode::X87IntegerStore,
+                ..
+            })
+        ));
+        assert!(matches!(
+            encode(&instruction(
+                X86Opcode::X87IntegerStoreTrunc,
+                x87_memory(X87MemoryFormat::Signed32, X86Register::Bx)
+            )),
+            Err(EncodeError::UnsupportedForm {
+                opcode: X86Opcode::X87IntegerStoreTrunc,
+                ..
+            })
+        ));
+        assert!(matches!(
+            encode(&instruction(
+                X86Opcode::X87StackLoad,
+                vec![register(X86Register::St2), register(X86Register::St3)]
+            )),
+            Err(EncodeError::UnsupportedForm {
+                opcode: X86Opcode::X87StackLoad,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn encodes_explicit_immediate_and_memory_push_forms() {
+        for (operands, bytes) in [
+            (
+                vec![MCOperand::Immediate(16), MCOperand::Immediate(-128)],
+                vec![0x6a, 0x80],
+            ),
+            (
+                vec![MCOperand::Immediate(16), MCOperand::Immediate(128)],
+                vec![0x68, 0x80, 0x00],
+            ),
+            (
+                vec![MCOperand::Immediate(32), MCOperand::Immediate(-128)],
+                vec![0x66, 0x6a, 0x80],
+            ),
+            (
+                vec![MCOperand::Immediate(32), MCOperand::Immediate(0x1234_5678)],
+                vec![0x66, 0x68, 0x78, 0x56, 0x34, 0x12],
+            ),
+            (
+                vec![MCOperand::Immediate(16), register(X86Register::Bx)],
+                vec![0xff, 0x37],
+            ),
+            (
+                vec![
+                    MCOperand::Immediate(32),
+                    register(X86Register::Bp),
+                    MCOperand::Immediate(-4),
+                ],
+                vec![0x66, 0xff, 0x76, 0xfc],
+            ),
+        ] {
+            assert_eq!(
+                encode(&instruction(X86Opcode::Push, operands)).unwrap(),
+                bytes
+            );
+        }
+
+        let expression = MCExpression {
+            symbol: SymbolId::new(11),
+            addend: -6,
+        };
+        let encoded = encode_with_fixups(&instruction(
+            X86Opcode::Push,
+            vec![MCOperand::Immediate(32), MCOperand::Expression(expression)],
+        ))
+        .unwrap();
+        assert_eq!(encoded.bytes, vec![0x66, 0xff, 0x36, 0, 0]);
+        assert_eq!(
+            encoded.fixups,
+            vec![Fixup {
+                offset: 3,
+                kind: X86FixupKind::NearData16.into(),
+                expression,
+                pc_relative: false,
+            }]
+        );
+        assert_eq!(
+            encode(&instruction(
+                X86Opcode::Push,
+                vec![MCOperand::Immediate(32), MCOperand::Expression(expression)],
+            )),
+            Err(EncodeError::FixupsRequired {
+                opcode: X86Opcode::Push,
+                count: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn encodes_explicit_immediate_store_widths_frames_and_symbolic_addresses() {
+        for (operands, bytes) in [
+            (
+                vec![
+                    register(X86Register::Bx),
+                    MCOperand::Immediate(8),
+                    MCOperand::Immediate(0x7f),
+                ],
+                vec![0xc6, 0x07, 0x7f],
+            ),
+            (
+                vec![
+                    register(X86Register::Bx),
+                    MCOperand::Immediate(16),
+                    MCOperand::Immediate(0x1234),
+                ],
+                vec![0xc7, 0x07, 0x34, 0x12],
+            ),
+            (
+                vec![
+                    register(X86Register::Bx),
+                    MCOperand::Immediate(32),
+                    MCOperand::Immediate(0x4040_0000),
+                ],
+                vec![0x66, 0xc7, 0x07, 0x00, 0x00, 0x40, 0x40],
+            ),
+            (
+                vec![
+                    register(X86Register::Bp),
+                    MCOperand::Immediate(-4),
+                    MCOperand::Immediate(8),
+                    MCOperand::Immediate(1),
+                ],
+                vec![0xc6, 0x46, 0xfc, 0x01],
+            ),
+            (
+                vec![
+                    register(X86Register::Bp),
+                    MCOperand::Immediate(-4),
+                    MCOperand::Immediate(16),
+                    MCOperand::Immediate(0x1234),
+                ],
+                vec![0xc7, 0x46, 0xfc, 0x34, 0x12],
+            ),
+            (
+                vec![
+                    register(X86Register::Bp),
+                    MCOperand::Immediate(-4),
+                    MCOperand::Immediate(32),
+                    MCOperand::Immediate(0x4040_0000),
+                ],
+                vec![0x66, 0xc7, 0x46, 0xfc, 0x00, 0x00, 0x40, 0x40],
+            ),
+            // Python's CHAIN regression: the raw dword is a bit pattern,
+            // even when it lies above signed i32::MAX.
+            (
+                vec![
+                    register(X86Register::Bp),
+                    MCOperand::Immediate(-4),
+                    MCOperand::Immediate(32),
+                    MCOperand::Immediate(0xc174_7c23),
+                ],
+                vec![0x66, 0xc7, 0x46, 0xfc, 0x23, 0x7c, 0x74, 0xc1],
+            ),
+        ] {
+            assert_eq!(
+                encode(&instruction(X86Opcode::Store, operands)).unwrap(),
+                bytes
+            );
+        }
+
+        let expression = MCExpression {
+            symbol: SymbolId::new(12),
+            addend: 4,
+        };
+        let encoded = encode_with_fixups(&instruction(
+            X86Opcode::Store,
+            vec![
+                MCOperand::Expression(expression),
+                MCOperand::Immediate(32),
+                MCOperand::Immediate(0x4040_0000),
+            ],
+        ))
+        .unwrap();
+        assert_eq!(
+            encoded.bytes,
+            vec![0x66, 0xc7, 0x06, 0, 0, 0, 0, 0x40, 0x40]
+        );
+        assert_eq!(
+            encoded.fixups,
+            vec![Fixup {
+                offset: 3,
+                kind: X86FixupKind::NearData16.into(),
+                expression,
+                pc_relative: false,
+            }]
+        );
     }
 
     #[test]
@@ -1309,6 +2498,18 @@ mod tests {
     }
 
     #[test]
+    fn encodes_python_truncation_control_word_mask() {
+        assert_eq!(
+            encode(&instruction(
+                X86Opcode::Or,
+                vec![register(X86Register::Ax), MCOperand::Immediate(0x0c00)],
+            ))
+            .unwrap(),
+            vec![0x81, 0xc8, 0x00, 0x0c]
+        );
+    }
+
+    #[test]
     fn accepts_signed_or_unsigned_immediate_bit_patterns_and_rejects_overflow() {
         assert_eq!(
             encode(&instruction(
@@ -1448,6 +2649,61 @@ mod tests {
     }
 
     #[test]
+    fn encodes_general_address16_displacements() {
+        // `addressforms.selected` leaves a folded base plus signed offset at
+        // its memory consumer.  The zero spelling is canonical except that
+        // BP needs an explicit zero displacement in 16-bit addressing.
+        assert_eq!(
+            encode(&instruction(
+                X86Opcode::Load,
+                vec![
+                    register(X86Register::Ax),
+                    register(X86Register::Bx),
+                    MCOperand::Immediate(0)
+                ],
+            ))
+            .unwrap(),
+            vec![0x8b, 0x07],
+        );
+        assert_eq!(
+            encode(&instruction(
+                X86Opcode::Load,
+                vec![
+                    register(X86Register::Ax),
+                    register(X86Register::Bx),
+                    MCOperand::Immediate(4)
+                ],
+            ))
+            .unwrap(),
+            vec![0x8b, 0x47, 0x04],
+        );
+        assert_eq!(
+            encode(&instruction(
+                X86Opcode::Load,
+                vec![
+                    register(X86Register::Ax),
+                    register(X86Register::Bp),
+                    MCOperand::Immediate(0)
+                ],
+            ))
+            .unwrap(),
+            vec![0x8b, 0x46, 0x00],
+        );
+        assert_eq!(
+            encode(&instruction(
+                X86Opcode::Load,
+                vec![
+                    register(X86Register::Ax),
+                    register(X86Register::Si),
+                    MCOperand::Immediate(128)
+                ],
+            ))
+            .unwrap(),
+            vec![0x8b, 0x84, 0x80, 0x00],
+        );
+    }
+
+    #[test]
     fn encodes_legal_sixteen_bit_register_indirect_loads_and_stores() {
         assert_eq!(
             encode(&instruction(
@@ -1542,6 +2798,32 @@ mod tests {
             .unwrap(),
             vec![0x26, 0x66, 0x8b, 0x07]
         );
+        assert_eq!(
+            encode(&instruction(
+                X86Opcode::X87Load,
+                vec![
+                    register(X86Register::St0),
+                    MCOperand::Immediate(i64::from(X87MemoryFormat::Float32.raw())),
+                    register(X86Register::Bx),
+                    register(X86Register::Es),
+                ],
+            ))
+            .unwrap(),
+            vec![0x26, 0xd9, 0x07]
+        );
+        assert_eq!(
+            encode(&instruction(
+                X86Opcode::X87StorePop,
+                vec![
+                    register(X86Register::St0),
+                    MCOperand::Immediate(i64::from(X87MemoryFormat::Float32.raw())),
+                    register(X86Register::Bx),
+                    register(X86Register::Es),
+                ],
+            ))
+            .unwrap(),
+            vec![0x26, 0xd9, 0x1f]
+        );
         assert!(matches!(
             encode(&instruction(
                 X86Opcode::Load,
@@ -1559,7 +2841,7 @@ mod tests {
     }
 
     #[test]
-    fn bp_zero_uses_a_displacement_and_non_bp_frames_are_refused() {
+    fn bp_zero_uses_a_displacement_and_bx_accepts_one() {
         assert_eq!(
             encode(&instruction(
                 X86Opcode::Load,
@@ -1580,11 +2862,9 @@ mod tests {
                     register(X86Register::Bx),
                     MCOperand::Immediate(6),
                 ],
-            )),
-            Err(EncodeError::UnsupportedFrameBase {
-                opcode: X86Opcode::Load,
-                raw: X86Register::Bx as u32,
-            })
+            ))
+            .unwrap(),
+            vec![0x8b, 0x47, 0x06]
         );
     }
 
@@ -1722,6 +3002,44 @@ mod tests {
             })
         );
         assert_eq!(encoded_size(&instruction), Ok(4));
+    }
+
+    #[test]
+    fn encodes_direct_symbolic_loads_and_stores() {
+        let expression = MCExpression {
+            symbol: SymbolId::new(5),
+            addend: 4,
+        };
+        let load = encode_with_fixups(&instruction(
+            X86Opcode::Load,
+            vec![
+                register(X86Register::Eax),
+                MCOperand::Expression(expression),
+            ],
+        ))
+        .unwrap();
+        let store = encode_with_fixups(&instruction(
+            X86Opcode::Store,
+            vec![
+                MCOperand::Expression(expression),
+                register(X86Register::Eax),
+            ],
+        ))
+        .unwrap();
+
+        assert_eq!(load.bytes, vec![0x66, 0x8b, 0x06, 0, 0]);
+        assert_eq!(store.bytes, vec![0x66, 0x89, 0x06, 0, 0]);
+        for encoded in [load, store] {
+            assert_eq!(
+                encoded.fixups,
+                vec![Fixup {
+                    offset: 3,
+                    kind: X86FixupKind::NearData16.into(),
+                    expression,
+                    pc_relative: false,
+                }]
+            );
+        }
     }
 
     #[test]

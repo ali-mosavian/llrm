@@ -206,8 +206,8 @@ pub(super) fn plan_globals(module: &hir::Module) -> Result<GlobalPlan, GlobalPla
                     referenced.insert(place.symbol);
                     pending_places.push((function.id, place, object.readonly));
                 }
-                hir::Storage::Local => {}
-                hir::Storage::Parameter | hir::Storage::Common | hir::Storage::External => {
+                hir::Storage::Local | hir::Storage::Parameter { .. } => {}
+                hir::Storage::Common | hir::Storage::External => {
                     return Err(GlobalPlanError::UnsupportedStorage {
                         function: function.id,
                         place: place.id,
@@ -862,7 +862,7 @@ mod tests {
     }
 
     #[test]
-    fn refuses_unsupported_storage() {
+    fn refuses_non_frame_unsupported_storage_and_ignores_parameter_cells() {
         let common_module = module(
             vec![data(7, vec![1], hir::AddressKind::Near)],
             vec![place(0, hir::Storage::Common, 0, 1, hir::AddressKind::Near)],
@@ -880,19 +880,15 @@ mod tests {
             Vec::new(),
             vec![place(
                 0,
-                hir::Storage::Parameter,
+                hir::Storage::Parameter { index: 0 },
                 0,
                 1,
                 hir::AddressKind::Near,
             )],
         );
-        assert!(matches!(
-            plan_globals(&module),
-            Err(GlobalPlanError::UnsupportedStorage {
-                storage: hir::Storage::Parameter,
-                ..
-            })
-        ));
+        let plan = plan_globals(&module).expect("parameter cells belong to the function frame");
+        assert!(plan.globals.is_empty());
+        assert!(plan.places.is_empty());
     }
 
     #[test]

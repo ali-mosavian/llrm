@@ -331,7 +331,7 @@ impl std::error::Error for DeclarationError {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse, DeclarationErrorKind, GroupMember, PublicBase, PublicScope};
+    use super::{DeclarationErrorKind, GroupMember, PublicBase, PublicScope, parse};
     use crate::object::omf::read::ReadError;
     use crate::object::omf::record::Record;
 

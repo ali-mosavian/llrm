@@ -1,6 +1,6 @@
 use std::fmt;
 
-pub const FORMAT_VERSION: u32 = 7;
+pub const FORMAT_VERSION: u32 = 8;
 
 macro_rules! entity_id {
     ($name:ident) => {
@@ -221,6 +221,7 @@ impl Instruction {
             },
             InstructionKind::Phi { .. }
             | InstructionKind::StackAlloc { .. }
+            | InstructionKind::ParameterAddress { .. }
             | InstructionKind::Unary { .. }
             | InstructionKind::Binary { .. }
             | InstructionKind::Compare { .. }
@@ -246,6 +247,14 @@ pub enum InstructionKind {
         size: u32,
         alignment: u32,
         address_space: AddressSpace,
+    },
+    /// Names the ABI-owned incoming stack cell for one formal parameter.
+    ///
+    /// This is an address, not a parameter load or a local copy. Targets own
+    /// the physical calling-convention offset and loads remain at source use
+    /// sites.
+    ParameterAddress {
+        parameter: u32,
     },
     Unary {
         op: UnaryOp,

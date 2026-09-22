@@ -99,7 +99,7 @@ pub fn module_header(program: &Program) -> Result<[u8; MODULE_HEADER_SIZE], Modu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hir::{Dialect, Module, ModuleId, TargetProfile, FORMAT_VERSION};
+    use crate::hir::{Dialect, FORMAT_VERSION, Module, ModuleId, TargetProfile};
 
     fn program(
         name: &str,

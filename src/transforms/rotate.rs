@@ -1107,12 +1107,16 @@ mod tests {
         assert_eq!(entered.phis.len(), 1);
         assert_eq!(entered.phis[0].incoming.get(&0), Some(&initial));
         assert_eq!(entered.phis[0].incoming.get(&1), Some(&next));
-        assert!(changed
-            .block(0)
-            .expect("preheader")
-            .ops
-            .last()
-            .is_some_and(|operation| operation.kind == Kind::Jump && operation.target == Some(2)));
+        assert!(
+            changed
+                .block(0)
+                .expect("preheader")
+                .ops
+                .last()
+                .is_some_and(
+                    |operation| operation.kind == Kind::Jump && operation.target == Some(2)
+                )
+        );
     }
 
     /// A zero-ending countdown needs no second compare after rotation: the

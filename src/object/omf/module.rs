@@ -317,8 +317,8 @@ impl std::error::Error for ModuleError {
 #[cfg(test)]
 mod tests {
     use super::{
-        defines, family, far_pointer, frame_relative, literal_only, Addr, DecodedModule,
-        DefinesError, Family, Space,
+        Addr, DecodedModule, DefinesError, Family, Space, defines, family, far_pointer,
+        frame_relative, literal_only,
     };
     use crate::object::omf::fixups::{FrameMethod, TargetMethod};
     use crate::object::omf::record::Record;

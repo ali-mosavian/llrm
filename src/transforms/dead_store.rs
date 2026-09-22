@@ -136,6 +136,7 @@ fn is_memory_barrier(instruction: &Instruction) -> bool {
         }
         InstructionKind::Phi { .. }
         | InstructionKind::StackAlloc { .. }
+        | InstructionKind::ParameterAddress { .. }
         | InstructionKind::Unary { .. }
         | InstructionKind::Binary { .. }
         | InstructionKind::Compare { .. }

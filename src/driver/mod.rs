@@ -15,9 +15,10 @@ use crate::object::omf::write::WriteError as OmfWriteError;
 use crate::support::diagnostic::Diagnostic;
 use crate::target::x86::{
     BasicAbiError, BasicAbiExpansionError, BasicFramePlan, BasicRuntime, CAbiExpansionError,
-    CFramePlan, CFramePlanError, CallClobberError, FrameIndexMaterializationError,
-    SegmentedMemoryExpansionError, SelectionError, WordMergeExpansionError, X86AllocationError,
-    X86JumpLayoutError, X86McModuleLowerError, X86OmfError,
+    CFramePlan, CFramePlanError, CallClobberError, ControlFlowError,
+    FrameIndexMaterializationError, SegmentedMemoryExpansionError, SelectionError,
+    WordMergeExpansionError, X86AllocationError, X86FloatAllocationError, X86FloatControlError,
+    X86JumpLayoutError, X86McModuleLowerError, X86OmfError, X87StoreSynchronization,
 };
 
 /// Configuration that affects QB source semantics.
@@ -69,6 +70,7 @@ pub enum Error {
     Parse(qb::ParseError),
     Semantic(qb::SemanticError),
     QbStatementMetadata(qb::statement_table::MetadataError),
+    QbFloatAbi(qb::BasicFloatAbiError),
     QbModuleHeader(qb::module_header::ModuleHeaderError),
     QbMc(qb::mc::ModuleMcError),
     QbStatementMc(qb::statement_mc::StatementMcError),
@@ -100,6 +102,14 @@ pub enum Error {
     CallClobber {
         function: String,
         error: CallClobberError,
+    },
+    FloatAllocation {
+        function: String,
+        error: X86FloatAllocationError,
+    },
+    FloatControl {
+        function: String,
+        error: X86FloatControlError,
     },
     Allocation {
         function: String,
@@ -133,6 +143,10 @@ pub enum Error {
         function: String,
         error: CAbiExpansionError,
     },
+    ControlFlow {
+        function: String,
+        error: ControlFlowError,
+    },
     MissingFramePlan {
         function: String,
     },
@@ -158,6 +172,7 @@ impl fmt::Display for Error {
             Self::Parse(error) => error.message.fmt(formatter),
             Self::Semantic(error) => error.message.fmt(formatter),
             Self::QbStatementMetadata(error) => error.fmt(formatter),
+            Self::QbFloatAbi(error) => error.fmt(formatter),
             Self::QbModuleHeader(error) => error.fmt(formatter),
             Self::QbMc(error) => error.fmt(formatter),
             Self::QbStatementMc(error) => error.fmt(formatter),
@@ -203,6 +218,14 @@ impl fmt::Display for Error {
                     "cannot materialize call clobbers for {function}: {error}"
                 )
             }
+            Self::FloatAllocation { function, error } => write!(
+                formatter,
+                "cannot allocate the x87 register stack for {function}: {error}"
+            ),
+            Self::FloatControl { function, error } => write!(
+                formatter,
+                "cannot expand x87 floating control for {function}: {error}"
+            ),
             Self::Allocation { function, error } => {
                 write!(
                     formatter,
@@ -238,6 +261,10 @@ impl fmt::Display for Error {
             Self::CAbiExpansion { function, error } => write!(
                 formatter,
                 "cannot finalize the allocated C x86 ABI for {function}: {error}"
+            ),
+            Self::ControlFlow { function, error } => write!(
+                formatter,
+                "cannot settle allocated x86 control flow for {function}: {error}"
             ),
             Self::MissingFramePlan { function } => write!(
                 formatter,
@@ -312,7 +339,8 @@ pub fn compile_wcc_capture_unit(
 ) -> Result<ir::Module, Error> {
     let module = wcc::raise_module(unit, module_name).map_err(Error::WccRaise)?;
     module.verify().map_err(Error::Hir)?;
-    crate::hir::lower_to_ir(&module).map_err(Error::Lower)
+    crate::hir::lower_to_ir_with_array_order(&module, crate::hir::ArrayOrder::RowMajor)
+        .map_err(Error::Lower)
 }
 
 /// Parse a WCC capture and lower its verified source-neutral HIR to IR.
@@ -329,7 +357,8 @@ pub fn lower_qb_to_ir(program: &Program) -> Result<ir::Module, Error> {
         });
     };
     let extracted = qb::statement_table::extract(module).map_err(Error::QbStatementMetadata)?;
-    crate::hir::lower_to_ir(&extracted.module).map_err(Error::Lower)
+    crate::hir::lower_to_ir_with_array_order(&extracted.module, program.array_order)
+        .map_err(Error::Lower)
 }
 
 /// Select verified portable IR into initial x86 Machine IR.
@@ -348,7 +377,10 @@ pub fn lower_qb_to_machine(program: &Program) -> Result<QbMachine, Error> {
             actual: program.modules.len(),
         });
     };
-    let ir = lower_qb_to_ir(program)?;
+    let extracted = qb::statement_table::extract(source).map_err(Error::QbStatementMetadata)?;
+    let physical = qb::physicalize(&extracted.module).map_err(Error::QbFloatAbi)?;
+    let ir = crate::hir::lower_to_ir_with_array_order(&physical, program.array_order)
+        .map_err(Error::Lower)?;
     let mut machine = lower_ir_to_machine(&ir)?;
     let source_functions = source
         .functions
@@ -390,6 +422,20 @@ pub fn lower_qb_to_machine(program: &Program) -> Result<QbMachine, Error> {
                     error,
                 }
             })?;
+        *function = crate::target::x86::allocate_x87_stack(function).map_err(|error| {
+            Error::FloatAllocation {
+                function: source_function.name.clone(),
+                error,
+            }
+        })?;
+        *function = crate::target::x86::expand_x87_truncation_with_synchronization(
+            function,
+            X87StoreSynchronization::BeforeAndAfter,
+        )
+        .map_err(|error| Error::FloatControl {
+            function: source_function.name.clone(),
+            error,
+        })?;
     }
     crate::target::x86::verify_machine(&machine).map_err(Error::Machine)?;
     Ok(QbMachine {
@@ -413,15 +459,15 @@ pub fn allocate_qb_machine(selected: &QbMachine) -> Result<QbMachine, Error> {
 
         if let Some(previous) = allocated.frames.get(&rewritten.id) {
             let refreshed = crate::target::x86::refresh_basic_runtime_frame(&rewritten, previous)
-                .map_err(|error| {
-                    Error::BasicAbi {
-                        function: rewritten.name.clone(),
-                        error,
-                    }
-                })?;
+                .map_err(|error| Error::BasicAbi {
+                function: rewritten.name.clone(),
+                error,
+            })?;
             allocated.frames.insert(rewritten.id, refreshed.frame);
             rewritten = refreshed.function;
         }
+
+        rewritten = crate::target::x86::forward_frame_reloads(&rewritten, &allocation.assignment);
 
         *function = apply_assignment(&rewritten, &allocation.assignment).map_err(|error| {
             Error::AllocationRewrite {
@@ -478,6 +524,14 @@ pub fn lower_qb_machine_to_mc(selected: &QbMachine) -> Result<crate::mc::MCModul
                 error,
             }
         })?;
+        *function = crate::target::x86::place_and_thread(
+            function,
+            &crate::target::x86::ControlFlowFacts::default(),
+        )
+        .map_err(|error| Error::ControlFlow {
+            function: function.name.clone(),
+            error,
+        })?;
     }
     crate::target::x86::verify_machine(&allocated.module).map_err(Error::Machine)?;
     crate::target::x86::lower_allocated_module(&allocated.module).map_err(Error::Mc)
@@ -491,19 +545,33 @@ pub fn lower_c_to_machine(module: &ir::Module) -> Result<CMachine, Error> {
     let mut machine = lower_ir_to_machine(module)?;
     let mut frames = BTreeMap::new();
     for function in &mut machine.functions {
-        *function =
-            crate::target::x86::materialize_c_call_clobbers(function).map_err(|error| {
-                Error::CallClobber {
-                    function: function.name.clone(),
-                    error,
-                }
-            })?;
+        *function = crate::target::x86::materialize_c_call_clobbers(function).map_err(|error| {
+            Error::CallClobber {
+                function: function.name.clone(),
+                error,
+            }
+        })?;
+        *function = crate::target::x86::allocate_x87_stack(function).map_err(|error| {
+            Error::FloatAllocation {
+                function: function.name.clone(),
+                error,
+            }
+        })?;
+        *function = crate::target::x86::expand_x87_truncation_with_synchronization(
+            function,
+            X87StoreSynchronization::None,
+        )
+        .map_err(|error| Error::FloatControl {
+            function: function.name.clone(),
+            error,
+        })?;
         let plan = crate::target::x86::plan_c_frame(function).map_err(|error| Error::CFrame {
             function: function.name.clone(),
             error,
         })?;
         frames.insert(function.id, plan);
     }
+    crate::target::x86::verify_machine(&machine).map_err(Error::Machine)?;
     Ok(CMachine {
         module: machine,
         frames,
@@ -528,6 +596,8 @@ pub fn allocate_c_machine(selected: &CMachine) -> Result<CMachine, Error> {
                 error,
             })?;
         allocated.frames.insert(rewritten.id, frame);
+        let rewritten =
+            crate::target::x86::forward_frame_reloads(&rewritten, &allocation.assignment);
         *function = apply_assignment(&rewritten, &allocation.assignment).map_err(|error| {
             Error::AllocationRewrite {
                 function: rewritten.name.clone(),
@@ -591,6 +661,14 @@ pub fn lower_c_machine_to_mc(selected: &CMachine) -> Result<crate::mc::MCModule,
                     error,
                 }
             })?;
+        *function = crate::target::x86::place_and_thread(
+            function,
+            &crate::target::x86::ControlFlowFacts::default(),
+        )
+        .map_err(|error| Error::ControlFlow {
+            function: function.name.clone(),
+            error,
+        })?;
     }
     crate::target::x86::verify_machine(&allocated.module).map_err(Error::Machine)?;
     crate::target::x86::lower_allocated_module(&allocated.module).map_err(Error::Mc)
@@ -612,8 +690,8 @@ pub fn write_x86_omf(module_name: &[u8], module: &crate::mc::MCModule) -> Result
 
 /// Writes encoded C MC with Open Watcom's medium-model object envelope.
 pub fn write_c_omf(module_name: &[u8], module: &crate::mc::MCModule) -> Result<Vec<u8>, Error> {
-    let object = crate::target::x86::lower_to_omf_with_dgroup(module_name, module)
-        .map_err(Error::X86Omf)?;
+    let object =
+        crate::target::x86::lower_to_omf_with_dgroup(module_name, module).map_err(Error::X86Omf)?;
     crate::object::omf::write::to_bytes(&object).map_err(Error::OmfWrite)
 }
 
@@ -1149,15 +1227,17 @@ mod tests {
             X86Opcode::from_raw(instruction.opcode.get()),
             Some(X86Opcode::MergeWords | X86Opcode::LowWord | X86Opcode::HighWord)
         )));
-        assert!(instructions
-            .iter()
-            .filter(|instruction| {
-                X86Opcode::from_raw(instruction.opcode.get()) == Some(X86Opcode::CallFar)
-            })
-            .all(|instruction| matches!(
-                instruction.operands.as_slice(),
-                [MCOperand::Expression(_)]
-            )));
+        assert!(
+            instructions
+                .iter()
+                .filter(|instruction| {
+                    X86Opcode::from_raw(instruction.opcode.get()) == Some(X86Opcode::CallFar)
+                })
+                .all(|instruction| matches!(
+                    instruction.operands.as_slice(),
+                    [MCOperand::Expression(_)]
+                ))
+        );
         assert!(instructions.iter().any(|instruction| {
             X86Opcode::from_raw(instruction.opcode.get()) == Some(X86Opcode::ReturnFar)
                 && instruction.operands == [MCOperand::Immediate(2)]

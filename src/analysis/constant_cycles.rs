@@ -227,7 +227,7 @@ pub(super) fn propagated(body: &MirBody, seeds: BTreeMap<Value, Known>) -> BTree
 
 #[cfg(test)]
 mod tests {
-    use super::super::constants::{known, Known};
+    use super::super::constants::{Known, known};
     use crate::model::mir::{Arg, Const, Held, Kind, MirBlock, MirBody, Op, Phi, Value};
 
     fn value(id: u32, at: i64) -> Value {

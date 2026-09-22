@@ -11,7 +11,7 @@ use std::error::Error;
 use std::fmt;
 
 use super::{
-    LiveInterval, PhysicalRegister, RegisterAssignment, RegisterClass, VirtualRegisterId, PER_INSN,
+    LiveInterval, PER_INSN, PhysicalRegister, RegisterAssignment, RegisterClass, VirtualRegisterId,
 };
 
 /// Maximum allocation-queue visits, matching Python `backend.allocate.BUDGET`.

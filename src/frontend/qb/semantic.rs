@@ -1511,11 +1511,20 @@ impl Compiler {
                     self.callables[(symbol - 1) as usize].defined = true;
                 }
             } else {
+                let mut abi_parameters = signature.parameters.clone();
+                if signature
+                    .result
+                    .is_some_and(|result| matches!(result, SINGLE | DOUBLE))
+                    && !signature.cdecl
+                {
+                    let result = signature.result.expect("floating result checked above");
+                    abi_parameters.push((self.pointer_type(result), true, false, false));
+                }
                 self.callables.push(Callable {
                     id: symbol,
                     name: signature.callee.clone(),
                     result_type: signature.result,
-                    parameters: signature.parameters.clone(),
+                    parameters: abi_parameters,
                     defined: !procedure.declaration,
                 });
                 self.signatures.insert(key.into(), signature);
@@ -1662,7 +1671,10 @@ impl Compiler {
             } else {
                 (
                     self.place_offset(storage, descriptor_extent),
-                    if matches!(storage, hir::Storage::Local | hir::Storage::Parameter) {
+                    if matches!(
+                        storage,
+                        hir::Storage::Local | hir::Storage::Parameter { .. }
+                    ) {
                         0
                     } else {
                         1
@@ -1680,7 +1692,10 @@ impl Compiler {
                 storage,
                 symbol: descriptor_symbol,
             });
-            if matches!(storage, hir::Storage::Local | hir::Storage::Parameter) {
+            if matches!(
+                storage,
+                hir::Storage::Local | hir::Storage::Parameter { .. }
+            ) {
                 self.data_offset += descriptor_extent;
             }
             let pointer_type = self.pointer_type(descriptor_type);
@@ -1766,7 +1781,10 @@ impl Compiler {
             } else {
                 (
                     self.place_offset(storage, descriptor_extent),
-                    if matches!(storage, hir::Storage::Local | hir::Storage::Parameter) {
+                    if matches!(
+                        storage,
+                        hir::Storage::Local | hir::Storage::Parameter { .. }
+                    ) {
                         0
                     } else {
                         1
@@ -1784,11 +1802,16 @@ impl Compiler {
                 storage,
                 symbol: descriptor_symbol,
             });
-            if matches!(storage, hir::Storage::Local | hir::Storage::Parameter) {
+            if matches!(
+                storage,
+                hir::Storage::Local | hir::Storage::Parameter { .. }
+            ) {
                 self.data_offset += descriptor_extent;
             }
-            if matches!(storage, hir::Storage::Local | hir::Storage::Parameter)
-                && self.data_offset > 65536
+            if matches!(
+                storage,
+                hir::Storage::Local | hir::Storage::Parameter { .. }
+            ) && self.data_offset > 65536
             {
                 return self.fail(format!(
                     "{} descriptor exceeds the 64 KiB near-data budget",
@@ -1865,7 +1888,10 @@ impl Compiler {
         } else {
             (
                 self.place_offset(storage, extent),
-                if matches!(storage, hir::Storage::Local | hir::Storage::Parameter) {
+                if matches!(
+                    storage,
+                    hir::Storage::Local | hir::Storage::Parameter { .. }
+                ) {
                     0
                 } else {
                     1
@@ -1883,7 +1909,10 @@ impl Compiler {
             storage,
             symbol: place_symbol,
         });
-        if matches!(storage, hir::Storage::Local | hir::Storage::Parameter) {
+        if matches!(
+            storage,
+            hir::Storage::Local | hir::Storage::Parameter { .. }
+        ) {
             self.data_offset += extent;
         }
         let descriptor_place = if array_element.is_some() {
@@ -1892,7 +1921,10 @@ impl Compiler {
                 14 + 4 * bounds.len(),
             );
             let descriptor_extent = self.width(descriptor_type);
-            let local_descriptor = matches!(storage, hir::Storage::Local | hir::Storage::Parameter);
+            let local_descriptor = matches!(
+                storage,
+                hir::Storage::Local | hir::Storage::Parameter { .. }
+            );
             let (descriptor_offset, descriptor_storage, descriptor_symbol) = if local_descriptor {
                 (self.place_offset(storage, descriptor_extent), storage, 0)
             } else {
@@ -1946,7 +1978,10 @@ impl Compiler {
     }
 
     fn reserve_module_data(&mut self, storage: hir::Storage) {
-        if !matches!(storage, hir::Storage::Local | hir::Storage::Parameter) {
+        if !matches!(
+            storage,
+            hir::Storage::Local | hir::Storage::Parameter { .. }
+        ) {
             self.data[0].bytes.resize(self.data_offset, 0);
         }
     }
@@ -2064,7 +2099,10 @@ impl Compiler {
     }
 
     fn place_offset(&self, storage: hir::Storage, extent: usize) -> isize {
-        if matches!(storage, hir::Storage::Local | hir::Storage::Parameter) {
+        if matches!(
+            storage,
+            hir::Storage::Local | hir::Storage::Parameter { .. }
+        ) {
             -((self.data_offset + extent) as isize)
         } else {
             self.data_offset as isize
@@ -6569,18 +6607,24 @@ impl Compiler {
             ));
         }
         if matches!(from, INTEGER | LONG | BOOLEAN | BYTE) && matches!(to, SINGLE | DOUBLE) {
-            let place = self.temporary(from)?;
-            self.emit(
-                hir::Opcode::Store,
-                Vec::new(),
-                vec![Operand::Place(place), operand],
-            );
+            // Conversion is a value operation.  The x87 target owns the
+            // temporary storage required by FILD; representing that target
+            // detail as a HIR place made a portable conversion unlowerable.
+            // Preserve an addressable source's read here, where HIR still
+            // owns source evaluation and aliasing.
+            let operand = match operand {
+                Operand::Value(_) | Operand::Constant(_, _) => operand,
+                place @ (Operand::Place(_)
+                | Operand::Element(_, _)
+                | Operand::Projection { .. }
+                | Operand::Indirect { .. }) => {
+                    let value = self.value(from);
+                    self.emit(hir::Opcode::Load, vec![value], vec![place]);
+                    Operand::Value(value)
+                }
+            };
             let result = self.value(to);
-            self.emit(
-                hir::Opcode::Convert,
-                vec![result],
-                vec![Operand::Place(place)],
-            );
+            self.emit(hir::Opcode::Convert, vec![result], vec![operand]);
             return Ok(Operand::Value(result));
         }
         let result = self.value(to);
@@ -7886,5 +7930,80 @@ fn binary_name(op: Binary) -> hir::Opcode {
         Binary::Multiply => hir::Opcode::Multiply,
         Binary::Divide => hir::Opcode::FloatDivide,
         Binary::Power => hir::Opcode::Call,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::frontend::qb::parse;
+
+    #[test]
+    fn integer_to_float_conversion_is_a_value_operation() {
+        // vid.bas exposed the old target-specific temporary: Convert read an
+        // HIR Place, which portable HIR-to-IR correctly refuses.  HIR owns
+        // the source load; x86 owns the FILD scratch cell.
+        let syntax = parse(
+            "dim count as integer\ndim ratio as single\nratio = count\n",
+            Dialect::VbDos,
+        )
+        .expect("QB source parses");
+        let program = compile_hir(&syntax, "convert", Dialect::VbDos, "vbdos")
+            .expect("QB integer-to-float conversion compiles");
+        let conversions = program
+            .modules
+            .iter()
+            .flat_map(|module| &module.functions)
+            .flat_map(|function| &function.blocks)
+            .flat_map(|block| &block.instructions)
+            .filter(|instruction| instruction.opcode == hir::Opcode::Convert)
+            .collect::<Vec<_>>();
+        assert_eq!(conversions.len(), 1);
+        assert!(matches!(
+            conversions[0].operands.as_slice(),
+            [hir::Operand::Value(_)] | [hir::Operand::Constant { .. }]
+        ));
+    }
+
+    #[test]
+    fn floating_function_callable_includes_its_hidden_result_pointer() {
+        // QBSP's RPLANEDIST call has two source formals plus Microsoft's
+        // hidden near destination pointer.  The callable ABI must describe
+        // all three physical parameters or HIR-to-IR rejects the defined
+        // target before the Python ABI physicalizer can store through it.
+        let syntax = parse(
+            "declare function addhalf (left as single, right as single) as single\n\
+             dim answer as single\n\
+             answer = addhalf(1.0, 0.5)\n\
+             function addhalf (left as single, right as single) as single\n\
+             addhalf = left + right\n\
+             end function\n",
+            Dialect::VbDos,
+        )
+        .expect("QB floating function parses");
+        let program = compile_hir(&syntax, "float_call", Dialect::VbDos, "vbdos")
+            .expect("QB floating function compiles to HIR");
+        let module = &program.modules[0];
+        let callable = module
+            .callables
+            .iter()
+            .find(|callable| callable.name == "ADDHALF")
+            .expect("declared floating function has a callable");
+
+        assert_eq!(callable.parameters.len(), 3);
+        assert_eq!(
+            module
+                .types
+                .iter()
+                .find(|type_| type_.id == callable.parameters[2].type_id)
+                .map(|type_| (type_.kind, type_.address, type_.element)),
+            Some((
+                hir::TypeKind::Pointer,
+                hir::AddressKind::Near,
+                callable.result_type,
+            ))
+        );
+        crate::hir::lower_to_ir_with_array_order(module, program.array_order)
+            .expect("the physical floating-function signature lowers exactly");
     }
 }

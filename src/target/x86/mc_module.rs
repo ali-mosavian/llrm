@@ -4,14 +4,14 @@
 //! not encode instructions, choose fixups, lay out sections, or expand ABI
 //! pseudos.  Those responsibilities stay on their respective side of MC.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 
 use crate::codegen::machine::{
     MachineAddressSpace, MachineBlockId, MachineDataObject, MachineDataObjectId, MachineFunction,
     MachineFunctionId, MachineInstruction, MachineInstructionId, MachineLinkage, MachineModule,
-    MachineOperand, MachineOperandKind,
+    MachineOperand, MachineOperandKind, MachineRegister,
 };
 use crate::mc::{
     self, AlignFragment, DataFragment, Fixup, FragmentId, InstructionFragment, MCExpression,
@@ -20,7 +20,10 @@ use crate::mc::{
 };
 use crate::support::diagnostic::Diagnostic;
 
-use super::mc::{McLowerError, UnresolvedOperand, validate_allocated_operand, validate_opcode};
+use super::{
+    X86Opcode,
+    mc::{McLowerError, UnresolvedOperand, validate_allocated_operand, validate_opcode},
+};
 
 const TEXT_SECTION: SectionId = SectionId::new(0);
 const RODATA_SECTION: SectionId = SectionId::new(1);
@@ -123,6 +126,11 @@ pub enum X86McModuleLowerError {
     Verification {
         diagnostics: Vec<Diagnostic>,
     },
+    MalformedAnchor {
+        function: MachineFunctionId,
+        block: MachineBlockId,
+        instruction: MachineInstructionId,
+    },
 }
 
 impl fmt::Display for X86McModuleLowerError {
@@ -148,7 +156,10 @@ impl fmt::Display for X86McModuleLowerError {
             Self::DuplicateInstructionId {
                 function,
                 instruction,
-            } => write!(formatter, "function {function} has duplicate instruction {instruction}"),
+            } => write!(
+                formatter,
+                "function {function} has duplicate instruction {instruction}"
+            ),
             Self::UnknownEntryBlock { function, block } => {
                 write!(
                     formatter,
@@ -237,6 +248,14 @@ impl fmt::Display for X86McModuleLowerError {
                 }
                 Ok(())
             }
+            Self::MalformedAnchor {
+                function,
+                block,
+                instruction,
+            } => write!(
+                formatter,
+                "function {function} block {block} instruction {instruction} is not a canonical zero-byte logical anchor"
+            ),
         }
     }
 }
@@ -470,6 +489,11 @@ fn lower_function(
     fragments: &mut Vec<MCFragment>,
     instruction_fragments: &mut BTreeMap<(MachineFunctionId, MachineInstructionId), FragmentId>,
 ) -> Result<(), X86McModuleLowerError> {
+    let declared_virtuals = function
+        .virtual_registers
+        .iter()
+        .map(|register| register.id)
+        .collect::<BTreeSet<_>>();
     for block in &function.blocks {
         let anchor = ids.fragment()?;
         fragments.push(MCFragment::Data(DataFragment {
@@ -498,8 +522,6 @@ fn lower_function(
 
         for instruction in &block.instructions {
             let instruction_id = instruction.id;
-            let instruction =
-                lower_module_instruction(function, block.id, instruction, ids, symbols)?;
             let fragment = ids.fragment()?;
             if instruction_fragments
                 .insert((function.id, instruction_id), fragment)
@@ -510,11 +532,42 @@ fn lower_function(
                     instruction: instruction_id,
                 });
             }
-            fragments.push(MCFragment::Instruction(InstructionFragment {
-                id: fragment,
-                instruction,
-                fixups: Vec::new(),
-            }));
+            let claims_anchor = instruction.flags.anchor
+                || instruction.opcode == X86Opcode::Nothing.machine_opcode();
+            let canonical_anchor =
+                instruction.is_logical_anchor(X86Opcode::Nothing.machine_opcode());
+            let declared_anchor_operands = instruction.operands.iter().all(|operand| {
+                matches!(
+                    operand.kind,
+                    MachineOperandKind::Register(MachineRegister::Virtual(register))
+                        if declared_virtuals.contains(&register)
+                )
+            });
+            if claims_anchor && (!canonical_anchor || !declared_anchor_operands) {
+                return Err(X86McModuleLowerError::MalformedAnchor {
+                    function: function.id,
+                    block: block.id,
+                    instruction: instruction.id,
+                });
+            }
+            if canonical_anchor {
+                // An anchor owns an instruction-fragment position even though
+                // it emits no bytes.  It is data rather than an MC instruction
+                // so the encoder can never turn it into x86 NOP.
+                fragments.push(MCFragment::Data(DataFragment {
+                    id: fragment,
+                    bytes: Vec::new(),
+                    fixups: Vec::new(),
+                }));
+            } else {
+                let instruction =
+                    lower_module_instruction(function, block.id, instruction, ids, symbols)?;
+                fragments.push(MCFragment::Instruction(InstructionFragment {
+                    id: fragment,
+                    instruction,
+                    fixups: Vec::new(),
+                }));
+            }
         }
     }
     Ok(())
@@ -767,9 +820,10 @@ mod tests {
     use crate::codegen::machine::{
         InstructionFlags, MachineAddressSpace, MachineBlock, MachineDataObject,
         MachineDataObjectId, MachineDataRelocation, MachineRegister, MachineSignature,
-        OperandIndex, OperandRole, PhysicalRegister, RegisterConstraint, VirtualRegisterId,
+        OperandIndex, OperandRole, PhysicalRegister, RegisterConstraint, VirtualRegister,
+        VirtualRegisterId,
     };
-    use crate::target::x86::{X86Opcode, X86Register, X86RegisterClass};
+    use crate::target::x86::{X86Opcode, X86Register, X86RegisterClass, verify_machine};
 
     fn signature() -> MachineSignature {
         MachineSignature {
@@ -1060,12 +1114,110 @@ mod tests {
         assert_eq!(first.module, legacy);
         assert_eq!(first.instruction_fragments.len(), 3);
         for (function, instruction) in [(2, 6), (2, 8), (3, 7)] {
-            let fragment = first.instruction_fragments
-                [&(MachineFunctionId::new(function), MachineInstructionId::new(instruction))];
+            let fragment = first.instruction_fragments[&(
+                MachineFunctionId::new(function),
+                MachineInstructionId::new(instruction),
+            )];
             assert!(first.module.sections[0].fragments.iter().any(
                 |candidate| matches!(candidate, MCFragment::Instruction(value) if value.id == fragment)
             ));
         }
+    }
+
+    #[test]
+    fn anchor_has_a_zero_byte_mc_fragment_at_its_machine_lineage_position() {
+        let logical_definition = MachineOperand {
+            kind: MachineOperandKind::Register(MachineRegister::Virtual(VirtualRegisterId::new(4))),
+            role: OperandRole::Def,
+            constraint: None,
+            tied_to: None,
+        };
+        let anchor =
+            instruction(6, vec![logical_definition]).anchor(X86Opcode::Nothing.machine_opcode());
+        let mut function = function(2, "anchored", 4, vec![block(4, vec![anchor])]);
+        function.virtual_registers.push(VirtualRegister {
+            id: VirtualRegisterId::new(4),
+            class: X86RegisterClass::Word.machine_class(),
+        });
+        let input = module(vec![function]);
+        verify_machine(&input).expect("an anchor keeps only valid logical virtual lineage");
+
+        let lowered = lower_allocated_module_with_lineage(&input).unwrap();
+        let fragment = lowered.instruction_fragments
+            [&(MachineFunctionId::new(2), MachineInstructionId::new(6))];
+        assert!(matches!(
+            lowered.module.sections[0].fragments.iter().find(|candidate| {
+                matches!(candidate, MCFragment::Data(data) if data.id == fragment && data.bytes.is_empty() && data.fixups.is_empty())
+            }),
+            Some(_)
+        ));
+    }
+
+    #[test]
+    fn direct_mc_lowering_rejects_an_encodable_instruction_marked_as_an_anchor() {
+        let logical = VirtualRegisterId::new(4);
+        let mut marked_mov = instruction(
+            6,
+            vec![MachineOperand {
+                kind: MachineOperandKind::Register(MachineRegister::Virtual(logical)),
+                role: OperandRole::Def,
+                constraint: None,
+                tied_to: None,
+            }],
+        );
+        marked_mov.flags.anchor = true;
+        let mut function = function(2, "malformed_anchor", 4, vec![block(4, vec![marked_mov])]);
+        function.virtual_registers.push(VirtualRegister {
+            id: logical,
+            class: X86RegisterClass::Word.machine_class(),
+        });
+        let input = module(vec![function]);
+
+        assert_eq!(
+            lower_allocated_module_with_lineage(&input),
+            Err(X86McModuleLowerError::MalformedAnchor {
+                function: MachineFunctionId::new(2),
+                block: MachineBlockId::new(4),
+                instruction: MachineInstructionId::new(6),
+            })
+        );
+    }
+
+    #[test]
+    fn direct_mc_lowering_rejects_undeclared_or_roleless_anchor_lineage() {
+        let logical = VirtualRegisterId::new(4);
+        let anchor_operand = |role| MachineOperand {
+            kind: MachineOperandKind::Register(MachineRegister::Virtual(logical)),
+            role,
+            constraint: None,
+            tied_to: None,
+        };
+        let undeclared = instruction(6, vec![anchor_operand(OperandRole::Def)])
+            .anchor(X86Opcode::Nothing.machine_opcode());
+        let undeclared_input = module(vec![function(
+            2,
+            "undeclared_anchor",
+            4,
+            vec![block(4, vec![undeclared])],
+        )]);
+        assert!(matches!(
+            lower_allocated_module_with_lineage(&undeclared_input),
+            Err(X86McModuleLowerError::MalformedAnchor { .. })
+        ));
+
+        let mut roleless = instruction(7, vec![anchor_operand(OperandRole::Def)])
+            .anchor(X86Opcode::Nothing.machine_opcode());
+        roleless.operands[0].role = OperandRole::None;
+        let mut roleless_function =
+            function(3, "roleless_anchor", 5, vec![block(5, vec![roleless])]);
+        roleless_function.virtual_registers.push(VirtualRegister {
+            id: logical,
+            class: X86RegisterClass::Word.machine_class(),
+        });
+        assert!(matches!(
+            lower_allocated_module_with_lineage(&module(vec![roleless_function])),
+            Err(X86McModuleLowerError::MalformedAnchor { .. })
+        ));
     }
 
     #[test]

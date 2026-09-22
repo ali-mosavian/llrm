@@ -12,10 +12,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use num_bigint::BigInt;
 
-use crate::analysis::ranges::{covering, Interval};
+use crate::analysis::ranges::{Interval, covering};
 use crate::model::memory::{Provenance, Slice, SliceError};
-use crate::model::mir::{symbolic_ref, MemRef, Symbol, Value};
-use crate::object::omf::module::{Addr, Space, NO_REGISTER};
+use crate::model::mir::{MemRef, Symbol, Value, symbolic_ref};
+use crate::object::omf::module::{Addr, NO_REGISTER, Space};
 
 const FLOOR: i64 = -(1_i64 << 31);
 const CEILING: i64 = 1_i64 << 31;
@@ -569,15 +569,15 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use super::{
-        addresses, may_alias, overlapping, regions, typed_apart, Origin, Region, RegionError,
-        RegionLayout, RegionPart, RegionSet, Span,
+        Origin, Region, RegionError, RegionLayout, RegionPart, RegionSet, Span, addresses,
+        may_alias, overlapping, regions, typed_apart,
     };
     use crate::analysis::ranges::Interval;
     use crate::model::memory::{
         MemoryKind, MemoryObject, ObjectIdentity, ObjectTag, Provenance, RestrictRoot, SliceError,
     };
     use crate::model::mir::{MemRef, Symbol, Value};
-    use crate::object::omf::module::{Addr, Space, NO_REGISTER};
+    use crate::object::omf::module::{Addr, NO_REGISTER, Space};
     use crate::support::PhysicalRegister;
 
     fn address(space: Space, disp: i64, index: u32) -> Addr {
@@ -614,12 +614,16 @@ mod tests {
         let static_ = reference(address(Space::Segment, 0x10, 5), 2);
         let frame = reference(address(Space::Frame, -4, 0), 2);
 
-        assert!(regions(&cell, None, None)
-            .unwrap()
-            .intersects(&regions(&static_, None, None).unwrap()));
-        assert!(!regions(&cell, None, None)
-            .unwrap()
-            .intersects(&regions(&frame, None, None).unwrap()));
+        assert!(
+            regions(&cell, None, None)
+                .unwrap()
+                .intersects(&regions(&static_, None, None).unwrap())
+        );
+        assert!(
+            !regions(&cell, None, None)
+                .unwrap()
+                .intersects(&regions(&frame, None, None).unwrap())
+        );
         assert_eq!(
             regions(&cell, None, None)
                 .unwrap()
@@ -683,15 +687,21 @@ mod tests {
             },
         )]);
 
-        assert!(!regions(&stack, None, None)
-            .unwrap()
-            .intersects(&regions(&static_, None, None).unwrap()));
-        assert!(!regions(&absolute, Some(&known), None)
-            .unwrap()
-            .intersects(&regions(&static_, None, None).unwrap()));
-        assert!(regions(&absolute, Some(&known), None)
-            .unwrap()
-            .intersects(&regions(&absolute, Some(&known), None).unwrap()));
+        assert!(
+            !regions(&stack, None, None)
+                .unwrap()
+                .intersects(&regions(&static_, None, None).unwrap())
+        );
+        assert!(
+            !regions(&absolute, Some(&known), None)
+                .unwrap()
+                .intersects(&regions(&static_, None, None).unwrap())
+        );
+        assert!(
+            regions(&absolute, Some(&known), None)
+                .unwrap()
+                .intersects(&regions(&absolute, Some(&known), None).unwrap())
+        );
     }
 
     #[test]
@@ -708,15 +718,21 @@ mod tests {
         let shared = reference(address(Space::Segment, 0, 7), 1);
         let external = reference(address(Space::External, 0, 1), 1);
 
-        assert!(regions(&owned, None, Some(&bounds_only))
-            .unwrap()
-            .intersects(&regions(&external, None, Some(&bounds_only)).unwrap()));
-        assert!(!regions(&owned, None, Some(&layout))
-            .unwrap()
-            .intersects(&regions(&external, None, Some(&layout)).unwrap()));
-        assert!(regions(&shared, None, Some(&layout))
-            .unwrap()
-            .intersects(&regions(&external, None, Some(&layout)).unwrap()));
+        assert!(
+            regions(&owned, None, Some(&bounds_only))
+                .unwrap()
+                .intersects(&regions(&external, None, Some(&bounds_only)).unwrap())
+        );
+        assert!(
+            !regions(&owned, None, Some(&layout))
+                .unwrap()
+                .intersects(&regions(&external, None, Some(&layout)).unwrap())
+        );
+        assert!(
+            regions(&shared, None, Some(&layout))
+                .unwrap()
+                .intersects(&regions(&external, None, Some(&layout)).unwrap())
+        );
 
         // `may_alias` has no provenance path here, and must therefore retain
         // the same owned/shared layout answer from `regions`.
@@ -741,14 +757,16 @@ mod tests {
 
         assert!(addresses(Some(indexed), 2, Some(same_segment), 2, Some(&layout)).unwrap());
         assert!(!addresses(Some(indexed), 2, Some(other_segment), 2, Some(&layout)).unwrap());
-        assert!(addresses(
-            Some(indexed),
-            2,
-            Some(address(Space::Segment, 0x999, 1)),
-            2,
-            None
-        )
-        .unwrap());
+        assert!(
+            addresses(
+                Some(indexed),
+                2,
+                Some(address(Space::Segment, 0x999, 1)),
+                2,
+                None
+            )
+            .unwrap()
+        );
         let raw = super::addressed(Some(indexed), 2, Some(&layout)).unwrap();
         assert_eq!(raw.spans.iter().next().unwrap().low, 0x20);
         assert_eq!(raw.spans.iter().next().unwrap().high, 0x30);
@@ -766,18 +784,22 @@ mod tests {
         let array_regions = regions(&array, None, None).unwrap();
         assert!(!array_regions.intersects(&regions(&field, None, None).unwrap()));
         assert!(array_regions.intersects(&regions(&neighbour, None, None).unwrap()));
-        assert!(array_regions
-            .holes
-            .iter()
-            .any(|one| one.low == 0x266 && one.high == 0x268));
+        assert!(
+            array_regions
+                .holes
+                .iter()
+                .any(|one| one.low == 0x266 && one.high == 0x268)
+        );
 
         let mut bounded_call = MemRef::new(None, 0);
         bounded_call.beyond = Some((5, BTreeSet::new()));
         let bounded = regions(&bounded_call, None, None).unwrap();
-        assert!(bounded
-            .holes
-            .iter()
-            .any(|one| one.region.0.ends_with(&[RegionPart::Segment(5)])));
+        assert!(
+            bounded
+                .holes
+                .iter()
+                .any(|one| one.region.0.ends_with(&[RegionPart::Segment(5)]))
+        );
     }
 
     #[test]

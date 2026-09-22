@@ -2191,7 +2191,10 @@ mod tests {
     fn kind_of_uses_operands_for_move_and_preserves_python_result_priority() {
         let moved = semantics(Operation::Move, "mov");
         assert_eq!(kind_of(&moved, &[], &[]), Kind::Copy);
-        assert_eq!(kind_of(&moved, &[Arg::Opaque(Opaque::new(None))], &[]), Kind::Copy);
+        assert_eq!(
+            kind_of(&moved, &[Arg::Opaque(Opaque::new(None))], &[]),
+            Kind::Copy
+        );
         assert_eq!(kind_of(&moved, &[cell()], &[]), Kind::Load);
         assert_eq!(kind_of(&moved, &[], &[cell()]), Kind::Store);
         assert_eq!(kind_of(&moved, &[cell()], &[cell()]), Kind::Store);
@@ -2238,8 +2241,14 @@ mod tests {
             kind_of(&semantics(Operation::Compare, "unknown"), &[], &[]),
             Kind::Sub
         );
-        assert_eq!(kind_of(&semantics(Operation::Compare, ""), &[], &[]), Kind::Sub);
-        assert_eq!(kind_of(&Semantics::new(Operation::Compare), &[], &[]), Kind::Sub);
+        assert_eq!(
+            kind_of(&semantics(Operation::Compare, ""), &[], &[]),
+            Kind::Sub
+        );
+        assert_eq!(
+            kind_of(&Semantics::new(Operation::Compare), &[], &[]),
+            Kind::Sub
+        );
         assert_eq!(
             kind_of(&semantics(Operation::Branch, "jl"), &[], &[]),
             Kind::Branch
@@ -2622,11 +2631,18 @@ mod tests {
             vec![(&used, &provenance), (&defined, &provenance)]
         );
         assert!(
-            rebuilt.integer_ranges.iter().all(|(_, range)| range == &interval),
+            rebuilt
+                .integer_ranges
+                .iter()
+                .all(|(_, range)| range == &interval),
             "every renamed value retains the Python range fact"
         );
         assert_eq!(
-            rebuilt.integer_ranges.keys().copied().collect::<BTreeSet<_>>(),
+            rebuilt
+                .integer_ranges
+                .keys()
+                .copied()
+                .collect::<BTreeSet<_>>(),
             BTreeSet::from([used, defined])
         );
         assert_eq!(rebuilt.loop_trip_counts, [(0, 3)]);
@@ -2661,10 +2677,8 @@ mod tests {
         ];
         let mut body = MirBody::new(0, vec![MirBlock::new(0, vec![], vec![operation], vec![])]);
         body.pointer_values.extend([first, second]);
-        body.pointer_seeds.insert(
-            first,
-            Provenance::one(MemoryObject::new(MemoryKind::Frame)),
-        );
+        body.pointer_seeds
+            .insert(first, Provenance::one(MemoryObject::new(MemoryKind::Frame)));
         body.pointer_seeds.insert(
             second,
             Provenance::one(MemoryObject::new(MemoryKind::Global)),

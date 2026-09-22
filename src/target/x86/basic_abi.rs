@@ -15,8 +15,8 @@ use crate::codegen::machine::{
 };
 
 use super::{
-    plan_basic_frame, BasicFramePlan, BasicFramePlanError, BasicRuntime, X86Opcode, X86Register,
-    X86RegisterClass,
+    BasicFramePlan, BasicFramePlanError, BasicRuntime, X86Opcode, X86Register, X86RegisterClass,
+    plan_basic_frame,
 };
 
 /// A BASIC function together with the immutable frame plan that shaped it.
@@ -337,12 +337,15 @@ fn is_local_size_producer(instruction: Option<&MachineInstruction>, local_bytes:
     {
         return false;
     }
-    let [destination, MachineOperand {
-        kind: MachineOperandKind::Immediate(immediate),
-        role: OperandRole::None,
-        constraint: None,
-        tied_to: None,
-    }] = instruction.operands.as_slice()
+    let [
+        destination,
+        MachineOperand {
+            kind: MachineOperandKind::Immediate(immediate),
+            role: OperandRole::None,
+            constraint: None,
+            tied_to: None,
+        },
+    ] = instruction.operands.as_slice()
     else {
         return false;
     };

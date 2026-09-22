@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 
 use super::error::Diagnostic;
-use super::lexer::lex;
 use super::lexer::Token;
 use super::lexer::TokenKind;
+use super::lexer::lex;
 use super::syntax::AssignTarget;
 use super::syntax::BinaryOp;
 use super::syntax::Expr;
@@ -103,7 +103,7 @@ impl Parser {
                 return Err(Diagnostic::new(
                     token.span,
                     "fixed-point storage must be i16 or i32",
-                ))
+                ));
             }
         };
         self.expect(

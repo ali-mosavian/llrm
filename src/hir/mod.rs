@@ -17,7 +17,7 @@ pub use calls::{
 pub use globals::GlobalPlanError;
 pub use lower::{
     InvalidProperty as LowerInvalidProperty, LowerError, UnsupportedFeature, UnsupportedOperand,
-    lower_module as lower_to_ir,
+    lower_module as lower_to_ir, lower_module_with_array_order as lower_to_ir_with_array_order,
 };
 pub use model::*;
 pub use text::{TextError, parse as parse_text, write as write_text};

@@ -92,7 +92,7 @@ fn count_uses(function: &Function) -> BTreeMap<ValueId, usize> {
 
 fn count_instruction_uses(instruction: &Instruction, uses: &mut BTreeMap<ValueId, usize>) {
     match &instruction.kind {
-        InstructionKind::StackAlloc { .. } => {}
+        InstructionKind::StackAlloc { .. } | InstructionKind::ParameterAddress { .. } => {}
         InstructionKind::Phi { incoming } => {
             for incoming in incoming {
                 count_operand(&incoming.value, uses);

@@ -975,7 +975,7 @@ impl<'a> FunctionCompiler<'a> {
                         return Err(Diagnostic::new(
                             *span,
                             "void function cannot return a value",
-                        ))
+                        ));
                     }
                     (_, None) => return Err(Diagnostic::new(*span, "return value is required")),
                     (result, Some(expression)) => {
@@ -1739,7 +1739,7 @@ impl<'a> FunctionCompiler<'a> {
                                 hir::Operand::ArrayElement(place, vec![index])
                             }
                             Storage::Parameter(_) => {
-                                return Err(Diagnostic::new(span, "parameters are immutable"))
+                                return Err(Diagnostic::new(span, "parameters are immutable"));
                             }
                             Storage::Reference(pointer) => hir::Operand::IndirectPlace {
                                 base: pointer,
@@ -1754,7 +1754,7 @@ impl<'a> FunctionCompiler<'a> {
                             Storage::Place(place) => (place, None, Vec::new()),
                             Storage::ArrayView { place, index } => (place, None, vec![index]),
                             Storage::Parameter(_) => {
-                                return Err(Diagnostic::new(span, "parameters are immutable"))
+                                return Err(Diagnostic::new(span, "parameters are immutable"));
                             }
                             Storage::Reference(pointer) => (0, Some(pointer), Vec::new()),
                         };
@@ -1809,7 +1809,7 @@ impl<'a> FunctionCompiler<'a> {
                                 (0, Some(pointer), Vec::new())
                             }
                             Storage::Parameter(_) | Storage::ArrayView { .. } => {
-                                return Err(Diagnostic::new(span, "array has no storage"))
+                                return Err(Diagnostic::new(span, "array has no storage"));
                             }
                         };
                         AssignmentPlace::Struct(StructView {
@@ -1869,7 +1869,7 @@ impl<'a> FunctionCompiler<'a> {
                     Storage::Place(place) => (place, None, Vec::new()),
                     Storage::ArrayView { place, index } => (place, None, vec![index]),
                     Storage::Parameter(_) => {
-                        return Err(Diagnostic::new(span, "struct has no addressable storage"))
+                        return Err(Diagnostic::new(span, "struct has no addressable storage"));
                     }
                     Storage::Reference(pointer) => (0, Some(pointer), Vec::new()),
                 };
@@ -1906,7 +1906,7 @@ impl<'a> FunctionCompiler<'a> {
                         (0, Some(pointer), Vec::new())
                     }
                     Storage::Parameter(_) | Storage::ArrayView { .. } => {
-                        return Err(Diagnostic::new(span, "array has no storage"))
+                        return Err(Diagnostic::new(span, "array has no storage"));
                     }
                 };
                 Ok(StructView {
@@ -2097,10 +2097,10 @@ impl<'a> FunctionCompiler<'a> {
                         return Err(Diagnostic::new(
                             *span,
                             "unary '-' requires a signed integer or float",
-                        ))
+                        ));
                     }
                     UnaryOp::Not if operand.type_name != TypeName::Bool => {
-                        return Err(Diagnostic::new(*span, "not requires bool"))
+                        return Err(Diagnostic::new(*span, "not requires bool"));
                     }
                     _ => {}
                 }
@@ -2562,7 +2562,7 @@ impl<'a> FunctionCompiler<'a> {
             BinaryOp::Multiply if is_float(left.type_name) => "fmul",
             BinaryOp::Divide if is_float(left.type_name) => "fdiv",
             BinaryOp::Remainder if is_float(left.type_name) => {
-                return Err(Diagnostic::new(span, "'%' is not defined for floats"))
+                return Err(Diagnostic::new(span, "'%' is not defined for floats"));
             }
             BinaryOp::Add => "add",
             BinaryOp::Subtract => "sub",
@@ -2943,14 +2943,14 @@ impl<'a> FunctionCompiler<'a> {
                 return Err(Diagnostic::new(
                     span,
                     format!("{name}() takes no arguments"),
-                ))
+                ));
             }
             "dim" => return Err(Diagnostic::new(span, "dim() takes one dimension index")),
             _ => {
                 return Err(Diagnostic::new(
                     span,
                     format!("array has no method {name:?}"),
-                ))
+                ));
             }
         };
         let operand = if let Some(length) = length {
@@ -3115,7 +3115,7 @@ impl<'a> FunctionCompiler<'a> {
                 return Err(Diagnostic::new(
                     *span,
                     "a by-value parameter has no borrowable storage",
-                ))
+                ));
             }
         };
         let result = self.value_type(pointer_type);

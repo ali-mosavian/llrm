@@ -769,8 +769,8 @@ impl fmt::Display for FixupErrorKind {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse, FixupError, FixupErrorKind, FixupMode, Frame, FrameDatum, FrameMethod, Location,
-        Target, TargetMethod,
+        FixupError, FixupErrorKind, FixupMode, Frame, FrameDatum, FrameMethod, Location, Target,
+        TargetMethod, parse,
     };
     use crate::object::omf::read::ReadError;
     use crate::object::omf::record::Record;

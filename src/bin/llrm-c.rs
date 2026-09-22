@@ -358,7 +358,7 @@ mod tests {
         let machine = driver::lower_ir_to_machine(&module).unwrap();
         let text = llrm::codegen::machine::write_text(&machine);
 
-        assert!(text.starts_with("qmir 7\n"));
+        assert!(text.starts_with("qmir 9\n"));
         assert!(text.contains(" far_cdecl "));
         assert!(text.contains(" c "));
         assert!(llrm::codegen::machine::parse_text(&text).is_ok());

@@ -5,8 +5,11 @@ mod basic_abi;
 mod basic_abi_expand;
 mod c_abi;
 mod call_clobbers;
+mod control_flow;
 mod encoding;
 mod fixup;
+mod float_control;
+mod float_stack;
 mod frame;
 mod frame_indices;
 mod instructions;
@@ -19,6 +22,8 @@ mod registers;
 mod segmented_memory;
 mod selection;
 mod semantic_registers;
+mod spill_forward;
+mod timing;
 mod verify;
 mod word_merge;
 
@@ -36,14 +41,22 @@ pub use c_abi::{
 pub use call_clobbers::{
     CallClobberError, materialize_c_call_clobbers, materialize_far_call_clobbers,
 };
+pub use control_flow::{ControlFlowError, ControlFlowFacts, place_and_thread};
 pub use encoding::{EncodeError, EncodedInstruction, encode, encode_with_fixups, encoded_size};
 pub use fixup::X86FixupKind;
-pub use frame::{BasicFramePlan, BasicFramePlanError, BasicRuntime, X86FrameLayout, plan_basic_frame};
+pub use float_control::{
+    X86FloatControlError, X87StoreSynchronization, expand_x87_truncation,
+    expand_x87_truncation_with_synchronization,
+};
+pub use float_stack::{X86FloatAllocationError, allocate_x87_stack};
+pub use frame::{
+    BasicFramePlan, BasicFramePlanError, BasicRuntime, X86FrameLayout, plan_basic_frame,
+};
 pub use frame_indices::{
     FrameIndexMaterializationError, materialize_frame_indices,
     materialize_frame_indices_with_layout,
 };
-pub use instructions::{ComparisonKind, ConditionCode, OperandSize, X86Opcode};
+pub use instructions::{ComparisonKind, ConditionCode, OperandSize, X86Opcode, X87MemoryFormat};
 pub use jump_layout::{JumpLayoutVerificationStage, X86JumpLayoutError, relax_and_encode_jumps};
 pub use mc::{McLowerError, UnresolvedOperand, lower_instruction};
 pub use mc_encode::{McEncodeVerificationStage, X86McEncodeError, encode_mc_module};
@@ -56,5 +69,7 @@ pub use registers::{X86Register, X86RegisterClass};
 pub use segmented_memory::{SegmentedMemoryExpansionError, expand_allocated_segmented_memory};
 pub use selection::{FunctionProperty, SelectionError, select_module};
 pub use semantic_registers::root;
+pub use spill_forward::forward_frame_reloads;
+pub use timing::{X86Cpu, X86FloatCosts};
 pub use verify::verify_machine;
-pub use word_merge::{expand_allocated_word_merges, WordMergeExpansionError};
+pub use word_merge::{WordMergeExpansionError, expand_allocated_word_merges};

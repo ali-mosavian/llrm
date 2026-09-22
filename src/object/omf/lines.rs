@@ -103,7 +103,7 @@ impl std::error::Error for LineError {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse, LineEntry};
+    use super::{LineEntry, parse};
     use crate::object::omf::read::ReadError;
     use crate::object::omf::record::Record;
 

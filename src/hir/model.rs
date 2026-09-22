@@ -1,6 +1,6 @@
 use std::fmt;
 
-pub const FORMAT_VERSION: u32 = 2;
+pub const FORMAT_VERSION: u32 = 3;
 
 macro_rules! entity_id {
     ($name:ident) => {
@@ -171,7 +171,7 @@ pub struct Type {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Storage {
     Local,
-    Parameter,
+    Parameter { index: u32 },
     Static,
     Module,
     Common,
@@ -182,11 +182,20 @@ impl Storage {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Local => "local",
-            Self::Parameter => "parameter",
+            Self::Parameter { .. } => "parameter",
             Self::Static => "static",
             Self::Module => "module",
             Self::Common => "common",
             Self::External => "external",
+        }
+    }
+}
+
+impl fmt::Display for Storage {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Parameter { index } => write!(formatter, "parameter({index})"),
+            storage => formatter.write_str(storage.as_str()),
         }
     }
 }

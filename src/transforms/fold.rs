@@ -106,6 +106,7 @@ impl ConstantFold {
             } => self.fold_select(condition, then_value, else_value, result.type_id),
             InstructionKind::Phi { .. }
             | InstructionKind::StackAlloc { .. }
+            | InstructionKind::ParameterAddress { .. }
             | InstructionKind::Load { .. }
             | InstructionKind::Store { .. }
             | InstructionKind::ComposePointer { .. }

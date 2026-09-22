@@ -3,8 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::support::diagnostic::{Diagnostic, Severity};
 
 use super::{
-    BlockId, CallableId, DataId, Function, Instruction, InstructionId, Module, Opcode, Operand,
-    Program, Terminator, Type, TypeId, TypeKind, ValueId, FORMAT_VERSION,
+    AddressKind, BlockId, CallableId, DataId, FORMAT_VERSION, Function, Instruction, InstructionId,
+    Module, Opcode, Operand, Program, Storage, Terminator, Type, TypeId, TypeKind, ValueId,
 };
 
 pub fn verify(program: &Program) -> Result<(), Vec<Diagnostic>> {
@@ -185,8 +185,54 @@ impl Verifier {
         for value in &function.values {
             self.type_exists(value.type_id, type_ids, "value");
         }
+        let values = function
+            .values
+            .iter()
+            .map(|value| (value.id, value.type_id))
+            .collect::<BTreeMap<_, _>>();
+        let mut parameter_places = BTreeSet::new();
         for place in &function.places {
             self.type_exists(place.type_id, type_ids, "place");
+            if let Storage::Parameter { index } = place.storage {
+                if !parameter_places.insert(index) {
+                    self.error(format!(
+                        "function {} has multiple places for parameter {}",
+                        function.id, index
+                    ));
+                }
+                let parameter_type = usize::try_from(index)
+                    .ok()
+                    .and_then(|index| function.parameters.get(index))
+                    .and_then(|value| values.get(value))
+                    .copied();
+                if parameter_type != Some(place.type_id) {
+                    self.error(format!(
+                        "place {} parameter {} type does not match its formal",
+                        place.id, index
+                    ));
+                }
+                if types
+                    .get(&place.type_id)
+                    .is_none_or(|type_| type_.width != place.extent)
+                {
+                    self.error(format!(
+                        "place {} parameter {} extent does not match its type",
+                        place.id, index
+                    ));
+                }
+                if place.address != AddressKind::Near || place.offset != 0 {
+                    self.error(format!(
+                        "place {} parameter {} must be an unoffset near cell",
+                        place.id, index
+                    ));
+                }
+                if place.symbol.get() != 0 {
+                    self.error(format!(
+                        "place {} parameter {} must not name a data object",
+                        place.id, index
+                    ));
+                }
+            }
             if place.symbol.get() != 0 && !data_ids.contains(&place.symbol) {
                 self.error(format!(
                     "place {} refers to unknown data object {}",
@@ -194,6 +240,12 @@ impl Verifier {
                 ));
             }
         }
+
+        let places = function
+            .places
+            .iter()
+            .map(|place| (place.id, place.type_id))
+            .collect::<BTreeMap<_, _>>();
 
         let mut instruction_ids = BTreeSet::new();
         for block in &function.blocks {
@@ -205,15 +257,20 @@ impl Verifier {
                     self.value_exists(*result, &value_ids, "instruction result");
                 }
                 for operand in &instruction.operands {
-                    self.operand(operand, type_ids, &value_ids, &place_ids);
+                    self.operand(
+                        operand, type_ids, types, &value_ids, &values, &place_ids, &places,
+                    );
                 }
                 self.concat_types(function, instruction, types);
             }
             self.terminator(
                 &block.terminator,
                 type_ids,
+                types,
                 &value_ids,
+                &values,
                 &place_ids,
+                &places,
                 &block_ids,
             );
         }
@@ -300,8 +357,11 @@ impl Verifier {
         &mut self,
         terminator: &Terminator,
         type_ids: &BTreeSet<TypeId>,
+        types: &BTreeMap<TypeId, &Type>,
         value_ids: &BTreeSet<ValueId>,
+        values: &BTreeMap<ValueId, TypeId>,
         place_ids: &BTreeSet<super::PlaceId>,
+        places: &BTreeMap<super::PlaceId, TypeId>,
         block_ids: &BTreeSet<BlockId>,
     ) {
         match terminator {
@@ -311,7 +371,9 @@ impl Verifier {
                 then_block,
                 else_block,
             } => {
-                self.operand(condition, type_ids, value_ids, place_ids);
+                self.operand(
+                    condition, type_ids, types, value_ids, values, place_ids, places,
+                );
                 self.block_exists(*then_block, block_ids, "branch");
                 self.block_exists(*else_block, block_ids, "branch");
             }
@@ -320,7 +382,9 @@ impl Verifier {
                 cases,
                 default,
             } => {
-                self.operand(selector, type_ids, value_ids, place_ids);
+                self.operand(
+                    selector, type_ids, types, value_ids, values, place_ids, places,
+                );
                 let mut values = BTreeSet::new();
                 for (value, target) in cases {
                     if !values.insert(*value) {
@@ -331,7 +395,7 @@ impl Verifier {
                 self.block_exists(*default, block_ids, "switch default");
             }
             Terminator::Return(Some(value)) => {
-                self.operand(value, type_ids, value_ids, place_ids);
+                self.operand(value, type_ids, types, value_ids, values, place_ids, places);
             }
             Terminator::Return(None) | Terminator::Unreachable => {}
         }
@@ -341,8 +405,11 @@ impl Verifier {
         &mut self,
         operand: &Operand,
         type_ids: &BTreeSet<TypeId>,
+        types: &BTreeMap<TypeId, &Type>,
         value_ids: &BTreeSet<ValueId>,
+        values: &BTreeMap<ValueId, TypeId>,
         place_ids: &BTreeSet<super::PlaceId>,
+        places: &BTreeMap<super::PlaceId, TypeId>,
     ) {
         match operand {
             Operand::Value(value) => self.value_exists(*value, value_ids, "operand"),
@@ -357,26 +424,108 @@ impl Verifier {
                     self.error(format!("element refers to unknown place {place}"));
                 }
                 for index in indices {
-                    self.operand(index, type_ids, value_ids, place_ids);
+                    self.operand(index, type_ids, types, value_ids, values, place_ids, places);
+                }
+                let Some(root_type_id) = places.get(place) else {
+                    return;
+                };
+                let Some(root) = types.get(root_type_id) else {
+                    return;
+                };
+                if root.kind != TypeKind::Array
+                    || !root
+                        .element
+                        .is_some_and(|element| types.contains_key(&element))
+                    || indices.len() != root.bounds.len()
+                {
+                    self.error(format!("invalid array element for place {place}"));
+                }
+                for index in indices {
+                    if !operand_is_integer(index, values, places, types) {
+                        self.error("array index is not an integer");
+                    }
                 }
             }
             Operand::Projection {
                 place,
                 indices,
+                offset,
                 type_id,
-                ..
             } => {
                 if !place_ids.contains(place) {
                     self.error(format!("projection refers to unknown place {place}"));
                 }
                 self.type_exists(*type_id, type_ids, "projection");
                 for index in indices {
-                    self.operand(index, type_ids, value_ids, place_ids);
+                    self.operand(index, type_ids, types, value_ids, values, place_ids, places);
+                }
+                let (Some(root_type_id), Some(projected)) = (places.get(place), types.get(type_id))
+                else {
+                    return;
+                };
+                let Some(root) = types.get(root_type_id) else {
+                    return;
+                };
+                let container = if root.kind == TypeKind::Array {
+                    root.element.and_then(|element| types.get(&element))
+                } else {
+                    Some(root)
+                };
+                let Some(container) = container else {
+                    self.error(format!("invalid projection for place {place}"));
+                    return;
+                };
+                if offset
+                    .checked_add(projected.width)
+                    .is_none_or(|end| end > container.width)
+                {
+                    self.error(format!("projection exceeds place {place}"));
+                }
+                let expected_rank = if root.kind == TypeKind::Array {
+                    root.bounds.len()
+                } else {
+                    0
+                };
+                if indices.len() != expected_rank {
+                    self.error(format!("invalid projection rank for place {place}"));
+                }
+                for index in indices {
+                    if !operand_is_integer(index, values, places, types) {
+                        self.error("projection index is not an integer");
+                    }
                 }
             }
-            Operand::Indirect { base, type_id, .. } => {
+            Operand::Indirect {
+                base,
+                offset,
+                type_id,
+                ..
+            } => {
                 self.value_exists(*base, value_ids, "indirect base");
                 self.type_exists(*type_id, type_ids, "indirect result");
+                let (Some(base_type_id), Some(accessed)) = (values.get(base), types.get(type_id))
+                else {
+                    return;
+                };
+                let Some(pointer) = types.get(base_type_id) else {
+                    return;
+                };
+                if pointer.kind != TypeKind::Pointer {
+                    self.error("indirect place disagrees with pointer type");
+                    return;
+                }
+                if let Some(element) = pointer.element {
+                    let Some(pointee) = types.get(&element) else {
+                        self.error("indirect place disagrees with pointer type");
+                        return;
+                    };
+                    if offset
+                        .checked_add(accessed.width)
+                        .is_none_or(|end| end > pointee.width)
+                    {
+                        self.error("indirect place exceeds its pointee");
+                    }
+                }
             }
         }
     }
@@ -429,6 +578,21 @@ fn operand_type(
     }
 }
 
+fn operand_is_integer(
+    operand: &Operand,
+    values: &BTreeMap<ValueId, TypeId>,
+    places: &BTreeMap<super::PlaceId, TypeId>,
+    types: &BTreeMap<TypeId, &Type>,
+) -> bool {
+    matches!(
+        operand_type(operand, values, places).and_then(|type_id| types.get(&type_id)),
+        Some(Type {
+            kind: TypeKind::Integer,
+            ..
+        })
+    )
+}
+
 fn collect_ids<I, T>(ids: I, kind: &str, diagnostics: &mut Vec<Diagnostic>) -> BTreeSet<T>
 where
     I: IntoIterator<Item = T>,
@@ -451,9 +615,254 @@ mod tests {
     use super::verify_module;
     use crate::hir::{
         AddressKind, Block, BlockId, CallDistance, ConstantValue, FloatEvaluation, Function,
-        FunctionId, Instruction, InstructionId, Linkage, Module, ModuleId, Opcode, Operand,
-        ProcedureAbi, StackCleanup, Terminator, Type, TypeId, TypeKind, Value, ValueId,
+        FunctionId, Instruction, InstructionId, Linkage, Module, ModuleId, Opcode, Operand, Place,
+        PlaceId, ProcedureAbi, StackCleanup, Storage, Terminator, Type, TypeId, TypeKind, Value,
+        ValueId,
     };
+
+    fn type_(id: u32, kind: TypeKind, width: usize, element: Option<u32>) -> Type {
+        Type {
+            id: TypeId::new(id),
+            name: format!("type{id}"),
+            kind,
+            width,
+            signed: (kind == TypeKind::Integer).then_some(true),
+            evaluation: FloatEvaluation::None,
+            element: element.map(TypeId::new),
+            bounds: Vec::new(),
+            address: AddressKind::None,
+        }
+    }
+
+    fn lvalue_module(operand: Operand) -> Module {
+        let mut array = type_(5, TypeKind::Array, 8, Some(3));
+        array.bounds = vec![(0, 1)];
+        let mut pointer = type_(6, TypeKind::Pointer, 2, Some(3));
+        pointer.address = AddressKind::Near;
+        let mut incomplete_pointer = type_(7, TypeKind::Pointer, 2, None);
+        incomplete_pointer.address = AddressKind::Near;
+
+        Module {
+            id: ModuleId::new(0),
+            name: "lvalues".into(),
+            types: vec![
+                type_(0, TypeKind::Void, 0, None),
+                type_(1, TypeKind::Integer, 2, None),
+                type_(2, TypeKind::Boolean, 1, None),
+                type_(3, TypeKind::Opaque, 4, None),
+                type_(4, TypeKind::Integer, 1, None),
+                array,
+                pointer,
+                incomplete_pointer,
+            ],
+            functions: vec![Function {
+                id: FunctionId::new(0),
+                name: "main".into(),
+                result_type: TypeId::new(0),
+                values: vec![
+                    Value {
+                        id: ValueId::new(0),
+                        type_id: TypeId::new(1),
+                    },
+                    Value {
+                        id: ValueId::new(1),
+                        type_id: TypeId::new(2),
+                    },
+                    Value {
+                        id: ValueId::new(2),
+                        type_id: TypeId::new(6),
+                    },
+                    Value {
+                        id: ValueId::new(3),
+                        type_id: TypeId::new(1),
+                    },
+                    Value {
+                        id: ValueId::new(4),
+                        type_id: TypeId::new(7),
+                    },
+                ],
+                places: vec![
+                    Place {
+                        id: PlaceId::new(0),
+                        name: "array".into(),
+                        type_id: TypeId::new(5),
+                        storage: Storage::Local,
+                        offset: 0,
+                        symbol: crate::hir::DataId::new(0),
+                        extent: 8,
+                        address: AddressKind::Near,
+                    },
+                    Place {
+                        id: PlaceId::new(1),
+                        name: "scalar".into(),
+                        type_id: TypeId::new(3),
+                        storage: Storage::Local,
+                        offset: 0,
+                        symbol: crate::hir::DataId::new(0),
+                        extent: 4,
+                        address: AddressKind::Near,
+                    },
+                ],
+                blocks: vec![Block {
+                    id: BlockId::new(0),
+                    instructions: vec![Instruction {
+                        id: InstructionId::new(0),
+                        opcode: Opcode::Load,
+                        results: Vec::new(),
+                        operands: vec![operand],
+                        callee: None,
+                    }],
+                    terminator: Terminator::Return(None),
+                }],
+                entry: BlockId::new(0),
+                parameters: Vec::new(),
+                abi: ProcedureAbi {
+                    cleanup: StackCleanup::Callee,
+                    distance: CallDistance::Far,
+                    parameter_bytes: 0,
+                },
+                calls: Vec::new(),
+                error_handler: None,
+                error_handler_local: false,
+                external_entries: Vec::new(),
+                linkage: Linkage::Internal,
+            }],
+            data: Vec::new(),
+            callables: Vec::new(),
+        }
+    }
+
+    fn assert_lvalue_rejected(operand: Operand, expected: &str) {
+        let diagnostics = verify_module(&lvalue_module(operand)).expect_err("lvalue is invalid");
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains(expected)),
+            "expected a diagnostic containing {expected:?}; got {diagnostics:#?}"
+        );
+    }
+
+    #[test]
+    fn verifies_element_lvalues_against_their_array_shape_and_index_type() {
+        assert_lvalue_rejected(
+            Operand::Element {
+                place: PlaceId::new(1),
+                indices: Vec::new(),
+            },
+            "invalid array element",
+        );
+        assert_lvalue_rejected(
+            Operand::Element {
+                place: PlaceId::new(0),
+                indices: Vec::new(),
+            },
+            "invalid array element",
+        );
+        assert_lvalue_rejected(
+            Operand::Element {
+                place: PlaceId::new(0),
+                indices: vec![Operand::Value(ValueId::new(1))],
+            },
+            "array index is not an integer",
+        );
+        let mut missing_element = lvalue_module(Operand::Element {
+            place: PlaceId::new(0),
+            indices: vec![Operand::Value(ValueId::new(0))],
+        });
+        missing_element.types[5].element = None;
+        assert!(
+            verify_module(&missing_element)
+                .expect_err("array elements require a declared element type")
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("invalid array element"))
+        );
+        verify_module(&lvalue_module(Operand::Element {
+            place: PlaceId::new(0),
+            indices: vec![Operand::Value(ValueId::new(0))],
+        }))
+        .expect("integer-indexed element of a rank-one array is valid");
+    }
+
+    #[test]
+    fn verifies_projection_lvalues_against_their_container_shape_and_width() {
+        assert_lvalue_rejected(
+            Operand::Projection {
+                place: PlaceId::new(1),
+                indices: Vec::new(),
+                offset: 3,
+                type_id: TypeId::new(1),
+            },
+            "projection exceeds place 1",
+        );
+        assert_lvalue_rejected(
+            Operand::Projection {
+                place: PlaceId::new(1),
+                indices: vec![Operand::Value(ValueId::new(0))],
+                offset: 0,
+                type_id: TypeId::new(1),
+            },
+            "invalid projection rank for place 1",
+        );
+        assert_lvalue_rejected(
+            Operand::Projection {
+                place: PlaceId::new(0),
+                indices: vec![Operand::Value(ValueId::new(1))],
+                offset: 0,
+                type_id: TypeId::new(1),
+            },
+            "projection index is not an integer",
+        );
+        verify_module(&lvalue_module(Operand::Projection {
+            place: PlaceId::new(0),
+            indices: vec![Operand::Value(ValueId::new(0))],
+            offset: 2,
+            type_id: TypeId::new(1),
+        }))
+        .expect("integer-indexed projection within every array element is valid");
+        verify_module(&lvalue_module(Operand::Projection {
+            place: PlaceId::new(1),
+            indices: Vec::new(),
+            offset: 3,
+            type_id: TypeId::new(4),
+        }))
+        .expect("scalar projection within its root is valid");
+    }
+
+    #[test]
+    fn verifies_indirect_lvalues_against_their_pointer_pointee_and_width() {
+        assert_lvalue_rejected(
+            Operand::Indirect {
+                base: ValueId::new(3),
+                offset: 0,
+                type_id: TypeId::new(1),
+                volatile: false,
+            },
+            "indirect place disagrees with pointer type",
+        );
+        assert_lvalue_rejected(
+            Operand::Indirect {
+                base: ValueId::new(2),
+                offset: 3,
+                type_id: TypeId::new(1),
+                volatile: false,
+            },
+            "indirect place exceeds its pointee",
+        );
+        verify_module(&lvalue_module(Operand::Indirect {
+            base: ValueId::new(2),
+            offset: 2,
+            type_id: TypeId::new(1),
+            volatile: false,
+        }))
+        .expect("indirect access within its pointee is valid");
+        verify_module(&lvalue_module(Operand::Indirect {
+            base: ValueId::new(4),
+            offset: 0,
+            type_id: TypeId::new(1),
+            volatile: false,
+        }))
+        .expect("a raw pointer has no declared pointee bound to exceed");
+    }
 
     #[test]
     fn rejects_concat_with_wrong_arity_non_i16_half_or_non_pointer_result() {
@@ -570,40 +979,52 @@ mod tests {
         wrong_arity.functions[0].blocks[0].instructions[0]
             .operands
             .pop();
-        assert!(verify_module(&wrong_arity)
-            .expect_err("wrong concat arity must be rejected")
-            .iter()
-            .any(|diagnostic| diagnostic.message.contains("pointer concat has the wrong arity")));
+        assert!(
+            verify_module(&wrong_arity)
+                .expect_err("wrong concat arity must be rejected")
+                .iter()
+                .any(|diagnostic| diagnostic
+                    .message
+                    .contains("pointer concat has the wrong arity"))
+        );
 
         let mut wrong_result_arity = module.clone();
         wrong_result_arity.functions[0].blocks[0].instructions[0]
             .results
             .clear();
-        assert!(verify_module(&wrong_result_arity)
-            .expect_err("wrong concat result arity must be rejected")
-            .iter()
-            .any(|diagnostic| diagnostic.message.contains("pointer concat has the wrong arity")));
+        assert!(
+            verify_module(&wrong_result_arity)
+                .expect_err("wrong concat result arity must be rejected")
+                .iter()
+                .any(|diagnostic| diagnostic
+                    .message
+                    .contains("pointer concat has the wrong arity"))
+        );
 
         let mut narrow_pointer_result = module.clone();
         narrow_pointer_result.types[3].width = 2;
-        assert!(verify_module(&narrow_pointer_result)
-            .expect_err("two-byte concat pointer result must be rejected")
-            .iter()
-            .any(|diagnostic| {
-                diagnostic
-                    .message
-                    .contains("pointer concat is not INTEGER:INTEGER to 16:16")
-            }));
+        assert!(
+            verify_module(&narrow_pointer_result)
+                .expect_err("two-byte concat pointer result must be rejected")
+                .iter()
+                .any(|diagnostic| {
+                    diagnostic
+                        .message
+                        .contains("pointer concat is not INTEGER:INTEGER to 16:16")
+                })
+        );
 
         let mut non_pointer_result = module;
         non_pointer_result.functions[0].values[2].type_id = TypeId::new(2);
-        assert!(verify_module(&non_pointer_result)
-            .expect_err("non-pointer concat result must be rejected")
-            .iter()
-            .any(|diagnostic| {
-                diagnostic
-                    .message
-                    .contains("pointer concat is not INTEGER:INTEGER to 16:16")
-            }));
+        assert!(
+            verify_module(&non_pointer_result)
+                .expect_err("non-pointer concat result must be rejected")
+                .iter()
+                .any(|diagnostic| {
+                    diagnostic
+                        .message
+                        .contains("pointer concat is not INTEGER:INTEGER to 16:16")
+                })
+        );
     }
 }

@@ -98,9 +98,7 @@ fn parse_passes(value: &str) -> Result<Vec<PassName>, String> {
         .split(',')
         .map(|name| match name {
             "algebraic-simplify" => Ok(PassName::AlgebraicSimplify),
-            "common-subexpression-elimination" => {
-                Ok(PassName::CommonSubexpressionElimination)
-            }
+            "common-subexpression-elimination" => Ok(PassName::CommonSubexpressionElimination),
             "constant-fold" => Ok(PassName::ConstantFold),
             "dead-code-elimination" => Ok(PassName::DeadCodeElimination),
             "dead-store-elimination" => Ok(PassName::DeadStoreElimination),
@@ -152,9 +150,9 @@ fn run_pipeline(
                 llrm::transforms::AlgebraicSimplify::new(&module)
                     .map_err(PipelineError::Algebraic)?,
             ),
-            PassName::CommonSubexpressionElimination => manager.add_pass(
-                llrm::transforms::CommonSubexpressionElimination::new(),
-            ),
+            PassName::CommonSubexpressionElimination => {
+                manager.add_pass(llrm::transforms::CommonSubexpressionElimination::new())
+            }
             PassName::ConstantFold => manager.add_pass(
                 llrm::transforms::ConstantFold::new(&module).map_err(PipelineError::Fold)?,
             ),
@@ -308,12 +306,8 @@ mod tests {
             "end\n",
         );
 
-        let output = run_pipeline(
-            source,
-            &[PassName::CommonSubexpressionElimination],
-            true,
-        )
-        .unwrap();
+        let output =
+            run_pipeline(source, &[PassName::CommonSubexpressionElimination], true).unwrap();
 
         assert!(output.contains("inst 0 results [2:0]"));
         assert!(!output.contains("inst 1 results [3:0]"));

@@ -11,7 +11,7 @@ use std::fmt;
 use crate::mc::{DataFragment, FragmentId, MCFragment, MCModule, SectionId};
 use crate::support::diagnostic::Diagnostic;
 
-use super::{encode_with_fixups, EncodeError};
+use super::{EncodeError, encode_with_fixups};
 
 /// Which side of the immutable encoding boundary failed MC verification.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

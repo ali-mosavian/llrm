@@ -142,8 +142,5 @@ fn decimal_integer_literals_select_the_qbasic_width_without_changing_based_bits(
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(
-        based,
-        vec![(-32768, None), (-1, None), (65535, Some('&'))]
-    );
+    assert_eq!(based, vec![(-32768, None), (-1, None), (65535, Some('&'))]);
 }

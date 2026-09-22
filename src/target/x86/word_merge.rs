@@ -199,7 +199,12 @@ pub fn expand_allocated_word_merges(
 }
 
 fn preflight(function: &MachineFunction) -> Result<usize, WordMergeExpansionError> {
-    if let Some(register) = function.virtual_registers.first() {
+    let anchor_registers = function.anchor_virtual_registers(X86Opcode::Nothing.machine_opcode());
+    if let Some(register) = function
+        .virtual_registers
+        .iter()
+        .find(|register| !anchor_registers.contains(&register.id))
+    {
         return Err(WordMergeExpansionError::DeclaredVirtualRegister {
             register: register.id,
         });
@@ -240,7 +245,9 @@ fn validate_allocated_operands(
             });
         }
         match operand.kind {
-            MachineOperandKind::Register(MachineRegister::Virtual(register)) => {
+            MachineOperandKind::Register(MachineRegister::Virtual(register))
+                if !instruction.is_logical_anchor(X86Opcode::Nothing.machine_opcode()) =>
+            {
                 return Err(WordMergeExpansionError::VirtualRegister {
                     block,
                     instruction: instruction.id,
@@ -527,9 +534,11 @@ mod tests {
             instructions[2].operands,
             vec![physical_operand(X86Register::Eax, OperandRole::Def)]
         );
-        assert!(instructions
-            .iter()
-            .all(|instruction| instruction.flags == InstructionFlags::NONE));
+        assert!(
+            instructions
+                .iter()
+                .all(|instruction| instruction.flags == InstructionFlags::NONE)
+        );
         assert_eq!(encoded_bytes(&expanded), vec![0x52, 0x50, 0x66, 0x58]);
     }
 
@@ -666,6 +675,65 @@ mod tests {
             expand_allocated_word_merges(&malformed),
             Err(WordMergeExpansionError::MalformedMerge { .. })
         ));
+    }
+
+    #[test]
+    fn accepts_anchor_only_logical_virtuals_after_allocation() {
+        let logical = VirtualRegisterId::new(0);
+        let mut input = function(vec![
+            instruction(
+                MachineInstructionId::new(0),
+                X86Opcode::Mov,
+                vec![MachineOperand {
+                    kind: MachineOperandKind::Register(MachineRegister::Virtual(logical)),
+                    role: OperandRole::Def,
+                    constraint: None,
+                    tied_to: None,
+                }],
+            )
+            .anchor(X86Opcode::Nothing.machine_opcode()),
+            merge(1, X86Register::Eax, X86Register::Ax, X86Register::Dx),
+        ]);
+        input
+            .virtual_registers
+            .push(crate::codegen::machine::VirtualRegister {
+                id: logical,
+                class: X86RegisterClass::Dword.machine_class(),
+            });
+
+        let expanded = expand_allocated_word_merges(&input)
+            .expect("an anchor's logical virtual is not an encodable operand");
+
+        assert!(expanded.blocks[0].instructions[0].flags.anchor);
+        assert_eq!(expanded.virtual_registers, input.virtual_registers);
+    }
+
+    #[test]
+    fn rejects_an_encodable_instruction_marked_as_an_anchor() {
+        let logical = VirtualRegisterId::new(0);
+        let mut marked_mov = instruction(
+            MachineInstructionId::new(0),
+            X86Opcode::Mov,
+            vec![MachineOperand {
+                kind: MachineOperandKind::Register(MachineRegister::Virtual(logical)),
+                role: OperandRole::Def,
+                constraint: None,
+                tied_to: None,
+            }],
+        );
+        marked_mov.flags.anchor = true;
+        let mut input = function(vec![marked_mov]);
+        input
+            .virtual_registers
+            .push(crate::codegen::machine::VirtualRegister {
+                id: logical,
+                class: X86RegisterClass::Dword.machine_class(),
+            });
+
+        assert_eq!(
+            expand_allocated_word_merges(&input),
+            Err(WordMergeExpansionError::DeclaredVirtualRegister { register: logical })
+        );
     }
 
     #[test]

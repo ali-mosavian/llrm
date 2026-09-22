@@ -373,7 +373,7 @@ mod tests {
     use crate::model::mir::MirBlock;
 
     use super::{
-        depth, dominators, frontiers, immediate_dominators, irreducible, loops, predecessors, Loop,
+        Loop, depth, dominators, frontiers, immediate_dominators, irreducible, loops, predecessors,
     };
 
     fn block(at: i64, successors: &[i64]) -> MirBlock {
@@ -605,8 +605,10 @@ mod tests {
             MirBlock::new(1, vec![], vec![], vec![2]),
             MirBlock::new(2, vec![], vec![], vec![]),
         ];
-        assert!(frontiers(&chain, 0)
-            .values()
-            .all(|where_| !where_.contains(&1) && !where_.contains(&2)));
+        assert!(
+            frontiers(&chain, 0)
+                .values()
+                .all(|where_| !where_.contains(&1) && !where_.contains(&2))
+        );
     }
 }

@@ -19,8 +19,8 @@ use std::fmt;
 
 use super::{
     FrameIndex, FrameObject, MachineBlockId, MachineFunction, MachineInstruction,
-    MachineInstructionId, MachineOperandKind, MachineRegister, RegisterClass,
-    RegisterConstraint, VirtualRegister, VirtualRegisterId,
+    MachineInstructionId, MachineOperandKind, MachineRegister, RegisterClass, RegisterConstraint,
+    VirtualRegister, VirtualRegisterId,
 };
 
 /// Target facts needed to turn explicit generic spill materialization into Machine IR.
@@ -92,7 +92,10 @@ impl<TargetError: fmt::Display> fmt::Display for SpillMaterializationError<Targe
         match self {
             Self::Target(error) => error.fmt(formatter),
             Self::MissingDeclaredClass { register } => {
-                write!(formatter, "virtual register {register} has no declared class")
+                write!(
+                    formatter,
+                    "virtual register {register} has no declared class"
+                )
             }
             Self::FixedConstraint { register } => write!(
                 formatter,
@@ -168,9 +171,7 @@ where
         .collect::<BTreeMap<_, _>>();
     for spilled in &spills {
         if !classes.contains_key(spilled) {
-            return Err(SpillMaterializationError::MissingDeclaredClass {
-                register: *spilled,
-            });
+            return Err(SpillMaterializationError::MissingDeclaredClass { register: *spilled });
         }
     }
     preflight_spills(function, &spills)?;
@@ -250,21 +251,30 @@ where
                 // must get a real register.  In particular, recursively
                 // spilling a reload puts a load in front of a load forever.
                 unspillable.insert(replacement.register);
-                instructions.push(target.spill_load(
+                let mut reload = target.spill_load(
                     fresh.instruction()?,
                     replacement.register,
                     replacement.frame,
-                ));
+                );
+                // This fact belongs to the allocator, not to the target
+                // opcode: an ordinary selected load is not deletable merely
+                // because it has the same selected shape.
+                reload.flags.spill_reload = true;
+                reload.flags.spill_store = false;
+                instructions.push(reload);
             }
             instructions.push(instruction);
             for register in write_order {
                 let replacement = &replacements[&register];
                 unspillable.insert(replacement.register);
-                instructions.push(target.spill_store(
+                let mut store = target.spill_store(
                     fresh.instruction()?,
                     replacement.register,
                     replacement.frame,
-                ));
+                );
+                store.flags.spill_reload = false;
+                store.flags.spill_store = true;
+                instructions.push(store);
             }
         }
         block.instructions = instructions;
@@ -433,8 +443,9 @@ mod tests {
     use super::*;
     use crate::codegen::machine::{
         FrameObjectKind, InstructionFlags, MachineBlock, MachineBlockId, MachineCallingConvention,
-        MachineFunctionId, MachineInstruction, MachineLinkage, MachineOperand, OperandIndex,
-        OperandRole, PhysicalRegister, TargetOpcode,
+        MachineFunctionId, MachineInstruction, MachineLinkage, MachineModule, MachineOperand,
+        OperandIndex, OperandRole, PhysicalRegister, TargetOpcode, allocate, apply_assignment,
+        parse_text, write_text,
     };
 
     const GENERAL: RegisterClass = RegisterClass::new(0);
@@ -602,8 +613,8 @@ mod tests {
             )],
             &[0],
         );
-        let rewritten = materialize_spills(&input, &[VirtualRegisterId::new(0)], &TestTarget)
-            .unwrap();
+        let rewritten =
+            materialize_spills(&input, &[VirtualRegisterId::new(0)], &TestTarget).unwrap();
         let instructions = &rewritten.function.blocks[0].instructions;
         let replacement = match instructions[1].operands[0].kind {
             MachineOperandKind::Register(MachineRegister::Virtual(register)) => register,
@@ -619,6 +630,45 @@ mod tests {
             instructions[2].operands[1].kind,
             MachineOperandKind::Register(MachineRegister::Virtual(register)) if register == replacement
         ));
+    }
+
+    #[test]
+    fn anchor_foundation_spill_provenance_survives_assignment_and_qmir_round_trip() {
+        // Python lir.Insn.spill_reload/spill_store are allocator provenance,
+        // not a property inferred from a selected load or store opcode.
+        let input = function(
+            vec![instruction(
+                0,
+                TargetOpcode::new(3),
+                vec![virtual_register(0, OperandRole::UseDef)],
+                InstructionFlags::NONE,
+            )],
+            &[0],
+        );
+        let materialized =
+            materialize_spills(&input, &[VirtualRegisterId::new(0)], &TestTarget).unwrap();
+        assert!(
+            materialized.function.blocks[0].instructions[0]
+                .flags
+                .spill_reload
+        );
+        assert!(
+            materialized.function.blocks[0].instructions[2]
+                .flags
+                .spill_store
+        );
+
+        let assignment = allocate(&materialized.function, |_| vec![FIRST], |_, _| false)
+            .expect("short spill ranges receive their assigned physical register");
+        let assigned = apply_assignment(&materialized.function, &assignment).unwrap();
+        let module = MachineModule {
+            data_objects: Vec::new(),
+            functions: vec![assigned],
+        };
+        let round_tripped = parse_text(&write_text(&module)).unwrap();
+        let instructions = &round_tripped.functions[0].blocks[0].instructions;
+        assert!(instructions[0].flags.spill_reload);
+        assert!(instructions[2].flags.spill_store);
     }
 
     #[test]
@@ -639,8 +689,8 @@ mod tests {
             &[0],
         );
 
-        let rewritten = materialize_spills(&input, &[VirtualRegisterId::new(0)], &TestTarget)
-            .unwrap();
+        let rewritten =
+            materialize_spills(&input, &[VirtualRegisterId::new(0)], &TestTarget).unwrap();
         let instructions = &rewritten.function.blocks[0].instructions;
 
         assert_eq!(instructions.len(), 2);
@@ -706,10 +756,7 @@ mod tests {
             vec![instruction(
                 0,
                 TargetOpcode::new(0),
-                vec![
-                    virtual_register(0, OperandRole::Use),
-                    tied_definition,
-                ],
+                vec![virtual_register(0, OperandRole::Use), tied_definition],
                 InstructionFlags::NONE,
             )],
             &[0, 1],

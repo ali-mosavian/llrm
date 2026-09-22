@@ -27,6 +27,10 @@ CONTROL_SOURCE = ROOT / "bench" / "parity" / "control.bas"
 CONTROL_GOLDEN = ROOT / "bench" / "parity" / "golden" / "control.txt"
 QLIGHT_SOURCE = ROOT / "bench" / "parity" / "qlight.bas"
 QLIGHT_GOLDEN = ROOT / "bench" / "parity" / "golden" / "qlight.txt"
+QMOVE_SOURCE = ROOT / "bench" / "parity" / "qmove.bas"
+QMOVE_GOLDEN = ROOT / "bench" / "parity" / "golden" / "qmove.txt"
+QBSP_SOURCE = ROOT / "bench" / "parity" / "qbsp.bas"
+QBSP_GOLDEN = ROOT / "bench" / "parity" / "golden" / "qbsp.txt"
 CFG = CONFIGS["v-g3"]
 
 pytestmark = [
@@ -153,3 +157,13 @@ def test_rust_qb_control_matches_its_program_level_oracle(tmp_path: Path) -> Non
 def test_rust_qb_qlight_matches_its_program_level_oracle(tmp_path: Path) -> None:
     """By-value INTEGER scaling must print qlight's 200100255/DONE oracle."""
     _assert_program_matches_oracle(tmp_path, QLIGHT_SOURCE, QLIGHT_GOLDEN, "QLIGHT")
+
+
+def test_rust_qb_qmove_matches_its_program_level_oracle(tmp_path: Path) -> None:
+    """The Python-era qmove x87/UDT path must preserve its 100405/DONE oracle."""
+    _assert_program_matches_oracle(tmp_path, QMOVE_SOURCE, QMOVE_GOLDEN, "QMOVE")
+
+
+def test_rust_qb_qbsp_matches_its_program_level_oracle(tmp_path: Path) -> None:
+    """The Python-era QBSP far-pointer/x87 path must preserve its 120/DONE oracle."""
+    _assert_program_matches_oracle(tmp_path, QBSP_SOURCE, QBSP_GOLDEN, "QBSP")

@@ -386,7 +386,7 @@ mod tests {
 
     use num_bigint::BigInt;
 
-    use super::{Known, _carry, _defined, _result, masked};
+    use super::{_carry, _defined, _result, Known, masked};
     use crate::model::mir::{Arg, Const, Held, Kind, Op, Value};
 
     fn value(id: u32) -> Value {

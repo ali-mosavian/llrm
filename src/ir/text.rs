@@ -238,6 +238,9 @@ fn write_instruction(out: &mut String, instruction: &Instruction) {
             )
             .expect("string writes cannot fail");
         }
+        InstructionKind::ParameterAddress { parameter } => {
+            write!(out, "parameter-address {parameter}").expect("string writes cannot fail");
+        }
         InstructionKind::Unary { op, operand } => {
             write!(out, "unary {} ", unary_name(*op)).expect("string writes cannot fail");
             push_operand(out, operand);
@@ -896,7 +899,11 @@ fn tokenize(input: &str) -> Result<Vec<Token>, TextError> {
                             column += 2;
                         }
                         current if current.is_control() => {
-                            return Err(TextError::new(line, column, "control character in string"));
+                            return Err(TextError::new(
+                                line,
+                                column,
+                                "control character in string",
+                            ));
                         }
                         current => {
                             value.push(current);
@@ -1114,6 +1121,9 @@ fn parse_instruction(parser: &mut Parser) -> Result<Instruction, TextError> {
             size: parser.u32()?,
             alignment: parser.u32()?,
             address_space: parse_address_space(parser)?,
+        },
+        "parameter-address" => InstructionKind::ParameterAddress {
+            parameter: parser.u32()?,
         },
         "unary" => InstructionKind::Unary {
             op: parse_unary(parser)?,
@@ -1725,6 +1735,10 @@ mod tests {
                         address_space: AddressSpace::NearData,
                     },
                 },
+                Type {
+                    id: TypeId::new(2),
+                    kind: TypeKind::Integer { bits: 16 },
+                },
             ],
             globals: Vec::new(),
             functions: vec![Function {
@@ -1733,26 +1747,39 @@ mod tests {
                 linkage: Linkage::Internal,
                 signature: Signature {
                     result: TypeId::new(0),
-                    parameters: Vec::new(),
+                    parameters: vec![TypeId::new(2)],
                     variadic: false,
                     calling_convention: CallingConvention::FarPascal,
                 },
                 attributes: Vec::new(),
-                parameters: Vec::new(),
+                parameters: vec![Value {
+                    id: ValueId::new(1),
+                    type_id: TypeId::new(2),
+                }],
                 blocks: vec![Block {
                     id: BlockId::new(0),
-                    instructions: vec![Instruction {
-                        id: InstructionId::new(0),
-                        results: vec![Value {
-                            id: ValueId::new(0),
-                            type_id: TypeId::new(1),
-                        }],
-                        kind: InstructionKind::StackAlloc {
-                            size: 8,
-                            alignment: 4,
-                            address_space: AddressSpace::NearData,
+                    instructions: vec![
+                        Instruction {
+                            id: InstructionId::new(0),
+                            results: vec![Value {
+                                id: ValueId::new(0),
+                                type_id: TypeId::new(1),
+                            }],
+                            kind: InstructionKind::StackAlloc {
+                                size: 8,
+                                alignment: 4,
+                                address_space: AddressSpace::NearData,
+                            },
                         },
-                    }],
+                        Instruction {
+                            id: InstructionId::new(1),
+                            results: vec![Value {
+                                id: ValueId::new(2),
+                                type_id: TypeId::new(1),
+                            }],
+                            kind: InstructionKind::ParameterAddress { parameter: 0 },
+                        },
+                    ],
                     terminator: Terminator::Return(None),
                 }],
             }],
@@ -1760,6 +1787,7 @@ mod tests {
 
         let text = write(&module);
         assert!(text.contains("alloca 8 4 neardata"));
+        assert!(text.contains("parameter-address 0"));
         assert_eq!(parse(&text), Ok(module));
     }
 

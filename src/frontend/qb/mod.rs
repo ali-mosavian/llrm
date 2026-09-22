@@ -4,6 +4,7 @@
 //! output is typed syntax.  There is deliberately no p-code buffer, opcode,
 //! executor, or scanner patch phase in this crate.
 
+pub mod abi;
 pub mod dialect;
 pub mod dialect_extensions;
 pub mod error;
@@ -19,6 +20,7 @@ pub mod statement_mc;
 pub mod statement_table;
 pub mod syntax;
 
+pub use abi::{BasicFloatAbiError, physicalize};
 pub use dialect::Dialect;
 pub use error::LexError;
 pub use error::ParseError;

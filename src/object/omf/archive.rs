@@ -8,7 +8,7 @@
 
 use std::fmt;
 
-use super::record::{parse, parse_at, Record, RecordError};
+use super::record::{Record, RecordError, parse, parse_at};
 
 const LIBHDR: u8 = 0xf0;
 const LIBDIC: u8 = 0xf1;
@@ -248,7 +248,10 @@ impl fmt::Display for ArchiveError {
                 write!(formatter, "nested OMF library THEADR at byte {offset}")
             }
             Self::ModendWithoutModule { offset } => {
-                write!(formatter, "OMF library MODEND at byte {offset} has no module")
+                write!(
+                    formatter,
+                    "OMF library MODEND at byte {offset} has no module"
+                )
             }
             Self::MissingModend {
                 module_offset,

@@ -368,7 +368,7 @@ where
 mod tests {
     use std::sync::Arc;
 
-    use super::{anchor, without, Insn};
+    use super::{Insn, anchor, without};
     use crate::codegen::machine::{Effects, Held, Operation, Semantics};
     use crate::frontend::omf::nodes::{Node, Restore};
     use crate::model::mir::{Kind, Op, OpCode};

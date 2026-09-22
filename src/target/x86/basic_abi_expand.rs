@@ -101,7 +101,10 @@ impl fmt::Display for BasicAbiExpansionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::DeclaredVirtualRegister { register } => {
-                write!(formatter, "BASIC ABI expansion retains virtual register declaration {register}")
+                write!(
+                    formatter,
+                    "BASIC ABI expansion retains virtual register declaration {register}"
+                )
             }
             Self::VirtualRegister {
                 block,
@@ -306,7 +309,12 @@ pub fn expand_allocated_basic_abi(
 }
 
 fn preflight(function: &MachineFunction) -> Result<usize, BasicAbiExpansionError> {
-    if let Some(register) = function.virtual_registers.first() {
+    let anchor_registers = function.anchor_virtual_registers(X86Opcode::Nothing.machine_opcode());
+    if let Some(register) = function
+        .virtual_registers
+        .iter()
+        .find(|register| !anchor_registers.contains(&register.id))
+    {
         return Err(BasicAbiExpansionError::DeclaredVirtualRegister {
             register: register.id,
         });
@@ -354,7 +362,9 @@ fn validate_allocated_operands(
             });
         }
         match operand.kind {
-            MachineOperandKind::Register(MachineRegister::Virtual(register)) => {
+            MachineOperandKind::Register(MachineRegister::Virtual(register))
+                if !instruction.is_logical_anchor(X86Opcode::Nothing.machine_opcode()) =>
+            {
                 return Err(BasicAbiExpansionError::VirtualRegister {
                     block,
                     instruction: instruction.id,
@@ -863,9 +873,11 @@ mod tests {
                 register_operand(X86Register::Eax, OperandRole::Use),
             ],
         )]);
-        assert!(expand_allocated_basic_abi(&same_view).unwrap().blocks[0]
-            .instructions
-            .is_empty());
+        assert!(
+            expand_allocated_basic_abi(&same_view).unwrap().blocks[0]
+                .instructions
+                .is_empty()
+        );
     }
 
     #[test]
@@ -883,10 +895,12 @@ mod tests {
             opcodes(&expanded),
             vec![X86Opcode::Push, X86Opcode::Pop, X86Opcode::Pop]
         );
-        assert!(expanded.blocks[0]
-            .instructions
-            .iter()
-            .all(|one| one.flags == InstructionFlags::NONE));
+        assert!(
+            expanded.blocks[0]
+                .instructions
+                .iter()
+                .all(|one| one.flags == InstructionFlags::NONE)
+        );
         assert_eq!(
             expanded.blocks[0].instructions[1].operands,
             vec![register_operand(X86Register::Dx, OperandRole::Def)]
@@ -932,12 +946,11 @@ mod tests {
             X86Opcode::ReturnFar,
             vec![register_operand(X86Register::Ax, OperandRole::Use)],
         )]);
-        assert!(expand_allocated_basic_abi(&without_cleanup)
-            .unwrap()
-            .blocks[0]
-            .instructions[0]
-            .operands
-            .is_empty());
+        assert!(
+            expand_allocated_basic_abi(&without_cleanup).unwrap().blocks[0].instructions[0]
+                .operands
+                .is_empty()
+        );
     }
 
     #[test]

@@ -208,7 +208,7 @@ fn write_function(output: &mut String, function: &Function) {
             output,
             " {} {} {} {} {} {}",
             place.type_id,
-            place.storage.as_str(),
+            place.storage,
             place.offset,
             place.symbol,
             place.extent,
@@ -577,11 +577,23 @@ fn parse_value(line: Line<'_>) -> Result<Value, TextError> {
 fn parse_place(line: Line<'_>) -> Result<Place, TextError> {
     let mut reader = Reader::new(line.number, &line.text);
     reader.expect_word("place")?;
+    let id = PlaceId::new(reader.u32()?);
+    let name = reader.string()?;
+    let type_id = TypeId::new(reader.u32()?);
+    let storage = if reader.peek_word()? == "parameter" {
+        reader.expect_word("parameter")?;
+        reader.expect_char('(')?;
+        let index = reader.u32()?;
+        reader.expect_char(')')?;
+        Storage::Parameter { index }
+    } else {
+        parse_storage(reader.word()?, line.number)?
+    };
     let place = Place {
-        id: PlaceId::new(reader.u32()?),
-        name: reader.string()?,
-        type_id: TypeId::new(reader.u32()?),
-        storage: parse_storage(reader.word()?, line.number)?,
+        id,
+        name,
+        type_id,
+        storage,
         offset: reader.isize()?,
         symbol: DataId::new(reader.u32()?),
         extent: reader.usize()?,
@@ -1316,7 +1328,6 @@ fn parse_address(value: &str, line: usize) -> Result<AddressKind, TextError> {
 fn parse_storage(value: &str, line: usize) -> Result<Storage, TextError> {
     match value {
         "local" => Ok(Storage::Local),
-        "parameter" => Ok(Storage::Parameter),
         "static" => Ok(Storage::Static),
         "module" => Ok(Storage::Module),
         "common" => Ok(Storage::Common),
@@ -1417,6 +1428,20 @@ fn parse_call_distance(value: &str, line: usize) -> Result<CallDistance, TextErr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_an_indexed_parameter_place() {
+        let place = parse_place(Line {
+            number: 1,
+            text: "place 3 \"value\" 2 parameter(4) 0 0 4 near",
+        })
+        .expect("indexed parameter storage parses");
+
+        assert_eq!(place.storage, Storage::Parameter { index: 4 });
+        assert_eq!(place.offset, 0);
+        assert_eq!(place.extent, 4);
+        assert_eq!(place.storage.to_string(), "parameter(4)");
+    }
 
     #[test]
     fn round_trips_a_complete_minimal_program() {

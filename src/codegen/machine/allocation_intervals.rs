@@ -16,8 +16,8 @@ use std::error::Error;
 use std::fmt;
 
 use super::{
-    compute_liveness, MachineBlockId, MachineFunction, MachineInstruction, MachineInstructionId,
-    MachineLivenessError, MachineOperandKind, MachineRegister, VirtualRegisterId,
+    MachineBlockId, MachineFunction, MachineInstruction, MachineInstructionId,
+    MachineLivenessError, MachineOperandKind, MachineRegister, VirtualRegisterId, compute_liveness,
 };
 
 /// The slot where an instruction reads its operands.

@@ -332,7 +332,7 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
                                     return Err(Diagnostic::new(
                                         Span::new(line_number, index + 1, index + 2),
                                         "unknown character escape",
-                                    ))
+                                    ));
                                 }
                             };
                             index += 1;
@@ -612,7 +612,7 @@ fn quoted(
                     return Err(Diagnostic::new(
                         Span::new(line, *index + 1, *index + 2),
                         "unknown string escape",
-                    ))
+                    ));
                 }
             };
             value.push(escaped);

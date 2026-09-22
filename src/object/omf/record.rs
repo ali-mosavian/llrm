@@ -304,7 +304,7 @@ pub fn serialize(records: &[Record]) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse, serialize, RecordError};
+    use super::{RecordError, parse, serialize};
 
     #[test]
     fn parses_and_serializes_known_record_losslessly() {

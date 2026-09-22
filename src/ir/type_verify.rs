@@ -89,7 +89,7 @@ impl<'module> TypeVerifier<'module> {
 
     fn verify_instruction_constants(&mut self, instruction: &Instruction) {
         match &instruction.kind {
-            InstructionKind::StackAlloc { .. } => {}
+            InstructionKind::StackAlloc { .. } | InstructionKind::ParameterAddress { .. } => {}
             InstructionKind::Phi { incoming } => {
                 for incoming in incoming {
                     self.verify_operand_constant(&incoming.value);
@@ -199,6 +199,28 @@ impl<'module> TypeVerifier<'module> {
                         function.id, instruction.id
                     ),
                 );
+            }
+            InstructionKind::ParameterAddress { parameter } => {
+                let Some(result) = self.single_result_type(instruction) else {
+                    return;
+                };
+                self.require_pointer_address_space(
+                    result,
+                    AddressSpace::NearData,
+                    format!(
+                        "function {} instruction {} parameter address result",
+                        function.id, instruction.id
+                    ),
+                );
+                if usize::try_from(*parameter)
+                    .ok()
+                    .is_none_or(|index| index >= function.parameters.len())
+                {
+                    self.error(format!(
+                        "function {} instruction {} references missing parameter {}",
+                        function.id, instruction.id, parameter
+                    ));
+                }
             }
             InstructionKind::Unary { op, operand } => {
                 let Some(result) = self.single_result_type(instruction) else {

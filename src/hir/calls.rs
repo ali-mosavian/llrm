@@ -512,6 +512,7 @@ pub(super) fn plan_calls(module: &hir::Module) -> Result<CallPlan, CallPlanError
                                 instruction: instruction.id,
                             },
                         )?;
+                        let signature = canonical_pointer_signature(module, signature);
                         let runtime_signature = RuntimeSignature {
                             signature,
                             calling_convention,
@@ -634,6 +635,31 @@ pub(super) fn plan_calls(module: &hir::Module) -> Result<CallPlan, CallPlanError
         declarations,
         sites,
     })
+}
+
+fn canonical_pointer_signature(
+    module: &hir::Module,
+    mut signature: CallSignature,
+) -> CallSignature {
+    let canonical = |type_id: ir::TypeId| {
+        let source = module
+            .types
+            .iter()
+            .find(|type_| type_.id.get() == type_id.get());
+        let Some(source) = source.filter(|type_| type_.kind == hir::TypeKind::Pointer) else {
+            return type_id;
+        };
+        module
+            .types
+            .iter()
+            .filter(|type_| type_.kind == hir::TypeKind::Pointer && type_.address == source.address)
+            .map(|type_| ir::TypeId::new(type_.id.get()))
+            .min()
+            .unwrap_or(type_id)
+    };
+    signature.result = canonical(signature.result);
+    signature.parameters = signature.parameters.into_iter().map(canonical).collect();
+    signature
 }
 
 enum PendingCall {
@@ -782,11 +808,12 @@ fn resolve_defined_target(
         });
     }
 
+    let expected_physical = canonical_pointer_signature(module, signature.clone());
     let mut actual = Vec::with_capacity(named.len());
     let mut matches = Vec::new();
     for candidate in named {
         let candidate_signature = function_signature(function, instruction, candidate)?;
-        if candidate_signature == *signature {
+        if canonical_pointer_signature(module, candidate_signature.clone()) == expected_physical {
             matches.push(candidate);
         } else {
             actual.push(candidate_signature);
@@ -860,9 +887,7 @@ fn validate_callable_parameters(
     callable: &hir::Callable,
 ) -> Result<(), CallPlanError> {
     for (index, parameter) in callable.parameters.iter().enumerate() {
-        let issue = if parameter.array {
-            Some(CallableParameterError::Array)
-        } else if parameter.segmented {
+        let issue = if parameter.segmented {
             Some(CallableParameterError::Segmented)
         } else {
             None
@@ -915,7 +940,18 @@ fn validate_callable_signature(
         .zip(&signature.parameters)
         .enumerate()
     {
-        if parameter.by_value {
+        if parameter.array {
+            if !is_pointer(module, *actual) {
+                return Err(CallPlanError::CallableByReferenceParameterMismatch {
+                    function,
+                    instruction,
+                    callable: callable.id,
+                    parameter: index,
+                    expected: parameter.type_id,
+                    actual: *actual,
+                });
+            }
+        } else if parameter.by_value {
             let expected = ir::TypeId::new(parameter.type_id.get());
             if *actual != expected {
                 return Err(CallPlanError::CallableByValueParameterMismatch {
@@ -950,6 +986,18 @@ fn is_pointer_to(module: &hir::Module, actual: ir::TypeId, expected: hir::TypeId
     matches!(
         types.as_slice(),
         [type_] if type_.kind == hir::TypeKind::Pointer && type_.element == Some(expected)
+    )
+}
+
+fn is_pointer(module: &hir::Module, actual: ir::TypeId) -> bool {
+    matches!(
+        module
+            .types
+            .iter()
+            .filter(|type_| type_.id.get() == actual.get())
+            .collect::<Vec<_>>()
+            .as_slice(),
+        [type_] if type_.kind == hir::TypeKind::Pointer
     )
 }
 
@@ -1460,6 +1508,46 @@ mod tests {
     }
 
     #[test]
+    fn runtime_pointer_parameters_are_opaque_within_one_address_space() {
+        // Python MIR carries a near pointer as one two-byte value regardless
+        // of the source pointee.  QBSP calls B$DDIM once with a NODE
+        // descriptor and once with a PLANE descriptor; both are the same
+        // runtime ABI signature after HIR's element typing has done its job.
+        let first_pointer = hir::TypeId::new(3);
+        let second_pointer = hir::TypeId::new(4);
+        let mut module = module(
+            vec![value(0, first_pointer), value(1, second_pointer)],
+            vec![
+                call(
+                    0,
+                    "B$POINTER",
+                    Vec::new(),
+                    vec![hir::Operand::Value(hir::ValueId::new(0))],
+                ),
+                call(
+                    1,
+                    "B$POINTER",
+                    Vec::new(),
+                    vec![hir::Operand::Value(hir::ValueId::new(1))],
+                ),
+            ],
+            vec![abi(0, vec![0]), abi(1, vec![0])],
+        );
+        module.types.extend([
+            pointer_type(first_pointer, I16),
+            pointer_type(second_pointer, I32),
+        ]);
+
+        let plan = plan_calls(&module).expect("near pointers share one portable runtime ABI type");
+
+        assert_eq!(plan.declarations.len(), 1);
+        assert_eq!(
+            plan.declarations[0].signature.parameters,
+            vec![ir::TypeId::new(first_pointer.get())]
+        );
+    }
+
+    #[test]
     fn rejects_conflicting_runtime_calling_conventions() {
         let mut second = abi(1, vec![0]);
         second.cleanup = hir::StackCleanup::Caller;
@@ -1690,25 +1778,43 @@ mod tests {
     }
 
     #[test]
-    fn rejects_an_array_callable_parameter() {
+    fn resolves_an_array_callable_through_its_descriptor_pointer() {
+        // Python lowers an array formal to the near address of its BASIC
+        // descriptor.  The caller and callee can name structurally identical
+        // descriptor types with different HIR ids; the physical ABI sees one
+        // opaque near pointer in both places.
+        let caller_descriptor = hir::TypeId::new(3);
+        let callee_descriptor = hir::TypeId::new(4);
         let mut module = module(
-            Vec::new(),
-            vec![call(0, "worker", Vec::new(), Vec::new())],
-            vec![direct_abi(0, Vec::new(), 7)],
+            vec![value(0, caller_descriptor)],
+            vec![call(
+                0,
+                "worker",
+                Vec::new(),
+                vec![hir::Operand::Value(hir::ValueId::new(0))],
+            )],
+            vec![direct_abi(0, vec![0], 7)],
         );
-        let mut array = parameter(I16);
+        module.types.extend([
+            pointer_type(caller_descriptor, I16),
+            pointer_type(callee_descriptor, I32),
+        ]);
+        let mut array = by_reference_parameter(I16);
         array.array = true;
         module
             .callables
             .push(callable(7, "worker", None, vec![array]));
+        module
+            .functions
+            .push(defined_function(1, "worker", VOID, vec![callee_descriptor]));
 
-        assert!(matches!(
-            plan_calls(&module),
-            Err(CallPlanError::UnsupportedCallableParameter {
-                issue: CallableParameterError::Array,
-                ..
-            })
-        ));
+        let plan = plan_calls(&module).expect("array descriptors use the physical pointer ABI");
+
+        assert!(plan.declarations.is_empty());
+        assert_eq!(
+            plan.sites[&(hir::FunctionId::new(0), hir::InstructionId::new(0))].target,
+            ir::FunctionId::new(1)
+        );
     }
 
     #[test]

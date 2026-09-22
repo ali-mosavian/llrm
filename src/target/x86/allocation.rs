@@ -18,6 +18,7 @@ use super::{X86Opcode, X86Register, X86RegisterClass};
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum X86AllocationError {
     UnknownRegisterClass(RegisterClass),
+    ResidualX87Virtual(VirtualRegisterId),
     Constraint(ConstraintError),
     Allocation(AllocationError),
     Intervals(Vec<MachineIntervalError>),
@@ -32,6 +33,10 @@ impl fmt::Display for X86AllocationError {
             Self::UnknownRegisterClass(class) => {
                 write!(formatter, "unknown x86 register class {class}")
             }
+            Self::ResidualX87Virtual(register) => write!(
+                formatter,
+                "x87 virtual register {register} reached the general register allocator"
+            ),
             Self::Constraint(error) => error.fmt(formatter),
             Self::Allocation(error) => error.fmt(formatter),
             Self::Intervals(errors) => write!(
@@ -52,7 +57,7 @@ impl fmt::Display for X86AllocationError {
 impl Error for X86AllocationError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::UnknownRegisterClass(_) => None,
+            Self::UnknownRegisterClass(_) | Self::ResidualX87Virtual(_) => None,
             Self::Constraint(error) => Some(error),
             Self::Allocation(error) => Some(error),
             Self::Intervals(_) | Self::RoundLimit { .. } => None,
@@ -225,7 +230,7 @@ impl SpillTarget for X86SpillTarget {
         class: RegisterClass,
     ) -> Result<FrameObject, Self::Error> {
         let (size, alignment) = match X86RegisterClass::from_machine_class(class) {
-            Some(X86RegisterClass::Word) => (2, 2),
+            Some(X86RegisterClass::Word | X86RegisterClass::Address16) => (2, 2),
             // Both current x86 frame planners lay stack objects out on word
             // boundaries; requiring 4 here would make C-frame planning
             // reject an otherwise ordinary dword spill.
@@ -255,6 +260,7 @@ impl SpillTarget for X86SpillTarget {
             ],
             flags: InstructionFlags {
                 may_load: true,
+                spill_reload: true,
                 ..InstructionFlags::NONE
             },
         }
@@ -276,6 +282,7 @@ impl SpillTarget for X86SpillTarget {
             flags: InstructionFlags {
                 side_effects: true,
                 may_store: true,
+                spill_store: true,
                 ..InstructionFlags::NONE
             },
         }
@@ -284,8 +291,12 @@ impl SpillTarget for X86SpillTarget {
 
 fn validate_register_classes(function: &MachineFunction) -> Result<(), X86AllocationError> {
     for register in &function.virtual_registers {
-        if X86RegisterClass::from_machine_class(register.class).is_none() {
-            return Err(X86AllocationError::UnknownRegisterClass(register.class));
+        match X86RegisterClass::from_machine_class(register.class) {
+            None => return Err(X86AllocationError::UnknownRegisterClass(register.class)),
+            Some(X86RegisterClass::X87) => {
+                return Err(X86AllocationError::ResidualX87Virtual(register.id));
+            }
+            Some(_) => {}
         }
     }
     Ok(())
@@ -423,11 +434,14 @@ mod tests {
     use super::*;
     use crate::codegen::machine::{
         FrameIndex, FrameObject, FrameObjectKind, InstructionFlags, MachineBlock, MachineBlockId,
-        MachineFunctionId, MachineInstruction, MachineInstructionId, MachineOperand,
+        MachineFunctionId, MachineInstruction, MachineInstructionId, MachineModule, MachineOperand,
         MachineOperandKind, MachineRegister, OperandRole, RegisterConstraint, TargetOpcode,
-        VirtualRegister, VirtualRegisterId,
+        VirtualRegister, VirtualRegisterId, apply_assignment,
     };
-    use crate::target::x86::materialize_far_call_clobbers;
+    use crate::target::x86::{
+        materialize_far_call_clobbers, materialize_frame_indices_with_layout, plan_c_frame,
+        verify_machine,
+    };
 
     #[test]
     fn respects_aliases_between_word_and_dword_views() {
@@ -774,9 +788,11 @@ mod tests {
             }
         );
         let instructions = &allocated.function.blocks[0].instructions;
-        assert!(instructions
-            .iter()
-            .any(|instruction| instruction.opcode == X86Opcode::Store.machine_opcode()));
+        assert!(
+            instructions
+                .iter()
+                .any(|instruction| instruction.opcode == X86Opcode::Store.machine_opcode())
+        );
         let reload = instructions
             .iter()
             .find(|instruction| instruction.opcode == X86Opcode::Load.machine_opcode())
@@ -797,10 +813,7 @@ mod tests {
         // alignment.
         assert_eq!(
             X86SpillTarget
-                .spill_frame_object(
-                    FrameIndex::new(7),
-                    X86RegisterClass::Dword.machine_class(),
-                )
+                .spill_frame_object(FrameIndex::new(7), X86RegisterClass::Dword.machine_class(),)
                 .unwrap(),
             FrameObject {
                 index: FrameIndex::new(7),
@@ -809,6 +822,149 @@ mod tests {
                 kind: FrameObjectKind::Spill,
             }
         );
+    }
+
+    #[test]
+    fn address_spills_reload_into_a_legal_16_bit_memory_base() {
+        // Four registers encode a 16-bit ModR/M address base.  Preserve the
+        // class through a spill so the reload can immediately address memory,
+        // rather than merely proving that a word-sized slot was allocated.
+        let mut instructions = Vec::new();
+        for register in 0..5 {
+            instructions.push(MachineInstruction {
+                id: MachineInstructionId::new(register),
+                opcode: X86Opcode::Mov.machine_opcode(),
+                operands: vec![virtual_definition(register), immediate(i64::from(register))],
+                flags: InstructionFlags::NONE,
+            });
+        }
+        for register in 0..5 {
+            instructions.push(MachineInstruction {
+                id: MachineInstructionId::new(5 + register),
+                opcode: X86Opcode::Load.machine_opcode(),
+                operands: vec![virtual_definition(5 + register), virtual_use(register)],
+                flags: InstructionFlags {
+                    may_load: true,
+                    ..InstructionFlags::NONE
+                },
+            });
+            instructions.push(MachineInstruction {
+                id: MachineInstructionId::new(10 + register),
+                opcode: X86Opcode::Store.machine_opcode(),
+                operands: vec![virtual_use(register), virtual_use(5 + register)],
+                flags: InstructionFlags {
+                    side_effects: true,
+                    may_store: true,
+                    ..InstructionFlags::NONE
+                },
+            });
+        }
+        let mut function = word_function_with_registers(instructions, 10);
+        for register in &mut function.virtual_registers[..5] {
+            register.class = X86RegisterClass::Address16.machine_class();
+        }
+
+        let allocated = allocate_registers_with_spills(&function)
+            .expect("address pressure spills through a word-sized home");
+        assert!(allocated.function.frame_objects.iter().any(|frame| {
+            frame.size == 2 && frame.alignment == 2 && frame.kind == FrameObjectKind::Spill
+        }));
+        let (reload_index, reload) = allocated.function.blocks[0]
+            .instructions
+            .iter()
+            .enumerate()
+            .find(|(_, instruction)| {
+                instruction.opcode == X86Opcode::Load.machine_opcode()
+                    && matches!(
+                        instruction.operands.as_slice(),
+                        [
+                            _,
+                            MachineOperand {
+                                kind: MachineOperandKind::FrameIndex { .. },
+                                ..
+                            }
+                        ]
+                    )
+            })
+            .expect("the spilled address is reloaded from its frame home");
+        let MachineOperandKind::Register(MachineRegister::Virtual(reload)) =
+            reload.operands[0].kind
+        else {
+            panic!("address spill reload must define a virtual register");
+        };
+        assert_eq!(
+            allocated
+                .function
+                .virtual_registers
+                .iter()
+                .find(|register| register.id == reload)
+                .expect("reload register is declared")
+                .class,
+            X86RegisterClass::Address16.machine_class(),
+        );
+
+        let following = &allocated.function.blocks[0].instructions[reload_index + 1];
+        assert_eq!(following.opcode, X86Opcode::Load.machine_opcode());
+        assert!(matches!(
+            following.operands.as_slice(),
+            [_, MachineOperand {
+                kind: MachineOperandKind::Register(MachineRegister::Virtual(base)),
+                role: OperandRole::Use,
+                ..
+            }] if *base == reload
+        ));
+
+        let applied = apply_assignment(&allocated.function, &allocated.assignment)
+            .expect("the spill reload receives a physical register");
+        let plan = plan_c_frame(&applied).expect("a two-byte spill has a C frame home");
+        let materialized = materialize_frame_indices_with_layout(&applied, plan.layout())
+            .expect("the spill frame index materializes through BP");
+        verify_machine(&MachineModule {
+            data_objects: Vec::new(),
+            functions: vec![materialized.clone()],
+        })
+        .expect("the reload and its following memory use are legal x86 Machine IR");
+
+        let reloaded_register = match materialized.blocks[0].instructions[reload_index]
+            .operands
+            .first()
+            .expect("reload has a destination")
+            .kind
+        {
+            MachineOperandKind::Register(MachineRegister::Physical(register)) => register,
+            _ => panic!("materialized reload must define a physical register"),
+        };
+        assert!(
+            X86RegisterClass::Address16
+                .members()
+                .iter()
+                .any(|register| register.physical() == reloaded_register)
+        );
+        assert!(matches!(
+            materialized.blocks[0].instructions[reload_index + 1].operands.as_slice(),
+            [_, MachineOperand {
+                kind: MachineOperandKind::Register(MachineRegister::Physical(base)),
+                role: OperandRole::Use,
+                ..
+            }] if *base == reloaded_register
+        ));
+    }
+
+    #[test]
+    fn residual_x87_virtual_is_refused_before_general_allocation() {
+        let mut function = word_function(Vec::new());
+        function.virtual_registers[0].class = X86RegisterClass::X87.machine_class();
+
+        assert!(matches!(
+            allocate_registers(&function),
+            Err(X86AllocationError::ResidualX87Virtual(register))
+                if register == VirtualRegisterId::new(0)
+        ));
+        assert!(matches!(
+            allocate_registers_with_spills(&function),
+            Err(X86AllocationError::ResidualX87Virtual(register))
+                if register == VirtualRegisterId::new(0)
+        ));
     }
 
     #[test]

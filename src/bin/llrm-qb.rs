@@ -263,7 +263,7 @@ mod tests {
         let parsed = llrm::codegen::machine::parse_text(&text)
             .expect("the qmir writer must emit parseable text");
 
-        assert!(text.starts_with("qmir 7\n"));
+        assert!(text.starts_with("qmir 9\n"));
         parsed.verify().expect("parsed qmir must verify");
         fs::remove_dir_all(directory).unwrap();
     }

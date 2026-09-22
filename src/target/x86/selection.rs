@@ -1,9 +1,7 @@
-//! Initial exact portable-IR to x86 Machine IR selection.
-//!
-//! This selector intentionally handles only integer expressions,
-//! unconditional control flow, and direct scalar calls. Unsupported IR is
-//! refused at the boundary instead of being
-//! approximated or silently discarded.
+//! Exact portable-IR to x86 Machine IR selection for the supported scalar
+//! integer, floating, control-flow, and direct-call surface. Unsupported IR
+//! is refused at the boundary instead of being approximated or silently
+//! discarded.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
@@ -12,19 +10,20 @@ use std::fmt;
 use crate::codegen::machine::{
     FrameIndex, FrameObject, FrameObjectKind, InstructionFlags, MachineAddressSpace, MachineBlock,
     MachineBlockId, MachineCallingConvention, MachineDataObject, MachineDataObjectId,
-    MachineDataRelocation, MachineFunction, MachineFunctionId, MachineInstruction,
-    MachineInstructionError, MachineInstructionId, MachineLinkage, MachineModule, MachineOperand,
-    MachineOperandKind, MachineRegister, MachineSignature, MachineValueType, OperandRole,
-    RegisterClass, RegisterConstraint, VirtualRegister, VirtualRegisterId,
+    MachineDataRelocation, MachineFloatKind, MachineFunction, MachineFunctionId,
+    MachineInstruction, MachineInstructionError, MachineInstructionId, MachineLinkage,
+    MachineModule, MachineOperand, MachineOperandKind, MachineRegister, MachineSignature,
+    MachineValueType, OperandRole, RegisterClass, RegisterConstraint, VirtualRegister,
+    VirtualRegisterId,
 };
 use crate::ir::{
     AddressSpace, BinaryOp, Block, BlockId, Callee, CallingConvention, CastOp, ComparePredicate,
-    Constant, Effects, Function, FunctionId, Global, GlobalId, Instruction, InstructionKind,
-    Linkage, MemoryEffects, Module, Operand, Terminator, TypeId, TypeKind, TypedConstant, UnaryOp,
-    Value, ValueId,
+    Constant, Effects, FloatKind, FloatRounding, Function, FunctionId, Global, GlobalId,
+    Instruction, InstructionKind, Linkage, MemoryEffects, Module, Operand, Terminator, TypeId,
+    TypeKind, TypedConstant, UnaryOp, Value, ValueId,
 };
 
-use super::{ConditionCode, X86Opcode, X86Register, X86RegisterClass};
+use super::{ConditionCode, X86Opcode, X86Register, X86RegisterClass, X87MemoryFormat};
 
 /// A refusal while selecting portable IR into the currently supported x86 subset.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -139,6 +138,12 @@ pub enum SelectionError {
         signature: TypeId,
         value: TypeId,
     },
+    ParameterAddressOutOfBounds {
+        function: FunctionId,
+        block: BlockId,
+        instruction: crate::ir::InstructionId,
+        parameter: u32,
+    },
     InvalidResultCount {
         function: FunctionId,
         block: BlockId,
@@ -157,6 +162,11 @@ pub enum SelectionError {
         block: BlockId,
         instruction: crate::ir::InstructionId,
     },
+    UnsupportedFloatConstant {
+        type_id: TypeId,
+        value: String,
+    },
+    DataObjectIdExhausted,
     UnsupportedUnary {
         function: FunctionId,
         block: BlockId,
@@ -354,6 +364,15 @@ impl fmt::Display for SelectionError {
                 formatter,
                 "function {function} parameter {parameter} has type {value}, expected {signature}"
             ),
+            Self::ParameterAddressOutOfBounds {
+                function,
+                block,
+                instruction,
+                parameter,
+            } => write!(
+                formatter,
+                "function {function} block {block} instruction {instruction} references missing parameter {parameter}"
+            ),
             Self::InvalidResultCount {
                 function,
                 block,
@@ -381,6 +400,13 @@ impl fmt::Display for SelectionError {
                 formatter,
                 "function {function} block {block} instruction {instruction} has an unsupported constant"
             ),
+            Self::UnsupportedFloatConstant { type_id, value } => write!(
+                formatter,
+                "floating constant {value:?} of type {type_id} has no exact x86 storage form"
+            ),
+            Self::DataObjectIdExhausted => {
+                formatter.write_str("floating constant pool exhausted Machine IR data IDs")
+            }
             Self::UnsupportedUnary {
                 function,
                 block,
@@ -454,15 +480,17 @@ impl fmt::Display for SelectionError {
 
 impl Error for SelectionError {}
 
-/// Selects the initial integer/control-flow x86 Machine IR subset.
+/// Selects the supported scalar x86 Machine IR subset.
 pub fn select_module(module: &Module) -> Result<MachineModule, SelectionError> {
     let types = collect_types(module)?;
     let globals = collect_globals(module)?;
-    let data_objects = module
+    let mut data_objects = module
         .globals
         .iter()
         .map(|global| select_data_object(global, &types, &globals))
         .collect::<Result<Vec<_>, _>>()?;
+    let (float_data, float_constants) = select_float_constants(module, &types, &data_objects)?;
+    data_objects.extend(float_data);
     let functions_by_id = collect_functions(module)?;
     for function in &module.functions {
         if function.blocks.is_empty() {
@@ -477,6 +505,7 @@ pub fn select_module(module: &Module) -> Result<MachineModule, SelectionError> {
                 &types,
                 &globals,
                 &functions_by_id,
+                &float_constants,
             )?);
         }
     }
@@ -558,6 +587,258 @@ fn select_data_relocation(
     })
 }
 
+fn select_float_constants(
+    module: &Module,
+    types: &BTreeMap<TypeId, &TypeKind>,
+    existing: &[MachineDataObject],
+) -> Result<
+    (
+        Vec<MachineDataObject>,
+        BTreeMap<(TypeId, String), SelectedFloatConstant>,
+    ),
+    SelectionError,
+> {
+    let mut keys = BTreeSet::new();
+    for function in &module.functions {
+        for block in &function.blocks {
+            for instruction in &block.instructions {
+                if let InstructionKind::Store { address, value, .. } = &instruction.kind {
+                    if let Operand::Constant(TypedConstant {
+                        type_id,
+                        value: Constant::Float(_),
+                    }) = value
+                    {
+                        if matches!(
+                            type_kind(types, *type_id)?,
+                            TypeKind::Float(FloatKind::Binary32)
+                        ) {
+                            collect_float_constant(address, &mut keys);
+                            continue;
+                        }
+                    }
+                }
+                for operand in instruction_operands(&instruction.kind) {
+                    collect_float_constant(operand, &mut keys);
+                }
+            }
+            match &block.terminator {
+                Terminator::Branch { condition, .. } => {
+                    collect_float_constant(condition, &mut keys)
+                }
+                Terminator::Switch { selector, .. } => collect_float_constant(selector, &mut keys),
+                Terminator::Return(Some(value)) => collect_float_constant(value, &mut keys),
+                Terminator::Jump(_) | Terminator::Return(None) | Terminator::Unreachable => {}
+            }
+        }
+    }
+
+    let mut next_id =
+        existing
+            .iter()
+            .map(|object| object.id.get())
+            .max()
+            .map_or(Ok(0), |last| {
+                last.checked_add(1)
+                    .ok_or(SelectionError::DataObjectIdExhausted)
+            })?;
+    let mut names = existing
+        .iter()
+        .map(|object| object.name.clone())
+        .collect::<BTreeSet<_>>();
+    let mut objects = Vec::with_capacity(keys.len());
+    let mut selected = BTreeMap::new();
+    for (ordinal, (type_id, value)) in keys.into_iter().enumerate() {
+        let kind = match type_kind(types, type_id)? {
+            TypeKind::Float(kind) => *kind,
+            _ => {
+                return Err(SelectionError::UnsupportedFloatConstant { type_id, value });
+            }
+        };
+        if exact_x87_constant_opcode(type_id, kind, &value)?.is_some() {
+            continue;
+        }
+        let (bytes, format) = float_constant_bytes(type_id, kind, &value)?;
+        let stem = format!("__llrm_float_{ordinal}");
+        let mut name = stem.clone();
+        let mut suffix = 0_u32;
+        while !names.insert(name.clone()) {
+            suffix = suffix
+                .checked_add(1)
+                .ok_or(SelectionError::DataObjectIdExhausted)?;
+            name = format!("{stem}_{suffix}");
+        }
+        objects.push(MachineDataObject {
+            id: MachineDataObjectId::new(next_id),
+            name: name.clone(),
+            bytes,
+            address_space: MachineAddressSpace::NearData,
+            relocations: Vec::new(),
+            alignment: 2,
+            constant: true,
+            linkage: MachineLinkage::Internal,
+        });
+        selected.insert((type_id, value), SelectedFloatConstant { name, format });
+        next_id = next_id
+            .checked_add(1)
+            .ok_or(SelectionError::DataObjectIdExhausted)?;
+    }
+    Ok((objects, selected))
+}
+
+fn collect_float_constant(operand: &Operand, constants: &mut BTreeSet<(TypeId, String)>) {
+    if let Operand::Constant(TypedConstant {
+        type_id,
+        value: Constant::Float(value),
+    }) = operand
+    {
+        constants.insert((*type_id, value.clone()));
+    }
+}
+
+fn instruction_operands(kind: &InstructionKind) -> Vec<&Operand> {
+    match kind {
+        InstructionKind::Phi { incoming } => incoming.iter().map(|entry| &entry.value).collect(),
+        InstructionKind::StackAlloc { .. } | InstructionKind::ParameterAddress { .. } => Vec::new(),
+        InstructionKind::Unary { operand, .. } | InstructionKind::Cast { operand, .. } => {
+            vec![operand]
+        }
+        InstructionKind::Binary { left, right, .. }
+        | InstructionKind::Compare { left, right, .. } => vec![left, right],
+        InstructionKind::Load { address, .. } => vec![address],
+        InstructionKind::Store { address, value, .. } => vec![address, value],
+        InstructionKind::GetElementPointer { base, indices } => {
+            std::iter::once(base).chain(indices).collect()
+        }
+        InstructionKind::ComposePointer { segment, offset } => vec![segment, offset],
+        InstructionKind::Select {
+            condition,
+            then_value,
+            else_value,
+        } => vec![condition, then_value, else_value],
+        InstructionKind::Call { callee, .. } => {
+            // Direct floating call constants are transferred as their raw ABI
+            // bits, so they need no x87 constant-pool cell.
+            let mut operands =
+                Vec::with_capacity(usize::from(matches!(callee, Callee::Indirect(_))));
+            if let Callee::Indirect(operand) = callee {
+                operands.push(operand);
+            }
+            operands
+        }
+        InstructionKind::Intrinsic { arguments, .. } => arguments.iter().collect(),
+    }
+}
+
+fn function_uses_value(function: &Function, value: ValueId) -> bool {
+    function.blocks.iter().any(|block| {
+        block.instructions.iter().any(|instruction| {
+            value_operands(&instruction.kind)
+                .into_iter()
+                .any(|operand| matches!(operand, Operand::Value(id) if *id == value))
+        }) || terminator_operands(&block.terminator)
+            .into_iter()
+            .any(|operand| matches!(operand, Operand::Value(id) if *id == value))
+    })
+}
+
+fn value_operands(kind: &InstructionKind) -> Vec<&Operand> {
+    match kind {
+        InstructionKind::Call {
+            callee, arguments, ..
+        } => {
+            let mut operands = Vec::with_capacity(arguments.len() + 1);
+            if let Callee::Indirect(callee) = callee {
+                operands.push(callee);
+            }
+            operands.extend(arguments);
+            operands
+        }
+        _ => instruction_operands(kind),
+    }
+}
+
+fn terminator_operands(terminator: &Terminator) -> Vec<&Operand> {
+    match terminator {
+        Terminator::Branch { condition, .. } => vec![condition],
+        Terminator::Switch { selector, .. } => vec![selector],
+        Terminator::Return(Some(value)) => vec![value],
+        Terminator::Jump(_) | Terminator::Return(None) | Terminator::Unreachable => Vec::new(),
+    }
+}
+
+fn float_constant_bytes(
+    type_id: TypeId,
+    kind: FloatKind,
+    value: &str,
+) -> Result<(Vec<u8>, X87MemoryFormat), SelectionError> {
+    match kind {
+        FloatKind::Binary32 => value
+            .parse::<f32>()
+            .map(|value| {
+                (
+                    value.to_bits().to_le_bytes().to_vec(),
+                    X87MemoryFormat::Float32,
+                )
+            })
+            .map_err(|_| SelectionError::UnsupportedFloatConstant {
+                type_id,
+                value: value.to_owned(),
+            }),
+        FloatKind::Binary64 => value
+            .parse::<f64>()
+            .map(|value| {
+                (
+                    value.to_bits().to_le_bytes().to_vec(),
+                    X87MemoryFormat::Float64,
+                )
+            })
+            .map_err(|_| SelectionError::UnsupportedFloatConstant {
+                type_id,
+                value: value.to_owned(),
+            }),
+        FloatKind::Extended80 => Err(SelectionError::UnsupportedFloatConstant {
+            type_id,
+            value: value.to_owned(),
+        }),
+    }
+}
+
+fn exact_x87_constant_opcode(
+    type_id: TypeId,
+    kind: FloatKind,
+    value: &str,
+) -> Result<Option<X86Opcode>, SelectionError> {
+    let bits = match kind {
+        FloatKind::Binary32 => u64::from(
+            value
+                .parse::<f32>()
+                .map_err(|_| SelectionError::UnsupportedFloatConstant {
+                    type_id,
+                    value: value.to_owned(),
+                })?
+                .to_bits(),
+        ),
+        FloatKind::Binary64 => value
+            .parse::<f64>()
+            .map_err(|_| SelectionError::UnsupportedFloatConstant {
+                type_id,
+                value: value.to_owned(),
+            })?
+            .to_bits(),
+        FloatKind::Extended80 => return Ok(None),
+    };
+    let one = match kind {
+        FloatKind::Binary32 => u64::from(1.0_f32.to_bits()),
+        FloatKind::Binary64 => 1.0_f64.to_bits(),
+        FloatKind::Extended80 => unreachable!("extended constants returned above"),
+    };
+    Ok(match bits {
+        0 => Some(X86Opcode::X87LoadZero),
+        bits if bits == one => Some(X86Opcode::X87LoadOne),
+        _ => None,
+    })
+}
+
 fn machine_data_address_space(address_space: AddressSpace) -> MachineAddressSpace {
     match address_space {
         AddressSpace::Generic => MachineAddressSpace::Generic,
@@ -596,6 +877,7 @@ fn select_function(
     types: &BTreeMap<TypeId, &TypeKind>,
     globals: &BTreeMap<GlobalId, &Global>,
     functions_by_id: &BTreeMap<FunctionId, &Function>,
+    float_constants: &BTreeMap<(TypeId, String), SelectedFloatConstant>,
 ) -> Result<MachineFunction, SelectionError> {
     if function.signature.variadic {
         return Err(SelectionError::UnsupportedFunctionProperty {
@@ -618,6 +900,14 @@ fn select_function(
             property: FunctionProperty::Attributes,
         });
     }
+    if function.signature.calling_convention == CallingConvention::FarPascal
+        && !matches!(type_kind(types, function.signature.result)?, TypeKind::Void)
+    {
+        return Err(SelectionError::UnsupportedExternalResult {
+            function: function.id,
+            result: function.signature.result,
+        });
+    }
     if function.parameters.len() != function.signature.parameters.len() {
         return Err(SelectionError::SignatureParameterCount {
             function: function.id,
@@ -628,7 +918,14 @@ fn select_function(
 
     let block_ids = collect_blocks(function)?;
     validate_value_ids(function)?;
-    let mut selector = FunctionSelector::new(function, types, globals, functions_by_id, block_ids)?;
+    let mut selector = FunctionSelector::new(
+        function,
+        types,
+        globals,
+        functions_by_id,
+        float_constants,
+        block_ids,
+    )?;
     selector.select_parameters()?;
     for block in &function.blocks {
         selector.select_block(block)?;
@@ -651,22 +948,10 @@ fn validate_external_declaration(
             property: FunctionProperty::Variadic,
         });
     }
-    if function.signature.calling_convention != CallingConvention::FarPascal {
-        return Err(SelectionError::UnsupportedFunctionProperty {
-            function: function.id,
-            property: FunctionProperty::CallingConvention(function.signature.calling_convention),
-        });
-    }
     if !function.attributes.is_empty() {
         return Err(SelectionError::UnsupportedFunctionProperty {
             function: function.id,
             property: FunctionProperty::Attributes,
-        });
-    }
-    if !matches!(type_kind(types, function.signature.result)?, TypeKind::Void) {
-        return Err(SelectionError::UnsupportedExternalResult {
-            function: function.id,
-            result: function.signature.result,
         });
     }
     if function.parameters.len() != function.signature.parameters.len() {
@@ -686,7 +971,9 @@ fn validate_external_declaration(
                 value: parameter.type_id,
             });
         }
-        far_pascal_argument_type(types, parameter.type_id)?;
+        if function.signature.calling_convention == CallingConvention::FarPascal {
+            far_pascal_argument_type(types, parameter.type_id)?;
+        }
     }
     Ok(())
 }
@@ -766,8 +1053,22 @@ fn collect_blocks(function: &Function) -> Result<BTreeSet<BlockId>, SelectionErr
 #[derive(Clone, Debug)]
 enum SelectedLocation {
     Register(VirtualRegisterId),
-    Frame(FrameIndex),
-    Global { name: String, addend: i64 },
+    /// A pure 16-bit offset from a near pointer.  Python's
+    /// `addressforms.selected` carries this in `ir.Mem.offset` until the
+    /// consuming memory operation; do the same here instead of emitting an
+    /// address arithmetic instruction which has no independent use.
+    RegisterOffset {
+        base: VirtualRegisterId,
+        addend: i64,
+    },
+    Frame {
+        index: FrameIndex,
+        addend: i64,
+    },
+    Global {
+        name: String,
+        addend: i64,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -776,11 +1077,24 @@ struct SelectedValue {
     type_id: TypeId,
 }
 
+#[derive(Clone, Debug)]
+struct SelectedFloatConstant {
+    name: String,
+    format: X87MemoryFormat,
+}
+
 #[derive(Clone, Copy, Debug)]
-struct PendingComparison {
-    left: VirtualRegisterId,
-    right: VirtualRegisterId,
-    condition: ConditionCode,
+enum PendingComparison {
+    Integer {
+        left: VirtualRegisterId,
+        right: VirtualRegisterId,
+        condition: ConditionCode,
+    },
+    Float {
+        left: VirtualRegisterId,
+        right: VirtualRegisterId,
+        condition: ConditionCode,
+    },
 }
 
 struct FunctionSelector<'types> {
@@ -788,11 +1102,13 @@ struct FunctionSelector<'types> {
     types: &'types BTreeMap<TypeId, &'types TypeKind>,
     globals: &'types BTreeMap<GlobalId, &'types Global>,
     functions_by_id: &'types BTreeMap<FunctionId, &'types Function>,
+    float_constants: &'types BTreeMap<(TypeId, String), SelectedFloatConstant>,
     block_ids: BTreeSet<BlockId>,
     values: BTreeMap<ValueId, SelectedValue>,
     comparisons: BTreeMap<ValueId, PendingComparison>,
     virtual_registers: Vec<VirtualRegister>,
     frame_objects: Vec<FrameObject>,
+    parameter_frames: Vec<FrameIndex>,
     entry_prefix: Vec<MachineInstruction>,
     entry: MachineBlockId,
     blocks: Vec<MachineBlock>,
@@ -807,6 +1123,7 @@ impl<'types> FunctionSelector<'types> {
         types: &'types BTreeMap<TypeId, &'types TypeKind>,
         globals: &'types BTreeMap<GlobalId, &'types Global>,
         functions_by_id: &'types BTreeMap<FunctionId, &'types Function>,
+        float_constants: &'types BTreeMap<(TypeId, String), SelectedFloatConstant>,
         block_ids: BTreeSet<BlockId>,
     ) -> Result<Self, SelectionError> {
         // Portable IR carries no entry field: its defined-function contract is
@@ -825,11 +1142,13 @@ impl<'types> FunctionSelector<'types> {
             types,
             globals,
             functions_by_id,
+            float_constants,
             block_ids,
             values: BTreeMap::new(),
             comparisons: BTreeMap::new(),
             virtual_registers: Vec::new(),
             frame_objects: Vec::new(),
+            parameter_frames: Vec::with_capacity(function.parameters.len()),
             entry_prefix: Vec::new(),
             entry,
             blocks: Vec::with_capacity(function.blocks.len()),
@@ -860,6 +1179,10 @@ impl<'types> FunctionSelector<'types> {
                     parameter: index as u32,
                 },
             )?;
+            self.parameter_frames.push(frame);
+            if !function_uses_value(self.function, parameter.id) {
+                continue;
+            }
             let register = self.fresh_virtual_register(self.value_class(parameter.type_id)?)?;
             self.values.insert(
                 parameter.id,
@@ -868,14 +1191,26 @@ impl<'types> FunctionSelector<'types> {
                     type_id: parameter.type_id,
                 },
             );
-            let load = self.machine_instruction(
-                X86Opcode::Load,
-                vec![
-                    virtual_operand(register, OperandRole::Def),
-                    frame_operand(frame),
-                ],
-                load_flags(false),
-            )?;
+            let load = if matches!(self.type_kind(parameter.type_id)?, TypeKind::Float(_)) {
+                self.machine_instruction(
+                    X86Opcode::X87Load,
+                    vec![
+                        virtual_operand(register, OperandRole::Def),
+                        float_format_operand(self.float_format(parameter.type_id)?),
+                        frame_operand(frame, 0),
+                    ],
+                    load_flags(false),
+                )?
+            } else {
+                self.machine_instruction(
+                    X86Opcode::Load,
+                    vec![
+                        virtual_operand(register, OperandRole::Def),
+                        frame_operand(frame, 0),
+                    ],
+                    load_flags(false),
+                )?
+            };
             self.entry_prefix.push(load);
         }
         Ok(())
@@ -910,16 +1245,13 @@ impl<'types> FunctionSelector<'types> {
     ) -> Result<(), SelectionError> {
         match &instruction.kind {
             InstructionKind::Unary { op, operand } => {
+                if matches!(op, UnaryOp::FloatNegate | UnaryOp::FloatAbsolute) {
+                    return self.select_float_unary(block, instruction, *op, operand, output);
+                }
                 let opcode = match op {
                     UnaryOp::Negate => X86Opcode::Neg,
                     UnaryOp::Not => X86Opcode::Not,
-                    UnaryOp::FloatNegate | UnaryOp::FloatAbsolute => {
-                        return Err(SelectionError::UnsupportedUnary {
-                            function: self.function.id,
-                            block,
-                            instruction: instruction.id,
-                        });
-                    }
+                    UnaryOp::FloatNegate | UnaryOp::FloatAbsolute => unreachable!("handled above"),
                 };
                 let result = self.result_definition(block, instruction)?;
                 let source =
@@ -935,6 +1267,15 @@ impl<'types> FunctionSelector<'types> {
                 )?;
             }
             InstructionKind::Binary { op, left, right } => {
+                if matches!(
+                    op,
+                    BinaryOp::FloatAdd
+                        | BinaryOp::FloatSubtract
+                        | BinaryOp::FloatMultiply
+                        | BinaryOp::FloatDivide
+                ) {
+                    return self.select_float_binary(block, instruction, *op, left, right, output);
+                }
                 if matches!(
                     op,
                     BinaryOp::SignedDivide
@@ -964,17 +1305,17 @@ impl<'types> FunctionSelector<'types> {
                     | BinaryOp::UnsignedRemainder => unreachable!("handled above"),
                     BinaryOp::ShiftLeft
                     | BinaryOp::LogicalShiftRight
-                    | BinaryOp::ArithmeticShiftRight
-                    | BinaryOp::FloatAdd
-                    | BinaryOp::FloatSubtract
-                    | BinaryOp::FloatMultiply
-                    | BinaryOp::FloatDivide => {
+                    | BinaryOp::ArithmeticShiftRight => {
                         return Err(SelectionError::UnsupportedBinary {
                             function: self.function.id,
                             block,
                             instruction: instruction.id,
                         });
                     }
+                    BinaryOp::FloatAdd
+                    | BinaryOp::FloatSubtract
+                    | BinaryOp::FloatMultiply
+                    | BinaryOp::FloatDivide => unreachable!("handled above"),
                 };
                 let result = self.result_definition(block, instruction)?;
                 let left =
@@ -1000,6 +1341,9 @@ impl<'types> FunctionSelector<'types> {
                 alignment,
                 address_space,
             } => self.select_stack_alloc(block, instruction, *size, *alignment, *address_space)?,
+            InstructionKind::ParameterAddress { parameter } => {
+                self.select_parameter_address(block, instruction, *parameter)?
+            }
             InstructionKind::Cast { op, operand, to } => {
                 self.select_cast(block, instruction, *op, operand, *to, output)?
             }
@@ -1184,30 +1528,35 @@ impl<'types> FunctionSelector<'types> {
         }
 
         let base = self.select_operand(block, instruction.id, base, result.type_id, output)?;
-        let base = self.materialize_register(base, output)?;
-        let result = self.define_register_value(result)?;
-        self.copy(result, base, output)?;
-
         let offset = match index {
             Operand::Constant(TypedConstant {
                 type_id,
                 value: Constant::Integer(value),
             }) => {
                 self.require_operand_type(block, instruction.id, index_type, *type_id)?;
-                immediate_operand(integer_immediate(*value, 16))
+                integer_immediate(*value, 16)
             }
             _ => {
-                let offset = self.select_operand(block, instruction.id, index, index_type, output)?;
+                let base = self.materialize_register(base, output)?;
+                let result = self.define_register_value(result)?;
+                self.copy(result, base, output)?;
+                let offset =
+                    self.select_operand(block, instruction.id, index, index_type, output)?;
                 let offset = self.materialize_register(offset, output)?;
-                virtual_operand(offset, OperandRole::Use)
+                self.push_instruction(
+                    X86Opcode::Add,
+                    vec![
+                        virtual_operand(result, OperandRole::UseDef),
+                        virtual_operand(offset, OperandRole::Use),
+                    ],
+                    InstructionFlags::NONE,
+                    output,
+                )?;
+                return Ok(());
             }
         };
-        self.push_instruction(
-            X86Opcode::Add,
-            vec![virtual_operand(result, OperandRole::UseDef), offset],
-            InstructionFlags::NONE,
-            output,
-        )
+        let location = self.offset_near_address(base, offset, output)?;
+        self.insert_value(result, location)
     }
 
     /// Advances only the low offset word of a far 16:16 pointer.  Huge
@@ -1325,6 +1674,90 @@ impl<'types> FunctionSelector<'types> {
         )
     }
 
+    fn select_float_unary(
+        &mut self,
+        block: BlockId,
+        instruction: &Instruction,
+        op: UnaryOp,
+        operand: &Operand,
+        output: &mut Vec<MachineInstruction>,
+    ) -> Result<(), SelectionError> {
+        let result = self.result_definition(block, instruction)?;
+        if !matches!(self.type_kind(result.type_id)?, TypeKind::Float(_)) {
+            return Err(SelectionError::UnsupportedUnary {
+                function: self.function.id,
+                block,
+                instruction: instruction.id,
+            });
+        }
+        let operand_type = self.operand_type(block, instruction.id, operand)?;
+        if operand_type != result.type_id {
+            return Err(SelectionError::OperandTypeMismatch {
+                function: self.function.id,
+                block,
+                instruction: instruction.id,
+                expected: result.type_id,
+                actual: operand_type,
+            });
+        }
+        let source = self.select_operand(block, instruction.id, operand, operand_type, output)?;
+        let source = self.materialize_register(source, output)?;
+        let destination = self.define_register_value(result)?;
+        self.push_instruction(
+            match op {
+                UnaryOp::FloatNegate => X86Opcode::X87ChangeSign,
+                UnaryOp::FloatAbsolute => X86Opcode::X87Absolute,
+                UnaryOp::Negate | UnaryOp::Not => unreachable!("integer unary selected elsewhere"),
+            },
+            vec![
+                virtual_operand(destination, OperandRole::Def),
+                virtual_operand(source, OperandRole::Use),
+            ],
+            InstructionFlags::NONE,
+            output,
+        )
+    }
+
+    fn select_float_binary(
+        &mut self,
+        block: BlockId,
+        instruction: &Instruction,
+        op: BinaryOp,
+        left: &Operand,
+        right: &Operand,
+        output: &mut Vec<MachineInstruction>,
+    ) -> Result<(), SelectionError> {
+        let result = self.result_definition(block, instruction)?;
+        if !matches!(self.type_kind(result.type_id)?, TypeKind::Float(_)) {
+            return Err(SelectionError::UnsupportedBinary {
+                function: self.function.id,
+                block,
+                instruction: instruction.id,
+            });
+        }
+        let left = self.select_operand(block, instruction.id, left, result.type_id, output)?;
+        let right = self.select_operand(block, instruction.id, right, result.type_id, output)?;
+        let left = self.materialize_register(left, output)?;
+        let right = self.materialize_register(right, output)?;
+        let destination = self.define_register_value(result)?;
+        self.push_instruction(
+            match op {
+                BinaryOp::FloatAdd => X86Opcode::X87Add,
+                BinaryOp::FloatSubtract => X86Opcode::X87Subtract,
+                BinaryOp::FloatMultiply => X86Opcode::X87Multiply,
+                BinaryOp::FloatDivide => X86Opcode::X87Divide,
+                _ => unreachable!("integer binary selected elsewhere"),
+            },
+            vec![
+                virtual_operand(destination, OperandRole::Def),
+                virtual_operand(left, OperandRole::Use),
+                virtual_operand(right, OperandRole::Use),
+            ],
+            InstructionFlags::NONE,
+            output,
+        )
+    }
+
     /// Records a comparison only when its i1 result is later consumed as a
     /// branch condition.  Materializing that boolean would introduce a
     /// source-independent value with no x86 representation in this slice;
@@ -1361,17 +1794,16 @@ impl<'types> FunctionSelector<'types> {
             ComparePredicate::UnsignedLessEqual => ConditionCode::BelowOrEqual,
             ComparePredicate::UnsignedGreaterThan => ConditionCode::Above,
             ComparePredicate::UnsignedGreaterEqual => ConditionCode::AboveOrEqual,
-            _ => {
-                return Err(SelectionError::UnsupportedCompare {
-                    function: self.function.id,
-                    block,
-                    instruction: instruction.id,
-                });
-            }
+            ComparePredicate::OrderedEqual => ConditionCode::Equal,
+            ComparePredicate::OrderedNotEqual => ConditionCode::NotEqual,
+            ComparePredicate::OrderedLessThan => ConditionCode::Below,
+            ComparePredicate::OrderedLessEqual => ConditionCode::BelowOrEqual,
+            ComparePredicate::OrderedGreaterThan => ConditionCode::Above,
+            ComparePredicate::OrderedGreaterEqual => ConditionCode::AboveOrEqual,
         };
         let left_type = self.operand_type(block, instruction.id, left)?;
         let right_type = self.operand_type(block, instruction.id, right)?;
-        if left_type != right_type || !matches!(self.integer_bits(left_type)?, 16 | 32) {
+        if left_type != right_type {
             return Err(SelectionError::UnsupportedCompare {
                 function: self.function.id,
                 block,
@@ -1382,14 +1814,50 @@ impl<'types> FunctionSelector<'types> {
         let right = self.select_operand(block, instruction.id, right, left_type, output)?;
         let left = self.materialize_register(left, output)?;
         let right = self.materialize_register(right, output)?;
-        self.comparisons.insert(
-            result.id,
-            PendingComparison {
-                left,
-                right,
-                condition,
-            },
-        );
+        let comparison = match self.type_kind(left_type)? {
+            TypeKind::Integer { bits: 16 | 32 }
+                if !matches!(
+                    predicate,
+                    ComparePredicate::OrderedEqual
+                        | ComparePredicate::OrderedNotEqual
+                        | ComparePredicate::OrderedLessThan
+                        | ComparePredicate::OrderedLessEqual
+                        | ComparePredicate::OrderedGreaterThan
+                        | ComparePredicate::OrderedGreaterEqual
+                ) =>
+            {
+                PendingComparison::Integer {
+                    left,
+                    right,
+                    condition,
+                }
+            }
+            TypeKind::Float(_)
+                if matches!(
+                    predicate,
+                    ComparePredicate::OrderedEqual
+                        | ComparePredicate::OrderedNotEqual
+                        | ComparePredicate::OrderedLessThan
+                        | ComparePredicate::OrderedLessEqual
+                        | ComparePredicate::OrderedGreaterThan
+                        | ComparePredicate::OrderedGreaterEqual
+                ) =>
+            {
+                PendingComparison::Float {
+                    left,
+                    right,
+                    condition,
+                }
+            }
+            _ => {
+                return Err(SelectionError::UnsupportedCompare {
+                    function: self.function.id,
+                    block,
+                    instruction: instruction.id,
+                });
+            }
+        };
+        self.comparisons.insert(result.id, comparison);
         Ok(())
     }
 
@@ -1410,7 +1878,40 @@ impl<'types> FunctionSelector<'types> {
             });
         }
         let frame = self.fresh_frame_object(size, alignment, FrameObjectKind::Local)?;
-        self.insert_value(result, SelectedLocation::Frame(frame))
+        self.insert_value(
+            result,
+            SelectedLocation::Frame {
+                index: frame,
+                addend: 0,
+            },
+        )
+    }
+
+    fn select_parameter_address(
+        &mut self,
+        block: BlockId,
+        instruction: &Instruction,
+        parameter: u32,
+    ) -> Result<(), SelectionError> {
+        let result = self.result_definition(block, instruction)?;
+        self.require_near_pointer(result.type_id)?;
+        let frame = usize::try_from(parameter)
+            .ok()
+            .and_then(|index| self.parameter_frames.get(index))
+            .copied()
+            .ok_or(SelectionError::ParameterAddressOutOfBounds {
+                function: self.function.id,
+                block,
+                instruction: instruction.id,
+                parameter,
+            })?;
+        self.insert_value(
+            result,
+            SelectedLocation::Frame {
+                index: frame,
+                addend: 0,
+            },
+        )
     }
 
     fn select_cast(
@@ -1431,6 +1932,23 @@ impl<'types> FunctionSelector<'types> {
             });
         }
         let operand_type = self.operand_type(block, instruction.id, operand)?;
+        if matches!(
+            op,
+            CastOp::IntegerToFloat
+                | CastOp::FloatExtend
+                | CastOp::FloatTruncate
+                | CastOp::FloatToInteger { .. }
+        ) {
+            return self.select_float_cast(
+                block,
+                instruction,
+                op,
+                operand,
+                operand_type,
+                to,
+                output,
+            );
+        }
         match op {
             CastOp::Truncate => {
                 return self.select_truncate_dword_to_word(
@@ -1472,6 +1990,20 @@ impl<'types> FunctionSelector<'types> {
                 block,
                 instruction: instruction.id,
             });
+        }
+        if let (TypeKind::Integer { bits: from }, TypeKind::Integer { bits: into }) =
+            (self.type_kind(operand_type)?, self.type_kind(to)?)
+        {
+            if from != into {
+                return Err(SelectionError::UnsupportedCast {
+                    function: self.function.id,
+                    block,
+                    instruction: instruction.id,
+                });
+            }
+            let selected =
+                self.select_operand(block, instruction.id, operand, operand_type, output)?;
+            return self.insert_value(result, selected.location);
         }
         let (
             TypeKind::Pointer {
@@ -1530,6 +2062,186 @@ impl<'types> FunctionSelector<'types> {
         )
     }
 
+    fn select_float_cast(
+        &mut self,
+        block: BlockId,
+        instruction: &Instruction,
+        op: CastOp,
+        operand: &Operand,
+        source_type: TypeId,
+        destination_type: TypeId,
+        output: &mut Vec<MachineInstruction>,
+    ) -> Result<(), SelectionError> {
+        match op {
+            CastOp::IntegerToFloat => {
+                self.float_kind(destination_type)?;
+                let bits = self.integer_bits(source_type)?;
+                let format = match bits {
+                    16 => X87MemoryFormat::Signed16,
+                    32 => X87MemoryFormat::Signed32,
+                    _ => {
+                        return Err(SelectionError::UnsupportedCast {
+                            function: self.function.id,
+                            block,
+                            instruction: instruction.id,
+                        });
+                    }
+                };
+                let destination =
+                    self.define_register_value(self.result_definition(block, instruction)?)?;
+                if let Operand::Constant(TypedConstant {
+                    type_id,
+                    value: Constant::Integer(value),
+                }) = operand
+                {
+                    self.require_operand_type(block, instruction.id, source_type, *type_id)?;
+                    if let Some(opcode) = match *value {
+                        0 => Some(X86Opcode::X87LoadZero),
+                        1 => Some(X86Opcode::X87LoadOne),
+                        _ => None,
+                    } {
+                        return self.push_instruction(
+                            opcode,
+                            vec![virtual_operand(destination, OperandRole::Def)],
+                            InstructionFlags::NONE,
+                            output,
+                        );
+                    }
+                    let frame = self.fresh_frame_object(
+                        u32::from(bits / 8),
+                        2,
+                        FrameObjectKind::Temporary,
+                    )?;
+                    self.push_instruction(
+                        X86Opcode::Store,
+                        vec![
+                            frame_operand(frame, 0),
+                            immediate_operand(i64::from(bits)),
+                            immediate_operand(integer_immediate(*value, bits)),
+                        ],
+                        store_flags(false),
+                        output,
+                    )?;
+                    return self.push_instruction(
+                        X86Opcode::X87IntegerLoad,
+                        vec![
+                            virtual_operand(destination, OperandRole::Def),
+                            float_format_operand(format),
+                            frame_operand(frame, 0),
+                        ],
+                        load_flags(false),
+                        output,
+                    );
+                }
+                let source =
+                    self.select_operand(block, instruction.id, operand, source_type, output)?;
+                let source = self.materialize_register(source, output)?;
+                let frame =
+                    self.fresh_frame_object(u32::from(bits / 8), 2, FrameObjectKind::Temporary)?;
+                self.push_instruction(
+                    X86Opcode::Store,
+                    vec![
+                        frame_operand(frame, 0),
+                        virtual_operand(source, OperandRole::Use),
+                    ],
+                    store_flags(false),
+                    output,
+                )?;
+                self.push_instruction(
+                    X86Opcode::X87IntegerLoad,
+                    vec![
+                        virtual_operand(destination, OperandRole::Def),
+                        float_format_operand(format),
+                        frame_operand(frame, 0),
+                    ],
+                    load_flags(false),
+                    output,
+                )
+            }
+            CastOp::FloatExtend | CastOp::FloatTruncate => {
+                let source_kind = self.float_kind(source_type)?;
+                let destination_kind = self.float_kind(destination_type)?;
+                let valid = match op {
+                    CastOp::FloatExtend => float_bytes(source_kind) < float_bytes(destination_kind),
+                    CastOp::FloatTruncate => {
+                        float_bytes(source_kind) > float_bytes(destination_kind)
+                    }
+                    _ => unreachable!(),
+                };
+                if !valid {
+                    return Err(SelectionError::UnsupportedCast {
+                        function: self.function.id,
+                        block,
+                        instruction: instruction.id,
+                    });
+                }
+                let source =
+                    self.select_operand(block, instruction.id, operand, source_type, output)?;
+                let source = self.materialize_register(source, output)?;
+                let destination =
+                    self.define_register_value(self.result_definition(block, instruction)?)?;
+                self.copy(destination, source, output)
+            }
+            CastOp::FloatToInteger { rounding } => {
+                self.float_kind(source_type)?;
+                let bits = self.integer_bits(destination_type)?;
+                let format = match bits {
+                    16 => X87MemoryFormat::Signed16,
+                    32 => X87MemoryFormat::Signed32,
+                    _ => {
+                        return Err(SelectionError::UnsupportedCast {
+                            function: self.function.id,
+                            block,
+                            instruction: instruction.id,
+                        });
+                    }
+                };
+                let opcode = match rounding {
+                    FloatRounding::Dynamic => X86Opcode::X87IntegerStorePop,
+                    FloatRounding::TowardZero => X86Opcode::X87IntegerStoreTrunc,
+                    FloatRounding::NearestEven => {
+                        return Err(SelectionError::UnsupportedCast {
+                            function: self.function.id,
+                            block,
+                            instruction: instruction.id,
+                        });
+                    }
+                };
+                let source =
+                    self.select_operand(block, instruction.id, operand, source_type, output)?;
+                let source = self.materialize_register(source, output)?;
+                let frame =
+                    self.fresh_frame_object(u32::from(bits / 8), 2, FrameObjectKind::Temporary)?;
+                self.push_instruction(
+                    opcode,
+                    vec![
+                        virtual_operand(source, OperandRole::Use),
+                        float_format_operand(format),
+                        frame_operand(frame, 0),
+                    ],
+                    store_flags(false),
+                    output,
+                )?;
+                let destination =
+                    self.define_register_value(self.result_definition(block, instruction)?)?;
+                self.push_instruction(
+                    X86Opcode::Load,
+                    vec![
+                        virtual_operand(destination, OperandRole::Def),
+                        frame_operand(frame, 0),
+                    ],
+                    load_flags(false),
+                    output,
+                )
+            }
+            _ => Err(SelectionError::UnsupportedCast {
+                function: self.function.id,
+                block,
+                instruction: instruction.id,
+            }),
+        }
+    }
+
     fn select_extend_word_to_dword(
         &mut self,
         block: BlockId,
@@ -1576,16 +2288,40 @@ impl<'types> FunctionSelector<'types> {
         let destination = self.define_register_value(result)?;
         match self.pointer_address_space(address_type)? {
             AddressSpace::NearData => {
-                let address = self.memory_address_operand(selected, output)?;
-                self.push_instruction(
-                    X86Opcode::Load,
-                    vec![virtual_operand(destination, OperandRole::Def), address],
-                    load_flags(volatile),
-                    output,
-                )
+                let address = self.memory_address_operands(selected);
+                if matches!(self.type_kind(result.type_id)?, TypeKind::Float(_)) {
+                    let mut operands = vec![
+                        virtual_operand(destination, OperandRole::Def),
+                        float_format_operand(self.float_format(result.type_id)?),
+                    ];
+                    operands.extend(address);
+                    return self.push_instruction(
+                        X86Opcode::X87Load,
+                        operands,
+                        load_flags(volatile),
+                        output,
+                    );
+                }
+                let mut operands = vec![virtual_operand(destination, OperandRole::Def)];
+                operands.extend(address);
+                self.push_instruction(X86Opcode::Load, operands, load_flags(volatile), output)
             }
             AddressSpace::FarData => {
                 let offset = self.extract_far_address(selected, output)?;
+                if matches!(self.type_kind(result.type_id)?, TypeKind::Float(_)) {
+                    self.push_instruction(
+                        X86Opcode::X87Load,
+                        vec![
+                            virtual_operand(destination, OperandRole::Def),
+                            float_format_operand(self.float_format(result.type_id)?),
+                            virtual_operand(offset, OperandRole::Use),
+                            physical_operand(X86Register::Es, OperandRole::Use),
+                        ],
+                        load_flags(volatile),
+                        output,
+                    )?;
+                    return self.restore_es(output);
+                }
                 self.push_instruction(
                     X86Opcode::Load,
                     vec![
@@ -1630,16 +2366,53 @@ impl<'types> FunctionSelector<'types> {
             AddressSpace::NearData => {
                 let address =
                     self.select_operand(block, instruction.id, address, address_type, output)?;
+                if let Operand::Constant(TypedConstant {
+                    type_id,
+                    value: Constant::Float(value),
+                }) = value
+                {
+                    if self.float_kind(*type_id)? == FloatKind::Binary32 {
+                        self.require_operand_type(block, instruction.id, value_type, *type_id)?;
+                        let value = value.parse::<f32>().map_err(|_| {
+                            SelectionError::UnsupportedFloatConstant {
+                                type_id: *type_id,
+                                value: value.clone(),
+                            }
+                        })?;
+                        let address = self.memory_address_operands(address);
+                        let mut operands = address;
+                        operands.extend([
+                            immediate_operand(32),
+                            immediate_operand(i64::from(value.to_bits())),
+                        ]);
+                        return self.push_instruction(
+                            X86Opcode::Store,
+                            operands,
+                            store_flags(volatile),
+                            output,
+                        );
+                    }
+                }
                 let value =
                     self.select_operand(block, instruction.id, value, value_type, output)?;
                 let value = self.materialize_register(value, output)?;
-                let address = self.memory_address_operand(address, output)?;
-                self.push_instruction(
-                    X86Opcode::Store,
-                    vec![address, virtual_operand(value, OperandRole::Use)],
-                    store_flags(volatile),
-                    output,
-                )
+                let address = self.memory_address_operands(address);
+                if matches!(self.type_kind(value_type)?, TypeKind::Float(_)) {
+                    let mut operands = vec![
+                        virtual_operand(value, OperandRole::Use),
+                        float_format_operand(self.float_format(value_type)?),
+                    ];
+                    operands.extend(address);
+                    return self.push_instruction(
+                        X86Opcode::X87StorePop,
+                        operands,
+                        store_flags(volatile),
+                        output,
+                    );
+                }
+                let mut operands = address;
+                operands.push(virtual_operand(value, OperandRole::Use));
+                self.push_instruction(X86Opcode::Store, operands, store_flags(volatile), output)
             }
             AddressSpace::FarData => {
                 // Keep the stored value live before the far-address scratch
@@ -1650,6 +2423,20 @@ impl<'types> FunctionSelector<'types> {
                 let address =
                     self.select_operand(block, instruction.id, address, address_type, output)?;
                 let offset = self.extract_far_address(address, output)?;
+                if matches!(self.type_kind(value_type)?, TypeKind::Float(_)) {
+                    self.push_instruction(
+                        X86Opcode::X87StorePop,
+                        vec![
+                            virtual_operand(value, OperandRole::Use),
+                            float_format_operand(self.float_format(value_type)?),
+                            virtual_operand(offset, OperandRole::Use),
+                            physical_operand(X86Register::Es, OperandRole::Use),
+                        ],
+                        store_flags(volatile),
+                        output,
+                    )?;
+                    return self.restore_es(output);
+                }
                 self.push_instruction(
                     X86Opcode::Store,
                     vec![
@@ -1755,14 +2542,9 @@ impl<'types> FunctionSelector<'types> {
                 effects,
                 output,
             ),
-            (false, _, CallingConvention::C | CallingConvention::FarCdecl) => self
-                .select_defined_caller_cleanup_call_result(
-                    block,
-                    instruction,
-                    target,
-                    effects,
-                    output,
-                ),
+            (_, _, CallingConvention::C | CallingConvention::FarCdecl) => {
+                self.select_caller_cleanup_call_result(block, instruction, target, effects, output)
+            }
             _ => Err(SelectionError::UnsupportedCallTarget {
                 function: self.function.id,
                 block,
@@ -1780,6 +2562,15 @@ impl<'types> FunctionSelector<'types> {
         expected_type: TypeId,
         output: &mut Vec<MachineInstruction>,
     ) -> Result<(), SelectionError> {
+        if matches!(self.type_kind(expected_type)?, TypeKind::Float(_)) {
+            return self.push_float_call_argument(
+                block,
+                instruction,
+                argument,
+                expected_type,
+                output,
+            );
+        }
         let argument = self.select_operand(block, instruction, argument, expected_type, output)?;
         let argument = self.materialize_register(argument, output)?;
         self.push_instruction(
@@ -1788,6 +2579,111 @@ impl<'types> FunctionSelector<'types> {
             InstructionFlags::NONE,
             output,
         )
+    }
+
+    fn push_float_call_argument(
+        &mut self,
+        block: BlockId,
+        instruction: crate::ir::InstructionId,
+        argument: &Operand,
+        expected_type: TypeId,
+        output: &mut Vec<MachineInstruction>,
+    ) -> Result<(), SelectionError> {
+        let kind = self.float_kind(expected_type)?;
+
+        if let Operand::Constant(TypedConstant {
+            type_id,
+            value: Constant::Float(value),
+        }) = argument
+        {
+            self.require_operand_type(block, instruction, expected_type, *type_id)?;
+            match kind {
+                FloatKind::Binary32 => {
+                    let value = value.parse::<f32>().map_err(|_| {
+                        SelectionError::UnsupportedFloatConstant {
+                            type_id: *type_id,
+                            value: value.clone(),
+                        }
+                    })?;
+                    self.push_instruction(
+                        X86Opcode::Push,
+                        vec![
+                            immediate_operand(32),
+                            immediate_operand(i64::from(value.to_bits())),
+                        ],
+                        InstructionFlags::NONE,
+                        output,
+                    )
+                }
+                FloatKind::Binary64 => {
+                    let value = value.parse::<f64>().map_err(|_| {
+                        SelectionError::UnsupportedFloatConstant {
+                            type_id: *type_id,
+                            value: value.clone(),
+                        }
+                    })?;
+                    let bits = value.to_bits();
+                    for word in [(bits >> 32) as u32, bits as u32] {
+                        self.push_instruction(
+                            X86Opcode::Push,
+                            vec![immediate_operand(32), immediate_operand(i64::from(word))],
+                            InstructionFlags::NONE,
+                            output,
+                        )?;
+                    }
+                    Ok(())
+                }
+                FloatKind::Extended80 => Err(SelectionError::UnsupportedInstruction {
+                    function: self.function.id,
+                    block,
+                    instruction,
+                }),
+            }
+        } else {
+            let value = self.select_operand(block, instruction, argument, expected_type, output)?;
+            let value = self.materialize_register(value, output)?;
+            let (size, format) = match kind {
+                FloatKind::Binary32 => (4, X87MemoryFormat::Float32),
+                FloatKind::Binary64 => (8, X87MemoryFormat::Float64),
+                FloatKind::Extended80 => {
+                    return Err(SelectionError::UnsupportedInstruction {
+                        function: self.function.id,
+                        block,
+                        instruction,
+                    });
+                }
+            };
+            let frame = self.fresh_frame_object(size, 2, FrameObjectKind::Temporary)?;
+            self.push_instruction(
+                X86Opcode::X87StorePop,
+                vec![
+                    virtual_operand(value, OperandRole::Use),
+                    float_format_operand(format),
+                    frame_operand(frame, 0),
+                ],
+                store_flags(false),
+                output,
+            )?;
+            for addend in (0..size).step_by(4).rev() {
+                let raw = self.fresh_virtual_register(X86RegisterClass::Dword.machine_class())?;
+                self.push_instruction(
+                    X86Opcode::Load,
+                    vec![
+                        virtual_operand(raw, OperandRole::Def),
+                        frame_operand(frame, i64::from(addend)),
+                    ],
+                    load_flags(false),
+                    output,
+                )?;
+                self.push_instruction(
+                    X86Opcode::Push,
+                    vec![virtual_operand(raw, OperandRole::Use)],
+                    InstructionFlags::NONE,
+                    output,
+                )?;
+            }
+            Ok(())
+        }
     }
 
     fn select_defined_far_pascal_call_result(
@@ -1831,6 +2727,30 @@ impl<'types> FunctionSelector<'types> {
                     X86Register::Ax,
                 ));
                 self.push_instruction(X86Opcode::CallFar, operands, call_flags(effects), output)
+            }
+            TypeKind::Pointer {
+                address_space: AddressSpace::NearData,
+            } => {
+                let result = self.result_definition(block, instruction)?;
+                if result.type_id != target.signature.result {
+                    return Err(SelectionError::OperandTypeMismatch {
+                        function: self.function.id,
+                        block,
+                        instruction: instruction.id,
+                        expected: target.signature.result,
+                        actual: result.type_id,
+                    });
+                }
+                let delivered =
+                    self.fresh_virtual_register(X86RegisterClass::Word.machine_class())?;
+                operands.push(fixed_virtual_operand(
+                    delivered,
+                    OperandRole::Def,
+                    X86Register::Ax,
+                ));
+                self.push_instruction(X86Opcode::CallFar, operands, call_flags(effects), output)?;
+                let pointer = self.define_register_value(result)?;
+                self.copy(pointer, delivered, output)
             }
             TypeKind::Integer { bits: 32 } => {
                 let result = self.result_definition(block, instruction)?;
@@ -1879,7 +2799,7 @@ impl<'types> FunctionSelector<'types> {
         }
     }
 
-    fn select_defined_caller_cleanup_call_result(
+    fn select_caller_cleanup_call_result(
         &mut self,
         block: BlockId,
         instruction: &Instruction,
@@ -1899,7 +2819,11 @@ impl<'types> FunctionSelector<'types> {
                 });
             }
         };
-        let mut operands = vec![function_operand(MachineFunctionId::new(target.id.get()))];
+        let mut operands = vec![if target.blocks.is_empty() {
+            external_symbol_operand(target.name.clone())
+        } else {
+            function_operand(MachineFunctionId::new(target.id.get()))
+        }];
         match self.type_kind(target.signature.result)? {
             TypeKind::Void => {
                 if !instruction.results.is_empty() {
@@ -1930,6 +2854,31 @@ impl<'types> FunctionSelector<'types> {
                     OperandRole::Def,
                     X86Register::Ax,
                 ));
+            }
+            TypeKind::Pointer {
+                address_space: AddressSpace::NearData,
+            } => {
+                let result = self.result_definition(block, instruction)?;
+                if result.type_id != target.signature.result {
+                    return Err(SelectionError::OperandTypeMismatch {
+                        function: self.function.id,
+                        block,
+                        instruction: instruction.id,
+                        expected: target.signature.result,
+                        actual: result.type_id,
+                    });
+                }
+                let delivered =
+                    self.fresh_virtual_register(X86RegisterClass::Word.machine_class())?;
+                operands.push(fixed_virtual_operand(
+                    delivered,
+                    OperandRole::Def,
+                    X86Register::Ax,
+                ));
+                self.push_instruction(opcode, operands, call_flags(effects), output)?;
+                let pointer = self.define_register_value(result)?;
+                self.copy(pointer, delivered, output)?;
+                return self.select_caller_cleanup(target, output);
             }
             TypeKind::Integer { bits: 32 } => {
                 let result = self.result_definition(block, instruction)?;
@@ -1967,6 +2916,24 @@ impl<'types> FunctionSelector<'types> {
                     output,
                 )?;
                 return self.select_caller_cleanup(target, output);
+            }
+            TypeKind::Float(_) => {
+                let result = self.result_definition(block, instruction)?;
+                if result.type_id != target.signature.result {
+                    return Err(SelectionError::OperandTypeMismatch {
+                        function: self.function.id,
+                        block,
+                        instruction: instruction.id,
+                        expected: target.signature.result,
+                        actual: result.type_id,
+                    });
+                }
+                let result = self.define_register_value(result)?;
+                operands.push(fixed_virtual_operand(
+                    result,
+                    OperandRole::Def,
+                    X86Register::St0,
+                ));
             }
             _ => {
                 return Err(SelectionError::UnsupportedCallResult {
@@ -2064,6 +3031,13 @@ impl<'types> FunctionSelector<'types> {
                             type_id: constant.type_id,
                         })
                     }
+                    Constant::Float(value) => self.materialize_float_constant(
+                        block,
+                        instruction,
+                        constant.type_id,
+                        value,
+                        output,
+                    ),
                     _ => Err(SelectionError::UnsupportedConstant {
                         function: self.function.id,
                         block,
@@ -2106,6 +3080,64 @@ impl<'types> FunctionSelector<'types> {
         })
     }
 
+    fn materialize_float_constant(
+        &mut self,
+        block: BlockId,
+        instruction: crate::ir::InstructionId,
+        type_id: TypeId,
+        value: &str,
+        output: &mut Vec<MachineInstruction>,
+    ) -> Result<SelectedValue, SelectionError> {
+        if let Some(opcode) = exact_x87_constant_opcode(type_id, self.float_kind(type_id)?, value)?
+        {
+            let register = self.fresh_virtual_register(X86RegisterClass::X87.machine_class())?;
+            self.push_instruction(
+                opcode,
+                vec![virtual_operand(register, OperandRole::Def)],
+                InstructionFlags::NONE,
+                output,
+            )?;
+            return Ok(SelectedValue {
+                location: SelectedLocation::Register(register),
+                type_id,
+            });
+        }
+        let Some(constant) = self
+            .float_constants
+            .get(&(type_id, value.to_owned()))
+            .cloned()
+        else {
+            return Err(SelectionError::UnsupportedConstant {
+                function: self.function.id,
+                block,
+                instruction,
+            });
+        };
+        let register = self.fresh_virtual_register(X86RegisterClass::X87.machine_class())?;
+        self.push_instruction(
+            X86Opcode::X87Load,
+            vec![
+                virtual_operand(register, OperandRole::Def),
+                float_format_operand(constant.format),
+                MachineOperand {
+                    kind: MachineOperandKind::Global {
+                        name: constant.name,
+                        addend: 0,
+                    },
+                    role: OperandRole::None,
+                    constraint: None,
+                    tied_to: None,
+                },
+            ],
+            load_flags(false),
+            output,
+        )?;
+        Ok(SelectedValue {
+            location: SelectedLocation::Register(register),
+            type_id,
+        })
+    }
+
     fn select_terminator(
         &mut self,
         block: &Block,
@@ -2139,19 +3171,44 @@ impl<'types> FunctionSelector<'types> {
                 )?;
                 let then_block = MachineBlockId::new(then_block.get());
                 let else_block = MachineBlockId::new(else_block.get());
-                self.push_instruction(
-                    X86Opcode::Cmp,
-                    vec![
-                        virtual_operand(comparison.left, OperandRole::Use),
-                        virtual_operand(comparison.right, OperandRole::Use),
-                    ],
-                    InstructionFlags::NONE,
-                    output,
-                )?;
+                let condition = match comparison {
+                    PendingComparison::Integer {
+                        left,
+                        right,
+                        condition,
+                    } => {
+                        self.push_instruction(
+                            X86Opcode::Cmp,
+                            vec![
+                                virtual_operand(left, OperandRole::Use),
+                                virtual_operand(right, OperandRole::Use),
+                            ],
+                            InstructionFlags::NONE,
+                            output,
+                        )?;
+                        condition
+                    }
+                    PendingComparison::Float {
+                        left,
+                        right,
+                        condition,
+                    } => {
+                        self.push_instruction(
+                            X86Opcode::X87Compare,
+                            vec![
+                                virtual_operand(left, OperandRole::Use),
+                                virtual_operand(right, OperandRole::Use),
+                            ],
+                            InstructionFlags::NONE,
+                            output,
+                        )?;
+                        condition
+                    }
+                };
                 self.push_instruction(
                     X86Opcode::JumpConditional,
                     vec![
-                        immediate_operand(i64::from(comparison.condition as u8)),
+                        immediate_operand(i64::from(condition as u8)),
                         block_operand(then_block),
                     ],
                     InstructionFlags::NONE,
@@ -2191,10 +3248,20 @@ impl<'types> FunctionSelector<'types> {
                     self.function.signature.calling_convention,
                     CallingConvention::C | CallingConvention::FarCdecl
                 ) {
-                    return self.select_caller_cleanup_integer_return(block, value, output);
+                    return self.select_c_return(block, value, output);
                 }
-                let bits = match self.type_kind(self.function.signature.result)? {
-                    TypeKind::Integer { bits: 16 } => 16,
+                let result_kind = self.type_kind(self.function.signature.result)?;
+                let near_pointer = matches!(
+                    result_kind,
+                    TypeKind::Pointer {
+                        address_space: AddressSpace::NearData,
+                    }
+                );
+                let bits = match result_kind {
+                    TypeKind::Integer { bits: 16 }
+                    | TypeKind::Pointer {
+                        address_space: AddressSpace::NearData,
+                    } => 16,
                     TypeKind::Integer { bits: 32 } => 32,
                     _ => {
                         return Err(SelectionError::UnsupportedReturnValue {
@@ -2222,15 +3289,26 @@ impl<'types> FunctionSelector<'types> {
                     });
                 }
                 let value = self.materialize_register(selected, output)?;
-                let mut operands = if bits == 16 {
+                let mut operands = if near_pointer {
+                    let delivered =
+                        self.fresh_virtual_register(X86RegisterClass::Word.machine_class())?;
+                    self.copy(delivered, value, output)?;
+                    vec![fixed_virtual_operand(
+                        delivered,
+                        OperandRole::Use,
+                        X86Register::Ax,
+                    )]
+                } else if bits == 16 {
                     vec![fixed_virtual_operand(
                         value,
                         OperandRole::Use,
                         X86Register::Ax,
                     )]
                 } else {
-                    let low = self.fresh_virtual_register(X86RegisterClass::Word.machine_class())?;
-                    let high = self.fresh_virtual_register(X86RegisterClass::Word.machine_class())?;
+                    let low =
+                        self.fresh_virtual_register(X86RegisterClass::Word.machine_class())?;
+                    let high =
+                        self.fresh_virtual_register(X86RegisterClass::Word.machine_class())?;
                     self.push_instruction(
                         X86Opcode::LowWord,
                         vec![
@@ -2318,14 +3396,62 @@ impl<'types> FunctionSelector<'types> {
         }
     }
 
-    fn select_caller_cleanup_integer_return(
+    fn select_c_return(
         &mut self,
         block: &Block,
         value: &Operand,
         output: &mut Vec<MachineInstruction>,
     ) -> Result<(Option<MachineInstruction>, Vec<MachineBlockId>), SelectionError> {
-        let bits = match self.type_kind(self.function.signature.result)? {
-            TypeKind::Integer { bits: 16 } => 16,
+        let result_kind = self.type_kind(self.function.signature.result)?;
+        if matches!(result_kind, TypeKind::Float(_)) {
+            let result_type = self.function.signature.result;
+            let selected = self.select_operand(
+                block.id,
+                crate::ir::InstructionId::new(0),
+                value,
+                result_type,
+                output,
+            )?;
+            let value = self.materialize_register(selected, output)?;
+            let mut operands = vec![fixed_virtual_operand(
+                value,
+                OperandRole::Use,
+                X86Register::St0,
+            )];
+            let opcode = match self.function.signature.calling_convention {
+                CallingConvention::C => X86Opcode::ReturnNear,
+                CallingConvention::FarCdecl => {
+                    operands.push(immediate_operand(0));
+                    X86Opcode::ReturnFar
+                }
+                CallingConvention::FarPascal => {
+                    return Err(SelectionError::UnsupportedReturnValue {
+                        function: self.function.id,
+                        block: block.id,
+                    });
+                }
+            };
+            let instruction = self.machine_instruction(
+                opcode,
+                operands,
+                InstructionFlags {
+                    terminator: true,
+                    ..InstructionFlags::NONE
+                },
+            )?;
+            return Ok((Some(instruction), Vec::new()));
+        }
+        let near_pointer = matches!(
+            result_kind,
+            TypeKind::Pointer {
+                address_space: AddressSpace::NearData,
+            }
+        );
+        let bits = match result_kind {
+            TypeKind::Integer { bits: 16 }
+            | TypeKind::Pointer {
+                address_space: AddressSpace::NearData,
+            } => 16,
             TypeKind::Integer { bits: 32 } => 32,
             _ => {
                 return Err(SelectionError::UnsupportedReturnValue {
@@ -2353,7 +3479,15 @@ impl<'types> FunctionSelector<'types> {
             });
         }
         let value = self.materialize_register(selected, output)?;
-        let mut operands = if bits == 16 {
+        let mut operands = if near_pointer {
+            let delivered = self.fresh_virtual_register(X86RegisterClass::Word.machine_class())?;
+            self.copy(delivered, value, output)?;
+            vec![fixed_virtual_operand(
+                delivered,
+                OperandRole::Use,
+                X86Register::Ax,
+            )]
+        } else if bits == 16 {
             vec![fixed_virtual_operand(
                 value,
                 OperandRole::Use,
@@ -2500,7 +3634,26 @@ impl<'types> FunctionSelector<'types> {
     ) -> Result<VirtualRegisterId, SelectionError> {
         match value.location {
             SelectedLocation::Register(register) => Ok(register),
-            location @ (SelectedLocation::Frame(_) | SelectedLocation::Global { .. }) => {
+            SelectedLocation::RegisterOffset { base, addend } => {
+                if addend == 0 {
+                    return Ok(base);
+                }
+                self.require_near_pointer(value.type_id)?;
+                let register =
+                    self.fresh_virtual_register(X86RegisterClass::Address16.machine_class())?;
+                self.copy(register, base, output)?;
+                self.push_instruction(
+                    X86Opcode::Add,
+                    vec![
+                        virtual_operand(register, OperandRole::UseDef),
+                        immediate_operand(addend),
+                    ],
+                    InstructionFlags::NONE,
+                    output,
+                )?;
+                Ok(register)
+            }
+            location @ (SelectedLocation::Frame { .. } | SelectedLocation::Global { .. }) => {
                 self.require_near_pointer(value.type_id)?;
                 let register =
                     self.fresh_virtual_register(X86RegisterClass::Address16.machine_class())?;
@@ -2518,25 +3671,69 @@ impl<'types> FunctionSelector<'types> {
         }
     }
 
-    fn memory_address_operand(
-        &mut self,
-        value: SelectedValue,
-        output: &mut Vec<MachineInstruction>,
-    ) -> Result<MachineOperand, SelectionError> {
+    fn memory_address_operands(&self, value: SelectedValue) -> Vec<MachineOperand> {
         match value.location {
-            SelectedLocation::Global { .. } => {
-                let register = self.materialize_register(value, output)?;
-                Ok(virtual_operand(register, OperandRole::Use))
+            SelectedLocation::RegisterOffset { base, addend } if addend != 0 => vec![
+                virtual_operand(base, OperandRole::Use),
+                immediate_operand(addend),
+            ],
+            SelectedLocation::RegisterOffset { base, .. } => {
+                vec![virtual_operand(base, OperandRole::Use)]
             }
-            location => Ok(selected_address_operand(location)),
+            location => vec![selected_address_operand(location)],
         }
     }
 
-    /// Splits one far 16:16 dword immediately before its ES-relative use.
+    fn offset_near_address(
+        &mut self,
+        value: SelectedValue,
+        offset: i64,
+        output: &mut Vec<MachineInstruction>,
+    ) -> Result<SelectedLocation, SelectionError> {
+        let offset = signed_i16(offset);
+        match value.location {
+            SelectedLocation::Register(base) => Ok(SelectedLocation::RegisterOffset {
+                base,
+                addend: offset,
+            }),
+            SelectedLocation::RegisterOffset { base, addend } => {
+                Ok(SelectedLocation::RegisterOffset {
+                    base,
+                    addend: signed_i16(addend + offset),
+                })
+            }
+            // A local field remains an abstract frame reference so frame
+            // planning can combine its slot and field offsets exactly once.
+            SelectedLocation::Frame { index, addend } => Ok(SelectedLocation::Frame {
+                index,
+                addend: signed_i16(addend + offset),
+            }),
+            // `addressforms.selected` intentionally does not move an offset
+            // into SEGMENT/EXTERNAL relocations.  Keep the existing symbolic
+            // LEA plus arithmetic for a pointer-valued global GEP.
+            location @ SelectedLocation::Global { .. } => {
+                let base = self.materialize_register(
+                    SelectedValue {
+                        location,
+                        type_id: value.type_id,
+                    },
+                    output,
+                )?;
+                Ok(SelectedLocation::RegisterOffset {
+                    base,
+                    addend: offset,
+                })
+            }
+        }
+    }
+
+    /// Materializes one far 16:16 dword immediately before its ES-relative use.
     ///
-    /// The selection sequence owns the offset and selector scratch values; ES itself is
-    /// occurrence-local so allocation never has to preserve a far pointer in a
-    /// pinned register across unrelated instructions.
+    /// This is Python backend `lower._pointer_access`'s exact sequence: save ES,
+    /// push the packed pointer, pop its low word into an address register, and
+    /// pop its high word into ES. Keeping the packed value whole until the push
+    /// lets allocation spill or rematerialize it without breaking a later
+    /// pattern recognizer.
     fn extract_far_address(
         &mut self,
         pointer: SelectedValue,
@@ -2544,7 +3741,6 @@ impl<'types> FunctionSelector<'types> {
     ) -> Result<VirtualRegisterId, SelectionError> {
         let pointer = self.materialize_register(pointer, output)?;
         let offset = self.fresh_virtual_register(X86RegisterClass::Address16.machine_class())?;
-        let selector = self.fresh_virtual_register(X86RegisterClass::Word.machine_class())?;
         self.push_instruction(
             X86Opcode::Push,
             vec![physical_operand(X86Register::Es, OperandRole::Use)],
@@ -2552,29 +3748,20 @@ impl<'types> FunctionSelector<'types> {
             output,
         )?;
         self.push_instruction(
-            X86Opcode::LowWord,
-            vec![
-                virtual_operand(offset, OperandRole::Def),
-                virtual_operand(pointer, OperandRole::Use),
-            ],
+            X86Opcode::Push,
+            vec![virtual_operand(pointer, OperandRole::Use)],
             InstructionFlags::NONE,
             output,
         )?;
         self.push_instruction(
-            X86Opcode::HighWord,
-            vec![
-                virtual_operand(selector, OperandRole::Def),
-                virtual_operand(pointer, OperandRole::Use),
-            ],
+            X86Opcode::Pop,
+            vec![virtual_operand(offset, OperandRole::Def)],
             InstructionFlags::NONE,
             output,
         )?;
         self.push_instruction(
-            X86Opcode::Mov,
-            vec![
-                physical_operand(X86Register::Es, OperandRole::Def),
-                virtual_operand(selector, OperandRole::Use),
-            ],
+            X86Opcode::Pop,
+            vec![physical_operand(X86Register::Es, OperandRole::Def)],
             InstructionFlags::NONE,
             output,
         )?;
@@ -2672,6 +3859,7 @@ impl<'types> FunctionSelector<'types> {
 
     fn value_class(&self, type_id: TypeId) -> Result<RegisterClass, SelectionError> {
         match self.type_kind(type_id)? {
+            TypeKind::Float(_) => Ok(X86RegisterClass::X87.machine_class()),
             TypeKind::Pointer {
                 address_space: AddressSpace::NearData,
             } => Ok(X86RegisterClass::Address16.machine_class()),
@@ -2685,6 +3873,9 @@ impl<'types> FunctionSelector<'types> {
 
     fn abi_size(&self, type_id: TypeId) -> Result<(u32, u32), SelectionError> {
         match self.type_kind(type_id)? {
+            TypeKind::Float(FloatKind::Binary32) => Ok((4, 2)),
+            TypeKind::Float(FloatKind::Binary64) => Ok((8, 2)),
+            TypeKind::Float(FloatKind::Extended80) => Ok((10, 2)),
             TypeKind::Integer { bits: 8 | 16 } => Ok((2, 2)),
             TypeKind::Integer { bits: 32 } => Ok((4, 2)),
             TypeKind::Pointer {
@@ -2764,6 +3955,21 @@ impl<'types> FunctionSelector<'types> {
         }
     }
 
+    fn float_kind(&self, type_id: TypeId) -> Result<FloatKind, SelectionError> {
+        match self.type_kind(type_id)? {
+            TypeKind::Float(kind) => Ok(*kind),
+            _ => Err(SelectionError::UnsupportedType { type_id }),
+        }
+    }
+
+    fn float_format(&self, type_id: TypeId) -> Result<X87MemoryFormat, SelectionError> {
+        Ok(match self.float_kind(type_id)? {
+            FloatKind::Binary32 => X87MemoryFormat::Float32,
+            FloatKind::Binary64 => X87MemoryFormat::Float64,
+            FloatKind::Extended80 => X87MemoryFormat::Float80,
+        })
+    }
+
     fn type_kind(&self, type_id: TypeId) -> Result<&TypeKind, SelectionError> {
         self.types
             .get(&type_id)
@@ -2839,7 +4045,16 @@ fn physical_operand(register: X86Register, role: OperandRole) -> MachineOperand 
 fn selected_address_operand(location: SelectedLocation) -> MachineOperand {
     match location {
         SelectedLocation::Register(register) => virtual_operand(register, OperandRole::Use),
-        SelectedLocation::Frame(index) => frame_operand(index),
+        // Offset locations are consumed by `memory_address_operands` or
+        // materialized before any plain-address use.  This arm keeps the
+        // helper total for the common base spelling.
+        SelectedLocation::RegisterOffset { base, addend: 0 } => {
+            virtual_operand(base, OperandRole::Use)
+        }
+        SelectedLocation::RegisterOffset { .. } => {
+            unreachable!("a nonzero selected offset needs a memory tail or materialization")
+        }
+        SelectedLocation::Frame { index, addend } => frame_operand(index, addend),
         SelectedLocation::Global { name, addend } => MachineOperand {
             kind: MachineOperandKind::Global { name, addend },
             role: OperandRole::None,
@@ -2849,13 +4064,20 @@ fn selected_address_operand(location: SelectedLocation) -> MachineOperand {
     }
 }
 
-fn frame_operand(index: FrameIndex) -> MachineOperand {
+fn frame_operand(index: FrameIndex, addend: i64) -> MachineOperand {
     MachineOperand {
-        kind: MachineOperandKind::FrameIndex { index, addend: 0 },
+        kind: MachineOperandKind::FrameIndex { index, addend },
         role: OperandRole::None,
         constraint: None,
         tied_to: None,
     }
+}
+
+/// x86 near offsets are 16-bit quantities.  Keep the same signed spelling as
+/// Python's `addressforms.selected`: a chain can cross the signed boundary,
+/// but its encoded displacement is always the wrapped low word.
+fn signed_i16(value: i64) -> i64 {
+    (value + 32_768).rem_euclid(65_536) - 32_768
 }
 
 fn immediate_operand(value: i64) -> MachineOperand {
@@ -2864,6 +4086,18 @@ fn immediate_operand(value: i64) -> MachineOperand {
         role: OperandRole::None,
         constraint: None,
         tied_to: None,
+    }
+}
+
+fn float_format_operand(format: X87MemoryFormat) -> MachineOperand {
+    immediate_operand(i64::from(format as u8))
+}
+
+const fn float_bytes(kind: FloatKind) -> u8 {
+    match kind {
+        FloatKind::Binary32 => 4,
+        FloatKind::Binary64 => 8,
+        FloatKind::Extended80 => 10,
     }
 }
 
@@ -2965,6 +4199,13 @@ fn machine_value_type(
 ) -> Result<MachineValueType, SelectionError> {
     match type_kind(types, type_id)? {
         TypeKind::Integer { bits } if *bits != 0 => Ok(MachineValueType::Integer { bits: *bits }),
+        TypeKind::Float(kind) => Ok(MachineValueType::Float {
+            kind: match kind {
+                FloatKind::Binary32 => MachineFloatKind::Binary32,
+                FloatKind::Binary64 => MachineFloatKind::Binary64,
+                FloatKind::Extended80 => MachineFloatKind::Extended80,
+            },
+        }),
         TypeKind::Pointer { address_space } => Ok(MachineValueType::Pointer {
             bits: match address_space {
                 AddressSpace::NearData | AddressSpace::Segment => 16,
@@ -3196,9 +4437,11 @@ mod tests {
                 && instruction.operands[1] == immediate_operand(120)
                 && instruction.operands[0].kind == idiv.operands[2].kind
         }));
-        assert!(instructions
-            .iter()
-            .any(|instruction| instruction.opcode == X86Opcode::CwdCdq.machine_opcode()));
+        assert!(
+            instructions
+                .iter()
+                .any(|instruction| instruction.opcode == X86Opcode::CwdCdq.machine_opcode())
+        );
     }
 
     fn basic_types() -> Vec<Type> {
@@ -3423,11 +4666,128 @@ mod tests {
         module(types, vec![function])
     }
 
+    fn far_float_memory_module(store: bool) -> Module {
+        let pointer = TypeId::new(7);
+        let float = TypeId::new(8);
+        let segment = Value {
+            id: ValueId::new(0),
+            type_id: I16,
+        };
+        let offset = Value {
+            id: ValueId::new(1),
+            type_id: I16,
+        };
+        let address = Value {
+            id: ValueId::new(2),
+            type_id: pointer,
+        };
+        let value = Value {
+            id: ValueId::new(3),
+            type_id: float,
+        };
+        let mut instructions = vec![Instruction {
+            id: crate::ir::InstructionId::new(0),
+            results: vec![address.clone()],
+            kind: InstructionKind::ComposePointer {
+                segment: Operand::Value(segment.id),
+                offset: Operand::Value(offset.id),
+            },
+        }];
+        instructions.push(if store {
+            Instruction {
+                id: crate::ir::InstructionId::new(1),
+                results: Vec::new(),
+                kind: InstructionKind::Store {
+                    address: Operand::Value(address.id),
+                    value: Operand::Value(value.id),
+                    alignment: 2,
+                    volatile: false,
+                },
+            }
+        } else {
+            Instruction {
+                id: crate::ir::InstructionId::new(1),
+                results: vec![value.clone()],
+                kind: InstructionKind::Load {
+                    address: Operand::Value(address.id),
+                    alignment: 2,
+                    volatile: false,
+                },
+            }
+        });
+        let parameters = if store {
+            vec![segment, offset, value]
+        } else {
+            vec![segment, offset]
+        };
+        let mut types = basic_types();
+        types.extend([
+            Type {
+                id: pointer,
+                kind: TypeKind::Pointer {
+                    address_space: AddressSpace::FarData,
+                },
+            },
+            Type {
+                id: float,
+                kind: TypeKind::Float(FloatKind::Binary32),
+            },
+        ]);
+        module(
+            types,
+            vec![function(
+                vec![Block {
+                    id: BlockId::new(0),
+                    instructions,
+                    terminator: Terminator::Return(None),
+                }],
+                parameters,
+            )],
+        )
+    }
+
     fn virtual_register_id(operand: &MachineOperand) -> VirtualRegisterId {
         match operand.kind {
             MachineOperandKind::Register(MachineRegister::Virtual(register)) => register,
             _ => panic!("operand is a virtual register"),
         }
+    }
+
+    fn python_far_access(instructions: &[MachineInstruction], opcode: X86Opcode) -> usize {
+        let access = instructions
+            .iter()
+            .position(|instruction| {
+                instruction.opcode == opcode.machine_opcode()
+                    && instruction.operands.last()
+                        == Some(&physical_operand(X86Register::Es, OperandRole::Use))
+            })
+            .expect("far access uses ES");
+        assert!(access >= 4, "far access has its four-instruction setup");
+        assert_eq!(
+            instructions[access - 4..access]
+                .iter()
+                .map(|instruction| instruction.opcode)
+                .collect::<Vec<_>>(),
+            vec![
+                X86Opcode::Push.machine_opcode(),
+                X86Opcode::Push.machine_opcode(),
+                X86Opcode::Pop.machine_opcode(),
+                X86Opcode::Pop.machine_opcode(),
+            ]
+        );
+        assert_eq!(
+            instructions[access - 4].operands,
+            vec![physical_operand(X86Register::Es, OperandRole::Use)]
+        );
+        assert_eq!(
+            instructions[access - 1].operands,
+            vec![physical_operand(X86Register::Es, OperandRole::Def)]
+        );
+        assert_eq!(
+            instructions[access + 1].operands,
+            vec![physical_operand(X86Register::Es, OperandRole::Def)]
+        );
+        access
     }
 
     #[test]
@@ -3439,67 +4799,24 @@ mod tests {
         crate::target::x86::verify_machine(&selected).expect("far word load Machine IR verifies");
         let function = &selected.functions[0];
         let instructions = &function.blocks[0].instructions;
-        let extract = instructions
-            .iter()
-            .position(|instruction| instruction.opcode == X86Opcode::LowWord.machine_opcode())
-            .expect("far load extracts the offset");
-        let [low, pointer] = instructions[extract].operands.as_slice() else {
-            panic!("LowWord has destination and pointer operands");
+        let access = python_far_access(instructions, X86Opcode::Load);
+        let [pointer] = instructions[access - 3].operands.as_slice() else {
+            panic!("packed pointer push has one operand");
         };
-        let [high, high_pointer] = instructions[extract + 1].operands.as_slice() else {
-            panic!("HighWord has destination and pointer operands");
+        let [low] = instructions[access - 2].operands.as_slice() else {
+            panic!("offset pop has one operand");
         };
-        let [es, selector] = instructions[extract + 2].operands.as_slice() else {
-            panic!("Mov has ES and selector operands");
-        };
-        let [destination, offset, load_es] = instructions[extract + 3].operands.as_slice() else {
+        let [destination, offset, load_es] = instructions[access].operands.as_slice() else {
             panic!("segmented Load has destination, offset, and ES operands");
         };
-
-        assert_eq!(
-            instructions[extract - 1].opcode,
-            X86Opcode::Push.machine_opcode()
-        );
-        assert_eq!(
-            instructions[extract + 1].opcode,
-            X86Opcode::HighWord.machine_opcode()
-        );
-        assert_eq!(
-            instructions[extract + 2].opcode,
-            X86Opcode::Mov.machine_opcode()
-        );
-        assert_eq!(
-            instructions[extract + 3].opcode,
-            X86Opcode::Load.machine_opcode()
-        );
-        assert_eq!(
-            instructions[extract + 4].opcode,
-            X86Opcode::Pop.machine_opcode()
-        );
-        assert_eq!(low.role, OperandRole::Def);
         assert_eq!(pointer.role, OperandRole::Use);
-        assert_eq!(high.role, OperandRole::Def);
-        assert_eq!(high_pointer.role, OperandRole::Use);
-        assert_eq!(
-            virtual_register_id(pointer),
-            virtual_register_id(high_pointer)
-        );
+        assert_eq!(low.role, OperandRole::Def);
         assert_eq!(virtual_register_id(low), virtual_register_id(offset));
-        assert_eq!(virtual_register_id(high), virtual_register_id(selector));
         assert_eq!(destination.role, OperandRole::Def);
         assert_eq!(offset.role, OperandRole::Use);
-        assert_eq!(es, &physical_operand(X86Register::Es, OperandRole::Def));
         assert_eq!(
             load_es,
             &physical_operand(X86Register::Es, OperandRole::Use)
-        );
-        assert_eq!(
-            instructions[extract - 1].operands,
-            vec![physical_operand(X86Register::Es, OperandRole::Use)]
-        );
-        assert_eq!(
-            instructions[extract + 4].operands,
-            vec![physical_operand(X86Register::Es, OperandRole::Def)]
         );
         let class = |operand: &MachineOperand| {
             let register = virtual_register_id(operand);
@@ -3511,7 +4828,7 @@ mod tests {
                 .class
         };
         assert_eq!(class(low), X86RegisterClass::Address16.machine_class());
-        assert_eq!(class(high), X86RegisterClass::Word.machine_class());
+        assert_eq!(class(pointer), X86RegisterClass::Dword.machine_class());
         assert_eq!(class(destination), X86RegisterClass::Word.machine_class());
     }
 
@@ -3524,78 +4841,35 @@ mod tests {
         crate::target::x86::verify_machine(&selected).expect("far word store Machine IR verifies");
         let function = &selected.functions[0];
         let instructions = &function.blocks[0].instructions;
-        let extract = instructions
-            .iter()
-            .position(|instruction| instruction.opcode == X86Opcode::LowWord.machine_opcode())
-            .expect("far store extracts the offset");
-        let [low, pointer] = instructions[extract].operands.as_slice() else {
-            panic!("LowWord has destination and pointer operands");
+        let access = python_far_access(instructions, X86Opcode::Store);
+        let [pointer] = instructions[access - 3].operands.as_slice() else {
+            panic!("packed pointer push has one operand");
         };
-        let [high, high_pointer] = instructions[extract + 1].operands.as_slice() else {
-            panic!("HighWord has destination and pointer operands");
+        let [low] = instructions[access - 2].operands.as_slice() else {
+            panic!("offset pop has one operand");
         };
-        let [es, selector] = instructions[extract + 2].operands.as_slice() else {
-            panic!("Mov has ES and selector operands");
-        };
-        let [offset, source, store_es] = instructions[extract + 3].operands.as_slice() else {
+        let [offset, source, store_es] = instructions[access].operands.as_slice() else {
             panic!("segmented Store has offset, source, and ES operands");
         };
-        let [materialized, _constant] = instructions[extract - 2].operands.as_slice() else {
+        let [materialized, _constant] = instructions[access - 5].operands.as_slice() else {
             panic!("stored constant materializes into one register");
         };
-
         assert_eq!(
-            instructions[extract - 2].opcode,
+            instructions[access - 5].opcode,
             X86Opcode::Mov.machine_opcode()
         );
-        assert_eq!(
-            instructions[extract - 1].opcode,
-            X86Opcode::Push.machine_opcode()
-        );
-        assert_eq!(
-            instructions[extract + 1].opcode,
-            X86Opcode::HighWord.machine_opcode()
-        );
-        assert_eq!(
-            instructions[extract + 2].opcode,
-            X86Opcode::Mov.machine_opcode()
-        );
-        assert_eq!(
-            instructions[extract + 3].opcode,
-            X86Opcode::Store.machine_opcode()
-        );
-        assert_eq!(
-            instructions[extract + 4].opcode,
-            X86Opcode::Pop.machine_opcode()
-        );
-        assert_eq!(low.role, OperandRole::Def);
         assert_eq!(pointer.role, OperandRole::Use);
-        assert_eq!(high.role, OperandRole::Def);
-        assert_eq!(high_pointer.role, OperandRole::Use);
-        assert_eq!(
-            virtual_register_id(pointer),
-            virtual_register_id(high_pointer)
-        );
+        assert_eq!(low.role, OperandRole::Def);
         assert_eq!(virtual_register_id(low), virtual_register_id(offset));
-        assert_eq!(virtual_register_id(high), virtual_register_id(selector));
         assert_eq!(
             virtual_register_id(materialized),
             virtual_register_id(source)
         );
         assert_eq!(offset.role, OperandRole::Use);
         assert_eq!(source.role, OperandRole::Use);
-        assert_eq!(es, &physical_operand(X86Register::Es, OperandRole::Def));
         assert_eq!(
             store_es,
             &physical_operand(X86Register::Es, OperandRole::Use)
-        );
-        assert_eq!(
-            instructions[extract - 1].operands,
-            vec![physical_operand(X86Register::Es, OperandRole::Use)]
-        );
-        assert_eq!(
-            instructions[extract + 4].operands,
-            vec![physical_operand(X86Register::Es, OperandRole::Def)]
         );
         let class = |operand: &MachineOperand| {
             let register = virtual_register_id(operand);
@@ -3607,8 +4881,21 @@ mod tests {
                 .class
         };
         assert_eq!(class(low), X86RegisterClass::Address16.machine_class());
-        assert_eq!(class(high), X86RegisterClass::Word.machine_class());
+        assert_eq!(class(pointer), X86RegisterClass::Dword.machine_class());
         assert_eq!(class(source), X86RegisterClass::Word.machine_class());
+    }
+
+    #[test]
+    fn far_memory_selects_float_load_and_store_through_occurrence_local_es() {
+        for (store, opcode) in [(false, X86Opcode::X87Load), (true, X86Opcode::X87StorePop)] {
+            let input = far_float_memory_module(store);
+            input.verify().expect("far float memory IR verifies");
+
+            let selected = select_module(&input).expect("far float memory access selects");
+            selected.verify().expect("far float Machine IR verifies");
+            let instructions = &selected.functions[0].blocks[0].instructions;
+            python_far_access(instructions, opcode);
+        }
     }
 
     #[test]
@@ -3632,9 +4919,21 @@ mod tests {
             id: ValueId::new(0),
             type_id: near,
         };
-        let result = Value {
+        let zero = Value {
             id: ValueId::new(1),
             type_id: near,
+        };
+        let four = Value {
+            id: ValueId::new(2),
+            type_id: near,
+        };
+        let zero_load = Value {
+            id: ValueId::new(3),
+            type_id: I16,
+        };
+        let four_load = Value {
+            id: ValueId::new(4),
+            type_id: I16,
         };
         let function = function(
             vec![Block {
@@ -3651,13 +4950,42 @@ mod tests {
                     },
                     Instruction {
                         id: crate::ir::InstructionId::new(1),
-                        results: vec![result],
+                        results: vec![zero.clone()],
                         kind: InstructionKind::GetElementPointer {
                             base: Operand::Value(base.id),
                             indices: vec![Operand::Constant(TypedConstant {
                                 type_id: I16,
-                                value: Constant::Integer(6),
+                                value: Constant::Integer(0),
                             })],
+                        },
+                    },
+                    Instruction {
+                        id: crate::ir::InstructionId::new(2),
+                        results: vec![zero_load],
+                        kind: InstructionKind::Load {
+                            address: Operand::Value(zero.id),
+                            alignment: 2,
+                            volatile: false,
+                        },
+                    },
+                    Instruction {
+                        id: crate::ir::InstructionId::new(3),
+                        results: vec![four.clone()],
+                        kind: InstructionKind::GetElementPointer {
+                            base: Operand::Value(base.id),
+                            indices: vec![Operand::Constant(TypedConstant {
+                                type_id: I16,
+                                value: Constant::Integer(4),
+                            })],
+                        },
+                    },
+                    Instruction {
+                        id: crate::ir::InstructionId::new(4),
+                        results: vec![four_load],
+                        kind: InstructionKind::Load {
+                            address: Operand::Value(four.id),
+                            alignment: 2,
+                            volatile: false,
                         },
                     },
                 ],
@@ -3678,23 +5006,31 @@ mod tests {
                 .map(|instruction| instruction.opcode)
                 .collect::<Vec<_>>(),
             vec![
-                X86Opcode::Lea.machine_opcode(),
-                X86Opcode::Copy.machine_opcode(),
-                X86Opcode::Add.machine_opcode(),
+                X86Opcode::Load.machine_opcode(),
+                X86Opcode::Load.machine_opcode(),
                 X86Opcode::ReturnNear.machine_opcode(),
             ]
         );
-        assert_eq!(instructions[2].operands[1], immediate_operand(6));
-        let MachineOperandKind::Register(MachineRegister::Virtual(result_register)) =
-            instructions[2].operands[0].kind
-        else {
-            panic!("address addition defines a virtual register");
-        };
-        assert_eq!(instructions[2].operands[0].role, OperandRole::UseDef);
-        assert!(function.virtual_registers.iter().any(|register| {
-            register.id == result_register
-                && register.class == X86RegisterClass::Address16.machine_class()
+        assert!(instructions.iter().all(|instruction| {
+            !matches!(
+                X86Opcode::from_machine_opcode(instruction.opcode),
+                Some(X86Opcode::Copy | X86Opcode::Add)
+            )
         }));
+        assert_eq!(
+            instructions[0].operands[1].kind,
+            MachineOperandKind::FrameIndex {
+                index: FrameIndex::new(0),
+                addend: 0,
+            }
+        );
+        assert_eq!(
+            instructions[1].operands[1].kind,
+            MachineOperandKind::FrameIndex {
+                index: FrameIndex::new(0),
+                addend: 4,
+            }
+        );
     }
 
     #[test]
@@ -3708,8 +5044,12 @@ mod tests {
             id: ValueId::new(1),
             type_id: near,
         };
-        let result = Value {
+        let constant = Value {
             id: ValueId::new(2),
+            type_id: near,
+        };
+        let result = Value {
+            id: ValueId::new(3),
             type_id: near,
         };
         let function = function(
@@ -3727,9 +5067,20 @@ mod tests {
                     },
                     Instruction {
                         id: crate::ir::InstructionId::new(1),
-                        results: vec![result],
+                        results: vec![constant.clone()],
                         kind: InstructionKind::GetElementPointer {
                             base: Operand::Value(base.id),
+                            indices: vec![Operand::Constant(TypedConstant {
+                                type_id: I16,
+                                value: Constant::Integer(6),
+                            })],
+                        },
+                    },
+                    Instruction {
+                        id: crate::ir::InstructionId::new(2),
+                        results: vec![result],
+                        kind: InstructionKind::GetElementPointer {
+                            base: Operand::Value(constant.id),
                             indices: vec![Operand::Value(offset.id)],
                         },
                     },
@@ -3757,6 +5108,14 @@ mod tests {
                 X86Opcode::Add.machine_opcode(),
                 X86Opcode::ReturnNear.machine_opcode(),
             ]
+        );
+        assert_eq!(
+            instructions[1].operands[1].kind,
+            MachineOperandKind::FrameIndex {
+                index: FrameIndex::new(1),
+                addend: 6,
+            },
+            "a pointer-valued constant GEP materializes its folded frame address",
         );
         let [destination, source] = instructions[3].operands.as_slice() else {
             panic!("address addition has two operands");
@@ -3879,10 +5238,17 @@ mod tests {
         let high = virtual_register(high);
         let base_high = virtual_register(base_high);
         let merged = virtual_register(merged);
-        assert_eq!(base_low, base_high, "both halves come from the same packed pointer");
+        assert_eq!(
+            base_low, base_high,
+            "both halves come from the same packed pointer"
+        );
         assert_eq!(low, added, "only the low word is advanced");
         assert_eq!(virtual_register(merged_low), low);
-        assert_eq!(virtual_register(merged_high), high, "high word is unchanged");
+        assert_eq!(
+            virtual_register(merged_high),
+            high,
+            "high word is unchanged"
+        );
         assert_eq!(immediate, &immediate_operand(6));
         assert_eq!(instructions[3].operands[0].role, OperandRole::Def);
         assert_eq!(instructions[4].operands[0].role, OperandRole::UseDef);
@@ -4477,32 +5843,48 @@ mod tests {
     }
 
     #[test]
-    fn refuses_unsupported_compare_predicates_and_widths() {
+    fn selects_ordered_float_compare_and_refuses_unsupported_integer_width() {
         let float = TypeId::new(3);
         let ordered_result = Value {
             id: ValueId::new(2),
             type_id: I1,
         };
         let ordered_float = function(
-            vec![Block {
-                id: BlockId::new(0),
-                instructions: vec![Instruction {
-                    id: crate::ir::InstructionId::new(0),
-                    results: vec![ordered_result],
-                    kind: InstructionKind::Compare {
-                        predicate: ComparePredicate::OrderedLessThan,
-                        left: Operand::Constant(TypedConstant {
-                            type_id: float,
-                            value: Constant::Float("1.0".to_owned()),
-                        }),
-                        right: Operand::Constant(TypedConstant {
-                            type_id: float,
-                            value: Constant::Float("2.0".to_owned()),
-                        }),
+            vec![
+                Block {
+                    id: BlockId::new(0),
+                    instructions: vec![Instruction {
+                        id: crate::ir::InstructionId::new(0),
+                        results: vec![ordered_result.clone()],
+                        kind: InstructionKind::Compare {
+                            predicate: ComparePredicate::OrderedLessThan,
+                            left: Operand::Constant(TypedConstant {
+                                type_id: float,
+                                value: Constant::Float("1.0".to_owned()),
+                            }),
+                            right: Operand::Constant(TypedConstant {
+                                type_id: float,
+                                value: Constant::Float("2.0".to_owned()),
+                            }),
+                        },
+                    }],
+                    terminator: Terminator::Branch {
+                        condition: Operand::Value(ordered_result.id),
+                        then_block: BlockId::new(1),
+                        else_block: BlockId::new(2),
                     },
-                }],
-                terminator: Terminator::Return(None),
-            }],
+                },
+                Block {
+                    id: BlockId::new(1),
+                    instructions: Vec::new(),
+                    terminator: Terminator::Return(None),
+                },
+                Block {
+                    id: BlockId::new(2),
+                    instructions: Vec::new(),
+                    terminator: Terminator::Return(None),
+                },
+            ],
             Vec::new(),
         );
         let mut types = basic_types();
@@ -4510,10 +5892,30 @@ mod tests {
             id: float,
             kind: TypeKind::Float(FloatKind::Binary32),
         });
-        assert!(matches!(
-            select_module(&module(types, vec![ordered_float])),
-            Err(SelectionError::UnsupportedCompare { .. })
-        ));
+        let selected = select_module(&module(types, vec![ordered_float])).unwrap();
+        assert_eq!(
+            selected.data_objects.len(),
+            1,
+            "Python selects exact positive 1.0 with fld1 rather than a pool load",
+        );
+        assert_eq!(
+            selected.functions[0].blocks[0]
+                .instructions
+                .iter()
+                .map(|instruction| instruction.opcode)
+                .collect::<Vec<_>>(),
+            vec![
+                X86Opcode::X87LoadOne.machine_opcode(),
+                X86Opcode::X87Load.machine_opcode(),
+                X86Opcode::X87Compare.machine_opcode(),
+                X86Opcode::JumpConditional.machine_opcode(),
+                X86Opcode::Jump.machine_opcode(),
+            ]
+        );
+        assert_eq!(
+            selected.functions[0].blocks[0].instructions[3].operands[0],
+            immediate_operand(i64::from(ConditionCode::Below as u8))
+        );
 
         let byte_left = Value {
             id: ValueId::new(0),
@@ -4635,6 +6037,474 @@ mod tests {
                     && selected.functions[0].virtual_registers.iter().any(|register| register.id == *source && register.class == source_class.machine_class())
             ));
         }
+    }
+
+    #[test]
+    fn selects_float_storage_casts_and_preserves_integer_rounding() {
+        let f32_type = TypeId::new(7);
+        let f80_type = TypeId::new(8);
+        let source = Value {
+            id: ValueId::new(0),
+            type_id: f32_type,
+        };
+        let extended = Value {
+            id: ValueId::new(1),
+            type_id: f80_type,
+        };
+        let integer = Value {
+            id: ValueId::new(2),
+            type_id: I32,
+        };
+        let function = function(
+            vec![Block {
+                id: BlockId::new(0),
+                instructions: vec![
+                    Instruction {
+                        id: crate::ir::InstructionId::new(0),
+                        results: vec![extended.clone()],
+                        kind: InstructionKind::Cast {
+                            op: CastOp::FloatExtend,
+                            operand: Operand::Value(source.id),
+                            to: f80_type,
+                        },
+                    },
+                    Instruction {
+                        id: crate::ir::InstructionId::new(1),
+                        results: vec![integer],
+                        kind: InstructionKind::Cast {
+                            op: CastOp::FloatToInteger {
+                                rounding: FloatRounding::TowardZero,
+                            },
+                            operand: Operand::Value(extended.id),
+                            to: I32,
+                        },
+                    },
+                ],
+                terminator: Terminator::Return(None),
+            }],
+            vec![source],
+        );
+        let mut types = basic_types();
+        types.extend([
+            Type {
+                id: f32_type,
+                kind: TypeKind::Float(FloatKind::Binary32),
+            },
+            Type {
+                id: f80_type,
+                kind: TypeKind::Float(FloatKind::Extended80),
+            },
+        ]);
+
+        let selected = select_module(&module(types, vec![function])).unwrap();
+        let function = &selected.functions[0];
+        assert_eq!(
+            function.blocks[0]
+                .instructions
+                .iter()
+                .map(|instruction| instruction.opcode)
+                .collect::<Vec<_>>(),
+            vec![
+                X86Opcode::X87Load.machine_opcode(),
+                X86Opcode::Copy.machine_opcode(),
+                X86Opcode::X87IntegerStoreTrunc.machine_opcode(),
+                X86Opcode::Load.machine_opcode(),
+                X86Opcode::ReturnNear.machine_opcode(),
+            ]
+        );
+        assert!(
+            function
+                .frame_objects
+                .iter()
+                .any(|frame| { frame.size == 4 && frame.kind == FrameObjectKind::Temporary })
+        );
+        assert_eq!(
+            function.blocks[0].instructions[2].operands[1],
+            float_format_operand(X87MemoryFormat::Signed32)
+        );
+    }
+
+    #[test]
+    fn selects_integer_to_float_through_python_fild_storage_forms() {
+        // Python floatalloc._integer_loads uses FLDZ/FLD1 for exact 0/1.
+        // Every other signed word/dword reaches FILD through an owned cell;
+        // x87 cannot read a general-purpose register directly.
+        let float = TypeId::new(7);
+        let mut types = basic_types();
+        types.push(Type {
+            id: float,
+            kind: TypeKind::Float(FloatKind::Binary32),
+        });
+
+        for (source_type, value, opcode) in [
+            (I16, 0, X86Opcode::X87LoadZero),
+            (I32, 1, X86Opcode::X87LoadOne),
+        ] {
+            let result = Value {
+                id: ValueId::new(0),
+                type_id: float,
+            };
+            let input = module(
+                types.clone(),
+                vec![function(
+                    vec![Block {
+                        id: BlockId::new(0),
+                        instructions: vec![Instruction {
+                            id: crate::ir::InstructionId::new(0),
+                            results: vec![result],
+                            kind: InstructionKind::Cast {
+                                op: CastOp::IntegerToFloat,
+                                operand: Operand::Constant(TypedConstant {
+                                    type_id: source_type,
+                                    value: Constant::Integer(value),
+                                }),
+                                to: float,
+                            },
+                        }],
+                        terminator: Terminator::Return(None),
+                    }],
+                    Vec::new(),
+                )],
+            );
+            let selected = select_module(&input).expect("exact integer conversion selects");
+            super::super::verify_machine(&selected).expect("exact conversion Machine IR verifies");
+            assert!(selected.functions[0].frame_objects.is_empty());
+            assert_eq!(
+                selected.functions[0].blocks[0].instructions[0].opcode,
+                opcode.machine_opcode()
+            );
+        }
+
+        for (source_type, value, format) in [
+            (I16, -27_i128, X87MemoryFormat::Signed16),
+            (I32, i128::from(0xc174_7c23_u32), X87MemoryFormat::Signed32),
+        ] {
+            let result = Value {
+                id: ValueId::new(0),
+                type_id: float,
+            };
+            let input = module(
+                types.clone(),
+                vec![function(
+                    vec![Block {
+                        id: BlockId::new(0),
+                        instructions: vec![Instruction {
+                            id: crate::ir::InstructionId::new(0),
+                            results: vec![result],
+                            kind: InstructionKind::Cast {
+                                op: CastOp::IntegerToFloat,
+                                operand: Operand::Constant(TypedConstant {
+                                    type_id: source_type,
+                                    value: Constant::Integer(value),
+                                }),
+                                to: float,
+                            },
+                        }],
+                        terminator: Terminator::Return(None),
+                    }],
+                    Vec::new(),
+                )],
+            );
+            let selected = select_module(&input).expect("integer literal conversion selects");
+            super::super::verify_machine(&selected)
+                .expect("literal conversion Machine IR verifies");
+            let function = &selected.functions[0];
+            assert_eq!(function.frame_objects.len(), 1);
+            assert_eq!(
+                function.frame_objects[0].size,
+                u32::from(match source_type {
+                    I16 => 2_u16,
+                    I32 => 4_u16,
+                    _ => unreachable!(),
+                })
+            );
+            assert_eq!(
+                function.blocks[0]
+                    .instructions
+                    .iter()
+                    .map(|instruction| instruction.opcode)
+                    .collect::<Vec<_>>(),
+                vec![
+                    X86Opcode::Store.machine_opcode(),
+                    X86Opcode::X87IntegerLoad.machine_opcode(),
+                    X86Opcode::ReturnNear.machine_opcode(),
+                ]
+            );
+            assert_eq!(
+                function.blocks[0].instructions[0].operands[1],
+                immediate_operand(i64::from(match source_type {
+                    I16 => 16_u16,
+                    I32 => 32_u16,
+                    _ => unreachable!(),
+                }))
+            );
+            assert_eq!(
+                function.blocks[0].instructions[1].operands[1],
+                float_format_operand(format)
+            );
+        }
+
+        for (source_type, format) in [
+            (I16, X87MemoryFormat::Signed16),
+            (I32, X87MemoryFormat::Signed32),
+        ] {
+            let source = Value {
+                id: ValueId::new(0),
+                type_id: source_type,
+            };
+            let result = Value {
+                id: ValueId::new(1),
+                type_id: float,
+            };
+            let input = module(
+                types.clone(),
+                vec![function(
+                    vec![Block {
+                        id: BlockId::new(0),
+                        instructions: vec![Instruction {
+                            id: crate::ir::InstructionId::new(0),
+                            results: vec![result],
+                            kind: InstructionKind::Cast {
+                                op: CastOp::IntegerToFloat,
+                                operand: Operand::Value(source.id),
+                                to: float,
+                            },
+                        }],
+                        terminator: Terminator::Return(None),
+                    }],
+                    vec![source],
+                )],
+            );
+            let selected = select_module(&input).expect("integer register conversion selects");
+            super::super::verify_machine(&selected)
+                .expect("register conversion Machine IR verifies");
+            let function = &selected.functions[0];
+            assert!(function.frame_objects.iter().any(|frame| {
+                frame.size
+                    == match source_type {
+                        I16 => 2,
+                        I32 => 4,
+                        _ => unreachable!(),
+                    }
+                    && frame.kind == FrameObjectKind::Temporary
+            }));
+            let fild = function.blocks[0]
+                .instructions
+                .iter()
+                .find(|instruction| {
+                    instruction.opcode == X86Opcode::X87IntegerLoad.machine_opcode()
+                })
+                .expect("selected FILD");
+            assert_eq!(fild.operands[1], float_format_operand(format));
+            assert!(
+                function.blocks[0]
+                    .instructions
+                    .iter()
+                    .any(|instruction| instruction.opcode == X86Opcode::Store.machine_opcode())
+            );
+        }
+
+        let byte = Value {
+            id: ValueId::new(0),
+            type_id: I8,
+        };
+        let result = Value {
+            id: ValueId::new(1),
+            type_id: float,
+        };
+        let mut byte_types = types;
+        byte_types.push(Type {
+            id: I8,
+            kind: TypeKind::Integer { bits: 8 },
+        });
+        assert!(matches!(
+            select_module(&module(
+                byte_types,
+                vec![function(
+                    vec![Block {
+                        id: BlockId::new(0),
+                        instructions: vec![Instruction {
+                            id: crate::ir::InstructionId::new(0),
+                            results: vec![result],
+                            kind: InstructionKind::Cast {
+                                op: CastOp::IntegerToFloat,
+                                operand: Operand::Value(byte.id),
+                                to: float,
+                            },
+                        }],
+                        terminator: Terminator::Return(None),
+                    }],
+                    vec![byte],
+                )],
+            )),
+            Err(SelectionError::UnsupportedCast { .. })
+        ));
+    }
+
+    #[test]
+    fn selects_same_width_integer_bitcast_as_python_value_view() {
+        // qbopt/cfront/raise_hir.py:_Raise.convert keeps a nonconstant
+        // same-width integer conversion as the held word.  hir/lower.py:
+        // Lowerer.convert_op represents that exact view as CastOp::Bitcast;
+        // selection must therefore reuse the selected word rather than
+        // materializing a conversion or refusing signedness-only changes.
+        let unsigned_word = TypeId::new(3);
+        let source = Value {
+            id: ValueId::new(0),
+            type_id: I16,
+        };
+        let viewed = Value {
+            id: ValueId::new(1),
+            type_id: unsigned_word,
+        };
+        let masked = Value {
+            id: ValueId::new(2),
+            type_id: unsigned_word,
+        };
+        let function = function(
+            vec![Block {
+                id: BlockId::new(0),
+                instructions: vec![
+                    Instruction {
+                        id: crate::ir::InstructionId::new(0),
+                        results: vec![viewed.clone()],
+                        kind: InstructionKind::Cast {
+                            op: CastOp::Bitcast,
+                            operand: Operand::Value(source.id),
+                            to: unsigned_word,
+                        },
+                    },
+                    Instruction {
+                        id: crate::ir::InstructionId::new(1),
+                        results: vec![masked],
+                        kind: InstructionKind::Binary {
+                            op: BinaryOp::And,
+                            left: Operand::Value(viewed.id),
+                            right: Operand::Constant(TypedConstant {
+                                type_id: unsigned_word,
+                                value: Constant::Integer(0x8000),
+                            }),
+                        },
+                    },
+                ],
+                terminator: Terminator::Return(None),
+            }],
+            vec![source],
+        );
+        let mut types = basic_types();
+        types.push(Type {
+            id: unsigned_word,
+            kind: TypeKind::Integer { bits: 16 },
+        });
+
+        let selected = select_module(&module(types, vec![function]))
+            .expect("same-width integer bitcast selects");
+        selected.verify().expect("selected Machine IR verifies");
+        let instructions = &selected.functions[0].blocks[0].instructions;
+        assert_eq!(
+            instructions
+                .iter()
+                .map(|instruction| X86Opcode::from_raw(instruction.opcode.get()).unwrap())
+                .collect::<Vec<_>>(),
+            vec![
+                X86Opcode::Load,
+                X86Opcode::Mov,
+                X86Opcode::Copy,
+                X86Opcode::And,
+                X86Opcode::ReturnNear,
+            ],
+            "the cast is a typed view: selection emits only the parameter setup and its consuming operation",
+        );
+    }
+
+    #[test]
+    fn stores_a_binary32_literal_as_its_python_oracle_bits() {
+        let pointer = TypeId::new(7);
+        let float = TypeId::new(8);
+        let address = Value {
+            id: ValueId::new(0),
+            type_id: pointer,
+        };
+        let function = function(
+            vec![Block {
+                id: BlockId::new(0),
+                instructions: vec![Instruction {
+                    id: crate::ir::InstructionId::new(0),
+                    results: Vec::new(),
+                    kind: InstructionKind::Store {
+                        address: Operand::Value(address.id),
+                        value: Operand::Constant(TypedConstant {
+                            type_id: float,
+                            value: Constant::Float("3.0".to_owned()),
+                        }),
+                        alignment: 2,
+                        volatile: false,
+                    },
+                }],
+                terminator: Terminator::Return(None),
+            }],
+            vec![address],
+        );
+        let mut types = basic_types();
+        types.extend([
+            Type {
+                id: pointer,
+                kind: TypeKind::Pointer {
+                    address_space: AddressSpace::NearData,
+                },
+            },
+            Type {
+                id: float,
+                kind: TypeKind::Float(FloatKind::Binary32),
+            },
+        ]);
+
+        let selected =
+            select_module(&module(types, vec![function])).expect("binary32 literal store selects");
+        selected.verify().expect("selected Machine IR verifies");
+        assert!(
+            selected.data_objects.is_empty(),
+            "a direct literal store must not leave a constant-pool object",
+        );
+        let stores = selected.functions[0].blocks[0]
+            .instructions
+            .iter()
+            .filter(|instruction| instruction.opcode == X86Opcode::Store.machine_opcode())
+            .collect::<Vec<_>>();
+        assert_eq!(stores.len(), 1);
+        assert!(matches!(
+            stores[0].operands.as_slice(),
+            [
+                MachineOperand {
+                    kind: MachineOperandKind::Register(MachineRegister::Virtual(_)),
+                    role: OperandRole::Use,
+                    constraint: None,
+                    tied_to: None,
+                },
+                MachineOperand {
+                    kind: MachineOperandKind::Immediate(32),
+                    role: OperandRole::None,
+                    constraint: None,
+                    tied_to: None,
+                },
+                MachineOperand {
+                    kind: MachineOperandKind::Immediate(bits),
+                    role: OperandRole::None,
+                    constraint: None,
+                    tied_to: None,
+                },
+            ] if *bits == i64::from(3.0_f32.to_bits())
+        ));
+        assert_eq!(stores[0].flags, store_flags(false));
+        assert!(
+            selected.functions[0].blocks[0]
+                .instructions
+                .iter()
+                .all(
+                    |instruction| instruction.opcode != X86Opcode::X87Load.machine_opcode()
+                        && instruction.opcode != X86Opcode::X87StorePop.machine_opcode()
+                )
+        );
     }
 
     #[test]
@@ -4768,7 +6638,7 @@ mod tests {
     }
 
     #[test]
-    fn refuses_i1_and_float_values() {
+    fn refuses_a_used_i1_but_selects_a_used_float_parameter_into_x87() {
         let i1 = TypeId::new(2);
         let float = TypeId::new(3);
         let mut types = basic_types();
@@ -4778,11 +6648,27 @@ mod tests {
         });
 
         let i1_function = function(
-            vec![Block {
-                id: BlockId::new(0),
-                instructions: Vec::new(),
-                terminator: Terminator::Return(None),
-            }],
+            vec![
+                Block {
+                    id: BlockId::new(0),
+                    instructions: Vec::new(),
+                    terminator: Terminator::Branch {
+                        condition: Operand::Value(ValueId::new(0)),
+                        then_block: BlockId::new(1),
+                        else_block: BlockId::new(2),
+                    },
+                },
+                Block {
+                    id: BlockId::new(1),
+                    instructions: Vec::new(),
+                    terminator: Terminator::Return(None),
+                },
+                Block {
+                    id: BlockId::new(2),
+                    instructions: Vec::new(),
+                    terminator: Terminator::Return(None),
+                },
+            ],
             vec![Value {
                 id: ValueId::new(0),
                 type_id: i1,
@@ -4798,7 +6684,17 @@ mod tests {
         let float_function = function(
             vec![Block {
                 id: BlockId::new(0),
-                instructions: Vec::new(),
+                instructions: vec![Instruction {
+                    id: crate::ir::InstructionId::new(0),
+                    results: vec![Value {
+                        id: ValueId::new(1),
+                        type_id: float,
+                    }],
+                    kind: InstructionKind::Unary {
+                        op: UnaryOp::FloatNegate,
+                        operand: Operand::Value(ValueId::new(0)),
+                    },
+                }],
                 terminator: Terminator::Return(None),
             }],
             vec![Value {
@@ -4806,11 +6702,106 @@ mod tests {
                 type_id: float,
             }],
         );
-        let float_error = select_module(&module(types, vec![float_function]))
-            .expect_err("floating values are outside the integer selector");
+        let selected = select_module(&module(types, vec![float_function])).unwrap();
+        let function = &selected.functions[0];
+        assert_eq!(
+            function.signature.parameters,
+            vec![MachineValueType::Float {
+                kind: MachineFloatKind::Binary32,
+            }]
+        );
+        assert_eq!(
+            function.blocks[0].instructions[0].opcode,
+            X86Opcode::X87Load.machine_opcode()
+        );
+        assert_eq!(
+            function.virtual_registers[0].class,
+            X86RegisterClass::X87.machine_class()
+        );
+    }
+
+    #[test]
+    fn loads_an_addressed_float_parameter_only_in_its_source_block() {
+        // Port of cfront.raise_hir._Raise.points/floating: an unused formal
+        // SSA value creates no entry x87 load. The source load reads the
+        // existing incoming frame cell in the block where it is consumed.
+        let float = TypeId::new(3);
+        let pointer = TypeId::new(7);
+        let mut types = basic_types();
+        types.extend([
+            Type {
+                id: float,
+                kind: TypeKind::Float(FloatKind::Binary32),
+            },
+            Type {
+                id: pointer,
+                kind: TypeKind::Pointer {
+                    address_space: AddressSpace::NearData,
+                },
+            },
+        ]);
+        let addressed = function(
+            vec![
+                Block {
+                    id: BlockId::new(0),
+                    instructions: Vec::new(),
+                    terminator: Terminator::Jump(BlockId::new(1)),
+                },
+                Block {
+                    id: BlockId::new(1),
+                    instructions: vec![
+                        Instruction {
+                            id: crate::ir::InstructionId::new(0),
+                            results: vec![Value {
+                                id: ValueId::new(1),
+                                type_id: pointer,
+                            }],
+                            kind: InstructionKind::ParameterAddress { parameter: 0 },
+                        },
+                        Instruction {
+                            id: crate::ir::InstructionId::new(1),
+                            results: vec![Value {
+                                id: ValueId::new(2),
+                                type_id: float,
+                            }],
+                            kind: InstructionKind::Load {
+                                address: Operand::Value(ValueId::new(1)),
+                                alignment: 2,
+                                volatile: false,
+                            },
+                        },
+                    ],
+                    terminator: Terminator::Return(None),
+                },
+            ],
+            vec![Value {
+                id: ValueId::new(0),
+                type_id: float,
+            }],
+        );
+
+        let selected = select_module(&module(types, vec![addressed])).unwrap();
+        let function = &selected.functions[0];
+        assert!(
+            function.blocks[0]
+                .instructions
+                .iter()
+                .all(|instruction| instruction.opcode != X86Opcode::X87Load.machine_opcode())
+        );
+        assert_eq!(
+            function.blocks[1]
+                .instructions
+                .iter()
+                .filter(|instruction| instruction.opcode == X86Opcode::X87Load.machine_opcode())
+                .count(),
+            1
+        );
         assert!(matches!(
-            float_error,
-            SelectionError::UnsupportedType { type_id } if type_id == float
+            function.frame_objects.as_slice(),
+            [FrameObject {
+                kind: FrameObjectKind::IncomingArgument { parameter: 0 },
+                ..
+            }]
         ));
     }
 
@@ -4943,6 +6934,456 @@ mod tests {
                 ..InstructionFlags::NONE
             }
         );
+    }
+
+    #[test]
+    fn selects_float_call_arguments_as_the_python_lowering_pushes_them() {
+        // Python cfront.raise_hir emits the literal's IEEE-754 bits directly
+        // as a dword argument. A computed value follows Python's ordinary
+        // fallback exactly: fstp to its temporary, mov the raw dword to a
+        // general register, then push that register.
+        let float = TypeId::new(7);
+        let parameter = Value {
+            id: ValueId::new(0),
+            type_id: float,
+        };
+        let callee = Function {
+            id: FunctionId::new(5),
+            name: "consume".to_owned(),
+            signature: Signature {
+                result: VOID,
+                parameters: vec![float, float],
+                variadic: false,
+                calling_convention: CallingConvention::C,
+            },
+            linkage: Linkage::Internal,
+            attributes: Vec::new(),
+            parameters: vec![
+                Value {
+                    id: ValueId::new(0),
+                    type_id: float,
+                },
+                Value {
+                    id: ValueId::new(1),
+                    type_id: float,
+                },
+            ],
+            blocks: vec![Block {
+                id: BlockId::new(0),
+                instructions: Vec::new(),
+                terminator: Terminator::Return(None),
+            }],
+        };
+        let caller = Function {
+            id: FunctionId::new(4),
+            name: "caller".to_owned(),
+            signature: Signature {
+                result: VOID,
+                parameters: vec![float],
+                variadic: false,
+                calling_convention: CallingConvention::C,
+            },
+            linkage: Linkage::Internal,
+            attributes: Vec::new(),
+            parameters: vec![parameter.clone()],
+            blocks: vec![Block {
+                id: BlockId::new(0),
+                instructions: vec![Instruction {
+                    id: crate::ir::InstructionId::new(0),
+                    results: Vec::new(),
+                    kind: InstructionKind::Call {
+                        callee: Callee::Direct(callee.id),
+                        arguments: vec![
+                            Operand::Value(parameter.id),
+                            Operand::Constant(TypedConstant {
+                                type_id: float,
+                                value: Constant::Float("1.5".to_owned()),
+                            }),
+                        ],
+                        effects: Effects::NONE,
+                    },
+                }],
+                terminator: Terminator::Return(None),
+            }],
+        };
+        let mut types = basic_types();
+        types.push(Type {
+            id: float,
+            kind: TypeKind::Float(FloatKind::Binary32),
+        });
+
+        let selected = select_module(&module(types, vec![caller, callee]))
+            .expect("f32 caller-cleanup arguments select");
+        selected.verify().expect("selected Machine IR verifies");
+        let caller = &selected.functions[0];
+        assert!(
+            selected.data_objects.is_empty(),
+            "direct literal arguments do not need a constant-pool object",
+        );
+        let instructions = &caller.blocks[0].instructions;
+        let pushes = instructions
+            .iter()
+            .filter(|instruction| instruction.opcode == X86Opcode::Push.machine_opcode())
+            .collect::<Vec<_>>();
+        assert_eq!(pushes.len(), 2);
+        assert_eq!(
+            pushes[0].operands,
+            vec![
+                immediate_operand(32),
+                immediate_operand(i64::from(1.5_f32.to_bits())),
+            ],
+            "right-to-left C argument order pushes the literal bits directly",
+        );
+        let store = instructions
+            .iter()
+            .find(|instruction| instruction.opcode == X86Opcode::X87StorePop.machine_opcode())
+            .expect("computed f32 is rounded into a temporary");
+        let load = instructions
+            .iter()
+            .find(|instruction| instruction.opcode == X86Opcode::Load.machine_opcode())
+            .expect("Python fallback loads the temporary bits into a GPR");
+        assert_eq!(store.operands[2].kind, load.operands[1].kind);
+        assert!(matches!(
+            load.operands[1],
+            MachineOperand {
+                kind: MachineOperandKind::FrameIndex { index, addend: 0 },
+                role: OperandRole::None,
+                constraint: None,
+                tied_to: None,
+            } if caller.frame_objects.iter().any(|frame| frame.index == index
+                && frame.size == 4
+                && frame.kind == FrameObjectKind::Temporary)
+        ));
+        assert_eq!(load.flags, load_flags(false));
+        assert_eq!(pushes[1].operands.len(), 1);
+        assert_eq!(pushes[1].operands[0].kind, load.operands[0].kind);
+        assert_eq!(pushes[1].flags, InstructionFlags::NONE);
+    }
+
+    #[test]
+    fn selects_external_c_float_calls_as_python_invoke_and_push() {
+        // Python cfront.raise_hir._Raise.library/_Raise.invoke create an
+        // imported far cdecl `_sqrt` returning one x87 value.  `_Raise.push`
+        // places a DOUBLE's high dword first so its low dword occupies the
+        // lower stack address.  An ignored floating result remains an x87
+        // value until float allocation emits Python's `fstp st(0)` discard.
+        let single = TypeId::new(7);
+        let double = TypeId::new(8);
+        let sqrt = Function {
+            id: FunctionId::new(5),
+            name: "_sqrt".to_owned(),
+            signature: Signature {
+                result: double,
+                parameters: vec![double],
+                variadic: false,
+                calling_convention: CallingConvention::FarCdecl,
+            },
+            linkage: Linkage::External,
+            attributes: Vec::new(),
+            parameters: vec![Value {
+                id: ValueId::new(0),
+                type_id: double,
+            }],
+            blocks: Vec::new(),
+        };
+        let sample = Function {
+            id: FunctionId::new(6),
+            name: "sample".to_owned(),
+            signature: Signature {
+                result: single,
+                parameters: Vec::new(),
+                variadic: false,
+                calling_convention: CallingConvention::C,
+            },
+            linkage: Linkage::External,
+            attributes: Vec::new(),
+            parameters: Vec::new(),
+            blocks: Vec::new(),
+        };
+        let caller = Function {
+            id: FunctionId::new(4),
+            name: "caller".to_owned(),
+            signature: Signature {
+                result: VOID,
+                parameters: Vec::new(),
+                variadic: false,
+                calling_convention: CallingConvention::C,
+            },
+            linkage: Linkage::Internal,
+            attributes: Vec::new(),
+            parameters: Vec::new(),
+            blocks: vec![Block {
+                id: BlockId::new(0),
+                instructions: vec![
+                    Instruction {
+                        id: crate::ir::InstructionId::new(0),
+                        results: vec![Value {
+                            id: ValueId::new(0),
+                            type_id: double,
+                        }],
+                        kind: InstructionKind::Call {
+                            callee: Callee::Direct(sqrt.id),
+                            arguments: vec![Operand::Constant(TypedConstant {
+                                type_id: double,
+                                value: Constant::Float("3.5".to_owned()),
+                            })],
+                            effects: Effects::NONE,
+                        },
+                    },
+                    Instruction {
+                        id: crate::ir::InstructionId::new(1),
+                        results: vec![Value {
+                            id: ValueId::new(1),
+                            type_id: single,
+                        }],
+                        kind: InstructionKind::Call {
+                            callee: Callee::Direct(sample.id),
+                            arguments: Vec::new(),
+                            effects: Effects::NONE,
+                        },
+                    },
+                ],
+                terminator: Terminator::Return(None),
+            }],
+        };
+        let mut types = basic_types();
+        types.push(Type {
+            id: single,
+            kind: TypeKind::Float(FloatKind::Binary32),
+        });
+        types.push(Type {
+            id: double,
+            kind: TypeKind::Float(FloatKind::Binary64),
+        });
+
+        let selected = select_module(&module(types, vec![caller, sqrt, sample]))
+            .expect("external C floating calls select as Python does");
+        selected.verify().expect("selected Machine IR verifies");
+        let instructions = &selected.functions[0].blocks[0].instructions;
+        let bits = 3.5_f64.to_bits();
+        assert_eq!(
+            instructions[0].operands,
+            vec![
+                immediate_operand(32),
+                immediate_operand(i64::from((bits >> 32) as u32)),
+            ],
+            "Python pushes the high DOUBLE dword first",
+        );
+        assert_eq!(
+            instructions[1].operands,
+            vec![
+                immediate_operand(32),
+                immediate_operand(i64::from(bits as u32))
+            ],
+            "Python pushes the low DOUBLE dword second",
+        );
+        let sqrt_call = &instructions[2];
+        assert_eq!(sqrt_call.opcode, X86Opcode::CallFar.machine_opcode());
+        assert!(matches!(
+            sqrt_call.operands.as_slice(),
+            [MachineOperand {
+                kind: MachineOperandKind::ExternalSymbol { name, addend: 0 },
+                role: OperandRole::None,
+                ..
+            }, MachineOperand {
+                role: OperandRole::Def,
+                constraint: Some(RegisterConstraint::Fixed(register)),
+                ..
+            }] if name == "_sqrt" && *register == X86Register::St0.physical()
+        ));
+        assert_eq!(instructions[3].opcode, X86Opcode::Add.machine_opcode());
+        assert_eq!(instructions[3].operands[1], immediate_operand(8));
+        let sample_call = &instructions[4];
+        assert_eq!(sample_call.opcode, X86Opcode::CallNear.machine_opcode());
+        assert!(matches!(
+            sample_call.operands.as_slice(),
+            [MachineOperand {
+                kind: MachineOperandKind::ExternalSymbol { name, addend: 0 },
+                role: OperandRole::None,
+                ..
+            }, MachineOperand {
+                role: OperandRole::Def,
+                constraint: Some(RegisterConstraint::Fixed(register)),
+                ..
+            }] if name == "sample" && *register == X86Register::St0.physical()
+        ));
+
+        let stackified = crate::target::x86::allocate_x87_stack(&selected.functions[0])
+            .expect("the ignored Python float results stackify");
+        let pop_positions = stackified.blocks[0]
+            .instructions
+            .iter()
+            .enumerate()
+            .filter_map(|(index, instruction)| {
+                (instruction.opcode == X86Opcode::X87StackStorePop.machine_opcode())
+                    .then_some(index)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            pop_positions.len(),
+            2,
+            "both unused call results become fstp st(0)"
+        );
+        let sample_call_position = stackified.blocks[0]
+            .instructions
+            .iter()
+            .position(|instruction| {
+                instruction.opcode == X86Opcode::CallNear.machine_opcode()
+                    && matches!(
+                        instruction.operands.first(),
+                        Some(MachineOperand {
+                            kind: MachineOperandKind::ExternalSymbol { name, .. },
+                            ..
+                        }) if name == "sample"
+                    )
+            })
+            .expect("stackified body retains sample's call");
+        assert!(
+            pop_positions[0] < sample_call_position,
+            "the unused sqrt result is popped before sample receives ST0",
+        );
+    }
+
+    #[test]
+    fn pushes_a_computed_external_double_as_python_push_does() {
+        // Python cfront.raise_hir._Raise.push first stores a computed DOUBLE
+        // to an 8-byte temporary, then emits ARG for offset +4 and offset +0.
+        // The resulting stack layout is high dword first, low dword second.
+        let double = TypeId::new(7);
+        let consume = Function {
+            id: FunctionId::new(5),
+            name: "consume_double".to_owned(),
+            signature: Signature {
+                result: VOID,
+                parameters: vec![double],
+                variadic: false,
+                calling_convention: CallingConvention::FarCdecl,
+            },
+            linkage: Linkage::External,
+            attributes: Vec::new(),
+            parameters: vec![Value {
+                id: ValueId::new(0),
+                type_id: double,
+            }],
+            blocks: Vec::new(),
+        };
+        let computed = Value {
+            id: ValueId::new(0),
+            type_id: double,
+        };
+        let caller = Function {
+            id: FunctionId::new(4),
+            name: "caller".to_owned(),
+            signature: Signature {
+                result: VOID,
+                parameters: Vec::new(),
+                variadic: false,
+                calling_convention: CallingConvention::C,
+            },
+            linkage: Linkage::Internal,
+            attributes: Vec::new(),
+            parameters: Vec::new(),
+            blocks: vec![Block {
+                id: BlockId::new(0),
+                instructions: vec![
+                    Instruction {
+                        id: crate::ir::InstructionId::new(0),
+                        results: vec![computed.clone()],
+                        kind: InstructionKind::Unary {
+                            op: UnaryOp::FloatNegate,
+                            operand: Operand::Constant(TypedConstant {
+                                type_id: double,
+                                value: Constant::Float("1.0".to_owned()),
+                            }),
+                        },
+                    },
+                    Instruction {
+                        id: crate::ir::InstructionId::new(1),
+                        results: Vec::new(),
+                        kind: InstructionKind::Call {
+                            callee: Callee::Direct(consume.id),
+                            arguments: vec![Operand::Value(computed.id)],
+                            effects: Effects::NONE,
+                        },
+                    },
+                ],
+                terminator: Terminator::Return(None),
+            }],
+        };
+        let mut types = basic_types();
+        types.push(Type {
+            id: double,
+            kind: TypeKind::Float(FloatKind::Binary64),
+        });
+
+        let selected = select_module(&module(types, vec![caller, consume]))
+            .expect("computed external DOUBLE argument selects");
+        selected.verify().expect("selected Machine IR verifies");
+        let function = &selected.functions[0];
+        let instructions = &function.blocks[0].instructions;
+        let store = instructions
+            .iter()
+            .position(|instruction| instruction.opcode == X86Opcode::X87StorePop.machine_opcode())
+            .expect("computed DOUBLE stores to Python's temporary");
+        let MachineOperandKind::FrameIndex { index, addend } = instructions[store].operands[2].kind
+        else {
+            panic!("computed DOUBLE store lacks a frame temporary");
+        };
+        assert_eq!(addend, 0);
+        assert!(function.frame_objects.iter().any(|frame| {
+            frame.index == index && frame.size == 8 && frame.kind == FrameObjectKind::Temporary
+        }));
+        assert!(matches!(
+            instructions[store + 1].operands.as_slice(),
+            [MachineOperand {
+                kind: MachineOperandKind::Register(MachineRegister::Virtual(_)),
+                role: OperandRole::Def,
+                ..
+            }, MachineOperand {
+                kind: MachineOperandKind::FrameIndex {
+                    index: loaded,
+                    addend: 4,
+                },
+                role: OperandRole::None,
+                ..
+            }] if *loaded == index
+        ));
+        assert_eq!(
+            instructions[store + 1].opcode,
+            X86Opcode::Load.machine_opcode()
+        );
+        assert_eq!(
+            instructions[store + 2].opcode,
+            X86Opcode::Push.machine_opcode()
+        );
+        assert_eq!(
+            instructions[store + 3].opcode,
+            X86Opcode::Load.machine_opcode()
+        );
+        assert!(matches!(
+            instructions[store + 3].operands.get(1),
+            Some(MachineOperand {
+                kind: MachineOperandKind::FrameIndex {
+                    index: loaded,
+                    addend: 0,
+                },
+                role: OperandRole::None,
+                ..
+            }) if *loaded == index
+        ));
+        assert_eq!(
+            instructions[store + 4].opcode,
+            X86Opcode::Push.machine_opcode()
+        );
+        assert_eq!(
+            instructions[store + 5].opcode,
+            X86Opcode::CallFar.machine_opcode()
+        );
+        assert_eq!(
+            instructions[store + 6].opcode,
+            X86Opcode::Add.machine_opcode()
+        );
+        assert_eq!(instructions[store + 6].operands[1], immediate_operand(8));
     }
 
     #[test]
@@ -5184,6 +7625,96 @@ mod tests {
                 role: OperandRole::None,
                 ..
             }] if *register == X86Register::Ax.physical()
+        ));
+    }
+
+    #[test]
+    fn selects_far_pascal_near_pointer_call_and_return_in_ax() {
+        // Microsoft BASIC floating functions physically return their hidden
+        // near result pointer in AX.  At this target boundary that pointer is
+        // the same one-word ABI value as an i16; pointee semantics stay in
+        // the QB frontend physicalizer.
+        let pointer = TypeId::new(7);
+        let parameter = |id| Value {
+            id: ValueId::new(id),
+            type_id: pointer,
+        };
+        let callee = Function {
+            id: FunctionId::new(5),
+            name: "return_pointer".into(),
+            signature: Signature {
+                result: pointer,
+                parameters: vec![pointer],
+                variadic: false,
+                calling_convention: CallingConvention::FarPascal,
+            },
+            linkage: Linkage::External,
+            attributes: Vec::new(),
+            parameters: vec![parameter(0)],
+            blocks: vec![Block {
+                id: BlockId::new(0),
+                instructions: Vec::new(),
+                terminator: Terminator::Return(Some(Operand::Value(ValueId::new(0)))),
+            }],
+        };
+        let caller = Function {
+            id: FunctionId::new(4),
+            name: "caller".into(),
+            signature: Signature {
+                result: pointer,
+                parameters: vec![pointer],
+                variadic: false,
+                calling_convention: CallingConvention::FarPascal,
+            },
+            linkage: Linkage::External,
+            attributes: Vec::new(),
+            parameters: vec![parameter(0)],
+            blocks: vec![Block {
+                id: BlockId::new(0),
+                instructions: vec![Instruction {
+                    id: crate::ir::InstructionId::new(0),
+                    results: vec![parameter(1)],
+                    kind: InstructionKind::Call {
+                        callee: Callee::Direct(callee.id),
+                        arguments: vec![Operand::Value(ValueId::new(0))],
+                        effects: Effects::NONE,
+                    },
+                }],
+                terminator: Terminator::Return(Some(Operand::Value(ValueId::new(1)))),
+            }],
+        };
+        let mut types = basic_types();
+        types.push(near_pointer_type(pointer));
+
+        let selected = select_module(&module(types, vec![caller, callee]))
+            .expect("far Pascal near-pointer result uses the one-word ABI");
+        super::super::verify_machine(&selected).expect("selected Machine IR verifies");
+
+        let caller = &selected.functions[0].blocks[0].instructions;
+        let call = caller
+            .iter()
+            .find(|instruction| instruction.opcode == X86Opcode::CallFar.machine_opcode())
+            .expect("caller contains the far call");
+        assert!(matches!(
+            call.operands.last(),
+            Some(MachineOperand {
+                kind: MachineOperandKind::Register(MachineRegister::Virtual(_)),
+                role: OperandRole::Def,
+                constraint: Some(RegisterConstraint::Fixed(register)),
+                tied_to: None,
+            }) if *register == X86Register::Ax.physical()
+        ));
+        let returned = caller
+            .iter()
+            .find(|instruction| instruction.opcode == X86Opcode::ReturnFar.machine_opcode())
+            .expect("caller returns the pointer");
+        assert!(matches!(
+            returned.operands.first(),
+            Some(MachineOperand {
+                role: OperandRole::Use,
+                constraint: Some(RegisterConstraint::Fixed(register)),
+                ..
+            }) if *register == X86Register::Ax.physical()
         ));
     }
 
@@ -5655,5 +8186,165 @@ mod tests {
             Some(RegisterConstraint::Fixed(X86Register::Dx.physical())),
             "the high return word is born in DX rather than copied there after frame teardown"
         );
+    }
+
+    #[test]
+    fn selects_c_float_call_and_return_through_st0() {
+        // Python cfront.raise_hir._Raise.invoke (1121-1152) materializes a
+        // floating call result as one x87 value, and ret (515-520) returns
+        // one such value.  Both sides of the C ABI therefore use ST0 rather
+        // than the integer AX/DX result protocol.
+        for float_kind in [FloatKind::Binary32, FloatKind::Binary64] {
+            let float = TypeId::new(7);
+            let mut types = basic_types();
+            types.push(Type {
+                id: float,
+                kind: TypeKind::Float(float_kind),
+            });
+            let callee = Function {
+                id: FunctionId::new(5),
+                name: "identity_float".into(),
+                signature: Signature {
+                    result: float,
+                    parameters: Vec::new(),
+                    variadic: false,
+                    calling_convention: CallingConvention::FarCdecl,
+                },
+                linkage: Linkage::Internal,
+                attributes: Vec::new(),
+                parameters: Vec::new(),
+                blocks: vec![Block {
+                    id: BlockId::new(0),
+                    instructions: vec![Instruction {
+                        id: crate::ir::InstructionId::new(0),
+                        results: vec![Value {
+                            id: ValueId::new(0),
+                            type_id: float,
+                        }],
+                        kind: InstructionKind::Unary {
+                            op: UnaryOp::FloatNegate,
+                            operand: Operand::Constant(TypedConstant {
+                                type_id: float,
+                                value: Constant::Float("1.0".into()),
+                            }),
+                        },
+                    }],
+                    terminator: Terminator::Return(Some(Operand::Value(ValueId::new(0)))),
+                }],
+            };
+            let caller = Function {
+                id: FunctionId::new(4),
+                name: "main".into(),
+                signature: Signature {
+                    result: float,
+                    parameters: Vec::new(),
+                    variadic: false,
+                    calling_convention: CallingConvention::FarCdecl,
+                },
+                linkage: Linkage::Internal,
+                attributes: Vec::new(),
+                parameters: Vec::new(),
+                blocks: vec![Block {
+                    id: BlockId::new(0),
+                    instructions: vec![Instruction {
+                        id: crate::ir::InstructionId::new(0),
+                        results: vec![Value {
+                            id: ValueId::new(0),
+                            type_id: float,
+                        }],
+                        kind: InstructionKind::Call {
+                            callee: Callee::Direct(callee.id),
+                            arguments: Vec::new(),
+                            effects: Effects::NONE,
+                        },
+                    }],
+                    terminator: Terminator::Return(Some(Operand::Value(ValueId::new(0)))),
+                }],
+            };
+            let literal_callee = Function {
+                id: FunctionId::new(6),
+                name: "literal_float".into(),
+                signature: Signature {
+                    result: float,
+                    parameters: Vec::new(),
+                    variadic: false,
+                    calling_convention: CallingConvention::FarCdecl,
+                },
+                linkage: Linkage::Internal,
+                attributes: Vec::new(),
+                parameters: Vec::new(),
+                blocks: vec![Block {
+                    id: BlockId::new(0),
+                    instructions: Vec::new(),
+                    terminator: Terminator::Return(Some(Operand::Constant(TypedConstant {
+                        type_id: float,
+                        value: Constant::Float("1.0".into()),
+                    }))),
+                }],
+            };
+
+            for (calling_convention, call_opcode, return_opcode) in [
+                (
+                    CallingConvention::C,
+                    X86Opcode::CallNear,
+                    X86Opcode::ReturnNear,
+                ),
+                (
+                    CallingConvention::FarCdecl,
+                    X86Opcode::CallFar,
+                    X86Opcode::ReturnFar,
+                ),
+            ] {
+                let mut caller = caller.clone();
+                let mut callee = callee.clone();
+                let mut literal_callee = literal_callee.clone();
+                caller.signature.calling_convention = calling_convention;
+                callee.signature.calling_convention = calling_convention;
+                literal_callee.signature.calling_convention = calling_convention;
+                let selected =
+                    select_module(&module(types.clone(), vec![caller, callee, literal_callee]))
+                        .expect("C floating calls and returns select through ST0");
+                selected.verify().expect("selected Machine IR verifies");
+
+                for function in &selected.functions {
+                    let instructions = &function.blocks[0].instructions;
+                    let returned = instructions.last().expect("function returns");
+                    assert_eq!(returned.opcode, return_opcode.machine_opcode());
+                    assert!(matches!(
+                        returned.operands.first(),
+                        Some(MachineOperand {
+                            role: OperandRole::Use,
+                            constraint: Some(RegisterConstraint::Fixed(register)),
+                            ..
+                        }) if *register == X86Register::St0.physical()
+                    ));
+                }
+                let call = selected.functions[0].blocks[0]
+                    .instructions
+                    .iter()
+                    .find(|instruction| instruction.opcode == call_opcode.machine_opcode())
+                    .expect("caller has ABI call");
+                assert!(matches!(
+                    call.operands.last(),
+                    Some(MachineOperand {
+                        role: OperandRole::Def,
+                        constraint: Some(RegisterConstraint::Fixed(register)),
+                        ..
+                    }) if *register == X86Register::St0.physical()
+                ));
+                assert_eq!(
+                    selected.functions[2].blocks[0]
+                        .instructions
+                        .iter()
+                        .map(|instruction| instruction.opcode)
+                        .collect::<Vec<_>>(),
+                    vec![
+                        X86Opcode::X87LoadOne.machine_opcode(),
+                        return_opcode.machine_opcode(),
+                    ],
+                    "a direct float literal is materialized on x87 before its ST0 return",
+                );
+            }
+        }
     }
 }

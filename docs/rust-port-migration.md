@@ -1191,3 +1191,449 @@ schema round trips, and the two adjacent real-capture probes used about 51
 seconds of command execution.  No broad suite, optimizer pipeline, matrix,
 runtime gate, or qrender command ran; verification remained below ten percent
 of the implementation and review interval.
+
+## Iteration 10: paired qmove CodeGen (in progress)
+
+The first Rust-only QB and C qmove executables now both compile, link, and run
+to the existing `100405` oracle without invoking an optimization pass.  This
+is not yet the CodeGen acceptance milestone: primary assembly review still
+shows target-lowering and cleanup sequences which do not match Python's
+unoptimized construction or code quality, so they remain port work rather
+than being excused as a new Rust backend.
+
+The C path initially produced the right answer by eagerly loading every
+floating formal at function entry, carrying those extended values across the
+CFG, and bridging them through two m80 frame homes.  Python does none of those
+things.  Its WCC raise retains every formal as its addressable incoming frame
+cell and emits a load only at the source use.  Primary review rejected the
+delegated cross-CFG reread exception in the x87 allocator and restored that
+boundary literally:
+
+- qhir 3 spells an incoming cell as indexed
+  `Storage::Parameter { index }`;
+- qir 8 represents its address with the source-neutral `ParameterAddress`;
+- WCC `CGFEName` binds to that place while the unused formal SSA value remains
+  only in the ABI signature;
+- selection reuses the existing `IncomingArgument` frame object and emits no
+  instruction for the address itself;
+- unused formal SSA values no longer trigger entry loads, while the existing
+  QB value-parameter route is unchanged when the value is actually used.
+
+The focused qmove regression checks the original machine symptom as well as
+runtime behavior.  `_pl_ground_accel` now loads its binary32 float formals
+directly from `[bp+10]` and `[bp+14]`, emits no `fstp tword` bridge home, links
+with the independent far-cdecl caller, and returns `100405`.  Calling-
+convention offsets remain solely in the generic C ABI frame planner; no WCC,
+C, QB, or fixture name entered IR, Machine IR, allocation, or an optimization
+pass.
+
+Focused verification for the parameter-cell correction used approximately 64
+seconds of command execution: delegated frontend checks, four HIR/IR/selection
+regressions, compile checks, one adjacent object inspection, and one 17.47
+second DOS runtime gate.  No broad suite, optimizer pipeline, matrix, or
+qrender command ran.  This remains below ten percent of the multi-hour qmove
+implementation and primary-review interval.
+
+Primary review then completed a line-by-line comparison of the affected x87
+stack rules with `qbopt/backend/floatalloc.py` and
+`qbopt/backend/floatregions.py`.  The Rust port now follows the Python
+mechanisms instead of accepting behaviorally convenient substitutes:
+
+- every value crossing a floating region receives Python's definition-time
+  m80 bridge and one reload in each consuming region;
+- stable m80 cells are rereadable homes, but remain ineligible for x87 memory
+  arithmetic exactly as Python's separate `_rereadable` and `_memory_name`
+  decisions require;
+- a load receives a home only after `_rereadable` succeeds;
+- `_may_write` considers unknown operations, actual overlapping memory
+  destinations, and definitions of address components rather than treating
+  Machine IR effect flags as invented destinations;
+- register stores use their Machine IR value width for overlap accounting;
+- arithmetic preserves an operand already at `st(0)`, orders materialization
+  by definition position, and uses Python's distinct top, buried-destination,
+  and pop orientation cases.
+
+Four initially failing x87 expectations were audited against Python.  Two
+were real Rust divergences and two expected behavior Python never had: the
+ninth stack value creates one m80 spill, and a value crossing a CFG fork still
+requires its m80 bridge even when an unrelated store cannot alias its source
+cell.  The corrected subsystem has 26 focused regressions.  The register-store
+width regression was also observed failing with the previous one-byte rule
+before passing with class-derived widths.  One subsystem run, the focused
+fail-first/rerun, compile checks, delegated read-only oracle probes, and one
+fresh C qmove DOS gate used about 85 seconds of additional command execution.
+The fresh object loads both C float formals from their incoming binary32 cells,
+contains no entry m80 bridge, and returns `100405`.  No broad suite, optimizer,
+matrix, or qrender command ran.
+
+The next adjacent-stage comparison used Python's unoptimized `qmove` dumps as
+the specification and found the first remaining divergence before allocation:
+Rust materialized every constant near-pointer GEP as `Copy; Add`, including
+zero, while `qbopt/backend/addressforms.py` folds that chain into the consuming
+memory cell.  The Rust selector now carries the same base-plus-signed-word
+displacement instead.  Frame field offsets remain abstract until the frame
+plan combines them exactly once, register-based cells use the complete 16-bit
+address-register encoding, and direct symbolic cells retain their OMF fixup.
+The paired Rust regression checks both `[base]` and `[base+4]` in the real
+qmove selected Machine IR and rejects the former `Copy; Add(0|4); X87Load`
+shape without banning unrelated integer arithmetic.
+
+Primary review caught and corrected three delegated approximations before
+acceptance: local fields were initially left behind a `lea`, explicit zero
+used the longer noncanonical ModR/M spelling for every base, and the old
+BP-only encoder disagreed with the newly general verifier.  Focused selector,
+frame-index, verifier, and exact-byte encoder regressions now cover those
+boundaries.  The real qmove program still links and returns `100405`.
+
+With address construction aligned, the next diff was Python FloatAlloc's
+`fld m32; fmul m32` versus Rust's `fld; fld; fmulp`.  Rust's explicit
+f32-to-f80 `Copy` had prematurely materialized an otherwise deferred scalar
+home; Python's LIR represents that same storage-to-evaluation transition as
+one extended value loaded from a four-byte cell.  A dying no-op x87 copy now
+transfers the deferred home only after rerunning Python's rereadability proof
+for the destination.  The same newly reachable direct-memory comparison also
+now carries its required load effect.  The first qmove dot products, scalar
+subtraction, multiplication, and comparison consequently match Python's x87
+memory forms.  `_quake_move_demo` moved from offset `0xc2` before these two
+ports to `0x8c`.
+
+The following adjacent HIR diff exposed two discarded `CGPreGets` update
+results.  Python's pre-get stores the computed SINGLE and returns an abstract
+FloatCell; `CGDone` discards that cell without loading it.  Rust had eagerly
+loaded each just-stored `vel` component.  The WCC raiser now shares one
+load/arithmetic/store update path: an ordinary expression reloads the rounded
+cell, a discarded update defers it, and a later DAG reuse reloads it exactly
+once without repeating the store.  Focused fail-first tests cover both cases.
+The unused loads and their final x87 cleanup pops are gone, moving
+`_quake_move_demo` to `0x83`.  Python is at `0x7b`, so the CodeGen milestone
+remains open rather than treating the remaining eight-byte construction
+difference as an optimizer task.  The first remaining representation diff is
+Python's equal-width SINGLE cell assignment, which `put_float` spells as a
+four-byte integer move while Rust still routes it through x87; after allocation
+Python's peephole also removes two repeated parameter-pointer reloads.
+
+Known focused verification in this interval used about 125 seconds of command
+execution across more than twenty minutes of implementation, delegated work,
+primary diff review, exact-stage inspection, and correction.  It included the
+two qmove acceptance tests, narrow selector/address/encoder/frame/x87 tests,
+and fresh adjacent-stage/object dumps.  No broad suite, optimizer pipeline,
+matrix, or qrender command ran; verification remained below ten percent.
+
+The next Python construction difference is now translated literally.  In
+`qbopt/cfront/raise_hir.py::_Raise.put_float`, an equal-width `FloatCell`
+assignment is not an x87 operation: Python loads its four bytes as
+`TY_UINT_4`, stores the same four bytes into the destination cell, and returns
+that destination `FloatCell`.  The WCC Rust raiser now retains that cell fact
+long enough to emit the same typed HIR `Load; Store` pair.  It uses a `u32`
+projection only for the memory transfer; no C or floating-domain fact entered
+HIR lowering, IR, Machine IR, or an optimization pass.  A discarded assignment
+still ends at the store, while the existing deferred-cell route loads the
+destination only if the capture DAG later consumes the assignment value.
+
+The focused regression was observed failing first because the transport value
+was still `f32`, then passed with a `u32` source projection, `u32` result, and
+`u32` destination projection.  A fresh real qmove object confirms that the
+conditional `accelspeed = addspeed` block is now exactly the two dword moves
+Python raises, rather than Rust's former `fld; fstp`.  This deliberately makes
+the faithful Rust function two bytes longer than its shorter but non-matching
+x87 spelling: `_quake_move_demo` now begins at `0x85`, versus Python's `0x7b`.
+The remaining ten bytes are completely accounted for by existing Python
+post-allocation mechanisms: `spillforward.forwarded` removes the two repeated
+three-byte parameter-pointer loads, and Python's final control-flow layout
+avoids two two-byte unconditional jumps around the copy and update blocks.
+
+Primary review independently reran the exact unit regression, rebuilt
+`llrm-c`, inspected the fresh QIR and object bytes, and ran the existing qmove
+DOS oracle (`100405`).  Delegated fail-first/pass runs, the primary checks, one
+Python dump, and one accidentally deselected pytest invocation used about 29
+seconds of command wall time.  No broad suite, optimizer pipeline, matrix, or
+qrender command ran, keeping verification below ten percent.
+
+The reload-forwarding port was not approximated.  A read-only audit traced the
+exact call chain to `qbopt/backend/spillforward.py::{_held, _available,
+_transfer, forwarded}` and its tests in `tests/test_peephole.py`.  Rust's
+current post-allocation Machine IR erases Python's `spill_reload`/
+`spill_store` provenance and has no zero-byte `lir.anchor` equivalent retaining
+logical ownership.  The representation must first port those facts; deleting
+the loads, calling the transformation machine CSE, or adding a qmove-specific
+rule would not be a faithful port.
+
+That representation prerequisite is now present as a direct Machine-IR
+translation.  Allocator-created loads and stores carry explicit provenance,
+and `MachineInstruction::anchor` retains only a removed instruction's logical
+virtual def/use operands and stable instruction identity while clearing every
+physical effect.  Assignment preserves those logical operands and their
+declarations.  The x86 target owns a `Nothing` pseudo which lowers to an empty
+MC data fragment at the same lineage position; it cannot reach the encoder or
+turn into a hardware `nop`.  The new flag meanings make `.qmir` version 9 an
+intentional schema break rather than silently assigning semantics to formerly
+invalid bits.
+
+Primary review caught that the first verifier draft recognized spill
+provenance only while its address was an abstract `FrameIndex`.  Frame-index
+materialization preserves the marker but rewrites the operand to the canonical
+`BP + immediate` tuple, so the verifier now accepts exactly those two forms.
+It still rejects a marker on the wrong opcode, a non-spill abstract object, or
+a noncanonical materialized address.  An independent focused run of the
+address-spill allocation/materialization regression passed in 2.74 seconds.
+Together with the delegate's three focused filters, verification for this
+foundation used about 20 seconds of command wall time and remained below ten
+percent of its implementation and review interval.
+
+The two post-allocation mechanisms which accounted for qmove's remaining gap
+are now ports of the Python implementations rather than fixture-shaped
+shortcuts.  `target::x86::spill_forward` translates
+`qbopt/backend/spillforward.py::{_held,_available,_transfer,forwarded}` with
+exact frame cells, physical byte lanes, the same top/bottom data-flow lattice,
+predecessor intersection, overlapping-store invalidation, unknown-operation
+refusal, and zero-byte anchors for eliminated reloads.  It deliberately
+forwards ordinary program frame loads as well as allocator reloads, matching
+Python.  Calls, unknown encodings, unknown stores, BP writes, and Python's x87
+status-word `BARRIER` end every fact.  The last point was found by the raw
+qmove diff: treating `fnstsw ax` as a completely known AX write carried BX/SI
+facts farther than Python and removed six extra bytes.  Its regression was
+observed failing with the known-write behavior before passing with the exact
+barrier boundary.
+
+`target::x86::control_flow` is the bounded translation of
+`qbopt/backend/jumps.py::{placed,_onward,_tests,threaded,_step,_passage,
+_through,_retargeted,_predecessors,_reachable}`.  Tail merging, machine DCE,
+and encoded-cost preference remain explicitly outside this slice; calling it
+the full Python `optimized` routine would be inaccurate.  Source facts which
+fresh Machine IR cannot infer are supplied separately: non-inserted
+instructions govern removal anchors, source-byte ownership retains inert
+orphans, and measured loop headers remain protected.  Fresh QB and C source
+use empty fact sets; the future object frontend must populate them from its
+rewrite ledger.  Primary review rejected an earlier approximation which tried
+to infer these facts from instruction shape, then caught two tests that had
+accidentally composed placement with threading while claiming to cover the
+Python threading helper alone.  The corrected helper-boundary and integrated
+placement regressions pass.
+
+Logical reload anchors exposed one representation assumption in the existing
+finalizers: word composition and both ABI expanders rejected their retained
+virtual declarations before MC could lower the anchors to zero-byte fragments.
+They now admit only declarations used by logical anchors and continue to reject
+every virtual operand on an encodable instruction.  The word-merger regression
+exercises the complete boundary.  This is one shared Machine-IR rule, not an
+exception in C or BASIC code generation.
+
+The final two-byte qmove difference was upstream of control-flow placement.
+Python `FunctionRaiser.branch` handles `O_IF_FALSE` on a `CGCompare` by
+inverting the relational test and branching directly to the capture label;
+Rust had materialized the original boolean relation and selected its false
+edge.  Both were semantically correct, but they presented opposite edges to
+the otherwise faithful placement algorithm.  The WCC frontend now performs
+the same comparison inversion without caching that branch-only result, just
+as Python calls `compare` directly rather than `eval`.  No C fact enters HIR
+lowering, portable IR passes, Machine IR passes, or MC.
+
+After these corrections, a fresh `_pl_ground_accel` has the same instruction
+sequence and block order as Python's unoptimized backend: the return block
+immediately follows the first conditional, the accelerated path follows it,
+the equal-width SINGLE assignment is the same dword load/store, the same two
+parameter-pointer reloads are forwarded, and the update path ends with the
+same short jump to the shared return.  `_quake_move_demo` begins at `0x7b` on
+both sides.  The Rust encoder may choose an equivalent spelling for an
+instruction, so this is an adjacent-stage and layout equality claim rather
+than a byte-identical whole-object claim.  Fresh DOS runs retained the paired
+C and QB qmove oracle `100405`.
+
+Focused verification for the anchor, spill-forward, control-flow, WCC branch,
+fresh-object, and two DOS checks used about 121 seconds of command wall time
+across a multi-hour implementation and primary-review interval.  That includes
+the required fail-first runs and one failed parity-instrument invocation whose
+stale QB JSON frontend path never reached the C oracle.  No broad suite,
+optimizer pipeline, matrix, or qrender command ran; verification remained
+below ten percent of wall time.
+
+A final read-only fidelity audit found that equal-sized natural loops were
+ordered by reconstructed header ID in Rust, while Python preserves first
+back-edge discovery order and then applies a stable body-size sort.  That can
+change which loop is protected when placement sees nested or adjacent loops.
+The Rust port now records headers at the point their first back edge is
+discovered, constructs loops in that order, and performs the same stable sort.
+The focused regression was observed failing with `[1, 2]` where Python requires
+`[2, 1]`, then passed after the correction (4.11 and 3.37 seconds).
+
+The same audit tightened the allocation-to-MC anchor contract.  A boolean
+`anchor` flag alone no longer exempts an encodable instruction or its virtual
+declaration from finalizer checks.  The only admitted form is the canonical
+zero-byte `Nothing` instruction whose operands are unconstrained, untied
+virtual def/use lineage and whose remaining flags are clear.  Direct MC
+lowering independently rejects a malformed claimed anchor, so callers cannot
+bypass the finalizers and silently erase a real instruction.  Follow-up review
+also required every anchor operand to have a dataflow role and a declaration
+in its containing function, and made control-flow retain malformed `Nothing`
+instructions so the MC boundary can diagnose them rather than losing them as
+transparent markers.  Twelve focused anchor tests, including these
+regressions, passed in 4.6 seconds.  No DOS or broad-suite rerun was needed
+because the correction only rejects malformed Machine IR; the previously
+verified canonical qmove path is unchanged.
+
+One deliberately conservative boundary remains explicit: Rust will not remove
+a volatile frame load, while the Python representation has no corresponding
+volatile case in this helper.  This does not alter any ported Python input and
+prevents the Rust-only qualifier from losing its required observable access.
+Materialized spill provenance also still needs to be correlated with the
+allocator's frame-layout ownership before a future consumer may treat a
+syntactically canonical `BP + displacement` address as proof of provenance.
+
+### 2026-09-21: paired qbsp adjacent-stage port
+
+The paired QB and WCC QBSP programs are being advanced only by porting the
+first measured Python behavior missing at each adjacent stage.  The QB path
+now resolves array formals through their physical descriptor pointers,
+canonicalizes opaque pointer identities by address kind where portable IR no
+longer retains pointees, and canonicalizes indirect-pointer lowering in the
+same way.  Focused fail-first regressions cover both boundaries.
+
+Python's split-evaluation BASIC floating-result ABI was initially considered
+at the target IR boundary and rejected there: portable pointer types no longer
+contain the pointee identity needed to distinguish the hidden SINGLE and
+DOUBLE result cells.  The faithful port therefore lives at the QB HIR
+boundary, matching `qbopt/frontend/qb/abi.py`: eligible far Pascal callees
+store into the final hidden near pointer and return it, and direct callers
+receive that pointer and immediately load the semantic floating result.  The
+transform is clone-only, retains argument order and exact storage types, and
+leaves CDECL, runtime calls, and unrelated functions unchanged.  Five focused
+tests passed in about 3 seconds.
+
+The next QBSP Machine-IR divergence was a floating load or store through a
+far 16:16 pointer.  The first Rust implementation exposed an older unfaithful
+detour: it split the pointer with `LowWord` and `HighWord` and tried to
+recognize the sequence after allocation.  Spilling separated those operations
+and left an unencodable `mov es`.  Python already has the general answer in
+`backend/lower.py::_pointer_access`: `push es`, `push pointer`, `pop offset`,
+`pop es`, access, `pop es`.  Rust selection now emits that exact balanced
+sequence for integer and x87 accesses.  The related selection tests assert the
+same order and Dword/Address16 classes, and x87 verification and encoding
+accept the ES-relative memory form.  The three focused far-memory tests and
+the exact encoding test passed in about 6 seconds total.  Fresh QBSP now emits
+both verified `.qmir` and a 2,159-byte OMF object.  Its focused VBDOS
+link-and-run regression also passes the established `120`/`DONE` oracle in
+2.4 seconds.
+
+On the WCC side, Python `_Raise.assign` accepts near `TY_POINTER` assignments
+through the ordinary typed store path; Rust had incorrectly called its
+scalar-only type helper.  The capture type now reaches the existing
+source-before-target/coercion/store sequence, with a focused QBSP-shaped
+regression.  Python `_Raise.unary` was then ported for integer negate and
+complement, including width wrapping of constants, plus SINGLE negate and
+absolute-value operations and the same refusal cases.  Five unary regressions
+passed in about 3 seconds.  The real capture then exposed `TY_DOUBLE` at source
+1:68:1.  Its port matches Python's 8-byte storage with extended x87
+evaluation, typed literal precision conversion, semantic unary/binary
+operations, deferred assignments, and two-word `TY_UINT_4` cell copies.  Three
+focused double regressions passed, and the real WCC QBSP capture now emits
+verified `.qir`.  The next target boundary was the C floating result ABI.
+Python carries both a direct C call's floating result and a C function's
+floating return in x87 `st(0)`; Rust now expresses the same contract as a
+fixed-ST0 definition or use in Machine IR for near C and far cdecl calls and
+returns.  Return operands still pass through ordinary typed selection first,
+so a literal return follows Python's evaluate-then-float path instead of being
+restricted to an existing SSA value.  The focused regression covers SINGLE
+and DOUBLE, both distances, and a direct literal.  Primary review independently
+ran that exact test and reproduced the real capture's next refusal: a
+same-width signed/unsigned integer bitcast in `_r_point_leaf`.  Python
+`_Raise.convert` represents that case by returning the same held word, and the
+Rust HIR lowerer records the typed view as `Bitcast`; selection now completes
+that translation by reusing the selected location when both integer widths
+match.  Unequal widths still refuse.  The focused i16-to-u16 mask regression
+passed independently in 0.02 seconds, and the real capture now emits a
+12,663-byte verified `.qmir`.  Its next adjacent object-emission boundary is
+the x87 stack allocator's floating `ReturnFar` rule.  Python's nameless
+`FLOAT_STORE` return arm moves the requested value to `st(0)`, refuses if any
+other x87 value remains live, and leaves that one architectural result for the
+caller.  Rust now performs the same operation for near and far C returns while
+preserving the far cleanup operand.  The focused regression also covers the
+multi-value refusal and passed independently in 0.03 seconds.  The real object
+rung now reaches the next frame-planning boundary: the C ABI planner has not
+yet admitted an extended x87 result that requires no AX/DX return machinery.
+The C ABI frame port now accepts all three supported floating formats, requires
+the exact physical `st(0)` return operand, and removes only that explicit
+operand during final expansion while retaining far-cdecl's zero cleanup.
+Python's native frame planner likewise has no floating result-register rule.
+The six near/far format cases passed independently; the checked-in QBSP object
+rung now reaches a distinct x87 region issue: a call's newly defined `st(0)`
+result must belong to the region after the call boundary, while values live
+before the call must still be bridged or refused.  Rust now recognizes only
+one pure fixed-`st(0)` call definition as that post-call value.  Primary review
+rejected an initial change that also moved returns across the boundary and a
+helper that could index an empty result list for ordinary calls; the corrected
+rule preserves floating returns, cannot panic on a zero-result call, refuses a
+non-ST0 x87 definition, and retains the existing m80 bridge for a genuine
+pre-call live value.  All three focused regressions passed independently.
+
+The paired C QBSP artifacts now travel with the port: the canonical WCC stream
+generated from `bench/parity/qbsp.c`, the standard far-cdecl DOS harness, and a
+Rust end-to-end regression using the established Python-era result `120`.
+Fresh Rust emission produces a 663-byte OMF object; JWASM, Microsoft LINK, and
+the DOS 386 run all completed, and the focused program regression returned
+`120`.  This reaches the requested pre-optimization milestone for both
+`llrm-qb` and `llrm-c` on the same paired program.
+
+This slice used only fail-first unit filters and one-program `.qir`, `.qmir`,
+object, and final QBSP runtime rungs.  Command execution was roughly 50 seconds
+plus one 15-second deselected invocation before the required `--full` marker
+was supplied, over a much longer implementation and review interval.  No
+broad suite, matrix, or qrender command ran; verification remained below ten
+percent of wall time.
+
+### 2026-09-21: WCC imported floating calls
+
+The next paired-C expansion follows Python
+`cfront/raise_hir.py:_Raise.library`, `_Raise.invoke`, and `_Raise.push`
+directly.  External C and far-cdecl declarations now select a named external
+call instead of requiring a Machine function body.  Floating results are
+fixed to `st(0)`, DOUBLE constants are pushed high dword before low dword, and
+a computed DOUBLE uses Python's exact eight-byte temporary followed by the
+`+4`, then `+0`, load/push sequence.  Caller cleanup remains the sum of the
+declared argument widths.  An unused result remains a real IR value; the
+existing x87 allocator therefore emits Python's `fstp st(0)` discard instead
+of hiding the result at selection time.  Primary review rejected a resultless
+non-void test construction, required the fixed-`st(0)` constraint and computed
+DOUBLE path, inspected the corrected selector, and independently ran the two
+new exact regressions.
+
+WCC's `O_SQRT` now follows Python `_Raise.library`: it converts each actual to
+DOUBLE, calls the imported far caller-cleanup `_sqrt`, receives the extended
+x87 result, then converts to the requested expression type.  HIR names the
+external symbol and leaves `CallAbi.callee` empty; the call planner interns the
+two test sites as one external far-cdecl declaration, matching Python's
+`Shared.runtime` cache.  Primary review rejected an initial undefined-callable
+model because a callable ID denotes a definition, then required Python's
+last-first binary-library inputs to be restored to logical HIR order before
+x86 cdecl selection reverses them for pushes.  Both focused library
+regressions passed independently.
+
+The real `fixtures/c/floats.cgs` probe still stops earlier, at Python
+`_Raise.__init__`'s formal layout: Rust's temporary 2/4-byte guard refuses the
+first DOUBLE parameter.  The next slice replaces that shortcut with Python's
+general `even(max(2, size(type)))` rule.  No raw `tools/stages.py` equality is
+claimed for this WCC path: the current tool accepts BC objects, while Python's
+C oracle is `python -m qbopt.cfront --dump`.  A stage-instrument port must make
+the corresponding WCC facts comparable before this path can satisfy the final
+stage-by-stage acceptance gate.
+
+That formal-layout slice now uses the general Python rule with checked
+rounding and accumulation in source declaration order.  The regression reads
+the real `floats.cgs` declarations: `_half` and `_sign` each retain one
+eight-byte DOUBLE formal, while `_mag` retains two in indices zero and one and
+reports sixteen parameter bytes.  The test inspects `_sign`'s declaration
+without entering its independently unported `CGChoose` body, then verifies and
+lowers the executable `_half`/`_mag` slice.  Primary review independently ran
+the exact regression; the real `.qir` probe advanced from source line 8 to the
+expected `CGChoose` refusal at source line 19.
+
+The WCC dump audit also made a larger acceptance gap explicit.  Python writes
+the ordered `stream`, source `hir`, raised `mir`, annotated/pass MIR, `lir`,
+every allocation phase, and `asm` from one compilation.  Rust currently lowers
+its capture directly into a different generic SSA IR and exposes only `qir`,
+`qmir`, and `obj`; those artifacts cannot prove a function-for-function port
+of Python MIR, LIR, allocation, or emission.  Consequently the next accepted
+work starts by reproducing Python's source-HIR dump exactly, then ports the
+Python MIR/LIR structures and printers before adding more WCC semantics.  The
+planned `CGChoose` implementation in the generic HIR was stopped before it
+edited the tree, rather than duplicating Python behavior into a temporary
+representation that cannot meet the stage gate.

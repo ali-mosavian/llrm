@@ -11,5 +11,5 @@ pub use interpreter::{
     interpret_with_step_limit,
 };
 pub use model::*;
-pub use text::{parse as parse_text, write as write_text, TextError};
+pub use text::{TextError, parse as parse_text, write as write_text};
 pub use verify::verify;

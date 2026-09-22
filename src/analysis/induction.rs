@@ -11,12 +11,12 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use num_bigint::BigInt;
 
-use super::constants::{self, masked, Known};
-use super::occurrence::{operations, phis, OpOccurrence, PhiOccurrence};
+use super::constants::{self, Known, masked};
+use super::occurrence::{OpOccurrence, PhiOccurrence, operations, phis};
 use super::ranges;
-use super::regions::{overlapping, RegionError, RegionLayout};
+use super::regions::{RegionError, RegionLayout, overlapping};
 use crate::model::mir::{Arg, Const, Held, Kind, MemRef, MirBody, Op, OrderedMap, Value};
-use crate::model::mir_loops::{self, predecessors, Loop};
+use crate::model::mir_loops::{self, Loop, predecessors};
 
 /// The canonical pre-tested, single-latch loop CFG.
 ///
@@ -212,10 +212,7 @@ pub(crate) fn relation(
 /// already-recognized `Derived` formula.  Recognition, pointer formation, and
 /// recurrence discovery belong to their Python-equivalent callers; this is
 /// not a second scalar-evolution solver.
-pub(crate) fn derived_map(
-    formula: &Derived,
-    facts: &BTreeMap<Value, Known>,
-) -> Option<AffineMap> {
+pub(crate) fn derived_map(formula: &Derived, facts: &BTreeMap<Value, Known>) -> Option<AffineMap> {
     let width = formula.of.start.width();
     let scale = _signed(&formula.by, facts, width)?;
     if scale == BigInt::from(0_u8) || formula.pointer.is_some() {
@@ -2246,7 +2243,7 @@ mod tests {
 
     use num_bigint::BigInt;
 
-    use crate::analysis::constants::{masked, Known};
+    use crate::analysis::constants::{Known, masked};
     use crate::codegen::machine::Operation;
     use crate::model::floating::{Format, Precision, Rounding, Semantics as FloatingSemantics};
     use crate::model::mir::{
@@ -2256,14 +2253,14 @@ mod tests {
     use crate::model::mir_loops::Loop;
 
     use crate::analysis::constants;
-    use crate::analysis::occurrence::{operations, OpOccurrence};
+    use crate::analysis::occurrence::{OpOccurrence, operations};
     use crate::object::omf::module::{Addr, Space};
 
     use super::{
-        Affine, AffineMap, AffineOperand, Derived, LoopShape, _as_signed, _composed, _constant,
-        _copied, _counter_bound, _extended, _multiplier, _quotients, _signed, basics, canonical,
-        control_replacement, counted, counted_with_facts, derived, derived_map, domain, invariant,
-        nonempty, of, relation, test_only, transparent_aliases, trip_count, unwritten,
+        _as_signed, _composed, _constant, _copied, _counter_bound, _extended, _multiplier,
+        _quotients, _signed, Affine, AffineMap, AffineOperand, Derived, LoopShape, basics,
+        canonical, control_replacement, counted, counted_with_facts, derived, derived_map, domain,
+        invariant, nonempty, of, relation, test_only, transparent_aliases, trip_count, unwritten,
         zero_terminating_control,
     };
 
@@ -3447,9 +3444,11 @@ mod tests {
             affine(counter.id, constant(0, 2), constant(1, 2), 1),
         );
 
-        assert!(derived(&body, &loop_, Some(&found), None)
-            .unwrap()
-            .is_empty());
+        assert!(
+            derived(&body, &loop_, Some(&found), None)
+                .unwrap()
+                .is_empty()
+        );
         body.blocks[0].ops[0].args[0] = Arg::Held(Held {
             value: counter,
             width: 2,
@@ -4304,7 +4303,12 @@ mod tests {
         );
     }
 
-    fn domain_body(start: i64, bound: i64, step: i64, branch_test: Kind) -> (MirBody, Loop, Affine) {
+    fn domain_body(
+        start: i64,
+        bound: i64,
+        step: i64,
+        branch_test: Kind,
+    ) -> (MirBody, Loop, Affine) {
         let counter = value(400, 1);
         let flags = Value {
             flags: true,
@@ -4312,7 +4316,10 @@ mod tests {
         };
         let mut compare = op(1, Kind::Sub, vec![flags], vec![counter]);
         compare.args = vec![
-            Arg::Held(Held { value: counter, width: 2 }),
+            Arg::Held(Held {
+                value: counter,
+                width: 2,
+            }),
             Arg::Const(Const::new(bound, 2)),
         ];
         let mut branch = op(1, Kind::Branch, vec![], vec![flags]);
@@ -4443,19 +4450,32 @@ mod tests {
         // cannot prove the loop shape.
         let (ascending_body, ascending_loop, ascending) = domain_body(1, 5, 2, Kind::Gt);
         assert_eq!(
-            domain(&ascending_body, &ascending_loop, &ascending, &BTreeMap::new()),
+            domain(
+                &ascending_body,
+                &ascending_loop,
+                &ascending,
+                &BTreeMap::new()
+            ),
             Some((BigInt::from(1), BigInt::from(5)))
         );
 
         let (descending_body, descending_loop, descending) = domain_body(5, 1, -2, Kind::Lt);
         assert_eq!(
-            domain(&descending_body, &descending_loop, &descending, &BTreeMap::new()),
+            domain(
+                &descending_body,
+                &descending_loop,
+                &descending,
+                &BTreeMap::new()
+            ),
             Some((BigInt::from(1), BigInt::from(5)))
         );
 
         let (mut refused_body, refused_loop, refused) = domain_body(1, 5, 2, Kind::Gt);
         refused_body.blocks[1].ops[1].target = None;
-        assert_eq!(domain(&refused_body, &refused_loop, &refused, &BTreeMap::new()), None);
+        assert_eq!(
+            domain(&refused_body, &refused_loop, &refused, &BTreeMap::new()),
+            None
+        );
     }
 
     #[test]
@@ -4880,13 +4900,15 @@ mod tests {
         let covered_occurrence = operations(&covered_once)
             .find_map(|(occurrence, _, operation)| (operation == &observer).then_some(occurrence))
             .expect("the covered observer belongs to this body snapshot");
-        assert!(control_replacement(
-            &covered_once,
-            &loop_,
-            proof,
-            &BTreeSet::from([covered_occurrence])
-        )
-        .is_some());
+        assert!(
+            control_replacement(
+                &covered_once,
+                &loop_,
+                proof,
+                &BTreeSet::from([covered_occurrence])
+            )
+            .is_some()
+        );
 
         let mut equal_observers = covered_once;
         equal_observers.blocks[2].ops.push(observer);

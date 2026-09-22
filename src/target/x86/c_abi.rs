@@ -11,9 +11,9 @@ use std::fmt;
 
 use crate::codegen::machine::{
     FrameIndex, FrameObjectKind, InstructionFlags, MachineAddressSpace, MachineBlockId,
-    MachineCallingConvention, MachineFunction, MachineFunctionId, MachineInstruction,
-    MachineInstructionId, MachineOperand, MachineOperandKind, MachineRegister, MachineValueType,
-    OperandRole, VirtualRegisterId,
+    MachineCallingConvention, MachineFloatKind, MachineFunction, MachineFunctionId,
+    MachineInstruction, MachineInstructionId, MachineOperand, MachineOperandKind, MachineRegister,
+    MachineValueType, OperandRole, VirtualRegisterId,
 };
 
 use super::{X86FrameLayout, X86Opcode, X86Register, X86RegisterClass};
@@ -83,6 +83,7 @@ pub enum CFramePlanError {
     IncomingArgumentSize {
         frame: FrameIndex,
         parameter: usize,
+        expected: u32,
         actual: u32,
     },
     IncomingArgumentAlignment {
@@ -142,10 +143,11 @@ impl fmt::Display for CFramePlanError {
             Self::IncomingArgumentSize {
                 frame,
                 parameter,
+                expected,
                 actual,
             } => write!(
                 formatter,
-                "frame index {frame} for C parameter {parameter} has size {actual}, expected 2"
+                "frame index {frame} for C parameter {parameter} has size {actual}, expected {expected}"
             ),
             Self::IncomingArgumentAlignment {
                 frame,
@@ -206,7 +208,7 @@ pub fn plan_c_frame(function: &MachineFunction) -> Result<CFramePlan, CFramePlan
             .map_err(|_| CFramePlanError::UnsupportedResult(value_type))?;
     }
     for (parameter, value_type) in function.signature.parameters.iter().copied().enumerate() {
-        require_word_value(value_type).map_err(|_| CFramePlanError::UnsupportedParameter {
+        c_parameter_size(value_type).ok_or(CFramePlanError::UnsupportedParameter {
             parameter,
             value_type,
         })?;
@@ -241,10 +243,16 @@ pub fn plan_c_frame(function: &MachineFunction) -> Result<CFramePlan, CFramePlan
                         parameter,
                     });
                 }
-                if frame.size != 2 {
+                let expected = c_parameter_size(function.signature.parameters[parameter_index])
+                    .ok_or(CFramePlanError::UnsupportedParameter {
+                        parameter: parameter_index,
+                        value_type: function.signature.parameters[parameter_index],
+                    })?;
+                if frame.size != expected {
                     return Err(CFramePlanError::IncomingArgumentSize {
                         frame: frame.index,
                         parameter: parameter_index,
+                        expected,
                         actual: frame.size,
                     });
                 }
@@ -261,7 +269,7 @@ pub fn plan_c_frame(function: &MachineFunction) -> Result<CFramePlan, CFramePlan
                     });
                 }
             }
-            FrameObjectKind::Local | FrameObjectKind::Spill => {
+            FrameObjectKind::Local | FrameObjectKind::Spill | FrameObjectKind::Temporary => {
                 if frame.alignment > 2 {
                     return Err(CFramePlanError::LocalAlignment {
                         frame: frame.index,
@@ -295,17 +303,21 @@ pub fn plan_c_frame(function: &MachineFunction) -> Result<CFramePlan, CFramePlan
         MachineCallingConvention::FarPascal => unreachable!("calling convention was checked"),
     };
     let mut offsets = BTreeMap::new();
+    let mut next_argument = first_argument;
     for parameter in 0..function.signature.parameters.len() {
-        let offset = first_argument
-            .checked_add(
-                u32::try_from(parameter)
-                    .map_err(|_| CFramePlanError::ArithmeticOverflow)?
-                    .checked_mul(2)
-                    .ok_or(CFramePlanError::ArithmeticOverflow)?,
-            )
-            .ok_or(CFramePlanError::ArithmeticOverflow)?;
+        let offset = next_argument;
         let offset = i32::try_from(offset).map_err(|_| CFramePlanError::ArithmeticOverflow)?;
         offsets.insert(incoming[&parameter], offset);
+        next_argument = next_argument
+            .checked_add(
+                c_parameter_size(function.signature.parameters[parameter]).ok_or(
+                    CFramePlanError::UnsupportedParameter {
+                        parameter,
+                        value_type: function.signature.parameters[parameter],
+                    },
+                )?,
+            )
+            .ok_or(CFramePlanError::ArithmeticOverflow)?;
     }
     for (frame, depth) in local_depths {
         let offset = i32::try_from(depth).map_err(|_| CFramePlanError::ArithmeticOverflow)?;
@@ -323,25 +335,42 @@ pub fn plan_c_frame(function: &MachineFunction) -> Result<CFramePlan, CFramePlan
     })
 }
 
-fn require_word_value(value_type: MachineValueType) -> Result<(), ()> {
-    // In the 16-bit C data model, a near data pointer is passed as its
-    // offset word. Other pointer representations are not one-word ABI values.
+fn c_parameter_size(value_type: MachineValueType) -> Option<u32> {
+    match value_type {
+        MachineValueType::Integer { bits: 8 | 16 } => Some(2),
+        MachineValueType::Integer { bits: 32 } => Some(4),
+        MachineValueType::Pointer {
+            bits: 16,
+            address_space: MachineAddressSpace::NearData,
+        } => Some(2),
+        MachineValueType::Float {
+            kind: MachineFloatKind::Binary32,
+        } => Some(4),
+        MachineValueType::Float {
+            kind: MachineFloatKind::Binary64,
+        } => Some(8),
+        MachineValueType::Float {
+            kind: MachineFloatKind::Extended80,
+        } => Some(10),
+        MachineValueType::Integer { .. } | MachineValueType::Pointer { .. } => None,
+    }
+}
+
+fn require_c_result_value(value_type: MachineValueType) -> Result<(), ()> {
+    // qbopt/cfront/raise_hir.py:_Raise.ret returns every floating C value on
+    // the x87 stack; qbopt/backend/nativeframe.py:plan only plans the stack
+    // frame and therefore assigns no integer result register for it.
     matches!(
         value_type,
-        MachineValueType::Integer { bits: 16 }
-            | MachineValueType::Pointer {
-                bits: 16,
-                address_space: MachineAddressSpace::NearData,
+        MachineValueType::Integer { bits: 16 | 32 }
+            | MachineValueType::Float {
+                kind: MachineFloatKind::Binary32
+                    | MachineFloatKind::Binary64
+                    | MachineFloatKind::Extended80,
             }
     )
     .then_some(())
     .ok_or(())
-}
-
-fn require_c_result_value(value_type: MachineValueType) -> Result<(), ()> {
-    matches!(value_type, MachineValueType::Integer { bits: 16 | 32 })
-        .then_some(())
-        .ok_or(())
 }
 
 fn align_word(value: u32) -> Result<u32, CFramePlanError> {
@@ -629,7 +658,12 @@ fn preflight(
     {
         return Err(CAbiExpansionError::UnknownEntry(function.entry));
     }
-    if let Some(register) = function.virtual_registers.first() {
+    let anchor_registers = function.anchor_virtual_registers(X86Opcode::Nothing.machine_opcode());
+    if let Some(register) = function
+        .virtual_registers
+        .iter()
+        .find(|register| !anchor_registers.contains(&register.id))
+    {
         return Err(CAbiExpansionError::DeclaredVirtualRegister {
             register: register.id,
         });
@@ -645,8 +679,11 @@ fn preflight(
         }
         for instruction in &block.instructions {
             for (operand, value) in instruction.operands.iter().enumerate() {
-                if let MachineOperandKind::Register(MachineRegister::Virtual(register)) = value.kind
-                {
+                let MachineOperandKind::Register(MachineRegister::Virtual(register)) = value.kind
+                else {
+                    continue;
+                };
+                if !instruction.is_logical_anchor(X86Opcode::Nothing.machine_opcode()) {
                     return Err(CAbiExpansionError::ResidualVirtualRegister {
                         block: block.id,
                         instruction: instruction.id,
@@ -975,6 +1012,7 @@ fn validate_return(
     }
     let ax = physical(X86Register::Ax, OperandRole::Use);
     let dx = physical(X86Register::Dx, OperandRole::Use);
+    let st0 = physical(X86Register::St0, OperandRole::Use);
     let valid_operands = match (expected, result) {
         (X86Opcode::ReturnNear, None) => instruction.operands.is_empty(),
         (X86Opcode::ReturnNear, Some(MachineValueType::Integer { bits: 16 })) => {
@@ -983,6 +1021,15 @@ fn validate_return(
         (X86Opcode::ReturnNear, Some(MachineValueType::Integer { bits: 32 })) => {
             instruction.operands == [ax, dx]
         }
+        (
+            X86Opcode::ReturnNear,
+            Some(MachineValueType::Float {
+                kind:
+                    MachineFloatKind::Binary32
+                    | MachineFloatKind::Binary64
+                    | MachineFloatKind::Extended80,
+            }),
+        ) => instruction.operands == [st0],
         (X86Opcode::ReturnFar, None) => instruction.operands == [immediate(0)],
         (X86Opcode::ReturnFar, Some(MachineValueType::Integer { bits: 16 })) => {
             instruction.operands == [ax, immediate(0)]
@@ -990,6 +1037,15 @@ fn validate_return(
         (X86Opcode::ReturnFar, Some(MachineValueType::Integer { bits: 32 })) => {
             instruction.operands == [ax, dx, immediate(0)]
         }
+        (
+            X86Opcode::ReturnFar,
+            Some(MachineValueType::Float {
+                kind:
+                    MachineFloatKind::Binary32
+                    | MachineFloatKind::Binary64
+                    | MachineFloatKind::Extended80,
+            }),
+        ) => instruction.operands == [st0, immediate(0)],
         _ => false,
     };
     if !valid_operands {
@@ -1154,6 +1210,18 @@ mod tests {
             kind: FrameObjectKind::IncomingArgument { parameter },
         }
     }
+    fn incoming_sized(
+        index: u32,
+        parameter: u32,
+        size: u32,
+    ) -> crate::codegen::machine::FrameObject {
+        FrameObject {
+            index: FrameIndex::new(index),
+            size,
+            alignment: 2,
+            kind: FrameObjectKind::IncomingArgument { parameter },
+        }
+    }
     fn local(index: u32, size: u32) -> crate::codegen::machine::FrameObject {
         FrameObject {
             index: FrameIndex::new(index),
@@ -1195,6 +1263,86 @@ mod tests {
         assert_eq!(near.offset(FrameIndex::new(1)), Some(6));
         assert_eq!(far.offset(FrameIndex::new(0)), Some(6));
         assert_eq!(far.offset(FrameIndex::new(1)), Some(8));
+    }
+
+    #[test]
+    fn plans_mixed_near_pointer_and_binary32_parameters_cumulatively() {
+        // Two near pointers occupy BP+6/+8; the following four-byte values
+        // begin at BP+10 and BP+14. Multiplying the formal index by one word
+        // used to overlap every parameter wider than 16 bits.
+        let pointer = MachineValueType::Pointer {
+            bits: 16,
+            address_space: MachineAddressSpace::NearData,
+        };
+        let float = MachineValueType::Float {
+            kind: MachineFloatKind::Binary32,
+        };
+        let input = function(
+            MachineCallingConvention::FarCdecl,
+            vec![pointer, pointer, float, float],
+            vec![
+                incoming_sized(0, 0, 2),
+                incoming_sized(1, 1, 2),
+                incoming_sized(2, 2, 4),
+                incoming_sized(3, 3, 4),
+            ],
+            false,
+        );
+        let plan = plan_c_frame(&input).unwrap();
+        assert_eq!(plan.offset(FrameIndex::new(0)), Some(6));
+        assert_eq!(plan.offset(FrameIndex::new(1)), Some(8));
+        assert_eq!(plan.offset(FrameIndex::new(2)), Some(10));
+        assert_eq!(plan.offset(FrameIndex::new(3)), Some(14));
+    }
+
+    #[test]
+    fn plans_float_results_without_integer_return_registers() {
+        // Python cfront.raise_hir._Raise.ret leaves C floating results on the
+        // x87 stack, and backend.nativeframe.plan never assigns a result
+        // register.  The C frame is therefore identical for every supported
+        // floating result: only the already-selected ST0 value returns.
+        for convention in [
+            MachineCallingConvention::C,
+            MachineCallingConvention::FarCdecl,
+        ] {
+            for kind in [
+                MachineFloatKind::Binary32,
+                MachineFloatKind::Binary64,
+                MachineFloatKind::Extended80,
+            ] {
+                let mut input = function(convention, vec![], vec![local(7, 2)], false);
+                input.signature.result = Some(MachineValueType::Float { kind });
+                input.blocks[0].instructions[0].operands = match convention {
+                    MachineCallingConvention::C => {
+                        vec![physical(X86Register::St0, OperandRole::Use)]
+                    }
+                    MachineCallingConvention::FarCdecl => {
+                        vec![physical(X86Register::St0, OperandRole::Use), immediate(0)]
+                    }
+                    MachineCallingConvention::FarPascal => unreachable!(),
+                };
+
+                let plan = plan_c_frame(&input).unwrap();
+                let expanded = expand_allocated_c_abi(&input, &plan).unwrap();
+                let returned = expanded.blocks[0].instructions.last().unwrap();
+                assert_eq!(
+                    X86Opcode::from_machine_opcode(returned.opcode),
+                    Some(match convention {
+                        MachineCallingConvention::C => X86Opcode::ReturnNear,
+                        MachineCallingConvention::FarCdecl => X86Opcode::ReturnFar,
+                        MachineCallingConvention::FarPascal => unreachable!(),
+                    })
+                );
+                assert_eq!(
+                    returned.operands,
+                    if convention == MachineCallingConvention::C {
+                        vec![]
+                    } else {
+                        vec![immediate(0)]
+                    }
+                );
+            }
+        }
     }
 
     #[test]

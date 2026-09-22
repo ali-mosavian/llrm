@@ -154,7 +154,9 @@ impl DefUse {
 
 fn instruction_operands(kind: &InstructionKind) -> Vec<&Operand> {
     match kind {
-        InstructionKind::Phi { .. } | InstructionKind::StackAlloc { .. } => Vec::new(),
+        InstructionKind::Phi { .. }
+        | InstructionKind::StackAlloc { .. }
+        | InstructionKind::ParameterAddress { .. } => Vec::new(),
         InstructionKind::Unary { operand, .. }
         | InstructionKind::Cast { operand, .. }
         | InstructionKind::Load {

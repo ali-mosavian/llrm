@@ -984,9 +984,11 @@ mod tests {
         for start in [DATA_CHUNK_SIZE - 1, DATA_CHUNK_SIZE * 2 - 2] {
             assert!(!cuts.iter().any(|cut| start < *cut && *cut < start + 4));
         }
-        assert!(blocks
-            .iter()
-            .all(|block| block.bytes.len() <= DATA_CHUNK_SIZE));
+        assert!(
+            blocks
+                .iter()
+                .all(|block| block.bytes.len() <= DATA_CHUNK_SIZE)
+        );
     }
 
     #[test]
@@ -1003,10 +1005,12 @@ mod tests {
         ));
         assert_eq!(to_bytes(&object).unwrap(), to_bytes(&object).unwrap());
         let records = records(&object).unwrap();
-        assert!(records
-            .iter()
-            .filter(|record| record.record_type() == FIXUPP)
-            .all(|record| record.body().first().is_some_and(|lead| lead & 0x80 != 0)));
+        assert!(
+            records
+                .iter()
+                .filter(|record| record.record_type() == FIXUPP)
+                .all(|record| record.body().first().is_some_and(|lead| lead & 0x80 != 0))
+        );
     }
 
     #[test]

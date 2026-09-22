@@ -1,0 +1,109 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="700" viewBox="0 0 960 700" role="img">
+<title>Fixed-point Newton square-root convergence</title>
+<desc>Maximum correction distance and percentage already at the floor root for one to three Newton rounds.</desc>
+<style>
+svg{background:#ffffff;color:#17212b;font-family:ui-sans-serif,system-ui,-apple-system,sans-serif}
+.grid{stroke:#d8dee5;stroke-width:1}.frame{fill:none;stroke:#7c8793;stroke-width:1}
+.axis{fill:currentColor;font-size:12px}.title{fill:currentColor;font-size:20px;font-weight:650}
+.subtitle{fill:currentColor;font-size:14px;font-weight:600}.note{fill:currentColor;font-size:12px}
+.series{fill:none;stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round}.point{stroke:#fff;stroke-width:1.5}
+</style>
+<rect width="960" height="700" fill="#ffffff"/>
+<text class="title" x="24" y="34">Fixed-point Newton convergence</text>
+<text class="note" x="24" y="57">Unsigned 32-bit input · normalized Q8 seed · exact final rounding</text>
+<line x1="590" y1="48" x2="614" y2="48" stroke="#d1495b" stroke-width="3" stroke-linecap="round"/>
+<text class="axis" x="621" y="52">1 round</text>
+<line x1="702" y1="48" x2="726" y2="48" stroke="#00798c" stroke-width="3" stroke-linecap="round" stroke-dasharray="10 6"/>
+<text class="axis" x="733" y="52">2 round</text>
+<line x1="814" y1="48" x2="838" y2="48" stroke="#edae49" stroke-width="3" stroke-linecap="round" stroke-dasharray="2 5"/>
+<text class="axis" x="845" y="52">3 round</text>
+<text class="subtitle" x="88" y="85">Maximum decrement to floor root</text>
+<text class="axis" text-anchor="middle" transform="translate(22 207.0) rotate(-90)">log₁₀(raw units + 1)</text>
+<rect class="frame" x="88" y="112" width="840" height="190"/>
+<line class="grid" x1="88.00" y1="112" x2="88.00" y2="302"/>
+<text class="axis" text-anchor="middle" x="88.00" y="322">0</text>
+<line class="grid" x1="304.77" y1="112" x2="304.77" y2="302"/>
+<text class="axis" text-anchor="middle" x="304.77" y="322">8</text>
+<line class="grid" x1="521.55" y1="112" x2="521.55" y2="302"/>
+<text class="axis" text-anchor="middle" x="521.55" y="322">16</text>
+<line class="grid" x1="738.32" y1="112" x2="738.32" y2="302"/>
+<text class="axis" text-anchor="middle" x="738.32" y="322">24</text>
+<line class="grid" x1="928.00" y1="112" x2="928.00" y2="302"/>
+<text class="axis" text-anchor="middle" x="928.00" y="322">31</text>
+<text class="axis" text-anchor="middle" x="508.0" y="344">fraction bits</text>
+<text class="subtitle" x="88" y="387">Inputs already at floor root</text>
+<text class="axis" text-anchor="middle" transform="translate(22 509.0) rotate(-90)">percent of corpus</text>
+<rect class="frame" x="88" y="414" width="840" height="190"/>
+<line class="grid" x1="88.00" y1="414" x2="88.00" y2="604"/>
+<text class="axis" text-anchor="middle" x="88.00" y="624">0</text>
+<line class="grid" x1="304.77" y1="414" x2="304.77" y2="604"/>
+<text class="axis" text-anchor="middle" x="304.77" y="624">8</text>
+<line class="grid" x1="521.55" y1="414" x2="521.55" y2="604"/>
+<text class="axis" text-anchor="middle" x="521.55" y="624">16</text>
+<line class="grid" x1="738.32" y1="414" x2="738.32" y2="604"/>
+<text class="axis" text-anchor="middle" x="738.32" y="624">24</text>
+<line class="grid" x1="928.00" y1="414" x2="928.00" y2="604"/>
+<text class="axis" text-anchor="middle" x="928.00" y="624">31</text>
+<text class="axis" text-anchor="middle" x="508.0" y="646">fraction bits</text>
+<line class="grid" x1="88" y1="302.00" x2="928" y2="302.00"/>
+<text class="axis" text-anchor="end" x="79" y="306.00">0</text>
+<line class="grid" x1="88" y1="290.67" x2="928" y2="290.67"/>
+<text class="axis" text-anchor="end" x="79" y="294.67">1</text>
+<line class="grid" x1="88" y1="262.81" x2="928" y2="262.81"/>
+<text class="axis" text-anchor="end" x="79" y="266.81">10</text>
+<line class="grid" x1="88" y1="226.58" x2="928" y2="226.58"/>
+<text class="axis" text-anchor="end" x="79" y="230.58">100</text>
+<line class="grid" x1="88" y1="189.09" x2="928" y2="189.09"/>
+<text class="axis" text-anchor="end" x="79" y="193.09">1,000</text>
+<line class="grid" x1="88" y1="151.48" x2="928" y2="151.48"/>
+<text class="axis" text-anchor="end" x="79" y="155.48">10,000</text>
+<line class="grid" x1="88" y1="113.85" x2="928" y2="113.85"/>
+<text class="axis" text-anchor="end" x="79" y="117.85">100,000</text>
+<line class="grid" x1="88" y1="604.00" x2="928" y2="604.00"/>
+<text class="axis" text-anchor="end" x="79" y="608.00">0%</text>
+<line class="grid" x1="88" y1="556.50" x2="928" y2="556.50"/>
+<text class="axis" text-anchor="end" x="79" y="560.50">25%</text>
+<line class="grid" x1="88" y1="509.00" x2="928" y2="509.00"/>
+<text class="axis" text-anchor="end" x="79" y="513.00">50%</text>
+<line class="grid" x1="88" y1="461.50" x2="928" y2="461.50"/>
+<text class="axis" text-anchor="end" x="79" y="465.50">75%</text>
+<line class="grid" x1="88" y1="414.00" x2="928" y2="414.00"/>
+<text class="axis" text-anchor="end" x="79" y="418.00">100%</text>
+<polyline class="series" stroke="#d1495b" points="88.00,284.05 304.77,246.97 521.55,202.64 738.32,157.35 928.00,112.00"/>
+<polyline class="series" stroke="#d1495b" points="88.00,434.76 304.77,548.70 521.55,585.25 738.32,601.02 928.00,603.67"/>
+<circle class="point" fill="#d1495b" cx="88.00" cy="284.05" r="6"><title>1 round, F=0: max decrement 2</title></circle>
+<circle class="point" fill="#d1495b" cx="88.00" cy="434.76" r="6"><title>1 round, F=0: 89.071% already exact</title></circle>
+<circle class="point" fill="#d1495b" cx="304.77" cy="246.97" r="6"><title>1 round, F=8: max decrement 28</title></circle>
+<circle class="point" fill="#d1495b" cx="304.77" cy="548.70" r="6"><title>1 round, F=8: 29.106% already exact</title></circle>
+<circle class="point" fill="#d1495b" cx="521.55" cy="202.64" r="6"><title>1 round, F=16: max decrement 436</title></circle>
+<circle class="point" fill="#d1495b" cx="521.55" cy="585.25" r="6"><title>1 round, F=16: 9.869% already exact</title></circle>
+<circle class="point" fill="#d1495b" cx="738.32" cy="157.35" r="6"><title>1 round, F=24: max decrement 6,981</title></circle>
+<circle class="point" fill="#d1495b" cx="738.32" cy="601.02" r="6"><title>1 round, F=24: 1.568% already exact</title></circle>
+<circle class="point" fill="#d1495b" cx="928.00" cy="112.00" r="6"><title>1 round, F=31: max decrement 111,979</title></circle>
+<circle class="point" fill="#d1495b" cx="928.00" cy="603.67" r="6"><title>1 round, F=31: 0.172% already exact</title></circle>
+<polyline class="series" stroke="#00798c" stroke-dasharray="10 6" points="88.00,290.67 304.77,290.67 521.55,290.67 738.32,290.67 928.00,279.34"/>
+<polyline class="series" stroke="#00798c" stroke-dasharray="10 6" points="88.00,414.02 304.77,414.00 521.55,414.01 738.32,414.19 928.00,430.99"/>
+<circle class="point" fill="#00798c" cx="88.00" cy="290.67" r="4.5"><title>2 round, F=0: max decrement 1</title></circle>
+<circle class="point" fill="#00798c" cx="88.00" cy="414.02" r="4.5"><title>2 round, F=0: 99.988% already exact</title></circle>
+<circle class="point" fill="#00798c" cx="304.77" cy="290.67" r="4.5"><title>2 round, F=8: max decrement 1</title></circle>
+<circle class="point" fill="#00798c" cx="304.77" cy="414.00" r="4.5"><title>2 round, F=8: 99.999% already exact</title></circle>
+<circle class="point" fill="#00798c" cx="521.55" cy="290.67" r="4.5"><title>2 round, F=16: max decrement 1</title></circle>
+<circle class="point" fill="#00798c" cx="521.55" cy="414.01" r="4.5"><title>2 round, F=16: 99.995% already exact</title></circle>
+<circle class="point" fill="#00798c" cx="738.32" cy="290.67" r="4.5"><title>2 round, F=24: max decrement 1</title></circle>
+<circle class="point" fill="#00798c" cx="738.32" cy="414.19" r="4.5"><title>2 round, F=24: 99.900% already exact</title></circle>
+<circle class="point" fill="#00798c" cx="928.00" cy="279.34" r="4.5"><title>2 round, F=31: max decrement 3</title></circle>
+<circle class="point" fill="#00798c" cx="928.00" cy="430.99" r="4.5"><title>2 round, F=31: 91.056% already exact</title></circle>
+<polyline class="series" stroke="#edae49" stroke-dasharray="2 5" points="88.00,290.67 304.77,290.67 521.55,290.67 738.32,290.67 928.00,290.67"/>
+<polyline class="series" stroke="#edae49" stroke-dasharray="2 5" points="88.00,414.10 304.77,414.02 521.55,414.00 738.32,414.00 928.00,414.00"/>
+<circle class="point" fill="#edae49" cx="88.00" cy="290.67" r="3"><title>3 round, F=0: max decrement 1</title></circle>
+<circle class="point" fill="#edae49" cx="88.00" cy="414.10" r="3"><title>3 round, F=0: 99.949% already exact</title></circle>
+<circle class="point" fill="#edae49" cx="304.77" cy="290.67" r="3"><title>3 round, F=8: max decrement 1</title></circle>
+<circle class="point" fill="#edae49" cx="304.77" cy="414.02" r="3"><title>3 round, F=8: 99.990% already exact</title></circle>
+<circle class="point" fill="#edae49" cx="521.55" cy="290.67" r="3"><title>3 round, F=16: max decrement 1</title></circle>
+<circle class="point" fill="#edae49" cx="521.55" cy="414.00" r="3"><title>3 round, F=16: 100.000% already exact</title></circle>
+<circle class="point" fill="#edae49" cx="738.32" cy="290.67" r="3"><title>3 round, F=24: max decrement 1</title></circle>
+<circle class="point" fill="#edae49" cx="738.32" cy="414.00" r="3"><title>3 round, F=24: 100.000% already exact</title></circle>
+<circle class="point" fill="#edae49" cx="928.00" cy="290.67" r="3"><title>3 round, F=31: max decrement 1</title></circle>
+<circle class="point" fill="#edae49" cx="928.00" cy="414.00" r="3"><title>3 round, F=31: 100.000% already exact</title></circle>
+<text class="note" x="88" y="682">FSQRT mismatches against exact rounding: 0</text>
+</svg>

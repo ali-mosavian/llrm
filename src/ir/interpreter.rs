@@ -628,6 +628,7 @@ fn execute_instruction(
             }))
         }
         InstructionKind::StackAlloc { .. }
+        | InstructionKind::ParameterAddress { .. }
         | InstructionKind::Load { .. }
         | InstructionKind::Store { .. }
         | InstructionKind::GetElementPointer { .. }

@@ -273,6 +273,7 @@ impl<'module> Verifier<'module> {
             InstructionKind::Store { .. } => Some(0),
             InstructionKind::Phi { .. }
             | InstructionKind::StackAlloc { .. }
+            | InstructionKind::ParameterAddress { .. }
             | InstructionKind::Unary { .. }
             | InstructionKind::Binary { .. }
             | InstructionKind::Compare { .. }
@@ -364,6 +365,17 @@ impl<'module> Verifier<'module> {
                     self.error(format!(
                         "function {} instruction {} stack allocation alignment must be a nonzero power of two",
                         function.id, instruction.id
+                    ));
+                }
+            }
+            InstructionKind::ParameterAddress { parameter } => {
+                if usize::try_from(*parameter)
+                    .ok()
+                    .is_none_or(|index| index >= function.parameters.len())
+                {
+                    self.error(format!(
+                        "function {} instruction {} references missing parameter {}",
+                        function.id, instruction.id, parameter
                     ));
                 }
             }
@@ -866,15 +878,22 @@ mod tests {
             .map(|diagnostic| diagnostic.message.as_str())
             .collect::<Vec<_>>();
 
-        assert!(messages
-            .iter()
-            .any(|message| message.contains("has 0 results, expected 1")));
-        assert!(messages
-            .iter()
-            .any(|message| message.contains("compose pointer segment references unknown value 4")));
-        assert!(messages
-            .iter()
-            .any(|message| message.contains("compose pointer offset references unknown value 5")));
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("has 0 results, expected 1"))
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|message| message
+                    .contains("compose pointer segment references unknown value 4"))
+        );
+        assert!(
+            messages.iter().any(
+                |message| message.contains("compose pointer offset references unknown value 5")
+            )
+        );
     }
 
     #[test]
