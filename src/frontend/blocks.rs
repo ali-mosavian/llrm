@@ -1,6 +1,6 @@
 //! Port of `qbopt/frontend/blocks.py`.
 //!
-//! Ported so far: INLINE_TABLE.
+//! Ported so far: INLINE_TABLE, Ends, Block.
 
 use std::collections::BTreeSet;
 use std::sync::LazyLock;
@@ -22,3 +22,33 @@ use std::sync::LazyLock;
 // above 255 enter B$FrameFC instead. These are normal CFG successors only.
 pub static INLINE_TABLE: LazyLock<BTreeSet<&'static str>> =
     LazyLock::new(|| BTreeSet::from(["B$OGTA"]));
+
+/// How a block ends. Port of `qbopt/frontend/blocks.py:Ends`.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum Ends {
+    FallsThrough,
+    Conditional,
+    Jump,
+    Indirect,
+    Return,
+    Leaves,
+    Table,
+}
+
+/// Port of `qbopt/frontend/blocks.py:Block`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Block {
+    pub at: usize,
+    pub end: usize,
+    pub insns: Vec<crate::frontend::declen::Insn>,
+    pub ends: Ends,
+    pub succ: Vec<usize>,
+}
+
+impl Block {
+    /// Whether control goes somewhere this cannot see.
+    #[must_use]
+    pub fn leaves(&self) -> bool {
+        matches!(self.ends, Ends::Return | Ends::Leaves | Ends::Indirect) || self.succ.is_empty()
+    }
+}
