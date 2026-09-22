@@ -2933,3 +2933,216 @@ fn _fold(cg_op: &str, a: &BigInt, b: &BigInt, signed: bool) -> R<BigInt> {
         _ => return Err(Unsupported(format!("constant {cg_op}"))),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+    use std::path::Path;
+
+    use iced_x86::Register;
+
+    use super::{Shared, raised};
+    use crate::analysis::regions;
+    use crate::backend::lower_int64;
+    use crate::cfront::{hir, stream};
+    use crate::model::ir::Operation;
+    use crate::model::memory::MemoryKind;
+    use crate::model::mir::{self, Arg, Const, Held, Kind, MemRef, MirBlock, MirBody, Op, OpCode, Value};
+    use crate::objectfile::module::{Addr, Space};
+
+    fn fixture(path: &str) -> String {
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/c").join(path)).unwrap()
+    }
+
+    fn unit(text: &str) -> hir::Unit {
+        hir::unit(&stream::parse(text)).unwrap()
+    }
+
+    fn named<'a>(unit: &'a hir::Unit, name: &str) -> &'a hir::Proc {
+        unit.procs.iter().find(|one| unit.symbols[&one.symbol].name == name).unwrap()
+    }
+
+    fn body(unit: &hir::Unit, proc: &hir::Proc) -> MirBody {
+        raised(unit, proc, &mut Shared::default()).unwrap().body
+    }
+
+    fn ops(body: &MirBody) -> impl Iterator<Item = &Op> {
+        body.blocks.iter().flat_map(|block| &block.ops)
+    }
+
+    fn width(arg: &Arg) -> u32 {
+        match arg {
+            Arg::Held(one) => one.width,
+            Arg::Const(one) => one.width,
+            Arg::Symbol(one) => one.width,
+            other => panic!("no width: {other:?}"),
+        }
+    }
+
+    /// `ls_animate(&ls, 0.05f)` pushes the single's four bytes; CGFloat was refused.
+    #[test]
+    fn test_float_moves_as_its_bits() {
+        let unit = unit(&fixture("ls.cgs"));
+        let body = body(&unit, named(&unit, "ls_selftest"));
+        let pushed: Vec<&Arg> = ops(&body).filter(|op| op.kind == Kind::Arg).map(|op| &op.args[0]).collect();
+        assert!(pushed.contains(&&Arg::Const(Const::new(0x3D4C_CCCD, 4))));
+    }
+
+    /// MIR says what each operation computes; lowering picks the instruction.
+    /// The raise wrote `mov`, `lea` and `fistp` into every op it made, `call`
+    /// and `retf` as machine semantics, `add sp` naming SP, and ES and BX into
+    /// every far cell.
+    #[test]
+    fn test_raised_mir_names_no_instruction() {
+        for module in ["pal", "qglsurf", "choose", "ls"] {
+            let unit = unit(&fixture(&format!("{module}.cgs")));
+            for proc in &unit.procs {
+                for op in ops(&body(&unit, proc)) {
+                    assert_eq!(
+                        (op.op, op.name.as_str()),
+                        (Some(OpCode::Operation(Operation::Nothing)), ""),
+                        "{module} {op:?}"
+                    );
+                    for one in op.loads.iter().chain(&op.stores) {
+                        if let Some(addr) = one.addr.filter(|addr| addr.space == Space::Far) {
+                            assert_eq!((addr.base, addr.segment), (Register::None, Register::None), "{module} {one:?}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// `raw` ends in inline code and `return;`-less: its MIR returned nothing,
+    /// and DX:AX reached the caller only because nothing was emitted after.
+    #[test]
+    fn test_value_less_return_returns_what_the_code_left() {
+        let unit = unit(&fixture("inline.cgs"));
+        let body = body(&unit, named(&unit, "raw"));
+        let returned = ops(&body).find(|op| op.kind == Kind::Return).unwrap();
+        assert_eq!(returned.args.len(), 2);
+    }
+
+    /// euclid64's remainder lived in EBX:ECX by mutating `MirBody.origin`.
+    /// Int64 legalization's fixed helper result is a backend allocation hint
+    /// keyed by the new scalar variables; public MIR stays unchanged.
+    #[test]
+    fn test_int64_helper_result_placement_is_an_external_hint() {
+        let unit = unit(&fixture("mir/euclid64.cgs"));
+        let proc = unit.procs.iter().find(|one| unit.symbols[&one.symbol].object_name() == "_gcd64").unwrap();
+        let raised = raised(&unit, proc, &mut Shared::default()).unwrap();
+        let legalized =
+            lower_int64::expanded(&raised.body, Some(&raised.calls), Some(&raised.contracts), Some(&raised.hints))
+                .unwrap();
+
+        let added: Vec<(&u32, &Register)> = legalized
+            .hints
+            .origins
+            .iter()
+            .filter(|(variable, _)| !raised.hints.origins.contains_key(variable))
+            .collect();
+        let registers: BTreeSet<Register> = added.iter().map(|(_, register)| **register).collect();
+        assert_eq!(registers, BTreeSet::from([Register::EBX, Register::ECX]));
+        assert_eq!(added.len(), 2);
+    }
+
+    /// An index value with no register in the address read as element zero
+    /// alone, so a store to `sy[j]` did not reach `sy[2]`.
+    #[test]
+    fn test_indexed_cell_reaches_its_whole_symbol() {
+        let j = Value::new(1, 10);
+        let element = MemRef {
+            base: Some(j),
+            space: Some(Space::Segment),
+            base_width: 2,
+            ..MemRef::new(Some(Addr { index: 5, ..Addr::new(Space::Segment, 0) }), 2)
+        };
+        let fixed = MemRef {
+            space: Some(Space::Segment),
+            ..MemRef::new(Some(Addr { index: 5, ..Addr::new(Space::Segment, 4) }), 2)
+        };
+        assert!(regions::overlapping(&fixed, &element, None, None, None).unwrap());
+    }
+
+    /// verify asked only whether the defining block dominates, so the loop limit
+    /// read before its start, in the same block, passed as SSA.
+    #[test]
+    fn test_verify_reports_a_use_before_its_definition_in_one_block() {
+        let (start, limit) = (Value::new(1, 1), Value::new(2, 1));
+        let add = Op {
+            kind: Kind::Add,
+            args: vec![Arg::Held(Held { value: start, width: 2 }), Arg::Const(Const::new(100, 2))],
+            results: vec![Arg::Held(Held { value: limit, width: 2 })],
+            ..Op::new(1, OpCode::Operation(Operation::Nothing), "", vec![limit], vec![start])
+        };
+        let copy = Op {
+            kind: Kind::Copy,
+            args: vec![Arg::Const(Const::new(0, 2))],
+            results: vec![Arg::Held(Held { value: start, width: 2 })],
+            ..Op::new(1, OpCode::Operation(Operation::Nothing), "", vec![start], vec![])
+        };
+        let body = MirBody::new(1, vec![MirBlock::new(1, vec![], vec![add, copy], vec![])]);
+        assert!(mir::verify(&body).iter().any(|problem| problem.contains("before its definition")));
+    }
+
+    /// qcport's combat_brush_points stopped at `no scalar width for T51`
+    /// while compiling `*target = *center`.
+    #[test]
+    fn test_aggregate_copy_through_pointers_reaches_mir() {
+        let unit = unit(&fixture("tests/test_aggregate_copy_through_pointers_reaches_mir.cgs"));
+        let body = body(&unit, &unit.procs[0]);
+        let loads: u32 = ops(&body)
+            .filter(|op| op.kind == Kind::Load)
+            .flat_map(|op| &op.loads)
+            .filter(|one| one.width == 4)
+            .map(|one| one.width)
+            .sum();
+        let stores: u32 =
+            ops(&body).filter(|op| op.kind == Kind::Store).flat_map(|op| &op.stores).map(|one| one.width).sum();
+        assert_eq!(loads, 24);
+        assert_eq!(stores, 24);
+    }
+
+    /// qcport's combat_radius passes a BspVec3 by value; the frontend stopped
+    /// at `no scalar width for T51` instead of laying its 12 bytes on the stack.
+    #[test]
+    fn test_aggregate_argument_is_pushed_by_value() {
+        let unit = unit(&fixture("tests/test_aggregate_argument_is_pushed_by_value.cgs"));
+        let body = body(&unit, &unit.procs[0]);
+        let widths: Vec<u32> = ops(&body).filter(|op| op.kind == Kind::Arg).map(|op| width(&op.args[0])).collect();
+        assert_eq!(widths, [4, 4, 4]);
+    }
+
+    /// OW parsed restrict but discarded it before CG; the shim now records it.
+    #[test]
+    fn test_restrict_reaches_mir_as_distinct_noalias_roots() {
+        let text = fixture("tests/test_restrict_reaches_mir_as_distinct_noalias_roots.cgs");
+        assert_eq!(text.matches(" CGAttr ").count(), 3);
+
+        let unit = unit(&text);
+        let body = body(&unit, &unit.procs[0]);
+        let roots: BTreeSet<_> = ops(&body)
+            .flat_map(|op| op.loads.iter().chain(&op.stores))
+            .filter_map(|one| one.provenance.as_ref())
+            .filter_map(|provenance| provenance.restrict.iter().next())
+            .collect();
+        assert_eq!(roots.len(), 3);
+    }
+
+    /// A pointer returned by malloc is an allocation-site object, not an unknown pointer.
+    #[test]
+    fn test_standard_allocator_return_has_fresh_object_identity() {
+        let unit = unit(&fixture("tests/test_standard_allocator_return_has_fresh_object_identity.cgs"));
+        let body = body(&unit, &unit.procs[0]);
+        let allocations: BTreeSet<_> = body
+            .pointer_seeds
+            .values()
+            .flat_map(|provenance| &provenance.slices)
+            .map(|slice| &slice.object)
+            .filter(|object| object.kind == MemoryKind::Allocation)
+            .collect();
+
+        assert_eq!(allocations.len(), 1);
+        assert_eq!(allocations.first().unwrap().extent, Some(8));
+    }
+}

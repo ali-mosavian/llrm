@@ -1,0 +1,31 @@
+INIT sw=0x808000 target=0xec size=50 rev=0x23
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=2
+SEG 3 attr=0xc name="CONST2" align=2
+SEG 4 attr=0x6 name="_DATA" align=2
+START
+f1 DBSrcFile "/private/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/tmpy63yw2dv/unit.c"
+- DBSrcCue f1 2 1
+SYM y1 name="make" base="make" pattern="_*" attr=0x7 seg=1
+CALLCONV y1 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y1 TY_POINTER
+l2 CGLastParm
+t3 CGTemp TY_POINTER
+SYM y2 name="malloc" base="malloc" pattern="_*" attr=0xf seg=1
+CALLCONV y2 class=0x80 target=0x716 parms=[] ret=0:0
+n4 CGFEName y2 TY_CODE_PTR
+c5 CGInitCall n4 TY_POINTER y2
+n6 CGInteger 8 TY_UNSIGNED
+- CGAddParm c5 n6 TY_UNSIGNED
+n7 CGCall c5
+n8 CGUnary O_POINTS n7 TY_POINTER
+n9 CGUnary O_CONVERT n8 TY_POINTER
+n10 CGUnary O_CONVERT n9 TY_POINTER
+n11 CGTempName t3 TY_POINTER
+n12 CGAssign n11 n10 TY_POINTER
+- CGDone n12
+n13 CGTempName t3 TY_POINTER
+n14 CGUnary O_POINTS n13 TY_POINTER
+- CGReturn n14 TY_POINTER
+STOP
+FINI
