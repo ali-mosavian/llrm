@@ -489,6 +489,613 @@ pub(crate) fn _kept(op: &crate::model::mir::Op) -> bool {
 // ==== END C2 ====
 
 // ==== BEGIN F: transform.py 2870-3297 (primary) ====
+// Every transform, as the one thing a transform is. The functions above stay
+// because they are what each class does and are what the tests name; what
+// changes is that the pipeline can only reach them through `transform`.
+pub(crate) struct Fold {
+    pub r#where: crate::model::passes::Where,
+}
+
+impl crate::model::passes::MIRTransform for Fold {
+    fn class_name(&self) -> &'static str {
+        "Fold"
+    }
+
+    fn name(&self) -> &str {
+        "fold"
+    }
+
+    fn transform(&mut self, body: MirBody) -> Result<MirBody, String> {
+        folded(&body, &self.r#where.dgroup, &self.r#where.named())
+    }
+}
+
+pub(crate) struct Decide {
+    pub r#where: crate::model::passes::Where,
+}
+
+impl crate::model::passes::MIRTransform for Decide {
+    fn class_name(&self) -> &'static str {
+        "Decide"
+    }
+
+    fn name(&self) -> &str {
+        "decide"
+    }
+
+    fn transform(&mut self, body: MirBody) -> Result<MirBody, String> {
+        crate::optimize::cfg::merged(&decided(&body, &self.r#where.dgroup, &self.r#where.named())?)
+            .map_err(|error| error.to_string())
+    }
+}
+
+pub(crate) struct Dead;
+
+impl crate::model::passes::MIRTransform for Dead {
+    fn class_name(&self) -> &'static str {
+        "Dead"
+    }
+
+    fn name(&self) -> &str {
+        "dead"
+    }
+
+    fn transform(&mut self, body: MirBody) -> Result<MirBody, String> {
+        dead(&body)
+    }
+}
+
+/// Specialize a proven strict-FP recurrence before LICM changes its shape.
+pub(crate) struct FloatLoop {
+    pub r#where: crate::model::passes::Where,
+}
+
+impl crate::model::passes::MIRTransform for FloatLoop {
+    fn class_name(&self) -> &'static str {
+        "FloatLoop"
+    }
+
+    fn name(&self) -> &str {
+        "floatloop"
+    }
+
+    fn transform(&mut self, body: MirBody) -> Result<MirBody, String> {
+        crate::optimize::floatloop::specialized(&body, &self.r#where.dgroup, &self.r#where.named())
+    }
+}
+
+pub(crate) struct Hoist {
+    pub r#where: crate::model::passes::Where,
+}
+
+impl crate::model::passes::MIRTransform for Hoist {
+    fn class_name(&self) -> &'static str {
+        "Hoist"
+    }
+
+    fn name(&self) -> &str {
+        "hoist"
+    }
+
+    fn transform(&mut self, body: MirBody) -> Result<MirBody, String> {
+        let body = hoisted(&body, &self.r#where.dgroup, &self.r#where.named(), self.r#where.bounds.as_ref())?;
+        crate::optimize::loopmotion::sunk_stores(
+            &body,
+            &self.r#where.dgroup,
+            self.r#where.bounds.as_ref(),
+            _handles_errors(&self.r#where),
+        )
+    }
+}
+
+pub(crate) struct DropStores {
+    pub r#where: crate::model::passes::Where,
+}
+
+impl crate::model::passes::MIRTransform for DropStores {
+    fn class_name(&self) -> &'static str {
+        "DropStores"
+    }
+
+    fn name(&self) -> &str {
+        "drop_stores"
+    }
+
+    fn transform(&mut self, body: MirBody) -> Result<MirBody, String> {
+        let private =
+            crate::analysis::observers::private(&body, self.r#where.found.as_ref(), self.r#where.blocks.as_ref())?;
+        without_dead_stores(
+            &body,
+            &self.r#where.dgroup,
+            &self.r#where.named(),
+            private.as_deref(),
+            self.r#where.bounds.as_ref(),
+            _handles_errors(&self.r#where),
+        )
+    }
+}
+
+pub(crate) fn _handles_errors(r#where: &crate::model::passes::Where) -> bool {
+    use crate::abi::runtime;
+
+    let contracts = r#where.named().values().map(|name| runtime::contract(Some(name))).collect::<Vec<_>>();
+    runtime::handles_errors(&contracts)
+}
+
+/// The single value-reuse pass: scalar GVN and memory-aware PRE.
+pub(crate) struct Gvn {
+    pub r#where: crate::model::passes::Where,
+}
+
+impl crate::model::passes::MIRTransform for Gvn {
+    fn class_name(&self) -> &'static str {
+        "Gvn"
+    }
+
+    fn name(&self) -> &str {
+        "gvn"
+    }
+
+    fn transform(&mut self, body: MirBody) -> Result<MirBody, String> {
+        crate::optimize::gvn::optimized(&body, &self.r#where)
+    }
+}
+
+pub(crate) struct Place {
+    pub r#where: crate::model::passes::Where,
+}
+
+impl crate::model::passes::MIRTransform for Place {
+    fn class_name(&self) -> &'static str {
+        "Place"
+    }
+
+    fn name(&self) -> &str {
+        "place"
+    }
+
+    fn transform(&mut self, body: MirBody) -> Result<MirBody, String> {
+        placed(&body, &self.r#where.dgroup, &self.r#where.named())
+    }
+}
+
+pub(crate) struct Algebraic;
+
+impl crate::model::passes::MIRTransform for Algebraic {
+    fn class_name(&self) -> &'static str {
+        "Algebraic"
+    }
+
+    fn name(&self) -> &str {
+        "algebraic"
+    }
+
+    fn transform(&mut self, body: MirBody) -> Result<MirBody, String> {
+        let demanded = halves(&body);
+        crate::optimize::algebraic::simplified(
+            &body,
+            &demanded.iter().map(|(value, _)| *value).collect(),
+            &demanded.iter().filter(|(_, part)| *part == HIGH).map(|(value, _)| *value).collect(),
+        )
+    }
+}
+
+/// Expose packed far addresses as independently allocatable MIR values.
+pub(crate) struct SplitPointers;
+
+impl crate::model::passes::MIRTransform for SplitPointers {
+    fn class_name(&self) -> &'static str {
+        "SplitPointers"
+    }
+
+    fn name(&self) -> &str {
+        "split_pointers"
+    }
+
+    fn transform(&mut self, body: MirBody) -> Result<MirBody, String> {
+        Ok(crate::optimize::pointeraccess::split(body))
+    }
+}
+
+/// Canonicalize indirect objects from current SSA pointer facts.
+pub(crate) struct PointerProvenance;
+
+impl crate::model::passes::MIRTransform for PointerProvenance {
+    fn class_name(&self) -> &'static str {
+        "PointerProvenance"
+    }
+
+    fn name(&self) -> &str {
+        "provenance"
+    }
+
+    fn transform(&mut self, body: MirBody) -> Result<MirBody, String> {
+        crate::analysis::alias::annotated(&body)
+    }
+}
+
+/// The passes, in order, that `wanted` leaves on.
+///
+/// A pass that is off is not in it, rather than in it and skipped, so what
+/// runs is what this returns.
+pub(crate) fn pipeline(
+    r#where: &crate::model::passes::Where,
+    wanted: &IndexMap<&str, bool>,
+) -> Vec<Box<dyn crate::model::passes::MIRTransform>> {
+    use crate::optimize::{fill, lcssa, loopsimplify, peel, promote, strength, unroll};
+
+    let every: Vec<Box<dyn crate::model::passes::MIRTransform>> = vec![
+        // Pointer identity is a solved program fact: resolve it before a
+        // packed pointer becomes independent offset and selector values.
+        Box::new(PointerProvenance),
+        Box::new(SplitPointers),
+        // Aggregate/object leaves become ordinary SSA before any scalar or
+        // CFG pass asks what is constant, redundant, or loop invariant.
+        Box::new(promote::Sroa::new(r#where.clone())),
+        Box::new(Fold { r#where: r#where.clone() }),
+        Box::new(Decide { r#where: r#where.clone() }),
+        Box::new(loopsimplify::LoopSimplify),
+        Box::new(lcssa::LoopClosedSSA),
+        // Strict floating recurrences must retain their original iteration
+        // order; LICM may move invariant x87 preparation out afterwards.
+        Box::new(FloatLoop { r#where: r#where.clone() }),
+        Box::new(Hoist { r#where: r#where.clone() }),
+        Box::new(DropStores { r#where: r#where.clone() }),
+        Box::new(Gvn { r#where: r#where.clone() }),
+        // Ordinary scalar write-through promotion remains after memory GVN.
+        Box::new(promote::Promote::new(r#where.clone())),
+        Box::new(strength::Strength::new(r#where.clone())),
+        Box::new(Algebraic),
+        Box::new(Dead),
+        Box::new(Place { r#where: r#where.clone() }),
+        Box::new(unroll::Unroll::new(r#where.clone())),
+        Box::new(peel::Peel::new(r#where.clone())),
+        Box::new(fill::Fill),
+    ];
+    every.into_iter().filter(|one| wanted.get(one.name()).copied().unwrap_or(true)).collect()
+}
+
+// The order, from the pipeline itself rather than beside it.
+pub(crate) static PASSES: std::sync::LazyLock<Vec<String>> = std::sync::LazyLock::new(|| {
+    pipeline(&crate::model::passes::Where::default(), &IndexMap::new())
+        .iter()
+        .map(|one| one.name().to_owned())
+        .collect()
+});
+// What runs with no caller asking otherwise: a pass may exist, be correct,
+// and be off because it costs.
+#[allow(dead_code)]
+pub(crate) static PASSES_ON: std::sync::LazyLock<Vec<String>> =
+    std::sync::LazyLock::new(|| PASSES.iter().filter(|one| *one != "strength").cloned().collect());
+
+/// `applied`'s keyword arguments, with Python's defaults.
+pub(crate) struct Applied<'a> {
+    pub blocks: Option<Vec<std::sync::Arc<dyn std::any::Any + Send + Sync>>>,
+    pub found: Option<std::sync::Arc<dyn std::any::Any + Send + Sync>>,
+    pub fold: bool,
+    pub lcssa_: bool,
+    pub decide: bool,
+    pub dead: bool,
+    pub hoist: bool,
+    pub forward: bool,
+    pub drop_loads: bool,
+    pub drop_stores: bool,
+    pub promote_: bool,
+    pub strength_: bool,
+    pub floatloop_: bool,
+    pub unroll_: bool,
+    pub peel_: bool,
+    pub fill_: bool,
+    pub unswitch_: bool,
+    pub only: Option<String>,
+    pub registers: Option<i64>,
+    pub call_registers: i64,
+    pub index_scales: Option<BTreeSet<i64>>,
+    pub address_forms: Option<Vec<crate::model::passes::AddressForm>>,
+    pub costs: Option<crate::model::passes::OperationCosts>,
+    pub max_unroll_iterations: i64,
+    pub max_unrolled_operations: i64,
+    pub watch: Option<&'a mut dyn FnMut(&str, &MirBody)>,
+}
+
+impl Default for Applied<'_> {
+    fn default() -> Self {
+        Self {
+            blocks: None,
+            found: None,
+            fold: true,
+            lcssa_: true,
+            decide: true,
+            dead: true,
+            hoist: true,
+            forward: true,
+            drop_loads: true,
+            drop_stores: true,
+            promote_: true,
+            strength_: true,
+            floatloop_: true,
+            unroll_: true,
+            peel_: true,
+            fill_: true,
+            unswitch_: false,
+            only: None,
+            registers: None,
+            call_registers: 0,
+            index_scales: None,
+            address_forms: None,
+            costs: None,
+            max_unroll_iterations: crate::model::passes::DEFAULT_MAX_UNROLL_ITERATIONS,
+            max_unrolled_operations: crate::model::passes::DEFAULT_MAX_UNROLLED_OPERATIONS,
+            watch: None,
+        }
+    }
+}
+
+/// Every transform this module has, or the one `only` names.
+pub(crate) fn applied(
+    body: &MirBody,
+    dgroup: &BTreeSet<i64>,
+    calls: &IndexMap<i64, String>,
+    options: Applied<'_>,
+) -> Result<MirBody, String> {
+    crate::analysis::consts::reusing(|| _reusing_halves(|| _applied(body, dgroup, calls, options)))
+}
+
+/// The closure state `applied`'s nested `scalarized`, `fixed` and
+/// `structural_candidate` share; they recurse through unroll and peel.
+struct _Transaction<'w, 'a> {
+    r#where: &'w crate::model::passes::Where,
+    boundary: std::cell::RefCell<Vec<Box<dyn crate::model::passes::MIRTransform>>>,
+    passes: std::cell::RefCell<Vec<Box<dyn crate::model::passes::MIRTransform>>>,
+    unrollers: std::cell::RefCell<Vec<Box<dyn crate::model::passes::MIRTransform>>>,
+    only: bool,
+    watch: std::cell::RefCell<Option<&'a mut dyn FnMut(&str, &MirBody)>>,
+}
+
+impl _Transaction<'_, '_> {
+    fn watching(&self) -> bool {
+        self.watch.borrow().is_some()
+    }
+
+    fn watch(&self, stage: &str, state: &MirBody) {
+        if let Some(watch) = self.watch.borrow_mut().as_mut() {
+            watch(stage, state);
+        }
+    }
+
+    fn scalarized(&self, state: MirBody, stage: &str) -> Result<MirBody, String> {
+        let mut state = state;
+        let mut boundary = self.boundary.borrow_mut();
+        for one in boundary.iter_mut() {
+            state = one.transform(state)?;
+            self.watch(&format!("{stage}-{}", one.name()), &state);
+        }
+        Ok(state)
+    }
+
+    fn fixed(&self, state: MirBody, consider_unroll: bool, prefix: &str) -> Result<MirBody, String> {
+        // A monotone chain may expose one simplification per operation.
+        // Scale with the body and separately reject a repeated state, so an
+        // oscillator fails immediately instead of consuming that allowance.
+        let size = state.blocks.iter().map(|block| 1 + block.phis.len() + block.ops.len()).sum::<usize>();
+        let limit = std::cmp::max(16, size + 1);
+        let mut state = state;
+        let mut history = vec![state.clone()];
+        for iteration in 0..limit {
+            let before = state.clone();
+            {
+                let mut passes = self.passes.borrow_mut();
+                for one in passes.iter_mut() {
+                    state = one.transform(state)?;
+                    self.watch(&format!("{prefix}r{:02}-{}", iteration + 1, one.name()), &state);
+                }
+            }
+            // Ask at the original pipeline boundary; accepting the candidate
+            // still requires a separately converged result.
+            if consider_unroll && !self.unrollers.borrow().is_empty() {
+                let stage = format!("{prefix}candidate-unroll");
+                let inner = format!("{prefix}candidate-unroll-");
+                let mut optimize = |candidate: MirBody| self.structural_candidate(candidate, &stage, &inner, false);
+                let mut watch = |stage: &str, candidate: &MirBody| self.watch(&format!("{prefix}{stage}"), candidate);
+                let watching = self.watching();
+                state = crate::optimize::unroll::optimized(
+                    &state,
+                    self.r#where,
+                    &mut optimize,
+                    if watching { Some(&mut watch) } else { None },
+                )?;
+            }
+            if self.only || state == before {
+                // A structural candidate can make its last cloned region
+                // unreachable on the same round that reaches the scalar fixed
+                // point, so normalize the public boundary itself.
+                return Ok(_unreachable(&state));
+            }
+            if history.iter().any(|previous| state == *previous) {
+                return Err(format!("MIR optimization did not converge: cycle after {} rounds", iteration + 1));
+            }
+            history.push(state.clone());
+        }
+        Err(format!("MIR optimization did not converge after {limit} size-scaled rounds"))
+    }
+
+    /// Normalize addresses and newly exact leaves before pricing a CFG clone.
+    fn structural_candidate(
+        &self,
+        candidate: MirBody,
+        stage: &str,
+        prefix: &str,
+        consider_unroll: bool,
+    ) -> Result<MirBody, String> {
+        let state = self.fixed(self.scalarized(candidate, stage)?, consider_unroll, prefix)?;
+        let scalar = self.scalarized(state.clone(), &format!("{stage}-settled"))?;
+        if scalar == state {
+            return Ok(state);
+        }
+        // The unscalarized side already pays for each explicit aggregate
+        // load/store; once SROA removes those homes, every retained SSA leaf
+        // has to fit the finite register file or be recreated in a spill slot.
+        let before = crate::optimize::profit::weighted(&state, &self.r#where.costs, None);
+        let settled = self.fixed(scalar, false, &format!("{prefix}settled-"))?;
+        let after = crate::optimize::profit::pressure_adjusted(&settled, &self.r#where.costs, self.r#where.registers, None);
+        if let (Some(before), Some(after)) = (before, after) {
+            if after > before {
+                self.watch(&format!("{stage}-settled-rejected-pressure"), &settled);
+                return Ok(state);
+            }
+        }
+        Ok(settled)
+    }
+}
+
+fn _applied(
+    body: &MirBody,
+    dgroup: &BTreeSet<i64>,
+    calls: &IndexMap<i64, String>,
+    options: Applied<'_>,
+) -> Result<MirBody, String> {
+    let Applied {
+        blocks,
+        found,
+        fold,
+        lcssa_,
+        decide,
+        dead,
+        hoist,
+        forward,
+        drop_loads,
+        drop_stores,
+        promote_,
+        strength_,
+        floatloop_,
+        unroll_,
+        peel_,
+        fill_,
+        unswitch_,
+        only,
+        registers,
+        call_registers,
+        index_scales,
+        address_forms,
+        costs,
+        max_unroll_iterations,
+        max_unrolled_operations,
+        watch,
+    } = options;
+    // Every pass can be turned off, which is how a miscompile is bisected.
+    let wanted = IndexMap::from([
+        ("lcssa", lcssa_),
+        ("floatloop", floatloop_),
+        ("fold", fold),
+        ("decide", decide),
+        ("dead", dead),
+        ("hoist", hoist),
+        ("gvn", forward && drop_loads),
+        ("drop_stores", drop_stores),
+        ("sroa", promote_),
+        ("promote", promote_),
+        ("strength", strength_),
+        ("unroll", unroll_),
+        ("peel", peel_),
+        ("fill", fill_),
+    ]);
+    if found.is_some() {
+        return Err("not yet ported: qbopt.objectfile.module.landmarks".to_owned());
+    }
+    let r#where = crate::model::passes::Where {
+        dgroup: dgroup.clone(),
+        calls: Some(calls.clone()),
+        bounds: None,
+        blocks,
+        found,
+        registers: registers.unwrap_or(mir::TRACKED.len() as i64),
+        call_registers,
+        // Existing direct MIR callers retain native medium-model addressing.
+        index_scales: index_scales.unwrap_or_else(|| BTreeSet::from([1])),
+        address_forms: address_forms.unwrap_or_default(),
+        costs: costs.unwrap_or_default(),
+        max_unroll_iterations,
+        max_unrolled_operations,
+    };
+    // Public debugging selectors from before value reuse became one pass.
+    let only = match only.as_deref() {
+        Some("forward" | "drop_loads" | "reuse" | "cse") => Some("gvn".to_owned()),
+        _ => only,
+    };
+    let passes = pipeline(&r#where, &wanted)
+        .into_iter()
+        .filter(|one| only.as_deref().is_none_or(|only| one.name() == only))
+        .collect::<Vec<_>>();
+    // Pointer decomposition and SROA establish the scalar memory shape at
+    // structural boundaries; they are not members of the scalar fixed point.
+    let structural = ["PointerProvenance", "SplitPointers", "Sroa"];
+    let (boundary, passes): (Vec<_>, Vec<_>) =
+        passes.into_iter().partition(|one| structural.contains(&one.class_name()));
+    let (mut unrollers, passes): (Vec<_>, Vec<_>) =
+        passes.into_iter().partition(|one| one.class_name() == "Unroll");
+    let (mut peelers, passes): (Vec<_>, Vec<_>) = passes.into_iter().partition(|one| one.class_name() == "Peel");
+
+    let has_unrollers = !unrollers.is_empty();
+    let has_boundary = !boundary.is_empty();
+    let transaction = _Transaction {
+        r#where: &r#where,
+        boundary: std::cell::RefCell::new(boundary),
+        passes: std::cell::RefCell::new(passes),
+        unrollers: std::cell::RefCell::new(Vec::new()),
+        only: only.is_some(),
+        watch: std::cell::RefCell::new(watch),
+    };
+
+    let mut body = transaction.scalarized(body.clone(), "r01")?;
+    if only.is_some() && has_boundary {
+        return Ok(_unreachable(&body));
+    }
+    if only.is_some() && has_unrollers {
+        body = unrollers[0].transform(body)?;
+        transaction.watch("r01-unroll", &body);
+        return Ok(_unreachable(&body));
+    }
+    if only.is_some() && !peelers.is_empty() {
+        body = peelers[0].transform(body)?;
+        transaction.watch("r01-peel", &body);
+        return Ok(_unreachable(&body));
+    }
+    *transaction.unrollers.borrow_mut() = std::mem::take(&mut unrollers);
+
+    body = transaction.fixed(body, has_unrollers, "")?;
+    if !peelers.is_empty() {
+        let mut optimize =
+            |candidate: MirBody| transaction.structural_candidate(candidate, "candidate-peel", "candidate-peel-", has_unrollers);
+        let mut watch = |stage: &str, candidate: &MirBody| transaction.watch(stage, candidate);
+        let watching = transaction.watching();
+        body = crate::optimize::peel::optimized(
+            &body,
+            &r#where,
+            &mut optimize,
+            if watching { Some(&mut watch) } else { None },
+        )?;
+    }
+    if unswitch_ {
+        let mut watch = |stage: &str, candidate: &MirBody| transaction.watch(stage, candidate);
+        let watching = transaction.watching();
+        body = crate::optimize::unswitch::optimized(
+            &body,
+            dgroup,
+            calls,
+            crate::optimize::unswitch::Optimized {
+                registers: Some(r#where.registers),
+                call_registers: r#where.call_registers,
+                index_scales: Some(r#where.index_scales.clone()),
+                address_forms: Some(r#where.address_forms.clone()),
+                costs: Some(r#where.costs.clone()),
+                max_unroll_iterations: r#where.max_unroll_iterations,
+                max_unrolled_operations: r#where.max_unrolled_operations,
+                watch: if watching { Some(&mut watch) } else { None },
+            },
+        )?;
+    }
+    Ok(_unreachable(&body))
+}
 // ==== END F ====
 
 #[cfg(test)]
