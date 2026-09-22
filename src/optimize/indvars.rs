@@ -19,7 +19,7 @@ use crate::analysis::{liveness, loops};
 use crate::model::mir::{self, Arg, Const, Held, Kind, MemRef, MirBlock, MirBody, Op, OrderedMap, Phi, Value};
 use crate::model::passes::OperationCosts;
 
-use super::{loopexit, rotate, strength, transform};
+use super::{counting, loopexit, rotate, strength, transform};
 
 /// Reuse an exact inner recurrence instead of reloading its saved start.
 ///
@@ -742,55 +742,46 @@ pub(crate) fn symbolically_zeroed(body: &MirBody) -> Result<MirBody, Substitutio
 
             let compare = &body.blocks[proof.compare.block_index()].ops[proof.compare.operation_index()];
             let ending = body.blocks[blocks[&proof.preheader]].ops.last().unwrap_or(compare);
-            let mut builder = rotate::Seeds {
+            let mut builder = counting::Seeds {
                 serial: values.iter().map(|value| value.id).max().unwrap_or(0) + 1,
                 variable: values.iter().map(|value| value.variable).max().unwrap_or(0) + 1,
                 at: ending.at,
                 width,
                 ops: Vec::new(),
+                facts: &facts,
             };
 
-            let count = induction::trips(proof, &mut |kind, args| builder.computed(kind, args)).as_arg();
-            let distance = if *step == BigInt::from(1_u8) {
-                count.clone()
-            } else {
-                Arg::Held(builder.computed(
-                    Kind::Mul,
-                    vec![count.clone(), Arg::Const(Const::new(consts::masked(step, width), width))],
-                ))
-            };
-            let source = Arg::Held(Held { value: initial, width });
-            let final_ = if induction::_signed(&source, &facts, width) == Some(BigInt::from(0_u8)) {
-                distance.clone()
-            } else {
-                Arg::Held(builder.computed(Kind::Add, vec![source, distance.clone()]))
-            };
+            let count = induction::trips(proof, &mut |kind, args| builder.computed(kind, args));
+            let distance = builder.computed(
+                Kind::Mul,
+                vec![count.as_arg(), Arg::Const(Const::new(consts::masked(step, width), width))],
+            );
+            let final_ = builder.computed(Kind::Add, vec![Arg::Held(Held { value: initial, width }), distance.as_arg()]);
             let mut rebased = BTreeMap::<(usize, usize), Op>::new();
             for (at, position, multiplier, _address, _extra) in &offsets {
                 let position = position.expect("offsets were checked for a position");
                 let op = operation(*at);
                 let base = op.args[position].clone();
-                let delta = if *multiplier == BigInt::from(1_u8) {
-                    final_.clone()
-                } else {
-                    Arg::Held(builder.computed(
-                        Kind::Mul,
-                        vec![final_.clone(), Arg::Const(Const::new(consts::masked(multiplier, width), width))],
-                    ))
-                };
-                let adjusted = builder.computed(Kind::Add, vec![base.clone(), delta]);
+                let delta = builder.computed(
+                    Kind::Mul,
+                    vec![final_.as_arg(), Arg::Const(Const::new(consts::masked(multiplier, width), width))],
+                );
+                let adjusted = builder.computed(Kind::Add, vec![base.clone(), delta.as_arg()]);
                 let args = op
                     .args
                     .iter()
                     .enumerate()
-                    .map(|(index, arg)| if index == position { Arg::Held(adjusted) } else { arg.clone() })
+                    .map(|(index, arg)| if index == position { adjusted.as_arg() } else { arg.clone() })
                     .collect();
                 assert!(matches!(base, Arg::Held(_) | Arg::Const(_)));
                 let uses = op
                     .uses
                     .iter()
                     .map(|value| match &base {
-                        Arg::Held(base) if *value == base.value => adjusted.value,
+                        Arg::Held(base) if *value == base.value => match &adjusted {
+                            AffineOperand::Held(adjusted) => adjusted.value,
+                            AffineOperand::Const(_) => panic!("AttributeError: 'Const' object has no attribute 'value'"),
+                        },
                         _ => *value,
                     })
                     .collect();
@@ -802,7 +793,9 @@ pub(crate) fn symbolically_zeroed(body: &MirBody) -> Result<MirBody, Substitutio
                 rebased.insert(*at, replacement);
             }
 
-            let begun = builder.computed(Kind::Sub, vec![Arg::Const(Const::new(0, width)), distance]);
+            let computed = builder.computed(Kind::Sub, vec![Arg::Const(Const::new(0, width)), distance.as_arg()]);
+            let begun = builder.held(computed);
+            let exits = counting::leaving(body, control, &mut builder);
             let step_flags =
                 Value { id: builder.serial, at: stepping.at, flags: true, variable: builder.variable, version: 1 };
             let guard_flags =
@@ -814,10 +807,12 @@ pub(crate) fn symbolically_zeroed(body: &MirBody) -> Result<MirBody, Substitutio
             decrement.source_backed = false;
             decrement.raised = None;
             decrement.symbol = Some(false);
-            let (guard_compare, guard_branch) = rotate::skip_guard(body, proof, ending.at, guard_flags);
+            let (guard_compare, guard_branch) = counting::skip_guard(body, proof, ending.at, guard_flags);
             let proof_phi = &body.blocks[proof.phi.block_index()].phis[proof.phi.phi_index()];
-            let private = [initial, *proof_phi.incoming.get(&proof.preheader).expect("a preheader input")]
+            let preheader_input = *proof_phi.incoming.get(&proof.preheader).expect("a preheader input");
+            let private = [Some(initial), exits.is_empty().then_some(preheader_input)]
                 .into_iter()
+                .flatten()
                 .filter_map(|value| {
                     let definition = made.get(&value).copied()?;
                     (!body.blocks.iter().flat_map(|block| &block.ops).any(|op| op.uses.contains(&value))
@@ -882,12 +877,19 @@ pub(crate) fn symbolically_zeroed(body: &MirBody) -> Result<MirBody, Substitutio
                     let cut = ops.len() - usize::from(ops.last().is_some_and(|op| op.kind == Kind::Jump));
                     ops.insert(cut, decrement.clone());
                 }
+                let exit_phi = |phi_index: usize, other: &Phi| {
+                    exits
+                        .iter()
+                        .find(|(at, _)| at.block_index() == block_index && at.phi_index() == phi_index)
+                        .map_or_else(|| other.clone(), |(_, exit)| exit.clone())
+                };
                 let phis = if block.at == loop_.header {
                     block
                         .phis
                         .iter()
-                        .filter(|other| !std::ptr::eq(*other, proof_phi))
-                        .map(|other| {
+                        .enumerate()
+                        .filter(|(_, other)| !std::ptr::eq(*other, proof_phi))
+                        .map(|(phi_index, other)| {
                             if std::ptr::eq(other, phi) {
                                 Phi {
                                     result: other.result,
@@ -897,12 +899,12 @@ pub(crate) fn symbolically_zeroed(body: &MirBody) -> Result<MirBody, Substitutio
                                     ]),
                                 }
                             } else {
-                                other.clone()
+                                exit_phi(phi_index, other)
                             }
                         })
                         .collect()
                 } else {
-                    block.phis.clone()
+                    block.phis.iter().enumerate().map(|(phi_index, other)| exit_phi(phi_index, other)).collect()
                 };
                 rewritten.push(MirBlock { at: block.at, phis, ops, succ: block.succ.clone(), cold: block.cold });
             }

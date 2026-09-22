@@ -17,65 +17,8 @@ use crate::model::mir::{
     self, Arg, Const, Held, Kind, MirBlock, MirBody, Op, OpCode, OrderedMap, Phi, Value,
 };
 
+use super::counting::{self, Seeds};
 use super::{cfg, transform};
-
-/// Loop-preheader values, constructed after the symbolic proof is complete.
-pub(crate) struct Seeds {
-    pub serial: u32,
-    pub variable: u32,
-    pub at: i64,
-    pub width: u32,
-    pub ops: Vec<Op>,
-}
-
-impl Seeds {
-    pub(crate) fn computed(&mut self, kind: Kind, args: Vec<Arg>) -> Held {
-        let value = Value { id: self.serial, at: self.at, flags: false, variable: self.variable, version: 0 };
-        self.serial += 1;
-        self.variable += 1;
-        self.ops.push(mir::computed(self.at, kind, value, args, self.width));
-        Held { value, width: self.width }
-    }
-}
-
-/// The preheader compare and branch that leave a counted loop before its first trip.
-///
-/// `body` is the snapshot `proof`'s occurrences index; Python holds the ops.
-pub(crate) fn skip_guard(body: &MirBody, proof: &induction::CountedLoop, at: i64, flags: Value) -> (Op, Op) {
-    let ((left, right), test) = induction::skipped(proof);
-    let args = vec![left.as_arg(), right.as_arg()];
-    let compare = Op {
-        at,
-        defines: vec![flags],
-        uses: args
-            .iter()
-            .filter_map(|arg| match arg {
-                Arg::Held(held) => Some(held.value),
-                _ => None,
-            })
-            .collect(),
-        source_backed: false,
-        args,
-        raised: None,
-        absorbed: Vec::new(),
-        symbol: Some(false),
-        ..body.blocks[proof.compare.block_index()].ops[proof.compare.operation_index()].clone()
-    };
-    let branch = Op {
-        at,
-        name: String::new(),
-        defines: Vec::new(),
-        uses: vec![flags],
-        source_backed: false,
-        test: Some(test),
-        target: Some(proof.exit),
-        raised: None,
-        absorbed: Vec::new(),
-        symbol: Some(false),
-        ..body.blocks[proof.branch.block_index()].ops[proof.branch.operation_index()].clone()
-    };
-    (compare, branch)
-}
 
 /// Every proven loop entered at its body, each test merged into its latch.
 ///
@@ -145,6 +88,7 @@ pub(crate) fn _counted_down(body: &MirBody) -> Result<MirBody, SubstitutionError
             at,
             width,
             ops: Vec::new(),
+            facts: &facts,
         };
         let count = induction::trips(proof, &mut |kind, args| seeds.computed(kind, args));
         // A constant count is handled more profitably by the ordinary
@@ -153,6 +97,7 @@ pub(crate) fn _counted_down(body: &MirBody) -> Result<MirBody, SubstitutionError
         let induction::AffineOperand::Held(count) = count else {
             continue;
         };
+        let exits = counting::leaving(body, &replacement, &mut seeds);
 
         let step_flags = Value {
             id: seeds.serial,
@@ -188,7 +133,7 @@ pub(crate) fn _counted_down(body: &MirBody) -> Result<MirBody, SubstitutionError
             symbol: Some(false),
             ..stepping.clone()
         };
-        let (guard_compare, guard_branch) = skip_guard(body, proof, at, guard_flags);
+        let (guard_compare, guard_branch) = counting::skip_guard(body, proof, at, guard_flags);
         let mut entry_ops = preheader_block.ops.clone();
         if entry_ops.last().is_some_and(|op| op.kind == Kind::Jump) {
             let last = entry_ops.len() - 1;
@@ -210,6 +155,7 @@ pub(crate) fn _counted_down(body: &MirBody) -> Result<MirBody, SubstitutionError
                 .flat_map(|block| &block.ops)
                 .any(|op| op.uses.contains(&start))
             && !start_is_read_by_the_guard
+            && exits.is_empty()
             && !occurrence::phis(body).any(|(other_at, _, other)| {
                 other_at != proof.phi && other.incoming.values().any(|value| *value == start)
             });
@@ -294,7 +240,17 @@ pub(crate) fn _counted_down(body: &MirBody) -> Result<MirBody, SubstitutionError
                     })
                     .collect()
             } else {
-                block.phis.clone()
+                block
+                    .phis
+                    .iter()
+                    .enumerate()
+                    .map(|(phi_index, other)| {
+                        exits
+                            .iter()
+                            .find(|(at, _)| at.block_index() == block_index && at.phi_index() == phi_index)
+                            .map_or_else(|| other.clone(), |(_, exit)| exit.clone())
+                    })
+                    .collect()
             };
             rewritten.push(MirBlock {
                 ops,
@@ -700,7 +656,7 @@ pub(crate) fn at_body(
             // from the header must then be their pre-loop versions, not the
             // latch versions used by the nonzero path.
             if entry_succ.is_some_and(|succ| succ.contains(&block.at)) && block.at != first.at {
-                if let Some(zero) = phi.incoming.get(&header.at) {
+                if let Some(zero) = phi.incoming.get(&header.at).filter(|_| !phi.incoming.contains_key(&preheader)) {
                     incoming.insert(preheader, initial.get(&zero.id).copied().unwrap_or(*zero));
                 }
             }

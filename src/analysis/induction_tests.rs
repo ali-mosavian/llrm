@@ -84,6 +84,65 @@ fn derive(body: &MirBody, loop_: &Loop) -> Vec<Derived> {
     derived(body, loop_, None, &BTreeSet::new(), None).unwrap()
 }
 
+/// `tests/test_counted_loops.py:_unit_loop`: `i = start; while not (i exit_test bound): i += 1`,
+/// the counter otherwise unread.
+fn _unit_loop(start: i64, bound: i64, exit_test: Kind) -> MirBody {
+    let version = |id: u32, at: i64, version: u32| Value { variable: 1, version, ..Value::new(id, at) };
+    let (seed, counter, following) = (version(1, 0, 1), version(2, 1, 2), version(3, 2, 3));
+    let flags = Value { flags: true, variable: 2, version: 1, ..Value::new(4, 1) };
+    let initialize = crate::model::mir::computed(0, Kind::Copy, seed, vec![Arg::Const(Const::new(start, 2))], 2);
+    let mut compare = Op::new(1, OpCode::Operation(Operation::Compare), "cmp", vec![flags], vec![counter]);
+    compare.kind = Kind::Sub;
+    compare.args = vec![held(counter, 2), Arg::Const(Const::new(bound, 2))];
+    let mut branch = op(1, Operation::Branch, vec![], vec![flags], Kind::Branch);
+    branch.test = Some(exit_test);
+    branch.target = Some(3);
+    let increment = crate::model::mir::computed(2, Kind::Increment, following, vec![held(counter, 2)], 2);
+    let mut jump = op(2, Operation::Jump, vec![], vec![], Kind::Jump);
+    jump.target = Some(1);
+    let returned = op(3, Operation::Return, vec![], vec![], Kind::Return);
+    let mut body = MirBody::new(
+        0,
+        vec![
+            MirBlock::new(0, vec![], vec![initialize], vec![1]),
+            MirBlock::new(
+                1,
+                vec![Phi { result: counter, incoming: OrderedMap::from_iter([(0, seed), (2, following)]) }],
+                vec![compare, branch],
+                vec![2, 3],
+            ),
+            MirBlock::new(2, vec![], vec![increment, jump], vec![1]),
+            MirBlock::new(3, vec![], vec![returned], vec![]),
+        ],
+    );
+    body.sealed = true;
+    body
+}
+
+/// Port of `tests/test_counted_loops.py`.
+///
+/// `i = 0; while i <= 32767` was proved to run 32768 trips: `i + 1` wraps and it never ends.
+#[test]
+fn test_an_inclusive_test_at_its_types_maximum_is_not_counted() {
+    let cases: [(i64, i64, Kind, Option<i64>); 5] = [
+        (0, 0x7FFF, Kind::Gt, None), // signed <= its maximum never fails
+        (0, 0x7FFE, Kind::Gt, Some(0x7FFF)),
+        (0, 0xFFFF, Kind::Above, None), // unsigned <= its maximum never fails
+        (1, 0xFFFE, Kind::Above, Some(0xFFFE)),
+        (-3, 2, Kind::Ge, Some(5)),
+    ];
+    for (start, bound, exit_test, trips) in cases {
+        let body = _unit_loop(start, bound, exit_test);
+        let found = crate::analysis::loops::loops(&body.blocks, Some(body.entry));
+        let [loop_] = &found[..] else { panic!("one loop") };
+        let proofs = super::counted(&body, loop_, None);
+
+        let maxima = proofs.iter().map(|proof| proof.maximum.clone()).collect::<Vec<_>>();
+        let expected = trips.map(|trips| vec![Some(BigInt::from(trips))]).unwrap_or_default();
+        assert_eq!(maxima, expected, "{start} {bound} {exit_test}");
+    }
+}
+
 #[test]
 fn test_counter_zero_test_requires_an_unchanged_counter() {
     for (kind, same, accepted) in [
