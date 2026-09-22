@@ -606,7 +606,7 @@ pub(crate) fn _read(body: &MirBody, value: Value) -> bool {
 pub(crate) fn reused_divides(
     body: &Rc<MirBody>,
     dgroup: &BTreeSet<i64>,
-    found: Option<&std::sync::Arc<dyn std::any::Any + Send + Sync>>,
+    found: Option<&Rc<crate::objectfile::module::Module>>,
 ) -> Result<Rc<MirBody>, String> {
     use crate::model::ir::Operation;
 
@@ -3716,8 +3716,8 @@ pub(crate) static PASSES_ON: std::sync::LazyLock<Vec<String>> =
 
 /// `applied`'s keyword arguments, with Python's defaults.
 pub(crate) struct Applied<'a> {
-    pub blocks: Option<Vec<std::sync::Arc<dyn std::any::Any + Send + Sync>>>,
-    pub found: Option<std::sync::Arc<dyn std::any::Any + Send + Sync>>,
+    pub blocks: Option<Rc<Vec<crate::frontend::blocks::Block>>>,
+    pub found: Option<Rc<crate::objectfile::module::Module>>,
     pub options: crate::model::passes::Options,
     pub only: Option<String>,
     pub registers: Option<i64>,
@@ -3901,13 +3901,10 @@ fn _applied(
         ("peel", options.peel),
         ("fill", options.fill),
     ]);
-    if found.is_some() {
-        return Err("not yet ported: qbopt.objectfile.module.landmarks".to_owned());
-    }
     let r#where = crate::model::passes::Where {
         dgroup: dgroup.clone(),
         calls: Some(calls.clone()),
-        bounds: None,
+        bounds: found.as_deref().map(crate::objectfile::module::landmarks),
         blocks,
         found,
         registers: registers.unwrap_or(mir::TRACKED.len() as i64),

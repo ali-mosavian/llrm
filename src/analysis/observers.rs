@@ -15,13 +15,10 @@
 //! Error and event handlers resume inside a body without a CFG edge, so a
 //! module with either has nothing private.
 //!
-//! `exposure` and `_exposure` read `objectfile.module.Module`, the partition
-//! and the handler tables, none of which is ported yet; `private` refuses a
-//! module until they are.
 
-use std::any::Any;
+use std::cell::RefCell;
 use std::collections::BTreeSet;
-use std::sync::Arc;
+use std::rc::{Rc, Weak};
 
 use iced_x86::Register;
 use crate::support::hash::IndexMap;
@@ -31,7 +28,12 @@ use super::frameescape;
 use crate::abi::runtime;
 use crate::model::memory::{Identity, MemoryKind, MemoryObject};
 use crate::model::mir::{Arg, Kind, MemRef, MirBody, Symbol, Value};
-use crate::objectfile::module::Space;
+use crate::abi::{events, handlers};
+use crate::frontend::blocks::Block;
+use crate::frontend::declen::Insn;
+use crate::frontend::extent;
+use crate::objectfile::module::{Module, Space};
+use crate::objectfile::omf;
 
 // Past every displacement a 16-bit segment can hold.
 pub const BEYOND: i64 = 1 << 17;
@@ -223,6 +225,117 @@ fn _descriptor_publications(
     published
 }
 
+thread_local! {
+    /// Python's `_known`, keyed by the module's identity.
+    static KNOWN: RefCell<Vec<(Weak<Module>, Option<Exposure>)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The module's program-data visibility, or None where it cannot be told.
+pub fn exposure(found: &Rc<Module>, blocks: &[Block]) -> Result<Option<Exposure>, String> {
+    let held = KNOWN.with(|known| {
+        known
+            .borrow()
+            .iter()
+            .find(|(module, _)| module.upgrade().is_some_and(|module| Rc::ptr_eq(&module, found)))
+            .map(|(_, got)| got.clone())
+    });
+    if let Some(held) = held {
+        return Ok(held);
+    }
+    let got = _exposure(found, blocks)?;
+    KNOWN.with(|known| {
+        let mut known = known.borrow_mut();
+        known.retain(|(module, _)| module.strong_count() > 0);
+        known.push((Rc::downgrade(found), got.clone()));
+    });
+    Ok(got)
+}
+
+fn _exposure(found: &Module, blocks: &[Block]) -> Result<Option<Exposure>, String> {
+    if !events::handler_entries(found).is_empty() || !handlers::error_entries(found).is_empty() {
+        return Ok(None);
+    }
+    let Ok(partition) = extent::partition(found) else {
+        return Ok(None);
+    };
+    if !partition.complete() {
+        return Ok(None);
+    }
+    let mut data = found.program_data;
+    if data.is_some_and(|one| omf::combines(&found.records).get(&one) == Some(&omf::COMBINE_COMMON)) {
+        data = None;
+    }
+    let segments = omf::segments(&found.records);
+    let debug: BTreeSet<i64> = segments
+        .iter()
+        .enumerate()
+        .filter(|(_, one)| one.as_ref().is_some_and(|one| one.0.starts_with("$$")))
+        .map(|(index, _)| index as i64)
+        .collect();
+    let fixups: Vec<omf::Fixup> =
+        omf::fixups(&found.records).into_iter().filter(|one| !one.seg.is_some_and(|seg| debug.contains(&seg))).collect();
+    let publics: Vec<(i64, i64)> =
+        omf::public_definitions(&found.records).map_err(|error| error.to_string())?.into_values().collect();
+    let mut named: BTreeSet<i64> = fixups
+        .iter()
+        .filter(|one| one.target == "segment" && Some(one.index) == data)
+        .map(|one| one.disp)
+        .collect();
+    named.extend(publics.iter().filter(|(seg, _)| Some(*seg) == data).map(|(_, offset)| *offset));
+    let named: Vec<i64> = named.into_iter().collect();
+    let reach = |disp: i64| -> (i64, i64) {
+        let after = named.partition_point(|&one| one <= disp);
+        (disp, if after < named.len() { named[after] } else { BEYOND })
+    };
+
+    let insns: IndexMap<usize, &Insn> = blocks.iter().flat_map(|block| &block.insns).map(|insn| (insn.at, insn)).collect();
+    let mut by_field: IndexMap<usize, &Insn> = IndexMap::default();
+    for insn in insns.values() {
+        for field in [insn.disp_at, insn.imm_at].into_iter().flatten() {
+            by_field.insert(field, insn);
+        }
+    }
+    let mut everywhere: Vec<(i64, i64)> =
+        publics.iter().filter(|(seg, _)| Some(*seg) == data).map(|(_, offset)| reach(*offset)).collect();
+    let mut direct: IndexMap<i64, Vec<(i64, i64)>> = IndexMap::default();
+    for one in &fixups {
+        if one.target != "segment" || Some(one.index) != data {
+            continue;
+        }
+        let insn = if one.seg == Some(found.seg) { by_field.get(&(one.offset as usize)).copied() } else { None };
+        let operand = insn.is_some_and(|insn| Some(one.offset as usize) == insn.disp_at);
+        let owner = match insn {
+            Some(insn)
+                if operand && insn.memory_base() == Register::None && insn.memory_index() == Register::None =>
+            {
+                partition
+                    .bodies
+                    .iter()
+                    .find(|body| body.ranges.iter().any(|&(lo, hi)| lo <= insn.at && insn.at < hi))
+                    .map(|body| body.seed as i64)
+            }
+            _ => None,
+        };
+        if let Some(owner) = owner {
+            direct.entry(owner).or_default().push(reach(one.disp));
+        } else if insn.is_some() && !operand {
+            everywhere.push((one.disp, BEYOND));
+        } else {
+            everywhere.push(reach(one.disp));
+        }
+    }
+    let main = partition
+        .bodies
+        .iter()
+        .find(|body| {
+            body.kind == extent::BodyKind::Main
+                && !found.publics.contains(&(body.seed as i64))
+                && !found.targets.contains(&(body.seed as i64))
+        })
+        .map(|body| body.seed as i64);
+    Ok(Some(Exposure { data, main, everywhere, direct }))
+}
+
 /// A test for the cells no call and no exit of `body` can observe.
 ///
 /// Without a module there is no program data to know the reach of, but a
@@ -231,19 +344,22 @@ fn _descriptor_publications(
 #[allow(clippy::type_complexity)]
 pub fn private(
     body: &MirBody,
-    found: Option<&Arc<dyn Any + Send + Sync>>,
-    blocks: Option<&Vec<Arc<dyn Any + Send + Sync>>>,
+    found: Option<&Rc<crate::objectfile::module::Module>>,
+    blocks: Option<&Rc<Vec<crate::frontend::blocks::Block>>>,
 ) -> Result<Option<Box<dyn Fn(&MemRef) -> bool>>, String> {
-    let exposed = if found.is_none() || blocks.is_none() {
-        if !body.sealed {
-            return Ok(None);
+    let exposed = match (found, blocks) {
+        (Some(found), Some(blocks)) => match exposure(found, blocks)? {
+            Some(exposed) => exposed,
+            None => return Ok(None),
+        },
+        _ => {
+            if !body.sealed {
+                return Ok(None);
+            }
+            Exposure { data: None, main: None, everywhere: Vec::new(), direct: IndexMap::default() }
         }
-        Exposure { data: None, main: None, everywhere: Vec::new(), direct: IndexMap::default() }
-    } else {
-        return Err("observers.exposure needs objectfile.module.Module, which is not ported".to_owned());
     };
-    // `found` is None past this point, so `found.calls` is never read.
-    let calls: IndexMap<i64, String> = IndexMap::default();
+    let calls: IndexMap<i64, String> = found.map(|found| found.calls.clone()).unwrap_or_default();
     let escapes = frameescape::analysed(body);
     let pointers = alias::points_to(body, None, None)?;
     let mut published: BTreeSet<MemoryObject> = pointers.escaped.clone();

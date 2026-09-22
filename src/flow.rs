@@ -69,8 +69,8 @@ pub(crate) fn optimized<'a>(
     calls: &IndexMap<i64, String>,
     cpu: impl Into<ProfileOrName<'a>>,
     options: Options,
-    blocks: Option<Vec<Arc<dyn Any + Send + Sync>>>,
-    found: Option<Arc<dyn Any + Send + Sync>>,
+    blocks: Option<Rc<Vec<crate::frontend::blocks::Block>>>,
+    found: Option<Rc<crate::objectfile::module::Module>>,
     only: Option<String>,
     watch: Option<&mut dyn FnMut(&str, &MirBody)>,
 ) -> Result<Rc<MirBody>, String> {

@@ -253,13 +253,13 @@ pub fn O2() -> Options {
 /// What a pass may be told about the module it is compiling.
 ///
 /// Handed to a pass when it is made, never reachable from `transform`.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Where {
     pub dgroup: BTreeSet<i64>,
     pub calls: Option<IndexMap<i64, String>>,
     pub bounds: Option<IndexMap<(Space, i64), Vec<i64>>>,
-    pub blocks: Option<Vec<Arc<dyn Any + Send + Sync>>>,
-    pub found: Option<Arc<dyn Any + Send + Sync>>,
+    pub blocks: Option<Rc<Vec<crate::frontend::blocks::Block>>>,
+    pub found: Option<Rc<crate::objectfile::module::Module>>,
     pub registers: i64,
     // Values the target can keep live across an ordinary call.
     pub call_registers: i64,
