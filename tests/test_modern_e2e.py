@@ -155,3 +155,10 @@ def test_native_integers_print_as_the_hir_executor_prints_them(tmp_path: Path) -
     expected = execute.run(driver.parsed(source), "main").output
     assert expected == "-128 255 -32768 65535 -2147483648 4294967295 0\n"
     assert build(source, tmp_path / "INTS.EXE", run=True).output == expected
+
+
+def test_native_matmul_matches_hir(tmp_path: Path) -> None:
+    source = ROOT / "frontends" / "modern" / "fixtures" / "matmul.mod"
+    expected = execute.run(driver.parsed(source), "main").output
+    assert expected == "matmul: 372432\n"
+    assert build(source, tmp_path / "MATMUL.EXE", run=True).output == expected
