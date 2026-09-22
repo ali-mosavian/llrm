@@ -5779,19 +5779,26 @@ impl Compiler {
         Ok(Operand::Place(place))
     }
 
+    /// The far address GET/PUT starts at -- the array's data or the named
+    /// element -- and the array's descriptor.
     fn graphics_array(&mut self, expression: &Expr) -> Result<Vec<Operand>, SemanticError> {
-        let name = match expression {
-            Expr::Name(name, _) => name,
+        let (name, element_named) = match expression {
+            Expr::Name(name, _) => (name, false),
             Expr::Apply {
                 name, arguments, ..
-            } if arguments.is_empty() => name,
-            _ => return self.fail("graphics GET/PUT requires a bare array"),
+            } => (name, !arguments.is_empty()),
+            _ => return self.fail("graphics GET/PUT requires an array"),
         };
         let variable = self.array(name)?;
-        let element = variable.element.expect("an array has an element type");
         let descriptor = self.descriptor_pointer(&variable)?;
-        let data_type = self.far_pointer_type(element);
-        let data = self.descriptor_field(descriptor, 0, data_type);
+        let data = if element_named {
+            let (place, type_id) = self.destination(expression)?;
+            self.far_address(place, type_id)
+        } else {
+            let element = variable.element.expect("an array has an element type");
+            let data_type = self.far_pointer_type(element);
+            self.descriptor_field(descriptor, 0, data_type)
+        };
         Ok(vec![Operand::Value(data), Operand::Value(descriptor)])
     }
 

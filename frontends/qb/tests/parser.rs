@@ -2279,3 +2279,17 @@ fn a_procedure_sees_only_shared_module_variables() {
         "{hir}"
     );
 }
+
+#[test]
+fn graphics_put_and_get_take_an_array_element() {
+    // oimad draws with `PUT (x, y), mask(1500), AND`; BC 4.5 passes the
+    // element's far address where the bare form passes the data start.
+    let module = parse(
+        "defint a-z\r\ndim m(2000)\r\nscreen 13\r\n\
+         put (1, 2), m(1500), and\r\nget (0, 0)-(9, 9), m(i)\r\n",
+        Dialect::QuickBasic45,
+    )
+    .unwrap();
+    let hir = compile(&module, "graphics_element", Dialect::QuickBasic45, "qb45").unwrap();
+    assert!(hir.contains("B$GPUT") && hir.contains("B$GGET"), "{hir}");
+}
