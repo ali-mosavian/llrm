@@ -127,6 +127,8 @@ def identities(body: mir.MirBody) -> mir.MirBody:
         ops = []
         for op in block.ops:
             if op.results and isinstance(op.results[0], mir.Held) and op.results[0].value.id in swap:
+                if op.id is not None or op.source_backed or op.absorbed:
+                    ops.append(mir.cleared(op))  # its bytes stay owned
                 continue
             op = ssa.substituted(copies.get(id(op), op), swap)
             if op.kind is mir.Kind.BRANCH and op.test in tests and zero_tests.intersection(op.uses):

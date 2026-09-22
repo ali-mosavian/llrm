@@ -1,5 +1,7 @@
 """`canonical.identities`: the neutral terms a rewrite states in full, folded once."""
 
+from dataclasses import replace
+
 from qbopt.model import ir
 from qbopt.model import mir
 from qbopt.model import execute
@@ -45,3 +47,14 @@ def test_a_neutral_term_is_its_operand_and_a_test_below_zero_is_equality() -> No
 def test_a_term_that_is_not_neutral_stays() -> None:
     body = _body(mir.Kind.SUB, 1, mir.Kind.BELOW)
     assert canonical.identities(body) is body
+
+
+def test_a_folded_term_keeps_the_source_bytes_it_owned() -> None:
+    """NESTED's raised `add x,0` vanished outright and its bytes were refused as not instructions."""
+    body = _body(mir.Kind.ADD, 0, mir.Kind.BELOW)
+    (entry, *rest) = body.blocks
+    owned = replace(entry.ops[0], id=7, source_backed=True)
+    body = replace(body, blocks=(replace(entry, ops=(owned, *entry.ops[1:])), *rest))
+
+    (entry, *_) = canonical.identities(body).blocks
+    assert [(op.kind, op.id) for op in entry.ops][0] == (mir.Kind.NOTHING, 7)

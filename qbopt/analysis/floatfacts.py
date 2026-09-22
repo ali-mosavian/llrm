@@ -251,7 +251,7 @@ def loop_exits(body: mir.MirBody, dgroup: frozenset[int], calls: dict) -> tuple[
             for op in header.ops
         ):
             continue
-        count = induction.trip_count(body, loop, integers)
+        count = induction.agreed_count(induction.counted(body, loop, integers))
         if count is None:
             continue
         asked = consts.memory_queries(body, integers, dgroup)

@@ -133,6 +133,13 @@ class CountedLoop:
     def width(self) -> int:
         return self.bound.width
 
+    @property
+    def span(self) -> tuple[int, int] | None:
+        """The signed values the header's counter takes on a trip, lowest first."""
+        if self.first is None or self.last is None:
+            return None
+        return min(self.first, self.last), max(self.first, self.last)
+
 
 _ASCENDING = frozenset({mir.Kind.LT, mir.Kind.LE, mir.Kind.BELOW, mir.Kind.BELOW_EQ})
 _DESCENDING = frozenset({mir.Kind.GT, mir.Kind.GE, mir.Kind.ABOVE, mir.Kind.ABOVE_EQ})
@@ -159,6 +166,8 @@ def trips(proof: CountedLoop, computed: Computed) -> mir.Held | mir.Const | None
     result. `counted` proved the count finite.
     """
     width = proof.width
+    if proof.posttested:
+        return None
     if proof.count is not None:
         return mir.Const(proof.count, width) if proof.count < 1 << 8 * width else None
     ahead, behind = (proof.bound, proof.start) if proof.step > 0 else (proof.start, proof.bound)
@@ -166,9 +175,11 @@ def trips(proof: CountedLoop, computed: Computed) -> mir.Held | mir.Const | None
     return computed(mir.Kind.ADD, (count, mir.Const(int(proof.inclusive), width)))
 
 
-def exit_value(proof: CountedLoop, computed: Computed) -> mir.Held | mir.Const:
-    """The counter as a loop that ran a trip leaves: the first value failing its test."""
+def exit_value(proof: CountedLoop, computed: Computed) -> mir.Held | mir.Const | None:
+    """The header's counter as a pre-tested loop that ran a trip leaves: the first value failing its test."""
     width = proof.width
+    if proof.posttested:
+        return None
     if proof.test is mir.Kind.NE:
         return proof.bound
     if isinstance(proof.start, mir.Const) and proof.count is not None:
@@ -244,7 +255,7 @@ def _control(body: mir.MirBody, loop: loopy.Loop) -> _Control | None:
 
 
 def counted(
-    body: mir.MirBody, loop: loopy.Loop, facts: dict | None = None, *, inbounds: bool = True
+    body: mir.MirBody, loop: loopy.Loop, facts: dict | None = None, *, inbounds: bool = False
 ) -> tuple[CountedLoop, ...]:
     """Prove every counter that alone decides when a single-exit loop leaves.
 
@@ -253,8 +264,8 @@ def counted(
     proof is symbolic, and only for a pre-tested unit step whose loop is
     proved finite: an exclusive or ``!=`` test always is; an inclusive one
     runs forever where ``bound`` is the end of its type, so needs a
-    ``maximum``. `inbounds` false leaves out the one from memory accesses,
-    which reads `derived` and so must not be asked from inside it.
+    ``maximum``. Only with `inbounds` is one taken from the loop's memory
+    accesses: that reads `derived`, which asks this for counts.
     """
     facts = consts.known(body) if facts is None else facts
     blocks = {block.at: block for block in body.blocks}
@@ -280,7 +291,12 @@ def counted(
         compare, width, bound, mirrored, stepped = comparisons[0]
         test = mir.MIRRORED[continuing] if mirrored else continuing
         step = _signed(counter.step, facts, counter.start.width)
-        if not step or not isinstance(bound, (mir.Held, mir.Const)) or bound.width != width:
+        if (
+            not step
+            or width > counter.start.width
+            or not isinstance(bound, (mir.Held, mir.Const))
+            or bound.width != width
+        ):
             continue
         if isinstance(bound, mir.Held) and bound.value.id not in still:
             continue
@@ -662,20 +678,16 @@ def derived_map(formula: Derived, facts: dict) -> AffineMap | None:
     return AffineMap(scale, offset, width)
 
 
-def controlling(
-    body: mir.MirBody, loop: loopy.Loop, counter: Affine, facts: dict, *, inbounds: bool = True
-) -> CountedLoop | None:
+def controlling(body: mir.MirBody, loop: loopy.Loop, counter: Affine, facts: dict) -> CountedLoop | None:
     """The proof in which `counter` decides when `loop` leaves."""
-    proofs = counted(body, loop, facts, inbounds=inbounds)
+    proofs = counted(body, loop, facts)
     return next((proof for proof in proofs if proof.counter.value == counter.value), None)
 
 
 def domain(body: mir.MirBody, loop: loopy.Loop, affine: Affine, facts: dict) -> tuple[int, int] | None:
     """The finite inclusive signed domain ``affine`` takes on a trip."""
     proof = controlling(body, loop, affine, facts)
-    if proof is None or proof.first is None or proof.last is None:
-        return None
-    return min(proof.first, proof.last), max(proof.first, proof.last)
+    return None if proof is None else proof.span
 
 
 def invariant(body: mir.MirBody, inside: set[int]) -> set[int]:
@@ -946,8 +958,8 @@ def _quotients(body: mir.MirBody, loop, found: dict[int, Affine]) -> list[Derive
     return out
 
 
-def trip_count(body: mir.MirBody, loop: loopy.Loop, facts: dict) -> int | None:
-    """The one proven positive trip count shared by every loop counter.
+def agreed_count(proofs: tuple[CountedLoop, ...]) -> int | None:
+    """The one positive trip count every counter of a loop proves, if they prove one.
 
     A loop may carry an integer counter, a byte address and one or more
     derived counters at once.  They are evidence for the same trip count,
@@ -955,16 +967,22 @@ def trip_count(body: mir.MirBody, loop: loopy.Loop, facts: dict) -> int | None:
     Refusing disagreement keeps cloning transforms independent of which
     recurrence happened to be visited first.
     """
-    counts = {proof.count for proof in counted(body, loop, facts) if proof.count}
-    if len(counts) != 1:
+    counts = {proof.count for proof in proofs if proof.count}
+    return next(iter(counts)) if len(counts) == 1 else None
+
+
+def trip_count(body: mir.MirBody, loop: loopy.Loop, facts: dict) -> int | None:
+    """`agreed_count`, or the count remembered at this header when nothing proves one now."""
+    proofs = counted(body, loop, facts)
+    if not any(proof.count for proof in proofs):
         # A semantics-preserving loop transform may consume the syntactic
         # relationship which established this fact.  Nested-recurrence
         # rewind, for example, replaces ``start`` with an outer phi after it
         # has proved the inner loop's exact distance.  Retain that proof at
         # the same header so rotation and measurement do not fall back to a
         # guessed trip count.  A newly derived disagreement is still refused.
-        return dict(body.loop_trip_counts).get(loop.header) if not counts else None
-    return next(iter(counts))
+        return dict(body.loop_trip_counts).get(loop.header)
+    return agreed_count(proofs)
 
 
 def nonempty(body: mir.MirBody, loop) -> bool:
@@ -1142,7 +1160,7 @@ def _extended(body, loop, op, forms, facts):
         return None
     raw_start = _constant(counter.start, facts, width)
     raw_step = _constant(counter.step, facts, width)
-    proof = controlling(body, loop, counter, facts, inbounds=False)
+    proof = controlling(body, loop, counter, facts)
     count = proof.count if proof is not None and proof.width == width else None
     constants = tuple((_constant(arg, facts, width), coefficient) for arg, coefficient in offsets)
     if raw_start is None or raw_step is None or not count or any(value is None for value, _ in constants):

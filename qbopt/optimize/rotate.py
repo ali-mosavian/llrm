@@ -54,7 +54,7 @@ def _counted_down(body: mir.MirBody) -> mir.MirBody:
     all_values = tuple(ssa.values(body))
 
     for loop in loops.loops(body.blocks, body.entry):
-        proofs = induction.counted(body, loop, facts)
+        proofs = induction.counted(body, loop, facts, inbounds=True)
         if len(proofs) != 1:
             continue
         proof = proofs[0]

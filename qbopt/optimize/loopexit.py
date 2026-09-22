@@ -32,8 +32,10 @@ def evaluated(body: mir.MirBody) -> mir.MirBody:
         counters = induction.basics(body, loop)
         if not counters:
             continue
-        count = induction.trip_count(body, loop, facts)
-        if count is None:
+        proofs = induction.counted(body, loop, facts)
+        count = induction.agreed_count(proofs)
+        # The exit terms below are the header's values as it leaves.
+        if count is None or any(proof.posttested for proof in proofs):
             continue
         exits = _exit_terms(body, loop, counters, count, facts)
         if not exits:

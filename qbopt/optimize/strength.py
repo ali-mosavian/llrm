@@ -472,7 +472,7 @@ def _control_credits(
     selected: dict[int, tuple[tuple[int, int, int], induction.Derived]] = {}
 
     for loop, _basics, _derived in found:
-        proofs = induction.counted(body, loop, facts)
+        proofs = induction.counted(body, loop, facts, inbounds=True)
         if len(proofs) != 1:
             continue
         proof = proofs[0]
@@ -530,17 +530,20 @@ def _replacement_credits(
         candidates = groups[loop.header]
         for affine in {one.of for one in candidates}:
             phi = next((one for one in header.phis if one.result.id == affine.value), None)
-            domain = induction.domain(body, loop, affine, facts)
-            if phi is None or latch not in phi.incoming or domain is None:
-                continue
             proof = induction.controlling(body, loop, affine, facts)
-            controls = (
-                {id(proof.compare)}
-                if proof is not None and not proof.posttested and proof.width == affine.start.width
-                else set()
-            )
+            if (
+                phi is None
+                or latch not in phi.incoming
+                or proof is None
+                or proof.span is None
+                or proof.posttested
+                or proof.width != affine.start.width
+            ):
+                continue
+            domain = proof.span
+            controls = {id(proof.compare)}
             update = made.get(phi.incoming[latch].id)
-            if len(controls) != 1 or update is None:
+            if update is None:
                 continue
 
             aliases, copies = induction.transparent_aliases(body, loop, phi.result)

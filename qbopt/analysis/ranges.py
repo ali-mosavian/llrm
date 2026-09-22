@@ -212,9 +212,8 @@ def bounded(body: mir.MirBody) -> dict[int, dict[mir.Value, Interval]]:
         counters = induction.basics(body, loop).values()
         trips = set()
         for proof in induction.counted(body, loop, facts):
-            if proof.first is not None and proof.last is not None:
-                span = min(proof.first, proof.last), max(proof.first, proof.last)
-                known[proof.phi.result] = Interval(*span, proof.counter.start.width)
+            if proof.span is not None:
+                known[proof.phi.result] = Interval(*proof.span, proof.counter.start.width)
                 trips.add(proof.count - 1)
         if len(trips) == 1:
             advances = next(iter(trips))

@@ -45,8 +45,13 @@ class Seeds:
 def skip_guard(proof: induction.CountedLoop, at: int, flags: mir.Value) -> tuple[mir.Op, mir.Op]:
     """The preheader compare and branch that leave a counted loop before its first trip."""
     args, test = induction.skipped(proof)
+    # A subtract whatever the loop's own test was: `or i,i` names one operand.
     compare = replace(
         proof.compare,
+        kind=mir.Kind.SUB,
+        name="",
+        results=(),
+        merges={},
         at=at,
         defines=(flags,),
         uses=tuple(arg.value for arg in args if isinstance(arg, mir.Held)),
