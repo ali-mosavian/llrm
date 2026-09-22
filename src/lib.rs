@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod abi;
 pub mod analysis;
 pub mod cfront;
 pub mod cycles;

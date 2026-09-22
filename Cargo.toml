@@ -10,6 +10,7 @@ default-run = "llrm-qb"
 iced-x86 = { version = "=1.21.0", default-features = false, features = ["std", "decoder", "instr_info"] }
 indexmap = "2"
 num-bigint = "0.4"
+toml = { version = "0.9", features = ["preserve_order"] }
 
 [build-dependencies]
 buildprs = { path = "tools/buildprs" }
