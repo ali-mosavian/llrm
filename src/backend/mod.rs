@@ -17,6 +17,7 @@ pub mod floatalloc;
 pub mod floatregions;
 pub mod fpu;
 pub mod frame;
+pub mod jumps;
 pub mod layout;
 pub mod liveness;
 pub mod lower;
