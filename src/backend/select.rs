@@ -984,6 +984,11 @@ pub fn funnel(name: &str, dest: Register, other: Register, count: Option<i64>, a
     _assemble(&raised(create_reg_reg_i32(code, dest, other, count)), at, true)
 }
 
+/// A count in cx or ecx is one in cl: every shift and rotate reads only `count & 31`.
+fn _cl(count: Option<Register>) -> bool {
+    matches!(count, Some(Register::CL | Register::CX | Register::ECX))
+}
+
 /// Shift a register or spill cell. `count` of None means by cl.
 pub fn shift(name: &str, dest: RegisterOrCell<'_>, count: Option<i64>, at: u64) -> Option<Emitted> {
     if !SHIFTS.contains(&name) {
@@ -1492,7 +1497,7 @@ pub fn emit(
             if let Some(count) = imm_of(&sources[2]) {
                 return funnel(name, into, other, Some(count), at);
             }
-            if reg_of(&sources[2]) == Some(Register::CL) {
+            if _cl(reg_of(&sources[2])) {
                 return funnel(name, into, other, None, at);
             }
         }
@@ -1500,7 +1505,7 @@ pub fn emit(
     }
     if op == Operation::Binary && SHIFTS.contains(&name) && dests.len() == 1 && sources.len() == 2 {
         let count = imm_of(&sources[1]);
-        let by_cl = reg_of(&sources[1]) == Some(Register::CL);
+        let by_cl = _cl(reg_of(&sources[1]));
         if let Some(into) = reg_of(&dests[0]) {
             if count.is_some() {
                 return shift(name, RegisterOrCell::Reg(into), count, at);

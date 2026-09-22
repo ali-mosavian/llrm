@@ -792,3 +792,20 @@ fn divides_matches_python() {
     let op = mir::Op { kind: Kind::Mul, args: args("cc"), ..mir::Op::new(0, OpCode::Operation(Operation::Call), "B$DVI4", vec![], vec![]) };
     assert_eq!(divides(&op, (eax, edx), true).map(|made| made.code), Err("B$DVI4: not a divide over two operands".to_owned()));
 }
+
+/// A u16 count held in cx selected nothing: `sar eax,cx` had no encoding. The shift reads only cl.
+#[test]
+fn test_a_shift_counts_from_cl_whatever_width_holds_the_count() {
+    for (count, width) in [(Register::CL, 1), (Register::CX, 2), (Register::ECX, 4)] {
+        let eax = rg(Register::EAX, 4);
+        let what = sem(Operation::Binary, Some("sar"), vec![eax.clone()], vec![eax, rg(count, width)], None, false);
+        assert_eq!(hex(&made(emitted(&what)).code), "66d3f8", "{count:?}");
+    }
+}
+
+#[test]
+fn test_a_count_in_ch_is_not_one_in_cl() {
+    let eax = rg(Register::EAX, 4);
+    let what = sem(Operation::Binary, Some("sar"), vec![eax.clone()], vec![eax, rg(Register::CH, 1)], None, false);
+    assert!(emitted(&what).is_none());
+}
