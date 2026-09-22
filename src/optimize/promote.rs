@@ -1141,7 +1141,7 @@ pub(crate) fn _initializers(
             };
             let before = memory.get(&(block.at, index)).cloned().unwrap_or_default();
             let after = consts::_kills(
-                &before, op, &nothing, dgroup, &calls, None, None, false, Some(&mut asked),
+                before, op, &nothing, dgroup, &calls, None, None, false, Some(&mut asked),
             );
             let mut facts = IndexMap::default();
             for (addr, width) in cells {

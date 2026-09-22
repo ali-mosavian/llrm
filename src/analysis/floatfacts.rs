@@ -375,7 +375,7 @@ pub(crate) fn repeated(
                 store.stores = vec![reference.into_owned()];
                 store.uses = Vec::new();
                 memory = consts::_kills(
-                    &memory,
+                    memory,
                     &store,
                     &integers,
                     dgroup,
@@ -480,7 +480,7 @@ pub(crate) fn loop_exits(body: &MirBody, dgroup: &BTreeSet<i64>, calls: &IndexMa
         let count = counts.pop_first().expect("one count");
         let mut asked = consts::memory_queries(body, &integers, dgroup);
         let initial = consts::_kills(
-            &memory[&(entry.at, entry.ops.len() - 1)],
+            memory[&(entry.at, entry.ops.len() - 1)].clone(),
             entry.ops.last().expect("entry ops"),
             &integers,
             dgroup,

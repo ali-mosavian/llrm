@@ -357,7 +357,7 @@ impl _Exit<'_> {
                         let nothing = IndexMap::default();
                         let mut asked = consts::memory_queries(body, &nothing, dgroup);
                         let after = consts::_kills(
-                            &before,
+                            before,
                             previous,
                             &nothing,
                             dgroup,

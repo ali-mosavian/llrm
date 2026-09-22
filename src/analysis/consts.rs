@@ -419,7 +419,7 @@ pub(crate) fn memory_queries(
 /// checks afterwards that every one of them did resolve.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn _kills(
-    here: &Cells,
+    mut here: Cells,
     op: &Op,
     known: &IndexMap<Value, Known>,
     dgroup: &BTreeSet<i64>,
@@ -429,7 +429,6 @@ pub(crate) fn _kills(
     edge_facts: bool,
     queries: Option<&mut _MemoryQueries>,
 ) -> Cells {
-    let mut here = here.clone();
     // A fact supplied for one CFG edge is a proof about reaching that edge,
     // not a durable summary of a callee.
     if edge_facts && op.kind == Kind::Call {
@@ -470,10 +469,7 @@ pub(crate) fn _kills(
                 continue;
             }
         }
-        here = here
-            .into_iter()
-            .filter(|(where_, _)| !queries.may_overlap(*where_, &reference))
-            .collect();
+        here.retain(|where_, _| !queries.may_overlap(*where_, &reference));
         if let Some(put) = &put {
             if reference.addr.is_some() && reference.base.is_none() && reference.segment.is_none() {
                 queries.learn(&reference);
@@ -600,7 +596,7 @@ pub(crate) fn cells(
             };
             for op in &block.ops {
                 here = _kills(
-                    &here,
+                    here,
                     op,
                     known,
                     dgroup,
@@ -624,7 +620,7 @@ pub(crate) fn cells(
         for (index, op) in block.ops.iter().enumerate() {
             found.insert((block.at, index), here.clone());
             here = _kills(
-                &here,
+                here,
                 op,
                 known,
                 dgroup,
