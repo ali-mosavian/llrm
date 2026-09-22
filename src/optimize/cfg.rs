@@ -145,6 +145,7 @@ pub(crate) fn merged(body: &MirBody) -> Result<MirBody, SubstitutionError> {
                     phis: first.phis.clone(),
                     ops: moved,
                     succ: second.succ.clone(),
+                    cold: first.cold,
                 },
                 std::iter::once(target)
                     .chain(between.iter().map(|block| block.at))
@@ -193,6 +194,7 @@ pub(crate) fn merged(body: &MirBody) -> Result<MirBody, SubstitutionError> {
                     .map(|op| ssa::substituted(op, &swaps))
                     .collect::<Result<_, _>>()?,
                 succ: block.succ.clone(),
+                cold: block.cold,
             });
         }
         body.blocks = blocks;

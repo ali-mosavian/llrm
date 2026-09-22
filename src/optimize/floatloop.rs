@@ -145,6 +145,7 @@ pub(crate) fn specialized(
             &initial,
             dgroup,
             Some(&facts),
+            None,
         );
         let Some(before_last) = before_last else {
             continue;

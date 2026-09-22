@@ -295,7 +295,7 @@ pub(crate) fn _rejection(
     if loops::loops(&after.blocks, Some(after.entry)).len() >= loops::loops(&before.blocks, Some(before.entry)).len() {
         return Some("residual-loops");
     }
-    if r#where.max_unroll_iterations != 0 && count > r#where.max_unroll_iterations && _size(after) > _size(before) {
+    if r#where.options.max_unroll_iterations != 0 && count > r#where.options.max_unroll_iterations && _size(after) > _size(before) {
         // A large exact loop may still be an excellent constant-folding
         // vehicle: allow it when scalar optimization erases all expansion
         // growth. Otherwise obey the target's complete-peel budget before an
@@ -320,8 +320,8 @@ pub(crate) fn _rejection(
     let total_after = dynamic_after + pressure_after;
     let sequence = _expanded_operations(before, after, latch, count);
     if pressure_after > 0
-        && r#where.max_unrolled_operations != 0
-        && sequence > r#where.max_unrolled_operations
+        && r#where.options.max_unrolled_operations != 0
+        && sequence > r#where.options.max_unrolled_operations
         && (pressure_after >= pressure_before || total_before - total_after <= sequence * r#where.costs.r#move)
     {
         // GCC's target-independent `max-completely-peeled-insns` is 200.

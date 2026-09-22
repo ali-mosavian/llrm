@@ -3883,8 +3883,7 @@ fn _applied(
         index_scales: index_scales.unwrap_or_else(|| BTreeSet::from([1])),
         address_forms: address_forms.unwrap_or_default(),
         costs: costs.unwrap_or_default(),
-        max_unroll_iterations,
-        max_unrolled_operations,
+        options: crate::model::passes::Options { max_unroll_iterations, max_unrolled_operations, ..crate::model::passes::Options::default() },
     };
     // Public debugging selectors from before value reuse became one pass.
     let only = match only.as_deref() {
@@ -3957,8 +3956,8 @@ fn _applied(
                 index_scales: Some(r#where.index_scales.clone()),
                 address_forms: Some(r#where.address_forms.clone()),
                 costs: Some(r#where.costs.clone()),
-                max_unroll_iterations: r#where.max_unroll_iterations,
-                max_unrolled_operations: r#where.max_unrolled_operations,
+                max_unroll_iterations: r#where.options.max_unroll_iterations,
+                max_unrolled_operations: r#where.options.max_unrolled_operations,
                 watch: if watching { Some(&mut watch) } else { None },
             },
         )?;

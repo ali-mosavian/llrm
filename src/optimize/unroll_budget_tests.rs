@@ -133,7 +133,7 @@ fn test_large_complete_peel_must_erase_its_growth_to_cross_the_profile_budget() 
     });
     let r#where = Where {
         costs,
-        max_unroll_iterations: 16,
+        options: crate::model::passes::Options { max_unroll_iterations: 16, ..crate::model::passes::Options::default() },
         ..Where::default()
     };
     let original = _loop();
@@ -157,8 +157,7 @@ fn test_default_complete_peel_budget_refuses_sc_init_sized_growth() {
 
     assert_eq!(_rejection(&_loop(), &_straight(25), 1, 25, &r#where), Some("iteration-growth"));
     let unbounded = Where {
-        max_unroll_iterations: 0,
-        max_unrolled_operations: 0,
+        options: crate::model::passes::Options { max_unroll_iterations: 0, max_unrolled_operations: 0, ..crate::model::passes::Options::default() },
         ..r#where
     };
     assert_eq!(_rejection(&_loop(), &_straight(25), 1, 25, &unbounded), None);
@@ -174,7 +173,7 @@ fn test_bounded_complete_peel_amortizes_growth_over_its_exact_trip_count() {
     let r#where = Where {
         costs,
         registers: 6,
-        max_unroll_iterations: 16,
+        options: crate::model::passes::Options { max_unroll_iterations: 16, ..crate::model::passes::Options::default() },
         ..Where::default()
     };
 
@@ -193,7 +192,7 @@ fn test_bounded_peel_with_spill_risk_pays_its_complete_growth() {
     let r#where = Where {
         costs: costs.clone(),
         registers: 3,
-        max_unroll_iterations: 16,
+        options: crate::model::passes::Options { max_unroll_iterations: 16, ..crate::model::passes::Options::default() },
         ..Where::default()
     };
 
@@ -213,8 +212,7 @@ fn test_spill_prone_complete_peel_respects_the_sequence_budget() {
     let r#where = Where {
         costs: costs.clone(),
         registers: 3,
-        max_unroll_iterations: 16,
-        max_unrolled_operations: 200,
+        options: crate::model::passes::Options { max_unroll_iterations: 16, max_unrolled_operations: 200, ..crate::model::passes::Options::default() },
         ..Where::default()
     };
 

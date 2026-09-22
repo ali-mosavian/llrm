@@ -174,10 +174,78 @@ impl Default for OperationCosts {
     }
 }
 
-// Target-independent complete-peel safeguards. A selected target may
-// override them; an omitted selection receives the default 386 policy.
 pub const DEFAULT_MAX_UNROLL_ITERATIONS: i64 = 16;
 pub const DEFAULT_MAX_UNROLLED_OPERATIONS: i64 = 200;
+
+/// What GCC's command line says about optimization, as one value.
+///
+/// `-O` picks the defaults, `--param` the copy budgets, `-f` each pass. They
+/// are independent of the CPU, as in GCC. `grows=false` is -Os's
+/// `UL_NO_GROWTH` (tree-ssa-loop-ivcanon.cc): a copy is taken only when it
+/// is no larger.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct Options {
+    pub level: String,
+    // --param max-completely-peel-times
+    pub max_unroll_iterations: i64,
+    // --param max-completely-peeled-insns
+    pub max_unrolled_operations: i64,
+    pub grows: bool,
+    pub lcssa: bool,
+    pub floatloop: bool,
+    pub fold: bool,
+    pub decide: bool,
+    pub dead: bool,
+    pub hoist: bool,
+    pub forward: bool,
+    pub drop_loads: bool,
+    pub drop_stores: bool,
+    pub promote: bool,
+    pub strength: bool,
+    pub unroll: bool,
+    pub peel: bool,
+    pub fill: bool,
+    pub unswitch: bool,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            level: "O2".to_owned(),
+            max_unroll_iterations: DEFAULT_MAX_UNROLL_ITERATIONS,
+            max_unrolled_operations: DEFAULT_MAX_UNROLLED_OPERATIONS,
+            grows: true,
+            lcssa: true,
+            floatloop: true,
+            fold: true,
+            decide: true,
+            dead: true,
+            hoist: true,
+            forward: true,
+            drop_loads: true,
+            drop_stores: true,
+            promote: true,
+            strength: true,
+            unroll: true,
+            peel: true,
+            fill: true,
+            unswitch: false,
+        }
+    }
+}
+
+/// Python `LEVELS`: each `-O` level's options, in declaration order.
+pub fn levels() -> IndexMap<&'static str, Options> {
+    IndexMap::from([
+        ("O2", Options::default()),
+        ("Os", Options { level: "Os".to_owned(), grows: false, ..Options::default() }),
+    ])
+}
+
+/// Python `O2`.
+pub fn o2() -> Options {
+    levels()["O2"].clone()
+}
 
 /// What a pass may be told about the module it is compiling.
 ///
@@ -198,8 +266,7 @@ pub struct Where {
     pub address_forms: Vec<AddressForm>,
     // Semantic work only.
     pub costs: OperationCosts,
-    pub max_unroll_iterations: i64,
-    pub max_unrolled_operations: i64,
+    pub options: Options,
 }
 
 impl Default for Where {
@@ -215,8 +282,7 @@ impl Default for Where {
             index_scales: BTreeSet::new(),
             address_forms: Vec::new(),
             costs: OperationCosts::default(),
-            max_unroll_iterations: DEFAULT_MAX_UNROLL_ITERATIONS,
-            max_unrolled_operations: DEFAULT_MAX_UNROLLED_OPERATIONS,
+            options: Options::default(),
         }
     }
 }

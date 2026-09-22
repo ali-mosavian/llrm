@@ -379,6 +379,8 @@ mod hoist_tests {
             identity: Some(Identity::Tuple(vec![Identity::Int(5), Identity::Int(-16), Identity::Int(-4)])),
             generation: 0,
             extent: Some(12),
+            addressed: true,
+            captured: true,
         };
         let provenance = Provenance::one_with_slice(object, 0, 1, 1, 1, BTreeSet::new()).unwrap();
         let interval = IntegerRange::new(0, 31, 2);
