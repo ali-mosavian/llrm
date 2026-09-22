@@ -4,7 +4,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use llrm::driver;
+use llrm::old::driver;
 
 fn main() -> ExitCode {
     run_arguments(env::args().skip(1))
@@ -132,7 +132,7 @@ impl Invocation {
         if self.stop_after == Some(StopAfter::Stream) {
             return ExitCode::SUCCESS;
         }
-        let hir = llrm::frontend::wcc::capture::text(&capture);
+        let hir = llrm::old::wcc::capture::text(&capture);
         if let Err(error) = write_stage(self.dump.as_deref(), "hir", hir.as_bytes()) {
             return failure(error);
         }
@@ -148,16 +148,16 @@ impl Invocation {
 }
 
 fn compile_output(
-    capture: &llrm::frontend::wcc::capture::CaptureUnit,
+    capture: &llrm::old::wcc::capture::CaptureUnit,
     module_name: &str,
     output_kind: OutputKind,
 ) -> Result<Vec<u8>, driver::Error> {
     let module = driver::compile_wcc_capture_unit(capture, module_name)?;
     match output_kind {
-        OutputKind::Ir => Ok(llrm::ir::write_text(&module).into_bytes()),
+        OutputKind::Ir => Ok(llrm::old::ir::write_text(&module).into_bytes()),
         OutputKind::Machine => {
             let machine = driver::lower_ir_to_machine(&module)?;
-            Ok(llrm::codegen::machine::write_text(&machine).into_bytes())
+            Ok(llrm::old::codegen::machine::write_text(&machine).into_bytes())
         }
         OutputKind::Object => {
             let machine = driver::lower_c_to_machine(&module)?;
@@ -212,7 +212,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::{Invocation, OutputKind, StopAfter, compile_output, run_arguments};
-    use llrm::driver;
+    use llrm::old::driver;
 
     static STAGE_DIRECTORY: AtomicUsize = AtomicUsize::new(0);
 
@@ -340,14 +340,14 @@ mod tests {
         let module =
             driver::compile_wcc_capture(include_str!("../../fixtures/c/iparg.cgs"), "iparg")
                 .unwrap();
-        let text = llrm::ir::write_text(&module);
+        let text = llrm::old::ir::write_text(&module);
 
         assert!(text.starts_with("qir 7\nmodule \"iparg\"\n"));
         assert!(text.contains("function 0 \"_twice\""));
         assert!(text.contains("function 1 \"_answer_from_argument\""));
         assert!(text.contains("cc c"));
         assert!(text.contains("cc far_cdecl"));
-        assert!(llrm::ir::parse_text(&text).is_ok());
+        assert!(llrm::old::ir::parse_text(&text).is_ok());
     }
 
     #[test]
@@ -356,12 +356,12 @@ mod tests {
             driver::compile_wcc_capture(include_str!("../../fixtures/c/iparg.cgs"), "iparg")
                 .unwrap();
         let machine = driver::lower_ir_to_machine(&module).unwrap();
-        let text = llrm::codegen::machine::write_text(&machine);
+        let text = llrm::old::codegen::machine::write_text(&machine);
 
         assert!(text.starts_with("qmir 9\n"));
         assert!(text.contains(" far_cdecl "));
         assert!(text.contains(" c "));
-        assert!(llrm::codegen::machine::parse_text(&text).is_ok());
+        assert!(llrm::old::codegen::machine::parse_text(&text).is_ok());
     }
 
     #[test]

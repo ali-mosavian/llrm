@@ -77,8 +77,8 @@ impl Invocation {
 
 #[derive(Debug)]
 enum CompileError {
-    Text(llrm::ir::TextError),
-    Driver(llrm::driver::Error),
+    Text(llrm::old::ir::TextError),
+    Driver(llrm::old::driver::Error),
 }
 
 impl fmt::Display for CompileError {
@@ -98,9 +98,9 @@ impl Error for CompileError {}
 
 /// Parses verified portable IR, selects the initial x86 subset, and writes qmir.
 fn compile(source: &str) -> Result<String, CompileError> {
-    let module = llrm::ir::parse_text(source).map_err(CompileError::Text)?;
-    let machine = llrm::driver::lower_ir_to_machine(&module).map_err(CompileError::Driver)?;
-    Ok(llrm::codegen::machine::write_text(&machine))
+    let module = llrm::old::ir::parse_text(source).map_err(CompileError::Text)?;
+    let machine = llrm::old::driver::lower_ir_to_machine(&module).map_err(CompileError::Driver)?;
+    Ok(llrm::old::codegen::machine::write_text(&machine))
 }
 
 fn write_output(path: Option<&Path>, bytes: &[u8]) -> ExitCode {
@@ -128,7 +128,7 @@ const fn usage() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{CompileError, Invocation, compile};
-    use llrm::target::x86::X86Opcode;
+    use llrm::old::target::x86::X86Opcode;
 
     const MINIMAL_INTEGER_IR: &str = concat!(
         "qir 7\n",
@@ -147,7 +147,7 @@ mod tests {
     #[test]
     fn selects_integer_ir_to_verified_qmir() {
         let qmir = compile(MINIMAL_INTEGER_IR).expect("the selected integer subset must compile");
-        let machine = llrm::codegen::machine::parse_text(&qmir)
+        let machine = llrm::old::codegen::machine::parse_text(&qmir)
             .expect("the qmir writer must emit parseable text");
         machine.verify().expect("selected qmir must verify");
         let instructions = machine.functions[0]

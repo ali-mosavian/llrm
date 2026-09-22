@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
-use crate::hir::{
+use crate::old::hir::{
     AddressKind, CallAbi, CallDistance, Callable, CallableId, FloatEvaluation, Function,
     FunctionId, Instruction, InstructionId, Module, Opcode, Operand, StackCleanup, Terminator,
     Type, TypeId, TypeKind, Value, ValueId,
@@ -559,7 +559,7 @@ fn normalized_name(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::physicalize;
-    use crate::hir::{
+    use crate::old::hir::{
         AddressKind, Block, BlockId, CallAbi, CallDistance, Callable, CallableId, FloatEvaluation,
         Function, FunctionId, Instruction, InstructionId, Linkage, Module, ModuleId, Opcode,
         Operand, Parameter, ProcedureAbi, StackCleanup, Terminator, Type, TypeId, TypeKind, Value,

@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use super::constants::{self, Known};
+use super::consts::{self, Known};
 use crate::model::mir::{Arg, Kind, MirBody, Op, Phi, Value};
 
 /// A definition not yet solved, or one which cannot be a constant.
@@ -59,7 +59,7 @@ pub(super) fn propagated(body: &MirBody, seeds: BTreeMap<Value, Known>) -> BTree
     }
     for block in &body.blocks {
         for op in &block.ops {
-            if let Some(value) = constants::_defined(op) {
+            if let Some(value) = consts::_defined(op) {
                 recipes.insert(value, Recipe::Op(op));
                 owners.insert(value, block.at);
             }
@@ -181,7 +181,7 @@ pub(super) fn propagated(body: &MirBody, seeds: BTreeMap<Value, Known>) -> BTree
             }
             Recipe::Op(op) => {
                 let facts = known(&states);
-                if let Some(fact) = constants::_result(op, &facts, None) {
+                if let Some(fact) = consts::_result(op, &facts, None) {
                     State::Known(fact)
                 } else {
                     let inputs = op
@@ -227,7 +227,7 @@ pub(super) fn propagated(body: &MirBody, seeds: BTreeMap<Value, Known>) -> BTree
 
 #[cfg(test)]
 mod tests {
-    use super::super::constants::{Known, known};
+    use super::super::consts::{Known, known};
     use crate::model::mir::{Arg, Const, Held, Kind, MirBlock, MirBody, Op, Phi, Value};
 
     fn value(id: u32, at: i64) -> Value {

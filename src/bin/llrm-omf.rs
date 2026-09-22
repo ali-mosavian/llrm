@@ -4,7 +4,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use llrm::driver;
+use llrm::old::driver;
 
 fn main() -> ExitCode {
     match Invocation::parse(env::args().skip(1)) {

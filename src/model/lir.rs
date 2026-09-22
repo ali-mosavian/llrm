@@ -8,8 +8,8 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use crate::codegen::machine::{Held, Operation, Semantics};
-use crate::frontend::omf::nodes::Node;
+use crate::model::ir::nodes::Node;
+use crate::model::ir::{Held, Operation, Semantics};
 use crate::support::PhysicalRegister;
 
 use super::mir::{self, Arg, Kind, Op, OrderedMap};
@@ -369,8 +369,8 @@ mod tests {
     use std::sync::Arc;
 
     use super::{Insn, anchor, without};
-    use crate::codegen::machine::{Effects, Held, Operation, Semantics};
-    use crate::frontend::omf::nodes::{Node, Restore};
+    use crate::model::ir::nodes::{Node, Restore};
+    use crate::model::ir::{Effects, Held, Operation, Semantics};
     use crate::model::mir::{Kind, Op, OpCode};
 
     fn instruction(at: i64, covers: Option<(i64, i64)>) -> Arc<Insn> {

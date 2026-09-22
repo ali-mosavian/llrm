@@ -9,9 +9,9 @@ use std::collections::BTreeMap;
 
 use num_bigint::BigInt;
 
-use super::constants;
+use super::consts;
 use crate::model::mir::{MemRef, MirBody, Value, symbolic_ref};
-use crate::object::omf::module::{NO_REGISTER, Space};
+use crate::old::object::omf::module::{NO_REGISTER, Space};
 
 /// A non-wrapping mathematical interval at a fixed width.
 ///
@@ -26,10 +26,10 @@ pub(crate) struct Interval {
 /// Every value `constants` knows, as the singleton interval an alias query reads.
 ///
 /// Direct port of `qbopt.analysis.ranges:constants(body, dgroup, calls=None)`.
-/// The existing value-only `constants::known` is invoked exactly once; like the
+/// The existing value-only `consts::known` is invoked exactly once; like the
 /// Python `calls=None` path, this function adds no memory or call facts.
 pub(crate) fn constants(body: &MirBody) -> BTreeMap<Value, Interval> {
-    constants::known(body)
+    consts::known(body)
         .into_iter()
         .map(|(value, fact)| {
             (
@@ -79,7 +79,7 @@ pub(crate) fn covering(reference: &MemRef, known: &BTreeMap<Value, Interval>) ->
         return reference;
     };
     let mut covered = reference.clone();
-    covered.addr = Some(crate::object::omf::module::Addr {
+    covered.addr = Some(crate::old::object::omf::module::Addr {
         disp,
         base: NO_REGISTER,
         ..address
@@ -99,7 +99,7 @@ mod tests {
     use crate::model::mir::{
         Arg, Const, Held, Kind, MemRef, MirBlock, MirBody, Op, Phi, Symbol, Value,
     };
-    use crate::object::omf::module::{Addr, NO_REGISTER, Space};
+    use crate::old::object::omf::module::{Addr, NO_REGISTER, Space};
     use crate::support::PhysicalRegister;
 
     fn value(id: u32, at: i64) -> Value {

@@ -8,7 +8,7 @@ use crate::frontend::qb::syntax::{
     Binary, CaseItem, Declaration, ExitTarget, Expr, FileMode, Literal, Module, PrintSeparator,
     Procedure, ProcedureKind, ResumeTarget, Statement, TypeName, Unary,
 };
-use crate::hir;
+use crate::old::hir;
 
 use super::statement_table::METADATA_OBJECT_NAME;
 
@@ -8003,7 +8003,7 @@ mod tests {
                 callable.result_type,
             ))
         );
-        crate::hir::lower_to_ir_with_array_order(module, program.array_order)
+        crate::old::hir::lower_to_ir_with_array_order(module, program.array_order)
             .expect("the physical floating-function signature lowers exactly");
     }
 }

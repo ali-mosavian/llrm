@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
-use crate::mc::{
+use crate::old::mc::{
     DataFragment, Fixup, FixupKind, FragmentId, MCExpression, MCFragment, MCModule, MCSymbol,
     SectionFlags, SectionId, SectionKind, SymbolBinding, SymbolDefinition, SymbolId,
     SymbolVisibility,
@@ -280,10 +280,10 @@ fn allocate_symbol(next: &mut u32) -> Result<SymbolId, StatementMcError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mc::{MCSection, SectionFlags};
-    use crate::object::omf::fixups::{FixupMode, Location};
-    use crate::object::omf::write::{RelocationFrame, RelocationTarget};
-    use crate::target::x86::{X86FixupKind, lower_to_omf};
+    use crate::old::mc::{MCSection, SectionFlags};
+    use crate::old::object::omf::fixups::{FixupMode, Location};
+    use crate::old::object::omf::write::{RelocationFrame, RelocationTarget};
+    use crate::old::target::x86::{X86FixupKind, lower_to_omf};
 
     const TEXT: SectionId = SectionId::new(1);
 

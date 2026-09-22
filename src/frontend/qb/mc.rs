@@ -8,10 +8,10 @@ use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
 
-use crate::codegen::machine::{MachineAddressSpace, MachineDataObject, MachineDataObjectId};
 use crate::frontend::qb::module_header::MODULE_HEADER_SIZE;
-use crate::hir::RuntimeProfile;
-use crate::mc::{
+use crate::old::codegen::machine::{MachineAddressSpace, MachineDataObject, MachineDataObjectId};
+use crate::old::hir::RuntimeProfile;
+use crate::old::mc::{
     DataFragment, FragmentId, MCFragment, MCModule, MCSection, SectionFlags, SectionId,
     SectionKind, SymbolBinding, SymbolDefinition, SymbolId, SymbolVisibility,
 };
@@ -271,7 +271,7 @@ pub fn place_data(
     let prefix = next_fragment_id(module)?;
     let prefix_symbol = next_symbol_id(module)?;
     let mut symbols = module.symbols.clone();
-    symbols.push(crate::mc::MCSymbol {
+    symbols.push(crate::old::mc::MCSymbol {
         id: prefix_symbol,
         name: DATA_PREFIX_SYMBOL.to_owned(),
         binding: SymbolBinding::Local,
@@ -532,7 +532,7 @@ pub fn prepend_module_header(
             fixups: Vec::new(),
         }),
     );
-    output.symbols.push(crate::mc::MCSymbol {
+    output.symbols.push(crate::old::mc::MCSymbol {
         id: symbol,
         name: HEADER_SYMBOL.to_owned(),
         binding: SymbolBinding::Local,
@@ -586,19 +586,19 @@ fn next_symbol_id(module: &MCModule) -> Result<SymbolId, ModuleMcError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen::machine::{
+    use crate::frontend::qb::module_header::module_header;
+    use crate::old::codegen::machine::{
         MachineAddressSpace, MachineDataObject, MachineDataObjectId, MachineDataRelocation,
         MachineLinkage,
     };
-    use crate::frontend::qb::module_header::module_header;
-    use crate::hir::{
+    use crate::old::hir::{
         ArrayOrder, Dialect, FORMAT_VERSION, FloatMode, Module, ModuleId, Program, RuntimeProfile,
         TargetProfile,
     };
-    use crate::mc::{
+    use crate::old::mc::{
         AlignFragment, Fixup, MCExpression, MCSection, MCSymbol, SectionFlags, SymbolDefinition,
     };
-    use crate::target::x86::{X86FixupKind, lower_to_omf};
+    use crate::old::target::x86::{X86FixupKind, lower_to_omf};
 
     const TEXT: SectionId = SectionId::new(4);
 
@@ -922,18 +922,18 @@ mod tests {
     fn layout_and_omf_lowering_shift_only_the_qb_prefixed_module() {
         let source = module();
         let prefixed = prepend_module_header(&source, TEXT, header()).unwrap();
-        let before = crate::mc::layout(&source, |_| None).unwrap();
-        let after = crate::mc::layout(&prefixed, |_| None).unwrap();
+        let before = crate::old::mc::layout(&source, |_| None).unwrap();
+        let after = crate::old::mc::layout(&prefixed, |_| None).unwrap();
         assert_eq!(
             before.symbols[&SymbolId::new(5)],
-            crate::mc::SymbolLayout::Defined {
+            crate::old::mc::SymbolLayout::Defined {
                 section: TEXT,
                 offset: 0,
             }
         );
         assert_eq!(
             after.symbols[&SymbolId::new(5)],
-            crate::mc::SymbolLayout::Defined {
+            crate::old::mc::SymbolLayout::Defined {
                 section: TEXT,
                 offset: MODULE_HEADER_SIZE as u64,
             }

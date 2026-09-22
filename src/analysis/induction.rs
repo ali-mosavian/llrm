@@ -11,12 +11,12 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use num_bigint::BigInt;
 
-use super::constants::{self, Known, masked};
+use super::consts::{self, Known, masked};
 use super::occurrence::{OpOccurrence, PhiOccurrence, operations, phis};
 use super::ranges;
 use super::regions::{RegionError, RegionLayout, overlapping};
+use crate::analysis::loops::{self, Loop, predecessors};
 use crate::model::mir::{Arg, Const, Held, Kind, MemRef, MirBody, Op, OrderedMap, Value};
-use crate::model::mir_loops::{self, Loop, predecessors};
 
 /// The canonical pre-tested, single-latch loop CFG.
 ///
@@ -237,7 +237,7 @@ pub(crate) fn derived_map(formula: &Derived, facts: &BTreeMap<Value, Known>) -> 
 /// operation occurrence comes from this immutable body snapshot, preserving
 /// Python's exact `mir.Op` identity rather than source operation provenance.
 fn _quotients(body: &MirBody, loop_: &Loop, found: &OrderedMap<u32, Affine>) -> Vec<Derived> {
-    let facts = constants::known(body);
+    let facts = consts::known(body);
     let mut out = Vec::new();
     for (occurrence, block, operation) in operations(body) {
         if !loop_.body.contains(&block.at) || block.at == loop_.header {
@@ -485,7 +485,7 @@ where
     F: Fn(&MemRef) -> Result<bool, RegionError>,
 {
     let inside = loop_.body.clone();
-    let known = constants::known(body);
+    let known = consts::known(body);
     let still = invariant(body, &inside);
     let mut forms = OrderedMap::new();
     for (value, recurrence) in found.iter() {
@@ -971,7 +971,7 @@ pub(crate) fn of(
     layout: Option<&RegionLayout>,
 ) -> Result<Vec<(Loop, OrderedMap<u32, Affine>, Vec<Derived>)>, RegionError> {
     let mut result = Vec::new();
-    for loop_ in mir_loops::loops(&body.blocks, Some(body.entry)) {
+    for loop_ in loops::loops(&body.blocks, Some(body.entry)) {
         let found = basics(body, &loop_);
         if found.is_empty() {
             continue;
@@ -984,7 +984,7 @@ pub(crate) fn of(
 
 /// Python's default `counted(body, loop)` invocation.
 pub(crate) fn counted(body: &MirBody, loop_: &Loop) -> Vec<CountedLoop> {
-    let facts = constants::known(body);
+    let facts = consts::known(body);
     counted_with_facts(body, loop_, &facts)
 }
 
@@ -1704,7 +1704,7 @@ fn _sentinel_trip_count(
 
 /// Python's `nonempty(body, loop)`.
 pub(crate) fn nonempty(body: &MirBody, loop_: &Loop) -> bool {
-    let facts = constants::known(body);
+    let facts = consts::known(body);
     trip_count(body, loop_, &facts).is_some()
 }
 
@@ -2186,7 +2186,7 @@ pub(crate) fn zero_terminating_control<'a>(
     proof: &'a CountedLoop,
     candidate: &Affine,
 ) -> Option<ZeroTerminatingControl<'a>> {
-    let facts = constants::known(body);
+    let facts = consts::known(body);
     zero_terminating_control_with_facts(body, loop_, proof, candidate, &facts)
 }
 
@@ -2243,18 +2243,18 @@ mod tests {
 
     use num_bigint::BigInt;
 
-    use crate::analysis::constants::{Known, masked};
-    use crate::codegen::machine::Operation;
+    use crate::analysis::consts::{Known, masked};
+    use crate::analysis::loops::Loop;
     use crate::model::floating::{Format, Precision, Rounding, Semantics as FloatingSemantics};
+    use crate::model::ir::Operation;
     use crate::model::mir::{
         Arg, Cell, Const, FloatingOrigin, Held, IntegerRange, Kind, MemRef, MirBlock, MirBody, Op,
         OpCode, OrderedMap, Phi, Value,
     };
-    use crate::model::mir_loops::Loop;
 
-    use crate::analysis::constants;
+    use crate::analysis::consts;
     use crate::analysis::occurrence::{OpOccurrence, operations};
-    use crate::object::omf::module::{Addr, Space};
+    use crate::old::object::omf::module::{Addr, Space};
 
     use super::{
         _as_signed, _composed, _constant, _copied, _counter_bound, _extended, _multiplier,
@@ -2480,7 +2480,7 @@ mod tests {
             ..value(9, 2)
         };
         let mut source = MemRef::new(None, 2);
-        source.space = Some(crate::object::omf::module::Space::Frame);
+        source.space = Some(crate::old::object::omf::module::Space::Frame);
 
         let constant_copy = |at, result, number| {
             let mut operation = op(at, Kind::Copy, vec![result], vec![]);
@@ -4731,7 +4731,7 @@ mod tests {
     #[test]
     fn direct_induction_counted_refuses_nonzero_or_nonunit_control() {
         let (body, loop_, _, seed) = symbolic_counted_body(0);
-        let mut nonzero = constants::known(&body);
+        let mut nonzero = consts::known(&body);
         nonzero.insert(seed, Known::new(1, 2));
         assert!(counted_with_facts(&body, &loop_, &nonzero).is_empty());
 
@@ -4745,7 +4745,7 @@ mod tests {
         let (body, loop_, bound, _) = symbolic_counted_body(0);
         let mut missing = body.clone();
         missing.blocks[1].ops[0].args[1] = Arg::Symbol(crate::model::mir::Symbol::new(
-            crate::object::omf::module::Space::Segment,
+            crate::old::object::omf::module::Space::Segment,
             0,
             0,
             2,
@@ -5087,7 +5087,7 @@ mod tests {
         // unrolled it. Python proves the immediate latch update has four.
         let (body, loop_) = posttested_counter_body(0, 4, Kind::AboveEq);
         assert_eq!(
-            trip_count(&body, &loop_, &constants::known(&body)),
+            trip_count(&body, &loop_, &consts::known(&body)),
             Some(BigInt::from(4))
         );
     }
@@ -5165,7 +5165,7 @@ mod tests {
             body: BTreeSet::from([1, 2]),
         };
         assert_eq!(
-            trip_count(&body, &loop_, &constants::known(&body)),
+            trip_count(&body, &loop_, &consts::known(&body)),
             Some(BigInt::from(4))
         );
         assert!(nonempty(&body, &loop_));
@@ -5259,7 +5259,7 @@ mod tests {
             body: BTreeSet::from([1, 2]),
         };
         assert_eq!(
-            trip_count(&body, &loop_, &constants::known(&body)),
+            trip_count(&body, &loop_, &consts::known(&body)),
             Some(BigInt::from(32))
         );
     }
@@ -5270,13 +5270,13 @@ mod tests {
         body.loop_trip_counts = vec![(1, 7), (1, 8)];
         // A fresh exact proof wins; stored facts only preserve a relationship a prior transform consumed.
         assert_eq!(
-            trip_count(&body, &loop_, &constants::known(&body)),
+            trip_count(&body, &loop_, &consts::known(&body)),
             Some(BigInt::from(4))
         );
         body.blocks[1].phis.clear();
         // Python's dict construction retains the last duplicate header entry.
         assert_eq!(
-            trip_count(&body, &loop_, &constants::known(&body)),
+            trip_count(&body, &loop_, &consts::known(&body)),
             Some(BigInt::from(8))
         );
     }
@@ -5342,6 +5342,6 @@ mod tests {
             .uses
             .push(flags);
         body.blocks[2].ops.insert(1, compare);
-        assert_eq!(trip_count(&body, &loop_, &constants::known(&body)), None);
+        assert_eq!(trip_count(&body, &loop_, &consts::known(&body)), None);
     }
 }

@@ -7,7 +7,7 @@
 use std::error::Error;
 use std::fmt;
 
-use crate::hir::{self, AddressKind, Linkage};
+use crate::old::hir::{self, AddressKind, Linkage};
 
 pub const METADATA_OBJECT_NAME: &str = "$qb$statementTable";
 const ROW_SIZE: usize = 14;

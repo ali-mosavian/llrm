@@ -23,8 +23,8 @@ fn semantic_frontend_returns_verified_typed_hir() {
 
     let program = compile_hir(&module, "answer", Dialect::QuickBasic45, "qb45").unwrap();
     program.verify().unwrap();
-    let text = llrm::hir::write_text(&program);
-    assert_eq!(llrm::hir::parse_text(&text).unwrap(), program);
+    let text = llrm::old::hir::write_text(&program);
+    assert_eq!(llrm::old::hir::parse_text(&text).unwrap(), program);
 
     let module = &program.modules[0];
     assert_eq!(module.name, "answer");
@@ -34,7 +34,7 @@ fn semantic_frontend_returns_verified_typed_hir() {
             .blocks
             .iter()
             .flat_map(|block| &block.instructions)
-            .any(|instruction| instruction.opcode == llrm::hir::Opcode::Multiply)
+            .any(|instruction| instruction.opcode == llrm::old::hir::Opcode::Multiply)
     );
 }
 
@@ -343,8 +343,8 @@ fn floating_to_integer_conversion_retains_basic_rounding_semantics() {
             .flat_map(|block| &block.instructions)
             .any(|instruction| matches!(
                 instruction.opcode,
-                llrm::hir::Opcode::FloatToInteger {
-                    rounding: llrm::hir::FloatRounding::Dynamic
+                llrm::old::hir::Opcode::FloatToInteger {
+                    rounding: llrm::old::hir::FloatRounding::Dynamic
                 }
             ))
     );
@@ -954,10 +954,10 @@ fn qlight_scale_literal_is_a_long_before_hir_conversion() {
         .flat_map(|instruction| &instruction.operands);
     assert!(constants.into_iter().any(|operand| matches!(
         operand,
-        llrm::hir::Operand::Constant {
+        llrm::old::hir::Operand::Constant {
             type_id,
-            value: llrm::hir::ConstantValue::Integer(1000000),
-        } if *type_id == llrm::hir::TypeId::new(2)
+            value: llrm::old::hir::ConstantValue::Integer(1000000),
+        } if *type_id == llrm::old::hir::TypeId::new(2)
     )));
 }
 
@@ -1355,7 +1355,12 @@ fn long_function_loads_its_result_after_erasing_local_arrays() {
     let exit = function
         .blocks
         .iter()
-        .find(|block| matches!(block.terminator, llrm::hir::Terminator::Return(Some(_))))
+        .find(|block| {
+            matches!(
+                block.terminator,
+                llrm::old::hir::Terminator::Return(Some(_))
+            )
+        })
         .expect("value-returning exit block");
     let erase = exit
         .instructions
@@ -1366,8 +1371,8 @@ fn long_function_loads_its_result_after_erasing_local_arrays() {
         .instructions
         .iter()
         .position(|instruction| {
-            instruction.opcode == llrm::hir::Opcode::Load
-                && matches!(instruction.operands.as_slice(), [llrm::hir::Operand::Place(place)] if *place == result_place)
+            instruction.opcode == llrm::old::hir::Opcode::Load
+                && matches!(instruction.operands.as_slice(), [llrm::old::hir::Operand::Place(place)] if *place == result_place)
         })
         .expect("function result load");
     assert!(erase < result_load, "exit block: {exit:#?}");
@@ -1407,7 +1412,12 @@ fn string_function_copies_its_result_before_cleaning_other_local_strings() {
     let exit = function
         .blocks
         .iter()
-        .find(|block| matches!(block.terminator, llrm::hir::Terminator::Return(Some(_))))
+        .find(|block| {
+            matches!(
+                block.terminator,
+                llrm::old::hir::Terminator::Return(Some(_))
+            )
+        })
         .expect("value-returning exit block");
     let (scpf_at, scpf) = exit
         .instructions
@@ -1420,7 +1430,7 @@ fn string_function_copies_its_result_before_cleaning_other_local_strings() {
     };
     assert!(matches!(
         &exit.terminator,
-        llrm::hir::Terminator::Return(Some(llrm::hir::Operand::Value(result))) if result == scpf_result
+        llrm::old::hir::Terminator::Return(Some(llrm::old::hir::Operand::Value(result))) if result == scpf_result
     ));
     let (stdl_at, stdl) = exit
         .instructions
@@ -1429,17 +1439,17 @@ fn string_function_copies_its_result_before_cleaning_other_local_strings() {
         .find(|(_, instruction)| instruction.callee.as_deref() == Some("B$STDL"))
         .expect("other local string cleanup");
     assert!(scpf_at < stdl_at, "exit block: {exit:#?}");
-    let [llrm::hir::Operand::Value(stdl_descriptor)] = stdl.operands.as_slice() else {
+    let [llrm::old::hir::Operand::Value(stdl_descriptor)] = stdl.operands.as_slice() else {
         panic!("B$STDL arguments: {stdl:#?}");
     };
     let descriptor_address = exit.instructions[..stdl_at]
         .iter()
         .find(|instruction| instruction.results.as_slice() == [*stdl_descriptor])
         .expect("B$STDL descriptor address");
-    assert_eq!(descriptor_address.opcode, llrm::hir::Opcode::Address);
+    assert_eq!(descriptor_address.opcode, llrm::old::hir::Opcode::Address);
     assert!(matches!(
         descriptor_address.operands.as_slice(),
-        [llrm::hir::Operand::Place(place)] if *place == other_place && *place != result_place
+        [llrm::old::hir::Operand::Place(place)] if *place == other_place && *place != result_place
     ));
 }
 

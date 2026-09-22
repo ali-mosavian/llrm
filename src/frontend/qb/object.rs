@@ -9,10 +9,10 @@ use std::error::Error;
 use std::fmt;
 
 use crate::frontend::qb::module_header::{MODULE_HEADER_SIZE, MODULE_SIGNATURE, object_name};
-use crate::hir::{Program, RuntimeProfile};
-use crate::object::omf::fixups::{FixupMode, Location};
-use crate::object::omf::segments::{Alignment, Combine};
-use crate::object::omf::write::{
+use crate::old::hir::{Program, RuntimeProfile};
+use crate::old::object::omf::fixups::{FixupMode, Location};
+use crate::old::object::omf::segments::{Alignment, Combine};
+use crate::old::object::omf::write::{
     InitializedSpan, ObjectGroup, ObjectModule, ObjectRelocation, ObjectSegment, RelocationFrame,
     RelocationTarget,
 };
@@ -338,9 +338,9 @@ fn generic_segment_remap(runtime: RuntimeProfile) -> Vec<u16> {
 }
 
 fn remap_publics(
-    publics: &[crate::object::omf::write::PublicSymbol],
+    publics: &[crate::old::object::omf::write::PublicSymbol],
     remap: &[u16],
-) -> Result<Vec<crate::object::omf::write::PublicSymbol>, ObjectEnvelopeError> {
+) -> Result<Vec<crate::old::object::omf::write::PublicSymbol>, ObjectEnvelopeError> {
     publics
         .iter()
         .cloned()
@@ -457,14 +457,14 @@ fn bc_sa_segment() -> ObjectSegment {
 mod tests {
     use super::*;
     use crate::frontend::qb::module_header::module_header;
-    use crate::hir::{
+    use crate::old::hir::{
         ArrayOrder, Dialect, FORMAT_VERSION, FloatMode, Module, ModuleId, RuntimeProfile,
         TargetProfile,
     };
-    use crate::object::omf::fixups::{FrameDatum, FrameMethod, TargetMethod};
-    use crate::object::omf::module::DecodedModule;
-    use crate::object::omf::record;
-    use crate::object::omf::write::{PublicSymbol, to_bytes};
+    use crate::old::object::omf::fixups::{FrameDatum, FrameMethod, TargetMethod};
+    use crate::old::object::omf::module::DecodedModule;
+    use crate::old::object::omf::record;
+    use crate::old::object::omf::write::{PublicSymbol, to_bytes};
 
     fn program(runtime: RuntimeProfile) -> Program {
         Program {

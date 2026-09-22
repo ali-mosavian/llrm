@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 
 use crate::model::mir::{Symbol, Value};
-use crate::object::omf::module::Space;
+use crate::old::object::omf::module::Space;
 
 /// Python `qbopt.model.memory:Kind`.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]

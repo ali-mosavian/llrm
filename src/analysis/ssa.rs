@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use super::occurrence::{OpOccurrence, operations};
-use crate::codegen::machine::Operation;
+use crate::model::ir::Operation;
 use crate::model::mir::{
     Arg, Cell, Held, MemRef, MirBody, Op, OpCode, OrderedMap, Value, consumed as operation_consumed,
 };
@@ -419,7 +419,7 @@ pub(crate) fn constructed(
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
-    use crate::codegen::machine::Operation;
+    use crate::model::ir::Operation;
     use crate::model::mir::{
         Arg, Cell, Const, Held, Kind, MemRef, MirBlock, MirBody, Op, OpCode, OrderedMap, Phi, Value,
     };

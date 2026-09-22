@@ -111,11 +111,11 @@ fn parse_passes(value: &str) -> Result<Vec<PassName>, String> {
 
 #[derive(Debug)]
 enum PipelineError {
-    Algebraic(llrm::transforms::AlgebraicError),
-    Text(llrm::ir::TextError),
-    BranchSimplify(llrm::transforms::BranchSimplifyError),
-    Fold(llrm::transforms::FoldError),
-    Pass(llrm::transforms::PassError),
+    Algebraic(llrm::old::transforms::AlgebraicError),
+    Text(llrm::old::ir::TextError),
+    BranchSimplify(llrm::old::transforms::BranchSimplifyError),
+    Fold(llrm::old::transforms::FoldError),
+    Pass(llrm::old::transforms::PassError),
     Verification(Vec<llrm::support::diagnostic::Diagnostic>),
 }
 
@@ -141,44 +141,44 @@ fn run_pipeline(
     passes: &[PassName],
     verify_each: bool,
 ) -> Result<String, PipelineError> {
-    let mut module = llrm::ir::parse_text(source).map_err(PipelineError::Text)?;
-    let mut manager = llrm::transforms::FunctionPassManager::new();
+    let mut module = llrm::old::ir::parse_text(source).map_err(PipelineError::Text)?;
+    let mut manager = llrm::old::transforms::FunctionPassManager::new();
     manager.set_verify_each(verify_each);
     for pass in passes {
         match pass {
             PassName::AlgebraicSimplify => manager.add_pass(
-                llrm::transforms::AlgebraicSimplify::new(&module)
+                llrm::old::transforms::AlgebraicSimplify::new(&module)
                     .map_err(PipelineError::Algebraic)?,
             ),
             PassName::CommonSubexpressionElimination => {
-                manager.add_pass(llrm::transforms::CommonSubexpressionElimination::new())
+                manager.add_pass(llrm::old::transforms::CommonSubexpressionElimination::new())
             }
             PassName::ConstantFold => manager.add_pass(
-                llrm::transforms::ConstantFold::new(&module).map_err(PipelineError::Fold)?,
+                llrm::old::transforms::ConstantFold::new(&module).map_err(PipelineError::Fold)?,
             ),
             PassName::DeadCodeElimination => {
-                manager.add_pass(llrm::transforms::DeadCodeElimination::new())
+                manager.add_pass(llrm::old::transforms::DeadCodeElimination::new())
             }
             PassName::DeadStoreElimination => {
-                manager.add_pass(llrm::transforms::DeadStoreElimination::new())
+                manager.add_pass(llrm::old::transforms::DeadStoreElimination::new())
             }
             PassName::SimplifyBranches => manager.add_pass(
-                llrm::transforms::SimplifyBranches::new(&module)
+                llrm::old::transforms::SimplifyBranches::new(&module)
                     .map_err(PipelineError::BranchSimplify)?,
             ),
             PassName::UnreachableBlockElimination => {
-                manager.add_pass(llrm::transforms::UnreachableBlockElimination::new())
+                manager.add_pass(llrm::old::transforms::UnreachableBlockElimination::new())
             }
         }
     }
     manager.run(&mut module).map_err(PipelineError::Pass)?;
     module.verify().map_err(PipelineError::Verification)?;
-    Ok(llrm::ir::write_text(&module))
+    Ok(llrm::old::ir::write_text(&module))
 }
 
 #[cfg(test)]
-fn canonicalize(source: &str) -> Result<String, llrm::ir::TextError> {
-    llrm::ir::parse_text(source).map(|module| llrm::ir::write_text(&module))
+fn canonicalize(source: &str) -> Result<String, llrm::old::ir::TextError> {
+    llrm::old::ir::parse_text(source).map(|module| llrm::old::ir::write_text(&module))
 }
 
 fn write_output(path: Option<&Path>, bytes: &[u8]) -> ExitCode {

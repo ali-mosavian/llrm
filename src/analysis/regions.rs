@@ -15,7 +15,7 @@ use num_bigint::BigInt;
 use crate::analysis::ranges::{Interval, covering};
 use crate::model::memory::{Provenance, Slice, SliceError};
 use crate::model::mir::{MemRef, Symbol, Value, symbolic_ref};
-use crate::object::omf::module::{Addr, NO_REGISTER, Space};
+use crate::old::object::omf::module::{Addr, NO_REGISTER, Space};
 
 const FLOOR: i64 = -(1_i64 << 31);
 const CEILING: i64 = 1_i64 << 31;
@@ -577,7 +577,7 @@ mod tests {
         MemoryKind, MemoryObject, ObjectIdentity, ObjectTag, Provenance, RestrictRoot, SliceError,
     };
     use crate::model::mir::{MemRef, Symbol, Value};
-    use crate::object::omf::module::{Addr, NO_REGISTER, Space};
+    use crate::old::object::omf::module::{Addr, NO_REGISTER, Space};
     use crate::support::PhysicalRegister;
 
     fn address(space: Space, disp: i64, index: u32) -> Addr {

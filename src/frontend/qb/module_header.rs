@@ -6,7 +6,7 @@
 use std::error::Error;
 use std::fmt;
 
-use crate::hir::{ArrayOrder, FloatMode, Program, RuntimeProfile};
+use crate::old::hir::{ArrayOrder, FloatMode, Program, RuntimeProfile};
 
 pub const MODULE_HEADER_SIZE: usize = 48;
 pub const MODULE_NAME_SIZE: usize = 8;
@@ -99,7 +99,7 @@ pub fn module_header(program: &Program) -> Result<[u8; MODULE_HEADER_SIZE], Modu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hir::{Dialect, FORMAT_VERSION, Module, ModuleId, TargetProfile};
+    use crate::old::hir::{Dialect, FORMAT_VERSION, Module, ModuleId, TargetProfile};
 
     fn program(
         name: &str,

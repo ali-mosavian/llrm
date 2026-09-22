@@ -4,9 +4,9 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use llrm::driver::{self, QbOptions};
 use llrm::frontend::qb::{Dialect, source};
-use llrm::hir::RuntimeProfile;
+use llrm::old::driver::{self, QbOptions};
+use llrm::old::hir::RuntimeProfile;
 
 fn main() -> ExitCode {
     match Invocation::parse(env::args().skip(1)) {
@@ -144,13 +144,15 @@ impl Invocation {
             Err(error) => return failure(format!("{}: {error}", self.input.display())),
         };
         let bytes = match self.output_kind {
-            OutputKind::Hir => llrm::hir::write_text(&program).into_bytes(),
+            OutputKind::Hir => llrm::old::hir::write_text(&program).into_bytes(),
             OutputKind::Ir => match driver::lower_qb_to_ir(&program) {
-                Ok(module) => llrm::ir::write_text(&module).into_bytes(),
+                Ok(module) => llrm::old::ir::write_text(&module).into_bytes(),
                 Err(error) => return failure(format!("{}: {error}", self.input.display())),
             },
             OutputKind::Machine => match driver::lower_qb_to_machine(&program) {
-                Ok(machine) => llrm::codegen::machine::write_text(&machine.module).into_bytes(),
+                Ok(machine) => {
+                    llrm::old::codegen::machine::write_text(&machine.module).into_bytes()
+                }
                 Err(error) => return failure(format!("{}: {error}", self.input.display())),
             },
             OutputKind::Object => match driver::write_qb_omf(&program, module_name.as_bytes()) {
@@ -196,7 +198,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{Invocation, OutputKind};
-    use llrm::driver::{self, QbOptions};
+    use llrm::old::driver::{self, QbOptions};
 
     #[test]
     fn selects_portable_ir_output_for_qb_source() {
@@ -226,10 +228,10 @@ mod tests {
     fn lowers_minimal_qb_source_to_portable_ir_text() {
         let program = driver::compile_qb("", "program", QbOptions::default()).unwrap();
         let module = driver::lower_qb_to_ir(&program).unwrap();
-        let text = llrm::ir::write_text(&module);
+        let text = llrm::old::ir::write_text(&module);
 
         assert!(text.starts_with("qir 7\nmodule \"program\"\n"));
-        assert!(llrm::ir::parse_text(&text).is_ok());
+        assert!(llrm::old::ir::parse_text(&text).is_ok());
     }
 
     #[test]
@@ -260,7 +262,7 @@ mod tests {
         assert_eq!(invocation.run(), std::process::ExitCode::SUCCESS);
 
         let text = fs::read_to_string(&output).unwrap();
-        let parsed = llrm::codegen::machine::parse_text(&text)
+        let parsed = llrm::old::codegen::machine::parse_text(&text)
             .expect("the qmir writer must emit parseable text");
 
         assert!(text.starts_with("qmir 9\n"));

@@ -1,12 +1,12 @@
 //! Transitional encoder for the Python-era QB HIR JSON format.
 //!
 //! The format is intentionally kept at the frontend edge. New Rust pipeline
-//! code consumes [`crate::hir::Program`] directly; this encoder exists only
+//! code consumes [`crate::old::hir::Program`] directly; this encoder exists only
 //! until the legacy JSON consumers have been retired.
 
 use std::fmt::{self, Write};
 
-use crate::hir::{
+use crate::old::hir::{
     ArrayOrder, CallDistance, ConstantValue, Dialect, FloatMode, Operand, Program, RuntimeProfile,
     StackCleanup, TargetProfile, Terminator,
 };
@@ -363,7 +363,7 @@ fn operand_json(out: &mut String, operand: &Operand) {
     }
 }
 
-fn type_json(out: &mut String, type_: &crate::hir::Type) {
+fn type_json(out: &mut String, type_: &crate::old::hir::Type) {
     write!(
         out,
         "{{\"address\":\"{}\",\"bounds\":[",
@@ -453,7 +453,7 @@ fn usize_values(out: &mut String, values: &[usize]) {
     }
 }
 
-fn value_ids(out: &mut String, values: &[crate::hir::ValueId]) {
+fn value_ids(out: &mut String, values: &[crate::old::hir::ValueId]) {
     for (value_index, value) in values.iter().enumerate() {
         if value_index != 0 {
             out.push(',');
@@ -462,7 +462,7 @@ fn value_ids(out: &mut String, values: &[crate::hir::ValueId]) {
     }
 }
 
-fn block_ids(out: &mut String, values: &[crate::hir::BlockId]) {
+fn block_ids(out: &mut String, values: &[crate::old::hir::BlockId]) {
     for (value_index, value) in values.iter().enumerate() {
         if value_index != 0 {
             out.push(',');

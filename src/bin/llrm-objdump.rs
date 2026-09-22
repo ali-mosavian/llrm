@@ -5,11 +5,11 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use llrm::object::omf::archive::Module;
-use llrm::object::omf::file::File;
-use llrm::object::omf::modend::StartAddress;
-use llrm::object::omf::module::{DecodedModule, ModuleError};
-use llrm::object::omf::record::Record;
+use llrm::old::object::omf::archive::Module;
+use llrm::old::object::omf::file::File;
+use llrm::old::object::omf::modend::StartAddress;
+use llrm::old::object::omf::module::{DecodedModule, ModuleError};
+use llrm::old::object::omf::record::Record;
 
 fn main() -> ExitCode {
     let path = match parse_arguments(env::args().skip(1)) {
@@ -202,8 +202,8 @@ impl From<ModuleError> for DumpError {
 #[cfg(test)]
 mod tests {
     use super::dump;
-    use llrm::object::omf::file::File;
-    use llrm::object::omf::record::Record;
+    use llrm::old::object::omf::file::File;
+    use llrm::old::object::omf::record::Record;
 
     #[test]
     fn reports_invalid_checksums_without_refusing_the_object() {

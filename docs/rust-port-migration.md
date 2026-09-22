@@ -297,7 +297,7 @@ an allocated move through MC into the expected instruction bytes.
 
 ## Current source-to-IR vertical slice
 
-Pass completion is governed by the [pass fidelity ledger](pass-port-fidelity.md).
+Pass completion is governed by the [pass fidelity ledger](port-map.md).
 The current Rust transforms are narrow foundations and are not yet recorded as
 faithful ports of the substantially richer Python passes with similar names.
 

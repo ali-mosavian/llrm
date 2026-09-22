@@ -1,14 +1,9 @@
 #![forbid(unsafe_code)]
 
 pub mod analysis;
-pub mod codegen;
-pub mod driver;
 pub mod frontend;
-pub mod hir;
-pub mod ir;
-pub mod mc;
+pub mod legacy;
 pub mod model;
-pub mod object;
+pub mod old;
+pub mod optimize;
 pub mod support;
-pub mod target;
-pub mod transforms;
