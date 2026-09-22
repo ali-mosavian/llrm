@@ -4,6 +4,7 @@
 //! code consumes [`crate::old::hir::Program`] directly; this encoder exists only
 //! until the legacy JSON consumers have been retired.
 
+use std::collections::BTreeSet;
 use std::fmt::{self, Write};
 
 use crate::old::hir::{
@@ -14,6 +15,11 @@ use crate::old::hir::{
 /// Serializes a typed HIR program in the exact deterministic JSON layout used
 /// by the legacy QB frontend.
 pub(crate) fn write(program: &Program) -> Result<String, Error> {
+    write_cold(program, &BTreeSet::new())
+}
+
+/// `write`, marking `(function, block)` pairs the frontend expects never to run.
+pub(crate) fn write_cold(program: &Program, cold: &BTreeSet<(String, u32)>) -> Result<String, Error> {
     if program
         .modules
         .iter()
@@ -67,6 +73,9 @@ pub(crate) fn write(program: &Program) -> Result<String, Error> {
                 }
                 out.push_str("],\"terminator\":{\"cases\":[],\"kind\":");
                 terminator_json(&mut out, &block.terminator);
+                if cold.contains(&(function.name.clone(), block.id.get())) {
+                    out.push_str(",\"cold\":true");
+                }
                 out.push('}');
             }
             write!(

@@ -174,6 +174,7 @@ def peeled(body: mir.MirBody, loop: loops.Loop, count: int) -> mir.MirBody | Non
                     tuple(phis),
                     tuple(ops),
                     tuple(destination(at, block.at, iteration) for at in block.succ),
+                    block.cold,
                 )
             )
 

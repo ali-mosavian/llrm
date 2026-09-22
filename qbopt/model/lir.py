@@ -229,6 +229,8 @@ class LirBlock:
     # allocation for the same reason, replacing each with a copy at the end
     # of the predecessor it came from.
     phis: tuple["Phi", ...] = ()
+    # See mir.MirBlock.cold.
+    cold: bool = False
 
     @property
     def arrives(self) -> tuple[int, ...]:

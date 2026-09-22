@@ -2766,3 +2766,40 @@ def test_array_bounds_are_read_from_the_descriptor() -> None:
 
     assert re.search(r"word ptr \[\w+\+\w+\+16\]", procedure)
     assert re.search(r"word ptr \[\w+\+\w+\+14\]", procedure)
+
+
+def _backward_loop(procedure: str) -> str:
+    """From the first label a later jump returns to, through that jump."""
+    for jump in re.finditer(r"\bj\w+ (\w+)\n", procedure):
+        start = procedure.find(jump.group(1) + ":\n")
+        if 0 <= start < jump.start():
+            return procedure[start : jump.end()]
+    raise AssertionError("no loop")
+
+
+def test_static_locals_are_stored_once_after_the_loop() -> None:
+    """sumThree stored its STATIC `total` and `index` on every iteration.
+
+    Proving the cells held the loop's entry values walked back through the
+    B$LBND fallback and refused every call, although that call's modelled
+    effects cannot reach a private static.
+    """
+    source = ROOT / "bench" / "parity" / "sum_three.bas"
+    text = masm.text(qb_compile.assembled(qb_driver.parsed(source)))
+    procedure = text[text.index("SUMTHREE proc") : text.index("SUMTHREE endp")]
+    assert "SUM_THREE$D" not in _backward_loop(procedure)
+
+
+def test_the_bound_error_call_is_placed_after_the_hot_path() -> None:
+    """LBOUND's runtime call was the fall-through; the descriptor read sat behind three jumps.
+
+    The call only raises "Subscript out of range", so the frontend marks its
+    block cold and layout places it after the return.
+    """
+    source = ROOT / "bench" / "parity" / "sum_three.bas"
+    text = masm.text(qb_compile.assembled(qb_driver.parsed(source)))
+    procedure = text[text.index("SUMTHREE proc") : text.index("SUMTHREE endp")]
+
+    returned = procedure.index("retf")
+    assert procedure.index("B$LBND") > returned
+    assert procedure.index("B$UBND") > returned

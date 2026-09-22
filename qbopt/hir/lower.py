@@ -1408,7 +1408,7 @@ def _function(
                 source_instructions[source_instruction] = marker
         ops.append(terminal)
         succ = tuple(block_at[one] for one in dict.fromkeys((*term.targets, *(target for _, target in term.cases))))
-        blocks.append(mir.MirBlock(block_at[source.id], (), tuple(ops), succ))
+        blocks.append(mir.MirBlock(block_at[source.id], (), tuple(ops), succ, source.cold))
     pointer_values = frozenset(
         values[one.id] for one in function.values if types[one.type].kind is model.TypeKind.POINTER
     )

@@ -1544,6 +1544,7 @@ def applied(body: lir.LirBody, got: Assignment) -> lir.LirBody:
                 ),
                 succ=block.succ,
                 phis=block.phis,
+                cold=block.cold,
             )
             for block in body.blocks
         ),

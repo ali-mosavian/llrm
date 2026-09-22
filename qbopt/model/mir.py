@@ -1118,6 +1118,9 @@ class MirBlock:
     phis: tuple[Phi, ...]
     ops: tuple[Op, ...]
     succ: tuple[int, ...]
+    # Reached only on a path the frontend expects never to run, such as
+    # raising an error. Layout places it after the hot code.
+    cold: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -2552,6 +2555,7 @@ def resolved(body: MirBody, calls: dict[int, str] | None = None) -> MirBody | st
             tuple(phis[block.at].values()),
             tuple(out[block.at]),
             tuple(one for one in block.succ if one in reachable),
+            block.cold,
         )
         for block in blocks
     )

@@ -278,6 +278,8 @@ class Block:
     id: int
     instructions: tuple[Instruction, ...]
     terminator: Terminator
+    # The frontend expects this block never to run; see mir.MirBlock.cold.
+    cold: bool = False
 
 
 @dataclass(frozen=True, slots=True)
