@@ -143,7 +143,10 @@ fn _branches(test: Kind) -> Option<&'static str> {
 
 /// The instruction each kind is, for MIR that says only what it computes.
 fn _named(kind: Kind) -> Option<(Operation, &'static str)> {
-    _machine_kind(kind).or(Some(match kind {
+    if let Some(found) = _machine_kind(kind) {
+        return Some(found);
+    }
+    Some(match kind {
         Kind::Sub => (Operation::Binary, "sub"),
         Kind::And => (Operation::Binary, "and"),
         Kind::Or => (Operation::Binary, "or"),
@@ -169,7 +172,7 @@ fn _named(kind: Kind) -> Option<(Operation, &'static str)> {
         Kind::Call => (Operation::Call, "call"),
         Kind::Return => (Operation::Return, ""),
         _ => return None,
-    }))
+    })
 }
 
 /// An x87 compare's answer reaches the flags through sahf, where an
@@ -2295,4 +2298,22 @@ pub fn lowered(
     out.loop_trip_counts = trip_counts;
     out.ordered = true;
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::mir::MirBlock;
+
+    /// `_NAMED` extends `_MACHINE`: a raised load named nothing, so every C
+    /// body refused with "no instruction for load".
+    #[test]
+    fn test_named_gives_machine_kinds_their_instruction() {
+        let mut op = Op::new(2, None, "", vec![], vec![]);
+        op.kind = Kind::Load;
+        let body = MirBody::new(0, vec![MirBlock::new(0, vec![], vec![op], vec![])]);
+        let named = named(&body).unwrap();
+        let op = &named.blocks[0].ops[0];
+        assert_eq!((op.op, op.name.as_str()), (Some(OpCode::Operation(Operation::Move)), "mov"));
+    }
 }
