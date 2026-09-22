@@ -1483,6 +1483,7 @@ def assembled(program: hir.Program, *, observer: StageObserver | None = None, op
         data=tuple(basic_data),
         procedures=tuple(procedures),
         private=frozenset(private),
+        requests=graphics,
     )
     _observe(observer, "emitted-assembly", emitted)
     return emitted

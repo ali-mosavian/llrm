@@ -1740,6 +1740,17 @@ def test_constant_screen_mode_pulls_its_graphics_driver(tmp_path: Path) -> None:
     assert "B$EGAUSED" in omf.externals(records)
 
 
+def test_a_qb45_screen_mode_keeps_its_driver_request(tmp_path: Path) -> None:
+    """qbdemo's SCREEN 13 raised "Illegal function call" under QB45: nothing
+    references B$VGAUSED, so the OBJ writer pruned the EXTDEF that links it."""
+    basic = tmp_path / "SCN13.BAS"
+    basic.write_bytes(b"screen 13\r\n")
+    source = qb_driver.parsed(basic, dialect="qb45", runtime="qb45")
+
+    records = omf.parse(qb_compile.object_bytes(source, "SCN13.BAS"))
+    assert "B$VGAUSED" in omf.externals(records)
+
+
 def test_variable_screen_mode_pulls_all_graphics_drivers(tmp_path: Path) -> None:
     """Gorillas SCREEN Mode linked no graphics modules and failed before drawing its first frame."""
     basic = tmp_path / "SCNVAR.BAS"

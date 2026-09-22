@@ -586,7 +586,7 @@ def _records(
         raise Unencodable(f"references to nothing defined or declared: {sorted(missing)}")
     # masm.text's order, data externals first; LINK searches libraries in EXTDEF order.
     declared = sorted(externs, key=lambda name: externs[name] != "byte")
-    order = [name for name in declared if name in used]
+    order = [name for name in declared if name in used or name in module.requests]
     data = []
     for index, segment in enumerate(segments, 1):
         data += _ledata(index, segment, symbols, segments, {name: n for n, name in enumerate(order, 1)}, externs)

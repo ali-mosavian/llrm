@@ -81,6 +81,8 @@ class Module:
     data: tuple[tuple[str, tuple[Datum, ...]], ...]  # (segment, items)
     procedures: tuple[Procedure, ...]
     private: frozenset[str] = frozenset()  # data segments outside DGROUP
+    # Externs nothing references, declared so LINK pulls in their module.
+    requests: frozenset[str] = frozenset()
 
 
 def text(module: Module) -> str:
