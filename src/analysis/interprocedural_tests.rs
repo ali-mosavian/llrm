@@ -159,7 +159,6 @@ fn test_current_call_constants_keeps_a_per_call_fact_when_another_call_is_dynami
 }
 
 #[test]
-#[ignore = "mir::consumed reads result Helds; Python's reads Held args only"]
 fn test_pure_call_removal_drops_its_exact_argument_pushes() {
     let pushed = argument(1, Arg::Const(Const::new(9, 2)));
     let result = value(2, 2, 2);

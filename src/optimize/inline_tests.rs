@@ -81,7 +81,6 @@ fn leaf_available(leaf: MirBody, parameters: Vec<MemRef>) -> IndexMap<String, Ca
 }
 
 #[test]
-#[ignore = "mir::consumed reads result Helds; Python's reads Held args only"]
 fn test_inline_splices_return_before_the_original_successor_phi() {
     let (body, result) = _caller(false);
     let made = expanded(
