@@ -484,6 +484,13 @@ class Kind(StrEnum):
     NOTHING = "nothing"
 
 
+# `a test b` is `b MIRRORED[test] a`.
+MIRRORED = {
+    Kind.EQ: Kind.EQ, Kind.NE: Kind.NE, Kind.LT: Kind.GT, Kind.GT: Kind.LT, Kind.LE: Kind.GE, Kind.GE: Kind.LE,
+    Kind.BELOW: Kind.ABOVE, Kind.ABOVE: Kind.BELOW, Kind.BELOW_EQ: Kind.ABOVE_EQ, Kind.ABOVE_EQ: Kind.BELOW_EQ,
+}  # fmt: skip
+
+
 # One x86 instruction to what it computes. The mnemonic is consulted only
 # here: BINARY and UNARY do not say which operation they are, so the raise
 # is where that is decided and after it nothing needs to ask.
@@ -2721,6 +2728,22 @@ def same_bytes(one: MemRef, other: MemRef) -> bool:
     return one.addr == other.addr
 
 
+def _unescaped(ref: MemRef) -> bool:
+    """Whether only a reference naming its objects can reach what `ref` names."""
+    return (
+        ref.provenance is not None
+        and bool(ref.provenance.slices)
+        and not any(one.object.escapes or one.object.kind is memory.Kind.ABSOLUTE for one in ref.provenance.slices)
+    )
+
+
+def _through_pointer(ref: MemRef) -> bool:
+    """Whether `ref`'s address is a value rather than a named object plus an index."""
+    return (ref.base is not None or ref.segment is not None) and (
+        ref.addr is None or ref.addr.space in (Space.LITERAL, Space.FAR)
+    )
+
+
 def overlapping(
     one: MemRef,
     other: MemRef,
@@ -2745,6 +2768,8 @@ def overlapping(
     # rewrite below erases it after widening the address to a byte hull.
     if one.provenance is not None and other.provenance is not None:
         return regions.may_alias(one, other, bounds, known, other_known, dgroup)
+    if (_unescaped(one) and _through_pointer(other)) or (_unescaped(other) and _through_pointer(one)):
+        return False
     if not (one.pointer or other.pointer):
         if known or other_known:
             from qbopt.analysis import ranges

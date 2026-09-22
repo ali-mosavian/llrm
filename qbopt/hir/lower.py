@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from qbopt.model import ir
 from qbopt.hir import model
 from qbopt.model import mir
+from qbopt.hir import escape
 from qbopt.model import memory
 from qbopt.model import floating
 from qbopt.hir.verify import verify
@@ -67,12 +68,18 @@ def _space(place: model.Place) -> Space:
     return Space.SEGMENT
 
 
-def _ref(place: model.Place, type_: model.Type) -> mir.MemRef:
+def _object(place: model.Place, escaped: frozenset[int]) -> memory.Object:
+    identity = (place.storage, place.id)
+    if _space(place) is Space.FRAME:
+        return memory.Object(memory.Kind.FRAME, identity, extent=place.extent)
+    private = place.storage in (model.Storage.STATIC, model.Storage.MODULE) and place.symbol not in escaped
+    return memory.Object(memory.Kind.GLOBAL, identity, extent=place.extent, escapes=not private)
+
+
+def _ref(place: model.Place, type_: model.Type, escaped: frozenset[int]) -> mir.MemRef:
     space = _space(place)
     index = 0 if space is Space.FRAME else place.symbol
-    kind = memory.Kind.FRAME if space is Space.FRAME else memory.Kind.GLOBAL
-    identity = (place.storage, place.id)
-    object_ = memory.Object(kind, identity, extent=place.extent)
+    object_ = _object(place, escaped)
     provenance = memory.Provenance.one(object_, 0, type_.width)
     return mir.MemRef(
         Addr(space, place.offset, index),
@@ -89,6 +96,7 @@ def lower(program: model.Program) -> tuple[Lowered, ...]:
     for module in program.modules:
         types = {one.id: one for one in module.types}
         externals = {one.id: one.name for one in module.data if one.linkage is model.DataLinkage.EXTERNAL}
+        escaped = escape.escaped(module)
         for function in module.functions:
             out.append(
                 _function(
@@ -97,6 +105,7 @@ def lower(program: model.Program) -> tuple[Lowered, ...]:
                     types,
                     externals,
                     program.array_order,
+                    escaped,
                 )
             )
     return tuple(out)
@@ -268,6 +277,7 @@ def _function(
     types: dict[int, model.Type],
     externals: dict[int, str],
     array_order: model.ArrayOrder,
+    escaped: frozenset[int],
 ) -> Lowered:
     values = {one.id: mir.Value(one.id, one.id, variable=one.id, version=1) for one in function.values}
     value_types = {one.id: types[one.type] for one in function.values}
@@ -355,7 +365,7 @@ def _function(
                 raise InvalidHIR(f"{module}.{function.name}: floating constants require a constant-pool place")
             case model.PlaceRef(place):
                 type_ = types[places[place].type]
-                return mir.Cell(_ref(places[place], type_))
+                return mir.Cell(_ref(places[place], type_, escaped))
             case model.ArrayElement(place_id, indices):
                 place = places[place_id]
                 array = types[place.type]
@@ -387,8 +397,7 @@ def _function(
                 )
                 space = _space(place)
                 index = 0 if space is Space.FRAME else place.symbol
-                object_kind = memory.Kind.FRAME if space is Space.FRAME else memory.Kind.GLOBAL
-                object_ = memory.Object(object_kind, (place.storage, place.id), extent=place.extent)
+                object_ = _object(place, escaped)
                 provenance = memory.Provenance.one(object_, 0, place.extent or array.width)
                 ref = mir.MemRef(
                     Addr(space, place.offset, index),
@@ -406,8 +415,7 @@ def _function(
                 field_type = types[type_id]
                 space = _space(place)
                 segment = 0 if space is Space.FRAME else place.symbol
-                object_kind = memory.Kind.FRAME if space is Space.FRAME else memory.Kind.GLOBAL
-                object_ = memory.Object(object_kind, (place.storage, place.id), extent=place.extent)
+                object_ = _object(place, escaped)
                 provenance = memory.Provenance.one(object_, 0, place.extent or root.width)
                 if not indices:
                     return mir.Cell(

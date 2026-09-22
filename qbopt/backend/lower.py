@@ -28,6 +28,7 @@ from qbopt.backend import division
 from qbopt.analysis import liveness
 from qbopt.analysis import induction
 from qbopt.backend import arithmetic
+from qbopt.optimize import canonical
 from qbopt.model.floating import Format
 from qbopt.backend import cpu as targets
 from qbopt.objectfile.module import Addr
@@ -568,7 +569,7 @@ def lowered(
         body = lower_switches.expanded(body)
     except ValueError as error:
         raise Unlowered(str(error)) from error
-    body = narrow.narrowed(named(body))
+    body = narrow.narrowed(canonical.compares(named(body)))
     lower_floats.checked(body)
     body = ssa.pruned_phis(body, {phi.result for block in body.blocks for phi in block.phis if not phi.result.flags})
     values = set(ssa.values(body))

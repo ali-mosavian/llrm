@@ -8,6 +8,7 @@ describes byte lanes selected by an indexed access, not merely its hull.
 
 from math import gcd
 from enum import StrEnum
+from dataclasses import field
 from dataclasses import dataclass
 
 
@@ -33,6 +34,10 @@ class Object:
     identity: object | None = None
     generation: int = 0
     extent: int | None = None
+    # False when no pointer, call or other object ever holds this object's
+    # address. A fact about the object, not its identity: two spellings of
+    # one object are still the same object.
+    escapes: bool = field(default=True, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,9 +129,13 @@ class Provenance:
 
 
 def objects_may_alias(one: Object, other: Object) -> bool:
-    if one.kind is Kind.UNKNOWN or other.kind is Kind.UNKNOWN:
-        return True
     if one == other:
+        return True
+    # Only a reference naming an unescaped object reaches it. An absolute
+    # address is not a pointer the program was given, so it is left alone.
+    if not (one.escapes and other.escapes) and Kind.ABSOLUTE not in (one.kind, other.kind):
+        return False
+    if one.kind is Kind.UNKNOWN or other.kind is Kind.UNKNOWN:
         return True
     if one.kind is Kind.NONLOCAL or other.kind is Kind.NONLOCAL:
         return Kind.FRAME not in (one.kind, other.kind) and Kind.STACK not in (one.kind, other.kind)

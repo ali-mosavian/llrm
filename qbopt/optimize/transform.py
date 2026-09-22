@@ -2877,7 +2877,9 @@ class Fold(MIRTransform):
         self.where = where
 
     def transform(self, body: MirBody) -> MirBody:
-        return folded(body, self.where.dgroup, self.where.named)
+        from qbopt.optimize import canonical
+
+        return canonical.compares(folded(body, self.where.dgroup, self.where.named))
 
 
 class Decide(MIRTransform):

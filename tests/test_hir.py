@@ -2724,3 +2724,45 @@ def test_identity_phi_edge_survives_control_flow_threading() -> None:
         array_order="row-major",
     )
     assert qb_compile.object_bytes(source, "ENTPHI.BAS")
+
+
+def test_a_constant_on_the_left_of_a_comparison_still_encodes(tmp_path: Path) -> None:
+    """`1 <= n` lowered to `cmp 1, bx`, which x86 cannot encode; UBOUND made it on every array."""
+    source = tmp_path / "LEFT.BAS"
+    source.write_text('DEFINT A-Z\nDECLARE SUB Show (n)\nShow 3\nSUB Show (n)\n  IF 1 <= n THEN PRINT "YES"\nEND SUB\n')
+    program = qb_driver.parsed(source)
+
+    assert qb_compile.object_bytes(program, source.name)
+    assert "cmp 1," not in masm.text(qb_compile.assembled(program))
+
+
+def test_array_parameters_do_not_pin_private_statics_inside_their_loop() -> None:
+    """sumThree reloaded three descriptors and stored `total` after every add.
+
+    Neither the parameter pointers nor B$UBND can reach a static whose
+    address the module never hands out.
+    """
+    source = ROOT / "bench" / "parity" / "sum_three.bas"
+    text = masm.text(qb_compile.assembled(qb_driver.parsed(source)))
+    procedure = text[text.index("SUMTHREE proc") : text.index("SUMTHREE endp")]
+    head = re.search(r"    jle (L\d+_\d+)\n", procedure)
+    assert head
+    loop = procedure[procedure.index(head.group(1) + ":\n") : head.end()]
+
+    assert not re.search(r"word ptr \[(?:bx|si|di)\+(?:2|10)\]", loop)
+    assert len(re.findall(r"mov word ptr SUM_THREE\$D\d+,", loop)) <= 2  # total and index, once each
+    assert "call" not in loop
+
+
+def test_array_bounds_are_read_from_the_descriptor() -> None:
+    """Every UBOUND called B$UBND, whose unknown writes pinned all memory around it.
+
+    The descriptor holds the bounds; the call remains only where the runtime
+    would raise "Subscript out of range".
+    """
+    source = ROOT / "bench" / "parity" / "sum_three.bas"
+    text = masm.text(qb_compile.assembled(qb_driver.parsed(source)))
+    procedure = text[text.index("SUMTHREE proc") : text.index("SUMTHREE endp")]
+
+    assert re.search(r"word ptr \[\w+\+\w+\+16\]", procedure)
+    assert re.search(r"word ptr \[\w+\+\w+\+14\]", procedure)
