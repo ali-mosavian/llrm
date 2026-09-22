@@ -298,7 +298,7 @@ pub(crate) fn updated(op: &Op, known: &IndexMap<Value, Known>, here: &Cells) -> 
     Some(Known::new(masked(&result, width), width))
 }
 
-fn _fragments(reference: &MemRef, fact: &Known) -> Cells {
+pub(crate) fn _fragments(reference: &MemRef, fact: &Known) -> Cells {
     let addr = reference.addr.expect("a fragment is of an addressed cell");
     (0..reference.width.min(fact.width))
         .map(|offset| {

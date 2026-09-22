@@ -3,6 +3,8 @@
 pub mod alias;
 pub(crate) mod constant_cycles;
 pub mod flags;
+pub(crate) mod floatbounds;
+pub(crate) mod floatfacts;
 pub(crate) mod consts;
 pub mod effects;
 pub mod frameescape;
