@@ -12,6 +12,10 @@ use crate::abi::runtime::Contract;
 use crate::objectfile::module::{self, Group, Module};
 use crate::support::hash::IndexMap;
 use crate::objectfile::omf;
+use crate::backend::cpu::ProfileOrName;
+use crate::model::passes::{O2, Options};
+use crate::optimize::transform;
+use crate::wholeseg::{self, Emission, Emitted, Watch, Watched};
 
 /// A path from the repo root, where Python's tests run.
 pub fn path(relative: impl AsRef<Path>) -> PathBuf {
@@ -24,7 +28,12 @@ pub fn data(relative: impl AsRef<Path>) -> Vec<u8> {
 
 /// `corpus.loaded`.
 pub fn loaded(relative: impl AsRef<Path>) -> Option<Module> {
-    module::of(&omf::parse(&data(relative)).unwrap())
+    loaded_bytes(&data(relative))
+}
+
+/// `corpus.loaded`, of an object's bytes.
+pub fn loaded_bytes(data: &[u8]) -> Option<Module> {
+    module::of(&omf::parse(data).unwrap())
 }
 
 fn _module(relative: impl AsRef<Path>) -> Module {
@@ -38,7 +47,12 @@ pub fn mapped(relative: impl AsRef<Path>) -> Result<CodeMap, String> {
 
 /// `corpus.partitioned`.
 pub fn partitioned(relative: impl AsRef<Path>) -> Vec<Block> {
-    let found = _module(relative);
+    partitioned_bytes(&data(relative))
+}
+
+/// `corpus.partitioned`, of an object's bytes.
+pub fn partitioned_bytes(data: &[u8]) -> Vec<Block> {
+    let found = loaded_bytes(data).expect("not a BASIC object this pass can read");
     let found_map = blocks::code_map(&found).unwrap();
     blocks::partition(&found, &found_map)
 }
@@ -110,4 +124,58 @@ pub fn raised_from(found: &Module, blocks: &[Block], contracts: Option<&mut Inde
 /// `mir.bodies(found, blocks)[0][1]`: the main body.
 pub fn main_body(found: &Module, blocks: &[Block]) -> Rc<MirBody> {
     raised_from(found, blocks, None).values[0].1.clone()
+}
+
+/// `wholeseg.emitted(data)`, with Python's keyword defaults.
+pub fn emitted(data: &[u8]) -> Emitted {
+    emitted_watching(data, None)
+}
+
+/// `wholeseg.emitted(data, watch=watch)`.
+pub fn emitted_watching(data: &[u8], watch: Option<Watch<'_>>) -> Emitted {
+    wholeseg::emitted(data, true, true, None, watch, ProfileOrName::Name("386"), false, false, None, &O2()).unwrap()
+}
+
+/// `wholeseg.emitted(data, basic_semantics=..., bounds_checks=...)`.
+pub fn emitted_with(data: &[u8], basic_semantics: bool, bounds_checks: bool) -> Emitted {
+    wholeseg::emitted(data, true, true, None, None, ProfileOrName::Name("386"), basic_semantics, bounds_checks, None, &O2())
+        .unwrap()
+}
+
+/// `wholeseg.emitted(data, watch=...)`, keeping the MIR of each body named
+/// `name...` at `stage`.
+pub fn emitted_mir(data: &[u8], stage: &str, name: &str) -> (Emitted, Vec<MirBody>) {
+    let mut states = vec![];
+    let mut watch = |seen: &str, named: Option<&str>, low: Watched<'_>| {
+        if let (true, Some(named), Watched::Mir(state)) = (seen == stage, named, low) {
+            if named.starts_with(name) {
+                states.push(state.clone());
+            }
+        }
+    };
+    let result = emitted_watching(data, Some(&mut watch));
+    (result, states)
+}
+
+/// `wholeseg.emitted` of a fixture, asserting the LIR emitter wrote it.
+pub fn emitted_lir(relative: impl AsRef<Path>) -> Emitted {
+    let result = emitted(&data(relative));
+    assert_eq!(result.outcome, Emission::Lir, "{}", result.reason);
+    result
+}
+
+/// `[one.insn for block in corpus.partitioned(data) for one in block.insns]`.
+pub fn instructions(data: &[u8]) -> Vec<iced_x86::Instruction> {
+    partitioned_bytes(data).iter().flat_map(|block| block.insns.iter().map(|one| one.insn)).collect()
+}
+
+/// `transform.applied(body, dgroup, calls, found=found, blocks=blocks, options=options)`.
+pub fn applied(found: &Rc<Module>, blocks: Option<&Rc<Vec<Block>>>, body: &Rc<MirBody>, options: Options) -> Rc<MirBody> {
+    transform::applied(
+        body,
+        &found.dgroup.members,
+        &found.calls,
+        transform::Applied { blocks: blocks.cloned(), found: Some(found.clone()), options, ..Default::default() },
+    )
+    .unwrap()
 }

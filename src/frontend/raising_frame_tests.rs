@@ -1,6 +1,4 @@
 //! Port of `tests/test_raising_frame.py`.
-//!
-//! Skipped, needing `wholeseg`: `test_chain_constant_divisors_survive_argument_setup`.
 
 use super::*;
 use crate::analysis::regions::overlapping;
@@ -158,4 +156,19 @@ fn test_pl_move_memory_push_reads_the_pointer_not_its_stack_destination() {
     assert!(source.base.is_some() && source.width == 4);
     assert_eq!(op.args, [Arg::Cell(Cell { r#ref: source.clone() })]);
     assert_eq!(op.stores[0].addr, Some(Addr::new(Space::Stack, -8)));
+}
+
+/// CHAIN kept six IDIVs: pushing ONE's label forgot local constants before PRINT.
+#[test]
+fn test_chain_constant_divisors_survive_argument_setup() {
+    for tag in ["p-g2", "q-O", "v-g3"] {
+        let data = testing::data(format!("fixtures/omf/chain-{tag}.obj").to_lowercase());
+        let (result, bodies) = testing::emitted_mir(&data, "mir-widen", "");
+        assert_eq!(result.outcome, crate::wholeseg::Emission::Lir, "{tag}: {}", result.reason);
+        assert!(!bodies.is_empty(), "{tag}");
+        assert!(
+            !bodies.iter().flat_map(|body| &body.blocks).flat_map(|block| &block.ops).any(|op| op.kind == Kind::Divmod),
+            "{tag}"
+        );
+    }
 }

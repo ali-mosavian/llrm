@@ -1,7 +1,4 @@
 //! Port of `tests/test_blocks.py`.
-//!
-//! Skipped, needing `wholeseg`, which is not ported:
-//! `test_rebuilt_event_code_is_fully_visible`.
 
 use std::path::Path;
 
@@ -93,6 +90,19 @@ fn test_only_an_event_build_has_a_stub_and_it_sits_after_the_jump() {
                 assert!(mapped.starts.contains(&stub), "{obj:?}: seeded, or nothing reaches it");
             }
         }
+    }
+}
+
+/// Rebuilt ADDRM hid 0035..0046 from the assembly dump and target scorer.
+#[test]
+fn test_rebuilt_event_code_is_fully_visible() {
+    for tag in ["p-evt", "v-evt"] {
+        let result = crate::support::testing::emitted(&crate::support::testing::data(format!("fixtures/omf/addrm-{tag}.obj")));
+        assert_eq!(result.outcome, crate::wholeseg::Emission::Lir, "{tag}");
+        let found = crate::support::testing::loaded_bytes(&result.data).unwrap();
+        let code = instructions(&found).unwrap();
+        let stub = event_stub(&found).unwrap();
+        assert!(code.iter().any(|one| one.at == stub), "{tag}");
     }
 }
 

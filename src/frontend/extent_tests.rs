@@ -1,16 +1,13 @@
 //! Port of `tests/test_extent.py`.
-//!
-//! Skipped, needing `wholeseg`, which is not ported:
-//! `test_error_resume_fixture_keeps_registered_entry`,
-//! `test_emission_preserves_the_empty_statement_table`,
-//! `test_emitted_statement_table_does_not_hide_code`.
-//! `test_registered_error_handler_has_independent_entry_and_emits` keeps its
-//! partition half; the `wholeseg.emitted` half is skipped.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use super::*;
-use crate::frontend::blocks::code_map;
+use crate::abi::handlers::error_entries;
+use crate::frontend::blocks::{code_map, statement_table};
+use crate::support::testing;
+use crate::wholeseg::Emission;
 use crate::objectfile::module::tests::{bare, fixtures, loaded, objects};
 
 fn fixture(relative: &str) -> PathBuf {
@@ -34,6 +31,27 @@ fn test_registered_error_handler_has_independent_entry_and_emits() {
         let result = partition(&found).unwrap();
         assert!(result.complete(), "{tag}");
         assert!(result.bodies.iter().any(|body| body.kind.value() == "error-handler"), "{tag}");
+        let emitted = testing::emitted(&testing::data(fixture(&format!("fixtures/omf/divmod-{tag}.obj"))));
+        assert_eq!(emitted.outcome, Emission::Lir, "{tag}: {}", emitted.reason);
+    }
+}
+
+/// ERRENT must print 11 then DONE through ON ERROR / RESUME NEXT, not lose its handler.
+#[test]
+fn test_error_resume_fixture_keeps_registered_entry() {
+    for tag in ["p-g2", "q-O", "v-g3", "p-evt", "q-evt", "v-evt"] {
+        let emitted =
+            testing::emitted_with(&testing::data(fixture(&format!("fixtures/regressions/errent-{tag}.obj"))), true, false);
+        assert_eq!(emitted.outcome, Emission::Lir, "{tag}: {}", emitted.reason);
+        let found = testing::loaded_bytes(&emitted.data).unwrap();
+        let result = partition(&found).unwrap();
+        assert!(result.complete(), "{tag}");
+        let handlers: BTreeSet<i64> = bodies(&result, BodyKind::ErrorHandler)
+            .iter()
+            .map(|body| i64::try_from(body.seed).unwrap())
+            .collect();
+        assert_eq!(error_entries(&found), handlers, "{tag}");
+        assert!(!error_entries(&found).is_empty(), "{tag}");
     }
 }
 
@@ -58,6 +76,25 @@ fn test_empty_statement_table_is_data_not_a_handler_instruction() {
     assert!(mapped.tables.contains(&(0x116, 0x118)));
     assert!(!mapped.starts.contains(&0x116));
     assert!(partition(&found).unwrap().complete());
+}
+
+/// ADDRM VBDOS refused OF_STA at 00bc when layout omitted trailing data.
+#[test]
+fn test_emission_preserves_the_empty_statement_table() {
+    let result = testing::emitted_lir("fixtures/omf/addrm-v-g3.obj");
+    let found = testing::loaded_bytes(&result.data).unwrap();
+    assert!(statement_table(&found).is_some());
+}
+
+/// DIVMOD event output had unmapped bytes after its RESUME table.
+#[test]
+fn test_emitted_statement_table_does_not_hide_code() {
+    for tag in ["p-evt", "v-evt"] {
+        let result = testing::emitted_lir(format!("fixtures/omf/divmod-{tag}.obj"));
+        let found = testing::loaded_bytes(&result.data).unwrap();
+        let mapped = code_map(&found);
+        assert!(mapped.is_ok(), "{tag}: {mapped:?}");
+    }
 }
 
 #[test]
