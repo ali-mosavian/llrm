@@ -147,7 +147,7 @@ pub fn assembled(
         lirs.push(_lir_text(&raised.name, &low));
         let frame = frame::of(&low, Some(&legalized.calls), "", None).map_err(|error| hir::Unsupported(error.0))?;
         let frame = Rc::new(RefCell::new(frame));
-        // `flow.machine`, as far as it is ported; `Prologue` runs at emission.
+        // `flow.machine`; `Prologue` runs at emission.
         let pinned = low.pins.clone();
         let profile = cpu::profile(cpu::ProfileOrName::Name(target)).map_err(hir::Unsupported)?;
         let mut phases: Vec<Box<dyn LIRTransform + '_>> = vec![
@@ -165,6 +165,8 @@ pub fn assembled(
             Box::new(parcopy::ParallelCopy),
             Box::new(prologue::Prologue::new(Rc::clone(&frame), Some(legalized.calls.clone()))),
             Box::new(peephole::Peephole::new(Some(Rc::clone(&frame)), profile).map_err(hir::Unsupported)?),
+            Box::new(schedule::Scheduler::new(profile).map_err(hir::Unsupported)?),
+            Box::new(jumps::ControlFlow),
         ];
         let mut in_ssa = true;
         let mut low = low;
@@ -211,9 +213,9 @@ pub fn assembled(
             reserve,
             callees,
         };
-        let overhead = masm::return_overhead_bytes(&procedure)?;
+        let overhead = masm::return_overhead_bytes(&procedure)? as i64;
         let masm::Procedure { name, public, far, body, reserve, callees } = procedure;
-        let low = jumps::duplicated_returns(body, overhead)?;
+        let low = jumps::duplicated_returns(body, overhead);
         lirs.push(_lir_text(&format!("{} (allocated)", raised.name), &low));
         procedures.push(masm::Procedure { name, public, far, body: low, reserve, callees });
     }

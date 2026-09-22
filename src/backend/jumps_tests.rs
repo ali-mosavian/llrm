@@ -2,7 +2,7 @@
 //!
 //! `flow.machine` is not ported; the two tests that ran its last phase run
 //! `ControlFlow` itself. `test_qglsurf_shares_all_three_zero_result_tails`
-//! is skipped: the Rust `cfront::compile::assembled` returns no module.
+//! waits for `cfront --opt` (phase 3).
 
 use std::sync::Arc;
 
