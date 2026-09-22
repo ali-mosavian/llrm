@@ -818,7 +818,7 @@ fn cls_is_runtime_and_poke_is_an_inline_segmented_store() {
     assert!(hir.contains("\"op\":\"concat\""));
     assert!(hir.contains("\"op\":\"store\""));
     assert!(hir.contains("\"name\":\"b$seg\""));
-    assert!(hir.contains("\"type\":1,\"value\":42"));
+    assert!(hir.contains("\"type\":8,\"value\":42"));
 }
 
 #[test]
@@ -2307,4 +2307,22 @@ fn a_power_of_a_variable_base_covers_the_whole_domain() {
     let hir = compile(&module, "general_power", Dialect::QuickBasic45, "qb45").unwrap();
     assert_eq!(hir.matches("\"op\":\"fexp2\"").count(), 4, "{hir}");
     assert_eq!(hir.matches("\"callee\":\"B$SERR\"").count(), 2, "{hir}");
+}
+
+#[test]
+fn port_io_statements_reach_the_ports_and_bound_their_byte() {
+    // OUT/INP/WAIT had no lowering. BC folds a constant byte and refuses
+    // one out of range with "Math overflow"; the frontend emitted 298 as-is.
+    let module = parse(
+        "p = &H3C8: OUT p, 40: a = INP(p + 1): WAIT &H3DA, 8, 8\r\n",
+        Dialect::QuickBasic45,
+    )
+    .unwrap();
+    let hir = compile(&module, "ports", Dialect::QuickBasic45, "qb45").unwrap();
+    assert_eq!(hir.matches("\"op\":\"port_out\"").count(), 1, "{hir}");
+    assert_eq!(hir.matches("\"op\":\"port_in\"").count(), 2, "{hir}");
+    let module = parse("OUT 5, 298\r\n", Dialect::QuickBasic45).unwrap();
+    let error = compile(&module, "overflow", Dialect::QuickBasic45, "qb45")
+        .expect_err("298 is no byte");
+    assert!(format!("{error:?}").contains("Math overflow"), "{error:?}");
 }

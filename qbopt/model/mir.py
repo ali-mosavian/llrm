@@ -454,6 +454,10 @@ class Kind(StrEnum):
     ADDRESS = "address"  # c := the number an address is
     PTR_OFFSET = "ptr_offset"  # c := pointer a advanced by a byte displacement
     FILL = "fill"  # args (value, count, address): count cells of the value's width from address, each := value
+    # Device I/O, always volatile: c := the byte at port a; port a := byte b.
+    # Memory reach is the port's device's, from qbopt.abi.ports.
+    PORT_IN = "port_in"
+    PORT_OUT = "port_out"
 
     # control
     CALL = "call"

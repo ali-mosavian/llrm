@@ -328,7 +328,7 @@ def _instruction(what: ir.Semantics, names: dict, number: int) -> list[str]:
         case ir.Operation.CALL if what.indirect and len(sources) == 1:
             return [f"call {sources[0]}"]
         case ir.Operation.BARRIER:
-            return [f"{name} {(dests or sources)[0]}"]
+            return [f"{name} {', '.join((*dests, *sources))}"]
         case ir.Operation.FLOAT_LOAD:
             return [name] if name in ("fldz", "fld1") or not sources else [f"{name} {sources[0]}"]
         case ir.Operation.FLOAT_STORE:

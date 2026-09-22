@@ -2898,6 +2898,75 @@ impl Compiler {
                             operands,
                         );
                     }
+                    "OUT" => {
+                        let [port, value] = arguments.as_slice() else {
+                            return self.fail("OUT expects a port and a byte value");
+                        };
+                        let port = self.port_operand(port)?;
+                        let (value, value_type) = self.expression(value)?;
+                        let value = self.convert(value, value_type, BYTE)?;
+                        self.emit("port_out", Vec::new(), vec![port, value]);
+                    }
+                    "WAIT" => {
+                        // BC 4.5 polls inline: in, xor with the optional
+                        // second mask, and with the first, until nonzero.
+                        let (port, and_mask, xor_mask) = match arguments.as_slice() {
+                            [port, and_mask] => (port, and_mask, None),
+                            [port, and_mask, xor_mask] => (port, and_mask, Some(xor_mask)),
+                            _ => return self.fail("WAIT expects a port and one or two masks"),
+                        };
+                        let mask = |this: &mut Self, expression: &Expr| {
+                            let (value, value_type) = this.expression(expression)?;
+                            let value = this.convert(value, value_type, BYTE)?;
+                            let cell = this.temporary(BYTE)?;
+                            this.emit("store", Vec::new(), vec![Operand::Place(cell), value]);
+                            Ok::<_, SemanticError>(cell)
+                        };
+                        let port_value = self.port_operand(port)?;
+                        let port_cell = match port_value.clone() {
+                            Operand::Constant(..) => None,
+                            value => {
+                                let cell = self.temporary(INTEGER)?;
+                                self.emit("store", Vec::new(), vec![Operand::Place(cell), value]);
+                                Some(cell)
+                            }
+                        };
+                        let and_cell = mask(self, and_mask)?;
+                        let xor_cell = xor_mask.map(|one| mask(self, one)).transpose()?;
+                        let poll = self.new_block();
+                        let done = self.new_block();
+                        self.terminate("jump", Vec::new(), vec![poll])?;
+                        self.select_block(poll);
+                        let port = match port_cell {
+                            Some(cell) => {
+                                let port = self.value(INTEGER);
+                                self.emit("load", vec![port], vec![Operand::Place(cell)]);
+                                Operand::Value(port)
+                            }
+                            None => port_value.clone(),
+                        };
+                        let mut read = self.value(BYTE);
+                        self.emit("port_in", vec![read], vec![port]);
+                        if let Some(xor_cell) = xor_cell {
+                            let xor = self.value(BYTE);
+                            self.emit("load", vec![xor], vec![Operand::Place(xor_cell)]);
+                            let flipped = self.value(BYTE);
+                            self.emit("xor", vec![flipped], vec![Operand::Value(read), Operand::Value(xor)]);
+                            read = flipped;
+                        }
+                        let and = self.value(BYTE);
+                        self.emit("load", vec![and], vec![Operand::Place(and_cell)]);
+                        let masked = self.value(BYTE);
+                        self.emit("and", vec![masked], vec![Operand::Value(read), Operand::Value(and)]);
+                        let ready = self.value(BOOLEAN);
+                        self.emit(
+                            "ne",
+                            vec![ready],
+                            vec![Operand::Value(masked), Operand::Constant(BYTE, Number::Integer(0))],
+                        );
+                        self.terminate("branch", vec![Operand::Value(ready)], vec![done, poll])?;
+                        self.select_block(done);
+                    }
                     "POKE" => {
                         if arguments.len() != 2 {
                             return self.fail("POKE expects an offset and byte value");
@@ -5515,6 +5584,13 @@ impl Compiler {
             self.emit("fsub", vec![result], vec![Operand::Value(adjusted), above]);
             return Ok(Some((Operand::Value(result), type_id)));
         }
+        if intrinsic.lowering == Lowering::PortIn {
+            let port = self.port_operand(&arguments[0])?;
+            let byte = self.value(BYTE);
+            self.emit("port_in", vec![byte], vec![port]);
+            let result = self.convert(Operand::Value(byte), BYTE, INTEGER)?;
+            return Ok(Some((result, INTEGER)));
+        }
         if intrinsic.lowering == Lowering::Peek {
             let segment_place = self.def_segment_place();
             let (offset, offset_type) = self.expression(&arguments[0])?;
@@ -5781,6 +5857,13 @@ impl Compiler {
 
     /// The far address GET/PUT starts at -- the array's data or the named
     /// element -- and the array's descriptor.
+    /// A port number is a 16-bit word; a constant one stays constant so the
+    /// target can see which device it names.
+    fn port_operand(&mut self, expression: &Expr) -> Result<Operand, SemanticError> {
+        let (port, port_type) = self.expression(expression)?;
+        self.convert(port, port_type, INTEGER)
+    }
+
     fn graphics_array(&mut self, expression: &Expr) -> Result<Vec<Operand>, SemanticError> {
         let (name, element_named) = match expression {
             Expr::Name(name, _) => (name, false),
@@ -6601,6 +6684,19 @@ impl Compiler {
                 self.name(from),
                 self.name(to)
             ));
+        }
+        if let Operand::Constant(_, Number::Integer(value)) = operand {
+            if let Some(range) = integer_range(to) {
+                if !range.contains(&value) {
+                    return self.fail("Math overflow");
+                }
+                return Ok(Operand::Constant(to, Number::Integer(value)));
+            }
+        }
+        if to == BYTE && matches!(from, SINGLE | DOUBLE) {
+            // BC rounds to INTEGER (B$FIS2) and keeps the low byte.
+            let integer = self.convert(operand, from, INTEGER)?;
+            return self.convert(integer, INTEGER, BYTE);
         }
         if matches!(from, INTEGER | LONG | BOOLEAN | BYTE) && matches!(to, SINGLE | DOUBLE) {
             let place = self.temporary(from)?;
@@ -7706,6 +7802,15 @@ fn narrow(value: i64, type_id: u32) -> i64 {
         INTEGER => value as i16 as i64,
         LONG => value as i32 as i64,
         _ => value,
+    }
+}
+
+fn integer_range(type_id: u32) -> Option<std::ops::RangeInclusive<i64>> {
+    match type_id {
+        BYTE => Some(0..=u8::MAX as i64),
+        INTEGER => Some(i16::MIN as i64..=i16::MAX as i64),
+        LONG => Some(i32::MIN as i64..=i32::MAX as i64),
+        _ => None,
     }
 }
 

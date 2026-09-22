@@ -1751,7 +1751,8 @@ def test_variable_screen_mode_pulls_all_graphics_drivers(tmp_path: Path) -> None
 
 
 def test_nested_integer_division_keeps_each_dividend(tmp_path: Path) -> None:
-    """Gorillas emitted IDIV AX twice for 30 \\ (80 \\ MaxCol), faulting on its first shot."""
+    """Gorillas emitted IDIV AX twice for 30 \\ (80 \\ MaxCol), faulting on its first shot.
+    Once the frontend folded 80 to a LONG constant, lowering dropped it: `idiv eax`."""
     basic = tmp_path / "NESTDIV.BAS"
     basic.write_bytes(
         b"defint a-z\r\n"
@@ -2894,3 +2895,14 @@ def test_unchecked_bounds_read_the_descriptor_without_runtime_calls() -> None:
 
     assert "B$LBND" not in procedure and "B$UBND" not in procedure
     assert re.search(r"word ptr \[\w+\+\w+\+16\]", procedure)
+
+
+def test_port_io_narrows_a_float_through_integer_and_prints_both_operands(tmp_path: Path) -> None:
+    """OUT/POKE of a SINGLE raised Unlowered (no one-byte fistp), and the
+    listing printed `out dx` / `in al` without their second operand."""
+    basic = tmp_path / "PORTS.BAS"
+    basic.write_bytes(b"defint a-z\r\np = &H3C8: f! = 41.6\r\nout p, f!\r\npoke 0, f!\r\na = inp(p + 1)\r\n")
+    source = qb_driver.parsed(basic, dialect="qb45", runtime="qb45")
+    lines = {" ".join(line.split(";")[0].split()) for line in masm.text(qb_compile.assembled(source)).splitlines()}
+    assert {"out dx, al", "in al, dx"} <= lines, sorted(lines)
+    assert any(line.startswith("fistp word ptr") for line in lines), sorted(lines)
