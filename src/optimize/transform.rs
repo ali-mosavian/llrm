@@ -572,6 +572,17 @@ pub(crate) const _TAKEN: [(
     ]
 };
 
+/// A Known as the number the machine would compare.
+pub(crate) fn _signed(fact: &crate::analysis::consts::Known) -> num_bigint::BigInt {
+    use num_bigint::BigInt;
+    let top = BigInt::from(1) << (fact.width * 8 - 1);
+    if (&fact.n & &top) != BigInt::from(0) {
+        &fact.n - (top << 1)
+    } else {
+        fact.n.clone()
+    }
+}
+
 /// The modeled comparison supplying this branch's condition value.
 pub(crate) fn _comparison<'a>(
     block: &'a crate::model::mir::MirBlock,
@@ -611,6 +622,398 @@ pub(crate) fn _comparison<'a>(
         }
     }
     None
+}
+
+/// Whether this branch is taken, where both its operands are numbers.
+pub(crate) fn _outcome(
+    block: &MirBlock,
+    op: &Op,
+    facts: &IndexMap<Value, crate::analysis::consts::Known>,
+    held: &IndexMap<(i64, usize), crate::analysis::consts::Cells>,
+    pointers: Option<&crate::analysis::alias::PointsTo>,
+) -> Option<bool> {
+    use crate::analysis::consts;
+    let (index, compare) = _comparison(block, op)?;
+    if compare.kind != Kind::Sub {
+        let result = consts::_result(compare, facts, None, None)?;
+        let Arg::Held(first) = &compare.results[0] else {
+            unreachable!("_comparison admits only a held result")
+        };
+        if result.width < first.width {
+            return None;
+        }
+        let zero = consts::masked(&result.n, first.width) == num_bigint::BigInt::from(0);
+        return Some(if op.test == Some(Kind::Eq) { zero } else { !zero });
+    }
+    let parts = compare
+        .args
+        .iter()
+        .map(|one| consts::_operand(compare, one, facts, held.get(&(block.at, index))))
+        .collect::<Vec<_>>();
+    if parts.iter().any(Option::is_none) {
+        if !matches!(op.test, Some(Kind::Eq | Kind::Ne)) {
+            return None;
+        }
+        let pointers = pointers?;
+        let pointer = compare
+            .args
+            .iter()
+            .zip(compare.args.iter().rev())
+            .find_map(|(arg, other)| match (arg, other) {
+                (Arg::Held(arg), Arg::Const(other))
+                    if consts::masked(&other.n, other.width) == num_bigint::BigInt::from(0) =>
+                {
+                    Some(arg.value)
+                }
+                _ => None,
+            })?;
+        if !pointers.nonnull(pointer) {
+            return None;
+        }
+        return Some(op.test == Some(Kind::Ne));
+    }
+    let (left, right) = (parts[0].as_ref().expect("known"), parts[1].as_ref().expect("known"));
+    let width = left.width.max(right.width);
+    let taken = _TAKEN.iter().find(|(kind, _)| Some(*kind) == op.test).expect("a test _comparison admits").1;
+    Some(taken(&_signed(left), &_signed(right), &|n| consts::masked(n, width)))
+}
+
+pub(crate) fn _switch_target(op: &Op, facts: &IndexMap<Value, crate::analysis::consts::Known>) -> Option<i64> {
+    use crate::analysis::consts;
+    if op.kind != Kind::Switch || op.args.len() != 1 || op.target.is_none() {
+        return None;
+    }
+    let width = match &op.args[0] {
+        Arg::Held(held) => held.width,
+        Arg::Const(constant) => constant.width,
+        _ => return None,
+    };
+    if ![1, 2, 4].contains(&width)
+        || !op.defines.is_empty()
+        || !op.results.is_empty()
+        || !op.loads.is_empty()
+        || !op.stores.is_empty()
+        || !op.merges.is_empty()
+        || op.barrier()
+        || op.stack.is_some()
+        || op.floating.is_some()
+    {
+        return None;
+    }
+    let cases = op.cases.iter().map(|(number, _)| consts::masked(&(*number).into(), width)).collect::<Vec<_>>();
+    if cases.iter().collect::<BTreeSet<_>>().len() != cases.len() {
+        return None;
+    }
+    let value = consts::_operand(op, &op.args[0], facts, None)?;
+    op.cases
+        .iter()
+        .find(|(number, _)| consts::masked(&(*number).into(), value.width) == value.n)
+        .map(|(_, target)| *target)
+        .or(op.target)
+}
+
+pub(crate) fn _executable_successors(
+    block: &MirBlock,
+    facts: &IndexMap<Value, crate::analysis::consts::Known>,
+    states: &IndexMap<Value, crate::analysis::constant_cycles::State>,
+    held: &IndexMap<(i64, usize), crate::analysis::consts::Cells>,
+    pointers: Option<&crate::analysis::alias::PointsTo>,
+) -> Option<Vec<i64>> {
+    use crate::analysis::constant_cycles::State;
+    let pending = |args: &[Arg]| {
+        args.iter()
+            .any(|arg| matches!(arg, Arg::Held(held) if states.get(&held.value) == Some(&State::Pending)))
+    };
+
+    let Some(last) = block.ops.last() else {
+        return Some(block.succ.clone());
+    };
+    if last.kind == Kind::Switch {
+        if let Some(target) = _switch_target(last, facts).filter(|target| block.succ.contains(target)) {
+            return Some(vec![target]);
+        }
+        if pending(&last.args) {
+            return None;
+        }
+        return Some(block.succ.clone());
+    }
+    if block.succ.len() != 2 {
+        return Some(block.succ.clone());
+    }
+    if !last.target.is_some_and(|target| block.succ.contains(&target)) {
+        return Some(block.succ.clone());
+    }
+    if let Some(answer) = _outcome(block, last, facts, held, pointers) {
+        return Some(if answer {
+            vec![last.target.expect("a successor")]
+        } else {
+            block.succ.iter().copied().filter(|at| Some(*at) != last.target).collect()
+        });
+    }
+    if let Some((_, compare)) = _comparison(block, last) {
+        if pending(&compare.args) {
+            return None;
+        }
+    }
+    Some(block.succ.clone())
+}
+
+/// Bypass empty control-flow blocks without changing any incoming phi value.
+pub(crate) fn _threaded(body: &MirBody) -> Result<MirBody, String> {
+    let known = body.blocks.iter().map(|block| (block.at, block)).collect::<BTreeMap<_, _>>();
+    let predecessors = loopy::predecessors(&body.blocks);
+    let mut loop_edges = BTreeSet::new();
+    for loop_ in loopy::loops(&body.blocks, Some(body.entry)) {
+        let outside = predecessors[&loop_.header].difference(&loop_.body).copied().collect::<Vec<_>>();
+        if outside.len() == 1 {
+            let parent = outside[0];
+            if known[&parent].succ == [loop_.header] {
+                loop_edges.insert(parent);
+            }
+        }
+        if loop_.latches.len() == 1 {
+            let parent = *loop_.latches.iter().next().expect("one latch");
+            if known[&parent].succ == [loop_.header] {
+                loop_edges.insert(parent);
+            }
+        }
+        loop_edges.extend(
+            body.blocks
+                .iter()
+                .filter(|block| {
+                    !loop_.body.contains(&block.at)
+                        && !predecessors[&block.at].is_empty()
+                        && predecessors[&block.at].is_subset(&loop_.body)
+                        && block.succ.len() == 1
+                        && !loop_.body.contains(&block.succ[0])
+                })
+                .map(|block| block.at),
+        );
+    }
+    let mut redirects = BTreeMap::new();
+    let mut explicit_jumps = BTreeSet::new();
+    for block in &body.blocks {
+        // Loop-simplify form deliberately keeps a unique entry edge and a
+        // unique backedge and dedicated exits as blocks of their own.
+        if !block.phis.is_empty() || block.succ.len() != 1 || loop_edges.contains(&block.at) {
+            continue;
+        }
+        let mut ops = &block.ops[..];
+        if let Some(last) = ops.last() {
+            if last.kind == Kind::Jump && last.target == Some(block.succ[0]) {
+                explicit_jumps.insert(block.at);
+                ops = &ops[..ops.len() - 1];
+            }
+        }
+        if ops.iter().any(|op| {
+            op.kind != Kind::Nothing
+                || !op.defines.is_empty()
+                || !op.uses.is_empty()
+                || !op.loads.is_empty()
+                || !op.stores.is_empty()
+                || !op.args.is_empty()
+                || !op.results.is_empty()
+                || !op.merges.is_empty()
+                || op.barrier()
+                || op.floating.is_some()
+                || op.stack.is_some()
+        }) {
+            continue;
+        }
+        if let Some(successor) = known.get(&block.succ[0]) {
+            if successor.phis.is_empty() {
+                redirects.insert(block.at, successor.at);
+            }
+        }
+    }
+
+    let destination = |start: i64, source: i64, implicit: bool| -> i64 {
+        let (mut target, mut seen) = (start, BTreeSet::from([source]));
+        while redirects.contains_key(&target) && !seen.contains(&target) {
+            if implicit && explicit_jumps.contains(&target) {
+                break;
+            }
+            seen.insert(target);
+            target = redirects[&target];
+        }
+        if seen.contains(&target) { start } else { target }
+    };
+    let jump = |last: &Op, target: i64| Op {
+        op: Some(mir::OpCode::jump()),
+        kind: Kind::Jump,
+        name: "jmp".to_owned(),
+        uses: Vec::new(),
+        args: Vec::new(),
+        results: Vec::new(),
+        test: None,
+        target: Some(target),
+        ..last.clone()
+    };
+
+    let mut blocks = Vec::new();
+    let mut changed = false;
+    for block in &body.blocks {
+        let last = block.ops.last();
+        if last.is_some_and(|last| last.kind == Kind::Switch) {
+            blocks.push(block.clone());
+            continue;
+        }
+        let explicit =
+            last.filter(|last| matches!(last.kind, Kind::Jump | Kind::Branch)).and_then(|last| last.target);
+        let mut successors = Vec::new();
+        for at in &block.succ {
+            let one = destination(*at, block.at, Some(*at) != explicit);
+            if !successors.contains(&one) {
+                successors.push(one);
+            }
+        }
+        if successors == block.succ {
+            blocks.push(block.clone());
+            continue;
+        }
+        changed = true;
+        let mut ops = block.ops.clone();
+        if let Some(last) = ops.last().filter(|last| matches!(last.kind, Kind::Jump | Kind::Branch)) {
+            let mut last =
+                Op { target: last.target.map(|target| destination(target, block.at, false)), ..last.clone() };
+            if last.kind == Kind::Branch && successors.len() == 1 {
+                last = jump(&last, successors[0]);
+            }
+            *ops.last_mut().expect("a last operation") = last;
+        }
+        blocks.push(MirBlock { ops, succ: successors, ..block.clone() });
+    }
+
+    // If both arms reach the same block through otherwise empty jump
+    // trampolines, the condition has no semantic successor to choose.  Keep a
+    // real jump at the source: the implicit arm may need one when source
+    // bodies are interleaved.
+    let mut converged = Vec::new();
+    for block in blocks {
+        let Some(last) = block.ops.last().filter(|last| last.kind == Kind::Branch && block.succ.len() == 2) else {
+            converged.push(block);
+            continue;
+        };
+        let destinations = block.succ.iter().map(|at| destination(*at, block.at, false)).collect::<Vec<_>>();
+        if destinations.iter().collect::<BTreeSet<_>>().len() != 1 {
+            converged.push(block);
+            continue;
+        }
+        let target = destinations[0];
+        let jumped = jump(last, target);
+        let mut ops = block.ops.clone();
+        *ops.last_mut().expect("a last operation") = jumped;
+        converged.push(MirBlock { ops, succ: vec![target], ..block });
+        changed = true;
+    }
+    Ok(if changed { _unreachable(&MirBody { blocks: converged, ..body.clone() }) } else { body.clone() })
+}
+
+/// A branch on two numbers, resolved.
+///
+/// Taken becomes an unconditional jump and not-taken becomes an inert owner.
+pub(crate) fn decided(
+    body: &MirBody,
+    dgroup: &BTreeSet<i64>,
+    calls: &IndexMap<i64, String>,
+) -> Result<MirBody, String> {
+    use crate::analysis::{alias, constant_cycles, consts, ranges};
+
+    let body = _threaded(body)?;
+    let facts = consts::known(&body, Some(dgroup), Some(calls), None, None);
+    let held = consts::cells(&body, dgroup, calls, Some(&facts), None, None, None, None);
+    let pointers = alias::points_to(&body, None, None)?;
+    let successors = |block: &MirBlock,
+                      values: &IndexMap<Value, consts::Known>,
+                      states: &IndexMap<Value, constant_cycles::State>| {
+        _executable_successors(block, values, states, &held, Some(&pointers))
+    };
+    let facts = constant_cycles::propagated(&body, &facts, Some(&successors));
+    let scoped = ranges::bounded(&body)?;
+
+    let mut out = Vec::new();
+    let mut changed = false;
+    for block in &body.blocks {
+        let Some(last) = block.ops.last() else {
+            out.push(block.clone());
+            continue;
+        };
+        if last.kind == Kind::Switch {
+            let Some(target) = _switch_target(last, &facts).filter(|target| block.succ.contains(target)) else {
+                out.push(block.clone());
+                continue;
+            };
+            let jump = Op {
+                kind: Kind::Jump,
+                target: Some(target),
+                cases: Vec::new(),
+                args: Vec::new(),
+                uses: Vec::new(),
+                defines: Vec::new(),
+                results: Vec::new(),
+                name: String::new(),
+                raised: None,
+                ..last.clone()
+            };
+            let mut ops = block.ops.clone();
+            *ops.last_mut().expect("a last operation") = jump;
+            out.push(MirBlock { ops, succ: vec![target], ..block.clone() });
+            changed = true;
+            continue;
+        }
+        let mut answer = _outcome(block, last, &facts, &held, Some(&pointers));
+        if answer.is_none() && last.kind == Kind::Branch && block.succ.len() == 2 {
+            if let Some(scope) = scoped.get(&block.at) {
+                let mut possible = Vec::new();
+                for at in &block.succ {
+                    if ranges::on_edge(block, *at, scope, Some(&facts))?.is_some() {
+                        possible.push(*at);
+                    }
+                }
+                if possible.len() == 1 {
+                    answer = Some(Some(possible[0]) == last.target);
+                }
+            }
+        }
+        let Some(answer) = answer else {
+            out.push(block.clone());
+            continue;
+        };
+        let Some(target) = last.target.filter(|target| body.blocks.iter().any(|one| one.at == *target)) else {
+            out.push(block.clone());
+            continue;
+        };
+        changed = true;
+        if answer {
+            let jump = Op {
+                kind: Kind::Jump,
+                uses: Vec::new(),
+                args: Vec::new(),
+                results: Vec::new(),
+                target: Some(target),
+                ..last.clone()
+            };
+            let mut ops = block.ops.clone();
+            *ops.last_mut().expect("a last operation") = jump;
+            out.push(MirBlock { ops, succ: vec![target], ..block.clone() });
+        } else {
+            let kept = _absorb(&block.ops, &BTreeSet::from([last.at]));
+            if kept == block.ops {
+                out.push(block.clone());
+                continue;
+            }
+            out.push(MirBlock {
+                ops: kept,
+                succ: block.succ.iter().copied().filter(|at| *at != target).collect(),
+                ..block.clone()
+            });
+        }
+    }
+    if !changed {
+        return Ok(body);
+    }
+    // Remove dead edges without losing the unreachable blocks' byte ownership.
+    _trivial_phis(&_unreachable(&MirBody { blocks: out, ..body }))
 }
 
 /// Dead blocks retain byte ownership, but no instructions or outgoing edges.
@@ -692,6 +1095,141 @@ pub(crate) fn _trivial_phis(body: &MirBody) -> Result<MirBody, String> {
     }
 }
 
+/// Operations whose results nothing reads, removed.
+///
+/// A removed computation leaves an empty ownership marker.
+pub(crate) fn dead(body: &MirBody) -> Result<MirBody, String> {
+    // Incomplete readers forbid global removal, but a result overwritten
+    // locally before reaching one cannot supply its hidden inputs.
+    let limited = body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.ops)
+        .any(|one| (one.barrier() || one.kind == Kind::Opaque) && !one.reads_complete);
+    let pruned;
+    let body = if limited {
+        body
+    } else {
+        pruned = crate::analysis::ssa::pruned_phis(body, &live(body));
+        &pruned
+    };
+    let mut alive = live(body);
+    if limited {
+        for block in &body.blocks {
+            let overwritten = _overwritten_locally(block);
+            alive.extend(
+                block.ops.iter().flat_map(|op| &op.defines).filter(|value| !overwritten.contains(value)).copied(),
+            );
+            alive.extend(block.phis.iter().flat_map(|phi| phi.incoming.values()).copied());
+        }
+        loop {
+            let before = alive.len();
+            let reached = body
+                .blocks
+                .iter()
+                .flat_map(|block| &block.ops)
+                .filter(|op| op.defines.iter().any(|value| alive.contains(value)))
+                .flat_map(|op| op.uses.iter().copied())
+                .collect::<Vec<_>>();
+            alive.extend(reached);
+            if alive.len() == before {
+                break;
+            }
+        }
+    }
+    let mut out = Vec::new();
+    let mut changed = false;
+    for block in &body.blocks {
+        // Several semantic operations may share an input address. Their
+        // computations are independent even when their provenance is not.
+        let overwritten = limited.then(|| _overwritten_locally(block));
+        let gone = block
+            .ops
+            .iter()
+            .enumerate()
+            .filter(|(_, op)| {
+                _removable(op, &alive)
+                    && overwritten
+                        .as_ref()
+                        .is_none_or(|overwritten| op.defines.iter().all(|one| overwritten.contains(one)))
+            })
+            .map(|(index, _)| index)
+            .collect::<BTreeSet<_>>();
+        if gone.is_empty() {
+            out.push(block.clone());
+            continue;
+        }
+        let ops = block
+            .ops
+            .iter()
+            .enumerate()
+            .map(|(index, op)| if gone.contains(&index) { _empty_operation(op) } else { op.clone() })
+            .collect();
+        changed = true;
+        out.push(MirBlock { ops, ..block.clone() });
+    }
+    if !changed {
+        return Ok(body.clone());
+    }
+    let after = out.iter().flat_map(|block| &block.ops).flat_map(|op| &op.defines).collect::<BTreeSet<_>>();
+    let removed = body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.ops)
+        .flat_map(|op| &op.defines)
+        .filter(|value| !after.contains(value))
+        .copied()
+        .collect::<BTreeSet<_>>();
+    Ok(MirBody {
+        blocks: out
+            .into_iter()
+            .map(|block| MirBlock {
+                ops: block
+                    .ops
+                    .iter()
+                    .map(|op| Op {
+                        uses: op
+                            .uses
+                            .iter()
+                            .filter(|value| !removed.contains(value) || !op.merges.contains_key(value))
+                            .copied()
+                            .collect(),
+                        merges: op
+                            .merges
+                            .iter()
+                            .filter(|(before, _)| !removed.contains(before))
+                            .map(|(before, after)| (*before, *after))
+                            .collect(),
+                        ..op.clone()
+                    })
+                    .collect(),
+                ..block
+            })
+            .collect(),
+        ..body.clone()
+    })
+}
+
+/// Results replaced before reaching an opaque reader or a block exit.
+pub(crate) fn _overwritten_locally(block: &MirBlock) -> BTreeSet<Value> {
+    let mut written = BTreeSet::new();
+    let mut overwritten = BTreeSet::new();
+    for op in block.ops.iter().rev() {
+        if op.barrier() || op.kind == Kind::Opaque {
+            written.clear();
+            continue;
+        }
+        overwritten.extend(
+            op.defines
+                .iter()
+                .filter(|value| value.version != 0 && written.contains(&(value.variable, value.flags)))
+                .copied(),
+        );
+        written.extend(op.defines.iter().filter(|value| value.version != 0).map(|value| (value.variable, value.flags)));
+    }
+    overwritten
+}
+
 /// Whether this operation stays whatever the liveness says.
 ///
 /// Direct port of `qbopt/optimize/transform.py:_kept`.
@@ -707,6 +1245,14 @@ pub(crate) fn _kept(op: &crate::model::mir::Op) -> bool {
         return false;
     }
     op.defines.iter().all(|one| one.flags)
+}
+
+/// Whether anything at all would notice this operation going.
+pub(crate) fn _removable(op: &Op, alive: &BTreeSet<Value>) -> bool {
+    if _kept(op) {
+        return false;
+    }
+    !op.defines.iter().any(|one| alive.contains(one))
 }
 // ==== END D ====
 
