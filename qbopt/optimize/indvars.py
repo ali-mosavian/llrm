@@ -9,6 +9,7 @@ from qbopt.analysis import loops
 from qbopt.analysis import consts
 from qbopt.analysis import liveness
 from qbopt.analysis import induction
+from qbopt.optimize import counting
 from qbopt.model.passes import OperationCosts
 
 
@@ -577,41 +578,23 @@ def symbolically_zeroed(body: mir.MirBody) -> mir.MirBody:
                 continue
 
             ending = blocks[proof.preheader].ops[-1] if blocks[proof.preheader].ops else proof.compare
-            builder = rotate.Seeds(
+            builder = counting.Seeds(
                 max((value.id for value in values), default=0) + 1,
                 max((value.variable for value in values), default=0) + 1,
                 ending.at,
                 width,
                 [],
+                facts,
             )
 
             count = induction.trips(proof, builder.computed)
-            distance = (
-                count
-                if step == 1
-                else builder.computed(
-                    mir.Kind.MUL,
-                    (count, mir.Const(consts.masked(step, width), width)),
-                )
-            )
-            source = mir.Held(initial, width)
-            final = (
-                distance
-                if induction._signed(source, facts, width) == 0
-                else builder.computed(mir.Kind.ADD, (source, distance))
-            )
+            distance = builder.computed(mir.Kind.MUL, (count, mir.Const(consts.masked(step, width), width)))
+            final = builder.computed(mir.Kind.ADD, (mir.Held(initial, width), distance))
             rebased: dict[int, mir.Op] = {}
             for op, position, multiplier, _address, _extra in offsets:
                 assert position is not None
                 base = op.args[position]
-                delta = (
-                    final
-                    if multiplier == 1
-                    else builder.computed(
-                        mir.Kind.MUL,
-                        (final, mir.Const(consts.masked(multiplier, width), width)),
-                    )
-                )
+                delta = builder.computed(mir.Kind.MUL, (final, mir.Const(consts.masked(multiplier, width), width)))
                 adjusted = builder.computed(mir.Kind.ADD, (base, delta))
                 args = tuple(adjusted if index == position else arg for index, arg in enumerate(op.args))
                 assert isinstance(base, (mir.Held, mir.Const))
@@ -620,7 +603,8 @@ def symbolically_zeroed(body: mir.MirBody) -> mir.MirBody:
                 )
                 rebased[id(op)] = replace(op, args=args, uses=uses, source_backed=False, raised=None)
 
-            begun = builder.computed(mir.Kind.SUB, (mir.Const(0, width), distance))
+            begun = builder.held(builder.computed(mir.Kind.SUB, (mir.Const(0, width), distance)))
+            exits = counting.leaving(control, builder)
             step_flags = mir.Value(
                 builder.serial,
                 stepping.at,
@@ -643,10 +627,10 @@ def symbolically_zeroed(body: mir.MirBody) -> mir.MirBody:
                 raised=None,
                 symbol=False,
             )
-            guard_compare, guard_branch = rotate.skip_guard(proof, ending.at, guard_flags)
+            guard_compare, guard_branch = counting.skip_guard(proof, ending.at, guard_flags)
             private = tuple(
                 definition
-                for value in (initial, proof.phi.incoming[proof.preheader])
+                for value in (initial, *(() if exits else (proof.phi.incoming[proof.preheader],)))
                 if (definition := made.get(value)) is not None
                 and not any(value in op.uses for block in body.blocks for op in block.ops)
                 and not any(value in op.uses for op in (*builder.ops, guard_compare))
@@ -701,6 +685,7 @@ def symbolically_zeroed(body: mir.MirBody) -> mir.MirBody:
                         for other in phis
                         if other is not proof.phi
                     )
+                phis = tuple(exits.get(id(other), other) for other in phis)
                 rewritten.append(replace(block, ops=tuple(ops), phis=phis))
             changed = replace(body, blocks=tuple(rewritten))
             return symbolically_zeroed(

@@ -6,8 +6,8 @@ raises rather than guessing.
 
 Memory is bytes keyed by region and 16-bit offset. A far cell's region is its
 selector's value; any other cell's is its address space and index, offset by
-its base's value. Two spellings of one byte through different regions are
-not unified.
+its base's value. The frame's `bp` is zero. Two spellings of one byte through
+different regions are not unified.
 """
 
 from dataclasses import field
@@ -101,8 +101,10 @@ def _where(ref: mir.MemRef, state: State) -> tuple[object, int]:
         offset += _integer(state, ref.base)
     if ref.segment is not None:
         return ("selector", _integer(state, ref.segment)), _mask(offset, 2)
-    index = ref.addr.index if ref.addr.space in (Space.SEGMENT, Space.EXTERNAL) else 0
-    return (ref.addr.space, index), _mask(offset, 2)
+    # A pointer into the frame is `abs` plus a base the reference says is frame.
+    space = Space.FRAME if Space.FRAME in (ref.space, ref.addr.space) else ref.addr.space
+    index = ref.addr.index if space in (Space.SEGMENT, Space.EXTERNAL) else 0
+    return (space, index), _mask(offset, 2)
 
 
 def _load(state: State, ref: mir.MemRef, width: int) -> int:
@@ -133,6 +135,8 @@ def _read(state: State, arg: mir.Arg) -> int:
             return _mask(n, width)
         case mir.Cell(ref):
             return _load(state, ref, ref.width)
+        case mir.FrameAddress(offset, width):
+            return _mask(offset, width)  # bp is zero
     raise ExecutionError(f"cannot read {arg!r}")
 
 
@@ -149,7 +153,7 @@ def _computed(op: mir.Op, args: tuple[int, ...], width: int) -> tuple[int, ...]:
     kind = op.kind
     bits = 8 * width
     match kind, args:
-        case mir.Kind.COPY | mir.Kind.CONVERT | mir.Kind.ZERO_EXTEND | mir.Kind.LOAD, (a,):
+        case mir.Kind.COPY | mir.Kind.CONVERT | mir.Kind.ZERO_EXTEND | mir.Kind.LOAD | mir.Kind.ADDRESS, (a,):
             return (a,)
         case mir.Kind.SIGN_EXTEND, (a,):
             source = op.args[0]
@@ -204,7 +208,10 @@ def _computed(op: mir.Op, args: tuple[int, ...], width: int) -> tuple[int, ...]:
 
 
 def _executed(op: mir.Op, state: State, call: Call | None) -> None:
-    args = tuple(_read(state, arg) for arg in op.args)
+    if op.kind is mir.Kind.ADDRESS and len(op.args) == 1 and isinstance(op.args[0], mir.Cell):
+        args = (_where(op.args[0].ref, state)[1],)
+    else:
+        args = tuple(_read(state, arg) for arg in op.args)
     if op.kind is mir.Kind.STORE:
         (target,) = op.results
         if not isinstance(target, mir.Cell):

@@ -2745,9 +2745,7 @@ def test_array_parameters_do_not_pin_private_statics_inside_their_loop() -> None
     source = ROOT / "bench" / "parity" / "sum_three.bas"
     text = masm.text(qb_compile.assembled(qb_driver.parsed(source)))
     procedure = text[text.index("SUMTHREE proc") : text.index("SUMTHREE endp")]
-    head = re.search(r"    jle (L\d+_\d+)\n", procedure)
-    assert head
-    loop = procedure[procedure.index(head.group(1) + ":\n") : head.end()]
+    loop = _backward_loop(procedure)
 
     assert not re.search(r"word ptr \[(?:bx|si|di)\+(?:2|10)\]", loop)
     assert len(re.findall(r"mov word ptr SUM_THREE\$D\d+,", loop)) <= 2  # total and index, once each
@@ -2815,10 +2813,13 @@ def test_the_first_dimension_is_not_rank_checked() -> None:
     text = masm.text(qb_compile.assembled(qb_driver.parsed(source)))
     procedure = text[text.index("SUMTHREE proc") : text.index("SUMTHREE endp")]
 
-    returned = procedure.index("retf")
-    cold = set(re.findall(r"^(\w+):$", procedure[returned:], re.MULTILINE))
-    branches = re.findall(r"\bj(?!mp)\w+ (\w+)$", procedure[:returned], re.MULTILINE)
-    assert len([label for label in branches if label in cold]) == 2
+    calls = {
+        label
+        for label, block in re.findall(r"^(\w+):\n((?:    .*\n)*)", procedure, re.MULTILINE)
+        if "B$" in block and "BND" in block
+    }
+    branches = re.findall(r"\bj(?!mp)\w+ (\w+)$", procedure, re.MULTILINE)
+    assert len([label for label in branches if label in calls]) == 2
 
 
 def test_unchecked_bounds_read_the_descriptor_without_runtime_calls() -> None:
