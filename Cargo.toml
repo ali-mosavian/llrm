@@ -26,6 +26,10 @@ name = "llrm-qb"
 path = "src/bin/llrm-qb.rs"
 
 [[bin]]
+name = "llrm-qb-old"
+path = "src/bin/llrm-qb-old.rs"
+
+[[bin]]
 name = "llrm-c-old"
 path = "src/bin/llrm-c-old.rs"
 

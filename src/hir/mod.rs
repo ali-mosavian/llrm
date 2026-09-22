@@ -1,0 +1,25 @@
+//! Port of `qbopt/hir/__init__.py`: the small, source-language-neutral IR
+//! above qbopt MIR.
+
+pub mod callmemory;
+pub mod codec;
+pub mod dump;
+pub mod escape;
+pub mod lower;
+pub mod model;
+pub mod verify;
+
+pub use codec::{decode, encode};
+pub use dump::mir_text;
+pub use lower::{Lowered, lower};
+pub use model::{
+    AddressKind, ArrayElement, ArrayOrder, Block, CallAbi, CallDistance, Constant, DataLinkage, DataObject,
+    DataRelocation, DescriptorField, DescriptorPlace, Dialect, FloatEvaluation, FloatMode, Function,
+    FunctionLinkage, IndirectPlace, Instruction, Module, Op, Place, PlaceRef, ProcedureAbi, Program,
+    ProjectedPlace, RuntimeProfile, StackCleanup, Storage, TargetProfile, Terminator, TerminatorKind, Type,
+    TypeKind, Value, ValueRef,
+};
+pub use verify::{InvalidHIR, verify};
+
+#[cfg(test)]
+mod test_hir;

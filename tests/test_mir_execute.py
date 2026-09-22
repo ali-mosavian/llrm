@@ -5,9 +5,12 @@ from dataclasses import replace
 
 import pytest
 
+from qbopt.model import ir
 from qbopt.model import mir
 from qbopt.model import execute
 from qbopt.backend import cpu as targets
+from qbopt.objectfile.module import Addr
+from qbopt.objectfile.module import Space
 from qbopt.frontend.modern import driver
 from qbopt.frontend.modern import compile as modern_compile
 
@@ -22,7 +25,7 @@ def slices(body: mir.MirBody, elements: int | tuple[int, ...]) -> tuple[dict, di
         {value for block in body.blocks for op in block.ops for value in op.uses if not value.flags} - defined,
         key=lambda value: value.id,
     )
-    region = ("selector", SELECTOR)
+    region = SELECTOR
     values, memory = {}, {}
     for number, value in enumerate(free):
         length = elements if isinstance(elements, int) else elements[number]
@@ -65,3 +68,33 @@ def test_an_unmodelled_operation_raises_rather_than_guessing(sum_three: tuple[mi
     with pytest.raises(execute.ExecutionError, match="call"):
         execute.run(body, values, memory)
     assert execute.run(body, values, memory, call=lambda op, args: ()).returned == (111,)
+
+
+POINTER = mir.Value(1, 0)
+
+
+def _through_pointer(pointer: mir.Arg, stored: mir.MemRef, read: mir.MemRef, **body: object) -> mir.MirBody:
+    """`POINTER = pointer`, store 0x1234 at `stored`, return what `read` holds."""
+    take = mir.computed(0, mir.Kind.COPY, POINTER, (pointer,), 2)
+    store = mir.Op(0, ir.Operation.MOVE, "", (), (POINTER,), stores=(stored,), kind=mir.Kind.STORE)
+    store = replace(store, args=(mir.Const(0x1234, 2),), results=(mir.Cell(stored),))
+    returned = mir.Op(0, ir.Operation.RETURN, "", (), (POINTER,), kind=mir.Kind.RETURN, args=(mir.Cell(read),))
+    return mir.MirBody(0, (mir.MirBlock(0, (), (take, store, returned), ()),), sealed=True, **body)
+
+
+def test_a_near_pointer_to_a_dgroup_cell_reaches_that_cell() -> None:
+    """A store through `ds:[bx]` pointing at a DGROUP static was invisible to the static: two regions."""
+    near = mir.MemRef(Addr(Space.LITERAL, 0), 2, base=POINTER)
+    static = mir.MemRef(Addr(Space.SEGMENT, 4, index=3), 2)
+
+    body = _through_pointer(mir.Const(0x44, 2), near, static)
+    assert execute.run(body, dgroup={3: 0x40}).returned == (0x1234,)
+
+
+def test_a_frame_slot_is_reached_through_a_near_pointer_when_the_stack_is_in_data() -> None:
+    """BC's SS == DS: `[bp-4]` and `ds:[bx]` with bx = bp-4 are one byte, but were two regions."""
+    slot = mir.MemRef(Addr(Space.FRAME, -4), 2, space=Space.FRAME)
+    near = mir.MemRef(Addr(Space.LITERAL, 0), 2, base=POINTER)
+
+    body = _through_pointer(mir.FrameAddress(-4, 2), slot, near, stack_in_data=True)
+    assert execute.run(body).returned == (0x1234,)

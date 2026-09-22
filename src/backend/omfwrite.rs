@@ -234,6 +234,8 @@ pub fn _data(segment: &mut Segment, index: usize, items: &[masm::Datum], symbols
                 segment.put(&vec![0; (-(segment.image.len() as i64)).rem_euclid(*to) as usize], &[]);
             }
             masm::Datum::Bytes(item) => segment.put(item, &[]),
+            // No case matches it in Python's `_data`.
+            masm::Datum::SegmentWord(_) => {}
         }
     }
 }

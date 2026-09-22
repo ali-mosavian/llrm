@@ -106,6 +106,9 @@ pub enum Datum {
     Pointer(Pointer),
     Align(Align),
     Bytes(Vec<u8>),
+    /// A frontend's own item, which Python's untyped `Module.data` carries
+    /// through: QB's `_SegmentWord`, a `dw seg name` only its writer encodes.
+    SegmentWord(String),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -165,6 +168,8 @@ pub fn datum(item: &Datum) -> Vec<String> {
         }
         Datum::Align(Align { to }) => vec![format!("    align {to}")],
         Datum::Bytes(item) => _code(&[InlinePart::Bytes(item.clone())]),
+        // `_code((item,))` yields nothing for an item it cannot match.
+        Datum::SegmentWord(_) => Vec::new(),
     }
 }
 

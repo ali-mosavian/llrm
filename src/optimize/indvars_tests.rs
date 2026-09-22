@@ -139,9 +139,9 @@ fn _symbolic_control_body(candidate_start: i64) -> MirBody {
     body
 }
 
-/// A recurrence seeded at 5 would make the replacement `jne` run until wraparound.
+/// A recurrence seeded at 5 is rebased by its final value, so its last update is still zero.
 #[test]
-fn test_symbolic_control_refuses_a_nonzero_terminal_recurrence() {
+fn test_symbolic_control_rebases_a_nonzero_start_recurrence() {
     let body = _symbolic_control_body(5);
     let found = loops::loops(&body.blocks, Some(body.entry));
     let [loop_] = &found[..] else { panic!("one loop") };
@@ -150,8 +150,8 @@ fn test_symbolic_control_refuses_a_nonzero_terminal_recurrence() {
     let basics = induction::basics(&body, loop_);
     let candidate = basics.values().find(|one| **one != proof.counter).expect("a second recurrence");
 
-    assert!(induction::zero_terminating_control(&Rc::new(MirBody::clone(&body)), loop_, proof, candidate, None).is_none());
-    assert_eq!(symbolically_zeroed(&Rc::new(MirBody::clone(&body))).unwrap(), Rc::new(body));
+    assert!(induction::zero_terminating_control(&Rc::new(body.clone()), loop_, proof, candidate, None).is_some());
+    assert_ne!(*symbolically_zeroed(&Rc::new(body.clone())).unwrap(), body);
 }
 
 /// The same bounded recurrence is usable when its final update is zero.

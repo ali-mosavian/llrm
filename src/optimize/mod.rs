@@ -2,6 +2,7 @@
 
 pub(crate) mod algebraic;
 pub(crate) mod canonical;
+pub(crate) mod counting;
 pub(crate) mod cfg;
 pub(crate) mod edges;
 pub(crate) mod exitsink;

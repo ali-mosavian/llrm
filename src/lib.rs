@@ -7,6 +7,7 @@ pub mod cfront;
 pub mod cycles;
 pub mod flow;
 pub mod frontend;
+pub mod hir;
 pub mod legacy;
 pub mod model;
 pub mod objectfile;

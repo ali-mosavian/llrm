@@ -56,12 +56,14 @@ impl fmt::Display for MemoryKind {
 }
 
 /// Python's `object`, as `Object.identity` and `Provenance.restrict` hold it:
-/// ints, strings, spaces, symbols, values and tuples of them.
+/// ints, strings, spaces, HIR storage classes, symbols, values and tuples
+/// of them.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum Identity {
     Int(i64),
     Str(String),
     Space(Space),
+    Storage(crate::hir::model::Storage),
     Symbol(Symbol),
     Value(Value),
     Tuple(Vec<Identity>),
@@ -73,6 +75,7 @@ impl Repr for Identity {
             Identity::Int(one) => one.repr(),
             Identity::Str(one) => one.repr(),
             Identity::Space(one) => one.repr(),
+            Identity::Storage(one) => one.repr(),
             Identity::Symbol(one) => one.repr(),
             Identity::Value(one) => one.repr(),
             Identity::Tuple(items) => pyrepr::tuple(items),

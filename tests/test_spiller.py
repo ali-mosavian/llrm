@@ -117,6 +117,34 @@ def test_a_short_update_is_completed_before_its_result_is_spilled() -> None:
     assert insns.index(spill) > insns.index(update)
 
 
+def test_a_short_update_leaves_a_copy_source_that_is_still_live() -> None:
+    """nbody's inner loop base `final = start + distance` overwrote `start`.
+
+    The update ran in the copy source's register: `add ax, bx` for
+    `mov final, start; add final, bx` with `start` still read by the outer
+    latch, which then advanced the wrong value and the answer drifted.
+    """
+    copied = _move(2, 1, at=0x10)
+    shifted = lir.Insn(
+        at=0x11,
+        covers=(0x11, 0x11),
+        what=ir.Semantics(
+            ir.Operation.BINARY,
+            "shl",
+            (ir.Held(2, 2),),
+            (ir.Held(2, 2), ir.Imm(1, 1)),
+        ),
+        defines=(2,),
+        uses=(2,),
+        op=None,
+    )
+
+    insns = _out(_body(copied, shifted, _move(3, 1, at=0x12)), {2})
+    read = next(index for index, one in enumerate(insns) if one.defines == (3,))
+
+    assert not any(1 in one.defines for one in insns[:read])
+
+
 def test_slot_is_as_wide_as_the_widest_use_of_its_value():
     """snd_mix_frame spilled a value first seen as a word, then stored all four
     bytes of it: `mov dword ptr [bp-2], eax` over the saved BP, and a 4-byte
