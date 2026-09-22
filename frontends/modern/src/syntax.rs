@@ -1,3 +1,6 @@
+/// An array has one to this many dimensions.
+pub const MAX_RANK: usize = 4;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Span {
     pub line: usize,
@@ -47,8 +50,10 @@ pub enum FixedStorage {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TypeAnnotation {
     Value(TypeSpec),
-    Slice { element: TypeSpec },
-    Array { element: TypeSpec, length: u32 },
+    /// `[T]`, or `[T, rank]` for a ranked view.
+    Slice { element: TypeSpec, rank: u8 },
+    /// `[T; d0, d1, ...]`, row-major.
+    Array { element: TypeSpec, dims: Vec<u32> },
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -169,7 +174,7 @@ pub enum IterationMode {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AssignTarget {
     Name(String),
-    Index { base: String, index: Expr },
+    Index { base: String, indices: Vec<Expr> },
     Member { base: Expr, field: String },
 }
 
@@ -268,9 +273,10 @@ pub enum Expr {
     },
     Boolean(bool, Span),
     Name(String, Span),
+    /// `base[i]`, or `base[i, j, ...]` for a ranked array.
     Index {
         base: Box<Expr>,
-        index: Box<Expr>,
+        indices: Vec<Expr>,
         span: Span,
     },
     Slice {

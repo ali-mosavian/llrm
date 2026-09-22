@@ -197,3 +197,18 @@ def test_native_fixed_conversions_and_i16_fixed_print(tmp_path: Path) -> None:
     expected = execute.run(driver.parsed(source), "main").output
     assert expected == "3.0 -2 0 2.75 200.0 7\n"
     assert build(source, tmp_path / "FIXCONV.EXE", run=True).output == expected
+
+
+def test_native_ranked_arrays_match_hir(tmp_path: Path) -> None:
+    source = ROOT / "frontends" / "modern" / "fixtures" / "ranked.mod"
+    expected = execute.run(driver.parsed(source), "main").output
+    assert expected == "15 106 162 42 9 3 4\n"
+    assert build(source, tmp_path / "RANKED.EXE", run=True).output == expected
+
+
+def test_native_4x4_fixed_matmul_through_rank_2_views(tmp_path: Path) -> None:
+    """Quarter-step 24.8 inputs: every entry is the exact rational product."""
+    source = ROOT / "frontends" / "modern" / "fixtures" / "matmul4.mod"
+    expected = execute.run(driver.parsed(source), "main").output
+    assert expected == "1.0 1.0 1.25 -4.0\n1.5 4.0 2.75 1.0\n-0.75 2.5 0.75 2.75\n3.5 0.5 1.5 9.5\n"
+    assert build(source, tmp_path / "MM4.EXE", run=True).output == expected

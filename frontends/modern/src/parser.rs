@@ -24,6 +24,7 @@ use crate::syntax::TypeAnnotation;
 use crate::syntax::TypeName;
 use crate::syntax::TypeSpec;
 use crate::syntax::UnaryOp;
+use crate::syntax::MAX_RANK;
 
 pub fn parse(tokens: Vec<Token>) -> Result<Module, Diagnostic> {
     Parser {
@@ -226,7 +227,7 @@ impl Parser {
                     if matches!(target, TypeAnnotation::Array { .. }) {
                         return Err(Diagnostic::new(
                             span,
-                            "borrowed array parameters omit the length; use '&[T]'",
+                            "borrowed array parameters omit the lengths; use '&[T]' or '&[T, rank]'",
                         ));
                     }
                     ParameterType::Borrowed { mutable, target }
@@ -331,17 +332,14 @@ impl Parser {
                     let span = expression.span();
                     let target = match expression {
                         Expr::Name(name, _) => AssignTarget::Name(name),
-                        Expr::Index { base, index, .. } => {
+                        Expr::Index { base, indices, .. } => {
                             let Expr::Name(base, _) = *base else {
                                 return Err(Diagnostic::new(
                                     span,
                                     "assignment target must be a named place",
                                 ));
                             };
-                            AssignTarget::Index {
-                                base,
-                                index: *index,
-                            }
+                            AssignTarget::Index { base, indices }
                         }
                         Expr::Member { base, field, .. } => {
                             AssignTarget::Member { base: *base, field }
@@ -816,14 +814,23 @@ impl Parser {
                 span: Span::new(start.line, start.column, close.span.end_column),
             });
         }
-        let index = first.expect("an index with no start is a slice");
+        let mut indices = vec![first.expect("an index with no start is a slice")];
+        while self.take(|kind| matches!(kind, TokenKind::Comma)).is_some() {
+            indices.push(self.expression(0)?);
+        }
+        if indices.len() > MAX_RANK {
+            return Err(Diagnostic::new(
+                start,
+                format!("an array has at most {MAX_RANK} dimensions"),
+            ));
+        }
         let close = self.expect(
             |kind| matches!(kind, TokenKind::RightBracket),
             "expected ']' after index",
         )?;
         Ok(Expr::Index {
             base: Box::new(base),
-            index: Box::new(index),
+            indices,
             span: Span::new(start.line, start.column, close.span.end_column),
         })
     }
@@ -966,40 +973,66 @@ impl Parser {
                     "an array element cannot be void",
                 ));
             }
+            if self.take(|kind| matches!(kind, TokenKind::Comma)).is_some() {
+                let rank = self.dimension("a view's rank")?;
+                if !(1..=MAX_RANK as u32).contains(&rank) {
+                    return Err(Diagnostic::new(
+                        self.peek().span,
+                        format!("a view's rank is 1 to {MAX_RANK}"),
+                    ));
+                }
+                self.expect(
+                    |kind| matches!(kind, TokenKind::RightBracket),
+                    "expected ']' after a view's rank",
+                )?;
+                return Ok(TypeAnnotation::Slice {
+                    element,
+                    rank: rank as u8,
+                });
+            }
             if self
                 .take(|kind| matches!(kind, TokenKind::RightBracket))
                 .is_some()
             {
-                return Ok(TypeAnnotation::Slice { element });
+                return Ok(TypeAnnotation::Slice { element, rank: 1 });
             }
             self.expect(
                 |kind| matches!(kind, TokenKind::Semicolon),
                 "expected ';' and an array length",
             )?;
-            let length_token = self.bump().clone();
-            let TokenKind::Integer(length_value) = length_token.kind else {
+            let mut dims = vec![self.dimension("array length")?];
+            while self.take(|kind| matches!(kind, TokenKind::Comma)).is_some() {
+                dims.push(self.dimension("array length")?);
+            }
+            if dims.len() > MAX_RANK {
                 return Err(Diagnostic::new(
-                    length_token.span,
-                    "array length must be an integer literal",
+                    self.peek().span,
+                    format!("an array has at most {MAX_RANK} dimensions"),
                 ));
-            };
-            let length = u32::try_from(length_value)
-                .ok()
-                .filter(|one| *one > 0)
-                .ok_or_else(|| {
-                    Diagnostic::new(
-                        length_token.span,
-                        "array length must be positive and fit u32",
-                    )
-                })?;
+            }
             self.expect(
                 |kind| matches!(kind, TokenKind::RightBracket),
                 "expected ']' after array type",
             )?;
-            Ok(TypeAnnotation::Array { element, length })
+            Ok(TypeAnnotation::Array { element, dims })
         } else {
             self.type_spec().map(TypeAnnotation::Value)
         }
+    }
+
+    /// A positive integer literal that fits u32.
+    fn dimension(&mut self, what: &str) -> Result<u32, Diagnostic> {
+        let token = self.bump().clone();
+        let TokenKind::Integer(value) = token.kind else {
+            return Err(Diagnostic::new(
+                token.span,
+                format!("{what} must be an integer literal"),
+            ));
+        };
+        u32::try_from(value)
+            .ok()
+            .filter(|one| *one > 0)
+            .ok_or_else(|| Diagnostic::new(token.span, format!("{what} must be positive and fit u32")))
     }
 
     fn type_name(&mut self) -> Result<TypeName, Diagnostic> {
@@ -1200,7 +1233,7 @@ mod tests {
             annotation:
                 Some(TypeAnnotation::Array {
                     element: TypeSpec::Primitive(TypeName::I32),
-                    length: 2,
+                    ..
                 }),
             ..
         } = &module.functions[0].body[0]

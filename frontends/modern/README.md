@@ -17,13 +17,13 @@ This crate implements the first source-language slice:
   bitwise operators and shifts, non-chaining comparisons, and short-circuit
   `and`/`or`;
 - conversions written `T(x)`;
-- fixed one-dimensional arrays, written `[T; length]`, with prefix descriptors,
-  literals, rank-one repeat literals `[value; length]`, indexed loads and
+- fixed arrays of rank one to four, written `[T; length]` or `[T; 4, 4]`,
+  with prefix descriptors, nested and repeat literals, indexed loads and
   stores, and intrinsic metadata methods;
 - source-ordered, nested `struct` layouts, local struct values, struct literals
   and copies, plus allocation-free array iteration through explicit references;
 - scoped `&T` and `&mut T` parameters, including unsized array views written
-  `&[T]` and `&mut [T]`;
+  `&[T]` and `&mut [T]`, or ranked `&[T, 2]`;
 - fixed-range slices, bounded list and dictionary comprehensions, and fused
   non-escaping generators; and
 - byte strings, allocation-free f-strings, and `print`.
@@ -109,8 +109,15 @@ all three values and folds them without emitting a helper or descriptor load;
 the physical descriptor remains available to interop. On a borrowed `[T]`
 view metadata loads through the scoped descriptor and indexing loads its data
 pointer. Strings provide `len()`, `capacity()`, and byte-value iteration over
-`char`. Only rank one is implemented, so any other dimension is currently
-rejected.
+`char`.
+
+Fixed arrays and borrowed views have one to four dimensions: `[T; 4, 4]` and
+`&[T, 2]`, indexed `a[i, j]`, row-major. Their descriptor is the dimensions,
+the capacity, then every stride but the last, so rank one keeps
+`[length][capacity]`. `len()` and `capacity()` count elements and `dim(k)`
+gives one dimension. A ranked array is initialized by a nested or repeat
+literal and iterated by index; only rank one can be sliced or iterated
+directly.
 
 Struct fields stay in source order, with at most two-byte alignment for the
 16-bit target. Indexing and field selection are structural HIR and lower to

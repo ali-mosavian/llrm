@@ -1026,3 +1026,44 @@ def test_a_float_does_not_convert_to_fixed_point(tmp_path: Path) -> None:
     )
     with pytest.raises(driver.FrontendError):
         driver.parsed(source)
+
+
+def test_ranked_arrays_index_fill_and_borrow_row_major() -> None:
+    """Only rank one existed; `[T; 3, 3]`, `a[i, j]` and `&[T, 2]` were rejected."""
+    program = driver.parsed(ROOT / "frontends" / "modern" / "fixtures" / "ranked.mod")
+    assert program.array_order is hir.ArrayOrder.ROW_MAJOR
+    assert execute.run(program, "main").output == "15 106 162 42 9 3 4\n"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "    let a: [i16; 2, 2] = [0; 2, 2]\n    return a[0]\n",
+        "    let a: [i16; 2, 2, 2, 2, 2] = [0; 2, 2, 2, 2, 2]\n    return 0\n",
+        "    let a: [i16; 2, 2] = [[1, 2], [3]]\n    return 0\n",
+        "    let a: [i16; 2, 2] = [0; 2, 3]\n    return 0\n",
+        "    let a: [i16; 2, 2] = [0; 2, 2]\n    return a.dim(2)\n",
+        "    let a: [i16; 2, 2] = [0; 2, 2]\n    return first(&a)\n",
+        "    let a: [i16; 2, 2] = [0; 2, 2]\n    var t: i16 = 0\n    for x in a:\n        t += x\n    return t\n",
+    ],
+)
+def test_ranked_arrays_reject_the_wrong_rank_or_shape(tmp_path: Path, body: str) -> None:
+    source = tmp_path / "ranked_rejected.mod"
+    source.write_text("fn first(values: &[i16]) -> i16:\n    return values[0]\nfn value() -> i16:\n" + body)
+    with pytest.raises(driver.FrontendError):
+        driver.parsed(source)
+
+
+@pytest.mark.parametrize("through", ["a[i, 1]", "at(&a, i)"])
+def test_a_ranked_index_is_not_computed_in_a_narrow_index_type(tmp_path: Path, through: str) -> None:
+    """A u8 first index made 19 * 20 + 1 wrap to 125 in u8 and read the wrong element."""
+    text = (
+        "fn at(m: &[i16, 2], i: u8) -> i16:\n"
+        "    return m[i, 1]\n"
+        "fn value() -> i16:\n"
+        "    var a: [i16; 20, 20] = [0; 20, 20]\n"
+        "    a[19, 1] = 7\n"
+        "    let i: u8 = 19\n"
+        f"    return {through}\n"
+    )
+    assert _returned(tmp_path, text) == 7
