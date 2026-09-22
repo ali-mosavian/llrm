@@ -62,6 +62,7 @@ pub(crate) enum DeclarationForm {
     Dim,
     Redim,
     Static,
+    Shared,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

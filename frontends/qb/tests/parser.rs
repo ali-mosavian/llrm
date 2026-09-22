@@ -2251,3 +2251,31 @@ fn a_scalar_and_an_array_may_share_a_name() {
         "{hir}"
     );
 }
+
+#[test]
+fn a_procedure_sees_only_shared_module_variables() {
+    // deedlines' SUBs begin `SHARED kb%, px%, ...`, which did not parse.
+    // Every procedure also saw every module variable: gorillas' DoSun
+    // wrote the module's x, which QB keeps local without SHARED.
+    let module = parse(
+        "x% = 5\r\nnamed\r\nunnamed\r\n\
+         sub named\r\nshared x%, onlyhere%\r\nx% = onlyhere%\r\nend sub\r\n\
+         sub unnamed\r\nx% = 6\r\nend sub\r\n",
+        Dialect::QuickBasic45,
+    )
+    .unwrap();
+    let hir = compile(&module, "shared_statement", Dialect::QuickBasic45, "qb45").unwrap();
+    // NAMED stores to the module's X% (place 1); UNNAMED to its own.
+    assert_eq!(
+        hir.matches("\"op\":\"store\",\"operands\":[{\"place\":1,")
+            .count(),
+        2,
+        "{hir}"
+    );
+    assert_eq!(
+        hir.matches("\"name\":\"X%\",\"offset\":-2,\"storage\":\"local\"")
+            .count(),
+        1,
+        "{hir}"
+    );
+}

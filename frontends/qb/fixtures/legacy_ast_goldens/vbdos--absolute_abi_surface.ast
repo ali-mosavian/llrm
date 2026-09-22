@@ -46,6 +46,7 @@ Module {
             declaration: true,
             is_static: false,
             exported: true,
+            module_scope: false,
             span: Span {
                 line: 3,
                 start: 8,

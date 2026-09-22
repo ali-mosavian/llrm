@@ -266,6 +266,10 @@ struct Compiler {
     // variables, C! and C%.
     default_changes: Vec<((usize, usize), [u32; 26])>,
     position: (usize, usize),
+    // Every module-level variable, and the keys of those with the SHARED
+    // attribute.
+    module_variables: BTreeMap<String, Variable>,
+    shared_keys: BTreeSet<String>,
     option_base: i64,
     statement_entries: Vec<(u32, u32, u16)>,
     data_entries: Vec<u32>,
@@ -337,10 +341,20 @@ pub fn compile_with_options(
     compiler.reserve_data_labels(&module.statements, &mut read_data_offset)?;
     compiler.reserve_labels(&module.statements)?;
     compiler.statements(module)?;
+    compiler.declare_procedure_shared(module)?;
     compiler.finish();
     compiler.save_function(1, "__main", VOID, Vec::new(), false, 0, "internal");
 
-    let module_variables = compiler.variables.clone();
+    compiler.module_variables = compiler.variables.clone();
+    // A procedure sees only what the module declared SHARED; the rest of
+    // the module's variables are local to it, and a procedure's SHARED
+    // statement adds the ones it names.
+    let shared_variables: BTreeMap<String, Variable> = compiler
+        .module_variables
+        .iter()
+        .filter(|(key, _)| compiler.shared_keys.contains(*key))
+        .map(|(key, variable)| (key.clone(), variable.clone()))
+        .collect();
     let module_constants = compiler.constants.clone();
     let module_places = compiler.functions[0].places.clone();
     for (index, procedure) in module
@@ -350,7 +364,11 @@ pub fn compile_with_options(
         .enumerate()
     {
         compiler.reset_function(
-            module_variables.clone(),
+            if procedure.module_scope {
+                compiler.module_variables.clone()
+            } else {
+                shared_variables.clone()
+            },
             module_constants.clone(),
             module_places.clone(),
         );
@@ -808,6 +826,7 @@ fn outline_module_gosubs(module: &Module) -> Result<Module, SemanticError> {
             declaration: false,
             is_static: false,
             exported: false,
+            module_scope: true,
             span,
         });
         removed[start..=end].fill(true);
@@ -922,6 +941,8 @@ impl Compiler {
             floating_literals: BTreeMap::new(),
             default_changes: Vec::new(),
             position: (0, 0),
+            module_variables: BTreeMap::new(),
+            shared_keys: BTreeSet::new(),
             option_base: 0,
             statement_entries: Vec::new(),
             data_entries: Vec::new(),
@@ -1451,6 +1472,16 @@ impl Compiler {
                         self.declare_as(item, "static")?;
                     }
                 }
+                Statement::Shared(items) => {
+                    for item in items {
+                        let key = self.declaration_key(item)?;
+                        let Some(variable) = self.module_variables.get(&key) else {
+                            return self
+                                .fail(format!("SHARED {} names no module variable", item.name));
+                        };
+                        self.variables.insert(key, variable.clone());
+                    }
+                }
                 Statement::DefType { .. }
                 | Statement::TypeDecl { .. }
                 | Statement::OptionBase(_, _) => {}
@@ -1485,12 +1516,34 @@ impl Compiler {
         Ok(())
     }
 
+    /// A variable only procedures' SHARED statements name is still the
+    /// module's: declare it there before the procedures are compiled.
+    fn declare_procedure_shared(&mut self, module: &Module) -> Result<(), SemanticError> {
+        for procedure in module.procedures.iter().filter(|one| !one.declaration) {
+            for statement in &procedure.body {
+                let Statement::Shared(items) = statement else {
+                    continue;
+                };
+                self.position = source_position(statement.span());
+                for item in items {
+                    if !self.variables.contains_key(&self.declaration_key(item)?) {
+                        self.declare_as(item, "module")?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn declare_as(
         &mut self,
         declaration: &Declaration,
         storage: &'static str,
     ) -> Result<u32, SemanticError> {
         let key = self.declaration_key(declaration)?;
+        if storage == "module" && declaration.shared {
+            self.shared_keys.insert(key.clone());
+        }
         let declaration = &self.typed_declaration(declaration)?;
         if self.variables.contains_key(&key)
             || self.constants.contains_key(canonical(&declaration.name))
@@ -2056,6 +2109,7 @@ impl Compiler {
                 statement,
                 Statement::Dim(_)
                     | Statement::Static(_)
+                    | Statement::Shared(_)
                     | Statement::DefType { .. }
                     | Statement::TypeDecl { .. }
                     | Statement::Const { .. }
@@ -2077,6 +2131,7 @@ impl Compiler {
             match statement {
                 Statement::Dim(_)
                 | Statement::Static(_)
+                | Statement::Shared(_)
                 | Statement::DefType { .. }
                 | Statement::TypeDecl { .. }
                 | Statement::Const { .. }

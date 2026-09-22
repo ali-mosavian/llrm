@@ -570,6 +570,11 @@ action = "StaticVariableDeclaration"
 retains = "name,type_name,array,fixed_length,span"
 
 [[external]]
+identity = "NtIdAry"
+action = "SharedVariableDeclaration"
+retains = "name,type_name,array,span"
+
+[[external]]
 identity = "NtIdAryDim"
 action = "DimDeclaration"
 retains = "name,type_name,array,fixed_length,bounds,dynamic,shared,span"
