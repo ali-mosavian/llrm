@@ -262,6 +262,10 @@ class LirBody:
     loop_trip_counts: tuple[tuple[int, int], ...] = ()
     ordered: bool = False
     noreturn: bool = False
+    # Blocks keep the order they arrive in. A BASIC body with an error
+    # handler says so: RESUME NEXT finds the statement after the faulting
+    # address, which holds only while each statement's code is contiguous.
+    source_order: bool = False
 
     @property
     def insns(self) -> "tuple[Insn, ...]":

@@ -1794,6 +1794,19 @@ def test_a_float_compare_status_word_does_not_overwrite_a_live_ax(tmp_path: Path
                 break
 
 
+def test_a_statement_under_an_error_handler_keeps_its_code_contiguous(tmp_path: Path) -> None:
+    """RESUME NEXT after -8 ^ (1/3) raised error 5 reported "No line number":
+    layout put the raise after B$CEND, outside its statement's code."""
+    basic = tmp_path / "POWRES.BAS"
+    basic.write_bytes(
+        b"on error goto h\r\nb! = -8: e! = .5\r\nfor i% = 1 to 2\r\nr! = b! ^ e!\r\nprint r!\r\nnext\r\nsystem\r\n"
+        b"h:\r\nresume next\r\n"
+    )
+    source = qb_driver.parsed(basic, dialect="qb45", runtime="qb45")
+    calls = [line.split()[-1] for line in masm.text(qb_compile.assembled(source)).splitlines() if "call" in line]
+    assert calls.index("B$SERR") < calls.index("B$PER4"), calls
+
+
 def test_byref_dynamic_array_field_copies_through_a_near_formal(tmp_path: Path) -> None:
     """ENT_MOVE_TRIGS passed a four-byte far field address to a two-byte scalar formal."""
     basic = tmp_path / "FARFIELD.BAS"

@@ -1249,6 +1249,7 @@ def assembled(program: hir.Program, *, observer: StageObserver | None = None, op
             "lower",
             in_ssa=True,
         )
+        low = replace(low, source_order=function.error_handler is not None)
         _observe(observer, "initial-lir", low, function)
         temporary_blocks = (
             frozenset(block.at for block in low.blocks) - frozenset(block.at for block in physical.lowered.body.blocks)
