@@ -58,6 +58,17 @@ impl Fraction {
     }
 }
 
+/// Python's `str(fraction)`: `n` over one, else `n/d`.
+impl std::fmt::Display for Fraction {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.denominator == BigInt::from(1) {
+            write!(formatter, "{}", self.numerator)
+        } else {
+            write!(formatter, "{}/{}", self.numerator, self.denominator)
+        }
+    }
+}
+
 impl Ord for Fraction {
     fn cmp(&self, other: &Self) -> Ordering {
         (&self.numerator * &other.denominator).cmp(&(&other.numerator * &self.denominator))

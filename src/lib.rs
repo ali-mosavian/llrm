@@ -14,3 +14,4 @@ pub mod objectfile;
 pub mod old;
 pub mod optimize;
 pub mod support;
+pub mod tools;

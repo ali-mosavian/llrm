@@ -7,7 +7,14 @@ use std::process::ExitCode;
 use llrm::old::driver;
 
 fn main() -> ExitCode {
-    match Invocation::parse(env::args().skip(1)) {
+    let arguments: Vec<String> = env::args().skip(1).collect();
+    if arguments.iter().any(|one| one == "--dump") {
+        return match llrm::tools::stages::main(&arguments) {
+            Ok(code) => ExitCode::from(u8::try_from(code).unwrap_or(1)),
+            Err(message) => failure(message),
+        };
+    }
+    match Invocation::parse(arguments.into_iter()) {
         Ok(invocation) => invocation.run(),
         Err(message) => {
             eprintln!("llrm-omf: {message}");
