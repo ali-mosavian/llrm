@@ -53,7 +53,12 @@ fn written(directory: &tempfile::TempDir, name: &str, text: &str) -> PathBuf {
 
 /// `masm.text(modern_compile.assembled(program, entry=entry, options=options))`.
 pub(crate) fn listing(program: &model::Program, entry: &str, options: &Options) -> String {
-    let module = modern_compile::assembled(program, entry, ProfileOrName::Name("386"), options).expect("assembles");
+    listing_on(program, entry, options, "386")
+}
+
+/// `listing` with `cpu=cpu`.
+fn listing_on(program: &model::Program, entry: &str, options: &Options, cpu: &'static str) -> String {
+    let module = modern_compile::assembled(program, entry, ProfileOrName::Name(cpu), options).expect("assembles");
     masm::text(&module).expect("prints")
 }
 
@@ -524,14 +529,12 @@ fn test_fixed_array_storage_has_a_prefix_descriptor() {
     let descriptor = |name: &str| function.places.iter().find(|place| place.name == name).unwrap();
     assert_eq!(values.offset, -6);
     assert_eq!(values.extent, Some(6));
-    assert_eq!(descriptor("$values.length").offset, values.offset - 6);
-    assert_eq!(descriptor("$values.capacity").offset, values.offset - 4);
-    assert_eq!(descriptor("$values.stride0").offset, values.offset - 2);
+    assert_eq!(descriptor("$values.length").offset, values.offset - 4);
+    assert_eq!(descriptor("$values.capacity").offset, values.offset - 2);
 
     let assembly = listing(&parsed(&source), "main", &O2());
-    assert!(assembly.contains("mov word ptr [bp-12], 3"));
     assert!(assembly.contains("mov word ptr [bp-10], 3"));
-    assert!(assembly.contains("mov word ptr [bp-8], 1"));
+    assert!(assembly.contains("mov word ptr [bp-8], 3"));
 }
 
 #[test]
@@ -611,7 +614,7 @@ fn test_array_parameter_is_one_unsized_view_pointer() {
     assert_eq!(function.parameters.len(), 1);
     assert_eq!(pointer.kind, model::TypeKind::Pointer);
     assert_eq!(pointer.rank, 1);
-    assert_eq!((descriptor.kind, descriptor.width), (model::TypeKind::Opaque, 10));
+    assert_eq!((descriptor.kind, descriptor.width), (model::TypeKind::Opaque, 8));
     assert_eq!(element.name, "i16");
     assert_eq!(
         descriptor_loads,
@@ -625,13 +628,15 @@ fn test_array_parameter_is_one_unsized_view_pointer() {
 
 #[test]
 fn test_runtime_bounded_array_loop_advances_its_payload_address() {
-    // sum rebuilt `payload + index * stride * 2` on every trip; the byte stride is scaled once.
+    // sum rebuilt `payload + index * 2` on every trip despite its invariant runtime bound.
     let assembly = listing(&parsed(&fixture("sum.mod")), "main", &O2());
     let function = between(&assembly, "_sum proc far", "_sum endp");
     let hot = between(function, "L0_3:", "L0_5:");
 
     assert!(!Regex::new(r"\b(?:imul|shl|lea)\b").unwrap().is_match(hot));
-    assert!(Regex::new(r"\badd\s+(?:si|di|bx),\s*(?:ax|bx|cx|dx|si|di)\b").unwrap().is_match(hot));
+    assert!(function.contains("xor ax, ax"));
+    assert!(!function.contains("dec "));
+    assert!(Regex::new(r"\badd\s+(?:si|di|bx),\s*2\s*\n(?:L\w+:\n)?\s*jne\b").unwrap().is_match(hot));
 }
 
 #[test]
@@ -640,7 +645,7 @@ fn test_three_array_initializer_keeps_the_fixed_frame_address_component() {
     let assembly = listing(&parsed(&fixture("sum_three.mod")), "main", &O2());
     let main = between(&assembly, "_main proc far", "call far ptr _sum_three");
     let cells: BTreeSet<String> =
-        [-8, -22, -36].iter().flat_map(|payload| (0..4).map(move |index| format!("[bp{}]", payload + 2 * index))).collect();
+        [-8, -20, -32].iter().flat_map(|payload| (0..4).map(move |index| format!("[bp{}]", payload + 2 * index))).collect();
     let initializers: BTreeSet<String> = Regex::new(r"mov word ptr (\[[^\]]+\]), \d+")
         .unwrap()
         .captures_iter(main)
@@ -682,10 +687,12 @@ fn test_runtime_bounded_array_loop_has_a_symbolic_count_proof() {
     let body = sum_optimized_physical(&program, &semantic);
     let found = loops::loops(&body.blocks, Some(body.entry));
     let [loop_] = found.as_slice() else { panic!("one loop") };
-    let steps: Vec<induction::AffineOperand> = induction::basics(&body, loop_).values().map(|one| one.step.clone()).collect();
-    assert!(steps.contains(&induction::AffineOperand::Const(mir::Const::new(1, 2))));
-    // the offset steps by the view's byte stride
-    assert!(steps.iter().any(|one| matches!(one, induction::AffineOperand::Held(_))));
+    let recurrences = induction::basics(&body, loop_);
+    assert_eq!(recurrences.len(), 1);
+    assert_eq!(
+        recurrences.values().next().unwrap().step,
+        induction::AffineOperand::Const(mir::Const::new(2, 2))
+    );
 
     let predecessors = loops::predecessors(&body.blocks);
     assert!(body.blocks.iter().all(|block| block.phis.iter().all(|phi| {
@@ -694,7 +701,8 @@ fn test_runtime_bounded_array_loop_has_a_symbolic_count_proof() {
 }
 
 #[test]
-fn test_a_view_offset_never_replaces_the_loop_counter() {
+fn test_runtime_bounded_array_control_respects_the_recurrence_period() {
+    // A stride-two offset repeats after 32768 word updates and cannot control a longer loop.
     let program = parsed(&fixture("sum.mod"));
     let semantic =
         modern_compile::semantic_lowered(&program).unwrap().into_iter().find(|one| one.name == "sum.sum").unwrap();
@@ -704,7 +712,7 @@ fn test_a_view_offset_never_replaces_the_loop_counter() {
     let mut unsafe_ = semantic.clone();
     unsafe_.body.integer_ranges = mir::OrderedMap::from_iter([(
         length,
-        mir::IntegerRange { low: BigInt::from(0), high: BigInt::from(4), width: 2 },
+        mir::IntegerRange { low: BigInt::from(0), high: BigInt::from(32769), width: 2 },
     )]);
 
     let body = sum_optimized_physical(&program, &unsafe_);
@@ -718,7 +726,7 @@ fn test_a_view_offset_never_replaces_the_loop_counter() {
         })
         .collect();
     steps.sort();
-    assert_eq!(steps, [BigInt::from(1)]);
+    assert_eq!(steps, [BigInt::from(1), BigInt::from(2)]);
 }
 
 #[test]
@@ -897,6 +905,118 @@ fn test_a_ranked_repeat_literal_at_os_is_one_string_fill() {
 }
 
 #[test]
+fn test_unroll_is_priced_against_the_loop_as_optimized() {
+    // Unroll compared its settled copy with the loop mid-round: `b`'s fill became eight at -Os, not one.
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "priced_unroll.mod",
+        concat!(
+            "type fix = fixed i32, fraction=8\n",
+            "fn value(k: i16) -> fix:\n",
+            "    var a: [fix; 8, 8] = [0; 8, 8]\n",
+            "    var b: [fix; 8, 8] = [0; 8, 8]\n",
+            "    for i in 0..8:\n",
+            "        for j in 0..8:\n",
+            "            a[i, j] = fix(i * 3 + j + 1) / 4\n",
+            "            if i == j:\n",
+            "                b[i, j] = 2\n",
+            "            else:\n",
+            "                b[i, j] = fix((i + j) % 3) / 2\n",
+            "    return a[k, 1] + b[k, 2]\n",
+            "fn main() -> i16:\n",
+            "    value(3)\n",
+            "    return 0\n",
+        ),
+    );
+    let assembly = listing_on(&parsed(&source), "main", &level("Os"), "486");
+    let body = &assembly[assembly.find("_value proc").unwrap()..assembly.find("_value endp").unwrap()];
+
+    assert_eq!(body.matches("rep stosd").count(), 2);
+    assert_eq!(body.matches("mov cx, 64").count(), 2);
+}
+
+fn _settled(directory: &tempfile::TempDir, text: &str, options: &Options) -> mir::MirBody {
+    let source = written(directory, "settled.mod", text);
+    let program = parsed(&source);
+    let function = function(&program, "value");
+    let semantic = modern_compile::semantic_lowered(&program)
+        .expect("lowers")
+        .into_iter()
+        .find(|one| one.name.ends_with(".value"))
+        .expect("the body exists");
+    let target = targets::profile("486").unwrap();
+    modern_compile::optimized(&program, function, &semantic, target, None, options).unwrap().body
+}
+
+#[test]
+fn test_a_fill_count_that_is_a_number_is_written_as_one() {
+    // A merged fill's count stayed a held 64, which pricing read as an unknown ten cells.
+    let directory = tempfile::tempdir().expect("a directory");
+    let text = "fn value(k: i16) -> i32:\n    var a: [i32; 8, 8] = [0; 8, 8]\n    a[k, 1] = 5\n    return a[k, 2]\n";
+    let body = _settled(&directory, text, &level("Os"));
+    let counts = body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.ops)
+        .filter(|op| op.kind == Kind::Fill)
+        .map(|op| op.args[1].clone())
+        .collect::<Vec<_>>();
+
+    assert_eq!(counts, vec![Arg::Const(mir::Const::new(BigInt::from(64), 2))]);
+}
+
+#[test]
+fn test_an_unnamed_loop_is_priced_at_its_proven_trip_count() {
+    // Every loop but the one asked about was priced at ten trips, so an 8-trip outer loop cost 25% too much.
+    let directory = tempfile::tempdir().expect("a directory");
+    let text = concat!(
+        "fn value(v: &[i16]) -> i16:\n",
+        "    var total: i16 = 0\n",
+        "    for i in 0..8:\n",
+        "        total += v[i]\n",
+        "    return total\n",
+    );
+    let options = Options { unroll: false, peel: false, ..Options::default() };
+    let body = std::rc::Rc::new(_settled(&directory, text, &options));
+    let found = loops::loops(&body.blocks, Some(body.entry));
+    let [loop_] = found.as_slice() else { panic!("one loop, found {}", found.len()) };
+    let frequency = profit::_frequencies(&body, None).expect("priced");
+
+    assert_eq!(loop_.body.iter().map(|at| frequency[at]).collect::<BTreeSet<_>>(), BTreeSet::from([8]));
+}
+
+#[test]
+fn test_a_new_counter_steps_where_no_condition_is_live() {
+    // A rotated loop branches on flags its body set; the pointer step went between them: Unlowered.
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "struct_view.mod",
+        concat!(
+            "struct sample:\n",
+            "    tag: i16\n",
+            "    value: i32\n",
+            "    delta: i32\n",
+            "fn total(samples: &[sample]) -> i32:\n",
+            "    var sum: i32 = 0\n",
+            "    for one in &samples:\n",
+            "        sum += one.value\n",
+            "    return sum\n",
+            "fn main() -> i16:\n",
+            "    let s: [sample; 2] = [sample { tag: 0, value: 1, delta: 2 }, sample { tag: 0, value: 2, delta: 3 }]\n",
+            "    return i16(total(&s))\n",
+        ),
+    );
+    let assembly = listing(&parsed(&source), "main", &O2());
+    let body = &assembly[assembly.find("_total proc").unwrap()..assembly.find("_total endp").unwrap()];
+
+    assert!(
+        Regex::new(r"add (?:si|di|bx), 10\n    add (?:si|di|bx|cx|dx|ax), 10\n(?:L\w+:\n)?    jne").unwrap().is_match(body)
+    );
+}
+
+#[test]
 fn test_an_unrolled_fill_stores_to_fixed_frame_cells() {
     // Each unrolled store of `[0; 8, 8]` loaded its constant offset into a register first: 64 extra movs.
     let directory = tempfile::tempdir().expect("a directory");
@@ -905,7 +1025,8 @@ fn test_an_unrolled_fill_stores_to_fixed_frame_cells() {
         "unrolled_fill.mod",
         "fn value(k: i16) -> i32:\n    var a: [i32; 8, 8] = [0; 8, 8]\n    a[k, 1] = 5\n    return a[k, 2]\nfn main() -> i16:\n    return i16(value(3))\n",
     );
-    let assembly = listing(&parsed(&source), "main", &O2());
+    // The 486 unrolls it: a dword store is one clock, `rep stosd` 7+4n.
+    let assembly = listing_on(&parsed(&source), "main", &O2(), "486");
     let body = &assembly[assembly.find("_value proc").unwrap()..assembly.find("_value endp").unwrap()];
     let zeroes: Vec<String> =
         Regex::new(r"mov dword ptr \[(.*?)\], 0\n").unwrap().captures_iter(body).map(|one| one[1].to_owned()).collect();
