@@ -18,23 +18,23 @@ only for a module still `todo`, and never after cutover.
 | 2 | `qbopt/analysis/intervals.py` | 232 | `src/analysis/intervals.rs` | todo | test_allocation, test_coalesce, test_splitkit |
 | 2 | `qbopt/analysis/liveness.py` | 159 | `src/analysis/liveness.rs` | draft | test_regalloc, test_word_arithmetic_carry |
 | 2 | `qbopt/backend/addressforms.py` | 585 | `src/backend/addressforms.rs` | draft | - |
-| 2 | `qbopt/backend/addressvalues.py` | 54 | `src/backend/addressvalues.rs` | todo | - |
+| 2 | `qbopt/backend/addressvalues.py` | 54 | `src/backend/addressvalues.rs` | draft | - |
 | 2 | `qbopt/backend/allocate.py` | 1650 | `src/backend/allocate.rs` | todo | test_allocation, test_constrain, test_cpu_profile, test_dead_call_deliveries, test_interval_redefinitions, test_lir, test_lower_arguments, test_spiller, test_wholeseg |
-| 2 | `qbopt/backend/arithmetic.py` | 69 | `src/backend/arithmetic.rs` | todo | test_arithmetic_target |
+| 2 | `qbopt/backend/arithmetic.py` | 69 | `src/backend/arithmetic.rs` | draft | test_arithmetic_target |
 | 2 | `qbopt/backend/asm.py` | 1079 | `src/backend/asm.rs` | todo | test_loop_exit_layout, test_raising_calls, test_select, test_symbolic_relocation |
 | 2 | `qbopt/backend/coalesce.py` | 373 | `src/backend/coalesce.rs` | todo | test_coalesce, test_flow |
-| 2 | `qbopt/backend/comparefold.py` | 109 | `src/backend/comparefold.rs` | todo | test_memory_folding |
+| 2 | `qbopt/backend/comparefold.py` | 109 | `src/backend/comparefold.rs` | draft | test_memory_folding |
 | 2 | `qbopt/backend/constrain.py` | 448 | `src/backend/constrain.rs` | todo | test_constrain |
 | 2 | `qbopt/backend/copyprop.py` | 248 | `src/backend/copyprop.rs` | todo | - |
 | 2 | `qbopt/backend/copysink.py` | 182 | `src/backend/copysink.rs` | todo | test_copysink |
-| 2 | `qbopt/backend/cpu.py` | 221 | `src/backend/cpu.rs` | todo | test_cpu_profile, test_floatalloc, test_inline, test_quality, test_schedule |
-| 2 | `qbopt/backend/division.py` | 101 | `src/backend/division.rs` | todo | test_reciprocal, test_timing_bounds |
-| 2 | `qbopt/backend/farcall.py` | 56 | `src/backend/farcall.rs` | todo | - |
-| 2 | `qbopt/backend/farload.py` | 141 | `src/backend/farload.rs` | todo | - |
+| 2 | `qbopt/backend/cpu.py` | 221 | `src/backend/cpu.rs` | draft | test_cpu_profile, test_floatalloc, test_inline, test_quality, test_schedule |
+| 2 | `qbopt/backend/division.py` | 101 | `src/backend/division.rs` | draft | test_reciprocal, test_timing_bounds |
+| 2 | `qbopt/backend/farcall.py` | 56 | `src/backend/farcall.rs` | draft | - |
+| 2 | `qbopt/backend/farload.py` | 141 | `src/backend/farload.rs` | draft | - |
 | 2 | `qbopt/backend/floatalloc.py` | 1086 | `src/backend/floatalloc.rs` | todo | test_cpu_profile, test_float_values, test_floatalloc, test_raising_copies |
 | 2 | `qbopt/backend/floatregions.py` | 195 | `src/backend/floatregions.rs` | todo | - |
-| 2 | `qbopt/backend/fpu.py` | 113 | `src/backend/fpu.rs` | todo | test_fpu |
-| 2 | `qbopt/backend/frame.py` | 107 | `src/backend/frame.rs` | todo | test_constrain, test_floatalloc, test_flow, test_frame, test_jumps, test_lower_arguments, test_native_frame, test_native_stack_arguments, test_peephole, test_prologue, test_rematerialized_definitions, test_spiller |
+| 2 | `qbopt/backend/fpu.py` | 113 | `src/backend/fpu.rs` | draft | test_fpu |
+| 2 | `qbopt/backend/frame.py` | 107 | `src/backend/frame.rs` | draft | test_constrain, test_floatalloc, test_flow, test_frame, test_jumps, test_lower_arguments, test_native_frame, test_native_stack_arguments, test_peephole, test_prologue, test_rematerialized_definitions, test_spiller |
 | 2 | `qbopt/backend/jumps.py` | 551 | `src/backend/jumps.rs` | todo | - |
 | 2 | `qbopt/backend/layout.py` | 619 | `src/backend/layout.rs` | todo | test_emission_order, test_layout, test_wholeseg |
 | 2 | `qbopt/backend/liveness.py` | 142 | `src/backend/liveness.rs` | todo | test_liveness |
@@ -45,24 +45,24 @@ only for a module still `todo`, and never after cutover.
 | 2 | `qbopt/backend/machinecse.py` | 245 | `src/backend/machinecse.rs` | todo | test_machinecse |
 | 2 | `qbopt/backend/machinedce.py` | 135 | `src/backend/machinedce.rs` | todo | test_machinedce |
 | 2 | `qbopt/backend/masm.py` | 423 | `src/backend/masm.rs` | todo | test_cfront_frontend, test_hir, test_hir_execute, test_memory_folding, test_modern_frontend, test_peephole |
-| 2 | `qbopt/backend/nativeframe.py` | 325 | `src/backend/nativeframe.rs` | todo | test_native_frame, test_native_stack_arguments |
+| 2 | `qbopt/backend/nativeframe.py` | 325 | `src/backend/nativeframe.rs` | draft | test_native_frame, test_native_stack_arguments |
 | 2 | `qbopt/backend/omfwrite.py` | 675 | `src/backend/omfwrite.rs` | todo | test_cbench_e2e, test_cfront_frontend, test_cfront_int64_e2e, test_frontend_parity, test_spiller, test_wholeseg |
-| 2 | `qbopt/backend/parcopy.py` | 258 | `src/backend/parcopy.rs` | todo | test_lir_verify, test_parcopy, test_wholeseg |
+| 2 | `qbopt/backend/parcopy.py` | 258 | `src/backend/parcopy.rs` | draft | test_lir_verify, test_parcopy, test_wholeseg |
 | 2 | `qbopt/backend/peephole.py` | 2683 | `src/backend/peephole.rs` | todo | test_addressforms, test_dead_address_arithmetic, test_lir_emission_order, test_liveness, test_machine_copyprop, test_prologue |
-| 2 | `qbopt/backend/phielim.py` | 508 | `src/backend/phielim.rs` | todo | test_floatalloc, test_flow, test_lir, test_spiller |
+| 2 | `qbopt/backend/phielim.py` | 508 | `src/backend/phielim.rs` | draft | test_floatalloc, test_flow, test_lir, test_spiller |
 | 2 | `qbopt/backend/pointers.py` | 55 | `src/backend/pointers.rs` | draft | test_pointer_offset |
-| 2 | `qbopt/backend/prologue.py` | 198 | `src/backend/prologue.rs` | todo | test_flow, test_parcopy |
+| 2 | `qbopt/backend/prologue.py` | 198 | `src/backend/prologue.rs` | draft | test_flow, test_parcopy |
 | 2 | `qbopt/backend/reencode.py` | 225 | `src/backend/reencode.rs` | n/a (unused) | test_reencode |
 | 2 | `qbopt/backend/regthrash.py` | 255 | `src/backend/regthrash.rs` | todo | - |
-| 2 | `qbopt/backend/rmw.py` | 332 | `src/backend/rmw.rs` | todo | test_rmw |
+| 2 | `qbopt/backend/rmw.py` | 332 | `src/backend/rmw.rs` | draft | test_rmw |
 | 2 | `qbopt/backend/schedule.py` | 319 | `src/backend/schedule.rs` | todo | - |
-| 2 | `qbopt/backend/select.py` | 1784 | `src/backend/select.rs` | todo | test_address_roles, test_allocation, test_allocation_hints, test_arithmetic_immediates, test_coalesce, test_constrain, test_e2e, test_float_register_arithmetic, test_flow, test_fpu, test_layout, test_lower_conditions, test_lower_switches, test_parcopy, test_peephole, test_postallocation, test_regthrash, test_select |
+| 2 | `qbopt/backend/select.py` | 1784 | `src/backend/select.rs` | draft | test_address_roles, test_allocation, test_allocation_hints, test_arithmetic_immediates, test_coalesce, test_constrain, test_e2e, test_float_register_arithmetic, test_flow, test_fpu, test_layout, test_lower_conditions, test_lower_switches, test_parcopy, test_peephole, test_postallocation, test_regthrash, test_select |
 | 2 | `qbopt/backend/spiller.py` | 1807 | `src/backend/spiller.rs` | todo | test_constrain, test_flow, test_rematerialized_definitions, test_spiller, test_wholeseg |
 | 2 | `qbopt/backend/spillforward.py` | 176 | `src/backend/spillforward.rs` | todo | test_peephole |
 | 2 | `qbopt/backend/splitkit.py` | 485 | `src/backend/splitkit.rs` | todo | test_splitkit |
-| 2 | `qbopt/backend/storecombine.py` | 52 | `src/backend/storecombine.rs` | todo | - |
-| 2 | `qbopt/backend/target.py` | 341 | `src/backend/target.rs` | todo | test_coalesce, test_constrain, test_flow, test_lir, test_regalloc, test_select, test_selectors, test_strength_offsets |
-| 2 | `qbopt/backend/timing.py` | 42 | `src/backend/timing.rs` | todo | test_timing_bounds |
+| 2 | `qbopt/backend/storecombine.py` | 52 | `src/backend/storecombine.rs` | draft | - |
+| 2 | `qbopt/backend/target.py` | 341 | `src/backend/target.rs` | draft | test_coalesce, test_constrain, test_flow, test_lir, test_regalloc, test_select, test_selectors, test_strength_offsets |
+| 2 | `qbopt/backend/timing.py` | 42 | `src/backend/timing.rs` | draft | test_timing_bounds |
 | 2 | `qbopt/backend/twoaddr.py` | 244 | `src/backend/twoaddr.rs` | todo | test_lir |
 | 2 | `qbopt/backend/verify.py` | 200 | `src/backend/verify.rs` | draft | test_addressforms, test_flow, test_memory_folding, test_peephole, test_phi_widths, test_regthrash |
 | 2 | `qbopt/cfront/compile.py` | 779 | `src/cfront/compile.rs` | draft | test_cfront, test_cfront_frontend, test_cpu_profile, test_float_values, test_frontend_parity, test_indvars, test_inline, test_jumps, test_omfwrite, test_quality, test_spiller, test_stack_segment, test_unroll |
@@ -78,7 +78,7 @@ only for a module still `todo`, and never after cutover.
 | 2 | `qbopt/model/lir.py` | 360 | `src/model/lir.rs` | draft | test_allocation, test_countdown, test_cpu_profile, test_emission_order, test_floatalloc, test_flow, test_hir, test_jumps, test_lir_verify, test_machinedce, test_omfwrite, test_pointer_memory, test_quality, test_select, test_spiller, test_store_combine, test_wholeseg |
 | 2 | `qbopt/model/memory.py` | 142 | `src/model/memory.rs` | draft | test_loopclone, test_mir_alias, test_private_frame, test_sccp |
 | 2 | `qbopt/model/mir.py` | 3383 | `src/model/mir.rs` | draft | test_addressforms, test_allocation, test_avail, test_cfg_empty, test_cfg_merge, test_constant_cells, test_constrain, test_countdown, test_cse_commutative, test_cse_dominance, test_emission_order, test_extract, test_farload, test_file_contracts, test_float_constants, test_float_loop_exit, test_floatalloc, test_floating, test_flow, test_frontend_parity, test_gvn_join, test_high_product, test_hoist_selector, test_induction_inequality, test_indvars, test_invariant_argument, test_invariant_shift, test_laststore, test_layout, test_lcssa_merges, test_licm_operand_dependencies, test_lir, test_lir_emission_order, test_literal_call_contracts, test_literal_initializers, test_liveness, test_load_pre, test_loopexit, test_loopmotion, test_loopsimplify, test_lower_sign, test_masm, test_memory_folding, test_memory_joins, test_memory_opportunities, test_mir, test_native_float_licm, test_native_frame, test_native_status_flags, test_noreturn, test_observers, test_opaque_memory_effects, test_opaque_relocations, test_pairs, test_peephole, test_phi_widths, test_pointer_memory, test_postallocation, test_raising_addresses, test_raising_call_memory, test_raising_dispatch, test_raising_longs, test_raising_unary, test_ranges, test_regions, test_rounding_contracts, test_rule5, test_scalar_division, test_scale_selection, test_scoreboard, test_select, test_spiller, test_switch_loopclone, test_symbol_licm, test_transform, test_unary_promotion, test_unroll, test_unsigned_edge_ranges, test_word_arithmetic_carry |
-| 2 | `qbopt/model/passes.py` | 226 | `src/model/passes.rs` | todo | test_cpu_profile, test_flow, test_lir_verify, test_mir_alias, test_promote, test_rewind, test_rule5, test_transform, test_unroll, test_unroll_budget, test_unswitch |
+| 2 | `qbopt/model/passes.py` | 226 | `src/model/passes.rs` | draft | test_cpu_profile, test_flow, test_lir_verify, test_mir_alias, test_promote, test_rewind, test_rule5, test_transform, test_unroll, test_unroll_budget, test_unswitch |
 | 3 | `qbopt/analysis/avail.py` | 555 | `src/analysis/avail.rs` | todo | test_avail, test_availability_call_effects, test_availability_operands, test_far_memory_identity, test_float_values, test_memoryssa_forward, test_observers, test_qgldiff_forwarding |
 | 3 | `qbopt/analysis/constant_cycles.py` | 123 | `src/analysis/constant_cycles.rs` | draft | - |
 | 3 | `qbopt/analysis/consts.py` | 769 | `src/analysis/consts.rs` | draft | test_array_access, test_array_bounds, test_constant_arguments, test_constant_call_memory, test_constant_carry, test_constant_conditions, test_constant_cycles, test_constant_division, test_constant_index, test_constant_stores, test_float_recurrences, test_floatfacts, test_high_product, test_induction_identity, test_induction_inequality, test_indvars, test_loopexit, test_pointer_constants, test_promote, test_raising_arrays, test_raising_copies, test_raising_dispatch, test_raising_longs, test_rewind, test_transform |
@@ -187,7 +187,7 @@ only for a module still `todo`, and never after cutover.
 | 5 | `qbopt/frontend/raising_numeric_policy.py` | 47 | `src/frontend/raising_numeric_policy.rs` | todo | test_float_cse_paths |
 | 5 | `qbopt/frontend/raising_returns.py` | 31 | `src/frontend/raising_returns.rs` | todo | - |
 | 5 | `qbopt/frontend/raising_words.py` | 122 | `src/frontend/raising_words.rs` | todo | test_raising_words, test_word_arithmetic_carry |
-| 5 | `qbopt/frontend/stack.py` | 131 | `src/frontend/stack.rs` | todo | test_stack |
+| 5 | `qbopt/frontend/stack.py` | 131 | `src/frontend/stack.rs` | draft | test_stack |
 | 5 | `qbopt/frontend/wide.py` | 312 | `src/frontend/wide.rs` | n/a (tools only) | test_wide |
 | 5 | `qbopt/objectfile/addends.py` | 48 | `src/objectfile/addends.rs` | todo | test_omf_addends |
 | 5 | `qbopt/objectfile/cvinfo.py` | 777 | `src/objectfile/cvinfo.rs` | todo | test_cvinfo |
