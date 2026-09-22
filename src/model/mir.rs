@@ -22,6 +22,10 @@ use crate::objectfile::module::{Addr, Space};
 use crate::support::pyrepr::{self, Repr};
 use iced_x86::Register;
 
+/// The registers that become values, rooted.
+pub const TRACKED: [Register; 6] =
+    [Register::EAX, Register::EBX, Register::ECX, Register::EDX, Register::ESI, Register::EDI];
+
 /// One SSA variable, deliberately with no register or historical home.
 ///
 /// Direct port of `qbopt.model.mir:Value` and `Value.__repr__`.
