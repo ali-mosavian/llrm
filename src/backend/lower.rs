@@ -11,14 +11,16 @@ use indexmap::IndexMap;
 use iced_x86::Register;
 use num_traits::ToPrimitive;
 
-use super::{arithmetic, cpu, division, target};
+use super::{addressforms, arithmetic, comparefold, cpu, division, farload, lower_floats, lower_switches, rmw, target};
 use crate::abi::runtime;
 use crate::legacy::calls;
+use crate::analysis::{consts, induction, liveness, loops, ssa};
 use crate::model::floating::{Format, Rounding};
+use crate::support::pyset::PySet;
 use crate::model::lir::{self, Insn};
 use crate::model::ir::nodes::Node;
 use crate::model::ir::{self, Loc, Operation};
-use crate::model::mir::{Arg, Held, Kind, MemRef, MirBody, Op, OpCode, Value};
+use crate::model::mir::{AllocationHints, Arg, Held, Kind, MemRef, MirBody, Op, OpCode, Value};
 use crate::objectfile::module::{Addr, Space};
 use crate::support::pyrepr::Repr;
 
@@ -1542,6 +1544,10 @@ pub struct Lowering<'a> {
     /// The dict carries BC's folded-site records, whose answers `_delivered`
     /// places; with ids alone `_sites` is empty, exactly as Python makes it.
     _absorbed: BTreeSet<u32>,
+    _address_forms: IndexMap<u32, (ir::Held, num_bigint::BigInt)>,
+    _indexed: IndexMap<u32, addressforms::FoldedForm>,
+    _folded: BTreeSet<u32>,
+    _address_promoted: BTreeSet<u32>,
     _next: u32,
 }
 
@@ -1591,6 +1597,10 @@ impl<'a> Lowering<'a> {
             }
         }
         let dividends = dividends.into_iter().filter(|(high, _)| count(&readers, *high) == 1).collect();
+        let exposed: BTreeSet<u32> = crate::model::mir::exposed(body).into_iter().map(|value| value.id).collect();
+        let address_forms = addressforms::offsets(body);
+        let (indexed, folded, address_promoted) =
+            addressforms::indexed(body, &exposed, &cpu.address_forms, Some(&cpu.operations)).map_err(Unlowered)?;
         let mut every: Vec<u32> = ops().flat_map(|op| op.defines.iter().chain(&op.uses)).map(|one| one.id).collect();
         every.extend(body.blocks.iter().flat_map(|block| &block.phis).map(|phi| phi.result.id));
         Ok(Self {
@@ -1599,7 +1609,7 @@ impl<'a> Lowering<'a> {
             _read: read,
             _extended: extended,
             _dividends: dividends,
-            _exposed: crate::model::mir::exposed(body).into_iter().map(|value| value.id).collect(),
+            _exposed: exposed,
             _coverage: options.coverage,
             _occurrences: options.occurrences,
             _nodes: options.nodes,
@@ -1607,6 +1617,10 @@ impl<'a> Lowering<'a> {
             _calls: calls,
             _contracts: contracts,
             _absorbed: absorbed,
+            _address_forms: address_forms,
+            _indexed: indexed,
+            _folded: folded,
+            _address_promoted: address_promoted,
             _next: every.into_iter().max().unwrap_or(0) + 1,
         })
     }
@@ -1936,6 +1950,155 @@ impl<'a> Lowering<'a> {
         self._dividends.get(&high).is_some_and(|found| *found == word.value.id)
     }
 
+    /// Every instruction this operation becomes, the leader first.
+    pub fn expand(&mut self, op: &Op, preserve_flags: bool) -> Result<Vec<Arc<Insn>>, Unlowered> {
+        let (covers, spread) = self.ownership(op)?;
+        let folded_op;
+        let op = if op.defines.iter().any(|one| self._folded.contains(&one.id)) {
+            // The address is its cells' base and index now; see addressforms.indexed.
+            let mut nothing = op.clone();
+            nothing.kind = Kind::Nothing;
+            nothing.name = String::new();
+            nothing.args = vec![];
+            nothing.results = vec![];
+            nothing.defines = vec![];
+            nothing.uses = vec![];
+            nothing.source_backed = false;
+            folded_op = nothing;
+            &folded_op
+        } else {
+            op
+        };
+        let mut parts = match op.kind {
+            Kind::Fill => Some(_fill(op, self)?),
+            Kind::Store => _constant_store(op, self)?,
+            Kind::Extract => Some(_extract(op, self)?),
+            Kind::Divmod | Kind::Udivmod => _word_division(op, self)?,
+            Kind::Concat => Some(_concat(op, self)?),
+            Kind::Smulhi => Some(_signed_high_product(op, self)?),
+            Kind::FixedMul => Some(_fixed_multiply(op, self)?),
+            Kind::FixedDiv => Some(_fixed_division(op, self)?),
+            Kind::PtrOffset => Some(_pointer_offset(op, self)?),
+            _ => _pointer_access(op, self)?,
+        };
+        let or = |made: Option<Vec<ir::Semantics>>, parts: Option<Vec<ir::Semantics>>| {
+            made.filter(|made| !made.is_empty()).or(parts)
+        };
+        parts = or(_flag_test(op, self), parts);
+        if op.kind == Kind::Convert && !preserve_flags {
+            parts = or(_sign_word(op), parts);
+        }
+        if op.kind == Kind::Mul && !preserve_flags {
+            parts = or(_scaled(op, self)?, parts);
+        }
+        let Some(parts) = parts.filter(|parts| !parts.is_empty()) else {
+            // The site's own sequence emits it, so there is nothing for this
+            // to say -- while it is still that operation.
+            let node = self.node(op).cloned();
+            let folded = op.id.is_some_and(|id| self._absorbed.contains(&id)) && node.is_some();
+            let what = if folded { None } else { current(op, Place::AsAValue, node.as_deref())? };
+            let what = addressforms::scaled(addressforms::selected(what.as_ref(), &self._address_forms).as_ref(), &self._indexed);
+            let speaks = what.as_ref().is_some_and(|what| !what.dests.is_empty() || !what.sources.is_empty());
+            let made = if speaks { _written(&what.as_ref().unwrap().dests) } else { vec![] };
+            let read = if speaks { _read(what.as_ref().unwrap()) } else { vec![] };
+            let requires = self._abi(op, what.as_ref())?;
+            let delivers = self._idiom(op, speaks)?;
+            if speaks && op.kind != Kind::Call {
+                // A register operand MIR has no value for is emitted as itself.
+                let given: BTreeSet<u32> = made.iter().copied().chain(delivers.iter().map(|(held, _)| held.value)).collect();
+                let lost: Vec<Value> = op
+                    .defines
+                    .iter()
+                    .filter(|one| !one.flags && self._read.contains(&one.id) && !given.contains(&one.id))
+                    .copied()
+                    .collect();
+                if !lost.is_empty() {
+                    return Err(Unlowered(format!(
+                        "{:#06x}: {} defines {} through no operand",
+                        op.at,
+                        what.repr(),
+                        crate::support::pyrepr::list(&lost)
+                    )));
+                }
+            }
+            // A node-less call's float result and a return's float operand are in st(0).
+            let floats: Vec<u32> = if node.is_none() && matches!(op.kind, Kind::Call | Kind::Return) {
+                op.args
+                    .iter()
+                    .chain(&op.results)
+                    .filter_map(|one| match one {
+                        Arg::Held(one) if one.width == 10 => Some(one.value.id),
+                        _ => None,
+                    })
+                    .collect()
+            } else {
+                vec![]
+            };
+            let st0 = || Loc::St(ir::St { index: 0 });
+            let before: Vec<Arc<Insn>> = if op.kind == Kind::Return {
+                floats.iter().map(|one| _follows(op, sem(Operation::FloatStore, "", vec![], vec![held(*one, 10)]))).collect()
+            } else {
+                vec![]
+            };
+            let after: Vec<Arc<Insn>> = if op.kind == Kind::Call {
+                floats
+                    .iter()
+                    .map(|one| {
+                        if self._read.contains(one) {
+                            _follows(op, sem(Operation::FloatLoad, "", vec![held(*one, 10)], vec![]))
+                        } else {
+                            _follows(op, sem(Operation::FloatStore, "fstp", vec![st0()], vec![st0()]))
+                        }
+                    })
+                    .collect()
+            } else {
+                vec![]
+            };
+            let inputs: Vec<u32> = if speaks {
+                read
+            } else {
+                op.uses.iter().filter(|one| !one.flags && !floats.contains(&one.id)).map(|one| one.id).collect()
+            };
+            let inputs: indexmap::IndexSet<u32> =
+                inputs.into_iter().chain(requires.iter().map(|(held, _)| held.value)).collect();
+            let defines: Vec<u32> = if speaks && op.kind != Kind::Call {
+                made.into_iter().chain(delivers.iter().map(|(held, _)| held.value)).collect::<indexmap::IndexSet<u32>>().into_iter().collect()
+            } else {
+                op.defines
+                    .iter()
+                    .filter(|one| !one.flags && self._read.contains(&one.id) && !floats.contains(&one.id))
+                    .map(|one| one.id)
+                    .collect()
+            };
+            let widths = if what.is_none() { self._widths(op) } else { vec![] };
+            let mut leader = Insn::new(op.at, Some(covers), what, defines, inputs.into_iter().collect());
+            leader.requires = requires;
+            leader.clobbers = _clobbers(op, self._calls, self._contracts, node.as_deref());
+            leader.clobbers_high = _clobbered_high(op, self._calls, self._contracts);
+            leader.spread = spread;
+            leader.delivers = delivers;
+            leader.widths = widths;
+            leader.op = Some(Arc::new(op.clone()));
+            leader.node = node;
+            leader.symbol = op.symbol;
+            let mut out = before;
+            out.push(Arc::new(leader));
+            out.extend(self._caller_cleanup(op));
+            out.extend(after);
+            return Ok(out);
+        };
+        // The leader keeps the operation's identity and nothing else.
+        let parts: Vec<ir::Semantics> =
+            parts.iter().map(|one| addressforms::scaled(Some(one), &self._indexed).unwrap()).collect();
+        let mut leader = Insn::new(op.at, Some(covers), Some(parts[0].clone()), _written(&parts[0].dests), _read(&parts[0]));
+        leader.spread = spread;
+        leader.op = Some(Arc::new(op.clone()));
+        leader.node = self.node(op).cloned();
+        let mut out = vec![Arc::new(leader)];
+        out.extend(parts[1..].iter().map(|one| _follows(op, one.clone())));
+        Ok(out)
+    }
+
     /// `add sp` after a call whose contract leaves its arguments to the caller.
     fn _caller_cleanup(&self, op: &Op) -> Vec<Arc<Insn>> {
         let contract = if op.kind == Kind::Call { self._contracts.and_then(|one| one.get(&op.at)) } else { None };
@@ -1946,4 +2109,190 @@ impl<'a> Lowering<'a> {
         let sp = Loc::Reg(ir::Reg { register: Register::SP, width: 2 });
         vec![_follows(op, sem(Operation::Binary, "add", vec![sp.clone()], vec![sp, immediate(count, 2)]))]
     }
+}
+
+/// Python's keyword arguments to `lowered`.
+#[derive(Default)]
+pub struct Lowered<'a> {
+    pub coverage: IndexMap<u32, Vec<(i64, i64)>>,
+    pub nodes: IndexMap<u32, Arc<Node>>,
+    pub occurrences: Option<&'a IndexMap<u32, Vec<(i64, i64)>>>,
+    pub hints: Option<&'a AllocationHints>,
+    pub pointer_model: Option<super::pointers::Model>,
+    pub noreturn: bool,
+}
+
+fn recount(made: &IndexMap<i64, Vec<Arc<Insn>>>, body: &MirBody) -> IndexMap<u32, i64> {
+    let mut uses: IndexMap<u32, i64> = IndexMap::new();
+    for one in made.values().flatten() {
+        for value in &one.uses {
+            *uses.entry(*value).or_insert(0) += 1;
+        }
+    }
+    for one in made.values().flatten() {
+        for (held, _) in &one.requires {
+            if !one.uses.contains(&held.value) {
+                *uses.entry(held.value).or_insert(0) += 1;
+            }
+        }
+    }
+    for value in body.blocks.iter().flat_map(|block| &block.phis).flat_map(|phi| phi.incoming.values()) {
+        *uses.entry(value.id).or_insert(0) += 1;
+    }
+    uses
+}
+
+/// One MIR body as machine instructions, and nothing else.
+pub fn lowered(
+    name: &str,
+    body: &MirBody,
+    calls: Option<&IndexMap<i64, String>>,
+    absorbed: BTreeSet<u32>,
+    contracts: Option<&IndexMap<i64, runtime::Contract>>,
+    cpu: impl Into<cpu::ProfileOrName<'static>>,
+    options: Lowered,
+) -> Result<lir::LirBody, Unlowered> {
+    // Width does not identify a type here: the C path runs lower_int64 first.
+    let default_hints = AllocationHints::new();
+    let hints = options.hints.unwrap_or(&default_hints);
+    let body = lower_switches::expanded(body).map_err(Unlowered)?;
+    let body = named(&body)?;
+    lower_floats::checked(&body)?;
+    let roots: BTreeSet<Value> =
+        body.blocks.iter().flat_map(|block| &block.phis).map(|phi| phi.result).filter(|value| !value.flags).collect();
+    let body = ssa::pruned_phis(&body, &roots);
+    let values: PySet<Value> = ssa::values(&body).collect();
+    let origin: IndexMap<Value, Register> =
+        values.iter().filter_map(|value| hints.origin_of(*value).map(|r#where| (*value, r#where))).collect();
+    let mut pins: IndexMap<Value, Register> = IndexMap::new();
+    for op in body.blocks.iter().flat_map(|block| &block.ops) {
+        for (index, value) in op.defines.iter().enumerate() {
+            if let Some(r#where) = hints.pin_of(op, index) {
+                pins.insert(*value, r#where);
+            }
+        }
+    }
+
+    // What anything reads, so a definition nothing reads can become what it
+    // always was: a statement that the register is destroyed.
+    let mut read: BTreeSet<u32> =
+        body.blocks.iter().flat_map(|block| &block.ops).flat_map(|op| &op.uses).map(|one| one.id).collect();
+    read.extend(body.blocks.iter().flat_map(|block| &block.phis).flat_map(|phi| phi.incoming.values()).map(|v| v.id));
+    let no_calls = IndexMap::new();
+    let calls = calls.unwrap_or(&no_calls);
+    let mut making = Lowering::new(
+        &body,
+        read,
+        calls,
+        absorbed,
+        contracts,
+        cpu,
+        Options {
+            coverage: options.coverage,
+            nodes: options.nodes,
+            occurrences: options.occurrences,
+            origin: origin.clone(),
+            pointer_model: options.pointer_model,
+        },
+    )?;
+    let mut readers: std::collections::HashMap<Value, usize> = std::collections::HashMap::new();
+    for value in body.blocks.iter().flat_map(|block| &block.ops).flat_map(|op| &op.uses) {
+        *readers.entry(*value).or_insert(0) += 1;
+    }
+    for value in body.blocks.iter().flat_map(|block| &block.phis).flat_map(|phi| phi.incoming.values()) {
+        *readers.entry(*value).or_insert(0) += 1;
+    }
+    let live = liveness::live(&body);
+    let scheduled: IndexMap<i64, Vec<Op>> =
+        body.blocks.iter().map(|block| (block.at, _branch_condition(block, &readers))).collect();
+    for block in &body.blocks {
+        _check_inserted_conditions(&scheduled[&block.at], &live.live_out[&block.at])?;
+    }
+    let mut made: IndexMap<i64, Vec<Arc<Insn>>> = IndexMap::new();
+    for block in &body.blocks {
+        let ops = &scheduled[&block.at];
+        let mut alive: BTreeSet<Value> = live.live_out[&block.at].iter().filter(|value| value.flags).copied().collect();
+        let mut preserve: BTreeSet<usize> = BTreeSet::new();
+        for (index, op) in ops.iter().enumerate().rev() {
+            if !alive.is_empty() {
+                preserve.insert(index);
+            }
+            for one in &op.defines {
+                alive.remove(one);
+            }
+            alive.extend(op.uses.iter().filter(|value| value.flags).copied());
+        }
+        let mut insns = vec![];
+        for (index, op) in ops.iter().enumerate() {
+            insns.extend(making.expand(op, preserve.contains(&index))?);
+        }
+        made.insert(block.at, insns);
+    }
+    // A far-pointer field is two language-visible word loads but one target instruction.
+    let made: IndexMap<i64, Vec<Arc<Insn>>> =
+        made.into_iter().map(|(at, insns)| (at, farload::selected(&insns))).collect();
+    let promoted = making._address_promoted.clone();
+    let made = addressforms::promote(&made, &promoted, &mut || making.fresh()).map_err(Unlowered)?;
+    let uses = recount(&made, &body);
+    // A one-use comparison load is a legal memory operand.
+    let made: IndexMap<i64, Vec<Arc<Insn>>> =
+        made.into_iter().map(|(at, insns)| (at, comparefold::selected(&insns, &uses, &making._exposed))).collect();
+    let uses = recount(&made, &body);
+    // x86 can express a C read-modify-write update in one memory operand.
+    let made: IndexMap<i64, Vec<Arc<Insn>>> =
+        made.into_iter().map(|(at, insns)| (at, rmw::selected(&insns, &uses))).collect();
+    let made: IndexMap<i64, Vec<Arc<Insn>>> =
+        made.into_iter().map(|(at, insns)| (at, _memory_arguments(&insns, &uses, &making._exposed))).collect();
+    let made: IndexMap<i64, Vec<Arc<Insn>>> =
+        made.into_iter().map(|(at, insns)| (at, _immediate_arguments(&insns, &uses))).collect();
+    let made: IndexMap<i64, Vec<Arc<Insn>>> = made
+        .into_iter()
+        .map(|(at, insns)| (at, _rematerialized_arguments(&insns, &uses, &making._exposed)))
+        .collect();
+    let live = _phis_worth_keeping(&body, &made);
+    let facts = consts::known(&body);
+    let mut trip_counts: Vec<(i64, i64)> = loops::loops(&body.blocks, Some(body.entry))
+        .iter()
+        .filter_map(|one| {
+            induction::trip_count(&body, one, &facts)
+                .map(|count| (one.header, count.to_i64().expect("a trip count fits an int64")))
+        })
+        .collect();
+    trip_counts.sort();
+    let blocks = body
+        .blocks
+        .iter()
+        .map(|block| lir::LirBlock {
+            at: block.at,
+            insns: made[&block.at].clone(),
+            succ: block.succ.clone(),
+            phis: block
+                .phis
+                .iter()
+                .filter(|phi| !phi.result.flags && live.contains(&phi.result.id))
+                .map(|phi| lir::Phi {
+                    result: phi.result.id,
+                    incoming: phi.incoming.iter().map(|(at, value)| (*at, value.id)).collect(),
+                })
+                .collect(),
+        })
+        .collect();
+    let mut all_pins: IndexMap<u32, Register> = pins.iter().map(|(value, r#where)| (value.id, *r#where)).collect();
+    for value in values.iter() {
+        if origin.get(value) == Some(&Register::ES) {
+            all_pins.insert(value.id, Register::ES);
+        }
+    }
+    let mut out = lir::LirBody::new(
+        name,
+        body.entry,
+        blocks,
+        origin.iter().map(|(value, r#where)| (value.id, *r#where)).collect(),
+        all_pins,
+    );
+    out.noreturn = options.noreturn;
+    out.inputs = liveness::entry_values(&body).into_iter().filter(|value| !value.flags).map(|value| value.id).collect();
+    out.loop_trip_counts = trip_counts;
+    out.ordered = true;
+    Ok(out)
 }
