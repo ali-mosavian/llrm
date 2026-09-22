@@ -559,21 +559,20 @@ explicit fallible builders from the allocator library.
 An owned vector allocation places its descriptor immediately before its data:
 
 ```text
-[dimensions][capacity][strides][data...]
-                              ^ data pointer
+[dimensions][capacity][data...]
+                     ^ data pointer
 ```
 
 Rank is part of the static type, so `vec[T, 2]` need not store a runtime rank.
-A borrowed view carries a data pointer plus the required dimensions and
-strides. Slicing aliases storage and never copies implicitly.
+A borrowed view carries a data pointer plus the dimensions. Slicing aliases
+storage and never copies implicitly.
 
 Ranks are one to four. Arrays are row-major: the last index is contiguous, so
-`a[i, j]` and `a[i, j + 1]` are neighbours. Strides count elements; every
-one is stored, the last included, so a view need not be contiguous. A fixed
-array's descriptor has the same words as a vector's,
-`[dimensions][capacity][strides]`, and a borrowed `&[T, N]` view holds them
-followed by the data pointer. At rank one these are
-`[length][capacity][stride]`.
+`a[i, j]` and `a[i, j + 1]` are neighbours. Every array and view is
+contiguous, so no stride is stored: each follows from the dimensions after
+it. A fixed array's descriptor has the same words as a vector's,
+`[dimensions][capacity]`, and a borrowed `&[T, N]` view holds them followed
+by the data pointer. At rank one these are `[length][capacity]`.
 
 A ranked literal nests one bracket per dimension:
 

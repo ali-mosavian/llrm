@@ -459,7 +459,7 @@ fn main() -> i16:
 
 
 def test_fixed_array_storage_has_a_prefix_descriptor(tmp_path: Path) -> None:
-    """A local fixed array must reserve and initialize length/capacity/stride before its payload."""
+    """A local fixed array must reserve and initialize length/capacity before its payload."""
     source = tmp_path / "array_descriptor.mod"
     source.write_text(
         "fn main() -> i16:\n    var values: [i16; 3] = [10, 20, 30]\n    print(values.len())\n    return values[0]\n"
@@ -470,14 +470,12 @@ def test_fixed_array_storage_has_a_prefix_descriptor(tmp_path: Path) -> None:
     descriptor = {place.name: place for place in function.places if place.name.startswith("$values.")}
     assert values.offset == -6
     assert values.extent == 6
-    assert descriptor["$values.length"].offset == values.offset - 6
-    assert descriptor["$values.capacity"].offset == values.offset - 4
-    assert descriptor["$values.stride0"].offset == values.offset - 2
+    assert descriptor["$values.length"].offset == values.offset - 4
+    assert descriptor["$values.capacity"].offset == values.offset - 2
 
     assembly = masm.text(modern_compile.assembled(driver.parsed(source), entry="main"))
-    assert "mov word ptr [bp-12], 3" in assembly
     assert "mov word ptr [bp-10], 3" in assembly
-    assert "mov word ptr [bp-8], 1" in assembly
+    assert "mov word ptr [bp-8], 3" in assembly
 
 
 def test_borrowed_array_call_builds_one_view_from_the_direct_payload(tmp_path: Path) -> None:
@@ -569,26 +567,28 @@ def test_array_parameter_is_one_unsized_view_pointer() -> None:
     assert len(function.parameters) == 1
     assert pointer.kind is hir.TypeKind.POINTER
     assert pointer.rank == 1
-    assert (descriptor.kind, descriptor.width) == (hir.TypeKind.OPAQUE, 10)
+    assert (descriptor.kind, descriptor.width) == (hir.TypeKind.OPAQUE, 8)
     assert element.name == "i16"
     assert descriptor_loads == [hir.DescriptorPlace(function.parameters[0], hir.DescriptorField.LENGTH, metadata.id)]
 
 
 def test_runtime_bounded_array_loop_advances_its_payload_address() -> None:
-    """sum rebuilt ``payload + index * stride * 2`` on every trip; the byte stride is scaled once."""
+    """sum rebuilt ``payload + index * 2`` on every trip despite its invariant runtime bound."""
     assembly = masm.text(modern_compile.assembled(driver.parsed(SUM), entry="main"))
     function = assembly.split("_sum proc far", 1)[1].split("_sum endp", 1)[0]
     hot = function.split("L0_3:", 1)[1].split("L0_5:", 1)[0]
 
     assert not re.search(r"\b(?:imul|shl|lea)\b", hot)
-    assert re.search(r"\badd\s+(?:si|di|bx),\s*(?:ax|bx|cx|dx|si|di)\b", hot)
+    assert "xor ax, ax" in function
+    assert "dec " not in function
+    assert re.search(r"\badd\s+(?:si|di|bx),\s*2\s*\n(?:L\w+:\n)?\s*jne\b", hot)
 
 
 def test_three_array_initializer_keeps_the_fixed_frame_address_component() -> None:
     """sum_three wrote locals through EAX+SI after a secondary-base rewrite lost BP."""
     assembly = masm.text(modern_compile.assembled(driver.parsed(SUM_THREE), entry="main"))
     main = assembly.split("_main proc far", 1)[1].split("call far ptr _sum_three", 1)[0]
-    cells = {f"[bp{payload + 2 * index}]" for payload in (-8, -22, -36) for index in range(4)}
+    cells = {f"[bp{payload + 2 * index}]" for payload in (-8, -20, -32) for index in range(4)}
     initializers = {one for one in re.findall(r"mov word ptr (\[[^]]+\]), \d+", main) if one in cells}
 
     assert initializers == cells
@@ -613,24 +613,23 @@ def test_runtime_bounded_array_loop_has_a_symbolic_count_proof() -> None:
     physical = physicalize(program, function, optimized)
     body = modern_compile.optimized(program, function, physical.lowered, target, physical.calls).body
     (loop,) = loops.loops(body.blocks, body.entry)
-    steps = [one.step for one in induction.basics(body, loop).values()]
-    assert mir.Const(1, 2) in steps
-    assert any(isinstance(one, mir.Held) for one in steps)  # the offset steps by the view's byte stride
+    recurrences = induction.basics(body, loop)
+    assert len(recurrences) == 1
+    assert next(iter(recurrences.values())).step == mir.Const(2, 2)
 
     predecessors = loops.predecessors(body.blocks)
     assert all(set(phi.incoming) == set(predecessors[block.at]) for block in body.blocks for phi in block.phis)
 
 
-def test_a_view_offset_never_replaces_the_loop_counter() -> None:
-    """A view's stride is read at run time and may be 0, so its offset cannot count the loop,
-    however short the loop's proven bound; the stride-two offset once did."""
+def test_runtime_bounded_array_control_respects_the_recurrence_period() -> None:
+    """A stride-two offset repeats after 32768 word updates and cannot control a longer loop."""
     program = driver.parsed(SUM)
     function = next(one for one in program.modules[0].functions if one.name == "sum")
     semantic = next(one for one in modern_compile.semantic_lowered(program) if one.name == "sum.sum")
     (length,) = semantic.body.integer_ranges
     unsafe = replace(
         semantic,
-        body=replace(semantic.body, integer_ranges={length: mir.IntegerRange(0, 4, 2)}),
+        body=replace(semantic.body, integer_ranges={length: mir.IntegerRange(0, 32769, 2)}),
     )
     target = targets.profile("386")
     optimized = modern_compile.optimized(program, function, unsafe, target)
@@ -639,7 +638,7 @@ def test_a_view_offset_never_replaces_the_loop_counter() -> None:
     (loop,) = loops.loops(body.blocks, body.entry)
 
     steps = sorted(one.step.n for one in induction.basics(body, loop).values() if isinstance(one.step, mir.Const))
-    assert steps == [1]
+    assert steps == [1, 2]
 
 
 def test_borrowed_array_parameter_rejects_a_repeated_fixed_length(tmp_path: Path) -> None:
@@ -1054,6 +1053,29 @@ def test_an_unnamed_loop_is_priced_at_its_proven_trip_count(tmp_path: Path) -> N
     assert {frequency[at] for at in loop.body} == {8}
 
 
+def test_a_new_counter_steps_where_no_condition_is_live(tmp_path: Path) -> None:
+    """A rotated loop branches on flags its body set; the pointer step went between them: Unlowered."""
+    source = tmp_path / "struct_view.mod"
+    source.write_text(
+        "struct sample:\n"
+        "    tag: i16\n"
+        "    value: i32\n"
+        "    delta: i32\n"
+        "fn total(samples: &[sample]) -> i32:\n"
+        "    var sum: i32 = 0\n"
+        "    for one in &samples:\n"
+        "        sum += one.value\n"
+        "    return sum\n"
+        "fn main() -> i16:\n"
+        "    let s: [sample; 2] = [sample { tag: 0, value: 1, delta: 2 }, sample { tag: 0, value: 2, delta: 3 }]\n"
+        "    return i16(total(&s))\n"
+    )
+    assembly = masm.text(modern_compile.assembled(driver.parsed(source), entry="main"))
+    body = assembly[assembly.index("_total proc") : assembly.index("_total endp")]
+
+    assert re.search(r"add (?:si|di|bx), 10\n    add (?:si|di|bx|cx|dx|ax), 10\n(?:L\w+:\n)?    jne", body)
+
+
 def test_an_unrolled_fill_stores_to_fixed_frame_cells(tmp_path: Path) -> None:
     """Each unrolled store of `[0; 8, 8]` loaded its constant offset into a register first: 64 extra movs."""
     source = tmp_path / "unrolled_fill.mod"
@@ -1217,43 +1239,3 @@ def test_a_ranked_index_is_not_computed_in_a_narrow_index_type(tmp_path: Path, t
         f"    return {through}\n"
     )
     assert _returned(tmp_path, text) == 7
-
-
-def test_a_view_reads_its_stored_stride(tmp_path: Path) -> None:
-    """Views assumed contiguous elements: a stride-2 view summed 1 + 2 instead of 1 + 3."""
-    source = tmp_path / "strided.mod"
-    source.write_text(
-        "fn sum(values: &[i16]) -> i16:\n"
-        "    var total: i16 = 0\n"
-        "    for value in &values:\n"
-        "        total += value\n"
-        "    return total\n"
-        "fn value() -> i16:\n"
-        "    let values: [i16; 4] = [1, 2, 3, 4]\n"
-        "    return sum(&values[0:2])\n"
-    )
-    program = driver.parsed(source)
-    assert execute.run(program, "value").value == 3
-
-    (module,) = program.modules
-    function = next(one for one in module.functions if one.name == "value")
-    view = next(one.id for one in function.places if one.name == "$slice_values")
-
-    patched = []
-
-    def strided(instruction: hir.Instruction) -> hir.Instruction:
-        target = instruction.operands[0] if instruction.operands else None
-        if instruction.op is hir.Op.STORE and isinstance(target, hir.ProjectedPlace) and target.place == view:
-            stride = instruction.operands[1]
-            if target.offset == 4 and isinstance(stride, hir.Constant):  # [length][capacity][stride]
-                patched.append(stride.value)
-                return replace(instruction, operands=(target, replace(stride, value=2)))
-        return instruction
-
-    blocks = tuple(
-        replace(block, instructions=tuple(strided(one) for one in block.instructions)) for block in function.blocks
-    )
-    assert patched == [1]
-    functions = tuple(replace(one, blocks=blocks) if one is function else one for one in module.functions)
-    program = replace(program, modules=(replace(module, functions=functions),))
-    assert execute.run(program, "value").value == 4

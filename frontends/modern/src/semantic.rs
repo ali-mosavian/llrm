@@ -592,16 +592,13 @@ impl Shape {
             words.push((name, *length));
         }
         words.push(("capacity".into(), self.len()));
-        for (axis, stride) in self.strides().into_iter().enumerate() {
-            words.push((format!("stride{axis}"), stride));
-        }
         words
     }
 }
 
 /// The descriptor before an array's data, or in a view before its data
-/// pointer: the dimensions, the capacity, then the strides, each a u16 word.
-/// At rank one that is `[length][capacity][stride]`.
+/// pointer: the dimensions, then the capacity, each a u16 word. Storage is
+/// row-major and contiguous, so the strides follow from the dimensions.
 mod descriptor {
     pub fn dim(axis: u8) -> u32 {
         2 * u32::from(axis)
@@ -611,13 +608,9 @@ mod descriptor {
         dim(rank)
     }
 
-    pub fn stride(rank: u8, axis: u8) -> u32 {
-        capacity(rank) + 2 + 2 * u32::from(axis)
-    }
-
     /// The descriptor's size, and so a view's data pointer offset.
     pub fn size(rank: u8) -> u32 {
-        stride(rank, rank)
+        capacity(rank) + 2
     }
 }
 
@@ -3256,7 +3249,8 @@ impl<'a> FunctionCompiler<'a> {
         Ok((element, at))
     }
 
-    /// The address of a view's element, through the strides its descriptor holds.
+    /// The address of a view's element: row-major, so the last stride is one
+    /// and each other is the product of the dimensions after it.
     fn view_element(
         &mut self,
         descriptor: u32,
@@ -3265,43 +3259,33 @@ impl<'a> FunctionCompiler<'a> {
         indices: Vec<hir::Operand>,
         span: Span,
     ) -> Result<u32, Diagnostic> {
-        let strides = (0..rank)
-            .map(|axis| {
-                let stride = self.value(TypeName::U16);
-                self.emit(
-                    "load",
-                    vec![stride],
-                    vec![hir::Operand::IndirectPlace {
-                        base: descriptor,
-                        offset: descriptor::stride(rank, axis),
-                        type_id: U16,
-                        inbounds: false,
-                    }],
-                    None,
-                );
-                hir::Operand::Value(stride)
-            })
-            .collect::<Vec<_>>();
-        // Strides in bytes, scaled once: the offset is then one product per
-        // index, which a loop turns into one addition.
-        let width = self.types.width(element.id());
-        let bytes = strides
-            .into_iter()
-            .map(|stride| {
-                let stride = TypedOperand {
-                    operand: Some(stride),
-                    type_name: TypeName::U16,
-                };
-                let width = TypedOperand {
-                    operand: Some(hir::Operand::Constant(U16, i64::from(width))),
-                    type_name: TypeName::U16,
-                };
-                self.folded("mul", stride, width, TypeName::U16)
-            })
-            .collect();
-        let offset = self.linear(indices, bytes, span)?;
+        let mut strides = vec![hir::Operand::Constant(U16, 1)];
+        for axis in (1..rank).rev() {
+            let dim = self.value(TypeName::U16);
+            self.emit(
+                "load",
+                vec![dim],
+                vec![hir::Operand::IndirectPlace {
+                    base: descriptor,
+                    offset: descriptor::dim(axis),
+                    type_id: U16,
+                    inbounds: false,
+                }],
+                None,
+            );
+            let inner = TypedOperand {
+                operand: Some(strides[0].clone()),
+                type_name: TypeName::U16,
+            };
+            let dim = TypedOperand {
+                operand: Some(hir::Operand::Value(dim)),
+                type_name: TypeName::U16,
+            };
+            strides.insert(0, self.folded("mul", dim, inner, TypeName::U16));
+        }
+        let flat = self.linear(indices, strides, span)?;
         let data = self.slice_data_pointer(descriptor, element, rank);
-        self.indexed_pointer(data, offset, 1, span)
+        self.indexed_pointer(data, flat, self.types.width(element.id()), span)
     }
 
     /// `sum(indices[k] * strides[k])` as a u16: a descriptor's u16 counts bound it.
