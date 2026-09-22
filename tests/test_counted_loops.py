@@ -58,7 +58,7 @@ def _backward_loop(procedure: str) -> str:
 
 def _arrays(body: mir.MirBody, low: int, count: int) -> tuple[dict, dict]:
     """Three allocated one-dimensional INTEGER arrays `low TO low+count-1`."""
-    near = (Space.LITERAL, 0)
+    near = execute.DS
     free = sorted(
         {value for block in body.blocks for op in block.ops for value in op.uses if not value.flags} - set(body.values),
         key=lambda value: value.id,
@@ -77,7 +77,7 @@ def _arrays(body: mir.MirBody, low: int, count: int) -> tuple[dict, dict]:
         put(near, descriptor + 14, count, 2)
         put(near, descriptor + 16, low, 2)
         for index in range(count):
-            put(("selector", SELECTOR), data + 2 * index, 10**number * (index + 1), 2)
+            put(SELECTOR, data + 2 * index, 10**number * (index + 1), 2)
     return values, memory
 
 
@@ -114,7 +114,10 @@ def test_a_runtime_lower_bound_loop_runs_its_source_trips(
         execute.run(body, *_arrays(body, low, count), call=_entry_and_exit)
         for body in (bodies["source-mir"], optimized, rotate.entered(optimized))
     ]
-    statics = [{key: byte for key, byte in run.memory.items() if key[0][0] is Space.SEGMENT} for run in runs]
+    statics = [
+        {key: byte for key, byte in run.memory.items() if isinstance(key[0], tuple) and key[0][0] is Space.SEGMENT}
+        for run in runs
+    ]
 
     assert [run.returned for run in runs] == [(111 * count * (count + 1) // 2,)] * 3
     assert statics[1:] == statics[:1] * 2
@@ -218,7 +221,7 @@ def test_a_c_loop_from_a_runtime_start_runs_its_source_trips(
 ) -> None:
     """nbody's `for (j = i + 1; j < 4; ++j)`: counted from a start the outer loop computes."""
     before, after = pairs
-    argument = {((Space.FRAME, 0), 6 + byte): steps >> 8 * byte & 0xFF for byte in range(2)}
+    argument = {(execute.SS, 6 + byte): steps >> 8 * byte & 0xFF for byte in range(2)}
 
     got = [execute.run(body, {}, argument).returned for body in (before, after, rotate.entered(after))]
     assert got[1:] == got[:1] * 2
