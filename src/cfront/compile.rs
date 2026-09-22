@@ -23,10 +23,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::backend::{
-    allocate, coalesce, cpu, farcall, floatalloc, frame, lower, jumps, lower_int64, masm, omfwrite, parcopy, peephole, phielim,
-    prologue, schedule, twoaddr,
+    cpu, frame, jumps, lower, lower_int64, masm, omfwrite,
 };
-use crate::model::passes::LIRTransform;
 use crate::flow;
 use crate::model::lir;
 use crate::model::mir::{self, Arg, Const, MemRef, MirBody};
@@ -147,27 +145,8 @@ pub fn assembled(
         lirs.push(_lir_text(&raised.name, &low));
         let frame = frame::of(&low, Some(&legalized.calls), "", None).map_err(|error| hir::Unsupported(error.0))?;
         let frame = Rc::new(RefCell::new(frame));
-        // `flow.machine`; `Prologue` runs at emission.
-        let pinned = low.pins.clone();
-        let profile = cpu::profile(cpu::ProfileOrName::Name(target)).map_err(hir::Unsupported)?;
-        let mut phases: Vec<Box<dyn LIRTransform + '_>> = vec![
-            Box::new(farcall::FarIndirectCalls::new(Rc::clone(&frame))),
-            Box::new(
-                floatalloc::FloatAlloc::new(Some(Rc::clone(&frame)), false, profile).map_err(hir::Unsupported)?,
-            ),
-            Box::new(phielim::PhiElimination),
-            Box::new(twoaddr::TwoAddress),
-            Box::new(coalesce::Coalescer::new(None)),
-            Box::new(
-                allocate::RegAlloc::new(Some(&pinned), Some(Rc::clone(&frame)), cpu::ProfileOrName::Profile(profile))
-                    .map_err(hir::Unsupported)?,
-            ),
-            Box::new(parcopy::ParallelCopy),
-            Box::new(prologue::Prologue::new(Rc::clone(&frame), Some(legalized.calls.clone()))),
-            Box::new(peephole::Peephole::new(Some(Rc::clone(&frame)), profile).map_err(hir::Unsupported)?),
-            Box::new(schedule::Scheduler::new(profile).map_err(hir::Unsupported)?),
-            Box::new(jumps::ControlFlow),
-        ];
+        let mut phases = flow::machine(&low.pins, Some(Rc::clone(&frame)), Some(&legalized.calls), false, target)
+            .map_err(hir::Unsupported)?;
         let mut in_ssa = true;
         let mut low = low;
         for (number, phase) in phases.iter_mut().enumerate() {
@@ -477,7 +456,7 @@ fn _referenced_data(body: &MirBody, candidates: &BTreeSet<i64>) -> BTreeSet<i64>
             found.insert(one.index - raise_hir::SELECTOR);
         }
     };
-    let mut reference = |one: &MemRef, symbol: &mut dyn FnMut(&mir::Symbol)| {
+    let reference = |one: &MemRef, symbol: &mut dyn FnMut(&mir::Symbol)| {
         if let Some(addr) = one.addr {
             symbol(&mir::Symbol::new(addr.space, addr.index, addr.disp, one.width));
         }

@@ -1,8 +1,7 @@
 //! Port of tests/test_jumps.py.
 //!
-//! `flow.machine` is not ported; the two tests that ran its last phase run
-//! `ControlFlow` itself. `test_qglsurf_shares_all_three_zero_result_tails`
-//! waits for `cfront --opt` (phase 3).
+//! `test_qglsurf_shares_all_three_zero_result_tails` waits for
+//! `cfront --opt` (phase 3).
 
 use std::sync::Arc;
 
@@ -10,6 +9,9 @@ use iced_x86::Register;
 use indexmap::IndexMap;
 
 use super::*;
+use std::cell::RefCell;
+use std::rc::Rc;
+use crate::backend::frame::Frame;
 use crate::model::ir::{Imm, Loc, Reg};
 
 fn ax() -> Loc {
@@ -172,7 +174,11 @@ fn test_shared_machine_pipeline_threads_the_final_branch_pair() {
         ],
     );
 
-    let result = ControlFlow.transform(source).unwrap();
+    let result = crate::flow::machine(&IndexMap::new(), Some(Rc::new(RefCell::new(Frame::new(0)))), Some(&IndexMap::new()), false, "386")
+        .unwrap()
+        .pop()
+        .unwrap()
+        .transform(source).unwrap();
 
     let real: Vec<(Operation, Option<String>, Option<i64>)> = result.blocks[0]
         .insns
@@ -371,7 +377,11 @@ fn test_identical_source_owned_tails_keep_their_distinct_anchors() {
 /// Fresh frontends inherited C's two identical failure-result tails.
 #[test]
 fn test_shared_machine_pipeline_merges_fresh_identical_tails() {
-    let result = ControlFlow.transform(two_zero_tails(true)).unwrap();
+    let result = crate::flow::machine(&IndexMap::new(), Some(Rc::new(RefCell::new(Frame::new(0)))), Some(&IndexMap::new()), false, "386")
+        .unwrap()
+        .pop()
+        .unwrap()
+        .transform(two_zero_tails(true)).unwrap();
     let physical = physical(&result);
 
     assert_eq!(physical.iter().filter(|what| what.op == Operation::Move).count(), 1);

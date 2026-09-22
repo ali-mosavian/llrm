@@ -736,7 +736,7 @@ fn _fixed_division(op: &Op, lowering: &mut Lowering) -> Parts {
         quotient_fits |= right.n >= scale || right.n < -scale.clone();
     }
     let mut setup = vec![];
-    let mut materialize = |arg: &Arg, setup: &mut Vec<ir::Semantics>, lowering: &mut Lowering| -> Result<Loc, Unlowered> {
+    let materialize = |arg: &Arg, setup: &mut Vec<ir::Semantics>, lowering: &mut Lowering| -> Result<Loc, Unlowered> {
         let value = located(arg)?;
         if matches!(value, Loc::Held(_)) {
             return Ok(value);
@@ -780,7 +780,7 @@ fn _fixed_division(op: &Op, lowering: &mut Lowering) -> Parts {
     let (sign_left, sign_right) = (held(lowering.fresh(), 4), held(lowering.fresh(), 4));
     setup.push(sem(Operation::Binary, "sar", vec![sign_left.clone()], vec![left.clone(), immediate(31, 1)]));
     setup.push(sem(Operation::Binary, "sar", vec![sign_right.clone()], vec![divisor.clone(), immediate(31, 1)]));
-    let mut magnitude = |value: Loc, sign: Loc, setup: &mut Vec<ir::Semantics>, lowering: &mut Lowering| {
+    let magnitude = |value: Loc, sign: Loc, setup: &mut Vec<ir::Semantics>, lowering: &mut Lowering| {
         let changed = held(lowering.fresh(), 4);
         let absolute = held(lowering.fresh(), 4);
         setup.push(sem(Operation::Binary, "xor", vec![changed.clone()], vec![value, sign.clone()]));
