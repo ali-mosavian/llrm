@@ -2,12 +2,20 @@
 //!
 //! Ported so far: the operand and naming half, up to `lowered`.
 
+use std::collections::BTreeSet;
 use std::fmt;
+use std::sync::Arc;
+
+use indexmap::IndexMap;
 
 use iced_x86::Register;
 use num_traits::ToPrimitive;
 
+use super::target;
+use crate::abi::runtime;
+use crate::legacy::calls;
 use crate::model::floating::{Format, Rounding};
+use crate::model::lir::{self, Insn};
 use crate::model::ir::nodes::Node;
 use crate::model::ir::{self, Loc, Operation};
 use crate::model::mir::{Arg, Held, Kind, MemRef, MirBody, Op, OpCode};
@@ -1058,4 +1066,389 @@ impl Lowering {
     pub fn divides(&self, high: u32, word: &Held) -> bool {
         self._dividends.get(&high).is_some_and(|found| *found == word.value.id)
     }
+}
+
+/// Python's `Counter`: a missing key reads as zero.
+fn count(counter: &IndexMap<u32, i64>, value: u32) -> i64 {
+    counter.get(&value).copied().unwrap_or(0)
+}
+
+fn plain(one: &Insn) -> bool {
+    !(!one.clobbers.is_empty() || !one.requires.is_empty() || !one.delivers.is_empty() || !one.spread.is_empty())
+}
+
+/// The value of a one-operand `push` of a held value.
+fn pushed_value(what: &ir::Semantics) -> Option<(u32, u32)> {
+    match (what.op, what.name.as_deref(), &what.dests[..], &what.sources[..]) {
+        (Operation::Push, Some("push"), [], [Loc::Held(one)]) => Some((one.value, one.width)),
+        _ => None,
+    }
+}
+
+/// A `mov` of an immediate into a held value.
+fn immediate_copy(what: &ir::Semantics) -> Option<(u32, u32, ir::Imm)> {
+    match (what.op, what.name.as_deref(), &what.dests[..], &what.sources[..]) {
+        (Operation::Move, Some("mov"), [Loc::Held(one)], [Loc::Imm(immediate)]) => {
+            Some((one.value, one.width, immediate.clone()))
+        }
+        _ => None,
+    }
+}
+
+/// Select immediate pushes without keeping literal addresses live across calls.
+fn _rematerialized_arguments(
+    insns: &[Arc<Insn>],
+    uses: &IndexMap<u32, i64>,
+    exposed: &BTreeSet<u32>,
+) -> Vec<Arc<Insn>> {
+    let mut literals: IndexMap<u32, (Arc<Insn>, ir::Imm)> = IndexMap::new();
+    // Only values whose every known use is an eligible PUSH may be recreated
+    // independently of an ordered setup sequence.
+    let mut pushed: IndexMap<u32, i64> = IndexMap::new();
+    for one in insns {
+        if let Some(what) = &one.what {
+            if what.op == Operation::Push
+                && what.sources.len() == 1
+                && matches!(&what.sources[0], Loc::Held(held) if one.uses.contains(&held.value))
+            {
+                let Loc::Held(held) = &what.sources[0] else { unreachable!() };
+                for value in &one.uses {
+                    if *value == held.value {
+                        *pushed.entry(*value).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+    }
+    let mut consumed: IndexMap<u32, i64> = IndexMap::new();
+    let mut out = Vec::new();
+    for one in insns {
+        let mut one = Arc::clone(one);
+        if let Some((value, width)) = one.what.as_ref().and_then(pushed_value) {
+            if literals.contains_key(&value)
+                && count(uses, value) == count(&pushed, value)
+                && plain(&one)
+                && one.defines.is_empty()
+                && one.uses == [value]
+            {
+                let (definition, immediate) = literals[&value].clone();
+                if width == immediate.width {
+                    let mut rewritten = (*one).clone();
+                    let mut what = rewritten.what.clone().unwrap();
+                    what.sources = vec![Loc::Imm(immediate.clone())];
+                    rewritten.what = Some(what);
+                    rewritten.uses = vec![];
+                    rewritten.op = definition.op.clone();
+                    rewritten.symbol = Some(immediate.address.is_some());
+                    rewritten.rematerialized = true;
+                    one = Arc::new(rewritten);
+                    *consumed.entry(value).or_insert(0) += 1;
+                }
+            }
+        }
+        for value in &one.defines {
+            literals.shift_remove(value);
+        }
+        if let Some((value, width, immediate)) = one.what.as_ref().and_then(immediate_copy) {
+            if width == immediate.width
+                && matches!(width, 2 | 4)
+                && one.defines == [value]
+                && one.uses.is_empty()
+                && plain(&one)
+            {
+                literals.insert(value, (Arc::clone(&one), immediate));
+            }
+        }
+        out.push(one);
+    }
+    let dead: Vec<Arc<Insn>> = literals
+        .iter()
+        .filter(|(value, _)| {
+            count(&consumed, **value) == count(uses, **value) && count(&consumed, **value) != 0 && !exposed.contains(value)
+        })
+        .map(|(_, (definition, _))| Arc::clone(definition))
+        .collect();
+    lir::without(&out, |one| dead.iter().any(|dead| Arc::ptr_eq(dead, one)), None::<fn(&Arc<Insn>) -> Arc<Insn>>)
+}
+
+/// Fold a single-use load into the PUSH that consumes it.
+fn _memory_arguments(insns: &[Arc<Insn>], uses: &IndexMap<u32, i64>, exposed: &BTreeSet<u32>) -> Vec<Arc<Insn>> {
+    let mut loaded: IndexMap<u32, (Arc<Insn>, ir::Mem)> = IndexMap::new();
+    let mut consumed: IndexMap<u32, i64> = IndexMap::new();
+    let mut out: Vec<Arc<Insn>> = Vec::new();
+    for one in insns {
+        let mut one = Arc::clone(one);
+        let mut folded = false;
+        if let Some((value, width)) = one.what.as_ref().and_then(pushed_value) {
+            if let Some((definition, source)) = loaded.get(&value).cloned() {
+                if width == source.width
+                    && matches!(source.width, 2 | 4)
+                    && count(uses, value) == 1
+                    && !exposed.contains(&value)
+                    && one.defines.is_empty()
+                    && plain(&one)
+                {
+                    let mut rewritten = (*one).clone();
+                    let mut what = rewritten.what.clone().unwrap();
+                    what.sources = vec![Loc::Mem(source)];
+                    rewritten.what = Some(what);
+                    rewritten.uses = vec![];
+                    rewritten.op = definition.op.clone();
+                    rewritten.symbol = definition.symbol;
+                    one = Arc::new(rewritten);
+                    *consumed.entry(value).or_insert(0) += 1;
+                    folded = true;
+                }
+            }
+        }
+
+        let what = one.what.as_ref();
+        let writes_memory = what.is_none_or(|what| what.dests.iter().any(|dest| matches!(dest, Loc::Mem(_))))
+            || one.op.as_ref().is_some_and(|op| !op.stores.is_empty());
+        let writes_fixed = what.is_none_or(|what| what.dests.iter().any(|dest| matches!(dest, Loc::Reg(_))));
+        let barrier =
+            what.is_none_or(|what| matches!(what.op, Operation::Barrier | Operation::Call | Operation::Return));
+        if writes_memory || writes_fixed || barrier || !one.clobbers.is_empty() {
+            loaded.clear();
+        }
+
+        for value in &one.defines {
+            loaded.shift_remove(value);
+        }
+        if !folded {
+            if let Some(what) = what {
+                if let (Operation::Move, Some("mov"), [Loc::Held(dest)], [Loc::Mem(source)]) =
+                    (what.op, what.name.as_deref(), &what.dests[..], &what.sources[..])
+                {
+                    if dest.width == source.width
+                        && matches!(source.width, 2 | 4)
+                        && source.addr.is_some_and(|addr| addr.space == Space::Frame && addr.disp >= 4)
+                        && ir::root(source.through) != Register::ESP
+                        && ir::root(source.index_through) != Register::ESP
+                        && !source.stack_argument
+                        && one.defines == [dest.value]
+                        && one.uses.is_empty()
+                        && plain(&one)
+                    {
+                        loaded.insert(dest.value, (Arc::clone(&one), source.clone()));
+                    }
+                }
+            }
+        }
+        out.push(one);
+    }
+
+    let dead: BTreeSet<u32> = consumed
+        .keys()
+        .filter(|value| {
+            count(&consumed, **value) == count(uses, **value) && count(&consumed, **value) != 0 && !exposed.contains(value)
+        })
+        .copied()
+        .collect();
+    let mut previous: Option<Vec<*const Insn>> = None;
+    loop {
+        let now: Vec<*const Insn> = out.iter().map(Arc::as_ptr).collect();
+        if previous.as_ref() == Some(&now) {
+            break;
+        }
+        previous = Some(now);
+        out = lir::without(
+            &out,
+            |one| one.defines.iter().any(|value| dead.contains(value)),
+            None::<fn(&Arc<Insn>) -> Arc<Insn>>,
+        );
+    }
+    out
+}
+
+/// Select a direct push for an adjacent, single-use immediate definition.
+fn _immediate_arguments(insns: &[Arc<Insn>], uses: &IndexMap<u32, i64>) -> Vec<Arc<Insn>> {
+    let mut out = Vec::new();
+    let mut index = 0;
+    while index < insns.len() {
+        if index + 1 < insns.len() && plain(&insns[index]) && plain(&insns[index + 1]) {
+            let (copy, push) = (&insns[index], &insns[index + 1]);
+            let copied = copy.what.as_ref().and_then(immediate_copy);
+            let pushed = push.what.as_ref().and_then(pushed_value);
+            if let (Some((value, width, immediate)), Some((pushed, pushed_width))) = (copied, pushed) {
+                if value == pushed
+                    && width == pushed_width
+                    && pushed_width == immediate.width
+                    && matches!(width, 2 | 4)
+                    && count(uses, value) == 1
+                    && copy.uses.is_empty()
+                    && copy.defines == [value]
+                    && push.uses == [value]
+                    && push.defines.is_empty()
+                {
+                    let mut combined = (**copy).clone();
+                    let mut what = push.what.clone().unwrap();
+                    what.sources = vec![Loc::Imm(immediate)];
+                    combined.what = Some(what);
+                    combined.defines = vec![];
+                    combined.uses = vec![];
+                    let folded = lir::without(
+                        &[Arc::new(combined), Arc::clone(push)],
+                        |one| Arc::ptr_eq(one, push),
+                        None::<fn(&Arc<Insn>) -> Arc<Insn>>,
+                    );
+                    if folded.len() == 1 {
+                        out.extend(folded);
+                        index += 2;
+                        continue;
+                    }
+                }
+            }
+        }
+        out.push(Arc::clone(&insns[index]));
+        index += 1;
+    }
+    out
+}
+
+/// One instruction an expansion inserted, beside the operation it came from.
+fn _follows(op: &Op, what: ir::Semantics) -> Arc<Insn> {
+    let defines = _written(&what.dests);
+    let uses = _read(&what);
+    Arc::new(Insn::new(op.at, Some((op.at, op.at)), Some(what), defines, uses))
+}
+
+/// Which phi results this body still reads, transitively.
+fn _phis_worth_keeping(body: &MirBody, made: &IndexMap<i64, Vec<Arc<Insn>>>) -> BTreeSet<u32> {
+    let mut wanted: BTreeSet<u32> =
+        made.values().flat_map(|insns| insns.iter().flat_map(|one| one.uses.iter().copied())).collect();
+    let phis: IndexMap<u32, Vec<u32>> = body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.phis)
+        .filter(|phi| !phi.result.flags)
+        .map(|phi| (phi.result.id, phi.incoming.values().map(|value| value.id).collect()))
+        .collect();
+    let mut changing = true;
+    while changing {
+        changing = false;
+        for (result, incoming) in &phis {
+            if wanted.contains(result) && !incoming.iter().all(|one| wanted.contains(one)) {
+                wanted.extend(incoming.iter().copied());
+                changing = true;
+            }
+        }
+    }
+    wanted
+}
+
+/// The abstract values an operand list names, `ir.values` deciding.
+fn _named_values(where_: &[Loc]) -> Vec<u32> {
+    where_.iter().flat_map(|operand| ir::values(operand).into_iter().map(|one| one.value)).collect()
+}
+
+/// The values an instruction writes: a destination that *is* a value.
+fn _written(dests: &[Loc]) -> Vec<u32> {
+    dests
+        .iter()
+        .filter_map(|one| match one {
+            Loc::Held(one) => Some(one.value),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The values an instruction reads: its sources, and the addresses its
+/// destinations are reached by.
+fn _read(what: &ir::Semantics) -> Vec<u32> {
+    let mut out = _named_values(&what.sources);
+    for where_ in &what.dests {
+        if !matches!(where_, Loc::Held(_)) {
+            out.extend(ir::values(where_).into_iter().map(|one| one.value));
+        }
+    }
+    out
+}
+
+/// What an absorbed divide destroys, for a caller with no call map.
+pub fn clobbering(op: &Op) -> BTreeSet<Register> {
+    if op.kind == Kind::Divmod { _clobbers(op, &IndexMap::new(), None, None) } else { BTreeSet::new() }
+}
+
+/// Which registers this instruction destroys without naming them.
+fn _clobbers(
+    op: &Op,
+    calls: &IndexMap<i64, String>,
+    contracts: Option<&IndexMap<i64, runtime::Contract>>,
+    node: Option<&Node>,
+) -> BTreeSet<Register> {
+    if let Some(Node::Restore(node)) = node {
+        // The second pop overwrites the other register even when its result is dead.
+        return BTreeSet::from([crate::model::mir::restore_pair(node.pair as i64).unwrap().1]);
+    }
+    if op.kind == Kind::Divmod {
+        // An absorbed divide writes the dividend's, the divisor's, idiv's own
+        // edx, and wherever the answer it was not asked for is kept.
+        return [calls::RESULT, calls::DIVISOR, Register::EDX, calls::OTHER]
+            .into_iter()
+            .filter(|register| target::AVAILABLE.contains(register))
+            .collect();
+    }
+    if op.kind != Kind::Call {
+        return BTreeSet::new();
+    }
+    let contract = _contract(op, calls, contracts);
+    let names = _names();
+    let disturbed = runtime::disturbs(&contract);
+    // A contract is about the 8086 and names no FS or GS; one reaching user
+    // code, or written for the 386, runs code that may use them.
+    let mut out: BTreeSet<Register> = if disturbed == *runtime::EVERY || contract.i386 {
+        target::SELECTORS.into_iter().filter(|register| !names.contains_key(register)).collect()
+    } else {
+        BTreeSet::new()
+    };
+    for (register, spelled) in &names {
+        if disturbed.iter().any(|named| spelled.contains(&named.value().to_lowercase())) {
+            out.insert(*register);
+        }
+    }
+    out
+}
+
+fn _contract(
+    op: &Op,
+    calls: &IndexMap<i64, String>,
+    contracts: Option<&IndexMap<i64, runtime::Contract>>,
+) -> runtime::Contract {
+    contracts
+        .and_then(|contracts| contracts.get(&op.at).cloned())
+        .unwrap_or_else(|| runtime::contract(calls.get(&op.at).map(String::as_str)))
+}
+
+/// The registers a 386 callee keeps only the 16-bit half of.
+fn _clobbered_high(
+    op: &Op,
+    calls: &IndexMap<i64, String>,
+    contracts: Option<&IndexMap<i64, runtime::Contract>>,
+) -> BTreeSet<Register> {
+    if op.kind != Kind::Call {
+        return BTreeSet::new();
+    }
+    if !_contract(op, calls, contracts).i386 {
+        return BTreeSet::new();
+    }
+    let whole: BTreeSet<Register> = _clobbers(op, calls, contracts, None).into_iter().map(ir::root).collect();
+    target::AVAILABLE.into_iter().filter(|register| !whole.contains(&ir::root(*register))).collect()
+}
+
+/// Each allocatable register by the names runtime.py's own Reg enum uses.
+fn _names() -> IndexMap<Register, BTreeSet<String>> {
+    target::AVAILABLE
+        .into_iter()
+        .chain([Register::ES])
+        .map(|register| {
+            (
+                register,
+                BTreeSet::from([
+                    target::name_of(target::named(register, 2)),
+                    target::name_of(target::named(register, 4)),
+                ]),
+            )
+        })
+        .collect()
 }
