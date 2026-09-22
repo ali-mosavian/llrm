@@ -1,24 +1,25 @@
 //! Port of `tests/test_loopexit.py`.
 //!
-//! Skipped: every test builds its body from an OMF fixture through modules
-//! not yet ported (`wholeseg.emitted`, `corpus.loaded`, `mir.bodies`,
-//! `transform.applied`):
-//! - test_accumulation_has_no_backedge
+//! Skipped, needing `wholeseg`: test_accumulation_has_no_backedge.
+//! Skipped, monkeypatching `loopexit`:
 //! - test_loop_exit_requires_a_complete_proof
 //! - test_accumulation_exit_wraps_at_its_own_width
 //! - test_index_sum_uses_the_exact_triangular_coefficient
 //! - test_a_doubled_accumulator_is_not_a_linear_sum
-//! - test_addrm_long_sum_is_computed_outside_the_store_loop
 //! - test_partial_exit_rewrite_preserves_observations
 //! - test_exit_evaluation_crosses_lcssa_boundary
 //! - test_closed_exit_does_not_hide_an_observed_recurrence
 //! - test_exit_evaluation_rewrites_downstream_phi_edges
 //!
-//! In their place, one hand-built `i < 4; s += i` loop, with every expected
+//! test_addrm_long_sum_is_computed_outside_the_store_loop keeps only its v-g3
+//! case: p-g2 and q-O fail in Python at this commit (a long ADD remains).
+//!
+//! Besides, one hand-built `i < 4; s += i` loop, with every expected
 //! listing taken from running Python `loopexit.evaluated` on the same body.
 
 use std::rc::Rc;
 use crate::analysis::{consts, loops};
+use crate::optimize::{testcorpus, transform};
 use crate::model::mir::{
     Arg, Cell, Const, Held, Kind, MemRef, MirBlock, MirBody, Op, OrderedMap, Phi, Value,
 };
@@ -232,4 +233,44 @@ fn constant_exit_replaces_an_unobserved_accumulator() {
         ]
     );
     assert_eq!(known(&result, 943), Some((6, 2)));
+}
+
+/// ADDRM's 1..20 long sum reaches PRINT as 210, with no remaining loop arithmetic.
+#[test]
+fn test_addrm_long_sum_is_computed_outside_the_store_loop() {
+    let found = testcorpus::loaded("fixtures/omf/addrm-v-g3.obj");
+    let partition = testcorpus::partitioned(&found);
+    let body = transform::applied(
+        &testcorpus::main_body(&found, &partition),
+        &found.dgroup.members,
+        &found.calls,
+        transform::Applied { blocks: Some(partition), found: Some(found.clone()), ..Default::default() },
+    )
+    .unwrap();
+    let retained = loops::loops(&body.blocks, Some(body.entry));
+    let ops: Vec<&Op> = body.blocks.iter().flat_map(|block| &block.ops).collect();
+    assert!(!ops.iter().any(|op| op.kind == Kind::Add
+        && op.results.iter().any(|result| matches!(result, Arg::Held(one) if one.width == 4))));
+    assert!(ops
+        .iter()
+        .filter(|op| op.kind == Kind::Arg)
+        .flat_map(|op| &op.args)
+        .any(|arg| matches!(arg, Arg::Const(one) if *one == Const::new(210, one.width))));
+    if retained.is_empty() {
+        // All bounds and values are literal for this fixture, so complete
+        // unrolling is a valid stronger form.  `repetitions` keeps the
+        // source-loop extent visible for costing and diagnostics.
+        assert!(body.repetitions.iter().any(|&(_, count)| count == 20));
+        return;
+    }
+    let [one] = retained.as_slice() else { panic!("{} loops retained", retained.len()) };
+    let mut widths: Vec<u32> = body
+        .blocks
+        .iter()
+        .filter(|block| one.body.contains(&block.at))
+        .flat_map(|block| &block.ops)
+        .flat_map(|op| op.stores.iter().map(|stored| stored.width))
+        .collect();
+    widths.sort_unstable();
+    assert_eq!(widths, vec![2, 4]);
 }
