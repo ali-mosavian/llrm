@@ -85,7 +85,7 @@ An array parameter is an unsized borrowed view, written `values: &[T]` or
 `values: &mut [T]`. A call passes exactly one far pointer; it never passes a
 separate hidden length. The pointer names an eight-byte scoped view containing
 `length`, `capacity`, and a 16:16 payload pointer. This indirection is necessary
-for `&values[start..end]`: an interior payload cannot claim the owner's prefix
+for `&values[start:end]`: an interior payload cannot claim the owner's prefix
 as its own descriptor. The view is stack-scoped and has no allocator or
 destructor. Owned arrays retain the direct prefix-plus-payload representation
 above. `array.data()` is the explicit systems escape hatch: it returns an
@@ -142,7 +142,7 @@ an immutable scoped view of the element;
 `for item in &mut array` requests a mutable view and is rejected for an
 immutable array. By-value struct iteration remains reserved until aggregate
 move semantics are implemented. A mutable view's field stores update the
-original element. `for item in &array[begin..end]` iterates only that checked
+original element. `for item in &array[begin:end]` iterates only that checked
 compile-time range.
 
 A list comprehension over a fixed array materializes another fixed,

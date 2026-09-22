@@ -12,7 +12,7 @@ fn first(text: string) -> char:
 fn main() -> i16:
     let values: [i16; 5] = [1, 2, 4, 8, 16]
     let text: string = "metal"
-    let middle = sum(&values[1..4])
+    let middle = sum(&values[1:4])
     if values.len() == 5:
         if values.capacity() == 5:
             if middle == 14:

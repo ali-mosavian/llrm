@@ -751,12 +751,12 @@ impl Parser {
     fn index(&mut self, base: Expr) -> Result<Expr, Diagnostic> {
         let start = base.span();
         self.bump();
-        let first = if matches!(self.peek().kind, TokenKind::Range) {
+        let first = if matches!(self.peek().kind, TokenKind::Colon) {
             None
         } else {
             Some(self.expression(0)?)
         };
-        if self.take(|kind| matches!(kind, TokenKind::Range)).is_some() {
+        if self.take(|kind| matches!(kind, TokenKind::Colon)).is_some() {
             let end = if matches!(self.peek().kind, TokenKind::RightBracket) {
                 None
             } else {
@@ -773,12 +773,7 @@ impl Parser {
                 span: Span::new(start.line, start.column, close.span.end_column),
             });
         }
-        let Some(index) = first else {
-            return Err(Diagnostic::new(
-                self.peek().span,
-                "expected slice end after '..'",
-            ));
-        };
+        let index = first.expect("an index with no start is a slice");
         let close = self.expect(
             |kind| matches!(kind, TokenKind::RightBracket),
             "expected ']' after index",

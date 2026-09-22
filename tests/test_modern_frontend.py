@@ -652,7 +652,7 @@ def test_scoped_array_range_is_one_descriptor_pointer_and_executes(tmp_path: Pat
         "    return total\n"
         "fn main() -> i16:\n"
         "    let values: [i16; 4] = [1, 2, 3, 4]\n"
-        "    return sum(&values[1..3])\n"
+        "    return sum(&values[1:3])\n"
     )
 
     program = driver.parsed(source)
@@ -672,12 +672,44 @@ def test_scoped_range_iteration_uses_only_the_selected_elements(tmp_path: Path) 
         "fn main() -> i16:\n"
         "    let values: [i16; 5] = [1, 2, 4, 8, 16]\n"
         "    var total: i16 = 0\n"
-        "    for value in &values[1..4]:\n"
+        "    for value in &values[1:4]:\n"
         "        total += value\n"
         "    return total\n"
     )
 
     assert execute.run(driver.parsed(source), "main").value == 14
+
+
+@pytest.mark.parametrize(("chosen", "total"), [("1:3", 5), ("1:", 9), (":3", 6), (":", 10)])
+def test_a_slice_is_spelled_as_in_python(tmp_path: Path, chosen: str, total: int) -> None:
+    """Slices were `a..b`; the language spells them `a:b`, `a:`, `:b` and `:`."""
+    source = tmp_path / "python_slice.mod"
+    source.write_text(
+        "fn sum(values: &[i16]) -> i16:\n"
+        "    var total: i16 = 0\n"
+        "    for value in &values:\n"
+        "        total += value\n"
+        "    return total\n"
+        "fn main() -> i16:\n"
+        "    let values: [i16; 4] = [1, 2, 3, 4]\n"
+        f"    return sum(&values[{chosen}])\n"
+    )
+
+    assert execute.run(driver.parsed(source), "main").value == total
+
+
+def test_a_range_is_not_a_slice(tmp_path: Path) -> None:
+    source = tmp_path / "range_slice.mod"
+    source.write_text(
+        "fn sum(values: &[i16]) -> i16:\n"
+        "    return values[0]\n"
+        "fn main() -> i16:\n"
+        "    let values: [i16; 4] = [1, 2, 3, 4]\n"
+        "    return sum(&values[1..3])\n"
+    )
+
+    with pytest.raises(driver.FrontendError):
+        driver.parsed(source)
 
 
 def test_data_is_an_explicit_pointer_escape_hatch(tmp_path: Path) -> None:
