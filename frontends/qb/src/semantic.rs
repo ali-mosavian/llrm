@@ -213,6 +213,9 @@ struct Compiler {
     row_major: bool,
     huge_arrays: bool,
     checked_arrays: bool,
+    // LBOUND/UBOUND read the descriptor without checking it is allocated
+    // or the dimension in range, as unchecked subscripts do.
+    unchecked_bounds: bool,
     mbf: bool,
     alternate_math: bool,
     module_name: String,
@@ -287,6 +290,7 @@ pub fn compile_with_array_order(
         false,
         false,
         false,
+        false,
     )
 }
 
@@ -298,6 +302,7 @@ pub fn compile_with_options(
     row_major: bool,
     huge_arrays: bool,
     checked_arrays: bool,
+    unchecked_bounds: bool,
     mbf: bool,
     alternate_math: bool,
 ) -> Result<String, SemanticError> {
@@ -310,6 +315,7 @@ pub fn compile_with_options(
         row_major,
         huge_arrays,
         checked_arrays,
+        unchecked_bounds,
         mbf,
         alternate_math,
     );
@@ -792,6 +798,7 @@ impl Compiler {
         row_major: bool,
         huge_arrays: bool,
         checked_arrays: bool,
+        unchecked_bounds: bool,
         mbf: bool,
         alternate_math: bool,
     ) -> Self {
@@ -812,6 +819,7 @@ impl Compiler {
             row_major,
             huge_arrays,
             checked_arrays,
+            unchecked_bounds,
             mbf,
             alternate_math,
             module_name: module_name.into(),
@@ -3920,36 +3928,48 @@ impl Compiler {
         upper: bool,
     ) -> Result<Operand, SemanticError> {
         let result = self.compiler_temporary("$bound", INTEGER)?;
+        let checked = !self.unchecked_bounds;
+        // Every allocated array has a first dimension.
+        let first = matches!(dimension, Operand::Constant(_, Number::Integer(1)));
         let read = self.new_block();
-        let checked = self.new_block();
-        let ranked = self.new_block();
-        let call = self.new_block();
+        let ranking = self.new_block();
+        let call = checked.then(|| self.new_block());
         let done = self.new_block();
-        // The runtime is called only to raise "Subscript out of range".
-        self.mark_cold(call);
 
-        let data = self.descriptor_field(descriptor, 2, INTEGER);
-        let allocated = self.value(BOOLEAN);
-        let zero = Operand::Constant(INTEGER, Number::Integer(0));
-        self.emit("ne", vec![allocated], vec![Operand::Value(data), zero]);
-        self.terminate(
-            "branch",
-            vec![Operand::Value(allocated)],
-            vec![checked, call],
-        )?;
+        if let Some(call) = call {
+            // The runtime is called only to raise "Subscript out of range".
+            self.mark_cold(call);
+            let data = self.descriptor_field(descriptor, 2, INTEGER);
+            let allocated = self.value(BOOLEAN);
+            let zero = Operand::Constant(INTEGER, Number::Integer(0));
+            self.emit("ne", vec![allocated], vec![Operand::Value(data), zero]);
+            self.terminate(
+                "branch",
+                vec![Operand::Value(allocated)],
+                vec![ranking, call],
+            )?;
+        } else {
+            self.terminate("jump", Vec::new(), vec![ranking])?;
+        }
 
-        self.select_block(checked);
+        self.select_block(ranking);
         let rank = self.descriptor_field(descriptor, 8, BYTE);
         let rank = self.convert(Operand::Value(rank), BYTE, INTEGER)?;
-        let positive = self.value(BOOLEAN);
-        let one = Operand::Constant(INTEGER, Number::Integer(1));
-        self.emit("ge", vec![positive], vec![dimension.clone(), one]);
-        self.terminate("branch", vec![Operand::Value(positive)], vec![ranked, call])?;
+        match call {
+            Some(call) if !first => {
+                let ranked = self.new_block();
+                let positive = self.value(BOOLEAN);
+                let one = Operand::Constant(INTEGER, Number::Integer(1));
+                self.emit("ge", vec![positive], vec![dimension.clone(), one]);
+                self.terminate("branch", vec![Operand::Value(positive)], vec![ranked, call])?;
 
-        self.select_block(ranked);
-        let within = self.value(BOOLEAN);
-        self.emit("le", vec![within], vec![dimension.clone(), rank.clone()]);
-        self.terminate("branch", vec![Operand::Value(within)], vec![read, call])?;
+                self.select_block(ranked);
+                let within = self.value(BOOLEAN);
+                self.emit("le", vec![within], vec![dimension.clone(), rank.clone()]);
+                self.terminate("branch", vec![Operand::Value(within)], vec![read, call])?;
+            }
+            _ => self.terminate("jump", Vec::new(), vec![read])?,
+        }
 
         // Dimensions are stored last first: dimension d is entry cDims - d.
         self.select_block(read);
@@ -4033,19 +4053,21 @@ impl Compiler {
         );
         self.terminate("jump", Vec::new(), vec![done])?;
 
-        self.select_block(call);
-        let called = self.value(INTEGER);
-        self.emit_runtime_call(
-            if upper { "B$UBND" } else { "B$LBND" },
-            vec![called],
-            vec![Operand::Value(descriptor), dimension],
-        );
-        self.emit(
-            "store",
-            Vec::new(),
-            vec![Operand::Place(result), Operand::Value(called)],
-        );
-        self.terminate("jump", Vec::new(), vec![done])?;
+        if let Some(call) = call {
+    self.select_block(call);
+            let called = self.value(INTEGER);
+            self.emit_runtime_call(
+                if upper { "B$UBND" } else { "B$LBND" },
+                vec![called],
+                vec![Operand::Value(descriptor), dimension],
+            );
+            self.emit(
+                "store",
+                Vec::new(),
+                vec![Operand::Place(result), Operand::Value(called)],
+            );
+            self.terminate("jump", Vec::new(), vec![done])?;
+        }
 
         self.select_block(done);
         let merged = self.value(INTEGER);

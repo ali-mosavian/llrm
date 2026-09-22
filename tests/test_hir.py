@@ -2803,3 +2803,29 @@ def test_the_bound_error_call_is_placed_after_the_hot_path() -> None:
     returned = procedure.index("retf")
     assert procedure.index("B$LBND") > returned
     assert procedure.index("B$UBND") > returned
+
+
+def test_the_first_dimension_is_not_rank_checked() -> None:
+    """LBOUND(a, 1) compared the rank against 1 before reading the descriptor.
+
+    Every allocated array has a first dimension, so only the allocation
+    test may branch to the runtime call.
+    """
+    source = ROOT / "bench" / "parity" / "sum_three.bas"
+    text = masm.text(qb_compile.assembled(qb_driver.parsed(source)))
+    procedure = text[text.index("SUMTHREE proc") : text.index("SUMTHREE endp")]
+
+    returned = procedure.index("retf")
+    cold = set(re.findall(r"^(\w+):$", procedure[returned:], re.MULTILINE))
+    branches = re.findall(r"\bj(?!mp)\w+ (\w+)$", procedure[:returned], re.MULTILINE)
+    assert len([label for label in branches if label in cold]) == 2
+
+
+def test_unchecked_bounds_read_the_descriptor_without_runtime_calls() -> None:
+    """--unchecked-bounds trusts the descriptor: no B$LBND/B$UBND fallback."""
+    source = ROOT / "bench" / "parity" / "sum_three.bas"
+    text = masm.text(qb_compile.assembled(qb_driver.parsed(source, unchecked_bounds=True)))
+    procedure = text[text.index("SUMTHREE proc") : text.index("SUMTHREE endp")]
+
+    assert "B$LBND" not in procedure and "B$UBND" not in procedure
+    assert re.search(r"word ptr \[\w+\+\w+\+16\]", procedure)

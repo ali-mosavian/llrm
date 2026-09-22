@@ -30,6 +30,11 @@ def main(arguments: list[str] | None = None) -> int:
         help="use the BC /D checked array-access contract",
     )
     parser.add_argument(
+        "--unchecked-bounds",
+        action="store_true",
+        help="LBOUND/UBOUND trust the descriptor: no allocation or dimension check",
+    )
+    parser.add_argument(
         "--alternate-math",
         action="store_true",
         help="use the PDS /FPa alternate floating-point runtime contract",
@@ -46,6 +51,7 @@ def main(arguments: list[str] | None = None) -> int:
         array_order=options.array_order,
         huge_arrays=options.huge_arrays,
         checked_arrays=options.checked_arrays,
+        unchecked_bounds=options.unchecked_bounds,
         alternate_math=options.alternate_math,
         dump=options.dump_hir,
         include_dirs=tuple(options.include),
