@@ -2,10 +2,6 @@
 //! the caller, routine by routine. The Python module docstring is the full
 //! account.
 //!
-//! Deferred until `Module`, `abi.events`, `abi.callsite` and
-//! `frontend.blocks` are ported: `for_module`, `_redim_sites`,
-//! `_zero_entry_sites`.
-//!
 //! `TABLE` is the text of `runtime.toml`, included at build time, not its path.
 
 use std::collections::BTreeSet;
@@ -13,7 +9,12 @@ use std::sync::LazyLock;
 
 use crate::support::hash::IndexMap;
 
-use crate::frontend::blocks::INLINE_TABLE;
+use iced_x86::{Code, Register};
+
+use crate::abi::{callsite, events};
+use crate::frontend::blocks::{self, INLINE_TABLE};
+use crate::objectfile::module::{self, Module};
+use crate::objectfile::omf::ValueError;
 use crate::support::pyrepr::{self, Repr};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -1577,6 +1578,126 @@ pub static WRITERS: LazyLock<IndexMap<(&'static str, &'static str), BTreeSet<&'s
         )])
     });
 
+/// The per-site map for a whole module, from the object itself.
+///
+/// One place, because the raise and the lowering must be handed the same
+/// answer: built twice from different arguments they can differ.
+pub fn for_module(
+    found: &Module,
+    external: Option<&IndexMap<String, Contract>>,
+) -> Result<IndexMap<i64, Contract>, ValueError> {
+    let family = module::family(&found.records);
+    let mut contracts = per_call(&found.calls, family.value(), &module::defines(&found.records, found.seg));
+    contracts.extend(events::contracts(found));
+    if family.value() == "vbdos" {
+        _zero_entry_sites(found, &mut contracts);
+        _redim_sites(found, &mut contracts);
+    }
+    let inferred = callsite::inferred(found, &contracts);
+    contracts.extend(inferred);
+    for (name, routine) in external.into_iter().flatten() {
+        if routine.name != *name {
+            return Err(ValueError(format!(
+                "external contract name mismatch: {} != {}",
+                pyrepr::string(name),
+                pyrepr::string(&routine.name)
+            )));
+        }
+        for (&at, called) in &found.calls {
+            if called == name {
+                contracts.insert(at, routine.clone());
+            }
+        }
+    }
+    Ok(contracts)
+}
+
+/// B$ExitDim removes three header words and two bound words per dimension.
+pub fn _redim_sites(found: &Module, contracts: &mut IndexMap<i64, Contract>) {
+    if !found.calls.values().any(|name| name == "B$RDIM") {
+        return;
+    }
+    let Ok(mapped) = blocks::code_map(found) else {
+        return;
+    };
+    for block in blocks::partition(found, &mapped) {
+        for window in block.insns.windows(3) {
+            let [rank, descriptor, call] = window else { unreachable!() };
+            if found.calls.get(&(call.at as i64)).map(String::as_str) != Some("B$RDIM")
+                || rank.end() != descriptor.at
+                || descriptor.end() != call.at
+            {
+                continue;
+            }
+            if !matches!(rank.insn.code(), Code::Push_imm16 | Code::Pushw_imm8) {
+                continue;
+            }
+            if !matches!(descriptor.insn.code(), Code::Push_imm16 | Code::Pushw_imm8 | Code::Push_r16 | Code::Push_rm16) {
+                continue;
+            }
+            if found.fixup_at.keys().any(|&field| rank.at as i64 <= field && field < rank.end() as i64) {
+                continue;
+            }
+            let dimensions = (rank.insn.immediate(0) & 255) as i64;
+            contracts.insert(
+                call.at as i64,
+                Contract {
+                    inputs: Some(BTreeSet::from([Reg::Ax, Reg::Bx, Reg::Cx, Reg::Dx, Reg::Si, Reg::Di])),
+                    cleanup: Some(6 + 4 * dimensions),
+                    evidence: concat!(
+                        "VBDCL10E.LIB erase.asm RDIM tails dynamic.asm DIM_COMMON. ",
+                        "ExitDim 010a reads [bp+8], clears CH, doubles twice and adds 6; ",
+                        "011d..0129 pops the return address, adds that count to SP and jumps back. ",
+                        "Rank is an unrelocated immediate word push immediately before the descriptor ",
+                        "and call in one basic block. All GP inputs and unknown effects retained."
+                    )
+                    .to_owned(),
+                    ..worst("B$RDIM")
+                },
+            );
+        }
+    }
+}
+
+/// VBDOS's zero-BX entry bypasses its unresolved helper call.
+pub fn _zero_entry_sites(found: &Module, contracts: &mut IndexMap<i64, Contract>) {
+    if !found.calls.values().any(|name| name == "B$ENRA") {
+        return;
+    }
+    let Ok(mapped) = blocks::code_map(found) else {
+        return;
+    };
+    for block in blocks::partition(found, &mapped) {
+        for window in block.insns.windows(2) {
+            let [previous, call] = window else { unreachable!() };
+            if found.calls.get(&(call.at as i64)).map(String::as_str) != Some("B$ENRA") || previous.end() != call.at {
+                continue;
+            }
+            let insn = &previous.insn;
+            if insn.code() != Code::Mov_r16_imm16 || insn.op0_register() != Register::BX || insn.immediate16() != 0 {
+                continue;
+            }
+            if found.fixup_at.keys().any(|&field| previous.at as i64 <= field && field < previous.end() as i64) {
+                continue;
+            }
+            contracts.insert(
+                call.at as i64,
+                Contract {
+                    inputs: Some(BTreeSet::from([Reg::Bx, Reg::Cx])),
+                    cleanup: Some(0),
+                    evidence: concat!(
+                        "VBDCL10E.LIB rtenexit.asm B$ENRA 0x17..0x55: CX sizes the frame; ",
+                        "BX=0 at 0x4b bypasses the helper at 0x5b. A same-block immediate MOV BX,0 ",
+                        "immediately precedes this call. All other effects remain worst-case."
+                    )
+                    .to_owned(),
+                    ..worst("B$ENRA")
+                },
+            );
+        }
+    }
+}
+
 /// One contract per call site, chosen once for the whole module.
 ///
 /// A side map rather than a field on the body: a contract is a fact about
@@ -1985,7 +2106,28 @@ pub fn contract(name: Option<&str>) -> Contract {
 
 #[cfg(test)]
 mod tests {
+    //! Port of `tests/test_runtime.py`.
+    //!
+    //! Skipped, needing `wholeseg`:
+    //! `test_registered_handler_does_not_land_in_a_phi_edge`,
+    //! `test_handler_discovery_accepts_lowered_push_only_with_matching_relocations`,
+    //! `test_addrm_event_adapter_emits_without_fallback`.
+    //! `test_event_stub_requires_exact_relocation` monkeypatches `omf.fixups`
+    //! to give the field a displacement of 1; here the FIXUPP record itself
+    //! says so instead.
+
     use super::*;
+    use crate::objectfile::omf::{self, Record};
+    use std::path::{Path, PathBuf};
+    use std::rc::Rc;
+
+    fn fixture(name: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join(name)
+    }
+
+    fn loaded(name: &str) -> Module {
+        module::load(fixture(name)).unwrap().unwrap()
+    }
 
     /// `{0: name}`.
     fn at_zero(name: &str) -> IndexMap<i64, String> {
@@ -2726,6 +2868,103 @@ mod tests {
             assert_eq!(contract.writes, Memory::Any);
             assert_eq!(contract.control, Control::Unknown);
             assert!(contract.raises_error);
+        }
+    }
+
+    #[test]
+    fn test_event_stub_near_call_has_no_register_arguments() {
+        // ADDRM /V refused at 0048 before its first statement could execute.
+        for tag in ["p-evt", "v-evt"] {
+            let found = loaded(&format!("fixtures/omf/addrm-{tag}.obj"));
+            let routine = for_module(&found, None).unwrap()[&0x48].clone();
+            assert_eq!(routine.inputs, Some(BTreeSet::new()), "{tag}");
+            assert_eq!(routine.cleanup, Some(0), "{tag}");
+            assert!(routine.enters_user_code && barrier(&routine), "{tag}");
+            assert!(routine.reads == Memory::Any && routine.writes == Memory::Any, "{tag}");
+        }
+    }
+
+    #[test]
+    fn test_changed_event_stub_remains_unknown() {
+        // Only instruction bytes: a relocated field's addend is folded into its fixup before recognition.
+        let found = loaded("fixtures/omf/addrm-p-evt.obj");
+        let width = |loc: i64| match loc {
+            omf::LOC_OFF16 => 2,
+            omf::LOC_PTR32 => 4,
+            _ => 2,
+        };
+        let relocated: BTreeSet<i64> = omf::fixups(&found.records)
+            .into_iter()
+            .filter(|one| one.seg == Some(found.seg))
+            .flat_map(|one| one.offset..one.offset + width(one.loc))
+            .collect();
+        for at in (0x30..0x42).filter(|at| !relocated.contains(at)) {
+            let mut changed = found.clone();
+            changed.code[at as usize] ^= 1;
+            assert!(!for_module(&changed, None).unwrap().contains_key(&0x48), "{at:#x}");
+        }
+    }
+
+    #[test]
+    fn test_event_stub_requires_exact_relocation() {
+        let found = loaded("fixtures/omf/addrm-p-evt.obj");
+        for field in [0x34, 0x3E] {
+            let fixup = omf::fixups(&found.records)
+                .into_iter()
+                .find(|one| one.seg == Some(found.seg) && one.offset == field)
+                .unwrap();
+            // Give the fixup an explicit displacement of 1, adding the field
+            // where the subrecord had none.
+            let mut body = fixup.record.body.clone();
+            match fixup.disp_pos {
+                Some(at) => body[at..at + 2].copy_from_slice(&1u16.to_le_bytes()),
+                None => {
+                    let mut sub = body[fixup.lo..fixup.hi].to_vec();
+                    sub[2] &= !0x04;
+                    sub.extend_from_slice(&1u16.to_le_bytes());
+                    body.splice(fixup.lo..fixup.hi, sub);
+                }
+            }
+            let edited = Rc::new(Record { r#type: fixup.record.r#type, body, raw: None });
+            let mut changed = found.clone();
+            changed.records = found
+                .records
+                .iter()
+                .map(|one| if Rc::ptr_eq(one, &fixup.record) { edited.clone() } else { one.clone() })
+                .collect();
+            let disp = omf::fixups(&changed.records)
+                .into_iter()
+                .find(|one| one.seg == Some(found.seg) && one.offset == field)
+                .map(|one| one.disp);
+            assert_eq!(disp, Some(1), "{field:#x}");
+            assert!(!for_module(&changed, None).unwrap().contains_key(&0x48), "{field:#x}");
+        }
+    }
+
+    /// Every `B$` routine a committed OMF fixture calls.
+    fn _runtime_targets() -> BTreeSet<String> {
+        let mut paths: Vec<PathBuf> = std::fs::read_dir(fixture("fixtures/omf"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "obj"))
+            .collect();
+        paths.sort();
+        let mut named = BTreeSet::new();
+        for path in paths {
+            let records = omf::parse(&std::fs::read(&path).unwrap()).unwrap();
+            if let Some(found) = module::of(&records) {
+                named.extend(found.calls.values().filter(|name| name.starts_with("B$")).cloned());
+            }
+        }
+        named
+    }
+
+    #[test]
+    fn test_every_runtime_routine_the_corpus_calls_has_an_entry() {
+        let names = _runtime_targets();
+        assert!(!names.is_empty());
+        for name in names {
+            assert!(contract(Some(&name)).established, "{name}");
         }
     }
 }
