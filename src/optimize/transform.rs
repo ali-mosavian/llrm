@@ -274,3 +274,92 @@ pub(crate) fn _kept(op: &crate::model::mir::Op) -> bool {
     }
     op.defines.iter().all(|one| one.flags)
 }
+
+/// Direct port of `qbopt.optimize.transform:_unreachable`.
+pub(crate) fn _unreachable(body: &MirBody) -> MirBody {
+    use std::collections::{BTreeMap, BTreeSet};
+    let blocks = body
+        .blocks
+        .iter()
+        .map(|block| (block.at, block))
+        .collect::<BTreeMap<_, _>>();
+    let mut reached = BTreeSet::new();
+    let mut pending = vec![body.entry];
+    while let Some(at) = pending.pop() {
+        if reached.contains(&at) || !blocks.contains_key(&at) {
+            continue;
+        }
+        reached.insert(at);
+        pending.extend(blocks[&at].succ.iter().copied());
+    }
+    let mut result = body.clone();
+    result.blocks = body
+        .blocks
+        .iter()
+        .filter(|block| reached.contains(&block.at) || !block.ops.is_empty())
+        .map(|block| {
+            if reached.contains(&block.at) {
+                block.clone()
+            } else {
+                let mut normalized = block.clone();
+                normalized.succ = Vec::new();
+                normalized.phis = Vec::new();
+                normalized.ops = block.ops.iter().map(_empty_operation).collect();
+                normalized
+            }
+        })
+        .collect();
+    result
+}
+
+/// Direct port of `qbopt.optimize.transform:_trivial_phis`.
+pub(crate) fn _trivial_phis(
+    body: &MirBody,
+) -> Result<MirBody, crate::analysis::ssa::SubstitutionError> {
+    use crate::analysis::ssa::{provider as _provider, substituted as _substituted};
+    use crate::model::mir::{OrderedMap, Phi, Value};
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let predecessors = crate::analysis::loops::predecessors(&body.blocks);
+    let mut swaps = BTreeMap::<u32, Value>::new();
+    let mut body = body.clone();
+    loop {
+        let mut changed = false;
+        let mut out = Vec::new();
+        for block in &body.blocks {
+            let mut phis = Vec::new();
+            for phi in &block.phis {
+                let mut incoming = OrderedMap::new();
+                for (at, value) in phi.incoming.iter() {
+                    if predecessors[&block.at].contains(at) {
+                        incoming.insert(*at, _provider(*value, &swaps)?);
+                    }
+                }
+                let mut values = incoming.values().copied().collect::<BTreeSet<_>>();
+                values.remove(&phi.result);
+                if values.len() == 1 {
+                    let only = *values.iter().next().expect("one remaining value");
+                    swaps.insert(phi.result.id, only);
+                    changed = true;
+                } else {
+                    phis.push(Phi {
+                        result: phi.result,
+                        incoming,
+                    });
+                }
+            }
+            let mut replaced = block.clone();
+            replaced.phis = phis;
+            replaced.ops = block
+                .ops
+                .iter()
+                .map(|op| _substituted(op, &swaps))
+                .collect::<Result<_, _>>()?;
+            out.push(replaced);
+        }
+        body.blocks = out;
+        if !changed {
+            return Ok(body);
+        }
+    }
+}

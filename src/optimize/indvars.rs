@@ -420,7 +420,7 @@ pub(crate) fn simplified(body: &MirBody) -> Result<MirBody, SubstitutionError> {
                     .map(|(_value, other)| other.result)
                     .collect::<BTreeSet<_>>();
                 swap.extend(removed.iter().map(|value| (value.id, final_)));
-                let mut changed = loopexit::_substituted_exits(body, exit_at, &following, vec![finish], &swap)?;
+                let mut changed = loopexit::_substituted_exits(body, exit_at, &following, &[finish], &swap)?;
                 if !removed.is_empty() {
                     for block in &mut changed.blocks {
                         block.phis.retain(|other| !removed.contains(&other.result));
@@ -1230,7 +1230,7 @@ pub(crate) fn zeroed(body: &MirBody, address_offsets: bool) -> Result<MirBody, S
                 .map(|(_value, other)| other.result)
                 .collect::<BTreeSet<_>>();
             swap.extend(removed.iter().map(|value| (value.id, finished)));
-            let changed = loopexit::_substituted_exits(body, exit_at, &following, vec![finish], &swap)?;
+            let changed = loopexit::_substituted_exits(body, exit_at, &following, &[finish], &swap)?;
             let mut out = Vec::new();
             for (block_index, block) in changed.blocks.iter().enumerate() {
                 let kept = !following.contains(&block.at);
