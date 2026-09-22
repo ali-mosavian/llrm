@@ -250,7 +250,7 @@ fn _unsigned_span(interval: &Interval) -> (BigInt, BigInt) {
 }
 
 /// Direct port of `qbopt.analysis.ranges:_operand`.
-fn _operand(
+pub(crate) fn _operand(
     arg: &Arg,
     known: &IndexMap<Value, Interval>,
     facts: &BTreeMap<Value, consts::Known>,

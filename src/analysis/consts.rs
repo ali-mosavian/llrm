@@ -750,3 +750,437 @@ mod tests {
         assert_eq!(_result(&mixed, &BTreeMap::new(), None), None);
     }
 }
+
+// ---- early port (agent E) ----
+
+/// Python's `Cells`: memory facts as bytes, keyed by `(addr, width)`.
+pub(crate) type Cells = indexmap::IndexMap<(crate::objectfile::module::Addr, u32), Known>;
+
+/// Alias questions for one immutable known-value epoch.
+///
+/// Keyed by reference identity, as Python's `id(ref)`: the body does not
+/// change while one instance is alive.
+pub(crate) struct _MemoryQueries<'a> {
+    known: &'a BTreeMap<Value, Known>,
+    dgroup: &'a std::collections::BTreeSet<i64>,
+    facts: BTreeMap<Value, crate::analysis::ranges::Interval>,
+    addressed: std::collections::HashMap<usize, mir::MemRef>,
+    overlaps: std::collections::HashMap<((crate::objectfile::module::Addr, u32), usize), bool>,
+}
+
+impl<'a> _MemoryQueries<'a> {
+    pub(crate) fn new(known: &'a BTreeMap<Value, Known>, dgroup: &'a std::collections::BTreeSet<i64>) -> Self {
+        Self {
+            known,
+            dgroup,
+            facts: _intervals(known),
+            addressed: std::collections::HashMap::new(),
+            overlaps: std::collections::HashMap::new(),
+        }
+    }
+
+    fn resolve(&mut self, reference: &mir::MemRef) -> mir::MemRef {
+        let key = std::ptr::from_ref(reference) as usize;
+        if !self.addressed.contains_key(&key) {
+            self.addressed.insert(key, _addressed(reference, self.known));
+        }
+        self.addressed[&key].clone()
+    }
+
+    /// Python passes `dgroup` as the region layout, which only a
+    /// `module.Group` informs; Rust's `None` layout is the same answer.
+    fn may_overlap(
+        &mut self,
+        where_: (crate::objectfile::module::Addr, u32),
+        original: &mir::MemRef,
+    ) -> Result<bool, crate::analysis::regions::RegionError> {
+        let _ = self.dgroup;
+        // `resolve` returns the same object for the same original, so the
+        // original's identity stands for the resolved reference's.
+        let key = (where_, std::ptr::from_ref(original) as usize);
+        let reference = &self.resolve(original);
+        if !self.overlaps.contains_key(&key) {
+            let found = crate::analysis::regions::overlapping(
+                &mir::MemRef::new(Some(where_.0), where_.1),
+                reference,
+                Some(&self.facts),
+                Some(&self.facts),
+                None,
+            )?;
+            self.overlaps.insert(key, found);
+        }
+        Ok(self.overlaps[&key])
+    }
+}
+
+/// What this store puts in the cell, where that is a number.
+pub(crate) fn _put(op: &Op, known: &BTreeMap<Value, Known>) -> Option<Known> {
+    if op.kind != Kind::Store || op.args.len() != 1 {
+        return None;
+    }
+    match &op.args[0] {
+        Arg::Const(source) => Some(Known::new(masked(&source.n, source.width), source.width)),
+        Arg::Held(source) => known.get(&source.value).cloned(),
+        _ => None,
+    }
+}
+
+/// The complete value a direct constant store writes to a contained cell.
+pub(crate) fn initialized(op: &Op, reference: &mir::MemRef) -> Option<Known> {
+    if op.kind != Kind::Store || !op.loads.is_empty() || op.barrier() || op.stores.len() != 1 {
+        return None;
+    }
+    let written = mir::symbolic_ref(&op.stores[0]);
+    let addr = written.addr?;
+    if written.base.is_some() || written.segment.is_some() {
+        return None;
+    }
+    let fact = _put(op, &BTreeMap::new())?;
+    _cell(&Cells::from([((addr, written.width), fact)]), reference)
+}
+
+/// The value of an exact scalar read-modify-write, before its store kills the facts.
+pub(crate) fn updated(op: &Op, known: &BTreeMap<Value, Known>, here: &Cells) -> Option<Known> {
+    if op.barrier()
+        || op.floating.is_some()
+        || !op.merges.is_empty()
+        || op.stores.len() != 1
+        || op.loads != op.stores
+        || op.results != [Arg::Cell(mir::Cell { r#ref: op.stores[0].clone() })]
+        || op.defines.iter().any(|value| !value.flags)
+    {
+        return None;
+    }
+    let width = op.stores[0].width;
+    if width != 2 && width != 4 {
+        return None;
+    }
+    // Python's `_operand(op, arg, known, here)`, whose cell arm reads memory.
+    let operand = |argument: &Arg| match argument {
+        Arg::Cell(cell) => _cell(here, &_addressed(&cell.r#ref, known)),
+        _ => _operand(op, argument, known),
+    };
+    let parts = op.args.iter().map(operand).collect::<Vec<_>>();
+    if parts.is_empty() || parts.iter().any(|fact| fact.as_ref().is_none_or(|fact| fact.width < width)) {
+        return None;
+    }
+    let parts = parts.into_iter().map(Option::unwrap).collect::<Vec<_>>();
+    let arithmetic = matches!(
+        op.kind,
+        Kind::Add | Kind::Sub | Kind::And | Kind::Or | Kind::Xor | Kind::Shl | Kind::Shr | Kind::Mul
+    );
+    let result = if arithmetic && parts.len() == 2 {
+        _arithmetic(op.kind, &parts[0].n, &parts[1].n)?
+    } else if matches!(op.kind, Kind::Neg | Kind::Not) && parts.len() == 1 {
+        _unary(op.kind, &parts[0].n)?
+    } else if parts.len() == 1 {
+        let mut plain = op.clone();
+        plain.loads = Vec::new();
+        plain.stores = Vec::new();
+        let step = mir::stepping(&plain)?;
+        let Arg::Const(step) = step.1 else {
+            return None;
+        };
+        &parts[0].n + step.n
+    } else {
+        return None;
+    };
+    Some(Known::new(masked(&result, width), width))
+}
+
+pub(crate) fn _fragments(reference: &mir::MemRef, fact: &Known) -> Cells {
+    let addr = reference.addr.expect("a fragment has an address");
+    (0..reference.width.min(fact.width))
+        .map(|offset| {
+            (
+                (addr.plus(i64::from(offset)), 1),
+                Known::new((&fact.n >> (offset * 8)) & BigInt::from(255), 1),
+            )
+        })
+        .collect()
+}
+
+/// A far store's selector, where nothing yet says which segment it is
+/// and it is still one this run may take on faith.
+pub(crate) fn _selector(
+    reference: &mir::MemRef,
+    known: &BTreeMap<Value, Known>,
+    allowed: Option<&std::collections::BTreeSet<Value>>,
+) -> Option<Value> {
+    let addr = reference.addr?;
+    if addr.space != crate::objectfile::module::Space::Far {
+        return None;
+    }
+    let segment = reference.segment?;
+    if known.contains_key(&segment) || allowed.is_some_and(|allowed| !allowed.contains(&segment)) {
+        return None;
+    }
+    Some(segment)
+}
+
+/// What each value is, as the alias lattice asks for it.
+pub(crate) fn _intervals(known: &BTreeMap<Value, Known>) -> BTreeMap<Value, crate::analysis::ranges::Interval> {
+    known
+        .iter()
+        .map(|(value, fact)| {
+            (
+                *value,
+                crate::analysis::ranges::Interval {
+                    low: fact.n.clone(),
+                    high: fact.n.clone(),
+                    width: fact.width,
+                },
+            )
+        })
+        .collect()
+}
+
+/// The cell facts still standing after this operation.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn _kills<'a>(
+    here: &Cells,
+    op: &Op,
+    known: &'a BTreeMap<Value, Known>,
+    dgroup: &'a std::collections::BTreeSet<i64>,
+    calls: &indexmap::IndexMap<i64, String>,
+    mut assume: Option<&mut std::collections::BTreeSet<Value>>,
+    allowed: Option<&std::collections::BTreeSet<Value>>,
+    edge_facts: bool,
+    queries: Option<&mut _MemoryQueries<'a>>,
+) -> Result<Cells, crate::analysis::regions::RegionError> {
+    use crate::abi::runtime;
+    use crate::analysis::effects;
+
+    let mut here = here.clone();
+    if edge_facts && op.kind == Kind::Call {
+        here = Cells::new();
+    }
+    if effects::unmodeled_write(op) && (op.barrier() || !calls.contains_key(&op.at)) {
+        here = Cells::new();
+    }
+    if op.kind == Kind::Call && calls.contains_key(&op.at) && op.stores.is_empty() {
+        let contract = runtime::contract(Some(&calls[&op.at]));
+        if runtime::barrier(&contract) || runtime::writes_caller_memory(&contract) {
+            here = Cells::new();
+        }
+    }
+    let put = if op.kind == Kind::Store {
+        _put(op, known)
+    } else {
+        updated(op, known, &here)
+    };
+    let mut own;
+    let queries = match queries {
+        Some(queries) => queries,
+        None => {
+            own = _MemoryQueries::new(known, dgroup);
+            &mut own
+        }
+    };
+    for original in &op.stores {
+        let reference = queries.resolve(original);
+        if let Some(assume) = assume.as_deref_mut() {
+            if let Some(selector) = _selector(&reference, known, allowed) {
+                assume.insert(selector);
+                continue;
+            }
+        }
+        let mut kept = Cells::new();
+        for (where_, fact) in &here {
+            if !queries.may_overlap(*where_, original)? {
+                kept.insert(*where_, fact.clone());
+            }
+        }
+        here = kept;
+        if let Some(put) = &put {
+            if reference.addr.is_some() && reference.base.is_none() && reference.segment.is_none() {
+                here.extend(_fragments(&reference, put));
+            }
+        }
+    }
+    if op.kind == Kind::Call && !op.memory_values.is_empty() {
+        for (reference, value) in &op.memory_values {
+            if reference.addr.is_some() && reference.base.is_none() && reference.segment.is_none() {
+                here.extend(_fragments(
+                    reference,
+                    &Known::new(masked(&value.n, value.width), value.width),
+                ));
+            }
+        }
+    }
+    Ok(here)
+}
+
+/// What each memory cell holds before each operation, where it is a number.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn cells(
+    body: &mir::MirBody,
+    dgroup: &std::collections::BTreeSet<i64>,
+    calls: &indexmap::IndexMap<i64, String>,
+    known: Option<&BTreeMap<Value, Known>>,
+    initial: Option<&Cells>,
+    edges: Option<&indexmap::IndexMap<(i64, i64), Cells>>,
+    mut assume: Option<&mut std::collections::BTreeSet<Value>>,
+    allowed: Option<&std::collections::BTreeSet<Value>>,
+) -> Result<indexmap::IndexMap<(i64, usize), Cells>, crate::analysis::regions::RegionError> {
+    let empty = BTreeMap::new();
+    let known = known.unwrap_or(&empty);
+    let mut queries = _MemoryQueries::new(known, dgroup);
+    let initial = match initial {
+        Some(initial) => initial.clone(),
+        None => {
+            let mut initial = Cells::new();
+            for (reference, value) in &body.initial {
+                initial.extend(_fragments(reference, &Known::new(value.n.clone(), value.width)));
+            }
+            initial
+        }
+    };
+    let mut outof = body
+        .blocks
+        .iter()
+        .map(|block| (block.at, None))
+        .collect::<indexmap::IndexMap<i64, Option<Cells>>>();
+    let preds = body
+        .blocks
+        .iter()
+        .map(|block| {
+            (
+                block.at,
+                body.blocks
+                    .iter()
+                    .filter(|one| one.succ.contains(&block.at))
+                    .map(|one| one.at)
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect::<indexmap::IndexMap<i64, Vec<i64>>>();
+
+    let entering = |at: i64, outof: &indexmap::IndexMap<i64, Option<Cells>>| -> Option<Cells> {
+        if preds[&at].is_empty() {
+            return Some(if at == body.entry { initial.clone() } else { Cells::new() });
+        }
+        let mut seen = Vec::new();
+        for one in &preds[&at] {
+            let Some(here) = &outof[one] else {
+                continue;
+            };
+            let extra = edges.and_then(|edges| edges.get(&(*one, at)));
+            let mut here = here.clone();
+            if let Some(extra) = extra.filter(|extra| !extra.is_empty()) {
+                here.retain(|where_, _| {
+                    !(0..where_.1).any(|offset| extra.contains_key(&(where_.0.plus(i64::from(offset)), 1)))
+                });
+                here.extend(extra.iter().map(|(key, fact)| (*key, fact.clone())));
+            }
+            seen.push(here);
+        }
+        if at == body.entry {
+            seen.push(initial.clone());
+        }
+        if seen.is_empty() {
+            return None;
+        }
+        Some(
+            seen[0]
+                .iter()
+                .filter(|(where_, fact)| seen[1..].iter().all(|one| one.get(*where_) == Some(*fact)))
+                .map(|(where_, fact)| (*where_, fact.clone()))
+                .collect(),
+        )
+    };
+
+    let edge_facts = edges.is_some_and(|edges| !edges.is_empty());
+    let mut changing = true;
+    while changing {
+        changing = false;
+        for block in &body.blocks {
+            let Some(mut here) = entering(block.at, &outof) else {
+                continue;
+            };
+            for op in &block.ops {
+                here = _kills(
+                    &here,
+                    op,
+                    known,
+                    dgroup,
+                    calls,
+                    assume.as_deref_mut(),
+                    allowed,
+                    edge_facts,
+                    Some(&mut queries),
+                )?;
+            }
+            if outof[&block.at].as_ref() != Some(&here) {
+                outof.insert(block.at, Some(here));
+                changing = true;
+            }
+        }
+    }
+
+    let mut found = indexmap::IndexMap::new();
+    for block in &body.blocks {
+        let mut here = entering(block.at, &outof).unwrap_or_default();
+        for (index, op) in block.ops.iter().enumerate() {
+            found.insert((block.at, index), here.clone());
+            here = _kills(
+                &here,
+                op,
+                known,
+                dgroup,
+                calls,
+                assume.as_deref_mut(),
+                allowed,
+                edge_facts,
+                Some(&mut queries),
+            )?;
+        }
+    }
+    Ok(found)
+}
+
+pub(crate) fn _cell(here: &Cells, reference: &mir::MemRef) -> Option<Known> {
+    let reference = mir::symbolic_ref(reference);
+    let addr = reference.addr?;
+    if reference.base.is_some() || reference.segment.is_some() {
+        return None;
+    }
+    if let Some(exact) = _read(here.get(&(addr, reference.width)), reference.width) {
+        return Some(exact);
+    }
+    let mut number = BigInt::from(0);
+    for offset in 0..reference.width {
+        let wanted = addr.plus(i64::from(offset));
+        let mut fragments = std::collections::BTreeSet::new();
+        for ((address, width), fact) in here {
+            for byte in 0..(*width).min(fact.width) {
+                if address.plus(i64::from(byte)) == wanted {
+                    fragments.insert((&fact.n >> (8 * byte)) & BigInt::from(255));
+                }
+            }
+        }
+        if fragments.len() != 1 {
+            return None;
+        }
+        number |= fragments.pop_first().expect("one fragment") << (8 * offset);
+    }
+    Some(Known::new(number, reference.width))
+}
+
+/// Resolve one proven constant offset using the existing no-wrap address proof.
+pub(crate) fn _addressed(reference: &mir::MemRef, known: &BTreeMap<Value, Known>) -> mir::MemRef {
+    use crate::analysis::ranges;
+
+    let reference = mir::symbolic_ref(reference);
+    let Some(base) = reference.base else {
+        return reference;
+    };
+    let Some(interval) = ranges::_operand(
+        &Arg::Held(mir::Held { value: base, width: reference.base_width }),
+        &indexmap::IndexMap::new(),
+        known,
+    ) else {
+        return reference;
+    };
+    ranges::covering(&reference, &BTreeMap::from([(base, interval)]))
+}

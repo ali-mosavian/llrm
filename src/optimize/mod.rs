@@ -5,6 +5,7 @@ pub(crate) mod edges;
 pub(crate) mod fill;
 pub(crate) mod floatfold;
 pub(crate) mod indvars;
+pub(crate) mod loopmotion;
 pub(crate) mod rotate;
 pub(crate) mod strength;
 pub(crate) mod transform;
