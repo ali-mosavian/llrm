@@ -20,7 +20,7 @@ pub mod nodes;
 pub mod semantics;
 mod root;
 
-pub use root::root;
+pub use root::{ROOT, root};
 
 /// One physical register operand, at the instruction's width.
 ///
