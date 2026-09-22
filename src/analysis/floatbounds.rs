@@ -142,7 +142,7 @@ pub(crate) fn _memory(
     }
     let mut values = Vec::new();
     for offset in offsets {
-        let mut cell = reference.clone();
+        let mut cell = reference.clone().into_owned();
         let mut address = addr;
         address.disp += i64::try_from(offset).ok()?;
         address.base = iced_x86::Register::None;

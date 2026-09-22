@@ -372,7 +372,7 @@ pub(crate) fn repeated(
                 let mut store = op.clone();
                 store.kind = Kind::Store;
                 store.args = vec![Arg::Const(Const::new(bits, reference.width))];
-                store.stores = vec![reference];
+                store.stores = vec![reference.into_owned()];
                 store.uses = Vec::new();
                 memory = consts::_kills(
                     &memory,

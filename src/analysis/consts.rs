@@ -679,7 +679,7 @@ pub(crate) fn _cell(here: &Cells, reference: &MemRef) -> Option<Known> {
 fn _addressed(reference: &MemRef, known: &IndexMap<Value, Known>) -> MemRef {
     let reference = mir::symbolic_ref(reference);
     let Some(base) = reference.base else {
-        return reference;
+        return reference.into_owned();
     };
     let interval = ranges::_operand(
         &Arg::Held(Held {
@@ -690,9 +690,9 @@ fn _addressed(reference: &MemRef, known: &IndexMap<Value, Known>) -> MemRef {
         known,
     );
     let Some(interval) = interval else {
-        return reference;
+        return reference.into_owned();
     };
-    ranges::covering(&reference, &BTreeMap::from([(base, interval)]))
+    ranges::covering(&reference, &BTreeMap::from([(base, interval)])).into_owned()
 }
 
 /// One operand as a number, if it is one.

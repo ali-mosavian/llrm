@@ -2,6 +2,7 @@
 //!
 //! Port of `qbopt/analysis/ranges.py`.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::support::hash::IndexMap;
@@ -26,7 +27,7 @@ pub(crate) struct Interval {
 /// A non-wrapping near indexed access as the static byte interval it can touch.
 ///
 /// Direct port of `qbopt.analysis.ranges:covering`.
-pub(crate) fn covering(reference: &MemRef, known: &BTreeMap<Value, Interval>) -> MemRef {
+pub(crate) fn covering<'a>(reference: &'a MemRef, known: &BTreeMap<Value, Interval>) -> Cow<'a, MemRef> {
     let reference = symbolic_ref(reference);
     let Some(address) = reference.addr else {
         return reference;
@@ -57,7 +58,7 @@ pub(crate) fn covering(reference: &MemRef, known: &BTreeMap<Value, Interval>) ->
     let (Ok(disp), Ok(width)) = (i64::try_from(&low), u32::try_from(&width)) else {
         return reference;
     };
-    let mut covered = reference.clone();
+    let mut covered = reference.into_owned();
     covered.addr = Some(crate::objectfile::module::Addr {
         disp,
         base: iced_x86::Register::None,
@@ -65,7 +66,7 @@ pub(crate) fn covering(reference: &MemRef, known: &BTreeMap<Value, Interval>) ->
     });
     covered.base = None;
     covered.width = width;
-    covered
+    Cow::Owned(covered)
 }
 
 /// Signed comparison facts on one CFG edge; `None` means that edge is impossible.

@@ -8,6 +8,7 @@
 //! deliberately separate: this module answers only the underlying alias
 //! query, exactly as Python `qbopt.analysis.regions` does.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use num_bigint::BigInt;
@@ -519,19 +520,12 @@ pub(crate) fn overlapping(
         let have_facts = known.is_some_and(|facts| !facts.is_empty())
             || other_known.is_some_and(|facts| !facts.is_empty());
         let empty = BTreeMap::new();
-        let one = if have_facts {
-            covering(one, known.unwrap_or(&empty))
+        let (one, other) = if have_facts {
+            (covering(one, known.unwrap_or(&empty)), covering(other, other_known.unwrap_or(&empty)))
         } else {
-            one.clone()
+            (Cow::Borrowed(one), Cow::Borrowed(other))
         };
-        let other = if have_facts {
-            covering(other, other_known.unwrap_or(&empty))
-        } else {
-            other.clone()
-        };
-        let one = symbolic_ref(&one);
-        let other = symbolic_ref(&other);
-        if let Some(apart) = _displaced(&one, &other) {
+        if let Some(apart) = _displaced(&symbolic_ref(&one), &symbolic_ref(&other)) {
             return Ok(!apart);
         }
     }

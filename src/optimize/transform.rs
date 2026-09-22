@@ -546,7 +546,7 @@ pub(crate) fn _computation(op: &Op, stands: &IndexMap<u32, Value>, whole: &Index
                 if !mir::same_bytes(&reference, &reference) {
                     return None;
                 }
-                named.push(Arg::Cell(mir::Cell { r#ref: reference }));
+                named.push(Arg::Cell(mir::Cell { r#ref: reference.into_owned() }));
             }
             _ => return None,
         }

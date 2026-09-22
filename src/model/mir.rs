@@ -8,6 +8,7 @@
 //! raising-copy provenance regressions belong to the raiser/liveness/source-
 //! map ports, not to this public schema slice.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -496,17 +497,20 @@ pub fn same_bytes(one: &MemRef, other: &MemRef) -> bool {
 ///
 /// Analyses that need an address-based view of a reference must use this
 /// normalization rather than spelling symbolic resolution themselves.
-pub(crate) fn symbolic_ref(reference: &MemRef) -> MemRef {
+pub(crate) fn symbolic_ref(reference: &MemRef) -> Cow<'_, MemRef> {
     let Some(symbol) = reference.symbolic else {
-        return reference.clone();
+        return Cow::Borrowed(reference);
     };
-    let mut resolved = reference.clone();
     let mut address = Addr::new(symbol.space, symbol.offset + symbol.addend);
     address.index = symbol.index;
+    if reference.addr == Some(address) && reference.base.is_none() && reference.segment.is_none() {
+        return Cow::Borrowed(reference);
+    }
+    let mut resolved = reference.clone();
     resolved.addr = Some(address);
     resolved.base = None;
     resolved.segment = None;
-    resolved
+    Cow::Owned(resolved)
 }
 
 /// What an operation computes in MIR terms.

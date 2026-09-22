@@ -192,7 +192,7 @@ fn _covered_by(r#ref: &MemRef, other: &MemRef, _dgroup: Option<&RegionLayout>) -
     let (Some(ref_addr), Some(other_addr)) = (r#ref.addr, other.addr) else {
         return false;
     };
-    let mut aligned = other.clone();
+    let mut aligned = other.clone().into_owned();
     aligned.addr = Some(other_addr.plus(ref_addr.disp - other_addr.disp));
     aligned.width = r#ref.width;
     if !mir::same_bytes(&r#ref, &aligned) {
