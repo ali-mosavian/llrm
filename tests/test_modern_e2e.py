@@ -134,3 +134,24 @@ def test_native_modern_collection_examples_match_hir(
 
     assert made.output == expected
     assert made.size < 3 * 1024
+
+
+def test_native_integers_print_as_the_hir_executor_prints_them(tmp_path: Path) -> None:
+    """The runtime had no integer formatter: printing an i32 failed to link on `_pi4`."""
+    source = tmp_path / "integers.mod"
+    source.write_text(
+        "fn main() -> i16:\n"
+        "    let a: i8 = -128\n"
+        "    let b: u8 = 255\n"
+        "    let c: i16 = -32768\n"
+        "    let d: u16 = 65535\n"
+        "    let e: i32 = -2147483648\n"
+        "    let f: u32 = 4294967295\n"
+        "    let g: i32 = 0\n"
+        "    print(f\"{a} {b} {c} {d} {e} {f} {g}\")\n"
+        "    return 0\n"
+    )
+
+    expected = execute.run(driver.parsed(source), "main").output
+    assert expected == "-128 255 -32768 65535 -2147483648 4294967295 0\n"
+    assert build(source, tmp_path / "INTS.EXE", run=True).output == expected

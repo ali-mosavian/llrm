@@ -1,6 +1,8 @@
 /* The freestanding modern-language runtime. Built through qbopt's C frontend. */
 
+typedef signed char i8;
 typedef unsigned char u8;
+typedef int i16;
 typedef unsigned int u16;
 typedef unsigned long u32;
 typedef long i32;
@@ -40,6 +42,22 @@ static char *unsigned_decimal(char *after, u32 value)
     } while (value != 0);
     return after;
 }
+
+static void decimal(u32 magnitude, u8 negative)
+{
+    char *after = fixed_buffer + 16;
+    char *text = unsigned_decimal(after, magnitude);
+    if (negative)
+        *--text = '-';
+    rt_write(text, (u16)(after - text));
+}
+
+void pi1(i8 value) { decimal(value < 0 ? 0UL - (u32)(i32)value : (u32)value, value < 0); }
+void pu1(u8 value) { decimal(value, 0); }
+void pi2(i16 value) { decimal(value < 0 ? 0UL - (u32)(i32)value : (u32)value, value < 0); }
+void pu2(u16 value) { decimal(value, 0); }
+void pi4(i32 value) { decimal(value < 0 ? 0UL - (u32)value : (u32)value, value < 0); }
+void pu4(u32 value) { decimal(value, 0); }
 
 void pf4(i32 raw, u8 fraction)
 {
