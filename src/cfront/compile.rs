@@ -22,7 +22,9 @@ use crate::analysis::alias;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::backend::{cpu, farcall, frame, lower, lower_int64, masm};
+use crate::backend::{
+    allocate, coalesce, cpu, farcall, floatalloc, frame, lower, lower_int64, masm, parcopy, phielim, twoaddr,
+};
 use crate::model::passes::LIRTransform;
 use crate::flow;
 use crate::model::lir;
@@ -130,10 +132,29 @@ pub fn assembled(
         let frame = frame::of(&low, Some(&legalized.calls), "", None).map_err(|error| hir::Unsupported(error.0))?;
         let frame = Rc::new(RefCell::new(frame));
         // `flow.machine`, as far as it is ported.
-        let mut phases: Vec<Box<dyn LIRTransform>> = vec![Box::new(farcall::FarIndirectCalls::new(Rc::clone(&frame)))];
-        let in_ssa = true;
+        // `flow.machine`, as far as it is ported; `Prologue` (07) runs at emission.
+        let pinned = low.pins.clone();
+        let profile = cpu::profile(cpu::ProfileOrName::Name(target)).map_err(hir::Unsupported)?;
+        let mut phases: Vec<Box<dyn LIRTransform + '_>> = vec![
+            Box::new(farcall::FarIndirectCalls::new(Rc::clone(&frame))),
+            Box::new(
+                floatalloc::FloatAlloc::new(Some(Rc::clone(&frame)), false, profile).map_err(hir::Unsupported)?,
+            ),
+            Box::new(phielim::PhiElimination),
+            Box::new(twoaddr::TwoAddress),
+            Box::new(coalesce::Coalescer::new(None)),
+            Box::new(
+                allocate::RegAlloc::new(Some(&pinned), Some(Rc::clone(&frame)), cpu::ProfileOrName::Profile(profile))
+                    .map_err(hir::Unsupported)?,
+            ),
+            Box::new(parcopy::ParallelCopy),
+        ];
+        let mut in_ssa = true;
         let mut low = low;
         for (number, phase) in phases.iter_mut().enumerate() {
+            if phase.class_name() == "PhiElimination" {
+                in_ssa = false;
+            }
             low = flow::checked(low, phase.as_mut(), in_ssa).map_err(|error| {
                 hir::Unsupported(match error {
                     flow::Checked::Refused(message) => message,
@@ -146,17 +167,11 @@ pub fn assembled(
                 &_lir_text(&raised.name, &low),
             )?;
         }
-        // Stopping here must not truncate `mir`: the rest of the unit still raised.
-        let index = raised_procedures.iter().position(|one| one.name == raised.name).unwrap();
-        for rest in &raised_procedures[index + 1..] {
-            mirs.push(_mir_text(&rest.name, &bodies[&rest.name]));
-        }
-        write(dump, "mir", &mirs.join("\n"))?;
-        return Err(CompileError::NotPorted("qbopt.backend.floatalloc.FloatAlloc"));
+        let _ = low;
     }
     write(dump, "mir", &mirs.join("\n"))?;
     let _ = lirs;
-    Err(CompileError::NotPorted("qbopt.backend.floatalloc.FloatAlloc"))
+    Err(CompileError::NotPorted("qbopt.backend.peephole.Peephole"))
 }
 
 pub fn _lir_text(name: &str, body: &lir::LirBody) -> String {
