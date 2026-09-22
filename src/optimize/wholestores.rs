@@ -5,7 +5,9 @@
 use std::collections::BTreeMap;
 
 use crate::model::ir::Operation;
-use crate::model::mir::{self, Arg, Cell, Kind, MemRef, MirBlock, MirBody, Op, OpCode, OrderedMap, Value};
+use crate::model::mir::{
+    self, Arg, Cell, Kind, MemRef, MirBlock, MirBody, Op, OpCode, OrderedMap, Value,
+};
 
 pub(crate) fn _word(op: &Op) -> bool {
     op.kind == Kind::Store
@@ -39,10 +41,18 @@ pub(crate) fn joined(body: &MirBody) -> MirBody {
                         ..r#ref.clone()
                     };
                     if moved == op.stores[0] {
-                        if let Some(whole) = mir::extracted_whole(&op.args[0], &low.args[0], &definitions) {
-                            let r#ref = MemRef { width: 4, ..r#ref.clone() };
+                        if let Some(whole) =
+                            mir::extracted_whole(&op.args[0], &low.args[0], &definitions)
+                        {
+                            let r#ref = MemRef {
+                                width: 4,
+                                ..r#ref.clone()
+                            };
                             let mut uses = Vec::new();
-                            for value in [Some(whole.value), r#ref.base, r#ref.segment].into_iter().flatten() {
+                            for value in [Some(whole.value), r#ref.base, r#ref.segment]
+                                .into_iter()
+                                .flatten()
+                            {
                                 if !uses.contains(&value) {
                                     uses.push(value);
                                 }
@@ -57,7 +67,9 @@ pub(crate) fn joined(body: &MirBody) -> MirBody {
                                 op: Some(OpCode::Operation(Operation::Move)),
                                 name: "mov".to_owned(),
                                 args: vec![Arg::Held(whole)],
-                                results: vec![Arg::Cell(Cell { r#ref: r#ref.clone() })],
+                                results: vec![Arg::Cell(Cell {
+                                    r#ref: r#ref.clone(),
+                                })],
                                 stores: vec![r#ref],
                                 uses,
                                 merges: OrderedMap::new(),
@@ -74,7 +86,13 @@ pub(crate) fn joined(body: &MirBody) -> MirBody {
             }
             ops.push(op.clone());
         }
-        blocks.push(MirBlock { ops, ..block.clone() });
+        blocks.push(MirBlock {
+            ops,
+            ..block.clone()
+        });
     }
-    MirBody { blocks, ..body.clone() }
+    MirBody {
+        blocks,
+        ..body.clone()
+    }
 }

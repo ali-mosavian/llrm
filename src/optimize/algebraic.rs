@@ -61,7 +61,11 @@ fn unique(values: impl IntoIterator<Item = Value>) -> Vec<Value> {
 }
 
 #[allow(dead_code)] // Wired by the transform port.
-pub(crate) fn simplified(body: &MirBody, wanted: &BTreeSet<Value>, wide: &BTreeSet<Value>) -> Result<MirBody, String> {
+pub(crate) fn simplified(
+    body: &MirBody,
+    wanted: &BTreeSet<Value>,
+    wide: &BTreeSet<Value>,
+) -> Result<MirBody, String> {
     let body = wholestores::joined(&wholephis::joined(body));
     let body = _halved(&_divisions(&body));
     let body = _reassociated_recurrences(&body);
@@ -70,20 +74,45 @@ pub(crate) fn simplified(body: &MirBody, wanted: &BTreeSet<Value>, wide: &BTreeS
         .blocks
         .iter()
         .flat_map(|block| &block.ops)
-        .flat_map(|op| op.uses.iter().filter(|value| !op.merges.contains_key(value)).copied())
-        .chain(body.blocks.iter().flat_map(|block| &block.phis).flat_map(|phi| phi.incoming.values().copied()))
+        .flat_map(|op| {
+            op.uses
+                .iter()
+                .filter(|value| !op.merges.contains_key(value))
+                .copied()
+        })
+        .chain(
+            body.blocks
+                .iter()
+                .flat_map(|block| &block.phis)
+                .flat_map(|phi| phi.incoming.values().copied()),
+        )
         .collect::<BTreeSet<_>>();
-    mentioned.extend(body.blocks.iter().flat_map(|block| &block.ops).flat_map(_operands_read));
+    mentioned.extend(
+        body.blocks
+            .iter()
+            .flat_map(|block| &block.ops)
+            .flat_map(_operands_read),
+    );
     let definitions = definitions_of(&body);
     let mut uses = Counter::new();
     for op in body.blocks.iter().flat_map(|block| &block.ops) {
         let mut read = _operands_read(op);
-        read.extend(op.uses.iter().filter(|value| !op.merges.contains_key(value)).copied());
+        read.extend(
+            op.uses
+                .iter()
+                .filter(|value| !op.merges.contains_key(value))
+                .copied(),
+        );
         for value in read {
             *uses.entry(value).or_default() += 1;
         }
     }
-    for value in body.blocks.iter().flat_map(|block| &block.phis).flat_map(|phi| phi.incoming.values()) {
+    for value in body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.phis)
+        .flat_map(|phi| phi.incoming.values())
+    {
         *uses.entry(*value).or_default() += 1;
     }
     let seen = wanted | &mentioned;
@@ -106,19 +135,28 @@ pub(crate) fn simplified(body: &MirBody, wanted: &BTreeSet<Value>, wide: &BTreeS
         blocks: body
             .blocks
             .iter()
-            .map(|block| MirBlock { ops: block.ops.iter().map(simplify).collect(), ..block.clone() })
+            .map(|block| MirBlock {
+                ops: block.ops.iter().map(simplify).collect(),
+                ..block.clone()
+            })
             .collect(),
         ..body.clone()
     };
     let changed = _shared_shifts(&changed, &seen);
-    let before = body.blocks.iter().flat_map(|block| &block.ops).flat_map(|op| op.defines.iter().copied());
+    let before = body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.ops)
+        .flat_map(|op| op.defines.iter().copied());
     let after = changed
         .blocks
         .iter()
         .flat_map(|block| &block.ops)
         .flat_map(|op| op.defines.iter().copied())
         .collect::<BTreeSet<_>>();
-    let removed = before.filter(|value| !after.contains(value)).collect::<BTreeSet<_>>();
+    let removed = before
+        .filter(|value| !after.contains(value))
+        .collect::<BTreeSet<_>>();
     if removed.is_empty() {
         return Ok(changed);
     }
@@ -134,7 +172,9 @@ pub(crate) fn simplified(body: &MirBody, wanted: &BTreeSet<Value>, wide: &BTreeS
                         uses: op
                             .uses
                             .iter()
-                            .filter(|value| !removed.contains(value) || !op.merges.contains_key(value))
+                            .filter(|value| {
+                                !removed.contains(value) || !op.merges.contains_key(value)
+                            })
                             .copied()
                             .collect(),
                         merges: op
@@ -203,11 +243,15 @@ pub(crate) fn _forwarded_zero_tests(body: &MirBody) -> Result<MirBody, String> {
         {
             continue;
         }
-        let Arg::Held(source) = op.args[0] else { continue };
+        let Arg::Held(source) = op.args[0] else {
+            continue;
+        };
         if op.results.len() != 1 {
             continue;
         }
-        let Arg::Held(result) = op.results[0] else { continue };
+        let Arg::Held(result) = op.results[0] else {
+            continue;
+        };
         if result.width != source.width
             || phi_inputs.contains(&result.value)
             || exposed.contains(&result.value)
@@ -215,7 +259,12 @@ pub(crate) fn _forwarded_zero_tests(body: &MirBody) -> Result<MirBody, String> {
         {
             continue;
         }
-        let conditions = op.defines.iter().filter(|value| value.flags).copied().collect::<Vec<_>>();
+        let conditions = op
+            .defines
+            .iter()
+            .filter(|value| value.flags)
+            .copied()
+            .collect::<Vec<_>>();
         if conditions.len() != 1 {
             continue;
         }
@@ -224,17 +273,24 @@ pub(crate) fn _forwarded_zero_tests(body: &MirBody) -> Result<MirBody, String> {
         if consumers.is_empty()
             || phi_inputs.contains(&condition)
             || exposed.contains(&condition)
-            || consumers
-                .iter()
-                .any(|one| one.kind != Kind::Branch || !matches!(one.test, Some(Kind::Eq | Kind::Ne)))
+            || consumers.iter().any(|one| {
+                one.kind != Kind::Branch || !matches!(one.test, Some(Kind::Eq | Kind::Ne))
+            })
         {
             continue;
         }
-        let Some(producer) = definitions.get(&source.value) else { continue };
+        let Some(producer) = definitions.get(&source.value) else {
+            continue;
+        };
         if !_ZERO_FLAGS.contains(&producer.kind) {
             continue;
         }
-        let produced = producer.defines.iter().filter(|value| value.flags).copied().collect::<Vec<_>>();
+        let produced = producer
+            .defines
+            .iter()
+            .filter(|value| value.flags)
+            .copied()
+            .collect::<Vec<_>>();
         if produced.len() != 1 || !producer.results.iter().any(|one| *one == Arg::Held(source)) {
             continue;
         }
@@ -250,9 +306,15 @@ pub(crate) fn _forwarded_zero_tests(body: &MirBody) -> Result<MirBody, String> {
             .iter()
             .map(|op| ssa::substituted(op, &swaps).map_err(|error| error.to_string()))
             .collect::<Result<Vec<_>, _>>()?;
-        blocks.push(MirBlock { ops, ..block.clone() });
+        blocks.push(MirBlock {
+            ops,
+            ..block.clone()
+        });
     }
-    Ok(MirBody { blocks, ..body.clone() })
+    Ok(MirBody {
+        blocks,
+        ..body.clone()
+    })
 }
 
 /// Put a loop-carried operand at the root of an integer ADD tree.
@@ -260,7 +322,11 @@ pub(crate) fn _forwarded_zero_tests(body: &MirBody) -> Result<MirBody, String> {
 /// Rotate only a two-level, single-use, memory-free ADD tree that is the
 /// actual back-edge value of that phi.
 pub(crate) fn _reassociated_recurrences(body: &MirBody) -> MirBody {
-    let indexed = body.blocks.iter().map(|block| (block.at, block)).collect::<BTreeMap<_, _>>();
+    let indexed = body
+        .blocks
+        .iter()
+        .map(|block| (block.at, block))
+        .collect::<BTreeMap<_, _>>();
     let mut updates = BTreeMap::<Value, Value>::new();
     for loop_ in loops::loops(&body.blocks, Some(body.entry)) {
         let header = indexed[&loop_.header];
@@ -280,12 +346,22 @@ pub(crate) fn _reassociated_recurrences(body: &MirBody) -> MirBody {
     let mut uses = Counter::new();
     for op in body.blocks.iter().flat_map(|block| &block.ops) {
         let mut read = _operands_read(op);
-        read.extend(op.uses.iter().filter(|value| !op.merges.contains_key(value)).copied());
+        read.extend(
+            op.uses
+                .iter()
+                .filter(|value| !op.merges.contains_key(value))
+                .copied(),
+        );
         for value in read {
             *uses.entry(value).or_default() += 1;
         }
     }
-    for value in body.blocks.iter().flat_map(|block| &block.phis).flat_map(|phi| phi.incoming.values()) {
+    for value in body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.phis)
+        .flat_map(|phi| phi.incoming.values())
+    {
         *uses.entry(*value).or_default() += 1;
     }
     // Python's `id(op)`.
@@ -301,7 +377,10 @@ pub(crate) fn _reassociated_recurrences(body: &MirBody) -> MirBody {
         op.is_some_and(|op| {
             op.kind == Kind::Add
                 && op.op == Some(OpCode::Operation(Operation::Binary))
-                && !(!op.loads.is_empty() || !op.stores.is_empty() || op.barrier() || !op.merges.is_empty())
+                && !(!op.loads.is_empty()
+                    || !op.stores.is_empty()
+                    || op.barrier()
+                    || !op.merges.is_empty())
                 && op.args.len() == 2
                 && op.results.len() == 1
                 && matches!(op.results[0], Arg::Held(result) if op.defines == [result.value])
@@ -313,10 +392,16 @@ pub(crate) fn _reassociated_recurrences(body: &MirBody) -> MirBody {
             if !plain(Some(outer)) {
                 continue;
             }
-            let Arg::Held(result) = outer.results[0] else { continue };
-            let Some(&recurrence) = updates.get(&result.value) else { continue };
+            let Arg::Held(result) = outer.results[0] else {
+                continue;
+            };
+            let Some(&recurrence) = updates.get(&result.value) else {
+                continue;
+            };
             for (position, candidate) in outer.args.iter().enumerate() {
-                let Arg::Held(candidate) = *candidate else { continue };
+                let Arg::Held(candidate) = *candidate else {
+                    continue;
+                };
                 let inner = definitions.get(&candidate.value).copied();
                 if !plain(inner) {
                     continue;
@@ -347,7 +432,8 @@ pub(crate) fn _reassociated_recurrences(body: &MirBody) -> MirBody {
                     .collect::<Vec<_>>();
                 if leaves.len() != 2
                     || leaves.iter().any(|arg| {
-                        !matches!(arg, Arg::Held(_) | Arg::Const(_)) || arg_width(arg) != Some(result.width)
+                        !matches!(arg, Arg::Held(_) | Arg::Const(_))
+                            || arg_width(arg) != Some(result.width)
                     })
                 {
                     continue;
@@ -357,7 +443,11 @@ pub(crate) fn _reassociated_recurrences(body: &MirBody) -> MirBody {
                 replacements.insert(
                     id(inner),
                     Op {
-                        uses: leaves.iter().filter_map(held_of).map(|held| held.value).collect(),
+                        uses: leaves
+                            .iter()
+                            .filter_map(held_of)
+                            .map(|held| held.value)
+                            .collect(),
                         args: leaves,
                         source_backed: false,
                         raised: None,
@@ -387,7 +477,11 @@ pub(crate) fn _reassociated_recurrences(body: &MirBody) -> MirBody {
             .blocks
             .iter()
             .map(|block| MirBlock {
-                ops: block.ops.iter().map(|op| replacements.get(&id(op)).unwrap_or(op).clone()).collect(),
+                ops: block
+                    .ops
+                    .iter()
+                    .map(|op| replacements.get(&id(op)).unwrap_or(op).clone())
+                    .collect(),
                 ..block.clone()
             })
             .collect(),
@@ -409,15 +503,24 @@ pub(crate) fn _negated_difference(
         || !op.merges.is_empty()
         || op.args.len() != 1
         || op.results.len() != 1
-        || !op.args.iter().chain(&op.results).all(|arg| matches!(arg, Arg::Held(_)))
+        || !op
+            .args
+            .iter()
+            .chain(&op.results)
+            .all(|arg| matches!(arg, Arg::Held(_)))
     {
         return op.clone();
     }
-    let (source, result) = (held_of(&op.args[0]).expect("held"), held_of(&op.results[0]).expect("held"));
+    let (source, result) = (
+        held_of(&op.args[0]).expect("held"),
+        held_of(&op.results[0]).expect("held"),
+    );
     if source.width != result.width || times(uses, &source.value) != 1 {
         return op.clone();
     }
-    let Some(difference) = definitions.get(&source.value) else { return op.clone() };
+    let Some(difference) = definitions.get(&source.value) else {
+        return op.clone();
+    };
     if difference.kind != Kind::Sub
         || !difference.loads.is_empty()
         || !difference.stores.is_empty()
@@ -425,13 +528,14 @@ pub(crate) fn _negated_difference(
         || !difference.merges.is_empty()
         || difference.results != [Arg::Held(source)]
         || difference.args.len() != 2
-        || difference
-            .args
-            .iter()
-            .any(|arg| !matches!(arg, Arg::Held(_) | Arg::Const(_)) || arg_width(arg) != Some(result.width))
+        || difference.args.iter().any(|arg| {
+            !matches!(arg, Arg::Held(_) | Arg::Const(_)) || arg_width(arg) != Some(result.width)
+        })
         || [op, *difference].iter().any(|one| {
             let first = held_of(&one.results[0]).map(|held| held.value);
-            one.defines.iter().any(|value| Some(*value) != first && wanted.contains(value))
+            one.defines
+                .iter()
+                .any(|value| Some(*value) != first && wanted.contains(value))
         })
     {
         return op.clone();
@@ -442,7 +546,11 @@ pub(crate) fn _negated_difference(
         name: "sub".to_owned(),
         op: Some(OpCode::Operation(Operation::Binary)),
         defines: vec![result.value],
-        uses: args.iter().filter_map(held_of).map(|held| held.value).collect(),
+        uses: args
+            .iter()
+            .filter_map(held_of)
+            .map(|held| held.value)
+            .collect(),
         args,
         source_backed: false,
         raised: None,
@@ -452,28 +560,59 @@ pub(crate) fn _negated_difference(
 
 /// Reuse a smaller available scale instead of shifting the original again.
 pub(crate) fn _shared_shifts(body: &MirBody, wanted: &BTreeSet<Value>) -> MirBody {
-    let mut used = body.blocks.iter().flat_map(|block| &block.ops).flat_map(_operands_read).collect::<BTreeSet<_>>();
-    used.extend(body.blocks.iter().flat_map(|block| &block.phis).flat_map(|phi| phi.incoming.values().copied()));
+    let mut used = body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.ops)
+        .flat_map(_operands_read)
+        .collect::<BTreeSet<_>>();
+    used.extend(
+        body.blocks
+            .iter()
+            .flat_map(|block| &block.phis)
+            .flat_map(|phi| phi.incoming.values().copied()),
+    );
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let mut available = BTreeMap::<Held, BTreeMap<BigInt, Held>>::new();
         let mut ops = Vec::new();
         for op in &block.ops {
             let mut op = op.clone();
-            let scale = if op.kind == Kind::Shl { _scale(&op, wanted, true) } else { None };
+            let scale = if op.kind == Kind::Shl {
+                _scale(&op, wanted, true)
+            } else {
+                None
+            };
             if let Some((source, factor)) = scale {
                 let count = BigInt::from(factor.bits() - 1);
                 let candidates = available.entry(source).or_default();
-                let smaller = candidates.keys().filter(|amount| **amount < count).cloned().collect::<Vec<_>>();
+                let smaller = candidates
+                    .keys()
+                    .filter(|amount| **amount < count)
+                    .cloned()
+                    .collect::<Vec<_>>();
                 let result = held_of(&op.results[0]).expect("scale");
                 if let Some(amount) = smaller.into_iter().max() {
                     let previous = candidates[&amount];
-                    let swap = |value: &Value| if *value == source.value { previous.value } else { *value };
+                    let swap = |value: &Value| {
+                        if *value == source.value {
+                            previous.value
+                        } else {
+                            *value
+                        }
+                    };
                     op = Op {
-                        args: vec![Arg::Held(previous), Arg::Const(Const::new(&count - &amount, 1))],
+                        args: vec![
+                            Arg::Held(previous),
+                            Arg::Const(Const::new(&count - &amount, 1)),
+                        ],
                         defines: vec![result.value],
                         uses: op.uses.iter().map(swap).collect(),
-                        merges: op.merges.iter().map(|(value, target)| (swap(value), *target)).collect(),
+                        merges: op
+                            .merges
+                            .iter()
+                            .map(|(value, target)| (swap(value), *target))
+                            .collect(),
                         source_backed: false,
                         raised: None,
                         ..op
@@ -485,9 +624,15 @@ pub(crate) fn _shared_shifts(body: &MirBody, wanted: &BTreeSet<Value>) -> MirBod
             }
             ops.push(op);
         }
-        blocks.push(MirBlock { ops, ..block.clone() });
+        blocks.push(MirBlock {
+            ops,
+            ..block.clone()
+        });
     }
-    MirBody { blocks, ..body.clone() }
+    MirBody {
+        blocks,
+        ..body.clone()
+    }
 }
 
 pub(crate) fn _scale(op: &Op, wanted: &BTreeSet<Value>, tied: bool) -> Option<(Held, BigInt)> {
@@ -501,11 +646,19 @@ pub(crate) fn _scale(op: &Op, wanted: &BTreeSet<Value>, tied: bool) -> Option<(H
     {
         return None;
     }
-    let Arg::Held(result) = op.results[0] else { return None };
-    if op.defines.iter().any(|value| *value != result.value && wanted.contains(value)) {
+    let Arg::Held(result) = op.results[0] else {
+        return None;
+    };
+    if op
+        .defines
+        .iter()
+        .any(|value| *value != result.value && wanted.contains(value))
+    {
         return None;
     }
-    let (Arg::Held(source), Arg::Const(factor)) = (&op.args[0], &op.args[1]) else { return None };
+    let (Arg::Held(source), Arg::Const(factor)) = (&op.args[0], &op.args[1]) else {
+        return None;
+    };
     if source.width != result.width {
         return None;
     }
@@ -520,17 +673,31 @@ pub(crate) fn _scale(op: &Op, wanted: &BTreeSet<Value>, tied: bool) -> Option<(H
 }
 
 /// Combine single-use integer scales at an unchanged modular width.
-pub(crate) fn _scaled_chain(op: &Op, definitions: &Definitions<'_>, wanted: &BTreeSet<Value>, uses: &Counter) -> Op {
-    let Some((middle, factor)) = _scale(op, wanted, false) else { return op.clone() };
-    let Some(previous) = definitions.get(&middle.value) else { return op.clone() };
+pub(crate) fn _scaled_chain(
+    op: &Op,
+    definitions: &Definitions<'_>,
+    wanted: &BTreeSet<Value>,
+    uses: &Counter,
+) -> Op {
+    let Some((middle, factor)) = _scale(op, wanted, false) else {
+        return op.clone();
+    };
+    let Some(previous) = definitions.get(&middle.value) else {
+        return op.clone();
+    };
     if times(uses, &middle.value) != 1 || previous.results != [Arg::Held(middle)] {
         return op.clone();
     }
-    let Some((source, initial)) = _scale(previous, wanted, false) else { return op.clone() };
+    let Some((source, initial)) = _scale(previous, wanted, false) else {
+        return op.clone();
+    };
     let factor = consts::masked(&(initial * factor), source.width);
     Op {
         kind: Kind::Mul,
-        args: vec![Arg::Held(source), Arg::Const(Const::new(factor, source.width))],
+        args: vec![
+            Arg::Held(source),
+            Arg::Const(Const::new(factor, source.width)),
+        ],
         defines: vec![held_of(&op.results[0]).expect("scale").value],
         uses: vec![source.value],
         source_backed: false,
@@ -550,35 +717,64 @@ pub(crate) fn _offset(op: &Op, wanted: &BTreeSet<Value>) -> Option<(Held, BigInt
     {
         return None;
     }
-    let Arg::Held(result) = op.results[0] else { return None };
-    if op.defines.iter().any(|value| *value != result.value && wanted.contains(value)) {
+    let Arg::Held(result) = op.results[0] else {
+        return None;
+    };
+    if op
+        .defines
+        .iter()
+        .any(|value| *value != result.value && wanted.contains(value))
+    {
         return None;
     }
     let (mut source, mut amount) = (&op.args[0], &op.args[1]);
     if op.kind == Kind::Add && matches!(source, Arg::Const(_)) {
         (source, amount) = (amount, source);
     }
-    let (Arg::Held(source), Arg::Const(amount)) = (source, amount) else { return None };
+    let (Arg::Held(source), Arg::Const(amount)) = (source, amount) else {
+        return None;
+    };
     if source.width != amount.width || source.width != result.width {
         return None;
     }
-    Some((*source, if op.kind == Kind::Add { amount.n.clone() } else { -&amount.n }))
+    Some((
+        *source,
+        if op.kind == Kind::Add {
+            amount.n.clone()
+        } else {
+            -&amount.n
+        },
+    ))
 }
 
 /// Compose single-use modular offsets without preserving intermediate flags.
-pub(crate) fn _offset_chain(op: &Op, definitions: &Definitions<'_>, wanted: &BTreeSet<Value>, uses: &Counter) -> Op {
-    let Some((middle, amount)) = _offset(op, wanted) else { return op.clone() };
-    let Some(previous) = definitions.get(&middle.value) else { return op.clone() };
+pub(crate) fn _offset_chain(
+    op: &Op,
+    definitions: &Definitions<'_>,
+    wanted: &BTreeSet<Value>,
+    uses: &Counter,
+) -> Op {
+    let Some((middle, amount)) = _offset(op, wanted) else {
+        return op.clone();
+    };
+    let Some(previous) = definitions.get(&middle.value) else {
+        return op.clone();
+    };
     if times(uses, &middle.value) != 1 || previous.results != [Arg::Held(middle)] {
         return op.clone();
     }
-    let Some((source, initial)) = _offset(previous, wanted) else { return op.clone() };
+    let Some((source, initial)) = _offset(previous, wanted) else {
+        return op.clone();
+    };
     let amount = consts::masked(&(initial + amount), source.width);
     Op {
         kind: Kind::Add,
         name: "add".to_owned(),
         op: Some(OpCode::Operation(Operation::Binary)),
-        args: vec![Arg::Held(source), Arg::Const(Const::new(amount, source.width))],
+        args: vec![
+            Arg::Held(source),
+            Arg::Const(Const::new(amount, source.width)),
+        ],
         defines: vec![held_of(&op.results[0]).expect("offset").value],
         uses: vec![source.value],
         source_backed: false,
@@ -590,7 +786,11 @@ pub(crate) fn _offset_chain(op: &Op, definitions: &Definitions<'_>, wanted: &BTr
 const _ASSOCIATIVE_BITS: [Kind; 3] = [Kind::And, Kind::Or, Kind::Xor];
 
 /// A pure fixed-width bitwise operation with one constant operand.
-pub(crate) fn _bitwise(op: &Op, wanted: &BTreeSet<Value>, preserve_flags: bool) -> Option<(Held, BigInt)> {
+pub(crate) fn _bitwise(
+    op: &Op,
+    wanted: &BTreeSet<Value>,
+    preserve_flags: bool,
+) -> Option<(Held, BigInt)> {
     if !_ASSOCIATIVE_BITS.contains(&op.kind)
         || !op.loads.is_empty()
         || !op.stores.is_empty()
@@ -601,16 +801,26 @@ pub(crate) fn _bitwise(op: &Op, wanted: &BTreeSet<Value>, preserve_flags: bool) 
     {
         return None;
     }
-    let Arg::Held(result) = op.results[0] else { return None };
-    let extra = op.defines.iter().filter(|value| **value != result.value).collect::<Vec<_>>();
-    if extra.iter().any(|value| !value.flags) || (!preserve_flags && extra.iter().any(|value| wanted.contains(value))) {
+    let Arg::Held(result) = op.results[0] else {
+        return None;
+    };
+    let extra = op
+        .defines
+        .iter()
+        .filter(|value| **value != result.value)
+        .collect::<Vec<_>>();
+    if extra.iter().any(|value| !value.flags)
+        || (!preserve_flags && extra.iter().any(|value| wanted.contains(value)))
+    {
         return None;
     }
     let (mut source, mut constant) = (&op.args[0], &op.args[1]);
     if matches!(source, Arg::Const(_)) {
         (source, constant) = (constant, source);
     }
-    let (Arg::Held(source), Arg::Const(constant)) = (source, constant) else { return None };
+    let (Arg::Held(source), Arg::Const(constant)) = (source, constant) else {
+        return None;
+    };
     if source.width != constant.width || source.width != result.width {
         return None;
     }
@@ -618,20 +828,37 @@ pub(crate) fn _bitwise(op: &Op, wanted: &BTreeSet<Value>, preserve_flags: bool) 
 }
 
 /// Compose single-use associative bitwise constants at one modular width.
-pub(crate) fn _bitwise_chain(op: &Op, definitions: &Definitions<'_>, wanted: &BTreeSet<Value>, uses: &Counter) -> Op {
+pub(crate) fn _bitwise_chain(
+    op: &Op,
+    definitions: &Definitions<'_>,
+    wanted: &BTreeSet<Value>,
+    uses: &Counter,
+) -> Op {
     // The final bitwise operation still computes identical flags from its
     // identical result.  An intermediate's flags would disappear and are only
     // admissible when unobserved.
-    let Some((middle, constant)) = _bitwise(op, wanted, true) else { return op.clone() };
-    let Some(previous) = definitions.get(&middle.value) else { return op.clone() };
-    if previous.kind != op.kind || times(uses, &middle.value) != 1 || previous.results != [Arg::Held(middle)] {
+    let Some((middle, constant)) = _bitwise(op, wanted, true) else {
+        return op.clone();
+    };
+    let Some(previous) = definitions.get(&middle.value) else {
+        return op.clone();
+    };
+    if previous.kind != op.kind
+        || times(uses, &middle.value) != 1
+        || previous.results != [Arg::Held(middle)]
+    {
         return op.clone();
     }
-    let Some((source, initial)) = _bitwise(previous, wanted, false) else { return op.clone() };
+    let Some((source, initial)) = _bitwise(previous, wanted, false) else {
+        return op.clone();
+    };
     let arith = early_d::ARITH(op.kind).expect("bitwise");
     let combined = consts::masked(&arith(&initial, &constant), source.width);
     Op {
-        args: vec![Arg::Held(source), Arg::Const(Const::new(combined, source.width))],
+        args: vec![
+            Arg::Held(source),
+            Arg::Const(Const::new(combined, source.width)),
+        ],
         uses: vec![source.value],
         source_backed: false,
         raised: None,
@@ -651,7 +878,9 @@ pub(crate) fn _recombined(op: &Op, definitions: &Definitions<'_>) -> Op {
     {
         return op.clone();
     }
-    let Some(original) = mir::extracted_whole(&op.args[0], &op.args[1], definitions) else { return op.clone() };
+    let Some(original) = mir::extracted_whole(&op.args[0], &op.args[1], definitions) else {
+        return op.clone();
+    };
     Op {
         kind: Kind::Copy,
         args: vec![Arg::Held(original)],
@@ -674,14 +903,18 @@ pub(crate) fn _extracted(op: &Op, definitions: &Definitions<'_>) -> Op {
     {
         return op.clone();
     }
-    let (Arg::Held(whole), Arg::Const(offset)) = (&op.args[0], &op.args[1]) else { return op.clone() };
+    let (Arg::Held(whole), Arg::Const(offset)) = (&op.args[0], &op.args[1]) else {
+        return op.clone();
+    };
     if whole.width != 4
         || !(offset.n == BigInt::zero() || offset.n == BigInt::from(16))
         || !matches!(op.results[0], Arg::Held(result) if result.width == 2)
     {
         return op.clone();
     }
-    let Some(joined) = definitions.get(&whole.value) else { return op.clone() };
+    let Some(joined) = definitions.get(&whole.value) else {
+        return op.clone();
+    };
     if joined.kind != Kind::Concat
         || !joined.loads.is_empty()
         || !joined.stores.is_empty()
@@ -689,7 +922,10 @@ pub(crate) fn _extracted(op: &Op, definitions: &Definitions<'_>) -> Op {
         || joined.args.len() != 2
         || joined.results.len() != 1
         || joined.results != [Arg::Held(*whole)]
-        || joined.args.iter().any(|arg| !matches!(arg, Arg::Held(_) | Arg::Const(_)) || arg_width(arg) != Some(2))
+        || joined
+            .args
+            .iter()
+            .any(|arg| !matches!(arg, Arg::Held(_) | Arg::Const(_)) || arg_width(arg) != Some(2))
     {
         return op.clone();
     }
@@ -724,12 +960,16 @@ pub(crate) fn _redundant_extension(op: &Op, definitions: &Definitions<'_>) -> Op
     {
         return op.clone();
     }
-    let (Arg::Held(viewed), Arg::Held(result)) = (&op.args[0], &op.results[0]) else { return op.clone() };
+    let (Arg::Held(viewed), Arg::Held(result)) = (&op.args[0], &op.results[0]) else {
+        return op.clone();
+    };
     let (viewed, result) = (*viewed, *result);
     if op.defines != [result.value] {
         return op.clone();
     }
-    let Some(previous) = definitions.get(&viewed.value) else { return op.clone() };
+    let Some(previous) = definitions.get(&viewed.value) else {
+        return op.clone();
+    };
     if previous.kind != op.kind
         || !previous.loads.is_empty()
         || !previous.stores.is_empty()
@@ -744,11 +984,17 @@ pub(crate) fn _redundant_extension(op: &Op, definitions: &Definitions<'_>) -> Op
     }
     let source_width = arg_width(&previous.args[0]);
     let established = held_of(&previous.results[0]).expect("held").width;
-    let Some(source_width) = source_width else { return op.clone() };
-    if !(source_width <= viewed.width && viewed.width < result.width && result.width <= established) {
+    let Some(source_width) = source_width else {
+        return op.clone();
+    };
+    if !(source_width <= viewed.width && viewed.width < result.width && result.width <= established)
+    {
         return op.clone();
     }
-    let known = Held { value: viewed.value, width: result.width };
+    let known = Held {
+        value: viewed.value,
+        width: result.width,
+    };
     Op {
         kind: Kind::Copy,
         args: vec![Arg::Held(known)],
@@ -772,16 +1018,27 @@ pub(crate) fn _zero_difference(op: &Op, definitions: &Definitions<'_>) -> Op {
     {
         return op.clone();
     }
-    let (Arg::Held(source), Arg::Held(result)) = (&op.args[1], &op.results[0]) else { return op.clone() };
+    let (Arg::Held(source), Arg::Held(result)) = (&op.args[1], &op.results[0]) else {
+        return op.clone();
+    };
     let (source, result) = (*source, *result);
-    if op.defines.iter().any(|value| *value != result.value && !value.flags) {
+    if op
+        .defines
+        .iter()
+        .any(|value| *value != result.value && !value.flags)
+    {
         return op.clone();
     }
     let zero = &op.args[0];
     if arg_width(zero) != Some(source.width)
         || source.width != result.width
         || op.uses.iter().copied().collect::<BTreeSet<_>>()
-            != op.args.iter().filter_map(held_of).map(|held| held.value).collect::<BTreeSet<_>>()
+            != op
+                .args
+                .iter()
+                .filter_map(held_of)
+                .map(|held| held.value)
+                .collect::<BTreeSet<_>>()
         || !_copied_zero(zero, definitions)
     {
         return op.clone();
@@ -807,7 +1064,9 @@ pub(crate) fn _copied_zero(arg: &Arg, definitions: &Definitions<'_>) -> bool {
         if !seen.insert(held.value) {
             break;
         }
-        let Some(made) = definitions.get(&held.value) else { return false };
+        let Some(made) = definitions.get(&held.value) else {
+            return false;
+        };
         if made.kind != Kind::Copy
             || !made.loads.is_empty()
             || !made.stores.is_empty()
@@ -832,7 +1091,10 @@ pub(crate) fn _halves(op: &Op) -> Option<(Arg, Arg)> {
         || !op.stores.is_empty()
         || op.barrier()
         || op.args.len() != 2
-        || !op.args.iter().all(|arg| matches!(arg, Arg::Held(_) | Arg::Const(_)) && arg_width(arg) == Some(2))
+        || !op
+            .args
+            .iter()
+            .all(|arg| matches!(arg, Arg::Held(_) | Arg::Const(_)) && arg_width(arg) == Some(2))
         || op.results.len() != 1
         || !matches!(op.results[0], Arg::Held(result) if result.width == 4 && op.defines == [result.value])
     {
@@ -848,7 +1110,11 @@ pub(crate) fn _takes_halves(op: &Op, whole: Held, readers: &BTreeMap<Value, Vec<
     }
     match op.kind {
         Kind::Store => {
-            let r#ref = if op.stores.len() == 1 { Some(&op.stores[0]) } else { None };
+            let r#ref = if op.stores.len() == 1 {
+                Some(&op.stores[0])
+            } else {
+                None
+            };
             op.args == [Arg::Held(whole)]
                 && op.defines.is_empty()
                 && r#ref.is_some_and(|r#ref| {
@@ -867,7 +1133,8 @@ pub(crate) fn _takes_halves(op: &Op, whole: Held, readers: &BTreeMap<Value, Vec<
                 && op.defines.iter().all(|value| value.flags)
                 && op.defines.iter().all(|value| {
                     readers.get(value).into_iter().flatten().all(|reader| {
-                        reader.kind == Kind::Branch && matches!(reader.test, Some(Kind::Eq | Kind::Ne))
+                        reader.kind == Kind::Branch
+                            && matches!(reader.test, Some(Kind::Eq | Kind::Ne))
                     })
                 })
         }
@@ -881,7 +1148,9 @@ pub(crate) fn _halved(body: &MirBody) -> MirBody {
         .blocks
         .iter()
         .flat_map(|block| &block.ops)
-        .filter_map(|op| _halves(op).map(|halves| (held_of(&op.results[0]).expect("halves").value, halves)))
+        .filter_map(|op| {
+            _halves(op).map(|halves| (held_of(&op.results[0]).expect("halves").value, halves))
+        })
         .collect::<BTreeMap<_, _>>();
     if joins.is_empty() {
         return body.clone();
@@ -904,11 +1173,16 @@ pub(crate) fn _halved(body: &MirBody) -> MirBody {
         .into_iter()
         .filter(|(value, _halves)| {
             !phied.contains(value)
-                && readers
-                    .get(value)
-                    .into_iter()
-                    .flatten()
-                    .all(|op| _takes_halves(op, Held { value: *value, width: 4 }, &readers))
+                && readers.get(value).into_iter().flatten().all(|op| {
+                    _takes_halves(
+                        op,
+                        Held {
+                            value: *value,
+                            width: 4,
+                        },
+                        &readers,
+                    )
+                })
         })
         .collect::<BTreeMap<_, _>>();
     if split.is_empty() {
@@ -930,15 +1204,36 @@ pub(crate) fn _halved(body: &MirBody) -> MirBody {
     let mut variable = values.iter().map(|value| value.variable).max().unwrap_or(0);
 
     let mut rewritten = |op: &Op| -> Vec<Op> {
-        let whole = op.args.iter().filter_map(held_of).map(|held| held.value).find(|value| split.contains_key(value));
-        let Some(whole) = whole else { return vec![op.clone()] };
+        let whole = op
+            .args
+            .iter()
+            .filter_map(held_of)
+            .map(|held| held.value)
+            .find(|value| split.contains_key(value));
+        let Some(whole) = whole else {
+            return vec![op.clone()];
+        };
         let (high, low) = split[&whole].clone();
-        let fresh = |op: Op| Op { source_backed: false, raised: None, merges: OrderedMap::new(), ..op };
-        let later = |op: Op| Op { absorbed: vec![], id: None, ..fresh(op) };
+        let fresh = |op: Op| Op {
+            source_backed: false,
+            raised: None,
+            merges: OrderedMap::new(),
+            ..op
+        };
+        let later = |op: Op| Op {
+            absorbed: vec![],
+            id: None,
+            ..fresh(op)
+        };
         let reads = |args: &[&Arg], r#ref: Option<&MemRef>| {
-            let held = args.iter().filter_map(|arg| held_of(arg)).map(|held| held.value);
+            let held = args
+                .iter()
+                .filter_map(|arg| held_of(arg))
+                .map(|held| held.value);
             match r#ref {
-                Some(r#ref) => unique(held.chain([r#ref.base, r#ref.segment].into_iter().flatten())),
+                Some(r#ref) => {
+                    unique(held.chain([r#ref.base, r#ref.segment].into_iter().flatten()))
+                }
                 None => unique(held),
             }
         };
@@ -947,8 +1242,21 @@ pub(crate) fn _halved(body: &MirBody) -> MirBody {
             Kind::Store => {
                 let r#ref = &op.stores[0];
                 let words = [
-                    (low, MemRef { width: 2, ..r#ref.clone() }),
-                    (high, MemRef { addr: r#ref.addr.map(|addr| addr.plus(2)), width: 2, ..r#ref.clone() }),
+                    (
+                        low,
+                        MemRef {
+                            width: 2,
+                            ..r#ref.clone()
+                        },
+                    ),
+                    (
+                        high,
+                        MemRef {
+                            addr: r#ref.addr.map(|addr| addr.plus(2)),
+                            width: 2,
+                            ..r#ref.clone()
+                        },
+                    ),
                 ];
                 words
                     .into_iter()
@@ -957,7 +1265,9 @@ pub(crate) fn _halved(body: &MirBody) -> MirBody {
                         let made = Op {
                             uses: reads(&[&word], Some(&cell)),
                             args: vec![word],
-                            results: vec![Arg::Cell(Cell { r#ref: cell.clone() })],
+                            results: vec![Arg::Cell(Cell {
+                                r#ref: cell.clone(),
+                            })],
                             stores: vec![cell],
                             ..op.clone()
                         };
@@ -969,7 +1279,11 @@ pub(crate) fn _halved(body: &MirBody) -> MirBody {
                 .into_iter()
                 .enumerate()
                 .map(|(index, word)| {
-                    let made = Op { uses: reads(&[&word], None), args: vec![word], ..op.clone() };
+                    let made = Op {
+                        uses: reads(&[&word], None),
+                        args: vec![word],
+                        ..op.clone()
+                    };
                     if index != 0 { later(made) } else { fresh(made) }
                 })
                 .collect(),
@@ -977,7 +1291,11 @@ pub(crate) fn _halved(body: &MirBody) -> MirBody {
                 serial += 1;
                 variable += 1;
                 let result = Held {
-                    value: Value { variable, version: 1, ..Value::new(serial, op.at) },
+                    value: Value {
+                        variable,
+                        version: 1,
+                        ..Value::new(serial, op.at)
+                    },
                     width: 2,
                 };
                 vec![fresh(Op {
@@ -987,7 +1305,9 @@ pub(crate) fn _halved(body: &MirBody) -> MirBody {
                     uses: reads(&[&high, &low], None),
                     args: vec![high, low],
                     results: vec![Arg::Held(result)],
-                    defines: std::iter::once(result.value).chain(op.defines.iter().copied()).collect(),
+                    defines: std::iter::once(result.value)
+                        .chain(op.defines.iter().copied())
+                        .collect(),
                     ..op.clone()
                 })]
             }
@@ -999,13 +1319,21 @@ pub(crate) fn _halved(body: &MirBody) -> MirBody {
         blocks: body
             .blocks
             .iter()
-            .map(|block| MirBlock { ops: block.ops.iter().flat_map(&mut rewritten).collect(), ..block.clone() })
+            .map(|block| MirBlock {
+                ops: block.ops.iter().flat_map(&mut rewritten).collect(),
+                ..block.clone()
+            })
             .collect(),
         ..body.clone()
     }
 }
 
-pub(crate) fn _shift_chain(op: &Op, definitions: &Definitions<'_>, wanted: &BTreeSet<Value>, uses: &Counter) -> Op {
+pub(crate) fn _shift_chain(
+    op: &Op,
+    definitions: &Definitions<'_>,
+    wanted: &BTreeSet<Value>,
+    uses: &Counter,
+) -> Op {
     if op.kind != Kind::Shl
         || !op.loads.is_empty()
         || !op.stores.is_empty()
@@ -1015,8 +1343,12 @@ pub(crate) fn _shift_chain(op: &Op, definitions: &Definitions<'_>, wanted: &BTre
     {
         return op.clone();
     }
-    let (Arg::Held(source), Arg::Const(count)) = (&op.args[0], &op.args[1]) else { return op.clone() };
-    let Some(previous) = definitions.get(&source.value) else { return op.clone() };
+    let (Arg::Held(source), Arg::Const(count)) = (&op.args[0], &op.args[1]) else {
+        return op.clone();
+    };
+    let Some(previous) = definitions.get(&source.value) else {
+        return op.clone();
+    };
     if times(uses, &source.value) != 1
         || previous.kind != Kind::Shl
         || previous.args.len() != 2
@@ -1024,24 +1356,39 @@ pub(crate) fn _shift_chain(op: &Op, definitions: &Definitions<'_>, wanted: &BTre
     {
         return op.clone();
     }
-    let (Arg::Held(original), Arg::Const(first_count)) = (&previous.args[0], &previous.args[1]) else {
+    let (Arg::Held(original), Arg::Const(first_count)) = (&previous.args[0], &previous.args[1])
+    else {
         return op.clone();
     };
     let first_result = held_of(&op.results[0]).map(|held| held.value);
     if previous.results[0] != Arg::Held(*source)
         || arg_width(&op.results[0]) != Some(source.width)
         || original.width != source.width
-        || op.defines.iter().any(|value| Some(*value) != first_result && wanted.contains(value))
+        || op
+            .defines
+            .iter()
+            .any(|value| Some(*value) != first_result && wanted.contains(value))
     {
         return op.clone();
     }
     let total = &first_count.n + &count.n;
-    if first_count.n.clone().min(count.n.clone()) <= BigInt::zero() || total >= BigInt::from(source.width * 8) {
+    if first_count.n.clone().min(count.n.clone()) <= BigInt::zero()
+        || total >= BigInt::from(source.width * 8)
+    {
         return op.clone();
     }
     Op {
-        args: vec![Arg::Held(*original), Arg::Const(Const::new(total, count.width))],
-        uses: unique(op.uses.iter().map(|value| if *value == source.value { original.value } else { *value })),
+        args: vec![
+            Arg::Held(*original),
+            Arg::Const(Const::new(total, count.width)),
+        ],
+        uses: unique(op.uses.iter().map(|value| {
+            if *value == source.value {
+                original.value
+            } else {
+                *value
+            }
+        })),
         source_backed: false,
         raised: None,
         ..op.clone()
@@ -1050,7 +1397,12 @@ pub(crate) fn _shift_chain(op: &Op, definitions: &Definitions<'_>, wanted: &BTre
 
 /// Divide by positive powers of two, biasing negatives to truncate toward zero.
 pub(crate) fn _divisions(body: &MirBody) -> MirBody {
-    if !body.blocks.iter().flat_map(|block| &block.ops).any(|op| op.kind == Kind::Divmod) {
+    if !body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.ops)
+        .any(|op| op.kind == Kind::Divmod)
+    {
         return body.clone();
     }
     let facts = consts::known(body);
@@ -1079,13 +1431,21 @@ pub(crate) fn _divisions(body: &MirBody) -> MirBody {
                 || op.barrier()
                 || op.args.len() != 2
                 || op.results.len() != 2
-                || !op.results.iter().all(|arg| matches!(arg, Arg::Held(held) if Some(held.width) == dividend_width))
+                || !op
+                    .results
+                    .iter()
+                    .all(|arg| matches!(arg, Arg::Held(held) if Some(held.width) == dividend_width))
                 || !matches!(op.args[0], Arg::Held(_))
                 || !matches!(dividend_width, Some(2 | 4))
                 || !matches!(op.args[1], Arg::Held(_) | Arg::Const(_))
                 || arg_width(&op.args[1]) != dividend_width
                 || op.defines.iter().copied().collect::<BTreeSet<_>>()
-                    != op.results.iter().filter_map(held_of).map(|held| held.value).collect::<BTreeSet<_>>()
+                    != op
+                        .results
+                        .iter()
+                        .filter_map(held_of)
+                        .map(|held| held.value)
+                        .collect::<BTreeSet<_>>()
             {
                 ops.push(op.clone());
                 continue;
@@ -1107,24 +1467,42 @@ pub(crate) fn _divisions(body: &MirBody) -> MirBody {
             let shift = u32::try_from(divisor.bits() - 1).expect("small");
             let mut sequence: Vec<Op> = Vec::new();
 
-            let mut emit = |kind: Kind, args: Vec<Arg>, result: Option<Held>, sequence: &mut Vec<Op>| {
-                let result = result.unwrap_or_else(|| {
-                    serial += 1;
-                    variable += 1;
-                    Held { value: Value { variable, version: 1, ..Value::new(serial, op.at) }, width }
-                });
-                let first = sequence.is_empty();
-                sequence.push(Op {
-                    kind,
-                    uses: args.iter().filter_map(held_of).map(|held| held.value).collect(),
-                    args,
-                    results: vec![Arg::Held(result)],
-                    id: if first { op.id } else { None },
-                    absorbed: if first { op.absorbed.clone() } else { vec![] },
-                    ..Op::new(op.at, OpCode::Operation(Operation::Binary), kind.to_string(), vec![result.value], vec![])
-                });
-                result
-            };
+            let mut emit =
+                |kind: Kind, args: Vec<Arg>, result: Option<Held>, sequence: &mut Vec<Op>| {
+                    let result = result.unwrap_or_else(|| {
+                        serial += 1;
+                        variable += 1;
+                        Held {
+                            value: Value {
+                                variable,
+                                version: 1,
+                                ..Value::new(serial, op.at)
+                            },
+                            width,
+                        }
+                    });
+                    let first = sequence.is_empty();
+                    sequence.push(Op {
+                        kind,
+                        uses: args
+                            .iter()
+                            .filter_map(held_of)
+                            .map(|held| held.value)
+                            .collect(),
+                        args,
+                        results: vec![Arg::Held(result)],
+                        id: if first { op.id } else { None },
+                        absorbed: if first { op.absorbed.clone() } else { vec![] },
+                        ..Op::new(
+                            op.at,
+                            OpCode::Operation(Operation::Binary),
+                            kind.to_string(),
+                            vec![result.value],
+                            vec![],
+                        )
+                    });
+                    result
+                };
 
             let dividend = op.args[0].clone();
             let sign = emit(
@@ -1135,15 +1513,28 @@ pub(crate) fn _divisions(body: &MirBody) -> MirBody {
             );
             let adjusted = if divisor == BigInt::from(2) {
                 // The bias is the sign's low bit, 0 or 1: subtracting the sign word adds it.
-                emit(Kind::Sub, vec![dividend.clone(), Arg::Held(sign)], None, &mut sequence)
+                emit(
+                    Kind::Sub,
+                    vec![dividend.clone(), Arg::Held(sign)],
+                    None,
+                    &mut sequence,
+                )
             } else {
                 let bias = emit(
                     Kind::And,
-                    vec![Arg::Held(sign), Arg::Const(Const::new(&divisor - 1u8, width))],
+                    vec![
+                        Arg::Held(sign),
+                        Arg::Const(Const::new(&divisor - 1u8, width)),
+                    ],
                     None,
                     &mut sequence,
                 );
-                emit(Kind::Add, vec![dividend.clone(), Arg::Held(bias)], None, &mut sequence)
+                emit(
+                    Kind::Add,
+                    vec![dividend.clone(), Arg::Held(bias)],
+                    None,
+                    &mut sequence,
+                )
             };
             let quotient = emit(
                 Kind::Sar,
@@ -1157,19 +1548,39 @@ pub(crate) fn _divisions(body: &MirBody) -> MirBody {
                 None,
                 &mut sequence,
             );
-            emit(Kind::Sub, vec![dividend, Arg::Held(product)], held_of(&op.results[1]), &mut sequence);
+            emit(
+                Kind::Sub,
+                vec![dividend, Arg::Held(product)],
+                held_of(&op.results[1]),
+                &mut sequence,
+            );
             ops.extend(sequence);
         }
-        blocks.push(MirBlock { ops, ..block.clone() });
+        blocks.push(MirBlock {
+            ops,
+            ..block.clone()
+        });
     }
-    MirBody { blocks, ..body.clone() }
+    MirBody {
+        blocks,
+        ..body.clone()
+    }
 }
 
 pub(crate) fn _product(op: &Op, wanted: &BTreeSet<Value>, wide: &BTreeSet<Value>) -> Op {
-    if op.kind != Kind::Mul || op.barrier() || !op.stores.is_empty() || op.results.len() != 2 || op.args.len() != 2 {
+    if op.kind != Kind::Mul
+        || op.barrier()
+        || !op.stores.is_empty()
+        || op.results.len() != 2
+        || op.args.len() != 2
+    {
         return op.clone();
     }
-    if !op.results.iter().all(|result| matches!(result, Arg::Held(held) if held.width == 2)) {
+    if !op
+        .results
+        .iter()
+        .all(|result| matches!(result, Arg::Held(held) if held.width == 2))
+    {
         return op.clone();
     }
     if !op.args.iter().all(|arg| match arg {
@@ -1180,14 +1591,24 @@ pub(crate) fn _product(op: &Op, wanted: &BTreeSet<Value>, wide: &BTreeSet<Value>
         return op.clone();
     }
     let result = held_of(&op.results[0]).expect("held");
-    if wide.contains(&result.value) || op.defines.iter().any(|value| *value != result.value && wanted.contains(value)) {
+    if wide.contains(&result.value)
+        || op
+            .defines
+            .iter()
+            .any(|value| *value != result.value && wanted.contains(value))
+    {
         return op.clone();
     }
     let read = _operands_read(op);
     Op {
         results: vec![Arg::Held(result)],
         defines: vec![result.value],
-        uses: op.uses.iter().filter(|value| !op.merges.contains_key(value) || read.contains(value)).copied().collect(),
+        uses: op
+            .uses
+            .iter()
+            .filter(|value| !op.merges.contains_key(value) || read.contains(value))
+            .copied()
+            .collect(),
         merges: OrderedMap::new(),
         ..op.clone()
     }
@@ -1198,15 +1619,27 @@ pub(crate) fn _operands_read(op: &Op) -> BTreeSet<Value> {
         .iter()
         .filter_map(held_of)
         .map(|held| held.value)
-        .chain(op.loads.iter().chain(&op.stores).flat_map(|r#ref| [r#ref.base, r#ref.segment].into_iter().flatten()))
+        .chain(
+            op.loads
+                .iter()
+                .chain(&op.stores)
+                .flat_map(|r#ref| [r#ref.base, r#ref.segment].into_iter().flatten()),
+        )
         .collect()
 }
 
 pub(crate) fn _simplified(op: &Op, wanted: &BTreeSet<Value>, wide: &BTreeSet<Value>) -> Op {
-    if !op.loads.is_empty() || !op.stores.is_empty() || op.barrier() || op.results.len() != 1 || op.args.len() != 2 {
+    if !op.loads.is_empty()
+        || !op.stores.is_empty()
+        || op.barrier()
+        || op.results.len() != 1
+        || op.args.len() != 2
+    {
         return op.clone();
     }
-    let Arg::Held(result) = op.results[0] else { return op.clone() };
+    let Arg::Held(result) = op.results[0] else {
+        return op.clone();
+    };
     if !matches!(result.width, 2 | 4) {
         return op.clone();
     }
@@ -1214,7 +1647,8 @@ pub(crate) fn _simplified(op: &Op, wanted: &BTreeSet<Value>, wide: &BTreeSet<Val
         if let (Arg::Const(high), Arg::Const(low)) = (&op.args[0], &op.args[1]) {
             if high.width + low.width == result.width {
                 let mask = |width: u32| (BigInt::one() << (width * 8)) - 1u8;
-                let number = ((&high.n & mask(high.width)) << (low.width * 8)) | (&low.n & mask(low.width));
+                let number =
+                    ((&high.n & mask(high.width)) << (low.width * 8)) | (&low.n & mask(low.width));
                 return Op {
                     kind: Kind::Copy,
                     args: vec![Arg::Const(Const::new(number, result.width))],
@@ -1228,11 +1662,18 @@ pub(crate) fn _simplified(op: &Op, wanted: &BTreeSet<Value>, wide: &BTreeSet<Val
     if result.width == 2 && wide.contains(&result.value) {
         return op.clone();
     }
-    if op.defines.iter().any(|value| *value != result.value && wanted.contains(value)) {
+    if op
+        .defines
+        .iter()
+        .any(|value| *value != result.value && wanted.contains(value))
+    {
         return op.clone();
     }
     let (mut left, mut right) = (&op.args[0], &op.args[1]);
-    if ![left, right].iter().all(|arg| matches!(arg, Arg::Held(_) | Arg::Const(_) | Arg::Symbol(_))) {
+    if ![left, right]
+        .iter()
+        .all(|arg| matches!(arg, Arg::Held(_) | Arg::Const(_) | Arg::Symbol(_)))
+    {
         return op.clone();
     }
     let shift = matches!(op.kind, Kind::Shl | Kind::Shr | Kind::Sar);
@@ -1241,14 +1682,27 @@ pub(crate) fn _simplified(op: &Op, wanted: &BTreeSet<Value>, wide: &BTreeSet<Val
     {
         return op.clone();
     }
-    if matches!(op.kind, Kind::Add | Kind::Mul | Kind::And | Kind::Or | Kind::Xor) && matches!(left, Arg::Const(_)) {
+    if matches!(
+        op.kind,
+        Kind::Add | Kind::Mul | Kind::And | Kind::Or | Kind::Xor
+    ) && matches!(left, Arg::Const(_))
+    {
         (left, right) = (right, left);
     }
-    let Arg::Const(right) = right else { return op.clone() };
+    let Arg::Const(right) = right else {
+        return op.clone();
+    };
     let mask = (BigInt::one() << (result.width * 8)) - 1u8;
     let number = &right.n & ((BigInt::one() << (right.width * 8)) - 1u8);
     let answer = match op.kind {
-        Kind::Add | Kind::Sub | Kind::Or | Kind::Xor | Kind::Shl | Kind::Shr | Kind::Sar | Kind::PtrOffset
+        Kind::Add
+        | Kind::Sub
+        | Kind::Or
+        | Kind::Xor
+        | Kind::Shl
+        | Kind::Shr
+        | Kind::Sar
+        | Kind::PtrOffset
             if number.is_zero() =>
         {
             left.clone()
@@ -1261,7 +1715,10 @@ pub(crate) fn _simplified(op: &Op, wanted: &BTreeSet<Value>, wide: &BTreeSet<Val
     };
     Op {
         kind: Kind::Copy,
-        uses: held_of(&answer).map(|held| held.value).into_iter().collect(),
+        uses: held_of(&answer)
+            .map(|held| held.value)
+            .into_iter()
+            .collect(),
         args: vec![answer],
         defines: vec![result.value],
         merges: OrderedMap::new(),

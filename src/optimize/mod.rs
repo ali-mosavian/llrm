@@ -5,6 +5,7 @@ pub(crate) mod cfg;
 pub(crate) mod edges;
 pub(crate) mod indvars;
 pub(crate) mod pointeraccess;
+pub(crate) mod promote;
 pub(crate) mod rotate;
 pub(crate) mod strength;
 pub(crate) mod transform;

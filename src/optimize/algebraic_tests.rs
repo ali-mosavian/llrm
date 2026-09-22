@@ -28,7 +28,10 @@ use num_bigint::BigInt;
 
 use super::*;
 use crate::model::ir::Operation;
-use crate::model::mir::{Arg, Cell, Const, Held, Kind, MemRef, MirBlock, MirBody, Op, OpCode, OrderedMap, Symbol, Synth, Value};
+use crate::model::mir::{
+    Arg, Cell, Const, Held, Kind, MemRef, MirBlock, MirBody, Op, OpCode, OrderedMap, Symbol, Synth,
+    Value,
+};
 use crate::objectfile::module::{Addr, Space};
 
 fn value(id: u32, at: i64) -> Value {
@@ -36,7 +39,10 @@ fn value(id: u32, at: i64) -> Value {
 }
 
 fn flag(id: u32, at: i64) -> Value {
-    Value { flags: true, ..Value::new(id, at) }
+    Value {
+        flags: true,
+        ..Value::new(id, at)
+    }
 }
 
 fn held(value: Value, width: u32) -> Arg {
@@ -47,8 +53,27 @@ fn constant(n: impl Into<BigInt>, width: u32) -> Arg {
     Arg::Const(Const::new(n, width))
 }
 
-fn binary(at: i64, name: &str, kind: Kind, defines: Vec<Value>, uses: Vec<Value>, args: Vec<Arg>, results: Vec<Arg>) -> Op {
-    Op { kind, args, results, ..Op::new(at, OpCode::Operation(Operation::Binary), name, defines, uses) }
+fn binary(
+    at: i64,
+    name: &str,
+    kind: Kind,
+    defines: Vec<Value>,
+    uses: Vec<Value>,
+    args: Vec<Arg>,
+    results: Vec<Arg>,
+) -> Op {
+    Op {
+        kind,
+        args,
+        results,
+        ..Op::new(
+            at,
+            OpCode::Operation(Operation::Binary),
+            name,
+            defines,
+            uses,
+        )
+    }
 }
 
 fn counter(entries: &[(Value, usize)]) -> BTreeMap<Value, usize> {
@@ -74,7 +99,15 @@ fn merges(entries: &[(Value, Value)]) -> OrderedMap<Value, Value> {
 #[test]
 fn test_offset_composition_preserves_modular_values_and_observers() {
     for kind in [Kind::Add, Kind::Sub] {
-        for guard in ["none", "first_flags", "last_flags", "shared", "width", "merge", "memory"] {
+        for guard in [
+            "none",
+            "first_flags",
+            "last_flags",
+            "shared",
+            "width",
+            "merge",
+            "memory",
+        ] {
             let (source, middle, result) = (value(1, 0), value(2, 0), value(3, 0));
             let flags = flag(4, 0);
             let mut first = binary(
@@ -104,14 +137,24 @@ fn test_offset_composition_preserves_modular_values_and_observers() {
                 _ => {}
             }
             let uses = counter(&[(middle, if guard == "shared" { 2 } else { 1 })]);
-            let done = _offset_chain(&last, &definitions(&[(middle, &first)]), &set(&[flags]), &uses);
+            let done = _offset_chain(
+                &last,
+                &definitions(&[(middle, &first)]),
+                &set(&[flags]),
+                &uses,
+            );
             if guard != "none" {
                 assert_eq!(done, last, "{guard}");
                 continue;
             }
             let delta: i64 = if kind == Kind::Add { 20 } else { -20 };
-            assert_eq!(done.args, vec![held(source, 2), constant((65530 + delta) & 65535, 2)]);
-            let Arg::Const(amount) = &done.args[1] else { unreachable!() };
+            assert_eq!(
+                done.args,
+                vec![held(source, 2), constant((65530 + delta) & 65535, 2)]
+            );
+            let Arg::Const(amount) = &done.args[1] else {
+                unreachable!()
+            };
             for number in [0_i64, 1, 32767, 32768, 65535] {
                 assert_eq!(
                     BigInt::from((((number + 65530) & 65535) + delta) & 65535),
@@ -129,7 +172,15 @@ fn test_associative_bitwise_constants_combine_without_losing_observers() {
         (Kind::Or, 0xF003, 0x0F30, 0xFF33),
         (Kind::Xor, 0xFFFF, 0x0031, 0xFFCE),
     ] {
-        for guard in ["none", "first_flags", "last_flags", "shared", "width", "merge", "memory"] {
+        for guard in [
+            "none",
+            "first_flags",
+            "last_flags",
+            "shared",
+            "width",
+            "merge",
+            "memory",
+        ] {
             let (source, middle, result) = (value(1, 0), value(2, 0), value(3, 0));
             let flags = flag(4, 0);
             let name = kind.to_string();
@@ -160,7 +211,12 @@ fn test_associative_bitwise_constants_combine_without_losing_observers() {
                 _ => {}
             }
             let uses = counter(&[(middle, if guard == "shared" { 2 } else { 1 })]);
-            let changed = _bitwise_chain(&last_op, &definitions(&[(middle, &first_op)]), &set(&[flags]), &uses);
+            let changed = _bitwise_chain(
+                &last_op,
+                &definitions(&[(middle, &first_op)]),
+                &set(&[flags]),
+                &uses,
+            );
             if !matches!(guard, "none" | "last_flags") {
                 assert_eq!(changed, last_op, "{guard}");
                 continue;
@@ -181,7 +237,14 @@ fn test_associative_bitwise_constants_combine_without_losing_observers() {
 
 #[test]
 fn test_scaled_chain_preserves_modular_values_and_observed_intermediates() {
-    for guard in ["none", "first_flags", "last_flags", "shared", "width", "merge"] {
+    for guard in [
+        "none",
+        "first_flags",
+        "last_flags",
+        "shared",
+        "width",
+        "merge",
+    ] {
         let (source, middle, result) = (value(1, 0), value(2, 0), value(3, 0));
         let flags = flag(4, 0);
         let mut first = binary(
@@ -210,7 +273,12 @@ fn test_scaled_chain_preserves_modular_values_and_observed_intermediates() {
             _ => {}
         }
         let uses = counter(&[(middle, if guard == "shared" { 2 } else { 1 })]);
-        let done = _scaled_chain(&last, &definitions(&[(middle, &first)]), &set(&[flags]), &uses);
+        let done = _scaled_chain(
+            &last,
+            &definitions(&[(middle, &first)]),
+            &set(&[flags]),
+            &uses,
+        );
         if guard != "none" {
             assert_eq!(done, last, "{guard}");
             continue;
@@ -226,7 +294,8 @@ fn test_scaled_chain_preserves_modular_values_and_observed_intermediates() {
 #[test]
 fn test_shared_shift_requires_available_same_width_value() {
     for guard in ["none", "unused", "flags", "width", "block"] {
-        let (source, middle, result, observed) = (value(1, 0), value(2, 0), value(3, 0), value(4, 0));
+        let (source, middle, result, observed) =
+            (value(1, 0), value(2, 0), value(3, 0), value(4, 0));
         let flags = flag(5, 0);
         let first = binary(
             0,
@@ -241,7 +310,13 @@ fn test_shared_shift_requires_available_same_width_value() {
             kind: Kind::Copy,
             args: vec![held(middle, 2)],
             results: vec![held(observed, 2)],
-            ..Op::new(1, OpCode::Operation(Operation::Move), "mov", vec![observed], vec![middle])
+            ..Op::new(
+                1,
+                OpCode::Operation(Operation::Move),
+                "mov",
+                vec![observed],
+                vec![middle],
+            )
         };
         let width = if guard == "width" { 4 } else { 2 };
         let mut last = binary(
@@ -256,11 +331,23 @@ fn test_shared_shift_requires_available_same_width_value() {
         if guard == "flags" {
             last.defines = vec![result, flags];
         }
-        let prefix = if guard == "unused" { vec![first] } else { vec![first, observe] };
-        let blocks = if guard == "block" {
-            vec![MirBlock::new(0, vec![], prefix, vec![2]), MirBlock::new(2, vec![], vec![last.clone()], vec![])]
+        let prefix = if guard == "unused" {
+            vec![first]
         } else {
-            vec![MirBlock::new(0, vec![], prefix.into_iter().chain([last.clone()]).collect(), vec![])]
+            vec![first, observe]
+        };
+        let blocks = if guard == "block" {
+            vec![
+                MirBlock::new(0, vec![], prefix, vec![2]),
+                MirBlock::new(2, vec![], vec![last.clone()], vec![]),
+            ]
+        } else {
+            vec![MirBlock::new(
+                0,
+                vec![],
+                prefix.into_iter().chain([last.clone()]).collect(),
+                vec![],
+            )]
         };
         let shared = _shared_shifts(&MirBody::new(0, blocks), &set(&[flags]));
         let done = shared.blocks.last().unwrap().ops.last().unwrap();
@@ -270,7 +357,10 @@ fn test_shared_shift_requires_available_same_width_value() {
         }
         assert_eq!(done.args, vec![held(middle, 2), constant(1, 1)]);
         for number in [0_i64, 1, 16383, 16384, 32767, 32768, 65535] {
-            assert_eq!((((number << 1) & 65535) << 1) & 65535, (number << 2) & 65535);
+            assert_eq!(
+                (((number << 1) & 65535) << 1) & 65535,
+                (number << 2) & 65535
+            );
         }
     }
 }
@@ -284,23 +374,44 @@ fn test_shared_shift_distinguishes_a_word_tie_from_a_partial_write() {
         let final_result = held(result, width);
         let first = Op {
             merges: merges(&[(source, middle)]),
-            ..binary(0, "shl", Kind::Shl, vec![middle], vec![source], vec![held(source, width), constant(1, 1)], vec![
-                first_result.clone(),
-            ])
+            ..binary(
+                0,
+                "shl",
+                Kind::Shl,
+                vec![middle],
+                vec![source],
+                vec![held(source, width), constant(1, 1)],
+                vec![first_result.clone()],
+            )
         };
         let last = Op {
             merges: merges(&[(source, result)]),
-            ..binary(1, "shl", Kind::Shl, vec![result], vec![source], vec![held(source, width), constant(2, 1)], vec![
-                final_result,
-            ])
+            ..binary(
+                1,
+                "shl",
+                Kind::Shl,
+                vec![result],
+                vec![source],
+                vec![held(source, width), constant(2, 1)],
+                vec![final_result],
+            )
         };
         let observe = Op {
             kind: Kind::Opaque,
             args: vec![first_result.clone()],
-            ..Op::new(2, OpCode::Operation(Operation::Move), "mov", vec![], vec![middle])
+            ..Op::new(
+                2,
+                OpCode::Operation(Operation::Move),
+                "mov",
+                vec![],
+                vec![middle],
+            )
         };
 
-        let shared = _shared_shifts(&one_block(vec![first, observe, last.clone()]), &BTreeSet::new());
+        let shared = _shared_shifts(
+            &one_block(vec![first, observe, last.clone()]),
+            &BTreeSet::new(),
+        );
         let done = shared.blocks[0].ops.last().unwrap();
 
         if partial {
@@ -315,23 +426,47 @@ fn test_shared_shift_distinguishes_a_word_tie_from_a_partial_write() {
 
 #[test]
 fn test_extracted_halves_recombine_to_the_original_value() {
-    for (high_offset, different_source, recombined) in [(16, false, true), (0, false, false), (16, true, false)] {
-        let (source, other, low, high, result) = (value(1, 0), value(2, 0), value(3, 0), value(4, 0), value(5, 0));
+    for (high_offset, different_source, recombined) in
+        [(16, false, true), (0, false, false), (16, true, false)]
+    {
+        let (source, other, low, high, result) = (
+            value(1, 0),
+            value(2, 0),
+            value(3, 0),
+            value(4, 0),
+            value(5, 0),
+        );
         let extract = |value: Value, original: Value, offset: i64| Op {
             kind: Kind::Extract,
             args: vec![held(original, 4), constant(offset, 4)],
             results: vec![held(value, 2)],
-            ..Op::new(0, OpCode::Synth(Synth::HalfToLow), "extract", vec![value], vec![original])
+            ..Op::new(
+                0,
+                OpCode::Synth(Synth::HalfToLow),
+                "extract",
+                vec![value],
+                vec![original],
+            )
         };
         let concat = Op {
             kind: Kind::Concat,
             args: vec![held(high, 2), held(low, 2)],
             results: vec![held(result, 4)],
-            ..Op::new(1, OpCode::Synth(Synth::ConcatLow), "concat", vec![result], vec![high, low])
+            ..Op::new(
+                1,
+                OpCode::Synth(Synth::ConcatLow),
+                "concat",
+                vec![result],
+                vec![high, low],
+            )
         };
         let body = one_block(vec![
             extract(low, source, 0),
-            extract(high, if different_source { other } else { source }, high_offset),
+            extract(
+                high,
+                if different_source { other } else { source },
+                high_offset,
+            ),
             concat.clone(),
         ]);
         let done = simplified(&body, &set(&[result]), &BTreeSet::new()).unwrap();
@@ -352,12 +487,19 @@ fn test_joined_halves_are_consumed_as_halves() {
         let flags = flag(4, 0);
         let mut address = Addr::new(Space::Segment, 8);
         address.index = 5;
-        let r#ref = MemRef { space: Some(Space::Segment), ..MemRef::new(Some(address), 4) };
+        let r#ref = MemRef {
+            space: Some(Space::Segment),
+            ..MemRef::new(Some(address), 4)
+        };
         let nothing = |at: i64, defines: Vec<Value>, uses: Vec<Value>| {
             Op::new(at, OpCode::Operation(Operation::Nothing), "", defines, uses)
         };
         let mut ops = vec![
-            Op { kind: Kind::Call, results: vec![held(low, 2), held(high, 2)], ..nothing(1, vec![low, high], vec![]) },
+            Op {
+                kind: Kind::Call,
+                results: vec![held(low, 2), held(high, 2)],
+                ..nothing(1, vec![low, high], vec![])
+            },
             Op {
                 kind: Kind::Concat,
                 args: vec![held(high, 2), held(low, 2)],
@@ -367,19 +509,32 @@ fn test_joined_halves_are_consumed_as_halves() {
             Op {
                 kind: Kind::Store,
                 args: vec![held(whole, 4)],
-                results: vec![Arg::Cell(Cell { r#ref: r#ref.clone() })],
+                results: vec![Arg::Cell(Cell {
+                    r#ref: r#ref.clone(),
+                })],
                 stores: vec![r#ref.clone()],
                 ..nothing(3, vec![], vec![whole])
             },
-            Op { kind: Kind::Arg, args: vec![held(whole, 4)], ..nothing(4, vec![], vec![whole]) },
+            Op {
+                kind: Kind::Arg,
+                args: vec![held(whole, 4)],
+                ..nothing(4, vec![], vec![whole])
+            },
             Op {
                 kind: Kind::Sub,
-                args: vec![held(whole, 4), constant(if mode == "nonzero" { 5 } else { 0 }, 4)],
+                args: vec![
+                    held(whole, 4),
+                    constant(if mode == "nonzero" { 5 } else { 0 }, 4),
+                ],
                 ..nothing(5, vec![flags], vec![whole])
             },
             Op {
                 kind: Kind::Branch,
-                test: Some(if mode == "ordered" { Kind::Lt } else { Kind::Ne }),
+                test: Some(if mode == "ordered" {
+                    Kind::Lt
+                } else {
+                    Kind::Ne
+                }),
                 target: Some(0),
                 ..nothing(6, vec![], vec![flags])
             },
@@ -417,7 +572,10 @@ fn test_joined_halves_are_consumed_as_halves() {
             ]
         );
         assert_eq!(
-            done.iter().filter(|op| op.kind == Kind::Arg).map(|op| op.args.clone()).collect::<Vec<_>>(),
+            done.iter()
+                .filter(|op| op.kind == Kind::Arg)
+                .map(|op| op.args.clone())
+                .collect::<Vec<_>>(),
             vec![vec![held(high, 2)], vec![held(low, 2)]]
         );
         let test = done.iter().find(|op| op.defines.contains(&flags)).unwrap();
@@ -437,7 +595,13 @@ fn test_recombination_follows_only_exact_word_copies() {
                 kind: Kind::Extract,
                 args: vec![held(source, 4), constant(offset, 4)],
                 results: vec![held(value, 2)],
-                ..Op::new(0, OpCode::Synth(Synth::HalfToLow), "extract", vec![value], vec![source])
+                ..Op::new(
+                    0,
+                    OpCode::Synth(Synth::HalfToLow),
+                    "extract",
+                    vec![value],
+                    vec![source],
+                )
             });
         }
         let incoming = if mode == "cycle" { copied } else { low };
@@ -445,23 +609,52 @@ fn test_recombination_follows_only_exact_word_copies() {
             kind: Kind::Copy,
             args: vec![held(incoming, if mode == "width_change" { 4 } else { 2 })],
             results: vec![held(copied, 2)],
-            ..Op::new(1, OpCode::Operation(Operation::Move), "mov", vec![copied], vec![incoming])
+            ..Op::new(
+                1,
+                OpCode::Operation(Operation::Move),
+                "mov",
+                vec![copied],
+                vec![incoming],
+            )
         });
         let found = definitions(&[(high, &ops[0]), (low, &ops[1]), (copied, &ops[2])]);
         let answer = mir::extracted_whole(&held(high, 2), &held(copied, 2), &found);
-        assert_eq!(answer, if mode == "copy" { Some(Held { value: source, width: 4 }) } else { None }, "{mode}");
+        assert_eq!(
+            answer,
+            if mode == "copy" {
+                Some(Held {
+                    value: source,
+                    width: 4,
+                })
+            } else {
+                None
+            },
+            "{mode}"
+        );
     }
 }
 
 #[test]
 fn test_signed_recombination_compares_copy_sources_symmetrically() {
     for mode in ["same", "sibling", "different", "width_change", "barrier"] {
-        let (root, copied, sibling, whole, high) = (value(1, 0), value(2, 0), value(3, 0), value(4, 0), value(5, 0));
+        let (root, copied, sibling, whole, high) = (
+            value(1, 0),
+            value(2, 0),
+            value(3, 0),
+            value(4, 0),
+            value(5, 0),
+        );
         let copy = |value: Value| Op {
             kind: Kind::Copy,
             args: vec![held(root, 2)],
             results: vec![held(value, 2)],
-            ..Op::new(0, OpCode::Operation(Operation::Move), "mov", vec![value], vec![root])
+            ..Op::new(
+                0,
+                OpCode::Operation(Operation::Move),
+                "mov",
+                vec![value],
+                vec![root],
+            )
         };
         let mut copied_op = copy(copied);
         let sibling_op = copy(sibling);
@@ -475,23 +668,42 @@ fn test_signed_recombination_compares_copy_sources_symmetrically() {
             kind: Kind::SignExtend,
             args: vec![held(copied, 2)],
             results: vec![held(whole, 4)],
-            ..Op::new(1, OpCode::Operation(Operation::Extend), "sign_extend", vec![whole], vec![copied])
+            ..Op::new(
+                1,
+                OpCode::Operation(Operation::Extend),
+                "sign_extend",
+                vec![whole],
+                vec![copied],
+            )
         };
         let extract = Op {
             kind: Kind::Extract,
             args: vec![held(whole, 4), constant(16, 4)],
             results: vec![held(high, 2)],
-            ..Op::new(1, OpCode::Synth(Synth::HalfToLow), "extract", vec![high], vec![whole])
+            ..Op::new(
+                1,
+                OpCode::Synth(Synth::HalfToLow),
+                "extract",
+                vec![high],
+                vec![whole],
+            )
         };
-        let found =
-            definitions(&[(copied, &copied_op), (sibling, &sibling_op), (whole, &extension), (high, &extract)]);
+        let found = definitions(&[
+            (copied, &copied_op),
+            (sibling, &sibling_op),
+            (whole, &extension),
+            (high, &extract),
+        ]);
         let low = match mode {
             "same" => copied,
             "different" => value(99, 0),
             _ => sibling,
         };
         let answer = mir::extracted_whole(&held(high, 2), &held(low, 2), &found);
-        let expected = matches!(mode, "same" | "sibling").then_some(Held { value: whole, width: 4 });
+        let expected = matches!(mode, "same" | "sibling").then_some(Held {
+            value: whole,
+            width: 4,
+        });
         assert_eq!(answer, expected, "{mode}");
     }
 }
@@ -514,7 +726,13 @@ fn test_reversed_difference_preserves_observed_values_and_flags() {
             kind: Kind::Neg,
             args: vec![held(middle, 4)],
             results: vec![held(result, 4)],
-            ..Op::new(1, OpCode::Operation(Operation::Unary), "neg", vec![result], vec![middle])
+            ..Op::new(
+                1,
+                OpCode::Operation(Operation::Unary),
+                "neg",
+                vec![result],
+                vec![middle],
+            )
         };
         match guard {
             "sub_flags" => difference.defines = vec![middle, flags],
@@ -524,16 +742,27 @@ fn test_reversed_difference_preserves_observed_values_and_flags() {
             _ => {}
         }
         let uses = counter(&[(middle, if guard == "shared" { 2 } else { 1 })]);
-        let done = _negated_difference(&negate, &definitions(&[(middle, &difference)]), &set(&[flags]), &uses);
+        let done = _negated_difference(
+            &negate,
+            &definitions(&[(middle, &difference)]),
+            &set(&[flags]),
+            &uses,
+        );
         if guard != "none" {
             assert_eq!(done, negate, "{guard}");
             continue;
         }
         assert_eq!(done.kind, Kind::Sub);
-        assert_eq!(done.args, difference.args.iter().rev().cloned().collect::<Vec<_>>());
+        assert_eq!(
+            done.args,
+            difference.args.iter().rev().cloned().collect::<Vec<_>>()
+        );
         for first in [0_i64, 1, 0x7FFF_FFFF, 0x8000_0000, 0xFFFF_FFFF] {
             for second in [0_i64, 1, 0x7FFF_FFFF, 0x8000_0000, 0xFFFF_FFFF] {
-                assert_eq!((-((first - second) & 0xFFFF_FFFF)) & 0xFFFF_FFFF, (second - first) & 0xFFFF_FFFF);
+                assert_eq!(
+                    (-((first - second) & 0xFFFF_FFFF)) & 0xFFFF_FFFF,
+                    (second - first) & 0xFFFF_FFFF
+                );
             }
         }
     }
@@ -541,8 +770,12 @@ fn test_reversed_difference_preserves_observed_values_and_flags() {
 
 #[test]
 fn test_shift_combination_preserves_count_flag_and_use_boundaries() {
-    for (first_count, last_count, live_flags, uses) in [(15, 1, false, 1), (32, 1, false, 1), (1, 1, true, 1), (1, 1, false, 2)]
-    {
+    for (first_count, last_count, live_flags, uses) in [
+        (15, 1, false, 1),
+        (32, 1, false, 1),
+        (1, 1, true, 1),
+        (1, 1, false, 2),
+    ] {
         let (source, middle, result) = (value(1, 0), value(2, 0), value(3, 0));
         let flags = flag(4, 0);
         let first = binary(
@@ -563,9 +796,18 @@ fn test_shift_combination_preserves_count_flag_and_use_boundaries() {
             vec![held(middle, 2), constant(last_count, 1)],
             vec![held(result, 2)],
         );
-        let wanted = if live_flags { set(&[flags]) } else { BTreeSet::new() };
+        let wanted = if live_flags {
+            set(&[flags])
+        } else {
+            BTreeSet::new()
+        };
         assert_eq!(
-            _shift_chain(&last, &definitions(&[(middle, &first)]), &wanted, &counter(&[(middle, uses)])),
+            _shift_chain(
+                &last,
+                &definitions(&[(middle, &first)]),
+                &wanted,
+                &counter(&[(middle, uses)])
+            ),
             last
         );
     }
@@ -573,15 +815,30 @@ fn test_shift_combination_preserves_count_flag_and_use_boundaries() {
 
 #[test]
 fn test_signed_power_division_preserves_quotient_and_remainder() {
-    for (width, divisor) in [(4_u32, 2_i64), (4, 16), (4, 512), (4, 262144), (2, 2), (2, 16), (2, 16384)] {
+    for (width, divisor) in [
+        (4_u32, 2_i64),
+        (4, 16),
+        (4, 512),
+        (4, 262144),
+        (2, 2),
+        (2, 16),
+        (2, 16384),
+    ] {
         for immediate in [false, true] {
             let bits = 8 * width;
-            let (source, constant_value, quotient, remainder) = (value(1, 0), value(2, 0), value(3, 0), value(4, 0));
+            let (source, constant_value, quotient, remainder) =
+                (value(1, 0), value(2, 0), value(3, 0), value(4, 0));
             let copy = Op {
                 kind: Kind::Copy,
                 args: vec![constant(divisor, width)],
                 results: vec![held(constant_value, width)],
-                ..Op::new(0, OpCode::Operation(Operation::Move), "mov", vec![constant_value], vec![])
+                ..Op::new(
+                    0,
+                    OpCode::Operation(Operation::Move),
+                    "mov",
+                    vec![constant_value],
+                    vec![],
+                )
             };
             let mut divide = Op {
                 kind: Kind::Divmod,
@@ -605,7 +862,18 @@ fn test_signed_power_division_preserves_quotient_and_remainder() {
             let done = _divisions(&body);
             assert!(done.blocks[0].ops.iter().all(|op| op.kind != Kind::Divmod));
             let (lowest, highest) = (-(1_i64 << (bits - 1)), (1_i64 << (bits - 1)) - 1);
-            for number in [lowest, -divisor - 1, -divisor, -divisor + 1, -1, 0, 1, divisor - 1, divisor, highest] {
+            for number in [
+                lowest,
+                -divisor - 1,
+                -divisor,
+                -divisor + 1,
+                -1,
+                0,
+                1,
+                divisor - 1,
+                divisor,
+                highest,
+            ] {
                 let mut values = BTreeMap::from([(source, number)]);
                 for op in &done.blocks[0].ops {
                     let args = op
@@ -627,10 +895,13 @@ fn test_signed_power_division_preserves_quotient_and_remainder() {
                         Kind::Sub => args[0] - args[1],
                         other => panic!("{other}"),
                     };
-                    let Arg::Held(result) = op.results[0] else { unreachable!() };
+                    let Arg::Held(result) = op.results[0] else {
+                        unreachable!()
+                    };
                     values.insert(
                         result.value,
-                        ((answer & ((1_i64 << bits) - 1)) ^ (1_i64 << (bits - 1))) - (1_i64 << (bits - 1)),
+                        ((answer & ((1_i64 << bits) - 1)) ^ (1_i64 << (bits - 1)))
+                            - (1_i64 << (bits - 1)),
                     );
                 }
                 let expected = number.abs() / divisor * if number < 0 { -1 } else { 1 };
@@ -643,13 +914,24 @@ fn test_signed_power_division_preserves_quotient_and_remainder() {
 
 #[test]
 fn test_constant_word_concatenation() {
-    for (high, low, answer) in [(4_i64, 0_i64, 262144_i64), (0, 512, 512), (-1, -1, 0xFFFF_FFFF), (1, -1, 0x1FFFF)] {
+    for (high, low, answer) in [
+        (4_i64, 0_i64, 262144_i64),
+        (0, 512, 512),
+        (-1, -1, 0xFFFF_FFFF),
+        (1, -1, 0x1FFFF),
+    ] {
         let result = value(1, 0);
         let op = Op {
             kind: Kind::Concat,
             args: vec![constant(high, 2), constant(low, 2)],
             results: vec![held(result, 4)],
-            ..Op::new(0, OpCode::Synth(Synth::ConcatLow), "concat", vec![result], vec![])
+            ..Op::new(
+                0,
+                OpCode::Synth(Synth::ConcatLow),
+                "concat",
+                vec![result],
+                vec![],
+            )
         };
         let done = simplified(&one_block(vec![op]), &set(&[result]), &BTreeSet::new()).unwrap();
         let done = &done.blocks[0].ops[0];
@@ -676,7 +958,11 @@ fn test_integer_identities() {
             (Kind::Sar, 0, None),
         ] {
             let (source, result) = (value(10, 0), value(11, 1));
-            let count_width = if matches!(kind, Kind::Shl | Kind::Shr | Kind::Sar) { 1 } else { width };
+            let count_width = if matches!(kind, Kind::Shl | Kind::Shr | Kind::Sar) {
+                1
+            } else {
+                width
+            };
             let op = binary(
                 1,
                 "",
@@ -690,7 +976,10 @@ fn test_integer_identities() {
             assert_eq!(changed.kind, Kind::Copy);
             let expected = match answer {
                 None => held(source, width),
-                Some(answer) => constant(BigInt::from(answer) & ((BigInt::from(1) << (width * 8)) - 1), width),
+                Some(answer) => constant(
+                    BigInt::from(answer) & ((BigInt::from(1) << (width * 8)) - 1),
+                    width,
+                ),
             };
             assert_eq!(changed.args, vec![expected]);
             assert_eq!(changed.defines, vec![result]);
@@ -698,8 +987,14 @@ fn test_integer_identities() {
                 assert_eq!(_simplified(&op, &set(&[result]), &set(&[result])), op);
             }
             let flags = flag(12, 1);
-            let observed_flags = Op { defines: vec![result, flags], ..op.clone() };
-            assert_eq!(_simplified(&observed_flags, &set(&[result, flags]), &BTreeSet::new()), observed_flags);
+            let observed_flags = Op {
+                defines: vec![result, flags],
+                ..op.clone()
+            };
+            assert_eq!(
+                _simplified(&observed_flags, &set(&[result, flags]), &BTreeSet::new()),
+                observed_flags
+            );
         }
     }
 }
@@ -713,7 +1008,13 @@ fn test_product_projection_retains_observed_outputs() {
             args: vec![held(source, 2), constant(20, 2)],
             results: vec![held(low, 2), held(high, 2)],
             merges: merges(&[(source, high)]),
-            ..Op::new(1, OpCode::Operation(Operation::Multiply), "imul", vec![flags, low, high], vec![source])
+            ..Op::new(
+                1,
+                OpCode::Operation(Operation::Multiply),
+                "imul",
+                vec![flags, low, high],
+                vec![source],
+            )
         };
         let mut wanted = set(&[low]);
         match observed {
@@ -725,7 +1026,11 @@ fn test_product_projection_retains_observed_outputs() {
             }
             _ => {}
         }
-        let wide = if observed == "upper" { set(&[low]) } else { BTreeSet::new() };
+        let wide = if observed == "upper" {
+            set(&[low])
+        } else {
+            BTreeSet::new()
+        };
         let changed = _product(&op, &wanted, &wide);
         if observed == "none" {
             assert_eq!(changed.results, vec![held(low, 2)]);
@@ -741,11 +1046,20 @@ fn test_product_projection_retains_observed_outputs() {
 fn test_a_symbol_plus_zero_is_the_symbol() {
     let symbol = Symbol::new(Space::Segment, 2, 0, 2);
     let result = value(1, 0);
-    let add = binary(0, "add", Kind::Add, vec![result], vec![], vec![constant(0, 2), Arg::Symbol(symbol)], vec![
-        held(result, 2),
-    ]);
+    let add = binary(
+        0,
+        "add",
+        Kind::Add,
+        vec![result],
+        vec![],
+        vec![constant(0, 2), Arg::Symbol(symbol)],
+        vec![held(result, 2)],
+    );
     let done = _simplified(&add, &BTreeSet::new(), &BTreeSet::new());
-    assert_eq!((done.kind, done.args), (Kind::Copy, vec![Arg::Symbol(symbol)]));
+    assert_eq!(
+        (done.kind, done.args),
+        (Kind::Copy, vec![Arg::Symbol(symbol)])
+    );
 }
 
 fn extension(at: i64, result: Value, source: Value, source_width: u32) -> Op {
@@ -753,7 +1067,13 @@ fn extension(at: i64, result: Value, source: Value, source_width: u32) -> Op {
         kind: Kind::ZeroExtend,
         args: vec![held(source, source_width)],
         results: vec![held(result, 2)],
-        ..Op::new(at, OpCode::Operation(Operation::Extend), "", vec![result], vec![source])
+        ..Op::new(
+            at,
+            OpCode::Operation(Operation::Extend),
+            "",
+            vec![result],
+            vec![source],
+        )
     }
 }
 
@@ -762,9 +1082,24 @@ fn test_reextending_an_already_zero_extended_low_byte_is_a_copy() {
     let (source, middle, result) = (value(1, 0), value(2, 0), value(3, 0));
     let first = extension(1, middle, source, 1);
     let second = extension(2, result, middle, 1);
-    let used = Op { kind: Kind::Arg, args: vec![held(result, 1)], ..Op::new(3, OpCode::Operation(Operation::Push), "", vec![], vec![result]) };
+    let used = Op {
+        kind: Kind::Arg,
+        args: vec![held(result, 1)],
+        ..Op::new(
+            3,
+            OpCode::Operation(Operation::Push),
+            "",
+            vec![],
+            vec![result],
+        )
+    };
 
-    let done = simplified(&one_block(vec![first, second, used]), &BTreeSet::new(), &BTreeSet::new()).unwrap();
+    let done = simplified(
+        &one_block(vec![first, second, used]),
+        &BTreeSet::new(),
+        &BTreeSet::new(),
+    )
+    .unwrap();
     let changed = &done.blocks[0].ops[1];
 
     assert_eq!(changed.kind, Kind::Copy);
@@ -773,7 +1108,12 @@ fn test_reextending_an_already_zero_extended_low_byte_is_a_copy() {
 
 #[test]
 fn test_redundant_extension_requires_every_output_bit_to_be_known() {
-    for guard in ["signedness", "discarded_bits", "unknown_upper", "extra_result"] {
+    for guard in [
+        "signedness",
+        "discarded_bits",
+        "unknown_upper",
+        "extra_result",
+    ] {
         let (source, middle, result, flags) = (value(1, 0), value(2, 0), value(3, 0), flag(4, 0));
         let mut first = extension(1, middle, source, 1);
         let mut second = extension(2, result, middle, 1);
@@ -783,7 +1123,11 @@ fn test_redundant_extension_requires_every_output_bit_to_be_known() {
             "unknown_upper" => second.results = vec![held(result, 4)],
             _ => second.defines = vec![result, flags],
         }
-        assert_eq!(_redundant_extension(&second, &definitions(&[(middle, &first)])), second, "{guard}");
+        assert_eq!(
+            _redundant_extension(&second, &definitions(&[(middle, &first)])),
+            second,
+            "{guard}"
+        );
     }
 }
 
@@ -792,7 +1136,13 @@ fn zero_copy(zero: Value) -> Op {
         kind: Kind::Copy,
         args: vec![constant(0, 4)],
         results: vec![held(zero, 4)],
-        ..Op::new(1, OpCode::Operation(Operation::Move), "", vec![zero], vec![])
+        ..Op::new(
+            1,
+            OpCode::Operation(Operation::Move),
+            "",
+            vec![zero],
+            vec![],
+        )
     }
 }
 
@@ -800,10 +1150,15 @@ fn zero_copy(zero: Value) -> Op {
 fn test_subtracting_from_a_copied_zero_is_negation() {
     let (zero, source, result, flags) = (value(1, 0), value(2, 0), value(3, 0), flag(4, 0));
     let constant_op = zero_copy(zero);
-    let subtract =
-        binary(2, "", Kind::Sub, vec![result, flags], vec![zero, source], vec![held(zero, 4), held(source, 4)], vec![
-            held(result, 4),
-        ]);
+    let subtract = binary(
+        2,
+        "",
+        Kind::Sub,
+        vec![result, flags],
+        vec![zero, source],
+        vec![held(zero, 4), held(source, 4)],
+        vec![held(result, 4)],
+    );
 
     let changed = _zero_difference(&subtract, &definitions(&[(zero, &constant_op)]));
 
@@ -815,13 +1170,25 @@ fn test_subtracting_from_a_copied_zero_is_negation() {
 
 #[test]
 fn test_zero_difference_requires_a_complete_pure_value() {
-    for guard in ["nonzero", "width", "effect", "extra_result", "untracked_use", "cycle"] {
+    for guard in [
+        "nonzero",
+        "width",
+        "effect",
+        "extra_result",
+        "untracked_use",
+        "cycle",
+    ] {
         let (zero, source, result, extra) = (value(1, 0), value(2, 0), value(3, 0), value(4, 0));
         let mut constant_op = zero_copy(zero);
-        let mut subtract =
-            binary(2, "", Kind::Sub, vec![result], vec![zero, source], vec![held(zero, 4), held(source, 4)], vec![
-                held(result, 4),
-            ]);
+        let mut subtract = binary(
+            2,
+            "",
+            Kind::Sub,
+            vec![result],
+            vec![zero, source],
+            vec![held(zero, 4), held(source, 4)],
+            vec![held(result, 4)],
+        );
         match guard {
             "nonzero" => constant_op.args = vec![constant(1, 4)],
             "width" => subtract.results = vec![held(result, 2)],
@@ -833,6 +1200,10 @@ fn test_zero_difference_requires_a_complete_pure_value() {
                 constant_op.uses = vec![zero];
             }
         }
-        assert_eq!(_zero_difference(&subtract, &definitions(&[(zero, &constant_op)])), subtract, "{guard}");
+        assert_eq!(
+            _zero_difference(&subtract, &definitions(&[(zero, &constant_op)])),
+            subtract,
+            "{guard}"
+        );
     }
 }

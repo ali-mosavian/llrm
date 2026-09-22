@@ -5,13 +5,19 @@
 use std::collections::BTreeMap;
 
 use crate::analysis::ssa;
-use crate::model::mir::{self, Arg, Cell, Const, Held, Kind, MemRef, MirBody, Op, OpCode, Synth, Value};
+use crate::model::mir::{
+    self, Arg, Cell, Const, Held, Kind, MemRef, MirBody, Op, OpCode, Synth, Value,
+};
 use crate::objectfile::module::{Addr, Space};
 use crate::support::pyset::PySet;
 
 /// Whether `ref` is the canonical supported packed dereference.
 pub(crate) fn _packed(r#ref: &MemRef) -> bool {
-    r#ref.pointer && r#ref.base.is_some() && r#ref.base_width == 4 && r#ref.addr.is_none() && r#ref.segment.is_none()
+    r#ref.pointer
+        && r#ref.base.is_some()
+        && r#ref.base_width == 4
+        && r#ref.addr.is_none()
+        && r#ref.segment.is_none()
 }
 
 /// One packed reference with its already-named address components.
@@ -59,9 +65,24 @@ pub(crate) fn split(body: MirBody) -> MirBody {
 
     let extract = |source: Value, result: Value, offset: i64, at: i64| Op {
         kind: Kind::Extract,
-        args: vec![Arg::Held(Held { value: source, width: 4 }), Arg::Const(Const::new(offset, 4))],
-        results: vec![Arg::Held(Held { value: result, width: 2 })],
-        ..Op::new(at, OpCode::Synth(Synth::HalfToLow), "extract", vec![result], vec![source])
+        args: vec![
+            Arg::Held(Held {
+                value: source,
+                width: 4,
+            }),
+            Arg::Const(Const::new(offset, 4)),
+        ],
+        results: vec![Arg::Held(Held {
+            value: result,
+            width: 2,
+        })],
+        ..Op::new(
+            at,
+            OpCode::Synth(Synth::HalfToLow),
+            "extract",
+            vec![result],
+            vec![source],
+        )
     };
 
     let mut changed = false;
@@ -118,7 +139,10 @@ pub(crate) fn split(body: MirBody) -> MirBody {
                 .chain(op.exits.iter().copied())
                 .chain(op.merges.keys().copied())
                 .collect::<Vec<_>>();
-            let packed_values = references.iter().filter_map(|r#ref| r#ref.base).collect::<PySet<Value>>();
+            let packed_values = references
+                .iter()
+                .filter_map(|r#ref| r#ref.base)
+                .collect::<PySet<Value>>();
             let mut uses = Vec::new();
             for value in &op.uses {
                 if !packed_values.contains(value) || direct.contains(value) {
@@ -143,7 +167,9 @@ pub(crate) fn split(body: MirBody) -> MirBody {
                     .args
                     .iter()
                     .map(|arg| match arg {
-                        Arg::Cell(cell) => Arg::Cell(Cell { r#ref: _reference(&cell.r#ref, &pieces) }),
+                        Arg::Cell(cell) => Arg::Cell(Cell {
+                            r#ref: _reference(&cell.r#ref, &pieces),
+                        }),
                         other => other.clone(),
                     })
                     .collect(),
@@ -151,12 +177,22 @@ pub(crate) fn split(body: MirBody) -> MirBody {
                     .results
                     .iter()
                     .map(|result| match result {
-                        Arg::Cell(cell) => Arg::Cell(Cell { r#ref: _reference(&cell.r#ref, &pieces) }),
+                        Arg::Cell(cell) => Arg::Cell(Cell {
+                            r#ref: _reference(&cell.r#ref, &pieces),
+                        }),
                         other => other.clone(),
                     })
                     .collect(),
-                loads: op.loads.iter().map(|r#ref| _reference(r#ref, &pieces)).collect(),
-                stores: op.stores.iter().map(|r#ref| _reference(r#ref, &pieces)).collect(),
+                loads: op
+                    .loads
+                    .iter()
+                    .map(|r#ref| _reference(r#ref, &pieces))
+                    .collect(),
+                stores: op
+                    .stores
+                    .iter()
+                    .map(|r#ref| _reference(r#ref, &pieces))
+                    .collect(),
                 memory_values: op
                     .memory_values
                     .iter()
@@ -166,7 +202,10 @@ pub(crate) fn split(body: MirBody) -> MirBody {
             });
             changed = true;
         }
-        blocks.push(mir::MirBlock { ops: operations, ..block.clone() });
+        blocks.push(mir::MirBlock {
+            ops: operations,
+            ..block.clone()
+        });
     }
 
     if changed {

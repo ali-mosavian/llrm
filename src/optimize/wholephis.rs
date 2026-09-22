@@ -21,7 +21,9 @@ pub(crate) fn _source(arg: &Arg, definitions: &BTreeMap<Value, &Op>) -> Arg {
         if !seen.insert(held.value) {
             break;
         }
-        let Some(op) = definitions.get(&held.value) else { break };
+        let Some(op) = definitions.get(&held.value) else {
+            break;
+        };
         if op.kind != Kind::Copy
             || !op.loads.is_empty()
             || !op.stores.is_empty()
@@ -47,7 +49,11 @@ pub(crate) fn joined(body: &MirBody) -> MirBody {
         .collect::<BTreeMap<Value, &Op>>();
     let facts = consts::known(body);
     let predecessors = loops::predecessors(&body.blocks);
-    let blocks = body.blocks.iter().map(|block| (block.at, block)).collect::<BTreeMap<i64, &MirBlock>>();
+    let blocks = body
+        .blocks
+        .iter()
+        .map(|block| (block.at, block))
+        .collect::<BTreeMap<i64, &MirBlock>>();
     let values = ssa::values(body).collect::<Vec<_>>();
     let mut serial = values.iter().map(|value| value.id).max().unwrap_or(0);
     let mut variable = values.iter().map(|value| value.variable).max().unwrap_or(0);
@@ -67,7 +73,11 @@ pub(crate) fn joined(body: &MirBody) -> MirBody {
     };
 
     for (block_index, block) in body.blocks.iter().enumerate() {
-        let mut phis = block.phis.iter().map(|phi| (phi.result, phi)).collect::<IndexMap<Value, &Phi>>();
+        let mut phis = block
+            .phis
+            .iter()
+            .map(|phi| (phi.result, phi))
+            .collect::<IndexMap<Value, &Phi>>();
         for (op_index, op) in block.ops.iter().enumerate() {
             if op.kind != Kind::Concat
                 || !op.loads.is_empty()
@@ -79,7 +89,11 @@ pub(crate) fn joined(body: &MirBody) -> MirBody {
             {
                 continue;
             }
-            let args = op.args.iter().map(|arg| _source(arg, &definitions)).collect::<Vec<_>>();
+            let args = op
+                .args
+                .iter()
+                .map(|arg| _source(arg, &definitions))
+                .collect::<Vec<_>>();
             if args
                 .iter()
                 .any(|arg| !matches!(arg, Arg::Held(held) if held.width == 2 && phis.contains_key(&held.value)))
@@ -93,7 +107,8 @@ pub(crate) fn joined(body: &MirBody) -> MirBody {
             let (high, low) = (phis[&held(&args[0])], phis[&held(&args[1])]);
             let preceding = predecessors.get(&block.at).cloned().unwrap_or_default();
             if high.incoming.is_empty()
-                || high.incoming.keys().collect::<BTreeSet<_>>() != low.incoming.keys().collect::<BTreeSet<_>>()
+                || high.incoming.keys().collect::<BTreeSet<_>>()
+                    != low.incoming.keys().collect::<BTreeSet<_>>()
                 || high.incoming.keys().copied().collect::<BTreeSet<_>>() != preceding
             {
                 continue;
@@ -102,21 +117,32 @@ pub(crate) fn joined(body: &MirBody) -> MirBody {
             for (at, upper) in high.incoming.iter() {
                 let lower = low.incoming.get(at).expect("same keys");
                 let whole = mir::extracted_whole(
-                    &Arg::Held(Held { value: *upper, width: 2 }),
-                    &Arg::Held(Held { value: *lower, width: 2 }),
+                    &Arg::Held(Held {
+                        value: *upper,
+                        width: 2,
+                    }),
+                    &Arg::Held(Held {
+                        value: *lower,
+                        width: 2,
+                    }),
                     &definitions,
                 );
                 let whole = match whole {
                     Some(whole) => Arg::Held(whole),
                     None => {
-                        let (Some(upper_fact), Some(lower_fact)) = (facts.get(upper), facts.get(lower)) else {
+                        let (Some(upper_fact), Some(lower_fact)) =
+                            (facts.get(upper), facts.get(lower))
+                        else {
                             break;
                         };
                         if upper_fact.width != 2 || lower_fact.width != 2 {
                             break;
                         }
                         let mask = BigInt::from(0xffff);
-                        Arg::Const(Const::new(((&upper_fact.n & &mask) << 16) | (&lower_fact.n & &mask), 4))
+                        Arg::Const(Const::new(
+                            ((&upper_fact.n & &mask) << 16) | (&lower_fact.n & &mask),
+                            4,
+                        ))
                     }
                 };
                 if !blocks.get(at).is_some_and(|one| !one.ops.is_empty()) {
@@ -150,22 +176,43 @@ pub(crate) fn joined(body: &MirBody) -> MirBody {
                 });
             }
             let result = fresh(block.at, variable);
-            new_phis.entry(block.at).or_default().push(Phi { result, incoming });
+            new_phis
+                .entry(block.at)
+                .or_default()
+                .push(Phi { result, incoming });
             for (phi, offset) in [(high, 16), (low, 0)] {
                 removed.insert(phi.result);
                 phis.shift_remove(&phi.result);
                 extracts.entry(block.at).or_default().push(Op {
                     kind: Kind::Extract,
-                    args: vec![Arg::Held(Held { value: result, width: 4 }), Arg::Const(Const::new(offset, 4))],
-                    results: vec![Arg::Held(Held { value: phi.result, width: 2 })],
-                    ..Op::new(block.at, OpCode::Synth(Synth::HalfToLow), "extract", vec![phi.result], vec![result])
+                    args: vec![
+                        Arg::Held(Held {
+                            value: result,
+                            width: 4,
+                        }),
+                        Arg::Const(Const::new(offset, 4)),
+                    ],
+                    results: vec![Arg::Held(Held {
+                        value: phi.result,
+                        width: 2,
+                    })],
+                    ..Op::new(
+                        block.at,
+                        OpCode::Synth(Synth::HalfToLow),
+                        "extract",
+                        vec![phi.result],
+                        vec![result],
+                    )
                 });
             }
             replacements.insert(
                 (block_index, op_index),
                 Op {
                     kind: Kind::Copy,
-                    args: vec![Arg::Held(Held { value: result, width: 4 })],
+                    args: vec![Arg::Held(Held {
+                        value: result,
+                        width: 4,
+                    })],
                     uses: vec![result],
                     merges: OrderedMap::new(),
                     source_backed: false,
@@ -184,10 +231,18 @@ pub(crate) fn joined(body: &MirBody) -> MirBody {
             .ops
             .iter()
             .enumerate()
-            .map(|(op_index, op)| replacements.get(&(block_index, op_index)).unwrap_or(op).clone())
+            .map(|(op_index, op)| {
+                replacements
+                    .get(&(block_index, op_index))
+                    .unwrap_or(op)
+                    .clone()
+            })
             .collect::<Vec<_>>();
-        let position = ops.len()
-            - usize::from(ops.last().is_some_and(|last| matches!(last.kind, Kind::Branch | Kind::Jump | Kind::Return)));
+        let position =
+            ops.len()
+                - usize::from(ops.last().is_some_and(|last| {
+                    matches!(last.kind, Kind::Branch | Kind::Jump | Kind::Return)
+                }));
         if let Some(added) = additions.get(&block.at) {
             ops.splice(position..position, added.iter().cloned());
         }
@@ -201,7 +256,14 @@ pub(crate) fn joined(body: &MirBody) -> MirBody {
             .cloned()
             .chain(new_phis.get(&block.at).into_iter().flatten().cloned())
             .collect();
-        changed.push(MirBlock { ops, phis, ..block.clone() });
+        changed.push(MirBlock {
+            ops,
+            phis,
+            ..block.clone()
+        });
     }
-    MirBody { blocks: changed, ..body.clone() }
+    MirBody {
+        blocks: changed,
+        ..body.clone()
+    }
 }
