@@ -198,7 +198,7 @@ pub(crate) fn evaluated(body: &Rc<MirBody>) -> Result<Rc<MirBody>, String> {
                 if block.at == header.at {
                     replacement.clone()
                 } else if block.at == latch.at {
-                    let mut cleared = block.clone();
+                    let mut cleared = block.with_ops(Vec::new());
                     cleared.succ = Vec::new();
                     cleared.ops = block.ops.iter().map(_cleared).collect();
                     cleared

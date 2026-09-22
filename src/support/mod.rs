@@ -1,5 +1,6 @@
 //! Target-independent support code.
 
+pub mod bits;
 pub mod diagnostic;
 pub mod hash;
 pub mod pyjson;

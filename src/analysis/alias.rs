@@ -547,9 +547,7 @@ pub fn calls_annotated(procedure: &Procedure, known: &IndexMap<String, Summary>)
             annotated.memory_complete = true;
             ops.push(annotated);
         }
-        let mut annotated = block.clone();
-        annotated.ops = ops;
-        blocks.push(annotated);
+        blocks.push(block.with_ops(ops));
     }
     let mut body = procedure.body.clone();
     body.blocks = blocks;
@@ -1413,9 +1411,7 @@ pub fn annotated(body: &Rc<MirBody>) -> Result<MirBody, String> {
             tagged.results = op.results.iter().map(|arg| operand(arg, block.at)).collect::<Result<_, _>>()?;
             ops.push(tagged);
         }
-        let mut tagged = block.clone();
-        tagged.ops = ops;
-        blocks.push(tagged);
+        blocks.push(block.with_ops(ops));
     }
     let mut annotated = MirBody::clone(body);
     annotated.blocks = blocks;

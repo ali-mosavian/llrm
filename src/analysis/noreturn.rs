@@ -142,8 +142,7 @@ pub(crate) fn after_terminal_calls(body: &Rc<MirBody>, terminal_calls: &BTreeSet
             blocks.push(block.clone());
             continue;
         }
-        let mut made = block.clone();
-        made.ops = ops;
+        let mut made = block.with_ops(ops);
         made.succ = Vec::new();
         blocks.push(made);
         changed = true;

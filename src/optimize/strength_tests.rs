@@ -28,7 +28,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use num_bigint::BigInt;
 
-use super::{_DEFAULT_COSTS, _answer, _formula_set, _secondary_indexes, reduced};
+use super::{_DEFAULT_COSTS, _Reads, _answer, _formula_set, _secondary_indexes, reduced};
 use crate::analysis::induction::{self, Affine, AffineOperand, Derived};
 use crate::analysis::loops::Loop;
 use crate::analysis::occurrence::{OpOccurrence, operations};
@@ -767,7 +767,7 @@ fn test_reduction_preserves_every_live_product_result() {
             ],
         );
         assert_eq!(
-            _answer(&built, occurrence(&built, 1, 1)),
+            _answer(&_Reads::of(&built), occurrence(&built, 1, 1)),
             if use_ == "low" { Some(low) } else { None }
         );
     }

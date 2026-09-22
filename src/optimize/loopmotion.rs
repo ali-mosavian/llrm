@@ -160,7 +160,7 @@ pub fn sunk_stores(
                 let invariant = if nonempty {
                     induction::invariant(&body, &loop_.body)
                 } else {
-                    BTreeSet::new()
+                    induction::Invariant::default()
                 };
                 for op in operations.iter().copied() {
                     if !relocated.contains_key(&id(op))
@@ -217,7 +217,7 @@ pub fn sunk_stores(
                 .collect();
             updates.insert(block.at, changed);
         }
-        let mut changed = exit_block.clone();
+        let mut changed = exit_block.with_ops(Vec::new());
         let anchor = exit_block.ops[0].at;
         changed.ops = moved
             .iter()
@@ -250,7 +250,7 @@ fn _last_counter_value(op: &Op, body: &Rc<MirBody>, loop_: &Loop) -> Option<Cons
     Some(Const::new(consts::masked(&last, stored.width), stored.width))
 }
 
-fn _invariant_value(op: &Op, invariant: &BTreeSet<u32>, nonempty: bool) -> Option<Arg> {
+fn _invariant_value(op: &Op, invariant: &induction::Invariant, nonempty: bool) -> Option<Arg> {
     if !nonempty || op.args.len() != 1 {
         return None;
     }
