@@ -409,9 +409,11 @@ fn main() -> i16:
 
 
 def test_os_copies_no_loop_into_larger_code(tmp_path: Path) -> None:
-    """-O2 unrolls the five-record update from 54 instructions to 81.
+    """-O2 unrolls the five-record update from 65 lines to 83.
 
-    -Os is GCC's UL_NO_GROWTH: never larger than not copying at all.
+    -Os is GCC's UL_NO_GROWTH: never larger than not copying at all. The
+    records come from a parameter and leave through `total`, so unrolling
+    cannot fold them away.
     """
     source = tmp_path / "stride.mod"
     source.write_text(
@@ -421,20 +423,27 @@ struct sample:
     value: i32
     delta: i32
 
-fn update() -> i32:
+fn total(samples: &[sample]) -> i32:
+    var sum: i32 = 0
+    for one in &samples:
+        sum += one.value
+    return sum
+
+fn update(v: &[i32]) -> i32:
     var samples: [sample; 5] = [
-        sample { tag: 0, value: 1, delta: 2 },
-        sample { tag: 0, value: 2, delta: 3 },
-        sample { tag: 0, value: 3, delta: 4 },
-        sample { tag: 0, value: 4, delta: 5 },
-        sample { tag: 0, value: 5, delta: 6 },
+        sample { tag: 0, value: v[0], delta: v[1] },
+        sample { tag: 0, value: v[1], delta: v[2] },
+        sample { tag: 0, value: v[2], delta: v[3] },
+        sample { tag: 0, value: v[3], delta: v[4] },
+        sample { tag: 0, value: v[4], delta: v[5] },
     ]
     for current in &mut samples:
         current.value += current.delta
-    return samples[0].value + samples[4].value
+    return total(&samples)
 
 fn main() -> i16:
-    update()
+    let v: [i32; 6] = [1, 2, 3, 4, 5, 6]
+    update(&v)
     return 0
 """
     )
@@ -578,12 +587,10 @@ def test_three_array_initializer_keeps_the_fixed_frame_address_component() -> No
     """sum_three wrote locals through EAX+SI after a secondary-base rewrite lost BP."""
     assembly = masm.text(modern_compile.assembled(driver.parsed(SUM_THREE), entry="main"))
     main = assembly.split("_main proc far", 1)[1].split("call far ptr _sum_three", 1)[0]
-    initializers = [
-        line.strip() for line in main.splitlines() if re.search(r"mov word ptr \[[^]]+-(?:8|22|36)\],", line)
-    ]
+    cells = {f"[bp{payload + 2 * index}]" for payload in (-8, -22, -36) for index in range(4)}
+    initializers = {one for one in re.findall(r"mov word ptr (\[[^]]+\]), \d+", main) if one in cells}
 
-    assert len(initializers) == 12
-    assert all("bp" in line for line in initializers)
+    assert initializers == cells
 
 
 def test_runtime_bounded_array_loop_has_a_symbolic_count_proof() -> None:
@@ -941,6 +948,25 @@ def test_a_repeat_literal_in_the_frame_is_one_string_fill(tmp_path: Path) -> Non
 
     assert "rep stosd" in body
     assert not re.search(r"\bj\w+\s", body)
+
+
+def test_an_unrolled_fill_stores_to_fixed_frame_cells(tmp_path: Path) -> None:
+    """Each unrolled store of `[0; 8, 8]` loaded its constant offset into a register first: 64 extra movs."""
+    source = tmp_path / "unrolled_fill.mod"
+    source.write_text(
+        "fn value(k: i16) -> i32:\n"
+        "    var a: [i32; 8, 8] = [0; 8, 8]\n"
+        "    a[k, 1] = 5\n"
+        "    return a[k, 2]\n"
+        "fn main() -> i16:\n"
+        "    return i16(value(3))\n"
+    )
+    assembly = masm.text(modern_compile.assembled(driver.parsed(source), entry="main"))
+    body = assembly[assembly.index("_value proc") : assembly.index("_value endp")]
+    zeroes = re.findall(r"mov dword ptr \[(.*?)\], 0\n", body)
+
+    assert len(zeroes) == 64
+    assert all(re.fullmatch(r"bp-\d+", one) for one in zeroes)
 
 
 @pytest.mark.parametrize(
