@@ -1,38 +1,34 @@
 //! Port of `tests/test_algebraic.py`.
 //!
-//! Skipped, needing modules not yet ported:
-//! - corpus fixtures, `mir.bodies`, `wholeseg`, `transform`:
-//!   test_nbody_reuses_the_whole_signed_initialization_value,
-//!   test_signed_recombination_requires_the_exact_extension,
-//!   test_nbody_counter_comparison_joins_whole_values_before_the_loop,
-//!   test_nbody_counter_is_stored_as_one_whole_value,
-//!   test_whole_store_requires_adjacent_matching_word_writes,
-//!   test_whole_counter_phi_requires_every_matching_edge,
+//! Skipped:
+//! - needing `wholeseg`:
 //!   test_sixty_dimensional_zero_offset_needs_no_pointer_arithmetic,
 //!   test_hotlpx_scales_by_twenty_without_a_second_multiply,
 //!   test_spill_folds_closed_loops_to_their_exact_final_constants,
 //!   test_addrm_reuses_word_scale_for_long_address,
 //!   test_nested_combines_row_scale_in_emitted_code,
-//!   test_nbody_multiply_value_survives_into_scaled_division,
-//!   test_nbody_address_shifts_combine_without_an_extra_counter,
 //!   test_nbody_damping_keeps_negation_whole,
-//!   test_nbody_damping_reverses_subtraction_without_negation,
-//!   test_algebraic_pass_runs_without_constant_propagation_facts,
-//!   test_harr_only_needs_the_low_product,
-//!   test_dead_phis_do_not_keep_matrix_product_halves.
+//!   test_nbody_damping_reverses_subtraction_without_negation.
 //! - monkeypatching `mir.consumed`: test_zero_test_forwarding_indexes_each_operation_once.
+//! - failing in Python at this commit (two stores, not one):
+//!   test_nbody_counter_is_stored_as_one_whole_value.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
 use num_bigint::BigInt;
 
 use super::*;
+use crate::analysis::ssa;
+use crate::frontend::blocks::Block;
 use crate::model::ir::Operation;
 use crate::model::mir::{
-    Arg, Cell, Const, Held, Kind, MemRef, MirBlock, MirBody, Op, OpCode, OrderedMap, Symbol, Synth,
+    self, Arg, Cell, Const, Held, Kind, MemRef, MirBlock, MirBody, Op, OpCode, OrderedMap, Symbol, Synth,
     Value,
 };
-use crate::objectfile::module::{Addr, Space};
+use crate::model::passes::{MIRTransform, Options};
+use crate::objectfile::module::{Addr, Module, Space};
+use crate::optimize::{testcorpus, transform, wholephis, wholestores};
 
 fn value(id: u32, at: i64) -> Value {
     Value::new(id, at)
@@ -1206,4 +1202,192 @@ fn test_zero_difference_requires_a_complete_pure_value() {
             "{guard}"
         );
     }
+}
+
+fn raised_main(path: &str) -> (Rc<Module>, Rc<Vec<Block>>, Rc<MirBody>) {
+    let found = testcorpus::loaded(path);
+    let blocks = testcorpus::partitioned(&found);
+    let body = testcorpus::main_body(&found, &blocks);
+    (found, blocks, body)
+}
+
+fn all_ops(body: &MirBody) -> impl Iterator<Item = &Op> {
+    body.blocks.iter().flat_map(|block| &block.ops)
+}
+
+fn transformed(path: &str, options: Options) -> Rc<MirBody> {
+    let (found, blocks, body) = raised_main(path);
+    transform::applied(
+        &body,
+        &found.dgroup.members,
+        &found.calls,
+        transform::Applied { blocks: Some(blocks), found: Some(found.clone()), options, ..Default::default() },
+    )
+    .unwrap()
+}
+
+fn algebraic_pass(body: Rc<MirBody>) -> Rc<MirBody> {
+    transform::Algebraic.transform(body).unwrap()
+}
+
+/// NBODY sign-extended initialization values, extracted their high words, then rebuilt the same longs.
+#[test]
+fn test_nbody_reuses_the_whole_signed_initialization_value() {
+    let (_, _, body) = raised_main("fixtures/bench/nbody-v-g3.obj");
+    let done = simplified(&body, &BTreeSet::new(), &BTreeSet::new()).unwrap();
+    for at in [0x75, 0x9C] {
+        assert!(!all_ops(&done).any(|op| op.at == at && op.kind == Kind::Concat));
+    }
+}
+
+/// Reusing NBODY's signed value must not join a sign word to an unrelated low word.
+#[test]
+fn test_signed_recombination_requires_the_exact_extension() {
+    let (_, _, body) = raised_main("fixtures/bench/nbody-v-g3.obj");
+    let ops: Vec<&Op> = all_ops(&body).collect();
+    let concat = *ops.iter().find(|op| op.at == 0x75 && op.kind == Kind::Concat).unwrap();
+    for mismatch in ["source", "width", "kind", "offset"] {
+        let mut extension = (*ops.iter().find(|op| op.at == 0x72 && op.kind == Kind::SignExtend).unwrap()).clone();
+        let mut extract = (*ops.iter().find(|op| op.at == 0x72 && op.kind == Kind::Extract).unwrap()).clone();
+        match mismatch {
+            "source" => extension.args = vec![held(value(999999, 0), 2)],
+            "width" => {
+                let Arg::Held(one) = &extension.results[0] else { panic!("a held result") };
+                extension.results = vec![held(one.value, 2)];
+            }
+            "kind" => extension.kind = Kind::Copy,
+            _ => extract.args = vec![extract.args[0].clone(), constant(0, 4)],
+        }
+        let mut known: BTreeMap<Value, &Op> =
+            ops.iter().flat_map(|op| op.defines.iter().map(move |value| (*value, *op))).collect();
+        known.insert(extension.defines[0], &extension);
+        known.insert(extract.defines[0], &extract);
+        assert_eq!(_recombined(concat, &known).kind, Kind::Concat, "{mismatch}");
+    }
+}
+
+/// NBODY rebuilt its long counter from two word phis for every loop comparison.
+#[test]
+fn test_nbody_counter_comparison_joins_whole_values_before_the_loop() {
+    let (_, _, body) = raised_main("fixtures/bench/nbody-v-g3.obj");
+    let done = simplified(&body, &BTreeSet::new(), &BTreeSet::new()).unwrap();
+    assert!(!all_ops(&done).any(|op| op.at == 0x2FE && op.kind == Kind::Concat));
+    assert!(all_ops(&done).any(|op| op.at == 0x2FE
+        && op.kind == Kind::Copy
+        && matches!(&op.args[0], Arg::Held(one) if one.width == 4)));
+    let existing: BTreeSet<u32> = ssa::values(&body).map(|value| value.variable).collect();
+    let added: Vec<_> =
+        done.blocks.iter().flat_map(|block| &block.phis).filter(|phi| !existing.contains(&phi.result.variable)).collect();
+    assert!(!added.is_empty());
+    assert!(added.iter().all(|phi| phi.incoming.values().all(|value| phi.result.variable == value.variable)));
+    let header = done.block(0x2F0).unwrap();
+    assert!(!header.phis.iter().any(|phi| [1, 3].contains(&phi.result.variable)));
+    mir::resolved(&done, None).unwrap();
+}
+
+/// NBODY's counter store is not permission to combine unrelated or observable writes.
+#[test]
+fn test_whole_store_requires_adjacent_matching_word_writes() {
+    let (_, _, raised) = raised_main("fixtures/bench/nbody-v-g3.obj");
+    for mismatch in ["address", "value", "barrier"] {
+        let mut body = (*wholephis::joined(&raised)).clone();
+        let header = body.blocks.iter_mut().find(|block| block.at == 0x2F0).unwrap();
+        let low = header.ops.iter().find(|op| op.at == 0x2F0 && !op.stores.is_empty()).unwrap().clone();
+        let high = header.ops.iter_mut().find(|op| op.at == 0x2F3 && !op.stores.is_empty()).unwrap();
+        match mismatch {
+            "address" => {
+                let mut moved = high.stores[0].clone();
+                moved.addr = moved.addr.map(|addr| addr.plus(2));
+                high.stores = vec![moved];
+            }
+            "value" => high.args = low.args.clone(),
+            _ => high.kind = Kind::Call,
+        }
+        let done = wholestores::joined(&body);
+        let stores = all_ops(&done).filter(|op| [0x2F0, 0x2F3].contains(&op.at) && !op.stores.is_empty()).count();
+        assert_eq!(stores, 2, "{mismatch}");
+    }
+}
+
+/// NBODY's comparison must not combine unrelated words or guess a missing incoming value.
+#[test]
+fn test_whole_counter_phi_requires_every_matching_edge() {
+    let (_, _, raised) = raised_main("fixtures/bench/nbody-v-g3.obj");
+    for mismatch in ["edge", "half", "unknown"] {
+        let mut body = (*raised).clone();
+        let header = body.blocks.iter_mut().find(|block| block.at == 0x2F0).unwrap();
+        let low = header.phis.iter().find(|phi| phi.result.variable == 1).unwrap().clone();
+        let high = header.phis.iter_mut().find(|phi| phi.result.variable == 3).unwrap();
+        match mismatch {
+            "edge" => {
+                high.incoming.remove(&0x2E3);
+            }
+            "half" => {
+                high.incoming.insert(0x2E3, *low.incoming.get(&0x2E3).unwrap());
+            }
+            _ => {
+                high.incoming.insert(0xC7, Value { variable: 999999, ..Value::new(999999, 0xC7) });
+            }
+        }
+        let done = wholephis::joined(&Rc::new(body));
+        assert!(all_ops(&done).any(|op| op.at == 0x2FE && op.kind == Kind::Concat), "{mismatch}");
+    }
+}
+
+/// Nbody rebuilt the product from two halves before /512, paying a redundant stack round trip.
+#[test]
+fn test_nbody_multiply_value_survives_into_scaled_division() {
+    let done = transformed("fixtures/regressions/nbody-stack-p-g2.obj", Options::default());
+    let ops: Vec<&Op> = all_ops(&done).collect();
+    let product = &ops.iter().find(|op| op.at == 0x1CD && op.kind == Kind::Mul).unwrap().results[0];
+    let sign = ops.iter().find(|op| op.at == 0x1D4 && op.kind == Kind::Sar).unwrap();
+    assert_eq!(&sign.args[0], product);
+    assert!(!ops.iter().any(|op| op.at == 0x1D4 && op.kind == Kind::Concat));
+}
+
+/// Nbody computed other*4 with two shifts; an extra induction counter increased spill cost.
+#[test]
+fn test_nbody_address_shifts_combine_without_an_extra_counter() {
+    let (_, _, body) = raised_main("fixtures/regressions/nbody-stack-p-g2.obj");
+    let done = algebraic_pass(body);
+    let shift = all_ops(&done).find(|op| op.at == 0x11B).unwrap();
+    assert!(shift.kind == Kind::Shl && shift.args[1] == constant(2, 1));
+}
+
+#[test]
+fn test_algebraic_pass_runs_without_constant_propagation_facts() {
+    let (source, result) = (value(10, 0), value(11, 1));
+    let op = binary(
+        1,
+        "add",
+        Kind::Add,
+        vec![result],
+        vec![source],
+        vec![held(source, 2), constant(0, 2)],
+        vec![held(result, 2)],
+    );
+    let mut used = Op::new(2, OpCode::Operation(Operation::Push), "push", vec![], vec![result]);
+    used.kind = Kind::Arg;
+    used.args = vec![held(result, 2)];
+    let body = Rc::new(one_block(vec![op, used]));
+    assert_eq!(algebraic_pass(body).blocks[0].ops[0].kind, Kind::Copy);
+}
+
+/// HARR paid for a widening product although its high answer and flags were unused.
+#[test]
+fn test_harr_only_needs_the_low_product() {
+    for tag in ["p-g2", "q-o", "v-g3"] {
+        let (_, _, before) = raised_main(&format!("fixtures/omf/harr-{tag}.obj"));
+        let after = algebraic_pass(before);
+        let products: Vec<&Op> = all_ops(&after).filter(|op| op.kind == Kind::Mul).collect();
+        assert!(!products.is_empty() && products.iter().all(|op| op.results.len() == 1), "{tag}");
+    }
+}
+
+/// Matrix retained widening multiplies solely for unused loop phi results.
+#[test]
+fn test_dead_phis_do_not_keep_matrix_product_halves() {
+    let after = transformed("fixtures/omf/matrix-p-g2.obj", Options { strength: false, ..Default::default() });
+    let products: Vec<&Op> = all_ops(&after).filter(|op| op.kind == Kind::Mul).collect();
+    assert!(!products.is_empty() && products.iter().all(|op| op.results.len() == 1));
 }
