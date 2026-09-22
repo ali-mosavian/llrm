@@ -1559,6 +1559,7 @@ pub fn applied(body: &LirBody, got: &Assignment) -> Result<LirBody, Error> {
             .collect(),
             succ: block.succ.clone(),
             phis: block.phis.clone(),
+            cold: block.cold,
         })
         .collect::<Vec<_>>();
     if let Some(error) = failed.into_inner() {

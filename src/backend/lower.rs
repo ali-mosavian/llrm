@@ -2278,6 +2278,7 @@ pub fn lowered(
                     incoming: phi.incoming.iter().map(|(at, value)| (*at, value.id)).collect(),
                 })
                 .collect(),
+                cold: block.cold,
         })
         .collect();
     let mut all_pins: IndexMap<u32, Register> = pins.iter().map(|(value, r#where)| (value.id, *r#where)).collect();

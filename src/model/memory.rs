@@ -81,17 +81,58 @@ impl Repr for Identity {
 }
 
 /// Python `qbopt.model.memory:Object`.
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+///
+/// `addressed` and `captured` are `field(compare=False)`: equality, hashing
+/// and order ignore them.
+#[derive(Clone, Debug)]
 pub struct MemoryObject {
     pub kind: MemoryKind,
     pub identity: Option<Identity>,
     pub generation: i64,
     pub extent: Option<i64>,
+    // Facts about the object, not its identity: two spellings of one object
+    // are the same object whatever they say. LLVM's split, stated once:
+    // `addressed` -- some code computes its address, so a pointer of unknown
+    // origin may hold it. `captured` -- that address can be found from
+    // outside this activation (memory, a return, a callee that keeps it), so
+    // NONLOCAL and PARAMETER may reach it. Unaddressed implies uncaptured.
+    pub addressed: bool,
+    pub captured: bool,
 }
 
 impl MemoryObject {
     pub const fn new(kind: MemoryKind) -> Self {
-        Self { kind, identity: None, generation: 0, extent: None }
+        Self { kind, identity: None, generation: 0, extent: None, addressed: true, captured: true }
+    }
+
+    fn key(&self) -> (MemoryKind, &Option<Identity>, i64, Option<i64>) {
+        (self.kind, &self.identity, self.generation, self.extent)
+    }
+}
+
+impl PartialEq for MemoryObject {
+    fn eq(&self, other: &Self) -> bool {
+        self.key() == other.key()
+    }
+}
+
+impl Eq for MemoryObject {}
+
+impl std::hash::Hash for MemoryObject {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.key().hash(state);
+    }
+}
+
+impl PartialOrd for MemoryObject {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for MemoryObject {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.key().cmp(&other.key())
     }
 }
 
@@ -104,6 +145,8 @@ impl Repr for MemoryObject {
                 ("identity", self.identity.repr()),
                 ("generation", self.generation.repr()),
                 ("extent", self.extent.repr()),
+                ("addressed", self.addressed.repr()),
+                ("captured", self.captured.repr()),
             ],
         )
     }
@@ -199,12 +242,12 @@ impl Slice {
         let theirs_low = i128::from(other.low);
         let theirs_high = i128::from(other.high);
         let theirs_width = i128::from(other.width);
-        if mine_low >= theirs_high + theirs_width - 1 || theirs_low >= mine_high + mine_width - 1 {
-            return false;
-        }
         // Byte offsets have a common origin only for the same concrete object.
         if self.object != other.object {
             return true;
+        }
+        if mine_low >= theirs_high + theirs_width - 1 || theirs_low >= mine_high + mine_width - 1 {
+            return false;
         }
 
         let divisor = gcd(self.stride, other.stride);
@@ -350,25 +393,30 @@ impl Repr for Provenance {
 
 /// Direct port of `qbopt.model.memory:objects_may_alias`.
 pub fn objects_may_alias(one: &MemoryObject, other: &MemoryObject) -> bool {
-    if one.kind == MemoryKind::Unknown || other.kind == MemoryKind::Unknown {
-        return true;
-    }
     if one == other {
         return true;
     }
-    if one.kind == MemoryKind::Nonlocal || other.kind == MemoryKind::Nonlocal {
-        return one.kind != MemoryKind::Frame
-            && other.kind != MemoryKind::Frame
-            && one.kind != MemoryKind::Stack
-            && other.kind != MemoryKind::Stack;
+    // Only a reference naming an unaddressed object reaches it.
+    if !(one.addressed && other.addressed) {
+        return false;
     }
-    if one.kind == MemoryKind::Parameter || other.kind == MemoryKind::Parameter {
-        return one.kind != MemoryKind::Frame && other.kind != MemoryKind::Frame;
+    for (this, _that) in [(one, other), (other, one)] {
+        if this.kind == MemoryKind::Unknown {
+            return true;
+        }
     }
-    if matches!(one.kind, MemoryKind::Stack | MemoryKind::Frame)
-        && matches!(other.kind, MemoryKind::Stack | MemoryKind::Frame)
-    {
-        return one.kind == MemoryKind::Stack || other.kind == MemoryKind::Stack;
+    for (this, that) in [(one, other), (other, one)] {
+        if this.kind == MemoryKind::Nonlocal {
+            return that.captured && !matches!(that.kind, MemoryKind::Frame | MemoryKind::Stack);
+        }
+    }
+    for (this, that) in [(one, other), (other, one)] {
+        if this.kind == MemoryKind::Parameter {
+            // An incoming pointer predates this activation and cannot designate
+            // one of its frame objects. At a call site the parameter object is
+            // replaced by the actual provenance before caller-side queries.
+            return that.captured && that.kind != MemoryKind::Frame;
+        }
     }
     if matches!(one.kind, MemoryKind::Global | MemoryKind::External)
         && matches!(other.kind, MemoryKind::Global | MemoryKind::External)
@@ -396,7 +444,8 @@ mod tests {
             &object(MemoryKind::Stack),
             &object(MemoryKind::Global)
         ));
-        assert!(super::objects_may_alias(
+        // Python since 8780f59b: the push area and the frame are distinct objects.
+        assert!(!super::objects_may_alias(
             &object(MemoryKind::Stack),
             &object(MemoryKind::Frame)
         ));
@@ -409,6 +458,8 @@ mod tests {
             identity: Some(Identity::Tuple(vec![Identity::Int(0), Identity::Int(-8), Identity::Int(0)])),
             generation: 0,
             extent: Some(8),
+            addressed: true,
+            captured: true,
         };
         let second = MemoryObject {
             identity: Some(Identity::Tuple(vec![Identity::Int(0), Identity::Int(-16), Identity::Int(-8)])),
@@ -442,6 +493,8 @@ mod tests {
             identity: Some(Identity::Tuple(vec![Identity::Space(Space::Segment), Identity::Int(4)])),
             generation: 0,
             extent: Some(64),
+            addressed: true,
+            captured: true,
         };
         let even =
             Provenance::one_with_slice(object.clone(), 0, 64, 2, 1, BTreeSet::new()).unwrap();
@@ -459,6 +512,8 @@ mod tests {
             identity: Some(Identity::Tuple(vec![Identity::Str("allocation".to_owned()), Identity::Int(1)])),
             generation: 0,
             extent: Some(12),
+            addressed: true,
+            captured: true,
         };
         let mut slices = Vec::new();
         for low in 0..4 {

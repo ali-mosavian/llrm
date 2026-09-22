@@ -12,9 +12,11 @@ use std::rc::Rc;
 use indexmap::IndexMap;
 use num_bigint::BigInt;
 
+use super::alias::NamedBytes;
 use super::ranges::Interval;
 use super::{constant_cycles, effects, loops, memoryssa, ranges};
 use crate::abi::runtime;
+use crate::model::memory::Provenance;
 use crate::model::mir::{self, Arg, Cell, Held, Kind, MemRef, MirBody, Op, Value};
 use crate::objectfile::module::{Addr, Space};
 
@@ -43,19 +45,26 @@ pub(crate) type Cells = IndexMap<(Addr, u32), Known>;
 ///
 /// Python keys both caches on `id(ref)`; the address of the reference in
 /// the body (and of the resolved copy) is that identity here.
-pub(crate) struct _MemoryQueries<'a> {
-    pub known: &'a IndexMap<Value, Known>,
-    pub dgroup: &'a BTreeSet<i64>,
+pub(crate) struct _MemoryQueries {
+    pub known: IndexMap<Value, Known>,
+    pub dgroup: BTreeSet<i64>,
+    // Which object each directly addressed byte is; see alias.named_bytes.
+    pub named: NamedBytes,
     pub facts: BTreeMap<Value, Interval>,
     pub addressed: HashMap<usize, Rc<MemRef>>,
     pub overlaps: HashMap<((Addr, u32), usize), bool>,
 }
 
-impl<'a> _MemoryQueries<'a> {
-    pub(crate) fn new(known: &'a IndexMap<Value, Known>, dgroup: &'a BTreeSet<i64>) -> Self {
+impl _MemoryQueries {
+    pub(crate) fn new(known: &IndexMap<Value, Known>, dgroup: &BTreeSet<i64>) -> Self {
+        Self::with_named(known, dgroup, NamedBytes::default())
+    }
+
+    fn with_named(known: &IndexMap<Value, Known>, dgroup: &BTreeSet<i64>, named: NamedBytes) -> Self {
         Self {
-            known,
-            dgroup,
+            known: known.clone(),
+            dgroup: dgroup.clone(),
+            named,
             facts: _intervals(known),
             addressed: HashMap::new(),
             overlaps: HashMap::new(),
@@ -64,11 +73,28 @@ impl<'a> _MemoryQueries<'a> {
 
     pub(crate) fn resolve(&mut self, reference: &MemRef) -> Rc<MemRef> {
         let key = std::ptr::from_ref(reference) as usize;
-        let known = self.known;
+        let known = &self.known;
         self.addressed
             .entry(key)
             .or_insert_with(|| Rc::new(_addressed(reference, known)))
             .clone()
+    }
+
+    /// The space a resolved store lands in is its object, where its displacement is its offset there.
+    pub(crate) fn learn(&mut self, reference: &MemRef) {
+        let (Some(provenance), Some(addr)) = (&reference.provenance, reference.addr) else {
+            return;
+        };
+        if provenance.slices.len() != 1 {
+            return;
+        }
+        let one = provenance.slices.first().expect("one slice");
+        if one.stride == 1
+            && one.low <= addr.disp
+            && addr.disp + i64::from(reference.width) <= one.high + one.width - 1
+        {
+            self.named.spaces.entry((addr.space, addr.index)).or_insert_with(|| one.object.clone());
+        }
     }
 
     pub(crate) fn may_overlap(&mut self, where_: (Addr, u32), reference: &Rc<MemRef>) -> bool {
@@ -76,12 +102,47 @@ impl<'a> _MemoryQueries<'a> {
         if let Some(answer) = self.overlaps.get(&key) {
             return *answer;
         }
+        let mut cell = MemRef::new(Some(where_.0), where_.1);
+        let named = (0..i64::from(where_.1))
+            .map(|byte| self.named.at.get(&where_.0.plus(byte)))
+            .collect::<Vec<_>>();
+        let whole = self.named.spaces.get(&(where_.0.space, where_.0.index));
+        let width = i64::from(where_.1);
+        let first = named.first().copied().flatten().filter(|(object, offset)| {
+            named
+                .iter()
+                .enumerate()
+                .all(|(i, one)| one.is_some_and(|(other, at)| other == object && *at == offset + i as i64))
+        });
+        if let Some((object, offset)) = first {
+            cell.provenance = Some(
+                Provenance::one_with_slice(object.clone(), *offset, offset + width, 1, 1, BTreeSet::new())
+                    .expect("a cell is at least one byte"),
+            );
+        } else if let Some(whole) = whole.filter(|whole| {
+            named
+                .iter()
+                .enumerate()
+                .all(|(i, one)| one.is_none_or(|(other, at)| other == *whole && *at == where_.0.disp + i as i64))
+        }) {
+            cell.provenance = Some(
+                Provenance::one_with_slice(
+                    whole.clone(),
+                    where_.0.disp,
+                    where_.0.disp + width,
+                    1,
+                    1,
+                    BTreeSet::new(),
+                )
+                .expect("a cell is at least one byte"),
+            );
+        }
         // `mir.overlapping` hands `dgroup` to regions as a layout, and a
         // frozenset is not a `module.Group`: that is `layout=None`.  An
         // endpoint Rust cannot represent is taken to overlap.
         let _ = self.dgroup;
         let answer = super::regions::overlapping(
-            &MemRef::new(Some(where_.0), where_.1),
+            &cell,
             reference,
             Some(&self.facts),
             Some(&self.facts),
@@ -342,21 +403,30 @@ fn _intervals(known: &IndexMap<Value, Known>) -> BTreeMap<Value, Interval> {
         .collect()
 }
 
+/// Alias questions about `body`'s cells, each cell carrying the object its references name.
+pub(crate) fn memory_queries(
+    body: &MirBody,
+    known: &IndexMap<Value, Known>,
+    dgroup: &BTreeSet<i64>,
+) -> _MemoryQueries {
+    _MemoryQueries::with_named(known, dgroup, super::alias::named_bytes(body))
+}
+
 /// The cell facts still standing after this operation.
 ///
 /// `assume` collects the far selectors this took on faith; the caller
 /// checks afterwards that every one of them did resolve.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn _kills<'a>(
+pub(crate) fn _kills(
     here: &Cells,
     op: &Op,
-    known: &'a IndexMap<Value, Known>,
-    dgroup: &'a BTreeSet<i64>,
+    known: &IndexMap<Value, Known>,
+    dgroup: &BTreeSet<i64>,
     calls: &IndexMap<i64, String>,
     mut assume: Option<&mut BTreeSet<Value>>,
     allowed: Option<&BTreeSet<Value>>,
     edge_facts: bool,
-    queries: Option<&mut _MemoryQueries<'a>>,
+    queries: Option<&mut _MemoryQueries>,
 ) -> Cells {
     let mut here = here.clone();
     // A fact supplied for one CFG edge is a proof about reaching that edge,
@@ -405,6 +475,7 @@ pub(crate) fn _kills<'a>(
             .collect();
         if let Some(put) = &put {
             if reference.addr.is_some() && reference.base.is_none() && reference.segment.is_none() {
+                queries.learn(&reference);
                 for (where_, fact) in _fragments(&reference, put) {
                     here.insert(where_, fact);
                 }
@@ -414,6 +485,7 @@ pub(crate) fn _kills<'a>(
     if op.kind == Kind::Call && !op.memory_values.is_empty() {
         for (reference, value) in &op.memory_values {
             if reference.addr.is_some() && reference.base.is_none() && reference.segment.is_none() {
+                queries.learn(reference);
                 let fact = Known::new(masked(&value.n, value.width), value.width);
                 for (where_, fact) in _fragments(reference, &fact) {
                     here.insert(where_, fact);
@@ -442,7 +514,7 @@ pub(crate) fn cells(
 ) -> IndexMap<(i64, usize), Cells> {
     let empty = IndexMap::new();
     let known = known.unwrap_or(&empty);
-    let mut queries = _MemoryQueries::new(known, dgroup);
+    let mut queries = memory_queries(body, known, dgroup);
     let initial = match initial {
         Some(initial) => initial.clone(),
         None => {
@@ -1007,17 +1079,3 @@ fn _solved(
 #[path = "consts_tests.rs"]
 mod tests;
 
-// ---- early port (agent B) ----
-
-/// Alias questions about `body`'s cells, each cell carrying the object its references name.
-///
-/// `alias.named_bytes` and `_MemoryQueries.named` are agent A's; until they
-/// land this asks what `_kills` asked on its own before.
-pub(crate) fn memory_queries<'a>(
-    body: &MirBody,
-    known: &'a IndexMap<Value, Known>,
-    dgroup: &'a BTreeSet<i64>,
-) -> _MemoryQueries<'a> {
-    let _ = body;
-    _MemoryQueries::new(known, dgroup)
-}

@@ -5,8 +5,6 @@
 //! operands are all constant once the iteration is fixed folds away in every
 //! copy; the rest is copied once per iteration.
 
-// ---- early port (agent B) ----
-
 use std::collections::{BTreeSet, HashMap};
 
 use indexmap::IndexMap;

@@ -199,6 +199,8 @@ pub struct LirBlock {
     pub insns: Vec<Arc<Insn>>,
     pub succ: Vec<i64>,
     pub phis: Vec<Phi>,
+    // See mir.MirBlock.cold.
+    pub cold: bool,
 }
 
 impl LirBlock {
@@ -209,6 +211,7 @@ impl LirBlock {
             insns,
             succ: Vec::new(),
             phis: Vec::new(),
+            cold: false,
         }
     }
 

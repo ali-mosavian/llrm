@@ -1087,13 +1087,16 @@ pub(crate) fn counted(body: &MirBody, loop_: &Loop, facts: Option<&IndexMap<Valu
         {
             continue;
         }
-        let maximum = match &bound {
+        let mut maximum = match &bound {
             AffineOperand::Const(constant) => Some(masked(&constant.n, constant.width)),
             AffineOperand::Held(held) => body.integer_ranges.get(&held.value).and_then(|range| {
                 (range.width == held.width && range.low >= BigInt::from(0_u8))
                     .then(|| range.high.clone())
             }),
         };
+        if maximum.is_none() {
+            maximum = _inbounds_trips(body, loop_, shape.latch);
+        }
         proven.push(CountedLoop {
             counter: counter.clone(),
             phi: phi_occurrence,
@@ -1108,6 +1111,57 @@ pub(crate) fn counted(body: &MirBody, loop_: &Loop, facts: Option<&IndexMap<Valu
         });
     }
     proven
+}
+
+/// How far each counter and each value affine in one advances per iteration.
+///
+/// The bytes-per-iteration view of `basics` and `derived`; nothing here
+/// re-derives which values are affine.
+pub(crate) fn advances(body: &MirBody, loop_: &Loop) -> IndexMap<Value, BigInt> {
+    let found = basics(body, loop_);
+    let header = body.blocks.iter().find(|block| block.at == loop_.header).expect("the loop's header is a block");
+    let mut out = IndexMap::new();
+    for phi in &header.phis {
+        if let Some(Affine { step: AffineOperand::Const(step), .. }) = found.get(&phi.result.id) {
+            out.insert(phi.result, _as_signed(&step.n, step.width));
+        }
+    }
+    // Python's `derived` cannot fail; an endpoint Rust cannot hold drops only
+    // the derived entries, which leaves fewer, never wrong, advances.
+    for one in derived(body, loop_, Some(&found), &BTreeSet::new(), None).unwrap_or_default() {
+        let op = &body.blocks[one.op.block_index()].ops[one.op.operation_index()];
+        if let (AffineOperand::Const(step), Arg::Const(by), None, [Arg::Held(result)]) =
+            (&one.of.step, &one.by, &one.pointer, op.results.as_slice())
+        {
+            out.insert(result.value, _as_signed(&step.n, step.width) * _as_signed(&by.n, by.width));
+        }
+    }
+    out.into_iter().filter(|(_, step)| *step != BigInt::from(0_u8)).collect()
+}
+
+/// The most iterations an access made every iteration allows, as LLVM's inbounds does.
+///
+/// Iteration i reaches `b + i*s` inside one object, and an offset `w` bytes
+/// wide addresses at most 2**(8w) of them, so i*s + width <= 2**(8w).
+fn _inbounds_trips(body: &MirBody, loop_: &Loop, latch: i64) -> Option<BigInt> {
+    let step = advances(body, loop_);
+    let dominators = loops::dominators(&body.blocks, Some(body.entry));
+    let empty = BTreeSet::new();
+    let every = dominators.get(&latch).unwrap_or(&empty);
+    body.blocks
+        .iter()
+        // The header also runs the final, failing test: n + 1 times.
+        .filter(|block| loop_.body.contains(&block.at) && every.contains(&block.at) && block.at != loop_.header)
+        .flat_map(|block| &block.ops)
+        .flat_map(|op| op.loads.iter().chain(&op.stores))
+        .filter_map(|reference| {
+            let advance = step.get(&reference.base?)?;
+            Some(
+                ((BigInt::from(1_u8) << (8 * reference.base_width)) - reference.width) / abs(advance)
+                    + 1,
+            )
+        })
+        .min()
 }
 
 /// Python's `_continuing_test(branch, inside)`.

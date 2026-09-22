@@ -140,13 +140,13 @@ pub(crate) fn specialized(
             false,
             Some(&mut asked),
         );
-        // `asked` goes to `repeated` too once floatfacts takes it (agent A).
         let before_last = floatfacts::repeated(
             &latch.ops,
             &(&proof.count - BigInt::from(1)),
             &initial,
             dgroup,
             Some(&facts),
+            Some(&mut asked),
         );
         let Some(before_last) = before_last else {
             continue;

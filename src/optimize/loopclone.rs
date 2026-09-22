@@ -204,12 +204,15 @@ pub(crate) fn peeled(body: &MirBody, loop_: &Loop, count: i64) -> Result<Option<
                 read.symbol = Some(op.symbol != Some(false));
                 ops.push(read);
             }
-            cloned.push(MirBlock::new(
-                labels[iteration][&block.at],
-                phis,
-                ops,
-                block.succ.iter().map(|&at| destination(at, block.at, iteration)).collect(),
-            ));
+            cloned.push(MirBlock {
+                cold: block.cold,
+                ..MirBlock::new(
+                    labels[iteration][&block.at],
+                    phis,
+                    ops,
+                    block.succ.iter().map(|&at| destination(at, block.at, iteration)).collect(),
+                )
+            });
         }
     }
 

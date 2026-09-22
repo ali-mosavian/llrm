@@ -2157,6 +2157,8 @@ impl<'a> _Raise<'a> {
                     identity: Some(Identity::Tuple(vec![Identity::Str(name.clone()), Identity::Int(site)])),
                     generation: site,
                     extent,
+                    addressed: true,
+                    captured: true,
                 };
                 self.pointer_seeds.insert(returned.low, one_slice(object, 0, 1));
             } else {
@@ -2680,6 +2682,8 @@ impl<'a> _Raise<'a> {
             ])),
             generation: 0,
             extent: Some(high - low),
+            addressed: true,
+            captured: true,
         }
     }
 

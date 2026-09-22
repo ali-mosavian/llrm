@@ -617,6 +617,8 @@ pub(crate) fn _allocation_leaves(body: &MirBody) -> MirBody {
             ])),
             generation: 0,
             extent: Some(extent),
+            addressed: true,
+            captured: true,
         };
         for (r#ref, offset) in accesses {
             let low = offset - origin;

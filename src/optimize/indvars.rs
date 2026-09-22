@@ -247,7 +247,7 @@ pub(crate) fn rewound(body: &MirBody, registers: i64, costs: Option<&OperationCo
                     });
                     _before_leaving(&mut ops, vec![rewind.clone()]);
                 }
-                changed.push(MirBlock { at: block.at, phis, ops, succ: block.succ.clone() });
+                changed.push(MirBlock { at: block.at, phis, ops, succ: block.succ.clone(), cold: block.cold });
             }
             let mut counts = body.loop_trip_counts.iter().copied().collect::<BTreeMap<_, _>>();
             counts.insert(inner.header, i64::try_from(&count).expect("trip count fits the MIR table"));
@@ -942,7 +942,7 @@ pub(crate) fn symbolically_zeroed(body: &MirBody) -> Result<MirBody, Substitutio
                 } else {
                     block.phis.clone()
                 };
-                rewritten.push(MirBlock { at: block.at, phis, ops, succ: block.succ.clone() });
+                rewritten.push(MirBlock { at: block.at, phis, ops, succ: block.succ.clone(), cold: block.cold });
             }
             let changed = MirBody { blocks: rewritten, ..body.clone() };
             let rotated = rotate::at_body(
@@ -1275,7 +1275,7 @@ pub(crate) fn zeroed(body: &MirBody, address_offsets: bool) -> Result<MirBody, S
                         other
                     })
                     .collect();
-                out.push(MirBlock { at: block.at, phis, ops, succ: block.succ.clone() });
+                out.push(MirBlock { at: block.at, phis, ops, succ: block.succ.clone(), cold: block.cold });
             }
             return zeroed(&MirBody { blocks: out, ..changed }, address_offsets);
         }

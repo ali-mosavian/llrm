@@ -364,7 +364,10 @@ pub struct Forward<'a> {
 /// pointer, index or selector remains unnamed and reaches a private cell no
 /// more than an unknown call does.
 fn _fixed(r#ref: &MemRef) -> bool {
-    let canonical = r#ref.provenance.as_ref().is_some_and(|provenance| !provenance.slices.is_empty());
+    let canonical = r#ref.provenance.as_ref().is_some_and(|provenance| {
+        !provenance.slices.is_empty()
+            && provenance.slices.iter().all(|one| one.object.kind != crate::model::memory::MemoryKind::Unknown)
+    });
     let direct = r#ref.addr.is_some_and(|addr| addr.direct()) && r#ref.base.is_none() && r#ref.segment.is_none();
     canonical || direct
 }
