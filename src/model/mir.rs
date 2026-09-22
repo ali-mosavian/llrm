@@ -57,6 +57,20 @@ impl fmt::Display for Value {
     }
 }
 
+/// A frozen dataclass hashes as the tuple of its fields.
+impl crate::support::pyset::PyHash for Value {
+    fn py_hash(&self) -> i64 {
+        use crate::support::pyset::{int_hash, tuple_hash};
+        tuple_hash(&[
+            int_hash(i64::from(self.id)),
+            int_hash(self.at),
+            i64::from(self.flags),
+            int_hash(i64::from(self.variable)),
+            int_hash(i64::from(self.version)),
+        ])
+    }
+}
+
 impl fmt::Debug for Value {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(self, formatter)
@@ -2375,6 +2389,35 @@ impl Repr for Phi {
 
 #[cfg(test)]
 mod tests {
+    /// The order CPython 3.13 iterates a set of Values built, thinned and
+    /// grown this way; `lower_int64` numbers fresh values in that order.
+    #[test]
+    fn value_sets_iterate_in_cpython_order() {
+        use crate::support::pyset::PySet;
+        let make = |i: u32| Value {
+            id: i * 7 % 113,
+            at: i64::from(i * 37),
+            flags: i % 3 == 0,
+            variable: i,
+            version: i % 4,
+        };
+        let mut set = PySet::new();
+        for i in 1..120 {
+            set.add(make(i));
+        }
+        for i in (1..120).step_by(5) {
+            set.discard(&make(i));
+        }
+        for i in 200..260_u32 {
+            set.add(Value { id: i, at: -i64::from(i), flags: false, variable: 0, version: 0 });
+        }
+        let got: Vec<i64> = set
+            .iter()
+            .map(|one| if one.version != 0 { i64::from(one.variable) } else { -i64::from(one.id) })
+            .collect();
+        assert_eq!(got, [-52, 30, -207, 37, -246, -247, 63, -109, 102, 113, -217, -208, -256, -82, -51, -200, -248, 43, 67, 50, 109, 58, -78, 25, 110, -236, -206, -221, 70, 118, 114, -213, 38, 45, 77, 47, -253, 7, 55, 59, 74, 34, -106, 83, -210, 99, -250, -28, -230, 82, -203, 97, -205, -108, -257, -204, -227, 105, -231, 107, -214, -233, 65, 35, -238, 9, -224, -225, 42, 90, -202, -27, 115, 78, 15, -239, -252, 18, -245, 27, 119, -243, -234, -223, -84, -216, -212, 17, -54, -56, -55, 3, -240, -209, -258, -81, -232, 10, 62, -219, 54, -237, 13, -111, -229, -226, 89, 117, -50, 33, 19, -222, -254, -235, -201, 95, -228, 5, 53, -241, 87, -211, -79, -22, 57, 85, 69, -244, -23, 103, -220, -259, -110, 98, -251, 2, -218, 29, 49, -242, -24, -215, -255, 39, -83, 73, 94, -25, 79, 75, 93, 22, 14, -249, 23]);
+    }
+
     use std::collections::BTreeSet;
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};

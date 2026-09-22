@@ -101,6 +101,32 @@ impl<A: Repr, B: Repr, C: Repr, D: Repr> Repr for (A, B, C, D) {
     }
 }
 
+impl Repr for f64 {
+    fn repr(&self) -> String {
+        float(*self)
+    }
+}
+
+/// `repr(float)`: the shortest round-trip digits, in exponent form below
+/// 1e-4 and from 1e16, as Python spells it.
+pub fn float(value: f64) -> String {
+    if value.is_nan() {
+        return "nan".to_owned();
+    }
+    if value.is_infinite() {
+        return if value > 0.0 { "inf" } else { "-inf" }.to_owned();
+    }
+    let shortest = format!("{value:e}");
+    let (mantissa, exponent) = shortest.split_once('e').expect("exponent form");
+    let exponent: i32 = exponent.parse().expect("an integer exponent");
+    if (-4..16).contains(&exponent) {
+        let text = format!("{value:?}");
+        return if text.contains('.') { text } else { format!("{text}.0") };
+    }
+    let sign = if exponent < 0 { '-' } else { '+' };
+    format!("{mantissa}e{sign}{:02}", exponent.abs())
+}
+
 /// A Python tuple of any length.
 #[derive(Clone, Debug, Default, Eq, Hash, PartialEq, PartialOrd, Ord)]
 pub struct Tuple<T>(pub Vec<T>);
@@ -251,6 +277,21 @@ mod tests {
     fn bytes_quote_like_python() {
         assert_eq!(bytes(b"a'\x00"), "b\"a'\\x00\"");
         assert_eq!(bytes(b"\x7f"), "b'\\x7f'");
+    }
+
+    /// Expected strings printed by Python's `repr(float)`.
+    #[test]
+    fn floats_print_like_python() {
+        assert_eq!(float(1.0), "1.0");
+        assert_eq!(float(1.5), "1.5");
+        assert_eq!(float(-0.0), "-0.0");
+        assert_eq!(float(0.1), "0.1");
+        assert_eq!(float(1e16), "1e+16");
+        assert_eq!(float(1.5e-5), "1.5e-05");
+        assert_eq!(float(0.0001), "0.0001");
+        assert_eq!(float(123456789012345.6), "123456789012345.6");
+        assert_eq!(float(1.7976931348623157e308), "1.7976931348623157e+308");
+        assert_eq!(float(f64::INFINITY), "inf");
     }
 
     #[test]
