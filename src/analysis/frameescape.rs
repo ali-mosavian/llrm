@@ -1,29 +1,29 @@
 //! Port of `qbopt/analysis/frameescape.py`.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
+
+use indexmap::IndexMap;
 
 use crate::model::mir::{Arg, Kind, MirBody, Op, Value};
 
-pub type Extent = (i64, i64);
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Escapes {
-    pub origins: BTreeMap<Value, BTreeSet<i64>>,
+    pub origins: IndexMap<Value, BTreeSet<i64>>,
     pub exposed: BTreeSet<i64>,
     pub opaque_addresses: BTreeSet<i64>,
-    /// The bytes the exposed addresses reach, or None where one is not bounded to its object.
-    pub reach: Option<BTreeSet<Extent>>,
+    // The bytes the exposed addresses reach, or None where one is not bounded to its object.
+    pub reach: Option<BTreeSet<(i64, i64)>>,
 }
 
 pub fn analysed(body: &MirBody) -> Escapes {
     // Origins are not allocation bounds. Absence here says nothing about
     // runtime frame walking, callbacks, or pointers loaded from memory.
-    let mut origins: BTreeMap<Value, BTreeSet<i64>> = BTreeMap::new();
+    let mut origins: IndexMap<Value, BTreeSet<i64>> = IndexMap::new();
     let operations: Vec<&Op> = body.blocks.iter().flat_map(|block| &block.ops).collect();
     let phis: Vec<_> = body.blocks.iter().flat_map(|block| &block.phis).collect();
 
-    let inputs = |op: &Op, origins: &BTreeMap<Value, BTreeSet<i64>>| -> BTreeSet<i64> {
-        let mut out: BTreeSet<i64> = op
+    let inputs = |op: &Op, origins: &IndexMap<Value, BTreeSet<i64>>| -> BTreeSet<i64> {
+        let mut direct: BTreeSet<i64> = op
             .args
             .iter()
             .filter_map(|arg| match arg {
@@ -38,12 +38,9 @@ pub fn analysed(body: &MirBody) -> Escapes {
         }));
         values.extend(op.loads.iter().chain(&op.stores).flat_map(|one| [one.base, one.segment]).flatten());
         for value in values {
-            out.extend(origins.get(&value).into_iter().flatten().copied());
+            direct.extend(origins.get(&value).into_iter().flatten().copied());
         }
-        out
-    };
-    let copies = |op: &Op| {
-        matches!(op.kind, Kind::Copy | Kind::Address) && op.loads.is_empty() && op.stores.is_empty() && !op.barrier()
+        direct
     };
 
     loop {
@@ -58,7 +55,11 @@ pub fn analysed(body: &MirBody) -> Escapes {
             }
         }
         for op in &operations {
-            if !copies(op) {
+            if !matches!(op.kind, Kind::Copy | Kind::Address)
+                || !op.loads.is_empty()
+                || !op.stores.is_empty()
+                || op.barrier()
+            {
                 continue;
             }
             let incoming = inputs(op, &origins);
@@ -78,14 +79,22 @@ pub fn analysed(body: &MirBody) -> Escapes {
         }
     }
 
-    let exposed: BTreeSet<i64> =
-        operations.iter().filter(|op| !copies(op)).flat_map(|op| inputs(op, &origins)).collect();
+    let exposed: BTreeSet<i64> = operations
+        .iter()
+        .filter(|op| {
+            !matches!(op.kind, Kind::Copy | Kind::Address)
+                || !op.loads.is_empty()
+                || !op.stores.is_empty()
+                || op.barrier()
+        })
+        .flat_map(|op| inputs(op, &origins))
+        .collect();
     let opaque: BTreeSet<i64> = operations
         .iter()
         .filter(|op| op.kind == Kind::Address && op.args.iter().any(|arg| matches!(arg, Arg::Opaque(_))))
         .map(|op| op.at)
         .collect();
-    let mut extents: BTreeMap<i64, BTreeSet<Option<Extent>>> = BTreeMap::new();
+    let mut extents: IndexMap<i64, BTreeSet<Option<(i64, i64)>>> = IndexMap::new();
     for op in &operations {
         for arg in &op.args {
             if let Arg::FrameAddress(address) = arg {
@@ -107,6 +116,7 @@ pub fn analysed(body: &MirBody) -> Escapes {
     Escapes { origins, exposed, opaque_addresses: opaque, reach }
 }
 
+/// `side`'s three answers.
 #[derive(Clone, Copy, PartialEq)]
 enum Side {
     Number,
@@ -114,80 +124,86 @@ enum Side {
     Unknown,
 }
 
-/// What `moved` answers: extents, None where it cannot, `...` while unknown.
+/// `moved`'s answers: extents, None where it cannot, `...` while unknown.
 enum Moved {
-    Extents(BTreeSet<Extent>),
-    Refuted,
-    Pending,
+    Extents(BTreeSet<(i64, i64)>),
+    None,
+    Ellipsis,
 }
 
 /// Values that hold an address inside frame objects of known extent on every path.
-pub fn framed(body: &MirBody) -> BTreeMap<Value, BTreeSet<Extent>> {
+///
+/// C's pointer arithmetic stays inside its object, so an address the body took
+/// of a local, moved by an integer, still reaches only that local's bytes.
+pub fn framed(body: &MirBody) -> IndexMap<Value, BTreeSet<(i64, i64)>> {
     let ops: Vec<&Op> = body.blocks.iter().flat_map(|block| &block.ops).collect();
     let phis: Vec<_> = body.blocks.iter().flat_map(|block| &block.phis).collect();
     let mut defined: BTreeSet<Value> = phis.iter().map(|phi| phi.result).collect();
     defined.extend(ops.iter().flat_map(|op| op.defines.iter().copied()));
-    // Python dict: insertion order, the last definition winning.
-    let mut moving: Vec<(Value, &Op)> = Vec::new();
+    let mut moving: IndexMap<Value, &Op> = IndexMap::new();
     let mut refuted: BTreeSet<Value> = BTreeSet::new();
     for op in &ops {
         let held = op.results.len() == 1 && matches!(&op.results[0], Arg::Held(one) if one.width == 2);
         let pure = !(!op.loads.is_empty() || !op.stores.is_empty() || op.barrier());
-        let kinds = matches!(op.kind, Kind::Address | Kind::Copy | Kind::Add | Kind::Sub);
+        let kinds = [Kind::Address, Kind::Copy, Kind::Add, Kind::Sub];
         for value in &op.defines {
-            let result = matches!(&op.results[..], [Arg::Held(one)] if one.value == *value);
-            if held && pure && kinds && result {
-                match moving.iter_mut().find(|(one, _)| one == value) {
-                    Some(entry) => entry.1 = op,
-                    None => moving.push((*value, op)),
-                }
+            if held
+                && pure
+                && kinds.contains(&op.kind)
+                && matches!(&op.results[0], Arg::Held(one) if one.value == *value)
+            {
+                moving.insert(*value, op);
             } else {
                 refuted.insert(*value);
             }
         }
     }
-    for phi in &phis {
-        refuted.extend(phi.incoming.values().filter(|one| !defined.contains(one)).copied());
-    }
-    let mut state: BTreeMap<Value, BTreeSet<Extent>> = BTreeMap::new();
+    refuted.extend(phis.iter().flat_map(|phi| phi.incoming.values()).filter(|one| !defined.contains(one)).copied());
+    let mut state: IndexMap<Value, BTreeSet<(i64, i64)>> = IndexMap::new();
 
-    let side = |arg: &Arg, state: &BTreeMap<Value, BTreeSet<Extent>>, refuted: &BTreeSet<Value>| match arg {
+    let side = |arg: &Arg, state: &IndexMap<Value, BTreeSet<(i64, i64)>>, refuted: &BTreeSet<Value>| match arg {
         Arg::Const(_) => Side::Number,
         Arg::Held(held) if refuted.contains(&held.value) => Side::Number,
         Arg::Held(held) if state.contains_key(&held.value) => Side::Address,
         _ => Side::Unknown,
     };
-    let moved = |op: &Op, state: &BTreeMap<Value, BTreeSet<Extent>>, refuted: &BTreeSet<Value>| -> Moved {
-        let value_of = |arg: &Arg| match arg {
+    // The extents `op` leaves its result in, None where it cannot, `...` while unknown.
+    let moved = |op: &Op,
+                 _final: bool,
+                 state: &IndexMap<Value, BTreeSet<(i64, i64)>>,
+                 refuted: &BTreeSet<Value>|
+     -> Moved {
+        let value = |arg: &Arg| match arg {
             Arg::Held(held) => held.value,
             _ => unreachable!("an address side is a held value"),
         };
-        let unknown = |sides: [Side; 2]| if sides.contains(&Side::Unknown) { Moved::Pending } else { Moved::Refuted };
-        match (op.kind, &op.args[..]) {
+        let unknown = |sides: [Side; 2]| if sides.contains(&Side::Unknown) { Moved::Ellipsis } else { Moved::None };
+        let (kind, source) = match (op.kind, &op.args[..]) {
             (Kind::Address, [Arg::FrameAddress(address)]) if address.extent.is_some() => {
-                Moved::Extents(BTreeSet::from([address.extent.unwrap()]))
+                return Moved::Extents(BTreeSet::from([address.extent.expect("guarded")]));
             }
-            (Kind::Copy, [source @ Arg::Held(_)]) => match side(source, state, refuted) {
-                Side::Address => Moved::Extents(state[&value_of(source)].clone()),
-                Side::Number => Moved::Refuted,
-                Side::Unknown => Moved::Pending,
-            },
+            (Kind::Copy, [source @ Arg::Held(_)]) => (side(source, state, refuted), source),
             (Kind::Add, [left, right]) => {
                 let sides = [side(left, state, refuted), side(right, state, refuted)];
-                match sides {
-                    [Side::Address, Side::Number] => Moved::Extents(state[&value_of(left)].clone()),
-                    [Side::Number, Side::Address] => Moved::Extents(state[&value_of(right)].clone()),
+                return match sides {
+                    [Side::Address, Side::Number] => Moved::Extents(state[&value(left)].clone()),
+                    [Side::Number, Side::Address] => Moved::Extents(state[&value(right)].clone()),
                     _ => unknown(sides),
-                }
+                };
             }
             (Kind::Sub, [left, right]) => {
                 let sides = [side(left, state, refuted), side(right, state, refuted)];
-                match sides {
-                    [Side::Address, Side::Number] => Moved::Extents(state[&value_of(left)].clone()),
+                return match sides {
+                    [Side::Address, Side::Number] => Moved::Extents(state[&value(left)].clone()),
                     _ => unknown(sides),
-                }
+                };
             }
-            _ => Moved::Refuted,
+            _ => return Moved::None,
+        };
+        match kind {
+            Side::Address => Moved::Extents(state[&value(source)].clone()),
+            Side::Number => Moved::None,
+            Side::Unknown => Moved::Ellipsis,
         }
     };
 
@@ -204,7 +220,7 @@ pub fn framed(body: &MirBody) -> BTreeMap<Value, BTreeSet<Extent>> {
                     changed = true;
                     continue;
                 }
-                let union: BTreeSet<Extent> =
+                let union: BTreeSet<(i64, i64)> =
                     phi.incoming.values().flat_map(|one| state.get(one).into_iter().flatten().copied()).collect();
                 let previous = state.get(&phi.result).cloned().unwrap_or_default();
                 if !union.is_subset(&previous) {
@@ -216,8 +232,8 @@ pub fn framed(body: &MirBody) -> BTreeMap<Value, BTreeSet<Extent>> {
                 if refuted.contains(value) {
                     continue;
                 }
-                match moved(op, &state, &refuted) {
-                    Moved::Refuted => {
+                match moved(op, false, &state, &refuted) {
+                    Moved::None => {
                         refuted.insert(*value);
                         changed = true;
                     }
@@ -228,25 +244,26 @@ pub fn framed(body: &MirBody) -> BTreeMap<Value, BTreeSet<Extent>> {
                             changed = true;
                         }
                     }
-                    Moved::Pending => {}
+                    Moved::Ellipsis => {}
                 }
             }
         }
         // Optimism settles cycles; anything still unproven is refuted and the rest looked at again.
-        let candidates = moving.iter().map(|(value, _)| *value).chain(phis.iter().map(|phi| phi.result));
-        let unproven: BTreeSet<Value> = candidates
+        let unproven: BTreeSet<Value> = moving
+            .keys()
+            .copied()
+            .chain(phis.iter().map(|phi| phi.result))
             .filter(|value| {
-                if refuted.contains(value) {
-                    return false;
-                }
-                let moved_by = moving.iter().find(|(one, _)| one == value).map(|(_, op)| *op);
-                !state.contains_key(value)
-                    || moved_by.is_some_and(|op| !matches!(moved(op, &state, &refuted), Moved::Extents(_)))
-                    || (moved_by.is_none()
-                        && phis
-                            .iter()
-                            .filter(|phi| phi.result == *value)
-                            .any(|phi| phi.incoming.values().any(|one| !state.contains_key(one))))
+                !refuted.contains(value)
+                    && (!state.contains_key(value)
+                        || moving
+                            .get(value)
+                            .is_some_and(|op| !matches!(moved(op, true, &state, &refuted), Moved::Extents(_)))
+                        || (!moving.contains_key(value)
+                            && phis
+                                .iter()
+                                .filter(|phi| phi.result == *value)
+                                .any(|phi| phi.incoming.values().any(|one| !state.contains_key(one)))))
             })
             .collect();
         if unproven.is_empty() {
@@ -258,6 +275,11 @@ pub fn framed(body: &MirBody) -> BTreeMap<Value, BTreeSet<Extent>> {
 
 #[cfg(test)]
 mod tests {
+    //! Port of tests/test_frame_escape.py.
+    //!
+    //! `test_renderer_exposes_temporary_string_not_counter_address` waits for
+    //! `mir.bodies` and the corpus loader.
+
     use super::*;
     use crate::model::ir::Operation;
     use crate::model::mir::{FrameAddress, Held, MirBlock, OpCode, Opaque, Phi};

@@ -6,6 +6,7 @@ pub(crate) mod indvars;
 pub(crate) mod inline;
 pub(crate) mod lcssa;
 pub(crate) mod lcssamerges;
+pub(crate) mod loadjoins;
 pub(crate) mod loopclone;
 pub(crate) mod loopsimplify;
 pub(crate) mod profit;
