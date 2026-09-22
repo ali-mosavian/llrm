@@ -63,7 +63,9 @@ def sunk_stores(
                     if id(op) not in relocated and _unobserved(
                         op, operations, dgroup, bounds, intervals, address_values
                     ):
-                        value = _exit_value(op, blocks[source], blocks[entry], latch, body, dgroup, bounds)
+                        value = _exit_value(
+                            op, blocks[source], blocks[entry], latch, body, dgroup, bounds, handles_errors
+                        )
                         if value is None and any(op is one for one in blocks[latch].ops):
                             value = _invariant_value(op, invariant, nonempty)
                             if value is None:
@@ -132,6 +134,7 @@ def _exit_value(
     body: mir.MirBody,
     dgroup: frozenset[int],
     bounds: dict | None,
+    handles_errors: bool = True,
 ) -> mir.Held | None:
     values = [arg for arg in op.args if isinstance(arg, mir.Held)]
     if len(values) != 1:
@@ -183,7 +186,12 @@ def _exit_value(
         block = blocks[at]
         for index in range(len(block.ops) - 1, -1, -1):
             previous = block.ops[index]
-            if previous.barrier or previous.kind in {mir.Kind.CALL, mir.Kind.ESCAPE, mir.Kind.OPAQUE}:
+            # A call is an operation like any other where its memory effects
+            # are complete: its stores say what it can write.
+            opaque = previous.kind is mir.Kind.CALL and not previous.memory_complete
+            if previous.barrier or opaque or previous.kind in {mir.Kind.ESCAPE, mir.Kind.OPAQUE}:
+                return False
+            if effects.exposes_memory(previous, handles_errors):
                 return False
             if any(mir.overlapping(ref, written, dgroup, bounds) for written in previous.stores):
                 if isinstance(expected, mir.Const):
