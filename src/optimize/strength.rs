@@ -142,9 +142,10 @@ pub(crate) fn reduced(
         return Ok(body.clone());
     }
 
+    let reads = _Reads::of(body);
     let mut candidate_groups = BTreeMap::<i64, Vec<Derived>>::new();
     for (loop_, _basics, derived) in &found {
-        candidate_groups.insert(loop_.header, _candidates(body, derived, scales));
+        candidate_groups.insert(loop_.header, _candidates(&reads, derived, scales));
     }
     let replacement_credits = if control_recurrences {
         &_replacement_credits(body, &found, &candidate_groups, costs)
@@ -231,7 +232,7 @@ pub(crate) fn reduced(
         for one in &leaves {
             if let Some(indexed) = native_forms
                 .iter()
-                .find_map(|form| _legal_form(body, loop_, one, form, &facts, &mut widened))
+                .find_map(|form| _legal_form(&reads, loop_, one, form, &facts, &mut widened))
             {
                 native.insert(one.op, indexed);
             }
@@ -243,7 +244,7 @@ pub(crate) fn reduced(
             }
             if let Some(indexed) = secondary_forms
                 .iter()
-                .find_map(|form| _legal_form(body, loop_, one, form, &facts, &mut widened))
+                .find_map(|form| _legal_form(&reads, loop_, one, form, &facts, &mut widened))
             {
                 secondary.insert(one.op, indexed);
             }
@@ -335,7 +336,7 @@ pub(crate) fn reduced(
             }
             let (scale, form) = indexes[&one.op].clone();
             let op = op_at(one.op);
-            let answer = _answer(body, one.op).expect("a candidate has an answer");
+            let answer = _answer(&reads, one.op).expect("a candidate has an answer");
             let counter = at_of[&loop_.header]
                 .phis
                 .iter()
@@ -476,7 +477,7 @@ pub(crate) fn reduced(
             // Once each: a multiply in a nest is derived in every loop.
             let mut one = one.clone();
             let op = op_at(one.op);
-            let answer = _answer(body, one.op);
+            let answer = _answer(&reads, one.op);
             let Some(answer) = answer else {
                 continue;
             };
@@ -609,13 +610,14 @@ pub(crate) fn reduced(
     Ok(ssa::constructed(&changed, &(first..=taken).collect())?)
 }
 
-fn _candidates(body: &MirBody, derived: &[Derived], scales: &BTreeSet<i64>) -> Vec<Derived> {
+fn _candidates(reads: &_Reads, derived: &[Derived], scales: &BTreeSet<i64>) -> Vec<Derived> {
+    let body = reads.body;
     let op_at = |at: OpOccurrence| &body.blocks[at.block_index()].ops[at.operation_index()];
     let candidates = derived
         .iter()
         .filter(|one| {
             let op = op_at(one.op);
-            _answer(body, one.op).is_some()
+            _answer(reads, one.op).is_some()
                 && (_multiplies(body, one, derived)
                     || one.pointer.is_some()
                     || op.kind == Kind::Divmod
@@ -634,7 +636,7 @@ fn _candidates(body: &MirBody, derived: &[Derived], scales: &BTreeSet<i64>) -> V
         .collect::<Vec<_>>();
     candidates
         .into_iter()
-        .filter(|one| scales.is_empty() || !_indexed(body, one))
+        .filter(|one| scales.is_empty() || !_indexed(reads, one))
         .collect()
 }
 
@@ -1568,36 +1570,71 @@ fn _start_temporary_count(one: &Derived, counted: bool) -> u32 {
 ///
 /// Where the high half or the flags are read too, the multiply is doing work
 /// an add does not do and it stays.
-fn _answer(body: &MirBody, op: OpOccurrence) -> Option<Value> {
-    let op_at = |at: OpOccurrence| &body.blocks[at.block_index()].ops[at.operation_index()];
+/// Who reads each value id in one body, indexed once for every `_answer`.
+struct _Reads<'a> {
+    body: &'a MirBody,
+    /// Reads of each id by any operation.
+    uses: HashMap<u32, u32>,
+    /// The phi results each id is an incoming value of.
+    arms: HashMap<u32, Vec<u32>>,
+}
+
+impl<'a> _Reads<'a> {
+    fn of(body: &'a MirBody) -> Self {
+        let mut uses = HashMap::<u32, u32>::default();
+        for (_, _, op) in operations(body) {
+            for value in &op.uses {
+                *uses.entry(value.id).or_insert(0) += 1;
+            }
+        }
+        // Keyed by result id, a later phi replacing an earlier one's arms.
+        let mut incoming = BTreeMap::<u32, Vec<u32>>::new();
+        for block in &body.blocks {
+            for phi in &block.phis {
+                incoming.insert(phi.result.id, phi.incoming.values().map(|one| one.id).collect());
+            }
+        }
+        let mut arms = HashMap::<u32, Vec<u32>>::default();
+        for (result, values) in incoming {
+            for one in values {
+                arms.entry(one).or_default().push(result);
+            }
+        }
+        Self { body, uses, arms }
+    }
+
+    /// Whether anything but `op` reads `id`, directly or through the phis
+    /// whose results are read.
+    fn read(&self, op: &Op, id: u32) -> bool {
+        let direct = |id: u32| {
+            let own = op.uses.iter().filter(|one| one.id == id).count();
+            self.uses.get(&id).is_some_and(|all| *all as usize > own)
+        };
+        let mut seen = HashSet::<u32>::default();
+        let mut pending = vec![id];
+        while let Some(next) = pending.pop() {
+            if !seen.insert(next) {
+                continue;
+            }
+            if direct(next) {
+                return true;
+            }
+            pending.extend(self.arms.get(&next).into_iter().flatten().copied());
+        }
+        false
+    }
+}
+
+fn _answer(reads: &_Reads, op: OpOccurrence) -> Option<Value> {
+    let op = &reads.body.blocks[op.block_index()].ops[op.operation_index()];
     let held_result = |op: &Op| match op.results.first() {
         Some(Arg::Held(held)) => Some(held.value),
         _ => None,
     };
-    let mut read = operations(body)
-        .filter(|(other, _, _)| *other != op)
-        .flat_map(|(_, _, other)| other.uses.iter().map(|value| value.id))
-        .collect::<BTreeSet<_>>();
-    // A phi arm counts only where the phi's own result is read.
-    let mut incoming = BTreeMap::<u32, Vec<Value>>::new();
-    for block in &body.blocks {
-        for phi in &block.phis {
-            incoming.insert(phi.result.id, phi.incoming.values().copied().collect());
-        }
-    }
-    let mut pending = read.iter().copied().collect::<Vec<_>>();
-    while let Some(next) = pending.pop() {
-        for value in incoming.get(&next).into_iter().flatten() {
-            if read.insert(value.id) {
-                pending.push(value.id);
-            }
-        }
-    }
-    let op = op_at(op);
     let wanted = op
         .defines
         .iter()
-        .filter(|one| read.contains(&one.id))
+        .filter(|one| reads.read(op, one.id))
         .collect::<Vec<_>>();
     if wanted.len() != 1 || wanted[0].flags || held_result(op) != Some(*wanted[0]) {
         return None;
@@ -1712,14 +1749,15 @@ fn _replaced(one: &[Op]) -> Vec<Op> {
 
 /// This derived address in one form, including exact-width proof.
 fn _legal_form(
-    body: &MirBody,
+    reads: &_Reads,
     loop_: &Loop,
     one: &Derived,
     form: &AddressForm,
     facts: &IndexMap<Value, Known>,
     widened: &mut BTreeMap<u32, Option<Vec<(OpOccurrence, Op)>>>,
 ) -> Option<(i64, AddressForm)> {
-    let scale = _indexable(body, loop_, one, &form.scales, facts)?;
+    let body = reads.body;
+    let scale = _indexable(reads, loop_, one, &form.scales, facts)?;
     if form.index_width > 2 {
         widened
             .entry(one.of.value)
@@ -1734,12 +1772,13 @@ fn _legal_form(
 /// From zero by one, so the counter is the index. A scale above one needs
 /// the counter as a dword, and the address is then exact only in bounds.
 fn _indexable(
-    body: &MirBody,
+    reads: &_Reads,
     _loop: &Loop,
     one: &Derived,
     scales: &BTreeSet<i64>,
     facts: &IndexMap<Value, Known>,
 ) -> Option<i64> {
+    let body = reads.body;
     let op_at = |at: OpOccurrence| &body.blocks[at.block_index()].ops[at.operation_index()];
     let zero = Some(BigInt::from(0_u8));
     let unit = Some(BigInt::from(1_u8));
@@ -1757,7 +1796,7 @@ fn _indexable(
         return None;
     }
     let scale = scale.expect("checked");
-    let answer = _answer(body, one.op);
+    let answer = _answer(reads, one.op);
     let refs = answer.and_then(|answer| _addressed(body, answer));
     let refs = refs.filter(|refs| !refs.is_empty())?;
     if refs
@@ -1776,10 +1815,11 @@ fn _indexable(
 ///
 /// Reducing it again would give the address back the recurrence the index
 /// replaced. A word is folded only unscaled, `[bx+si]`.
-fn _indexed(body: &MirBody, one: &Derived) -> bool {
+fn _indexed(reads: &_Reads, one: &Derived) -> bool {
+    let body = reads.body;
     let op_at = |at: OpOccurrence| &body.blocks[at.block_index()].ops[at.operation_index()];
     let op = op_at(one.op);
-    let answer = _answer(body, one.op);
+    let answer = _answer(reads, one.op);
     let Some(answer) = answer else {
         return false;
     };
