@@ -98,3 +98,21 @@ fn test_sqrt_facts_require_an_exact_rational_square() {
         assert_eq!(evaluated(Kind::Fsqrt, &rule, &[Finite::new(number, negative_zero)]), expected);
     }
 }
+
+/// `_MemoryQueries` keyed a reference by its address, and `repeated` builds a
+/// fresh store every iteration, so a freed store's address answered for the
+/// next one: fpcse's D exited at 145.5 (three iterations) for 487.5.
+#[test]
+fn test_a_loop_exit_repeats_its_stores_every_iteration() {
+    use crate::objectfile::{module, omf};
+    let data = std::fs::read("fixtures/omf/fpcse-p-g2.obj").unwrap();
+    let found = module::of(&omf::parse(&data).unwrap()).unwrap();
+    let blocks = crate::frontend::blocks::partition(&found, &crate::frontend::blocks::code_map(&found).unwrap());
+    let raised = crate::model::mir::bodies(&found, &blocks, None, false, false).unwrap();
+    let (_, body) = &raised.values[0];
+    let exits = super::loop_exits(body, &found.dgroup.members, &found.calls);
+    assert_eq!(exits.len(), 1);
+    assert_eq!(exits[0].count, BigInt::from(10));
+    let stored: Vec<BigInt> = exits[0].stores.iter().map(|(_, fact)| fact.n.clone()).collect();
+    assert_eq!(stored, [0x4240_0000, 0x3f40_0000, 0x43f3_c000].map(BigInt::from));
+}

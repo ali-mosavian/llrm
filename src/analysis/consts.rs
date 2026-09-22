@@ -44,15 +44,17 @@ pub(crate) type Cells = IndexMap<(Addr, u32), Known>;
 
 /// Alias questions for one immutable known-value epoch.
 ///
-/// Python keys both caches on `id(ref)`; the address of the reference in
-/// the body (and of the resolved copy) is that identity here.
+/// Python keys both caches on `id(ref)`. An address is that identity only
+/// while the reference lives, and a caller may hand in a temporary, so a hit
+/// must also be the same reference field for field; resolved copies are
+/// never dropped, which keeps `overlaps`' addresses unique.
 pub(crate) struct _MemoryQueries {
     pub known: IndexMap<Value, Known>,
     pub dgroup: BTreeSet<i64>,
     // Which object each directly addressed byte is; see alias.named_bytes.
     pub named: NamedBytes,
     pub facts: BTreeMap<Value, Interval>,
-    pub addressed: HashMap<usize, Rc<MemRef>>,
+    pub addressed: HashMap<usize, Vec<(MemRef, Rc<MemRef>)>>,
     pub overlaps: HashMap<((Addr, u32), usize), bool>,
 }
 
@@ -75,14 +77,18 @@ impl _MemoryQueries {
     pub(crate) fn resolve(&mut self, reference: &MemRef) -> Rc<MemRef> {
         let key = std::ptr::from_ref(reference) as usize;
         let known = &self.known;
-        if let Some(saved) = self.addressed.get(&key) {
+        let entries = self.addressed.entry(key).or_default();
+        let same = |source: &MemRef| {
+            source == reference && source.typed == reference.typed && source.within == reference.within
+        };
+        if let Some((_, saved)) = entries.iter().find(|(source, _)| same(source)) {
             if crate::support::checking_caches() {
                 assert!(format!("{saved:?}") == format!("{:?}", _addressed(reference, known)), "_MemoryQueries.resolve: a cache hit disagrees with its recomputation");
             }
             return Rc::clone(saved);
         }
         let made = Rc::new(_addressed(reference, known));
-        self.addressed.insert(key, Rc::clone(&made));
+        entries.push((reference.clone(), Rc::clone(&made)));
         made
     }
 
