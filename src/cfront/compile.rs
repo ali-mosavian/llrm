@@ -377,3 +377,121 @@ pub fn main(argv: &[String]) -> i32 {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::{CompileError, _body_initializers, _constant_initializers, assembled};
+    use crate::cfront::hir;
+    use crate::model::ir::Operation;
+    use crate::model::mir::{Arg, Const, Held, Kind, MemRef, MirBlock, MirBody, Op, OpCode, Value};
+    use crate::objectfile::module::{Addr, Space};
+    use crate::support::pyrepr::Tuple;
+
+    fn segment(offset: i64, index: i64) -> Addr {
+        Addr { index, ..Addr::new(Space::Segment, offset) }
+    }
+
+    fn item(call: &str, args: &[&str]) -> (String, Tuple<String>) {
+        (call.to_owned(), Tuple(args.iter().map(|one| (*one).to_owned()).collect()))
+    }
+
+    fn symbol(id: i64, name: &str, attr: i64, segment: i64) -> hir::Symbol {
+        hir::Symbol {
+            id,
+            name: name.to_owned(),
+            base: name.to_owned(),
+            pattern: "_*".to_owned(),
+            attr,
+            call_class: 0,
+            call_target: 0,
+            register_parms: false,
+            code: None,
+            segment,
+        }
+    }
+
+    /// CRC's constant byte table reached MIR with no initializer facts.
+    ///
+    /// Numeric bytes of a private immutable object are loader-established facts;
+    /// mutable, volatile, relocatable, or inline-assembly-visible objects are not.
+    #[test]
+    fn test_private_constant_data_seeds_complete_loader_bytes_only() {
+        let mut unit = hir::Unit::default();
+        unit.symbols.insert(1, symbol(1, "table", hir::FE_CONSTANT | hir::FE_INTERNAL, 1));
+        unit.backs.insert(1, 1);
+        unit.segments.insert(
+            1,
+            hir::Segment {
+                id: 1,
+                name: "CONST2".to_owned(),
+                attr: 0,
+                items: vec![
+                    item("DGLabel", &["b1"]),
+                    item("DGBytes", &["2", "3132"]),
+                    item("DGIBytes", &["2", "255"]),
+                    item("DGInteger", &["4660", "TY_UINT_2"]),
+                ],
+            },
+        );
+
+        let expected: Vec<(MemRef, Const)> = b"12\xff\xff\x34\x12"
+            .iter()
+            .enumerate()
+            .map(|(offset, byte)| (MemRef::new(Some(segment(offset as i64, 1)), 1), Const::new(*byte, 1)))
+            .collect();
+        assert_eq!(_constant_initializers(&unit), expected);
+
+        unit.symbols[&1].attr &= !hir::FE_CONSTANT;
+        assert!(_constant_initializers(&unit).is_empty());
+        unit.symbols[&1].attr |= hir::FE_CONSTANT | hir::FE_VOLATILE;
+        assert!(_constant_initializers(&unit).is_empty());
+        unit.symbols[&1].attr &= !hir::FE_VOLATILE;
+        unit.segments[&1].items.push(item("DGFEPtr", &["y1", "TY_NEAR_POINTER", "0"]));
+        assert!(_constant_initializers(&unit).is_empty());
+
+        unit.segments[&1].items.pop();
+        let mut inline = symbol(2, "inline", hir::FE_PROC, 0);
+        inline.code = Some(hir::Code {
+            data: b"\x90\x90".to_vec(),
+            fixups: vec![hir::Fixup { at: 0, kind: "offset".to_owned(), symbol: 1, offset: 0 }],
+        });
+        unit.symbols.insert(2, inline);
+        assert!(_constant_initializers(&unit).is_empty());
+    }
+
+    /// A large qcport lookup table must not enlarge SCCP in every procedure.
+    ///
+    /// Module initializer facts belong only to bodies that directly name their
+    /// object; unrelated functions previously received every byte in the module.
+    #[test]
+    fn test_constant_loader_facts_are_local_to_referencing_bodies() {
+        let first = MemRef::new(Some(segment(0, 7)), 1);
+        let second = MemRef::new(Some(segment(0, 8)), 1);
+        let initial = vec![(first.clone(), Const::new(1, 1)), (second, Const::new(2, 1))];
+        let loaded = Value::new(1, 1);
+        let load = Op {
+            kind: Kind::Load,
+            loads: vec![first],
+            results: vec![Arg::Held(Held { value: loaded, width: 1 })],
+            ..Op::new(1, OpCode::Operation(Operation::Nothing), "", vec![loaded], vec![])
+        };
+        let body = MirBody::new(1, vec![MirBlock::new(1, vec![], vec![load], vec![])]);
+
+        assert_eq!(_body_initializers(&body, &initial), [initial[0].clone()]);
+    }
+
+    /// A callee taking arguments in registers: the raise pushed them anyway,
+    /// and ls linked against `strlen_`, Watcom's register-convention strlen.
+    #[test]
+    fn test_register_convention_is_refused() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/c/regs.cgs");
+        match assembled(&std::fs::read_to_string(path).unwrap(), "regs", false, None, "386") {
+            Err(CompileError::Unsupported(refused)) => {
+                assert!(refused.to_string().contains("_twice has a register calling convention"), "{refused}");
+            }
+            _ => panic!("a register convention was compiled as a stack one"),
+        }
+    }
+}

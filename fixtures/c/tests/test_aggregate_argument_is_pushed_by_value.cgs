@@ -1,0 +1,29 @@
+INIT sw=0x808000 target=0xec size=50 rev=0x23
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=2
+SEG 3 attr=0xc name="CONST2" align=2
+SEG 4 attr=0x6 name="_DATA" align=2
+START
+TYPE T25 size=12 align=1
+f1 DBSrcFile "/private/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/tmpu7of4zgf/unit.c"
+- DBSrcCue f1 3 1
+SYM y1 name="pass" base="pass" pattern="_*" attr=0x7 seg=1
+CALLCONV y1 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y1 TY_INTEGER
+SYM y2 name="src" base="src" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y2 TY_POINTER
+l2 CGLastParm
+t3 CGTemp TY_INTEGER
+SYM y3 name="take" base="take" pattern="_*" attr=0xf seg=1
+CALLCONV y3 class=0x80 target=0x716 parms=[] ret=0:0
+n4 CGFEName y3 TY_CODE_PTR
+c5 CGInitCall n4 TY_INTEGER y3
+n6 CGFEName y2 TY_POINTER
+n7 CGUnary O_POINTS n6 TY_POINTER
+n8 CGUnary O_POINTS n7 T25
+- CGAddParm c5 n8 T25
+n9 CGCall c5
+- CGDone n9
+- CGReturn n0 TY_INTEGER
+STOP
+FINI
