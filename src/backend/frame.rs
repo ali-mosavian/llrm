@@ -114,6 +114,17 @@ impl Frame {
     }
 
     /// The memory operand that reads or writes this value's slot.
+    pub fn saved(&self) -> (IndexMap<SlotKey, i64>, IndexMap<i64, i64>) {
+        (self.slots.clone(), self.capacities.clone())
+    }
+
+    /// Forget a discarded trial's slots. Kept, a later spill of the same
+    /// value reuses its stale slot without an overlap check.
+    pub fn restore(&mut self, saved: &(IndexMap<SlotKey, i64>, IndexMap<i64, i64>)) {
+        self.slots = saved.0.clone();
+        self.capacities = saved.1.clone();
+    }
+
     pub fn cell(&mut self, value: impl Into<SlotKey>, width: impl Into<i64>) -> Result<Mem, Refused> {
         let width: i64 = width.into();
         let disp = self.slot(value, width)?;

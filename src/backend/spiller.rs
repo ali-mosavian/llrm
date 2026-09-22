@@ -126,7 +126,7 @@ pub fn spilled(
     let mut abandoned: BTreeSet<usize> = BTreeSet::new();
     let mut rematerialized_definitions: BTreeSet<usize> = BTreeSet::new();
     let mut identities: BTreeSet<usize> = BTreeSet::new();
-    let base_uses = _base_uses(&body);
+    let r#final = _final_uses(&body);
     let rebuilt_values: BTreeSet<u32> = rebuilt.keys().copied().collect();
     let mut cells = _Cells::new(rebuilt.clone());
 
@@ -141,7 +141,7 @@ pub fn spilled(
                 continue;
             }
             // A word index held only for one final memory access.
-            if let Some((add, rewritten)) = _indexed_source(&one, &stored, frame, &base_uses)? {
+            if let Some((add, rewritten)) = _indexed_source(&one, &stored, frame, &r#final)? {
                 insns.push(add);
                 one = rewritten;
             }
@@ -1158,12 +1158,39 @@ impl CellOf for _Cells {
     }
 }
 
-/// How many instructions still read each possible address base.
-fn _base_uses(body: &LirBody) -> IndexMap<u32, i64> {
-    let mut out: IndexMap<u32, i64> = IndexMap::new();
-    for one in body.blocks.iter().flat_map(|block| &block.insns) {
-        for value in _set(&one.uses) {
-            *out.entry(value).or_insert(0) += 1;
+/// Every `(id(insn), value)` where that instruction is the value's last read.
+///
+/// A destructive index fold needs the base dead after the access. Counting
+/// static uses cannot say so: sum_three's loop-invariant base had one use,
+/// inside the loop, and `add di,[slot]` moved it on every trip -- 330 for
+/// 1110.
+fn _final_uses(body: &LirBody) -> BTreeSet<(usize, u32)> {
+    use crate::backend::allocate;
+
+    let (_live_in, live_out) = allocate::live(body);
+    let mut out: BTreeSet<(usize, u32)> = BTreeSet::new();
+    for block in &body.blocks {
+        let mut alive: BTreeSet<u32> = live_out[&block.at].clone();
+        let mut index = block.insns.len() as i64 - 1;
+        while index >= 0 {
+            let one = &block.insns[index as usize];
+            let mut first = index as usize;
+            if one.group.is_some() {
+                while first > 0 && block.insns[first - 1].group == one.group {
+                    first -= 1;
+                }
+            }
+            let group = &block.insns[first..=index as usize];
+            for item in group {
+                for value in &item.defines {
+                    alive.remove(value);
+                }
+            }
+            for item in group {
+                out.extend(item.uses.iter().filter(|value| !alive.contains(value)).map(|value| (key(item), *value)));
+            }
+            alive.extend(group.iter().flat_map(|item| item.uses.iter().copied()));
+            index = first as i64 - 1;
         }
     }
     out
@@ -1171,11 +1198,11 @@ fn _base_uses(body: &LirBody) -> IndexMap<u32, i64> {
 
 /// Spilled word indexes that can become a direct frame add.
 pub fn foldable_indexes(body: &LirBody, values: &BTreeSet<u32>) -> BTreeSet<u32> {
-    let bases = _base_uses(body);
+    let r#final = _final_uses(body);
     body.blocks
         .iter()
         .flat_map(|block| &block.insns)
-        .filter_map(|one| _indexed_pattern(one, values, &bases))
+        .filter_map(|one| _indexed_pattern(one, values, &r#final))
         .map(|found| found.1.value)
         .collect()
 }
@@ -1185,7 +1212,7 @@ pub fn unfolded_indexes(body: &LirBody, values: &BTreeSet<u32>) -> (LirBody, BTr
     if values.is_empty() {
         return (body.clone(), BTreeSet::new());
     }
-    let base_uses = _base_uses(body);
+    let r#final = _final_uses(body);
     let mut changed: BTreeSet<u32> = BTreeSet::new();
     let mut blocks = Vec::new();
     for block in &body.blocks {
@@ -1195,7 +1222,7 @@ pub fn unfolded_indexes(body: &LirBody, values: &BTreeSet<u32>) -> (LirBody, BTr
         for (position, one) in block.insns.iter().enumerate() {
             let position = position as i64;
             definitions.extend(one.defines.iter().map(|value| (*value, position)));
-            let Some((base, index, _cells)) = _indexed_pattern(one, values, &base_uses) else {
+            let Some((base, index, _cells)) = _indexed_pattern(one, values, &r#final) else {
                 continue;
             };
             let (add, access) = _unfolded_index(one, base, index);
@@ -1206,7 +1233,10 @@ pub fn unfolded_indexes(body: &LirBody, values: &BTreeSet<u32>) -> (LirBody, BTr
                 .max()
                 .expect("two values");
             let crossed = &block.insns[(latest_definition + 1) as usize..position as usize];
-            if latest_definition < position && _flags_overwritten(crossed) {
+            if latest_definition < position
+                && _flags_overwritten(crossed)
+                && !crossed.iter().any(|item| item.uses.contains(&base.value))
+            {
                 placement = latest_definition;
             }
             rewritten.insert(position, access);
@@ -1257,9 +1287,9 @@ fn _flags_overwritten(crossed: &[Arc<Insn>]) -> bool {
 
 /// The base, index and matching cells of one legal direct-index fold.
 fn _indexed_pattern(
-    one: &Insn,
+    one: &Arc<Insn>,
     values: &BTreeSet<u32>,
-    base_uses: &IndexMap<u32, i64>,
+    r#final: &BTreeSet<(usize, u32)>,
 ) -> Option<(Held, Held, Vec<Mem>)> {
     let what = one.what.as_ref()?;
     if one.group.is_some() || !one.requires.is_empty() || !one.delivers.is_empty() || !one.clobbers.is_empty() {
@@ -1308,7 +1338,7 @@ fn _indexed_pattern(
             }
         }
     }
-    if base_uses.get(&base.value).copied().unwrap_or(0) != 1 {
+    if !r#final.contains(&(key(one), base.value)) {
         return None;
     }
     Some((base, index, cells))
@@ -1352,12 +1382,12 @@ fn _unfolded_index(one: &Insn, base: Held, index: Held) -> (Arc<Insn>, Arc<Insn>
 
 /// Fold a spilled word index into a base the current access kills.
 fn _indexed_source(
-    one: &Insn,
+    one: &Arc<Insn>,
     values: &BTreeSet<u32>,
     frame: &mut Frame,
-    base_uses: &IndexMap<u32, i64>,
+    r#final: &BTreeSet<(usize, u32)>,
 ) -> Result<Option<(Arc<Insn>, Arc<Insn>)>, Error> {
-    let Some((base, index, _cells)) = _indexed_pattern(one, values, base_uses) else {
+    let Some((base, index, _cells)) = _indexed_pattern(one, values, r#final) else {
         return Ok(None);
     };
     let slot = frame.cell(index.value, index.width)?;

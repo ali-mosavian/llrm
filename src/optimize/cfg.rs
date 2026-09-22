@@ -142,6 +142,7 @@ pub(crate) fn merged(body: &MirBody) -> Result<MirBody, SubstitutionError> {
                 target,
                 MirBlock {
                     at: first.at,
+                    cold: first.cold,
                     phis: first.phis.clone(),
                     ops: moved,
                     succ: second.succ.clone(),
@@ -186,6 +187,7 @@ pub(crate) fn merged(body: &MirBody) -> Result<MirBody, SubstitutionError> {
                 .collect::<Vec<_>>();
             blocks.push(MirBlock {
                 at: block.at,
+                cold: block.cold,
                 phis,
                 ops: block
                     .ops

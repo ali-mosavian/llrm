@@ -482,6 +482,7 @@ pub fn _split_edges(
             (where_, into),
             LirBlock {
                 at,
+                cold: false,
                 insns: insns.iter().map(|one| _renamed(one, rename)).collect::<Result<_, _>>()?,
                 succ: vec![into],
                 phis: vec![],
@@ -512,6 +513,7 @@ pub fn _split_edges(
         }
         blocks.push(LirBlock {
             at: block.at,
+            cold: block.cold,
             insns: insns.iter().map(|one| _renamed(one, rename)).collect::<Result<_, _>>()?,
             succ,
             phis: kept[&block.at]
@@ -643,6 +645,7 @@ pub fn unsplit(body: &LirBody) -> LirBody {
             .collect();
         blocks.push(LirBlock {
             at: block.at,
+            cold: block.cold,
             insns,
             succ: block.succ.iter().map(|&at| where_(at)).collect(),
             phis,
@@ -671,7 +674,7 @@ mod tests {
     }
 
     fn block(at: i64, insns: Vec<Arc<Insn>>, succ: Vec<i64>, phis: Vec<Phi>) -> LirBlock {
-        LirBlock { at, insns, succ, phis }
+        LirBlock { at, insns, succ, phis, cold: false }
     }
 
     fn body(name: &str, blocks: Vec<LirBlock>) -> LirBody {

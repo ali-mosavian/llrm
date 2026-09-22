@@ -1715,8 +1715,8 @@ pub fn emit(
         }
         return None;
     }
-    if op == Operation::Fill {
-        return fill(name, at, true);
+    if op == Operation::Fill && matches!(sources.len(), 3 | 4) {
+        return fill(name, at, sources.len() == 4);
     }
     if op == Operation::Nothing && name.is_empty() {
         return Some(Emitted::new(Vec::new()));

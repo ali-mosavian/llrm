@@ -27,6 +27,7 @@ pub mod lower_switches;
 pub mod machinecse;
 pub mod machinedce;
 pub mod masm;
+pub mod narrow;
 pub mod nativeframe;
 pub mod omfwrite;
 pub mod parcopy;
