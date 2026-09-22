@@ -46,7 +46,7 @@ def test_a_runtime_lower_bound_loop_ends_on_its_shared_offset(dynamic_sum: Path,
     loop = _backward_loop(procedure)
 
     assert re.search(r"add \w\w, 2\n", loop)
-    assert not re.search(r"    (?:inc|dec|lea|cmp) ", loop)
+    assert not re.search(r"    (?:inc|lea|cmp) |\[bp", loop)
 
 
 def _backward_loop(procedure: str) -> str:

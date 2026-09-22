@@ -604,6 +604,16 @@ def test_a_loop_whose_latch_copies_ends_on_its_branch() -> None:
     assert "jmp" not in top.group(0)
 
 
+def test_three_views_past_the_index_pairs_step_their_own_pointers() -> None:
+    """sum_three indexed three bases off one counter, and word base+index holds two: two reloads a trip."""
+    assembly = masm.text(modern_compile.assembled(driver.parsed(SUM_THREE), entry="main", cpu="486"))
+    function = assembly.split("_sum_three proc far", 1)[1].split("_sum_three endp", 1)[0]
+    loop = re.search(r"(L\w+):\n(?:.*\n)*?\s*jne\s+\1\n", function).group(0)
+
+    assert "[bp" not in loop
+    assert len(re.findall(r"\badd\s+\w+,\s*word ptr \w+:\[(?:si|di|bx)\]", loop)) == 3
+
+
 def test_runtime_bounded_array_loop_has_a_symbolic_count_proof() -> None:
     """A runtime descriptor extent is an exact trip count, not an unknown loop."""
     program = driver.parsed(SUM)

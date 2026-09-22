@@ -155,7 +155,9 @@ def _operation_costs(costs: dict[str, int], prefix: int) -> OperationCosts:
 def _address_forms(costs: OperationCosts, prefix: int, address_stall: int = 0) -> tuple[AddressForm, ...]:
     """Native medium-model addressing, then the legal secondary 67h form."""
     return (
-        AddressForm(2, frozenset({1})),
+        # A word base+index is bx or bp plus si or di, and bp is the frame:
+        # one register pairs with at most two others.
+        AddressForm(2, frozenset({1}), partners=2),
         AddressForm(
             4,
             frozenset({1, 2, 4, 8}),
