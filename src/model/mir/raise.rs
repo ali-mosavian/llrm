@@ -14,8 +14,21 @@ use super::{
 };
 use crate::abi::runtime;
 use crate::analysis::loops;
-use crate::frontend::blocks::Block;
-use crate::frontend::{raising_call_memory, stack};
+use std::rc::Rc;
+
+use super::AllocationHints;
+use crate::analysis::regions;
+use crate::frontend::blocks::{self as split, Block};
+use crate::frontend::extent::BodyKind;
+use crate::frontend::{
+    raising_addresses, raising_array_access, raising_arrays, raising_bytes, raising_call_memory, raising_calls,
+    raising_carried, raising_conditions, raising_control, raising_copies, raising_defseg, raising_dispatch,
+    raising_division, raising_float_calls, raising_float_results, raising_float_values, raising_floats, raising_frame,
+    raising_literals, raising_longs, raising_numeric_policy, raising_returns, raising_words, stack,
+};
+use crate::model::ir::decode;
+use crate::objectfile::cvinfo;
+use crate::objectfile::module::{self, SourceMap};
 use crate::legacy::calls;
 use crate::model::ir::nodes::{Node, span};
 use crate::model::ir::{Loc, Operation, ROOT, Semantics, root};
@@ -475,7 +488,7 @@ fn shapes(blocks: &[&Block]) -> Vec<Shape> {
 /// Python `_placed`: which variables need a phi in which block.
 fn _placed(
     blocks: &[&Block],
-    nodes: &IndexMap<usize, Arc<Node>>,
+    nodes: &IndexMap<i64, Arc<Node>>,
     entry: Option<i64>,
     calls: Option<&IndexMap<i64, String>>,
     contracts: Option<&IndexMap<i64, runtime::Contract>>,
@@ -484,7 +497,7 @@ fn _placed(
     let mut defines: IndexMap<Register, BTreeSet<i64>> = IndexMap::default();
     for block in blocks {
         for insn in &block.insns {
-            let Some(node) = nodes.get(&insn.at) else {
+            let Some(node) = nodes.get(&(insn.at as i64)) else {
                 continue;
             };
             for one in touched(node, calls, contracts).0 {
@@ -630,7 +643,7 @@ fn in_order(registers: &Registers) -> Vec<Register> {
 #[allow(clippy::too_many_arguments)]
 pub fn raise_body(
     blocks: &[Block],
-    nodes: &IndexMap<usize, Arc<Node>>,
+    nodes: &IndexMap<i64, Arc<Node>>,
     entry: Option<i64>,
     calls: Option<&IndexMap<i64, String>>,
     sites: Option<&IndexMap<i64, calls::CallSite>>,
@@ -738,7 +751,7 @@ struct Raiser<'a> {
     phis: IndexMap<i64, IndexMap<Register, Phi>>,
     ops: IndexMap<i64, Vec<Op>>,
     start: i64,
-    nodes: &'a IndexMap<usize, Arc<Node>>,
+    nodes: &'a IndexMap<i64, Arc<Node>>,
     calls: Option<&'a IndexMap<i64, String>>,
     sites: Option<&'a IndexMap<i64, calls::CallSite>>,
     unreached: Option<&'a Reach>,
@@ -763,7 +776,7 @@ impl Raiser<'_> {
         let empty = IndexMap::default();
         let inside = super::_within(self.sites.unwrap_or(&empty));
         for insn in &block.insns {
-            let Some(node) = self.nodes.get(&insn.at).cloned() else {
+            let Some(node) = self.nodes.get(&(insn.at as i64)).cloned() else {
                 continue;
             };
             let insn_at = insn.at as i64;
@@ -954,4 +967,492 @@ fn cells(operands: &[Arg]) -> Vec<MemRef> {
             _ => None,
         })
         .collect()
+}
+
+/// Python `RaisedBodies`: the raised bodies and their machine-provenance side table.
+pub struct RaisedBodies {
+    pub values: Vec<(String, Rc<MirBody>)>,
+    pub source: SourceMap,
+    pub hints: IndexMap<i64, AllocationHints>,
+}
+
+/// Python `_opaque_effects`: effects on resources not represented by SSA values.
+fn _opaque_effects(node: Option<&Node>) -> (Option<BTreeSet<String>>, Option<BTreeSet<String>>) {
+    let outside = |registers: &Option<BTreeSet<Register>>| {
+        registers.as_ref().map(|registers| {
+            registers
+                .iter()
+                .filter(|one| !TRACKED.contains(one))
+                .map(|one| format!("resource-{}", *one as u32))
+                .collect()
+        })
+    };
+    match node {
+        None => (Some(BTreeSet::new()), Some(BTreeSet::new())),
+        Some(node) => (outside(&node.effects().defs), outside(&node.effects().uses)),
+    }
+}
+
+/// Python `_record_provenance`: every raise-time occurrence, before recognition.
+fn _record_provenance(body: &MirBody, source: &mut SourceMap) -> Vec<u32> {
+    let mut recorded = Vec::new();
+    for block in &body.blocks {
+        for op in &block.ops {
+            let Some(id) = op.id else {
+                continue;
+            };
+            recorded.push(id);
+            if let Some(node) = op.node() {
+                source.nodes.insert(id, node.clone());
+            }
+            let spans = raising_ranges(op);
+            source.occurrences.insert(id, spans.into_iter().filter(|span| span.0 < span.1).collect());
+        }
+    }
+    recorded
+}
+
+/// Python `_absorbed_ids`: occurrences wholly represented by this operation's ranges.
+fn _absorbed_ids(op: &Op, source: &SourceMap, candidates: &[u32], owned: Option<&[(i64, i64)]>) -> Vec<u32> {
+    let ranges: Vec<(i64, i64)> = match owned {
+        Some(owned) if !owned.is_empty() => owned.to_vec(),
+        _ => raising_ranges(op),
+    };
+    let ranges: Vec<(i64, i64)> = ranges.into_iter().filter(|span| span.0 < span.1).collect();
+    if ranges.is_empty() {
+        return op.absorbed.clone();
+    }
+    let within = |span: &(i64, i64)| ranges.iter().any(|&(low, high)| low <= span.0 && span.1 <= high);
+    let found = candidates.iter().copied().filter(|identity| {
+        source.occurrences.get(identity).is_some_and(|spans| !spans.is_empty() && spans.iter().all(within))
+    });
+    let mut out: Vec<u32> = Vec::new();
+    for one in op.absorbed.iter().copied().chain(found) {
+        if !out.contains(&one) {
+            out.push(one);
+        }
+    }
+    out
+}
+
+/// Python `_completed_ownership`: disjoint folded-site ranges found after recognition.
+fn _completed_ownership(
+    body: RaisedBody,
+    source: &SourceMap,
+    candidates: &[u32],
+    coverage: &IndexMap<u32, Vec<(i64, i64)>>,
+) -> RaisedBody {
+    if coverage.is_empty() {
+        return body;
+    }
+    let blocks = body
+        .blocks
+        .iter()
+        .map(|block| {
+            block.with_ops(
+                block
+                    .ops
+                    .iter()
+                    .map(|op| match op.id.and_then(|id| coverage.get(&id)) {
+                        Some(owned) => {
+                            let mut made = op.clone();
+                            made.absorbed = _absorbed_ids(op, source, candidates, Some(owned));
+                            made
+                        }
+                        None => op.clone(),
+                    })
+                    .collect(),
+            )
+        })
+        .collect();
+    body.with_blocks(blocks)
+}
+
+/// Python `_externalized`: every decoded node moved out of a completed raise.
+fn _externalized(body: RaisedBody, source: &mut SourceMap, candidates: &[u32]) -> RaisedBody {
+    let mut blocks = Vec::new();
+    for block in &body.blocks {
+        let mut ops = Vec::new();
+        for op in &block.ops {
+            let node = op.node().cloned();
+            if let (Some(node), Some(id)) = (&node, op.id) {
+                source.nodes.insert(id, node.clone());
+            }
+            let (opaque_defs, opaque_uses) = _opaque_effects(node.as_deref());
+            let absorbed = _absorbed_ids(op, source, candidates, None);
+            let mut made = op.clone();
+            made.raising = None;
+            made.source_backed = node.is_some();
+            made.opaque_defs = opaque_defs;
+            made.opaque_uses = opaque_uses;
+            made.absorbed = absorbed;
+            ops.push(made);
+        }
+        blocks.push(block.with_ops(ops));
+    }
+    body.with_blocks(blocks)
+}
+
+/// Python `_unreached`: what a runtime call can reach inside the program's data.
+fn _unreached(found: &Module) -> Option<Reach> {
+    found.program_data.map(|data| (data, module::escaped(found)))
+}
+
+/// Python `_frame_bounded` on a `_RaisedBody`: `replace` keeps its private maps.
+fn frame_bounded_raised(body: RaisedBody) -> RaisedBody {
+    let RaisedBody { body, origin, pins } = body;
+    RaisedBody { body: super::frame_bounded(body, false), origin, pins }
+}
+
+/// Python `_provenanced`: every reference with its region set as provenance.
+fn _provenanced(body: RaisedBody, found: &Module) -> Result<RaisedBody, String> {
+    let layout = regions::RegionLayout {
+        shared_segments: None,
+        landmarks: module::landmarks(found).into_iter().collect(),
+    };
+    let private: BTreeSet<i64> = found.program_data.into_iter().collect();
+    let spared: BTreeSet<i64> = body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.ops)
+        .flat_map(|op| op.loads.iter().chain(&op.stores))
+        .flat_map(|reference| &reference.excludes)
+        .filter(|(addr, _)| addr.space == Space::Segment)
+        .map(|(addr, _)| addr.index)
+        .collect();
+    let moved = |reference: &MemRef| -> Result<MemRef, String> {
+        if reference.provenance.is_some() {
+            return Ok(reference.clone());
+        }
+        let mut made = reference.clone();
+        made.provenance = Some(
+            regions::provenance(reference, None, Some(&layout), &private, &spared)
+                .map_err(|error| format!("{error:?}"))?,
+        );
+        Ok(made)
+    };
+    let operand = |one: &Arg| -> Result<Arg, String> {
+        Ok(match one {
+            Arg::Cell(cell) => Arg::Cell(Cell { r#ref: moved(&cell.r#ref)? }),
+            other => other.clone(),
+        })
+    };
+    let mut blocks = Vec::new();
+    for block in &body.blocks {
+        let mut ops = Vec::new();
+        for op in &block.ops {
+            let mut made = op.clone();
+            made.loads = op.loads.iter().map(moved).collect::<Result<_, _>>()?;
+            made.stores = op.stores.iter().map(moved).collect::<Result<_, _>>()?;
+            made.args = op.args.iter().map(operand).collect::<Result<_, _>>()?;
+            made.results = op.results.iter().map(operand).collect::<Result<_, _>>()?;
+            made.memory_values = op
+                .memory_values
+                .iter()
+                .map(|(reference, value)| Ok((moved(reference)?, value.clone())))
+                .collect::<Result<_, String>>()?;
+            ops.push(made);
+        }
+        blocks.push(block.with_ops(ops));
+    }
+    let initial = body
+        .initial
+        .iter()
+        .map(|(reference, value)| Ok((moved(reference)?, value.clone())))
+        .collect::<Result<Vec<_>, String>>()?;
+    let mut made = body.with_blocks(blocks);
+    made.body.initial = initial;
+    Ok(made)
+}
+
+/// Python `_returned`: what a call hands back, held to the registers BC reads it from.
+fn _returned(body: &RaisedBody) -> IndexMap<Value, Register> {
+    let mut read: BTreeSet<Value> = body.blocks.iter().flat_map(|block| &block.ops).flat_map(|op| op.uses.iter().copied()).collect();
+    read.extend(body.blocks.iter().flat_map(|block| &block.phis).flat_map(|phi| phi.incoming.values().copied()));
+    let mut out = IndexMap::default();
+    for op in body.blocks.iter().flat_map(|block| &block.ops) {
+        if op.kind != Kind::Call {
+            continue;
+        }
+        for one in &op.defines {
+            if one.flags || !read.contains(one) {
+                continue;
+            }
+            if let Some(register) = body.origin.get(one) {
+                out.insert(*one, *register);
+            }
+        }
+    }
+    out
+}
+
+/// Python `bodies`: every body in the module, raised, labelled, and skipping what will not.
+pub fn bodies(
+    found: &Module,
+    blocks: &[Block],
+    contracts: Option<&mut IndexMap<i64, runtime::Contract>>,
+    basic_semantics: bool,
+    bounds_checks: bool,
+) -> Result<RaisedBodies, String> {
+    let mut source = SourceMap::from_module(found);
+    let unreached = _unreached(found);
+    let result = match decode::decode_module(found) {
+        Ok(result) => result,
+        Err(_) => return Ok(RaisedBodies { values: Vec::new(), source, hints: IndexMap::default() }),
+    };
+    let decoded_nodes: IndexMap<i64, Arc<Node>> =
+        result.iter().flat_map(|body| body.nodes.iter()).map(|node| (span(node).0 as i64, node.clone())).collect();
+    let header = split::has_header(found);
+    let nodes: IndexMap<i64, Arc<Node>> =
+        decoded_nodes.iter().map(|(&at, node)| (at, raising_returns::returned(node, header, None))).collect();
+    let mut return_registers: IndexMap<i64, Vec<Register>> = IndexMap::default();
+    if header {
+        for procedure in cvinfo::parse(&found.records).procedures {
+            let Some(signature) = procedure.signature() else {
+                continue;
+            };
+            let returned_type = cvinfo::type_name(signature.return_type, Some(&procedure.types));
+            return_registers.insert(
+                procedure.offset,
+                if returned_type.as_deref() == Some("LONG") {
+                    vec![Register::AX, Register::DX]
+                } else {
+                    vec![Register::AX]
+                },
+            );
+        }
+    }
+    let mut own;
+    let contracts: &mut IndexMap<i64, runtime::Contract> = match contracts {
+        Some(contracts) => contracts,
+        None => {
+            own = runtime::for_module(found, None).map_err(|error| error.to_string())?;
+            &mut own
+        }
+    };
+    for body in &result {
+        let Some(registers) = return_registers.get(&(body.body.seed as i64)) else {
+            continue;
+        };
+        let direct: BTreeSet<runtime::Reg> = [(runtime::Reg::Ax, Register::AX), (runtime::Reg::Dx, Register::DX)]
+            .into_iter()
+            .filter(|(_, machine)| registers.contains(machine))
+            .map(|(register, _)| register)
+            .collect();
+        for (&at, name) in &found.calls {
+            if name == "B$EXSA" && body.body.ranges.iter().any(|&(lo, hi)| lo as i64 <= at && at < hi as i64) {
+                let mut specialized = contracts[&at].clone();
+                specialized.direct_inputs = Some(direct.clone());
+                contracts.insert(at, specialized);
+            }
+        }
+    }
+    let spared = raising_call_memory::spared(found, &result, contracts);
+    let mut out: Vec<(String, RaisedBody)> = Vec::new();
+    let mut error_handlers: Vec<RaisedBody> = Vec::new();
+    for body in &result {
+        let mine: Vec<Block> = blocks
+            .iter()
+            .filter(|one| body.body.ranges.iter().any(|&(lo, hi)| lo <= one.at && one.at < hi))
+            .cloned()
+            .collect();
+        let procedure_nodes_own;
+        let procedure_nodes = match return_registers.get(&(body.body.seed as i64)) {
+            Some(registers) => {
+                procedure_nodes_own = decoded_nodes
+                    .iter()
+                    .map(|(&at, node)| (at, raising_returns::returned(node, header, Some(registers))))
+                    .collect::<IndexMap<i64, Arc<Node>>>();
+                &procedure_nodes_own
+            }
+            None => &nodes,
+        };
+        let mine = raising_control::terminal_edges(mine, contracts);
+        if mine.is_empty() {
+            continue;
+        }
+        let carried = raising_carried::carried(&mine, &nodes, &found.calls, contracts);
+        contracts.extend(carried);
+        let sites = super::_sites(found, blocks);
+        let built = match raise_body(
+            &mine,
+            procedure_nodes,
+            Some(body.body.seed as i64),
+            Some(&found.calls),
+            Some(&sites),
+            unreached.as_ref(),
+            Some(contracts),
+            Some(&spared),
+        )
+        .map_err(|error| format!("Unraisable: {error}"))?
+        {
+            Ok(built) => built,
+            Err(_) => continue,
+        };
+        let provenance = _record_provenance(&built, &mut source);
+        let built = raising_frame::annotated(built, found, &mine, contracts);
+        let built = super::with_live_outs(built);
+        let built = if basic_semantics { built } else { raising_numeric_policy::native(built) };
+        let built = raising_division::scalar(built);
+        let built = raising_calls::arithmetic(built, found, &mine, basic_semantics);
+        let built = raising_bytes::scalar(built);
+        let built = raising_longs::sign_fills(built);
+        let built = raising_longs::scalar(built).map_err(|error| error.to_string())?;
+        let built = raising_longs::unary(built);
+        // Unary recognition exposes whole sources for adjacent word stores.
+        let built = raising_longs::scalar(built).map_err(|error| error.to_string())?;
+        let built = raising_longs::arguments(built);
+        let built = raising_copies::scalar(built, found);
+        let built = raising_conditions::loaded(built);
+        let defined = module::defines(&found.records, found.seg);
+        let array_calls: IndexMap<i64, String> =
+            found.calls.iter().filter(|(_, name)| !defined.contains(*name)).map(|(&at, name)| (at, name.clone())).collect();
+        let built = raising_arrays::annotated(built, &array_calls, module::family(&found.records).value());
+        let built = raising_array_access::native(built, found, bounds_checks)?;
+        let built = raising_addresses::loaded(built, Some(contracts))?;
+        let built = raising_call_memory::fixed_assignments(built, found);
+        let built = raising_call_memory::indirect_results(built, found);
+        let built = raising_defseg::raised(built, found, contracts, &mut source)?;
+        let built = if basic_semantics { built } else { raising_float_calls::raised(built, found, contracts, &mut source) };
+        let built = if basic_semantics { built } else { raising_float_results::raised(built, found, contracts, &mut source) };
+        let built = raising_longs::arguments(built);
+        let built = raising_longs::sign_fills(built);
+        let built = raising_floats::annotated(built);
+        let built = if basic_semantics { built } else { raising_numeric_policy::checkpoints(built) };
+        let built = raising_float_values::loaded(raising_float_values::raised(built));
+        let built = raising_words::scalar(built);
+        let built = if body.body.kind == BodyKind::Main {
+            raising_literals::initialized(built, found, Some(contracts))?
+        } else {
+            built
+        };
+        let built = raising_dispatch::raised(built, found, &mine);
+        let referenced = super::_referenced(&built, found);
+        source.refs.extend(referenced);
+        let built = _externalized(built, &mut source, &provenance);
+        let built = frame_bounded_raised(built);
+        let (folded, absorbed, refs, coverage) = super::_folded(&built, found, blocks);
+        let mut built = _completed_ownership(built, &source, &provenance, &coverage);
+        source.absorbed.extend(absorbed);
+        source.refs.extend(refs);
+        source.coverage.extend(coverage);
+        let mut held = _returned(&built);
+        for (value, register) in folded.iter() {
+            held.insert(*value, *register);
+        }
+        for (value, register) in held.iter() {
+            built.pins.insert(*value, *register);
+        }
+        let label = format!("{} {}", body.body.kind.value(), body.body.name.as_deref().unwrap_or("(main)"));
+        if body.body.kind == BodyKind::ErrorHandler {
+            error_handlers.push(built.clone());
+        }
+        out.push((label, built));
+    }
+    if !basic_semantics {
+        let procedures: Vec<(&str, &MirBody)> = out
+            .iter()
+            .filter(|(name, _)| name.starts_with("procedure "))
+            .map(|(name, body)| (name.as_str(), &body.body))
+            .collect();
+        let result_only = raising_call_memory::result_only_functions(&procedures, found)?;
+        if !result_only.is_empty() {
+            out = out
+                .into_iter()
+                .map(|(name, body)| (name, raising_call_memory::complete_result_calls(body, &found.calls, &result_only)))
+                .collect();
+        }
+    }
+    if !error_handlers.is_empty() {
+        let summaries: Vec<_> = error_handlers
+            .iter()
+            .map(|one| raising_call_memory::handler_effects(one, &found.calls, contracts, unreached.as_ref()))
+            .collect();
+        let summary = if summaries.iter().any(Option::is_none) {
+            None
+        } else {
+            let summaries: Vec<_> = summaries.into_iter().flatten().collect();
+            Some((
+                summaries.iter().flat_map(|one| one.0.iter().cloned()).collect::<Vec<_>>(),
+                summaries.iter().flat_map(|one| one.1.iter().cloned()).collect::<Vec<_>>(),
+            ))
+        };
+        out = out
+            .into_iter()
+            .map(|(name, body)| {
+                (
+                    name,
+                    frame_bounded_raised(raising_call_memory::with_handler_effects(
+                        body,
+                        summary.as_ref(),
+                        &found.calls,
+                        contracts,
+                        unreached.as_ref(),
+                    )),
+                )
+            })
+            .collect();
+    }
+    let mut finished = Vec::new();
+    for (name, body) in out {
+        let mut body = super::with_live_outs(body);
+        body.body.stack_in_data = true;
+        finished.push((name, _provenanced(body, found)?));
+    }
+    let mut hints = IndexMap::default();
+    for (_, body) in &finished {
+        hints.insert(body.entry, AllocationHints::from_body(body).map_err(|error| error.to_string())?);
+    }
+    Ok(RaisedBodies {
+        values: finished.into_iter().map(|(name, body)| (name, Rc::new(super::public(body)))).collect(),
+        source,
+        hints,
+    })
+}
+
+/// Python `_with_hints`: placement reattached for raise-time recognition tests.
+pub fn _with_hints(body: &MirBody, hints: &AllocationHints) -> RaisedBody {
+    let mut values = BTreeSet::new();
+    for block in &body.blocks {
+        values.extend(block.phis.iter().map(|phi| phi.result));
+        values.extend(block.phis.iter().flat_map(|phi| phi.incoming.values().copied()));
+        for op in &block.ops {
+            values.extend(op.defines.iter().chain(&op.uses).chain(&op.exits).copied());
+        }
+    }
+    let mut origin = OrderedMap::new();
+    for value in values {
+        if let Some(place) = hints.origin_of(value) {
+            origin.insert(value, place);
+        }
+    }
+    let mut pins = OrderedMap::new();
+    for op in body.blocks.iter().flat_map(|block| &block.ops) {
+        for (index, value) in op.defines.iter().enumerate() {
+            if let Some(place) = hints.pin_of(op, index) {
+                pins.insert(*value, place);
+            }
+        }
+    }
+    RaisedBody { body: body.clone(), origin, pins }
+}
+
+/// Python `_with_raise_context`: the private raise view for focused frontend tests.
+pub fn _with_raise_context(body: &MirBody, hints: &AllocationHints, source: &SourceMap) -> RaisedBody {
+    let occurrence = |op: &Op| -> Op {
+        let spans: Vec<(i64, i64)> = op
+            .absorbed
+            .iter()
+            .flat_map(|identity| source.occurrences.get(identity).into_iter().flatten().copied())
+            .collect();
+        let node = op.id.and_then(|id| source.nodes.get(&id)).cloned();
+        if spans.is_empty() && node.is_none() {
+            return op.clone();
+        }
+        raising_occurrence(op, spans.first().copied().unwrap_or((op.at, op.at)), spans.iter().skip(1).copied().collect(), node)
+    };
+    let private = body.with_blocks(
+        body.blocks.iter().map(|block| block.with_ops(block.ops.iter().map(occurrence).collect())).collect(),
+    );
+    _with_hints(&private, hints)
 }
