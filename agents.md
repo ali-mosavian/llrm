@@ -25,6 +25,10 @@ not a chance to redesign it. The plan is the Codex thread's `PLAN.md`.
   restates this section and names the Python source, tests and stage.
   Anything not traceable to Python is rejected.
 
+**Writing rules -- repeat them after every iteration.** Keep it short, to
+the point and coherent. No rambling. This applies to all writing: replies,
+docs, comments, tests, and git commit messages in Conventional Commit form.
+
 ## Measurements — the second rule
 
 **Doubt the measurement before the subject.** A result that contradicts what
