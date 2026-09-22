@@ -90,7 +90,7 @@ fn object_name(name: &str) -> String {
 
 fn _checked(error: flow::Checked) -> String {
     match error {
-        flow::Checked::Refused(message) => message,
+        flow::Checked::Refused(raised) => raised.message,
         flow::Checked::Malformed(malformed) => malformed.0,
     }
 }
