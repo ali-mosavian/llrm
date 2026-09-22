@@ -79,53 +79,56 @@ only for a module still `todo`, and never after cutover.
 | 2 | `qbopt/model/memory.py` | 142 | `src/model/memory.rs` | ported (C path) | test_loopclone, test_mir_alias, test_private_frame, test_sccp |
 | 2 | `qbopt/model/mir.py` | 3383 | `src/model/mir.rs` | ported (C path) | test_addressforms, test_allocation, test_avail, test_cfg_empty, test_cfg_merge, test_constant_cells, test_constrain, test_countdown, test_cse_commutative, test_cse_dominance, test_emission_order, test_extract, test_farload, test_file_contracts, test_float_constants, test_float_loop_exit, test_floatalloc, test_floating, test_flow, test_frontend_parity, test_gvn_join, test_high_product, test_hoist_selector, test_induction_inequality, test_indvars, test_invariant_argument, test_invariant_shift, test_laststore, test_layout, test_lcssa_merges, test_licm_operand_dependencies, test_lir, test_lir_emission_order, test_literal_call_contracts, test_literal_initializers, test_liveness, test_load_pre, test_loopexit, test_loopmotion, test_loopsimplify, test_lower_sign, test_masm, test_memory_folding, test_memory_joins, test_memory_opportunities, test_mir, test_native_float_licm, test_native_frame, test_native_status_flags, test_noreturn, test_observers, test_opaque_memory_effects, test_opaque_relocations, test_pairs, test_peephole, test_phi_widths, test_pointer_memory, test_postallocation, test_raising_addresses, test_raising_call_memory, test_raising_dispatch, test_raising_longs, test_raising_unary, test_ranges, test_regions, test_rounding_contracts, test_rule5, test_scalar_division, test_scale_selection, test_scoreboard, test_select, test_spiller, test_switch_loopclone, test_symbol_licm, test_transform, test_unary_promotion, test_unroll, test_unsigned_edge_ranges, test_word_arithmetic_carry |
 | 2 | `qbopt/model/passes.py` | 226 | `src/model/passes.rs` | ported (C path) | test_cpu_profile, test_flow, test_lir_verify, test_mir_alias, test_promote, test_rewind, test_rule5, test_transform, test_unroll, test_unroll_budget, test_unswitch |
-| 3 | `qbopt/analysis/avail.py` | 555 | `src/analysis/avail.rs` | todo | test_avail, test_availability_call_effects, test_availability_operands, test_far_memory_identity, test_float_values, test_memoryssa_forward, test_observers, test_qgldiff_forwarding |
-| 3 | `qbopt/analysis/constant_cycles.py` | 123 | `src/analysis/constant_cycles.rs` | draft | - |
-| 3 | `qbopt/analysis/consts.py` | 769 | `src/analysis/consts.rs` | draft | test_array_access, test_array_bounds, test_constant_arguments, test_constant_call_memory, test_constant_carry, test_constant_conditions, test_constant_cycles, test_constant_division, test_constant_index, test_constant_stores, test_float_recurrences, test_floatfacts, test_high_product, test_induction_identity, test_induction_inequality, test_indvars, test_loopexit, test_pointer_constants, test_promote, test_raising_arrays, test_raising_copies, test_raising_dispatch, test_raising_longs, test_rewind, test_transform |
-| 3 | `qbopt/analysis/effects.py` | 30 | `src/analysis/effects.rs` | todo | test_far_load_identity, test_opaque_memory_effects |
-| 3 | `qbopt/analysis/flags.py` | 111 | `src/analysis/flags.rs` | draft (Flag, ALL, DIVERGENT) | test_calls, test_ir, test_lift |
-| 3 | `qbopt/analysis/floatbounds.py` | 153 | `src/analysis/floatbounds.rs` | todo | test_floatbounds |
-| 3 | `qbopt/analysis/floatfacts.py` | 356 | `src/analysis/floatfacts.rs` | todo | test_float_loop_exit, test_float_recurrences, test_float_values, test_floatbounds, test_floatfacts, test_floatfold, test_literal_initializers |
-| 3 | `qbopt/analysis/frameescape.py` | 170 | `src/analysis/frameescape.rs` | draft | test_frame_escape |
-| 3 | `qbopt/analysis/induction.py` | 1322 | `src/analysis/induction.rs` | draft | test_induction_identity, test_induction_inequality, test_indvars, test_loopexit, test_mir, test_modern_frontend, test_quotient_recurrence, test_rewind, test_unroll |
-| 3 | `qbopt/analysis/interprocedural.py` | 487 | `src/analysis/interprocedural.rs` | todo | test_sccp |
-| 3 | `qbopt/analysis/loops.py` | 316 | `src/analysis/loops.rs` | draft | test_algebraic, test_countdown, test_float_values, test_hir, test_induction_identity, test_induction_inequality, test_indvars, test_invariant_argument, test_jumps, test_laststore, test_loopclone, test_loopexit, test_loopmotion, test_loops, test_promote, test_quotient_recurrence, test_rewind, test_scoreboard, test_unswitch |
-| 3 | `qbopt/analysis/memoryssa.py` | 204 | `src/analysis/memoryssa.rs` | todo | test_memoryssa |
-| 3 | `qbopt/analysis/noreturn.py` | 87 | `src/analysis/noreturn.rs` | todo | test_noreturn, test_sccp |
-| 3 | `qbopt/analysis/observers.py` | 352 | `src/analysis/observers.rs` | todo | test_private_frame |
-| 3 | `qbopt/analysis/pointerfacts.py` | 65 | `src/analysis/pointerfacts.rs` | todo | test_pointer_constants |
-| 3 | `qbopt/analysis/ranges.py` | 369 | `src/analysis/ranges.rs` | draft | test_array_facts, test_cfg_merge, test_edge_ranges, test_floatbounds, test_mir_alias, test_promote, test_regions |
-| 3 | `qbopt/analysis/regions.py` | 391 | `src/analysis/regions.rs` | draft | test_external_cells |
-| 3 | `qbopt/analysis/ssa.py` | 344 | `src/analysis/ssa.rs` | draft | test_algebraic, test_float_values, test_induction_identity, test_mir, test_pointer_memory, test_rule5, test_ssa_phis, test_ssa_unreachable, test_transform |
-| 3 | `qbopt/optimize/algebraic.py` | 1027 | `src/optimize/algebraic.rs` | todo | test_algebraic, test_invariant_values |
-| 3 | `qbopt/optimize/cfg.py` | 77 | `src/optimize/cfg.rs` | draft | - |
-| 3 | `qbopt/optimize/edges.py` | 40 | `src/optimize/edges.rs` | draft | - |
-| 3 | `qbopt/optimize/exitsink.py` | 107 | `src/optimize/exitsink.rs` | todo | - |
-| 3 | `qbopt/optimize/fill.py` | 301 | `src/optimize/fill.rs` | todo | - |
-| 3 | `qbopt/optimize/floatfold.py` | 234 | `src/optimize/floatfold.rs` | todo | test_floatfold, test_unroll |
-| 3 | `qbopt/optimize/floatloop.py` | 140 | `src/optimize/floatloop.rs` | todo | test_float_loop_exit |
-| 3 | `qbopt/optimize/gvn.py` | 206 | `src/optimize/gvn.rs` | todo | test_mir_alias |
-| 3 | `qbopt/optimize/indvars.py` | 1155 | `src/optimize/indvars.rs` | draft | test_induction_identity, test_indvars, test_loopexit |
-| 3 | `qbopt/optimize/inline.py` | 462 | `src/optimize/inline.rs` | todo | - |
-| 3 | `qbopt/optimize/ivshare.py` | 117 | `src/optimize/ivshare.rs` | todo | test_ivshare |
-| 3 | `qbopt/optimize/lcssa.py` | 134 | `src/optimize/lcssa.rs` | todo | test_layout, test_lcssa, test_lcssa_merges |
-| 3 | `qbopt/optimize/lcssamerges.py` | 119 | `src/optimize/lcssamerges.rs` | todo | - |
-| 3 | `qbopt/optimize/loadjoins.py` | 154 | `src/optimize/loadjoins.rs` | todo | test_load_pre |
-| 3 | `qbopt/optimize/loopclone.py` | 214 | `src/optimize/loopclone.rs` | todo | test_layout, test_loopclone, test_switch_loopclone |
-| 3 | `qbopt/optimize/loopexit.py` | 399 | `src/optimize/loopexit.rs` | todo | test_induction_identity, test_loopexit |
-| 3 | `qbopt/optimize/loopmotion.py` | 251 | `src/optimize/loopmotion.rs` | todo | test_float_loop_exit, test_laststore |
-| 3 | `qbopt/optimize/loopsimplify.py` | 122 | `src/optimize/loopsimplify.rs` | todo | - |
-| 3 | `qbopt/optimize/peel.py` | 123 | `src/optimize/peel.rs` | todo | test_transform, test_unroll |
-| 3 | `qbopt/optimize/pointeraccess.py` | 133 | `src/optimize/pointeraccess.rs` | todo | - |
-| 3 | `qbopt/optimize/profit.py` | 264 | `src/optimize/profit.rs` | todo | test_unroll_budget |
-| 3 | `qbopt/optimize/promote.py` | 1105 | `src/optimize/promote.rs` | todo | test_flow, test_mir_alias, test_promote, test_transform, test_unary_promotion |
-| 3 | `qbopt/optimize/rotate.py` | 406 | `src/optimize/rotate.rs` | draft | test_countdown, test_induction_identity, test_rewind |
-| 3 | `qbopt/optimize/strength.py` | 1359 | `src/optimize/strength.rs` | draft | test_cpu_profile, test_flow, test_ivshare, test_ranges |
-| 3 | `qbopt/optimize/transform.py` | 3297 | `src/optimize/transform.rs` | draft | test_cfront, test_constant_arguments, test_constant_stores, test_consts, test_copy_values, test_cpu_driver, test_dead_ownership, test_far_memory_identity, test_float_cse_paths, test_float_loop_exit, test_float_recurrences, test_float_values, test_flow, test_hoist_selector, test_induction_inequality, test_invariant_argument, test_ivshare, test_laststore, test_licm_operand_dependencies, test_loopexit, test_loopmotion, test_loopsimplify, test_lower_switches, test_memory_cse, test_mir, test_native_float_licm, test_parcopy, test_phi_widths, test_pointer_memory, test_promote, test_qgldiff_forwarding, test_quotient_recurrence, test_raising_calls, test_raising_copies, test_raising_dispatch, test_ranges, test_rule5, test_scalar_division, test_sccp, test_transform, test_unroll |
-| 3 | `qbopt/optimize/unroll.py` | 449 | `src/optimize/unroll.rs` | todo | test_transform, test_unroll |
-| 3 | `qbopt/optimize/unswitch.py` | 218 | `src/optimize/unswitch.rs` | todo | test_indvars, test_unswitch |
-| 3 | `qbopt/optimize/wholephis.py` | 100 | `src/optimize/wholephis.rs` | todo | test_algebraic |
-| 3 | `qbopt/optimize/wholestores.py` | 37 | `src/optimize/wholestores.rs` | todo | - |
+| 2 | `qbopt/backend/narrow.py` | 108 | `src/backend/narrow.rs` | ported (C path) | - |
+| 3 | `qbopt/analysis/avail.py` | 555 | `src/analysis/avail.rs` | ported (C path) | test_avail, test_availability_call_effects, test_availability_operands, test_far_memory_identity, test_float_values, test_memoryssa_forward, test_observers, test_qgldiff_forwarding |
+| 3 | `qbopt/analysis/constant_cycles.py` | 123 | `src/analysis/constant_cycles.rs` | ported (C path) | - |
+| 3 | `qbopt/analysis/consts.py` | 769 | `src/analysis/consts.rs` | ported (C path) | test_array_access, test_array_bounds, test_constant_arguments, test_constant_call_memory, test_constant_carry, test_constant_conditions, test_constant_cycles, test_constant_division, test_constant_index, test_constant_stores, test_float_recurrences, test_floatfacts, test_high_product, test_induction_identity, test_induction_inequality, test_indvars, test_loopexit, test_pointer_constants, test_promote, test_raising_arrays, test_raising_copies, test_raising_dispatch, test_raising_longs, test_rewind, test_transform |
+| 3 | `qbopt/analysis/effects.py` | 30 | `src/analysis/effects.rs` | ported (C path) | test_far_load_identity, test_opaque_memory_effects |
+| 3 | `qbopt/analysis/flags.py` | 111 | `src/analysis/flags.rs` | ported (C path) | test_calls, test_ir, test_lift |
+| 3 | `qbopt/analysis/floatbounds.py` | 153 | `src/analysis/floatbounds.rs` | ported (C path) | test_floatbounds |
+| 3 | `qbopt/analysis/floatfacts.py` | 356 | `src/analysis/floatfacts.rs` | ported (C path) | test_float_loop_exit, test_float_recurrences, test_float_values, test_floatbounds, test_floatfacts, test_floatfold, test_literal_initializers |
+| 3 | `qbopt/analysis/frameescape.py` | 170 | `src/analysis/frameescape.rs` | ported (C path) | test_frame_escape |
+| 3 | `qbopt/analysis/induction.py` | 1322 | `src/analysis/induction.rs` | ported (C path) | test_induction_identity, test_induction_inequality, test_indvars, test_loopexit, test_mir, test_modern_frontend, test_quotient_recurrence, test_rewind, test_unroll |
+| 3 | `qbopt/analysis/interprocedural.py` | 487 | `src/analysis/interprocedural.rs` | ported (C path) | test_sccp |
+| 3 | `qbopt/analysis/loops.py` | 316 | `src/analysis/loops.rs` | ported (C path) | test_algebraic, test_countdown, test_float_values, test_hir, test_induction_identity, test_induction_inequality, test_indvars, test_invariant_argument, test_jumps, test_laststore, test_loopclone, test_loopexit, test_loopmotion, test_loops, test_promote, test_quotient_recurrence, test_rewind, test_scoreboard, test_unswitch |
+| 3 | `qbopt/analysis/memoryssa.py` | 204 | `src/analysis/memoryssa.rs` | ported (C path) | test_memoryssa |
+| 3 | `qbopt/analysis/noreturn.py` | 87 | `src/analysis/noreturn.rs` | ported (C path) | test_noreturn, test_sccp |
+| 3 | `qbopt/analysis/observers.py` | 352 | `src/analysis/observers.rs` | ported (C path) | test_private_frame |
+| 3 | `qbopt/analysis/pointerfacts.py` | 65 | `src/analysis/pointerfacts.rs` | ported (C path) | test_pointer_constants |
+| 3 | `qbopt/analysis/ranges.py` | 369 | `src/analysis/ranges.rs` | ported (C path) | test_array_facts, test_cfg_merge, test_edge_ranges, test_floatbounds, test_mir_alias, test_promote, test_regions |
+| 3 | `qbopt/analysis/regions.py` | 391 | `src/analysis/regions.rs` | ported (C path) | test_external_cells |
+| 3 | `qbopt/analysis/ssa.py` | 344 | `src/analysis/ssa.rs` | ported (C path) | test_algebraic, test_float_values, test_induction_identity, test_mir, test_pointer_memory, test_rule5, test_ssa_phis, test_ssa_unreachable, test_transform |
+| 3 | `qbopt/optimize/algebraic.py` | 1027 | `src/optimize/algebraic.rs` | ported (C path) | test_algebraic, test_invariant_values |
+| 3 | `qbopt/optimize/cfg.py` | 77 | `src/optimize/cfg.rs` | ported (C path) | - |
+| 3 | `qbopt/optimize/edges.py` | 40 | `src/optimize/edges.rs` | ported (C path) | - |
+| 3 | `qbopt/optimize/exitsink.py` | 107 | `src/optimize/exitsink.rs` | ported (C path) | - |
+| 3 | `qbopt/optimize/fill.py` | 301 | `src/optimize/fill.rs` | ported (C path) | - |
+| 3 | `qbopt/optimize/floatfold.py` | 234 | `src/optimize/floatfold.rs` | ported (C path) | test_floatfold, test_unroll |
+| 3 | `qbopt/optimize/floatloop.py` | 140 | `src/optimize/floatloop.rs` | ported (C path) | test_float_loop_exit |
+| 3 | `qbopt/optimize/gvn.py` | 206 | `src/optimize/gvn.rs` | ported (C path) | test_mir_alias |
+| 3 | `qbopt/optimize/indvars.py` | 1155 | `src/optimize/indvars.rs` | ported (C path) | test_induction_identity, test_indvars, test_loopexit |
+| 3 | `qbopt/optimize/inline.py` | 462 | `src/optimize/inline.rs` | ported (C path) | - |
+| 3 | `qbopt/optimize/ivshare.py` | 117 | `src/optimize/ivshare.rs` | ported (C path) | test_ivshare |
+| 3 | `qbopt/optimize/lcssa.py` | 134 | `src/optimize/lcssa.rs` | ported (C path) | test_layout, test_lcssa, test_lcssa_merges |
+| 3 | `qbopt/optimize/lcssamerges.py` | 119 | `src/optimize/lcssamerges.rs` | ported (C path) | - |
+| 3 | `qbopt/optimize/loadjoins.py` | 154 | `src/optimize/loadjoins.rs` | ported (C path) | test_load_pre |
+| 3 | `qbopt/optimize/loopclone.py` | 214 | `src/optimize/loopclone.rs` | ported (C path) | test_layout, test_loopclone, test_switch_loopclone |
+| 3 | `qbopt/optimize/loopexit.py` | 399 | `src/optimize/loopexit.rs` | ported (C path) | test_induction_identity, test_loopexit |
+| 3 | `qbopt/optimize/loopmotion.py` | 251 | `src/optimize/loopmotion.rs` | ported (C path) | test_float_loop_exit, test_laststore |
+| 3 | `qbopt/optimize/loopsimplify.py` | 122 | `src/optimize/loopsimplify.rs` | ported (C path) | - |
+| 3 | `qbopt/optimize/peel.py` | 123 | `src/optimize/peel.rs` | ported (C path) | test_transform, test_unroll |
+| 3 | `qbopt/optimize/pointeraccess.py` | 133 | `src/optimize/pointeraccess.rs` | ported (C path) | - |
+| 3 | `qbopt/optimize/profit.py` | 264 | `src/optimize/profit.rs` | ported (C path) | test_unroll_budget |
+| 3 | `qbopt/optimize/promote.py` | 1105 | `src/optimize/promote.rs` | ported (C path) | test_flow, test_mir_alias, test_promote, test_transform, test_unary_promotion |
+| 3 | `qbopt/optimize/rotate.py` | 406 | `src/optimize/rotate.rs` | ported (C path) | test_countdown, test_induction_identity, test_rewind |
+| 3 | `qbopt/optimize/strength.py` | 1359 | `src/optimize/strength.rs` | ported (C path) | test_cpu_profile, test_flow, test_ivshare, test_ranges |
+| 3 | `qbopt/optimize/transform.py` | 3297 | `src/optimize/transform.rs` | ported (C path) | test_cfront, test_constant_arguments, test_constant_stores, test_consts, test_copy_values, test_cpu_driver, test_dead_ownership, test_far_memory_identity, test_float_cse_paths, test_float_loop_exit, test_float_recurrences, test_float_values, test_flow, test_hoist_selector, test_induction_inequality, test_invariant_argument, test_ivshare, test_laststore, test_licm_operand_dependencies, test_loopexit, test_loopmotion, test_loopsimplify, test_lower_switches, test_memory_cse, test_mir, test_native_float_licm, test_parcopy, test_phi_widths, test_pointer_memory, test_promote, test_qgldiff_forwarding, test_quotient_recurrence, test_raising_calls, test_raising_copies, test_raising_dispatch, test_ranges, test_rule5, test_scalar_division, test_sccp, test_transform, test_unroll |
+| 3 | `qbopt/optimize/unroll.py` | 449 | `src/optimize/unroll.rs` | ported (C path) | test_transform, test_unroll |
+| 3 | `qbopt/optimize/unswitch.py` | 218 | `src/optimize/unswitch.rs` | ported (C path) | test_indvars, test_unswitch |
+| 3 | `qbopt/optimize/wholephis.py` | 100 | `src/optimize/wholephis.rs` | ported (C path) | test_algebraic |
+| 3 | `qbopt/optimize/wholestores.py` | 37 | `src/optimize/wholestores.rs` | ported (C path) | - |
+| 3 | `qbopt/analysis/peelsize.py` | 102 | `src/analysis/peelsize.rs` | ported (C path) | - |
+| 3 | `qbopt/optimize/canonical.py` | 80 | `src/optimize/canonical.rs` | ported (C path) | - |
 | 4 | `qbopt/frontend/modern/compile.py` | 200 | `src/frontend/modern/compile.rs` | todo | test_hir_execute |
 | 4 | `qbopt/frontend/modern/driver.py` | 53 | `src/frontend/modern/driver.rs` | todo | - |
 | 4 | `qbopt/frontend/qb/__init__.py` | 23 | `src/frontend/qb/__init__.rs` | todo | test_hir, test_modern_frontend, test_qb_frontend_command, test_qbstages |
