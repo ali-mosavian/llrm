@@ -114,18 +114,71 @@ pub(crate) struct CountedLoop {
     pub phi: PhiOccurrence,
     pub compare: OpOccurrence,
     pub branch: OpOccurrence,
+    pub start: AffineOperand,
     pub bound: AffineOperand,
+    /// The comparison that continues the loop.
+    pub test: Kind,
     pub preheader: i64,
     pub latch: i64,
     pub entered: i64,
     pub exit: i64,
     pub maximum: Option<BigInt>,
+    /// Unsigned `0 ..< bound`: the count is the bound itself.
+    pub zero_based: bool,
 }
 
 impl CountedLoop {
-    /// Python's `CountedLoop.trips` property.
-    pub(crate) const fn trips(&self) -> &AffineOperand {
-        &self.bound
+    /// Python's `CountedLoop.inclusive` property.
+    pub(crate) const fn inclusive(&self) -> bool {
+        matches!(self.test, Kind::Le | Kind::BelowEq)
+    }
+}
+
+/// Python's `_SKIPPED.get(test)`.
+#[allow(non_snake_case)]
+const fn _SKIPPED(test: Kind) -> Option<Kind> {
+    match test {
+        Kind::Below => Some(Kind::BelowEq),
+        Kind::Lt => Some(Kind::Le),
+        Kind::BelowEq => Some(Kind::Below),
+        Kind::Le => Some(Kind::Lt),
+        _ => None,
+    }
+}
+
+/// The preheader comparison, and the test on it, under which the loop runs no trips.
+pub(crate) fn skipped(proof: &CountedLoop) -> ((AffineOperand, AffineOperand), Kind) {
+    let width = proof.bound.width();
+    if proof.zero_based {
+        return ((proof.bound.clone(), AffineOperand::Const(Const::new(0, width))), Kind::Eq);
+    }
+    let skip = _SKIPPED(proof.test).expect("counted proves a skippable test");
+    if matches!((&proof.bound, &proof.start), (AffineOperand::Const(_), AffineOperand::Held(_))) {
+        let mirrored = crate::model::mir::MIRRORED(skip).expect("a skipped test is ordered");
+        return ((proof.start.clone(), proof.bound.clone()), mirrored);
+    }
+    ((proof.bound.clone(), proof.start.clone()), skip)
+}
+
+/// Trips on the entered path, exact modulo the counter's width.
+///
+/// `computed(kind, args)` places one preheader operation and returns its
+/// result. `counted` proved the count fits: an exclusive test cannot reach
+/// the width's size, and an inclusive one is proved finite first.
+pub(crate) fn trips(proof: &CountedLoop, computed: &mut dyn FnMut(Kind, Vec<Arg>) -> Held) -> AffineOperand {
+    let width = proof.bound.width();
+    if proof.zero_based {
+        return proof.bound.clone();
+    }
+    if let (AffineOperand::Const(bound), AffineOperand::Const(start)) = (&proof.bound, &proof.start) {
+        let count = &bound.n - &start.n + BigInt::from(u8::from(proof.inclusive()));
+        return AffineOperand::Const(Const::new(masked(&count, width), width));
+    }
+    let count = computed(Kind::Sub, vec![proof.bound.as_arg(), proof.start.as_arg()]);
+    if proof.inclusive() {
+        AffineOperand::Held(computed(Kind::Add, vec![Arg::Held(count), Arg::Const(Const::new(1, width))]))
+    } else {
+        AffineOperand::Held(count)
     }
 }
 
@@ -975,7 +1028,12 @@ pub(crate) fn of(
     Ok(result)
 }
 
-/// Prove every canonical unsigned `0..<bound` control recurrence.
+/// Prove every canonical `start ..< bound` or `start ..= bound` unit control recurrence.
+///
+/// An exclusive test stops the counter before it can wrap.  An inclusive
+/// one runs forever where `bound` is its type's maximum, so it is proved
+/// only where that cannot happen: a constant below it, or a finite
+/// `maximum`.
 pub(crate) fn counted(body: &MirBody, loop_: &Loop, facts: Option<&IndexMap<Value, Known>>) -> Vec<CountedLoop> {
     let computed;
     let facts = match facts {
@@ -1005,9 +1063,11 @@ pub(crate) fn counted(body: &MirBody, loop_: &Loop, facts: Option<&IndexMap<Valu
         return Vec::new();
     };
     let inside = &loop_.body;
-    if _continuing_test(branch, inside) != Some(Kind::Below) {
+    let Some(test) = _continuing_test(branch, inside).filter(|test| _SKIPPED(*test).is_some()) else {
         return Vec::new();
-    }
+    };
+    let unsigned = matches!(test, Kind::Below | Kind::BelowEq);
+    let inclusive = matches!(test, Kind::Le | Kind::BelowEq);
     let still = invariant(body, inside);
     let mut made = BTreeMap::<u32, &Op>::new();
     for block in &body.blocks {
@@ -1025,9 +1085,8 @@ pub(crate) fn counted(body: &MirBody, loop_: &Loop, facts: Option<&IndexMap<Valu
     let mut proven = Vec::new();
     for counter in basics(body, loop_).values() {
         let width = counter.start.width();
-        if _signed(&counter.start.as_arg(), facts, width) != Some(BigInt::from(0_u8))
-            || _signed(&counter.step.as_arg(), facts, width) != Some(BigInt::from(1_u8))
-        {
+        // Python's `isinstance(counter.start, (Held, Const))` is `AffineOperand`'s type.
+        if _signed(&counter.step.as_arg(), facts, width) != Some(BigInt::from(1_u8)) {
             continue;
         }
         let Some((phi_occurrence, phi)) = header_phis
@@ -1087,27 +1146,54 @@ pub(crate) fn counted(body: &MirBody, loop_: &Loop, facts: Option<&IndexMap<Valu
         {
             continue;
         }
-        let mut maximum = match &bound {
-            AffineOperand::Const(constant) => Some(masked(&constant.n, constant.width)),
-            AffineOperand::Held(held) => body.integer_ranges.get(&held.value).and_then(|range| {
-                (range.width == held.width && range.low >= BigInt::from(0_u8))
-                    .then(|| range.high.clone())
-            }),
-        };
+        let zero_based =
+            test == Kind::Below && _signed(&counter.start.as_arg(), facts, width) == Some(BigInt::from(0_u8));
+        let start = _constant(&counter.start.as_arg(), facts, width);
+        let limit = _constant(&bound.as_arg(), facts, width);
+        let mut maximum = None;
+        if let (Some(start), Some(limit)) = (&start, &limit) {
+            let (first, last) = if unsigned {
+                (start.clone(), limit.clone())
+            } else {
+                (_as_signed(start, width), _as_signed(limit, width))
+            };
+            maximum = Some(max(BigInt::from(0_u8), last - first + BigInt::from(u8::from(inclusive))));
+        } else if let (true, AffineOperand::Held(held)) = (zero_based, &bound) {
+            if let Some(interval) = body.integer_ranges.get(&held.value) {
+                if interval.width == held.width && interval.low >= BigInt::from(0_u8) {
+                    maximum = Some(interval.high.clone());
+                }
+            }
+        }
         if maximum.is_none() {
             maximum = _inbounds_trips(body, loop_, shape.latch);
+        }
+        if inclusive && maximum.is_none() {
+            let top = if unsigned {
+                (BigInt::from(1_u8) << (8 * width)) - 1
+            } else {
+                (BigInt::from(1_u8) << (8 * width - 1)) - 1
+            };
+            match &limit {
+                None => continue,
+                Some(limit) if (if unsigned { limit.clone() } else { _as_signed(limit, width) }) == top => continue,
+                Some(_) => {}
+            }
         }
         proven.push(CountedLoop {
             counter: counter.clone(),
             phi: phi_occurrence,
             compare: compare_occurrence,
             branch: branch_occurrence,
+            start: counter.start.clone(),
             bound,
+            test,
             preheader: shape.preheader,
             latch: shape.latch,
             entered: shape.entered,
             exit: shape.exit,
             maximum,
+            zero_based,
         });
     }
     proven
@@ -2249,12 +2335,7 @@ pub(crate) fn zero_terminating_control<'a>(
             &computed
         }
     };
-    let start = _signed(&candidate.start.as_arg(), facts, width);
-    let step = _signed(&candidate.step.as_arg(), facts, width);
-    if start != Some(BigInt::from(0_u8)) {
-        return None;
-    }
-    let step = step?;
+    let step = _signed(&candidate.step.as_arg(), facts, width)?;
     if step == BigInt::from(0_u8) {
         return None;
     }
