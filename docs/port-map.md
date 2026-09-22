@@ -65,11 +65,11 @@ only for a module still `todo`, and never after cutover.
 | 2 | `qbopt/backend/timing.py` | 42 | `src/backend/timing.rs` | todo | test_timing_bounds |
 | 2 | `qbopt/backend/twoaddr.py` | 244 | `src/backend/twoaddr.rs` | todo | test_lir |
 | 2 | `qbopt/backend/verify.py` | 200 | `src/backend/verify.rs` | todo | test_addressforms, test_flow, test_memory_folding, test_peephole, test_phi_widths, test_regthrash |
-| 2 | `qbopt/cfront/compile.py` | 779 | `src/cfront/compile.rs` | todo | test_cfront, test_cfront_frontend, test_cpu_profile, test_float_values, test_frontend_parity, test_indvars, test_inline, test_jumps, test_omfwrite, test_quality, test_spiller, test_stack_segment, test_unroll |
-| 2 | `qbopt/cfront/hir.py` | 268 | `src/cfront/hir.rs` | todo | test_cfront_frontend |
+| 2 | `qbopt/cfront/compile.py` | 779 | `src/cfront/compile.rs` | draft | test_cfront, test_cfront_frontend, test_cpu_profile, test_float_values, test_frontend_parity, test_indvars, test_inline, test_jumps, test_omfwrite, test_quality, test_spiller, test_stack_segment, test_unroll |
+| 2 | `qbopt/cfront/hir.py` | 268 | `src/cfront/hir.rs` | ported | test_cfront_frontend |
 | 2 | `qbopt/cfront/libfunc.py` | 36 | `src/cfront/libfunc.rs` | todo | - |
 | 2 | `qbopt/cfront/raise_hir.py` | 1630 | `src/cfront/raise_hir.rs` | todo | test_algebraic, test_cfront_frontend |
-| 2 | `qbopt/cfront/stream.py` | 65 | `src/cfront/stream.rs` | todo | test_cfront_frontend |
+| 2 | `qbopt/cfront/stream.py` | 65 | `src/cfront/stream.rs` | ported | test_cfront_frontend |
 | 2 | `qbopt/cycles/cycles.py` | 478 | `src/cycles/cycles.rs` | todo | test_cpu_profile |
 | 2 | `qbopt/cycles/timings.py` | 239 | `src/cycles/timings.rs` | todo | - |
 | 2 | `qbopt/flow.py` | 198 | `src/flow.rs` | todo | test_allocation, test_coalesce, test_cpu_profile, test_flow, test_jumps, test_lir_verify, test_native_frame, test_parcopy, test_raising_copies, test_spiller, test_wholeseg |

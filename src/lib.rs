@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod analysis;
+pub mod cfront;
 pub mod frontend;
 pub mod legacy;
 pub mod model;

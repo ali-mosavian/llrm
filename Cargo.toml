@@ -8,6 +8,7 @@ default-run = "llrm-qb"
 
 [dependencies]
 iced-x86 = { version = "=1.21.0", default-features = false, features = ["std", "decoder", "instr_info"] }
+indexmap = "2"
 num-bigint = "0.4"
 
 [build-dependencies]
@@ -19,6 +20,10 @@ buildprs = { path = "tools/buildprs" }
 [[bin]]
 name = "llrm-qb"
 path = "src/bin/llrm-qb.rs"
+
+[[bin]]
+name = "llrm-c-old"
+path = "src/bin/llrm-c-old.rs"
 
 [[bin]]
 name = "llrm-c"

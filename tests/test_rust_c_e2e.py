@@ -48,9 +48,9 @@ pytestmark = [
 
 
 def _llrm_c() -> Path:
-    binary = ROOT / "target" / "debug" / "llrm-c"
+    binary = ROOT / "target" / "debug" / "llrm-c-old"
     build = subprocess.run(
-        ["cargo", "build", "--quiet", "--bin", "llrm-c"],
+        ["cargo", "build", "--quiet", "--bin", "llrm-c-old"],
         cwd=ROOT,
         capture_output=True,
         text=True,
