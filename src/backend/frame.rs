@@ -32,6 +32,13 @@ impl From<i64> for SlotKey {
     }
 }
 
+/// An untyped integer literal.
+impl From<i32> for SlotKey {
+    fn from(value: i32) -> Self {
+        Self::Value(i64::from(value))
+    }
+}
+
 impl From<u32> for SlotKey {
     fn from(value: u32) -> Self {
         Self::Value(i64::from(value))

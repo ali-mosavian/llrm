@@ -1391,19 +1391,6 @@ pub fn allocated<'a>(
     _truncating(&selected, frame)
 }
 
-/// Private copy of `qbopt.backend.spiller._next_value`: one past the
-/// highest value id this body names.
-fn _next_value(body: &LirBody) -> u32 {
-    let mut seen: HashSet<u32> = HashSet::from([0]);
-    for block in &body.blocks {
-        seen.extend(block.arrives());
-        for one in &block.insns {
-            seen.extend(&one.defines);
-            seen.extend(&one.uses);
-        }
-    }
-    seen.into_iter().max().expect("seen holds 0") + 1
-}
 
 /// `fisttp` as a 387 has it: `fistp` with the control word set to round
 /// toward zero and put back. After allocation, so the control-word barriers
@@ -1424,7 +1411,7 @@ fn _truncating(body: &LirBody, frame: Option<&mut Frame>) -> Result<LirBody, Rai
     };
     // Python keys these slots by the 1-tuples ("control",) and ("chop",).
     let (saved, chop) = (frame.cell(("control", 0), 2)?, frame.cell(("chop", 0), 2)?);
-    let loaded_id = _next_value(body);
+    let loaded_id = super::spiller::_next_value(body);
     let chopped_id = loaded_id + 1;
     let loaded = Held { value: loaded_id, width: 2 };
     let chopped = Held { value: chopped_id, width: 2 };

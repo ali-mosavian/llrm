@@ -568,7 +568,7 @@ fn test_ninth_float_uses_an_owned_extended_precision_spill() {
     }
     let body = _body(operations);
     let mut slots = Frame::new(-80);
-    let integer_scratch = slots.cell(1, 2).unwrap();
+    let integer_scratch = slots.cell(1_i64, 2).unwrap();
     let allocated = with_frame(&body, &mut slots);
     let insns = allocated.insns();
     let spills: Vec<&Arc<Insn>> = insns
