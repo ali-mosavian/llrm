@@ -11,6 +11,8 @@ pub mod cpu;
 pub mod division;
 pub mod farcall;
 pub mod farload;
+pub mod floatalloc;
+pub mod floatregions;
 pub mod fpu;
 pub mod frame;
 pub mod layout;
