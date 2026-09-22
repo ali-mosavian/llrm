@@ -2161,6 +2161,24 @@ mod tests {
         }
     }
 
+    /// nbodys placed `fld [si]`'s base in AX, where the call left it: the
+    /// allocator released the whole-range AX pin, constrain found it again in
+    /// `body.pins`, and `[ax]`, which has no 16-bit encoding, was emitted.
+    #[test]
+    fn test_a_call_result_used_as_a_base_leaves_the_register_it_was_delivered_in() {
+        let mut call =
+            Insn::new(0xF0, Some((0xF0, 0xF3)), Some(semantics(Operation::Call, "call", vec![], vec![])), vec![21], vec![]);
+        call.delivers = vec![(Held { value: 21, width: 2 }, Register::AX)];
+        let mut body = _one_block(vec![call, _based_cell()]);
+        body.pins = pins(&[(21, Register::EAX)]);
+        let placed = _through_regalloc(body, &[(21, Register::EAX)]);
+        let load = placed.insns().into_iter().find(|one| {
+            one.at == 0x100 && matches!(one.what.as_ref().map(|what| &what.sources[0]), Some(Loc::Mem(_)))
+        });
+        let through = cell_of(&load.expect("the load")).through;
+        assert!(target::ADDRESSING.contains(&through), "{through:?}");
+    }
+
     #[test]
     fn test_a_based_cell_keeps_the_register_the_allocation_gave_its_base() {
         let r#where = Addr { base: Register::SI, ..Addr::new(Space::Literal, 0x2) };

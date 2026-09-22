@@ -78,9 +78,10 @@ def constrained(
     body rather than inside it. Given here rather than read from
     `body.pins`, so that the map deciding whether a value is already in
     the register an instruction wants is the same one the allocation will
-    honour.
+    honour. A pin the caller released is not merged back from `body.pins`.
     """
-    pinned = {**body.pins, **(pinned or {})}
+    ids = {getattr(value, "id", value) for value in (*body.pins, *(pinned or {}))}
+    pinned = dict(body.pins if pinned is None else pinned)
     from qbopt.backend import spiller
 
     constants = spiller._constants(body, frozenset(value for one in body.insns for value in one.defines))
@@ -89,7 +90,7 @@ def constrained(
         constant = constants.get(value)
         return constant if constant is not None and constant.width == width else ir.Held(value, width)
 
-    fresh = max(_next_value(body), max((getattr(value, "id", value) for value in pinned), default=0) + 1)
+    fresh = max(_next_value(body), max(ids, default=0) + 1)
     pins: dict[int, Register_] = {}
     blocks = []
     for block in body.blocks:

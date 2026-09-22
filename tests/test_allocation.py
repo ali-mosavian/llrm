@@ -624,6 +624,32 @@ def test_a_placed_cell_reaches_memory_by_the_register_its_value_got() -> None:
             assert getattr(got, field) == getattr(_based_cell().what.sources[0], field), field
 
 
+def test_a_call_result_used_as_a_base_leaves_the_register_it_was_delivered_in() -> None:
+    """nbodys placed `fld [si]`'s base in AX, where the call left it.
+
+    The allocator released the whole-range AX pin, but constrain still found
+    it in `body.pins` and judged the result already where the call delivers
+    it, so nothing split it and `[ax]`, which has no 16-bit encoding, was
+    emitted.
+    """
+    from dataclasses import replace
+
+    result = ir.Held(21, 2)
+    call = lir.Insn(
+        at=0xF0,
+        covers=(0xF0, 0xF3),
+        what=ir.Semantics(ir.Operation.CALL, "call", (), ()),
+        defines=(21,),
+        uses=(),
+        op=None,
+        delivers=((result, Register.AX),),
+    )
+    body = replace(_one_block(call, _based_cell()), pins={21: Register.EAX})
+    placed = _through_regalloc(body, {21: Register.EAX})
+    load = next(one for one in placed.insns if one.at == 0x100 and isinstance(one.what.sources[0], ir.Mem))
+    assert load.what.sources[0].through in target.ADDRESSING, load.what.sources[0].through
+
+
 def test_a_cell_whose_address_nothing_placed_is_refused() -> None:
     """Guessing a base register is how arrprm printed ' 0  0' for ' 7  8'."""
     from qbopt.backend import select

@@ -66,9 +66,9 @@ pub fn constrained(
     body: &LirBody,
     pinned: Option<&IndexMap<u32, Register>>,
 ) -> Result<(LirBody, IndexMap<u32, Register>), Impossible> {
-    let mut pinned_all: IndexMap<u32, Register> = body.pins.clone();
-    pinned_all.extend(pinned.into_iter().flatten().map(|(value, register)| (*value, *register)));
-    let mut pinned = pinned_all;
+    // A pin the caller released is not merged back from `body.pins`.
+    let ids = body.pins.keys().chain(pinned.into_iter().flat_map(|given| given.keys())).copied().max();
+    let mut pinned: IndexMap<u32, Register> = pinned.unwrap_or(&body.pins).clone();
 
     let defined: BTreeSet<u32> =
         body.blocks.iter().flat_map(|block| &block.insns).flat_map(|one| one.defines.iter().copied()).collect();
@@ -81,7 +81,7 @@ pub fn constrained(
         }
     };
 
-    let mut fresh = _next_value(body).max(pinned.keys().copied().max().unwrap_or(0) + 1);
+    let mut fresh = _next_value(body).max(ids.unwrap_or(0) + 1);
     let mut pins: IndexMap<u32, Register> = IndexMap::default();
     let mut blocks = Vec::new();
     for block in &body.blocks {
