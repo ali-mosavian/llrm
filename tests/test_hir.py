@@ -1754,8 +1754,8 @@ def test_nested_integer_division_keeps_each_dividend(tmp_path: Path) -> None:
     """Gorillas emitted IDIV AX twice for 30 \\ (80 \\ MaxCol), faulting on its first shot."""
     basic = tmp_path / "NESTDIV.BAS"
     basic.write_bytes(
-        b"declare function scale (maxCol)\r\n"
         b"defint a-z\r\n"
+        b"declare function scale (maxCol)\r\n"
         b"print scale(80)\r\n"
         b"end\r\n"
         b"function scale (maxCol)\r\n"

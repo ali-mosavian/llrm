@@ -384,18 +384,20 @@ fn parses_default_type_ranges_as_declarations_not_calls() {
 }
 
 #[test]
-fn default_typing_is_module_wide_and_yields_to_suffix_and_as() {
-    // VBDOS, PDS 7.1, and QB 4.5 all print 2,2 for declarations on either
-    // side of DEFINT. Explicit suffixes and AS clauses remain authoritative.
+fn default_typing_applies_from_its_line_and_yields_to_suffix_and_as() {
+    // BC 4.5's listing of `banana = 1: DEFINT B: banana = 2` stores BANANA!
+    // then BANANA%: each name is typed where it appears, so `apple` either
+    // side of DEFINT is two variables. PRINT LEN(apple) after it prints 2.
     let module = parse(
-        "dim apple\ndefint a-a\ndim another, aLong&, appleDouble as double\n",
+        "dim apple\ndefint a-a\ndim another, aLong&, appleDouble as double\nprint len(apple)\n",
         Dialect::QuickBasic45,
     )
     .unwrap();
     let hir = compile(&module, "default_types", Dialect::QuickBasic45, "qb45").unwrap();
     for (name, extent, type_id) in [
-        ("APPLE", 2, 1),
-        ("ANOTHER", 2, 1),
+        ("APPLE!", 4, 3),
+        ("APPLE%", 2, 1),
+        ("ANOTHER%", 2, 1),
         ("ALONG&", 4, 2),
         ("APPLEDOUBLE", 8, 4),
     ] {
@@ -454,19 +456,34 @@ fn control_not_inverts_the_operand_truth_without_materializing_bitwise_not() {
 }
 
 #[test]
-fn procedure_default_types_are_scoped_to_local_declarations() {
-    // A VBDOS executable with this shape reports a two-byte inherited A local
-    // and an eight-byte procedure-local B local. The following procedure must
-    // start again from the module defaults rather than inheriting DEFDBL.
+fn a_procedure_def_type_carries_into_the_procedures_after_it() {
+    // QB 4.5, PDS 7.1 and VBDOS listings of this shape all store `beta = 3`
+    // in `later` as an eight-byte DOUBLE: DEFtype is textual, not scoped to
+    // the procedure it appears in.
     let module = parse(
-        "defint a-a\nsub first\ndefdbl b-b\ndim apple, beta\nend sub\nsub second\ndim beta\nend sub\n",
+        "defint a-a\nsub first\ndefdbl b-b\ndim apple, beta\nend sub\nsub later\ndim beta\nend sub\n",
         Dialect::VbDos,
     )
     .unwrap();
     let hir = compile(&module, "local_defaults", Dialect::VbDos, "vbdos").unwrap();
-    assert_eq!(hir.matches("\"name\":\"APPLE\",\"offset\":-2").count(), 1);
-    assert_eq!(hir.matches("\"name\":\"BETA\",\"offset\":-10").count(), 1);
-    assert_eq!(hir.matches("\"name\":\"BETA\",\"offset\":-4").count(), 1);
+    assert_eq!(
+        hir.matches("\"extent\":2,\"id\":1,\"name\":\"APPLE%\"")
+            .count(),
+        1,
+        "{hir}"
+    );
+    assert_eq!(
+        hir.matches("\"extent\":8,\"id\":2,\"name\":\"BETA#\"")
+            .count(),
+        1,
+        "{hir}"
+    );
+    assert_eq!(
+        hir.matches("\"extent\":8,\"id\":1,\"name\":\"BETA#\"")
+            .count(),
+        1,
+        "{hir}"
+    );
 }
 
 #[test]

@@ -260,11 +260,12 @@ struct Compiler {
     def_segment_symbol: Option<u32>,
     far_string_segment_symbol: Option<u32>,
     floating_literals: BTreeMap<(u32, Vec<u8>), u32>,
-    default_types: [u32; 26],
-    // The table each module-level DEFtype leaves, by source position. A
-    // procedure definition is typed by those before it; module-level code
-    // by those before the first definition, wherever they fall in it.
+    // The table each DEFtype leaves, by source position. BC reads the file
+    // once: a DEFtype governs every name from it to the next one, across
+    // SUB and FUNCTION boundaries, and `c` either side of `DEFINT C` is two
+    // variables, C! and C%.
     default_changes: Vec<((usize, usize), [u32; 26])>,
+    position: (usize, usize),
     option_base: i64,
     statement_entries: Vec<(u32, u32, u16)>,
     data_entries: Vec<u32>,
@@ -327,15 +328,7 @@ pub fn compile_with_options(
         mbf,
         alternate_math,
     );
-    compiler.record_default_types(&module.statements)?;
-    let module_default_types = compiler.defaults_at(
-        module
-            .procedures
-            .iter()
-            .find(|procedure| !procedure.declaration)
-            .map_or((usize::MAX, 0), |procedure| source_position(procedure.span)),
-    );
-    compiler.default_types = module_default_types;
+    compiler.record_default_types(module)?;
     compiler.apply_option_base(&module.statements)?;
     compiler.type_declarations(module)?;
     compiler.signatures(module)?;
@@ -366,7 +359,7 @@ pub fn compile_with_options(
         } else {
             "local"
         };
-        compiler.default_types = compiler.defaults_at(source_position(procedure.span));
+        compiler.position = source_position(procedure.span);
         let mut parameters = Vec::new();
         let mut parameter_bytes = 0;
         for parameter in &procedure.parameters {
@@ -396,7 +389,7 @@ pub fn compile_with_options(
             parameter_bytes += compiler.width(value_type).max(2);
             if is_array {
                 compiler.variables.insert(
-                    variable_key(&parameter.declaration.name).into(),
+                    compiler.typed_declaration(&parameter.declaration)?.name,
                     Variable {
                         place: 0,
                         type_id: parameter_type,
@@ -431,7 +424,7 @@ pub fn compile_with_options(
                 );
             } else {
                 compiler.variables.insert(
-                    variable_key(&parameter.declaration.name).into(),
+                    compiler.typed_declaration(&parameter.declaration)?.name,
                     Variable {
                         place: 0,
                         type_id: parameter_type,
@@ -477,10 +470,6 @@ pub fn compile_with_options(
             let place = compiler.declare_as(&declaration, "local")?;
             compiler.result_place = Some((place, result_type));
         }
-        // A procedure is its own DEF-type scope in Microsoft BASIC. Its
-        // directives govern all declarations in the body regardless of
-        // source order, but not the already-declared procedure signature.
-        compiler.apply_default_types(&procedure.body)?;
         compiler.declarations_in(&procedure.body, compiler.implicit_storage)?;
         compiler.reserve_labels(&procedure.body)?;
         compiler
@@ -931,8 +920,8 @@ impl Compiler {
             def_segment_symbol: None,
             far_string_segment_symbol: None,
             floating_literals: BTreeMap::new(),
-            default_types: [SINGLE; 26],
             default_changes: Vec::new(),
+            position: (0, 0),
             option_base: 0,
             statement_entries: Vec::new(),
             data_entries: Vec::new(),
@@ -1283,68 +1272,68 @@ impl Compiler {
             .ok_or_else(|| SemanticError {
                 message: format!("{name} has no initial letter for default typing"),
             })?;
-        Ok(self.default_types[(first - b'A') as usize])
-    }
-
-    fn defaults_at(&self, position: (usize, usize)) -> [u32; 26] {
-        self.default_changes
+        Ok(self
+            .default_changes
             .iter()
             .rev()
-            .find(|(at, _)| *at <= position)
-            .map_or([SINGLE; 26], |(_, table)| *table)
+            .find(|(at, _)| *at <= self.position)
+            .map_or(SINGLE, |(_, table)| table[(first - b'A') as usize]))
     }
 
-    fn record_default_types(&mut self, statements: &[Statement]) -> Result<(), SemanticError> {
-        for statement in statements {
-            let Statement::DefType {
-                type_name,
-                ranges,
-                span,
-            } = statement
-            else {
-                continue;
-            };
-            let mut table = self
-                .default_changes
-                .last()
-                .map_or([SINGLE; 26], |(_, table)| *table);
+    /// The variable an unsuffixed name denotes here: an AS-declared one if
+    /// it exists, otherwise the one its DEFtype names, e.g. `c` -> `C%`.
+    fn variable_key(&self, name: &str) -> String {
+        if suffix(name).is_some() || self.variables.contains_key(name) {
+            return name.into();
+        }
+        self.typed_name(name).unwrap_or_else(|_| name.into())
+    }
+
+    fn typed_name(&self, name: &str) -> Result<String, SemanticError> {
+        let type_id = self.named_type(name, None)?;
+        Ok(format!("{name}{}", type_suffix(type_id)))
+    }
+
+    /// A declaration without AS or suffix declares its DEFtype-named variable.
+    fn typed_declaration(&self, declaration: &Declaration) -> Result<Declaration, SemanticError> {
+        let mut typed = declaration.clone();
+        if suffix(&declaration.name).is_none() && declaration.type_name.is_none() {
+            typed.name = self.typed_name(&declaration.name)?;
+        }
+        Ok(typed)
+    }
+
+    fn record_default_types(&mut self, module: &Module) -> Result<(), SemanticError> {
+        let mut directives = module
+            .statements
+            .iter()
+            .chain(module.procedures.iter().flat_map(|one| one.body.iter()))
+            .filter_map(|statement| match statement {
+                Statement::DefType {
+                    type_name,
+                    ranges,
+                    span,
+                } => Some((source_position(*span), type_name, ranges)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        directives.sort_by_key(|(position, ..)| *position);
+        let mut table = [SINGLE; 26];
+        for (position, type_name, ranges) in directives {
             let selected = self.resolve_type(Some(type_name))?;
             for (first, last) in ranges {
                 for letter in (*first as u8)..=(*last as u8) {
                     table[(letter - b'A') as usize] = selected;
                 }
             }
-            self.default_changes.push(((span.line, span.start), table));
-        }
-        Ok(())
-    }
-
-    fn apply_default_types(&mut self, statements: &[Statement]) -> Result<(), SemanticError> {
-        for statement in statements {
-            let Statement::DefType {
-                type_name, ranges, ..
-            } = statement
-            else {
-                continue;
-            };
-            let selected = self.resolve_type(Some(type_name))?;
-            for (first, last) in ranges {
-                for letter in (*first as u8)..=(*last as u8) {
-                    self.default_types[(letter - b'A') as usize] = selected;
-                }
-            }
+            self.default_changes.push((position, table));
         }
         Ok(())
     }
 
     fn signatures(&mut self, module: &Module) -> Result<(), SemanticError> {
-        let module_default_types = self.default_types;
         for procedure in &module.procedures {
-            self.default_types = if procedure.declaration {
-                module_default_types
-            } else {
-                self.defaults_at(source_position(procedure.span))
-            };
+            self.position = source_position(procedure.span);
             let key = canonical(&procedure.name);
             let symbol = self
                 .signatures
@@ -1401,7 +1390,6 @@ impl Compiler {
                 self.signatures.insert(key.into(), signature);
             }
         }
-        self.default_types = module_default_types;
         Ok(())
     }
 
@@ -1411,6 +1399,7 @@ impl Compiler {
         storage: &'static str,
     ) -> Result<(), SemanticError> {
         for statement in statements {
+            self.position = source_position(statement.span());
             match statement {
                 Statement::Dim(items) => {
                     for item in items {
@@ -1421,7 +1410,7 @@ impl Compiler {
                             // module GOSUB creates INTEGER i, while
                             // DrawGorilla deliberately declares a local
                             // SINGLE i.
-                            self.variables.remove(variable_key(&item.name));
+                            self.variables.remove(&self.typed_declaration(item)?.name);
                         }
                         if storage == "local" && item.array {
                             // Microsoft documents every explicitly DIMmed
@@ -1437,7 +1426,7 @@ impl Compiler {
                 }
                 Statement::Static(items) => {
                     for item in items {
-                        self.variables.remove(variable_key(&item.name));
+                        self.variables.remove(&self.typed_declaration(item)?.name);
                         self.declare_as(item, "static")?;
                     }
                 }
@@ -1446,7 +1435,10 @@ impl Compiler {
                 | Statement::OptionBase(_, _) => {}
                 Statement::Redim(items) => {
                     for item in items {
-                        if self.variables.contains_key(variable_key(&item.name)) {
+                        if self
+                            .variables
+                            .contains_key(&self.typed_declaration(item)?.name)
+                        {
                             continue;
                         }
                         // REDIM is itself a declaration in QB, including
@@ -1464,7 +1456,7 @@ impl Compiler {
                         .constants
                         .insert(canonical(name).into(), literal)
                         .is_some()
-                        || self.variables.contains_key(variable_key(name))
+                        || self.variables.contains_key(&self.variable_key(name))
                     {
                         return self.fail(format!("duplicate declaration {name}"));
                     }
@@ -1480,7 +1472,8 @@ impl Compiler {
         declaration: &Declaration,
         storage: &'static str,
     ) -> Result<u32, SemanticError> {
-        if self.variables.contains_key(variable_key(&declaration.name))
+        let declaration = &self.typed_declaration(declaration)?;
+        if self.variables.contains_key(&declaration.name)
             || self.constants.contains_key(canonical(&declaration.name))
         {
             return self.fail(format!("duplicate declaration {}", declaration.name));
@@ -1609,7 +1602,7 @@ impl Compiler {
             order.extend(2 * declaration.bounds.len()..2 * declaration.bounds.len() + 3);
             self.emit_call("B$DDIM", Vec::new(), operands, order, false);
             self.variables.insert(
-                variable_key(&declaration.name).into(),
+                declaration.name.clone(),
                 Variable {
                     place: 0,
                     type_id: element,
@@ -1676,7 +1669,7 @@ impl Compiler {
                 ));
             }
             self.variables.insert(
-                variable_key(&declaration.name).into(),
+                declaration.name.clone(),
                 Variable {
                     place: 0,
                     type_id: element,
@@ -1810,7 +1803,7 @@ impl Compiler {
             None
         };
         self.variables.insert(
-            variable_key(&declaration.name).into(),
+            declaration.name.clone(),
             Variable {
                 place,
                 type_id,
@@ -1857,14 +1850,7 @@ impl Compiler {
             Some(TypeName::Double) => "#",
             Some(TypeName::String) => "$",
             Some(TypeName::Named(_)) => "",
-            None => match type_id {
-                INTEGER => "%",
-                LONG => "&",
-                SINGLE => "!",
-                DOUBLE => "#",
-                STRING => "$",
-                _ => "",
-            },
+            None => type_suffix(type_id),
         };
         format!("{}{suffix}", name.to_ascii_uppercase())
     }
@@ -2046,6 +2032,7 @@ impl Compiler {
     fn statement_list(&mut self, statements: &[Statement]) -> Result<(), SemanticError> {
         for statement in statements {
             self.current_source_line = statement.span().line;
+            self.position = source_position(statement.span());
             let metadata_only = matches!(
                 statement,
                 Statement::Dim(_)
@@ -4789,7 +4776,7 @@ impl Compiler {
             Expr::Apply { name, .. }
                 if intrinsics::find(canonical(name), self.dialect).is_none()
                     && !self.signatures.contains_key(canonical(name))
-                    && self.variables.contains_key(variable_key(name)) =>
+                    && self.variables.contains_key(&self.variable_key(name)) =>
             {
                 Some(self.destination(expression)?)
             }
@@ -6234,7 +6221,7 @@ impl Compiler {
     }
 
     fn bare_function_type(&self, name: &str) -> Option<u32> {
-        if self.variables.contains_key(variable_key(name)) {
+        if self.variables.contains_key(&self.variable_key(name)) {
             return None;
         }
         self.signatures.get(canonical(name)).and_then(|signature| {
@@ -6250,11 +6237,11 @@ impl Compiler {
         match expression {
             Expr::Name(name, _) => self
                 .variables
-                .get(variable_key(name))
+                .get(&self.variable_key(name))
                 .map(|one| one.type_id),
             Expr::Apply { name, .. } => self
                 .variables
-                .get(variable_key(name))
+                .get(&self.variable_key(name))
                 .and_then(|one| one.element),
             Expr::Index { base, .. } => {
                 let base = self.place_syntax_type(base)?;
@@ -6412,13 +6399,13 @@ impl Compiler {
     }
 
     fn variable(&mut self, name: &str) -> Result<Variable, SemanticError> {
-        if let Some(variable) = self.variables.get(variable_key(name)) {
+        let key = self.variable_key(name);
+        if let Some(variable) = self.variables.get(&key) {
             return Ok(variable.clone());
         }
-        let type_id = self.named_type(name, None)?;
         let declaration = Declaration {
-            name: name.into(),
-            type_name: Some(type_name(type_id)),
+            name: key.clone(),
+            type_name: None,
             array: false,
             bounds: Vec::new(),
             fixed_length: None,
@@ -6431,7 +6418,7 @@ impl Compiler {
             },
         };
         self.declare_as(&declaration, self.implicit_storage)?;
-        Ok(self.variables[variable_key(name)].clone())
+        Ok(self.variables[&key].clone())
     }
 
     fn constant(&self, expression: &Expr) -> Result<(u32, Number), SemanticError> {
@@ -7455,8 +7442,15 @@ fn canonical(name: &str) -> &str {
     name.trim_end_matches(['%', '&', '!', '#', '$'])
 }
 
-fn variable_key(name: &str) -> &str {
-    name
+fn type_suffix(type_id: u32) -> &'static str {
+    match type_id {
+        INTEGER => "%",
+        LONG => "&",
+        SINGLE => "!",
+        DOUBLE => "#",
+        STRING => "$",
+        _ => "",
+    }
 }
 
 fn arity_description(minimum: usize, maximum: usize) -> String {
