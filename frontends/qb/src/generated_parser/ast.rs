@@ -309,8 +309,11 @@ fn identifier_statement(state: &mut ParseState) -> ParseResult {
     let TokenKind::Identifier(name) = token.kind else {
         return ParseResult::NotFound;
     };
+    let line_start =
+        state.at == 0 || state.tokens[state.at - 1].kind == TokenKind::Reserved(named("tkNewLine"));
     state.at += 1;
-    if at_named(state, "tkColon") {
+    // Only a line's first name is a label; after that `name:` is a call.
+    if line_start && at_named(state, "tkColon") {
         state.statements.push(Statement::Label(name, token.span));
         return ParseResult::GoodSyntax;
     }

@@ -2204,3 +2204,30 @@ fn a_declared_function_suffix_matches_its_default_typed_definition() {
     .unwrap();
     compile(&module, "function_suffix", Dialect::QuickBasic45, "qb45").unwrap();
 }
+
+#[test]
+fn a_name_and_colon_after_the_start_of_a_line_is_a_call_not_a_label() {
+    // deedlines repeats `IF xit% = 1 THEN xit% = 2: getpal: ...`; taking
+    // `getpal:` for a label failed with "duplicate label GETPAL". BC 4.5's
+    // listing calls G at both sites.
+    let module = parse(
+        "declare sub g ()\r\nx% = 1\r\n\
+         if x% = 1 then x% = 2: g: print 1\r\n\
+         x% = 3: g: print 2\r\n\
+         g: print 3\r\n\
+         sub g\r\nend sub\r\n",
+        Dialect::QuickBasic45,
+    )
+    .unwrap();
+    let hir = compile(&module, "mid_line_call", Dialect::QuickBasic45, "qb45").unwrap();
+    assert_eq!(
+        module
+            .statements
+            .iter()
+            .filter(|one| matches!(one, Statement::Label(..)))
+            .count(),
+        1,
+        "only the line-initial g: is a label"
+    );
+    assert_eq!(hir.matches("\"callee\":\"G\"").count(), 2, "{hir}");
+}
