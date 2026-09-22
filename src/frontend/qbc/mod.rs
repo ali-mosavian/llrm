@@ -4,6 +4,7 @@
 //! fork; the cutover moves this to `src/frontends/qb`.
 
 pub mod abi;
+pub mod compile;
 pub mod driver;
 pub mod inline_x87;
 pub mod stage_text;
