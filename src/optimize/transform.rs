@@ -11,10 +11,16 @@ use crate::analysis::ssa::{provider as _provider, substituted as _substituted};
 use crate::model::mir::{self, Arg, Held, Kind, MirBlock, MirBody, Op, OrderedMap, Phi, Value};
 
 // ==== BEGIN S0: transform.py 60-129 (primary) ====
+/// Erase the operations whose address is in `gone`.
+pub(crate) fn _absorb(ops: &[Op], gone: &BTreeSet<i64>) -> Vec<Op> {
+    _without(ops, |one| gone.contains(&one.at))
+}
+
 /// Remove selected computation while retaining exact source ownership.
 ///
-/// Direct port of `qbopt.optimize.transform:_without`.
-pub(crate) fn _without(ops: &[crate::model::mir::Op], drop: impl Fn(&crate::model::mir::Op) -> bool) -> Vec<crate::model::mir::Op> {
+/// A deleted source occurrence becomes an inert marker owning the same
+/// opaque ids; source-free operations disappear completely.
+pub(crate) fn _without(ops: &[Op], drop: impl Fn(&Op) -> bool) -> Vec<Op> {
     let mut out = Vec::new();
     for op in ops {
         if !drop(op) {
@@ -25,6 +31,54 @@ pub(crate) fn _without(ops: &[crate::model::mir::Op], drop: impl Fn(&crate::mode
     }
     out
 }
+
+/// One phi taking the provider along any edge that named the load.
+pub(crate) fn _phi_reading(phi: &Phi, swap: &BTreeMap<u32, Value>) -> Result<Phi, String> {
+    if !phi.incoming.values().any(|one| swap.contains_key(&one.id)) {
+        return Ok(phi.clone());
+    }
+    let incoming = phi
+        .incoming
+        .iter()
+        .map(|(at, one)| _provider(*one, swap).map(|value| (*at, value)))
+        .collect::<Result<OrderedMap<_, _>, _>>()
+        .map_err(|error| error.to_string())?;
+    Ok(Phi { result: phi.result, incoming })
+}
+
+// CSE only ever removes an operation whose whole answer is in its operands.
+pub(crate) const _PURE: [Kind; 30] = [
+    Kind::Add,
+    Kind::Sub,
+    Kind::Mul,
+    Kind::FixedMul,
+    Kind::Smulhi,
+    Kind::PtrOffset,
+    Kind::Div,
+    Kind::Rem,
+    Kind::And,
+    Kind::Or,
+    Kind::Xor,
+    Kind::Shl,
+    Kind::Shr,
+    Kind::Sar,
+    Kind::Neg,
+    Kind::Not,
+    Kind::Convert,
+    Kind::SignExtend,
+    Kind::Extract,
+    Kind::Concat,
+    Kind::Copy,
+    Kind::Address,
+    Kind::Lt,
+    Kind::Le,
+    Kind::Gt,
+    Kind::Ge,
+    Kind::Eq,
+    Kind::Ne,
+    Kind::Below,
+    Kind::Above,
+];
 
 // ==== END S0 ====
 
@@ -141,16 +195,40 @@ pub(crate) const LOW: u8 = 0;
 pub(crate) const HIGH: u8 = 1;
 
 // ==== BEGIN S1: transform.py 1433-1447 (primary) ====
+type _HalvesReuse = std::collections::HashMap<usize, (MirBody, BTreeSet<(Value, u8)>)>;
+
+thread_local! {
+    /// Python's `_halves_reuse` context variable.  The saved body is compared
+    /// as well as its address: Python holds the body alive, Rust cannot.
+    #[allow(non_upper_case_globals)]
+    static _halves_reuse: std::cell::RefCell<Option<_HalvesReuse>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Share half-liveness for immutable states in one transaction.
+pub(crate) fn _reusing_halves<T>(inside: impl FnOnce() -> T) -> T {
+    let token = _halves_reuse.with(|reuse| reuse.replace(Some(std::collections::HashMap::new())));
+    let result = inside();
+    _halves_reuse.with(|reuse| *reuse.borrow_mut() = token);
+    result
+}
 // ==== END S1 ====
 
 /// Which half of which value something reads, to a fixed point.
 ///
-/// Direct port of `qbopt/optimize/transform.py:halves`, without the
-/// `_reusing_halves` memo, which is not ported here.
-pub(crate) fn halves(body: &MirBody) -> std::collections::BTreeSet<(crate::model::mir::Value, u8)> {
-    use std::collections::{BTreeMap, BTreeSet};
-
-    use crate::model::mir::{Arg, Kind, Op, Value};
+/// Both halves of everything reaching an exit are live.
+pub(crate) fn halves(body: &MirBody) -> BTreeSet<(Value, u8)> {
+    let key = std::ptr::from_ref(body) as usize;
+    let saved = _halves_reuse.with(|reuse| {
+        reuse
+            .borrow()
+            .as_ref()
+            .and_then(|reused| reused.get(&key))
+            .filter(|saved| saved.0 == *body)
+            .map(|saved| saved.1.clone())
+    });
+    if let Some(saved) = saved {
+        return saved;
+    }
 
     let mut out: BTreeSet<(Value, u8)> = BTreeSet::new();
     for value in _leaving(body) {
@@ -229,6 +307,11 @@ pub(crate) fn halves(body: &MirBody) -> std::collections::BTreeSet<(crate::model
         }
         changing = out.len() != before;
     }
+    _halves_reuse.with(|reuse| {
+        if let Some(reused) = reuse.borrow_mut().as_mut() {
+            reused.insert(key, (body.clone(), out.clone()));
+        }
+    });
     out
 }
 
