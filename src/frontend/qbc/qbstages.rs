@@ -17,7 +17,7 @@ use crate::model::passes::Options;
 use crate::objectfile::module::Space;
 
 /// Decode the physical source exactly as qbfront does before lexing.
-fn _source_text(path: &Path) -> Result<String, String> {
+pub(super) fn _source_text(path: &Path) -> Result<String, String> {
     let raw = std::fs::read(path).map_err(|error| error.to_string())?;
     let raw = raw.split(|byte| *byte == 0x1a).next().unwrap_or_default();
     Ok(match std::str::from_utf8(raw) {
@@ -46,7 +46,7 @@ const CP437: [char; 128] = [
     '\u{00B0}', '\u{2219}', '\u{00B7}', '\u{221A}', '\u{207F}', '\u{00B2}', '\u{25A0}', '\u{00A0}',
 ];
 
-fn _lir(body: &lir::LirBody, callees: Option<&IndexMap<i64, masm::Callee>>) -> String {
+pub(super) fn _lir(body: &lir::LirBody, callees: Option<&IndexMap<i64, masm::Callee>>) -> String {
     let empty = IndexMap::new();
     let callees = callees.unwrap_or(&empty);
     let mut lines = vec![format!("; entry L0_{}", body.entry), format!("{} proc", body.name)];
@@ -240,7 +240,7 @@ fn _mnemonic(line: &str) -> Option<(&str, &str)> {
 }
 
 /// Align instructions and hide only display-only, unreferenced block labels.
-fn _display_assembly(text: &str) -> String {
+pub(super) fn _display_assembly(text: &str) -> String {
     let lines: Vec<&str> = text.lines().collect();
     let referenced: BTreeSet<String> =
         lines.iter().filter(|line| !line.ends_with(':')).flat_map(|line| _labels_in(line)).collect();
