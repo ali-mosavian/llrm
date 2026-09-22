@@ -1284,7 +1284,7 @@ pub fn bodies(
             Some(contracts),
             Some(&spared),
         )
-        .map_err(|error| format!("Unraisable: {error}"))?
+        .map_err(|error| error.to_string())?
         {
             Ok(built) => built,
             Err(_) => continue,

@@ -23,7 +23,7 @@ use crate::model::ir::{self, Addr, Address, Held, Imm, Loc, Mem, Operation, Reg,
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
 use crate::model::memory::MemoryKind;
 use crate::model::mir::{self, MemRef};
-use crate::model::passes::LIRTransform;
+use crate::model::passes::{Exception, LIRTransform};
 use crate::support::pyset::PySet;
 
 pub struct Spiller {
@@ -51,6 +51,10 @@ impl LIRTransform for Spiller {
     /// Python returns `spilled(...)`'s pair; the trait carries the body.
     fn transform(&mut self, body: LirBody) -> Result<LirBody, String> {
         spilled(&body, &self.spilled, self.frame.as_mut()).map(|(body, _made)| body).map_err(|error| error.to_string())
+    }
+
+    fn transform_raising(&mut self, body: LirBody) -> Result<LirBody, Exception> {
+        spilled(&body, &self.spilled, self.frame.as_mut()).map(|(body, _made)| body).map_err(|error| error.raised())
     }
 }
 

@@ -17,7 +17,7 @@ use crate::support::hash::IndexMap;
 use crate::backend::frame::{self as frames, Frame};
 use crate::model::ir::{Imm, Loc, Operation, Reg, Semantics};
 use crate::model::lir::{Insn, LirBlock, LirBody};
-use crate::model::passes::LIRTransform;
+use crate::model::passes::{Exception, LIRTransform};
 
 /// The frame cannot be grown safely on this body.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -80,6 +80,10 @@ impl LIRTransform for Prologue {
 
     fn transform(&mut self, body: LirBody) -> Result<LirBody, String> {
         reserved(&body, &self.frame.borrow(), Some(&self.calls)).map_err(|refused| refused.0)
+    }
+
+    fn transform_raising(&mut self, body: LirBody) -> Result<LirBody, Exception> {
+        reserved(&body, &self.frame.borrow(), Some(&self.calls)).map_err(|refused| Exception::new("Refused", refused.0))
     }
 }
 

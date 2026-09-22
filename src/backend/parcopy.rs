@@ -15,7 +15,7 @@ use crate::support::hash::{IndexMap, IndexSet};
 use crate::backend::target;
 use crate::model::ir::{self, Loc, Operation, Reg, Semantics};
 use crate::model::lir::{self, Insn, LirBody};
-use crate::model::passes::LIRTransform;
+use crate::model::passes::{Exception, LIRTransform};
 use crate::support::pyrepr::Repr;
 
 /// A parallel copy whose moves all read each other's destinations.
@@ -62,6 +62,16 @@ impl LIRTransform for ParallelCopy {
 
     fn transform(&mut self, body: LirBody) -> Result<LirBody, String> {
         scheduled(&body).map_err(|refused| refused.to_string())
+    }
+
+    fn transform_raising(&mut self, body: LirBody) -> Result<LirBody, Exception> {
+        scheduled(&body).map_err(|refused| {
+            let kind = match refused {
+                Refused::Tangled(_) => "Tangled",
+                Refused::Malformed(_) => "Malformed",
+            };
+            Exception::new(kind, refused.to_string())
+        })
     }
 }
 

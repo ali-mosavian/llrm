@@ -9,13 +9,14 @@ use std::rc::Rc;
 
 use crate::analysis::{floatfacts, frameescape, loops};
 use crate::frontend::fpstack;
-use crate::model::ir::{self, Loc};
+use crate::model::ir::Loc;
 use crate::model::lir::LirBody;
 use crate::model::mir::{self, Arg, Cell, Kind, MemRef, MirBody, Op};
 use crate::objectfile::cvinfo::{DebugInfo, Local, Procedure};
 use crate::objectfile::module::{Addr, Module, Space};
 use crate::support::hash::IndexMap;
 use crate::support::pyrepr::Repr;
+use crate::wholeseg::Watched;
 
 /// Python `f"{value:#x}"` for any sign.
 fn hex(value: i64) -> String {
@@ -701,9 +702,49 @@ pub fn main(argv: &[String]) -> Result<i32, String> {
         println!("  nothing to raise");
         return Ok(1);
     };
-    dump(0, "omf", &format!("BC ({} bytes)", data.len()), &raised, None, &debug, &found)?;
-    // The stages after the raise are what `wholeseg.emitted` shows its watch,
-    // and wholeseg is ported separately; this is where the two meet.
-    Err("not yet ported: qbopt.wholeseg.emitted".to_owned())
+    let mut step = 0usize;
+    let mut was = dump(step, "omf", &format!("BC ({} bytes)", data.len()), &raised, None, &debug, &found)?;
+    step += 1;
+
+    // Observe the actual optimization run; never rebuild or re-resolve it for a dump.
+    let mut mir_stages: IndexMap<String, Vec<(String, Rc<MirBody>)>> = IndexMap::default();
+    let mut stages: IndexMap<String, Vec<(String, LirBody)>> = IndexMap::default();
+    let mut watch = |stage: &str, name: Option<&str>, low: Watched<'_>| match low {
+        Watched::Mir(body) => {
+            let stage = stage.strip_prefix("mir-").unwrap_or(stage);
+            let name = name.unwrap_or("None").to_owned();
+            mir_stages.entry(stage.to_owned()).or_default().push((name, Rc::new(body.clone())));
+        }
+        Watched::Route(_) => {}
+        Watched::Lir(body) => {
+            if name.is_some_and(|name| !selected(name)) {
+                return;
+            }
+            stages.entry(stage.to_owned()).or_default().push((name.unwrap_or("None").to_owned(), body.clone()));
+        }
+    };
+    let cpu: &'static str = Box::leak(args.cpu.clone().into_boxed_str());
+    let got = crate::wholeseg::emitted(
+        &data,
+        true,
+        true,
+        args.only.as_deref(),
+        Some(&mut watch),
+        cpu.into(),
+        args.basic_semantics,
+        args.bounds_checks,
+        None,
+        &crate::model::passes::O2(),
+    );
+    for (name, bodies) in &mir_stages {
+        was = dump(step, name, name, bodies, Some(&was), &debug, &found)?;
+        step += 1;
+    }
+    got.map_err(|raised| raised.message)?;
+    for (stage, bodies) in &stages {
+        write(step, "lir", stage, &lir_stage(stage, bodies))?;
+        step += 1;
+    }
+    Ok(0)
 }
 

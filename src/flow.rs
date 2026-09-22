@@ -120,13 +120,13 @@ pub fn verified(body: LirBody, stage: &str, in_ssa: bool) -> Result<LirBody, Mal
 /// A phase's refusal, or the malformed body it returned.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Checked {
-    Refused(String),
+    Refused(crate::model::passes::Exception),
     Malformed(Malformed),
 }
 
 /// Run one machine phase and verify what it returned.
 pub fn checked(body: LirBody, phase: &mut dyn LIRTransform, in_ssa: bool) -> Result<LirBody, Checked> {
-    let transformed = phase.transform(body).map_err(Checked::Refused)?;
+    let transformed = phase.transform_raising(body).map_err(Checked::Refused)?;
     let stage = if phase.name().is_empty() { phase.class_name().to_owned() } else { phase.name().to_owned() };
     verified(transformed, &stage, in_ssa).map_err(Checked::Malformed)
 }
