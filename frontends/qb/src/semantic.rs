@@ -2903,12 +2903,14 @@ impl Compiler {
                         let mut operands = self.graphics_array(&arguments[array_index])?;
                         if name == "PUT" {
                             let mode = match &arguments[3] {
+                                // getput.asm's PutGetInit table, not its
+                                // header comment.
                                 Expr::Name(mode, _) => match canonical(mode) {
-                                    "PSET" => 3,
-                                    "PRESET" => 2,
+                                    "OR" => 0,
                                     "AND" => 1,
-                                    "OR" => 4,
-                                    "XOR" => 5,
+                                    "PRESET" => 2,
+                                    "PSET" => 3,
+                                    "XOR" => 4,
                                     _ => return self.fail("graphics PUT mode is not recognized"),
                                 },
                                 _ => return self.fail("graphics PUT requires a raster operation"),

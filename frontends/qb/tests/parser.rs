@@ -2363,3 +2363,26 @@ fn a_parenthesized_argument_passes_a_copy() {
     };
     assert_eq!((address(1), address(2)), (0, 1), "{hir}");
 }
+
+#[test]
+fn graphics_put_passes_the_runtime_action_codes() {
+    // oimad's `PUT ..., text(1500), OR` drew XOR: OR was passed as 4 and XOR
+    // as 5, from getput.asm's header comment. Its PutGetInit table and the
+    // QB45 /A listing agree: OR 0, AND 1, PRESET 2, PSET 3, XOR 4 (default).
+    let module = parse(
+        "defint a-z\r\ndim a(100)\r\nscreen 13\r\nput (1, 1), a, pset\r\nput (1, 1), a, preset\r\n\
+         put (1, 1), a, and\r\nput (1, 1), a, or\r\nput (1, 1), a, xor\r\nput (1, 1), a\r\n",
+        Dialect::QuickBasic45,
+    )
+    .unwrap();
+    let hir = compile(&module, "put_actions", Dialect::QuickBasic45, "qb45").unwrap();
+    let actions: Vec<&str> = hir
+        .split("\"callee\":\"B$GPUT\"")
+        .skip(1)
+        .map(|call| {
+            let operands = &call[..call.find("}]").expect("operands end")];
+            &operands[operands.rfind("\"value\":").expect("action") + 8..]
+        })
+        .collect();
+    assert_eq!(actions, ["3", "2", "1", "0", "4", "4"], "{hir}");
+}
