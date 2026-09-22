@@ -131,13 +131,13 @@ only for a module still `todo`, and never after cutover.
 | 3 | `qbopt/optimize/canonical.py` | 80 | `src/optimize/canonical.rs` | ported (C path) | - |
 | 4 | `qbopt/frontend/modern/compile.py` | 200 | `src/frontend/modern/compile.rs` | todo | test_hir_execute |
 | 4 | `qbopt/frontend/modern/driver.py` | 53 | `src/frontend/modern/driver.rs` | todo | - |
-| 4 | `qbopt/frontend/qb/__init__.py` | 23 | `src/frontend/qb/__init__.rs` | todo | test_hir, test_modern_frontend, test_qb_frontend_command, test_qbstages |
-| 4 | `qbopt/frontend/qb/__main__.py` | 64 | `src/frontend/qb/__main__.rs` | todo | - |
-| 4 | `qbopt/frontend/qb/abi.py` | 1339 | `src/frontend/qb/abi.rs` | todo | test_hir |
-| 4 | `qbopt/frontend/qb/compile.py` | 1645 | `src/frontend/qb/compile.rs` | todo | - |
-| 4 | `qbopt/frontend/qb/driver.py` | 204 | `src/frontend/qb/driver.rs` | todo | test_hir, test_qb_frontend_command |
-| 4 | `qbopt/frontend/qb/inline_x87.py` | 64 | `src/frontend/qb/inline_x87.rs` | todo | - |
-| 4 | `qbopt/frontend/qb/stage_text.py` | 178 | `src/frontend/qb/stage_text.rs` | n/a (tools only) | - |
+| 4 | `qbopt/frontend/qb/__init__.py` | 23 | `src/frontend/qbc/mod.rs` | ported | test_hir, test_modern_frontend, test_qb_frontend_command, test_qbstages |
+| 4 | `qbopt/frontend/qb/__main__.py` | 64 | `src/frontend/qbc/main.rs` (`llrm-qb`) | ported | - |
+| 4 | `qbopt/frontend/qb/abi.py` | 1339 | `src/frontend/qbc/abi.rs` | ported | test_hir |
+| 4 | `qbopt/frontend/qb/compile.py` | 1645 | `src/frontend/qbc/compile.rs` | ported | - |
+| 4 | `qbopt/frontend/qb/driver.py` | 204 | `src/frontend/qbc/driver.rs` | ported | test_hir, test_qb_frontend_command |
+| 4 | `qbopt/frontend/qb/inline_x87.py` | 64 | `src/frontend/qbc/inline_x87.rs` | ported | - |
+| 4 | `qbopt/frontend/qb/stage_text.py` | 178 | `src/frontend/qbc/stage_text.rs` (+ `tools/qbstages.py` as `qbstages.rs`) | ported | - |
 | 4 | `qbopt/hir/__init__.py` | 93 | `src/hir/mod.rs` | ported (test_hir HIR-only cases) | test_hir, test_hir_execute, test_modern_e2e, test_modern_frontend, test_qbstages |
 | 4 | `qbopt/hir/__main__.py` | 29 | `src/hir/__main__.rs` | todo | - |
 | 4 | `qbopt/hir/callmemory.py` | 71 | `src/hir/callmemory.rs` | ported | - |
