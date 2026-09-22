@@ -614,6 +614,43 @@ def test_three_views_past_the_index_pairs_step_their_own_pointers() -> None:
     assert len(re.findall(r"\badd\s+\w+,\s*word ptr \w+:\[(?:si|di|bx)\]", loop)) == 3
 
 
+COLUMN = """\
+fn column(m: &[i32, 2], j: i16) -> i32:
+    var total: i32 = 0
+    for k in 0..m.dim(0):
+        total += m[k, j]
+    return total
+
+fn main() -> i16:
+    var m: [i32; 4, 4] = [1; 4, 4]
+    column(&m, 1)
+    return 0
+"""
+
+
+def _column_loop(tmp_path: Path) -> str:
+    source = tmp_path / "column.mod"
+    source.write_text(COLUMN)
+    assembly = masm.text(modern_compile.assembled(driver.parsed(source), entry="main", cpu="486"))
+    function = assembly.split("_column proc far", 1)[1].split("_column endp", 1)[0]
+    return function[function.index("L0_3:") : function.index("L0_5:")]
+
+
+def test_a_column_read_steps_a_pointer_by_its_runtime_stride(tmp_path: Path) -> None:
+    """`k * dim + j` had no pointer: strength could not multiply a runtime step, so every trip rebuilt it."""
+    loop = _column_loop(tmp_path)
+
+    assert "shl" not in loop and "[bp" not in loop
+
+
+def test_a_pointer_stepped_by_a_runtime_stride_is_one_recurrence(tmp_path: Path) -> None:
+    """Strength reduced the pointer's own step, leaving a lagging copy: `xchg` and `jmp` on every trip."""
+    loop = _column_loop(tmp_path)
+
+    assert re.search(r"\bjne L0_3\n", loop)
+    assert not re.search(r"\b(?:jmp|xchg)\b|mov \w\w, \w\w\n", loop)
+
+
 def test_runtime_bounded_array_loop_has_a_symbolic_count_proof() -> None:
     """A runtime descriptor extent is an exact trip count, not an unknown loop."""
     program = driver.parsed(SUM)

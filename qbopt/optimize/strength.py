@@ -348,7 +348,7 @@ def reduced(
                 if one.pointer is not None:
                     pointer_bindings.append((one.op, answer, shared[key]))
                 continue
-            if _times(one.of.step, one.by, width) is None:
+            if isinstance(one.of.step, mir.Cell):
                 continue
             if isinstance(one.by, mir.Cell):
                 if one.op.loads != (one.by.ref,) or one.by not in one.op.args:
@@ -360,7 +360,12 @@ def reduced(
                 one = replace(one, by=mir.Held(multiplier, width))
             stride = _times(one.of.step, one.by, width)
             if stride is None:
-                continue
+                taken += 1
+                product = mir.Value(id=_next(body, taken), at=preheader, variable=taken, version=1)
+                ahead.setdefault(preheader, []).append(
+                    _made(mir.Kind.MUL, "imul", product, (one.of.step, one.by), preheader, one.op)
+                )
+                stride = mir.Held(product, width)
             taken += 1
             start = mir.Value(id=_next(body, taken), at=preheader, variable=taken, version=1)
             step = mir.Value(id=start.id + 1, at=step_at, variable=taken, version=2)
@@ -411,10 +416,13 @@ def _candidates(
     scales: frozenset[int],
     partners: int | None = None,
 ) -> list[induction.Derived]:
+    # A counter's own step reads as the counter plus its stride.
+    steps = {(phi.result.id, value) for block in body.blocks for phi in block.phis for value in phi.incoming.values()}
     candidates = [
         one
         for one in derived
-        if _answer(body, one.op) is not None
+        if (answer := _answer(body, one.op)) is not None
+        and (one.of.value, answer) not in steps
         and (
             _multiplies(one, derived)
             or one.pointer is not None
@@ -1420,9 +1428,8 @@ def _times(step, by, width: int):
     """`step * by`, where that can be said without an operation.
 
     A step of one is the case BC writes -- `FOR i = 1 TO n` -- and then the
-    stride is the multiplier itself, whatever it is. Anything else needs a
-    multiply of two invariants, which belongs in the preheader beside the
-    first one and is not written yet.
+    stride is the multiplier itself, whatever it is. Anything else is None:
+    a multiply of two invariants, written in the preheader.
     """
     if isinstance(step, mir.Const) and step.n == 1:
         return by
