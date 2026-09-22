@@ -102,6 +102,8 @@ _I386_COSTS = {
     "sahf": 3,
     "lea": 2,
     "leave": 6,
+    "rep_stos": 5,
+    "rep_stos_cell": 5,
     # GCC's i386 tuning table prices x87 loads/stores at eight units and
     # arithmetic at 23/27/88. Memory arithmetic includes both components.
     "x87_load": 8,
@@ -143,6 +145,10 @@ def _operation_costs(costs: dict[str, int], prefix: int) -> OperationCosts:
         float_load=costs["x87_load"],
         float_store=costs["x87_store"],
         extend=costs["movzx"],
+        # The expansion saves ES, loads it from the cells' segment, and sets
+        # the value and count before `rep stos`; then restores ES.
+        fill=costs["rep_stos"] + 2 * costs["push_r"] + 2 * costs["pop_seg"] + 2 * costs["mov_ri"],
+        fill_cell=costs["rep_stos_cell"],
     )
 
 

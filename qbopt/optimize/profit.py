@@ -10,6 +10,9 @@ from qbopt.analysis import loops
 from qbopt.analysis import liveness
 from qbopt.model.passes import OperationCosts
 
+# Trips assumed of a loop, and cells of a fill, whose count is not a number.
+UNKNOWN_TRIPS = 10
+
 _ALU = frozenset(
     {
         mir.Kind.ADD,
@@ -89,6 +92,10 @@ def operation(one: mir.Op, costs: OperationCosts) -> int | None:
         work = costs.float_multiply
     elif one.kind in (mir.Kind.FDIV, mir.Kind.FSQRT):
         work = costs.float_divide
+    elif one.kind is mir.Kind.FILL:
+        count = one.args[1]
+        cells = count.n if isinstance(count, mir.Const) else UNKNOWN_TRIPS
+        return costs.fill + cells * costs.fill_cell
     elif one.kind is mir.Kind.FCHECK:
         work = costs.float_store
     elif one.kind is mir.Kind.CALL:
@@ -123,7 +130,7 @@ def _frequencies(body: mir.MirBody, trips: dict[int, int] | None = None) -> dict
         exact = {trips[at] for at in loop.latches if at in trips}
         if len(exact) > 1:
             return None
-        factor = next(iter(exact), 10)
+        factor = next(iter(exact), UNKNOWN_TRIPS)
         for at in loop.body:
             if at in frequency:
                 frequency[at] *= factor
