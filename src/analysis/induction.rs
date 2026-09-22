@@ -2008,30 +2008,50 @@ pub(crate) fn test_only(op: &Op) -> bool {
 }
 
 /// Python's `invariant(body, inside)`.
-pub(crate) fn invariant(body: &MirBody, inside: &BTreeSet<i64>) -> BTreeSet<u32> {
-    let mut written = crate::support::hash::HashSet::<u32>::default();
+pub(crate) fn invariant(body: &MirBody, inside: &BTreeSet<i64>) -> Invariant {
+    let mut written = Invariant::default();
+    let mut named = Invariant::default();
     for block in &body.blocks {
-        if !inside.contains(&block.at) {
-            continue;
+        if inside.contains(&block.at) {
+            for op in &block.ops {
+                for value in &op.defines {
+                    written.insert(value.id);
+                }
+            }
+            for phi in &block.phis {
+                written.insert(phi.result.id);
+            }
         }
-        written.extend(
-            block
-                .ops
-                .iter()
-                .flat_map(|op| op.defines.iter().map(|value| value.id)),
-        );
-        written.extend(block.phis.iter().map(|phi| phi.result.id));
+        for op in &block.ops {
+            for value in op.defines.iter().chain(&op.uses) {
+                named.insert(value.id);
+            }
+        }
     }
-    let mut still = body
-        .blocks
-        .iter()
-        .flat_map(|block| block.ops.iter())
-        .flat_map(|op| op.defines.iter().chain(op.uses.iter()).map(|value| value.id))
-        .filter(|value| !written.contains(value))
-        .collect::<Vec<_>>();
-    still.sort_unstable();
-    still.dedup();
-    still.into_iter().collect()
+    for (word, gone) in named.words.iter_mut().zip(&written.words) {
+        *word &= !gone;
+    }
+    named
+}
+
+/// Value ids, as `invariant` answers them: a bit per id.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Invariant {
+    words: Vec<u64>,
+}
+
+impl Invariant {
+    fn insert(&mut self, id: u32) {
+        let (word, bit) = (id as usize / 64, id % 64);
+        if word >= self.words.len() {
+            self.words.resize(word + 1, 0);
+        }
+        self.words[word] |= 1 << bit;
+    }
+
+    pub(crate) fn contains(&self, id: &u32) -> bool {
+        self.words.get(*id as usize / 64).is_some_and(|word| word & (1 << (id % 64)) != 0)
+    }
 }
 
 /// Python's `basics(body, loop)`.
@@ -2154,7 +2174,7 @@ fn _copied(mut operand: Held, made: &BTreeMap<u32, &Op>) -> Held {
 fn _stepped(
     op: Option<&Op>,
     value: u32,
-    still: &BTreeSet<u32>,
+    still: &Invariant,
     made: &BTreeMap<u32, &Op>,
 ) -> Option<AffineOperand> {
     let op = op?;
