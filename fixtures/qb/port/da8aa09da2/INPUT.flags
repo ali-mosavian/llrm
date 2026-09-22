@@ -1,0 +1,6 @@
+--dialect
+vbdos
+--runtime
+qb45
+--array-order
+column-major

@@ -1,0 +1,7 @@
+--dialect
+pds71
+--runtime
+pds71
+--array-order
+column-major
+--alternate-math

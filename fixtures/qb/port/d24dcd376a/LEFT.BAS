@@ -1,0 +1,6 @@
+DEFINT A-Z
+DECLARE SUB Show (n)
+Show 3
+SUB Show (n)
+  IF 1 <= n THEN PRINT "YES"
+END SUB

@@ -1,0 +1,6 @@
+--dialect
+vbdos
+--runtime
+vbdos
+--array-order
+row-major

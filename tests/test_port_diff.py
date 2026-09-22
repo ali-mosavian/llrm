@@ -1,9 +1,11 @@
 """The port's instrument: a stage diff that misses a divergence proves nothing."""
 
 import os
-import subprocess
 import sys
+import subprocess
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
@@ -102,3 +104,36 @@ def test_the_python_oracle_is_this_checkouts_qbopt(tmp_path: Path) -> None:
         [sys.executable, str(script)], env=port_diff.oracle_env(), capture_output=True, text=True, check=True
     )
     assert Path(found.stdout.strip()).parent.parent == port_diff.ROOT
+
+
+def test_a_sources_flags_reach_every_compiler(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """sum_three --unchecked-bounds was never diffed: --qb compiled every source at default flags."""
+    source = tmp_path / "ONE.BAS"
+    source.write_text("PRINT 1\n")
+    source.with_suffix(".flags").write_text("--dialect\nqb45\n--unchecked-bounds\n")
+    commands = []
+
+    def run(command: list[str], **_: object) -> subprocess.CompletedProcess:
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(port_diff.subprocess, "run", run)
+    port_diff.run_qb(source, tmp_path / "work", Path("llrm-qb"))
+    assert len(commands) == 3
+    assert all(command[-3:] == ["--dialect", "qb45", "--unchecked-bounds"] for command in commands)
+
+
+def test_the_recorded_corpus_keeps_each_compiles_flags(tmp_path: Path) -> None:
+    """A parity source at default flags is already diffed; the same source at other flags is not."""
+    import qb_port_corpus
+
+    parity = port_diff.ROOT / "bench/parity/sum_three.bas"
+    defaults = ("--dialect", "vbdos")
+    recorder = qb_port_corpus.Recorder()
+    recorder.record(parity, defaults, defaults)
+    recorder.record(parity, (*defaults, "--unchecked-bounds"), defaults)
+    qb_port_corpus.write(recorder.compiled, tmp_path)
+
+    [written] = tmp_path.glob("*/*.bas")
+    assert written.read_bytes() == parity.read_bytes()
+    assert port_diff.qb_flags(written) == [*defaults, "--unchecked-bounds"]

@@ -7,14 +7,15 @@
 Python writes the reference dump (`python -m qbopt.cfront --dump`); the Rust
 port writes the same tree (`llrm-c --dump`). With `--qb`, Python's is
 `tools/qbstages.py` and Rust's `llrm-qb --dump`; with no sources it runs
-`bench/parity/*.bas` and every `.bas` tests/test_hir.py names. Stages are
+`bench/parity/*.bas` and `fixtures/qb/port`, every source and flag set the QB
+tests compile (`tools/qb_port_corpus.py`). A source's `.flags` sidecar holds
+the options both compilers get. Stages are
 compared in the order Python wrote them, so the first mismatch is the first
 stage the port gets wrong. `frozenset` elements are sorted on both sides: their order is Python's
 hash order, not a fact of the compiler.
 """
 
 import os
-import re
 import sys
 import argparse
 import subprocess
@@ -164,11 +165,15 @@ def _rust_binary(name: str = "llrm-c") -> Path:
 
 
 def qb_corpus() -> list[Path]:
-    """`bench/parity/*.bas`, then every `.bas` tests/test_hir.py names that exists."""
-    named = re.findall(r'"((?:frontends|bench)/[^"]+\.bas)"', (ROOT / "tests/test_hir.py").read_text())
+    """`bench/parity/*.bas`, then every source the QB tests compile."""
     found = sorted(ROOT.glob("bench/parity/*.bas"))
-    found += [ROOT / one for one in dict.fromkeys(named) if (ROOT / one).is_file() and ROOT / one not in found]
-    return found
+    return found + sorted(one for one in (ROOT / "fixtures/qb/port").glob("*/*") if one.suffix.lower() == ".bas")
+
+
+def qb_flags(source: Path) -> list[str]:
+    """The compiler options in the source's `.flags` sidecar; none without one."""
+    sidecar = source.with_suffix(".flags")
+    return sidecar.read_text().split() if sidecar.is_file() else []
 
 
 def oracle_env() -> dict[str, str]:
@@ -185,8 +190,9 @@ def run_qb(source: Path, work: Path, rust: Path) -> Result:
     if QBFRONT.is_file():
         env.setdefault("QBOPT_QBFRONT", str(QBFRONT))
     python = [sys.executable, "-m"]
+    flags = qb_flags(source)
     made = subprocess.run(
-        [sys.executable, str(ROOT / "tools/qbstages.py"), str(source), "--output", str(python_dir)],
+        [sys.executable, str(ROOT / "tools/qbstages.py"), str(source), "--output", str(python_dir), *flags],
         cwd=ROOT,
         env=env,
         capture_output=True,
@@ -194,7 +200,7 @@ def run_qb(source: Path, work: Path, rust: Path) -> Result:
     )
     if not made.returncode:
         made = subprocess.run(
-            [*python, "qbopt.frontend.qb", str(source), "-o", str(python_dir / OBJECT)],
+            [*python, "qbopt.frontend.qb", str(source), "-o", str(python_dir / OBJECT), *flags],
             cwd=ROOT,
             env=env,
             capture_output=True,
@@ -203,7 +209,7 @@ def run_qb(source: Path, work: Path, rust: Path) -> Result:
     if made.returncode:
         (python_dir / REFUSAL).write_text(_message(made.stderr, ": ") + "\n")
     done = subprocess.run(
-        [str(rust), str(source), "--dump", str(rust_dir), "-o", str(rust_dir / OBJECT)],
+        [str(rust), str(source), "--dump", str(rust_dir), "-o", str(rust_dir / OBJECT), *flags],
         cwd=ROOT,
         env=env,
         capture_output=True,
