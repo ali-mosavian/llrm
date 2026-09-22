@@ -3,6 +3,7 @@
 //! Syntax is private to this crate. Successful compilation crosses the
 //! process boundary as typed, name-resolved common HIR.
 
+pub mod conversions;
 pub mod error;
 pub mod hir;
 pub mod lexer;

@@ -929,7 +929,9 @@ def test_a_repeat_literal_fills_a_fixed_array(tmp_path: Path) -> None:
     [
         "    return i16(1 < 2 < 3)\n",
         "    return 1 << 16\n",
-        "    let count: i16 = 1\n    return 1 << count\n",
+        "    return 1 << -1\n",
+        "    let a: i16 = 1\n    let b: u16 = 1\n    return i16(a + b)\n",
+        "    let a: i8 = -1\n    let b: u16 = 1\n    return i16(a < b)\n",
         "    return i16(bool(1))\n",
         "    return i16(u8(300))\n",
         "    return i16(f64(1) & f64(2))\n",
@@ -962,3 +964,33 @@ def test_not_is_not_an_operand_of_a_tighter_operator(tmp_path: Path) -> None:
     source.write_text("fn value() -> bool:\n    return true == not false\n")
     with pytest.raises(driver.FrontendError):
         driver.parsed(source)
+
+
+@pytest.mark.parametrize(
+    ("type_", "body", "expected"),
+    [
+        ("i16", "    let a: u8 = 200\n    let b: u8 = 100\n    return a + b\n", 300),
+        ("u8", "    let a: i16 = 300\n    return a\n", 44),
+        ("i16", "    let a: u8 = 5\n    return -a\n", -5),
+        ("i16", "    let a: i16 = -1\n    let b: u32 = 1\n    return i16(a < b)\n", 0),
+        ("f32", "    let a: i8 = 3\n    let f: f32 = 0.5\n    return a * f\n", 1.5),
+        ("i32", "    let a: i16 = 1\n    return a + 40000\n", 40001),
+        ("u8", "    var x: u8 = 250\n    x += 10\n    return x\n", 4),
+        ("i16", "    return half(7)\n", 3),
+        ("i16", "    let a: i8 = -1\n    let b: u8 = 1\n    return a + b\n", 0),
+        ("u16", "    let a: u8 = 1\n    let b: u16 = 65535\n    return a + b\n", 0),
+        ("i32", "    let n: u32 = 15\n    return 1 << n\n", -32768),
+        ("i16", "    let n: u8 = 3\n    var t: i16 = 0\n    for i in 0..n + n:\n        t += i\n    return t\n", 15),
+        (
+            "i16",
+            "    let k: i16 = 1\n    let n: u8 = 4\n    var t: i16 = 0\n    for i in k..n:\n        t += i\n    return t\n",
+            6,
+        ),
+    ],
+)
+def test_integers_and_floats_convert_implicitly_as_in_c(
+    tmp_path: Path, type_: str, body: str, expected: object
+) -> None:
+    """Every one of these was a type mismatch: operands and destinations had to agree exactly."""
+    text = f"fn half(x: f64) -> f64:\n    return x / 2\nfn value() -> {type_}:\n" + body
+    assert _returned(tmp_path, text) == expected

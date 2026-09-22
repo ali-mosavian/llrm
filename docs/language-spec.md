@@ -130,6 +130,26 @@ There is no conversion to `bool`; compare instead (`count != 0`). A
 conversion that must not lose information is a named library method,
 `checked_to[T]()`, returning `Option[T]`.
 
+Between integer and float types, conversions are also implicit, as in C.
+`bool`, `char`, and fixed-point types convert only explicitly.
+
+- **Assignment.** A value bound, assigned, passed, or returned converts to
+  the destination's type by the table above, narrowing included.
+- **Promotion.** An operand narrower than the target's `int` converts to
+  `int`. On this target `int` is `i16`, so `u16` is not promoted; a 32-bit
+  target would make `int` `i32`.
+- **Usual arithmetic conversions.** The operands of an arithmetic, bitwise, or
+  comparison operator convert to a common type. With a float operand, it is
+  the wider float. Otherwise, after promotion, it is the wider integer type.
+  Where that leaves a signed and an unsigned operand of the same width, C
+  picks the unsigned one; here it is a compile-time error, unless the signed
+  operand was promoted from an unsigned type. So `i8 + u8` is `i16`,
+  `u8 + u16` is `u16`, and `i8 < u16` is rejected.
+- A range's bounds meet at their common type, as operands do.
+
+An integer literal takes the type of the other operand when it fits, and its
+own type otherwise: `int`, or `i32` if it does not fit `int`.
+
 ### Operators
 
 From tightest to loosest binding:
@@ -153,15 +173,16 @@ Binary operators group left to right. Comparisons do not chain: `a < b < c`
 is a compile-time error. As in Python, bitwise operators bind tighter than
 comparisons, so `flags & mask == 0` means `(flags & mask) == 0`.
 
-Both operands of an arithmetic, bitwise, or comparison operator have the same
-type; the result has that type, and a comparison's is `bool`. A shift's count
-may be any unsigned integer type. `and`, `or`, and `not` take and give `bool`;
+The operands of an arithmetic, bitwise, or comparison operator convert to
+their common type; the result has that type, and a comparison's is `bool`. A
+shift's operands are promoted separately; the result has the left one's type,
+and the count may be any integer type. `and`, `or`, and `not` take and give `bool`;
 `and` and `or` evaluate their right operand only when it decides the result.
 
 Integer `/` truncates toward zero and `%` takes the sign of the dividend.
 `>>` is arithmetic on a signed operand and logical on an unsigned one. A shift
-count not less than the operand's width is a compile-time error when constant
-and invokes the panic handler otherwise.
+count that is negative, or not less than the operand's width, is a
+compile-time error when constant and invokes the panic handler otherwise.
 
 Every binary arithmetic and bitwise operator has a compound assignment:
 `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=`, and `>>=`. There is

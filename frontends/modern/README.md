@@ -30,9 +30,11 @@ This crate implements the first source-language slice:
 
 `char` is one target-code-page byte; `\xNN` spells any code unit without
 making the compiler or runtime Unicode-aware. Decimal floating literals are
-stored once in read-only module data. There are no implicit numeric
-conversions: literals may acquire a type from context, while nonliteral
-operands must already have the same type. Native code for float arithmetic
+stored once in read-only module data. Integers and floats convert implicitly
+as in C: operands narrower than `int` (`i16` here, set per target in
+`src/conversions.rs`) are promoted, mixed operands meet at their common type,
+and destinations convert what is assigned to them. Where C would convert
+a signed operand to an unsigned type of its width, it is an error instead. Native code for float arithmetic
 and conversions waits on strict `f32`/`f64` evaluation; the HIR executor runs
 them.
 
