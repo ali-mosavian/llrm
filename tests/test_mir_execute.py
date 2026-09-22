@@ -15,8 +15,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SELECTOR = 0x1000
 
 
-def slices(body: mir.MirBody, elements: int) -> tuple[dict, dict]:
-    """Three `&[i16]` live-ins: first holds 1,2,.. second 10,20,.. third 100,200,.."""
+def slices(body: mir.MirBody, elements: int | tuple[int, ...]) -> tuple[dict, dict]:
+    """`&[i16]` live-ins holding 1,2,.. then 10,20,.. then 100,200,.. of `elements` each."""
     defined = set(body.values)
     free = sorted(
         {value for block in body.blocks for op in block.ops for value in op.uses if not value.flags} - defined,
@@ -25,11 +25,12 @@ def slices(body: mir.MirBody, elements: int) -> tuple[dict, dict]:
     region = ("selector", SELECTOR)
     values, memory = {}, {}
     for number, value in enumerate(free):
+        length = elements if isinstance(elements, int) else elements[number]
         descriptor, data = 0x100 + 0x10 * number, 0x200 + 0x40 * number
         values[value] = SELECTOR << 16 | descriptor
-        fields = elements.to_bytes(2, "little") + bytes(2) + data.to_bytes(2, "little") + SELECTOR.to_bytes(2, "little")
+        fields = length.to_bytes(2, "little") + bytes(2) + data.to_bytes(2, "little") + SELECTOR.to_bytes(2, "little")
         memory.update({(region, descriptor + at): byte for at, byte in enumerate(fields)})
-        for index in range(elements):
+        for index in range(length):
             element = (10**number * (index + 1)).to_bytes(2, "little")
             memory.update({(region, data + 2 * index + at): byte for at, byte in enumerate(element)})
     return values, memory

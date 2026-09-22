@@ -21,6 +21,7 @@ time round, because it compiles a statement at a time.
 
 from math import gcd
 from dataclasses import dataclass
+from collections.abc import Callable
 
 from qbopt.model import mir
 from qbopt.analysis import consts
@@ -110,28 +111,67 @@ class CountedLoop:
     positive host integer?"; this object retains the useful answer when the
     count is an invariant MIR value:
 
-        i = 0; while i < bound: ...; i += 1
+        i = start; while i test bound: ...; i += 1
 
-    The unsigned comparison proves exactly ``bound`` trips, including zero,
-    without assuming a value for ``bound``.  Consumers may turn the control
-    recurrence into a guarded countdown, but may not infer that an unrelated
-    scaled recurrence is injective over that unknown domain.
+    ``test`` is ``<`` or ``<=``, signed or unsigned. The loop is entered iff
+    ``start test bound``, and then runs ``bound - start`` trips, one more
+    when inclusive, without assuming a value for either.  Consumers may turn
+    the control recurrence into a guarded countdown, but may not infer that
+    an unrelated scaled recurrence is injective over that unknown domain.
     """
 
     counter: Affine
     phi: mir.Phi
     compare: mir.Op
     branch: mir.Op
+    start: mir.Held | mir.Const
     bound: mir.Held | mir.Const
+    test: mir.Kind  # the comparison that continues the loop
     preheader: int
     latch: int
     entered: int
     exit: int
     maximum: int | None = None
+    # Unsigned `0 ..< bound`: the count is the bound itself.
+    zero_based: bool = False
 
     @property
-    def trips(self) -> mir.Held | mir.Const:
-        return self.bound
+    def inclusive(self) -> bool:
+        return self.test in (mir.Kind.LE, mir.Kind.BELOW_EQ)
+
+
+_SKIPPED = {
+    mir.Kind.BELOW: mir.Kind.BELOW_EQ,
+    mir.Kind.LT: mir.Kind.LE,
+    mir.Kind.BELOW_EQ: mir.Kind.BELOW,
+    mir.Kind.LE: mir.Kind.LT,
+}
+
+
+def skipped(proof: CountedLoop) -> tuple[tuple[mir.Held | mir.Const, mir.Held | mir.Const], mir.Kind]:
+    """The preheader comparison, and the test on it, under which the loop runs no trips."""
+    width = proof.bound.width
+    if proof.zero_based:
+        return (proof.bound, mir.Const(0, width)), mir.Kind.EQ
+    if isinstance(proof.bound, mir.Const) and isinstance(proof.start, mir.Held):
+        return (proof.start, proof.bound), mir.MIRRORED[_SKIPPED[proof.test]]
+    return (proof.bound, proof.start), _SKIPPED[proof.test]
+
+
+def trips(proof: CountedLoop, computed: Callable[[mir.Kind, tuple[mir.Arg, ...]], mir.Held]) -> mir.Held | mir.Const:
+    """Trips on the entered path, exact modulo the counter's width.
+
+    `computed(kind, args)` places one preheader operation and returns its
+    result. `counted` proved the count fits: an exclusive test cannot reach
+    the width's size, and an inclusive one is proved finite first.
+    """
+    width = proof.bound.width
+    if proof.zero_based:
+        return proof.bound
+    if isinstance(proof.bound, mir.Const) and isinstance(proof.start, mir.Const):
+        return mir.Const(consts.masked(proof.bound.n - proof.start.n + proof.inclusive, width), width)
+    count = computed(mir.Kind.SUB, (proof.bound, proof.start))
+    return computed(mir.Kind.ADD, (count, mir.Const(1, width))) if proof.inclusive else count
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,13 +218,18 @@ def canonical(body: mir.MirBody, loop: loopy.Loop) -> LoopShape | None:
 
 
 def counted(body: mir.MirBody, loop: loopy.Loop, facts: dict | None = None) -> tuple[CountedLoop, ...]:
-    """Prove every canonical unsigned ``0..<bound`` control recurrence.
+    """Prove every canonical ``start ..< bound`` or ``start ..= bound`` unit control recurrence.
 
     Loop normalization gives analyses one structural spelling: a dedicated
     preheader, a pre-tested header, one latch, and no side exit.  This proof
     adds the semantic facts which shape alone cannot supply.  It is shared by
     strength reduction and loop rotation so neither pass grows a subtly
     different interpretation of the same branch.
+
+    An exclusive test stops the counter before it can wrap.  An inclusive
+    one runs forever where ``bound`` is its type's maximum, so it is proved
+    only where that cannot happen: a constant below it, or a finite
+    ``maximum``.
     """
     facts = consts.known(body) if facts is None else facts
     blocks = {block.at: block for block in body.blocks}
@@ -194,14 +239,17 @@ def counted(body: mir.MirBody, loop: loopy.Loop, facts: dict | None = None) -> t
     header = blocks[loop.header]
     inside = set(loop.body)
     branch = header.ops[-1]
-    if _continuing_test(branch, inside) is not mir.Kind.BELOW:
+    test = _continuing_test(branch, inside)
+    if test not in _SKIPPED:
         return ()
+    unsigned = test in (mir.Kind.BELOW, mir.Kind.BELOW_EQ)
+    inclusive = test in (mir.Kind.LE, mir.Kind.BELOW_EQ)
     still = invariant(body, inside)
     made = {value.id: op for block in body.blocks for op in block.ops for value in op.defines}
     proven = []
     for counter in basics(body, loop).values():
         width = counter.start.width
-        if _signed(counter.start, facts, width) != 0 or _signed(counter.step, facts, width) != 1:
+        if _signed(counter.step, facts, width) != 1 or not isinstance(counter.start, (mir.Held, mir.Const)):
             continue
         phi = next((one for one in header.phis if one.result.id == counter.value), None)
         if phi is None or set(phi.incoming) != {shape.preheader, shape.latch}:
@@ -230,27 +278,38 @@ def counted(body: mir.MirBody, loop: loopy.Loop, facts: dict | None = None) -> t
             or stepping.merges
         ):
             continue
-        if isinstance(bound, mir.Const):
-            maximum = consts.masked(bound.n, bound.width)
-        else:
+        zero_based = test is mir.Kind.BELOW and _signed(counter.start, facts, width) == 0
+        start = _constant(counter.start, facts, width)
+        limit = _constant(bound, facts, width)
+        maximum = None
+        if start is not None and limit is not None:
+            first, last = (start, limit) if unsigned else (_as_signed(start, width), _as_signed(limit, width))
+            maximum = max(0, last - first + inclusive)
+        elif zero_based and isinstance(bound, mir.Held):
             interval = body.integer_ranges.get(bound.value)
-            maximum = (
-                interval.high if interval is not None and interval.width == bound.width and interval.low >= 0 else None
-            )
+            if interval is not None and interval.width == bound.width and interval.low >= 0:
+                maximum = interval.high
         if maximum is None:
             maximum = _inbounds_trips(body, loop, shape.latch)
+        if inclusive and maximum is None:
+            top = (1 << 8 * width) - 1 if unsigned else (1 << 8 * width - 1) - 1
+            if limit is None or (limit if unsigned else _as_signed(limit, width)) == top:
+                continue
         proven.append(
             CountedLoop(
                 counter,
                 phi,
                 compare,
                 branch,
+                counter.start,
                 bound,
+                test,
                 shape.preheader,
                 shape.latch,
                 shape.entered,
                 shape.exit,
                 maximum,
+                zero_based,
             )
         )
     return tuple(proven)

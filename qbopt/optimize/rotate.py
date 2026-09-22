@@ -6,6 +6,7 @@ the test is then reached only from the latch, which it can merge into.
 """
 
 from dataclasses import replace
+from dataclasses import dataclass
 
 from qbopt.model import ir
 from qbopt.model import mir
@@ -13,6 +14,54 @@ from qbopt.analysis import ssa
 from qbopt.analysis import loops
 from qbopt.analysis import consts
 from qbopt.analysis import induction
+
+
+@dataclass
+class Seeds:
+    """Loop-preheader values, constructed after the symbolic proof is complete."""
+
+    serial: int
+    variable: int
+    at: int
+    width: int
+    ops: list[mir.Op]
+
+    def computed(self, kind: mir.Kind, args: tuple[mir.Arg, ...]) -> mir.Held:
+        value = mir.Value(self.serial, self.at, variable=self.variable)
+        self.serial += 1
+        self.variable += 1
+        self.ops.append(mir.computed(self.at, kind, value, args, self.width))
+        return mir.Held(value, self.width)
+
+
+def skip_guard(proof: induction.CountedLoop, at: int, flags: mir.Value) -> tuple[mir.Op, mir.Op]:
+    """The preheader compare and branch that leave a counted loop before its first trip."""
+    args, test = induction.skipped(proof)
+    compare = replace(
+        proof.compare,
+        at=at,
+        defines=(flags,),
+        uses=tuple(arg.value for arg in args if isinstance(arg, mir.Held)),
+        source_backed=False,
+        args=args,
+        raised=None,
+        absorbed=(),
+        symbol=False,
+    )
+    branch = replace(
+        proof.branch,
+        at=at,
+        name="",
+        defines=(),
+        uses=(flags,),
+        source_backed=False,
+        test=test,
+        target=proof.exit,
+        raised=None,
+        absorbed=(),
+        symbol=False,
+    )
+    return compare, branch
 
 
 def entered(body: mir.MirBody) -> mir.MirBody:
@@ -28,19 +77,19 @@ def entered(body: mir.MirBody) -> mir.MirBody:
 
 
 def _counted_down(body: mir.MirBody) -> mir.MirBody:
-    """Rotate a dead ``0..bound-1`` counter into a guarded countdown.
+    """Rotate a dead counted counter into a guarded countdown.
 
-    A dynamic unsigned bound cannot prove that the loop is entered, so the
-    ordinary rotation below correctly leaves its initial test in place.  If
-    the induction value itself is otherwise dead, its only useful meaning is
-    the number of trips remaining:
+    A dynamic bound cannot prove that the loop is entered, so the ordinary
+    rotation below correctly leaves its initial test in place.  If the
+    induction value itself is otherwise dead, its only useful meaning is the
+    number of trips remaining:
 
-        i = 0; while (i < n) { body; ++i; }
+        i = start; while (i < n) { body; ++i; }
 
-    becomes a zero-trip guard followed by ``--n`` and a branch on that
+    becomes a zero-trip guard followed by ``--trips`` and a branch on that
     operation's own flags.  This is an induction-variable formula choice,
-    not a peephole: the guard is what makes ``n == 0`` exact, and refusing an
-    observed counter is what makes replacing its values sound.
+    not a peephole: the guard is what makes a zero count exact, and refusing
+    an observed counter is what makes replacing its values sound.
 
     The first implementation deliberately takes the canonical one-body-block
     form produced by loop simplification.  More involved loops remain on the
@@ -62,19 +111,26 @@ def _counted_down(body: mir.MirBody) -> mir.MirBody:
         preheader, latch_at = proof.preheader, proof.latch
         header, latch = blocks[loop.header], blocks[latch_at]
         counter, phi = proof.counter, proof.phi
-        compare, branch, bound = proof.compare, proof.branch, proof.bound
+        compare, branch = proof.compare, proof.branch
         width = counter.start.width
+        update, stepping = replacement.update, replacement.stepping
+        at = blocks[preheader].ops[-1].at if blocks[preheader].ops else preheader
+        seeds = Seeds(
+            max((value.id for value in all_values), default=0) + 1,
+            max((value.variable for value in all_values), default=0) + 1,
+            at,
+            width,
+            [],
+        )
+        count = induction.trips(proof, seeds.computed)
         # A constant count is handled more profitably by the ordinary
         # finite-domain induction transforms.  This rewrite exists for a
         # symbolic value which may be zero at run time.
-        if not isinstance(bound, mir.Held):
+        if not isinstance(count, mir.Held):
             continue
-        update, stepping = replacement.update, replacement.stepping
 
-        serial = max((value.id for value in all_values), default=0) + 1
-        variable = max((value.variable for value in all_values), default=0) + 1
-        step_flags = mir.Value(serial, stepping.at, flags=True, variable=variable, version=1)
-        guard_flags = mir.Value(serial + 1, preheader, flags=True, variable=variable + 1, version=1)
+        step_flags = mir.Value(seeds.serial, stepping.at, flags=True, variable=seeds.variable, version=1)
+        guard_flags = mir.Value(seeds.serial + 1, preheader, flags=True, variable=seeds.variable + 1, version=1)
         decrement = replace(
             stepping,
             name="",
@@ -86,42 +142,20 @@ def _counted_down(body: mir.MirBody) -> mir.MirBody:
             raised=None,
             symbol=False,
         )
-        guard_compare = replace(
-            compare,
-            at=blocks[preheader].ops[-1].at if blocks[preheader].ops else preheader,
-            defines=(guard_flags,),
-            uses=(bound.value,),
-            source_backed=False,
-            args=(bound, mir.Const(0, width)),
-            raised=None,
-            absorbed=(),
-            symbol=False,
-        )
-        guard_branch = replace(
-            branch,
-            at=guard_compare.at,
-            name="",
-            defines=(),
-            uses=(guard_flags,),
-            source_backed=False,
-            test=mir.Kind.EQ,
-            target=proof.exit,
-            raised=None,
-            absorbed=(),
-            symbol=False,
-        )
+        guard_compare, guard_branch = skip_guard(proof, at, guard_flags)
         entry_ops = list(blocks[preheader].ops)
         if entry_ops and entry_ops[-1].kind is mir.Kind.JUMP:
             entry_ops[-1] = mir.cleared(entry_ops[-1])
         elif entry_ops and entry_ops[-1].kind is mir.Kind.BRANCH:
             continue
-        entry_ops += [guard_compare, guard_branch]
+        entry_ops += [*seeds.ops, guard_compare, guard_branch]
 
         start = phi.incoming[preheader]
         start_definition = made.get(start.id)
         start_is_private = (
             start_definition is not None
             and not any(start in op.uses for block in body.blocks for op in block.ops)
+            and not any(start in op.uses for op in (*seeds.ops, guard_compare))
             and not any(
                 start in other.incoming.values() for block in body.blocks for other in block.phis if other is not phi
             )
@@ -162,7 +196,7 @@ def _counted_down(body: mir.MirBody) -> mir.MirBody:
                     block,
                     ops=tuple(ops),
                     phis=tuple(
-                        replace(other, incoming={preheader: bound.value, latch_at: update}) if other is phi else other
+                        replace(other, incoming={preheader: count.value, latch_at: update}) if other is phi else other
                         for other in block.phis
                     )
                     if block.at == header.at
