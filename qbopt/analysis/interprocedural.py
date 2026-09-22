@@ -394,14 +394,16 @@ def noreturn_procedures(
         proven = found
 
 
-def terminal_calls(
-    body: mir.MirBody, calls: dict[int, str], noreturn: frozenset[str]
-) -> mir.MirBody:
+def terminal_calls(body: mir.MirBody, calls: dict[int, str], noreturn: frozenset[str]) -> mir.MirBody:
     """Apply the shared MIR terminal-call cleanup to named direct C calls."""
     from qbopt.analysis import noreturn as control
 
-    sites = frozenset(at for at, target in calls.items() if target in noreturn)
-    return control.after_terminal_calls(body, sites)
+    return control.after_terminal_calls(body, terminal_sites(calls, noreturn))
+
+
+def terminal_sites(calls: dict[int, str], noreturn: frozenset[str]) -> frozenset[int]:
+    """Direct call sites whose named callee cannot return."""
+    return frozenset(at for at, target in calls.items() if target in noreturn)
 
 
 def argument_sites(body: mir.MirBody, contracts: dict[int, object]) -> dict[int, frozenset[int]]:

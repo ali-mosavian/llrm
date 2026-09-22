@@ -1,5 +1,6 @@
 from dataclasses import replace
 
+from qbopt.abi import runtime
 from qbopt.model import mir
 
 
@@ -21,6 +22,39 @@ def inferred(
         if found == proven:
             return proven
         proven = found
+
+
+def terminal_sites(contracts: dict[int, runtime.Contract]) -> frozenset[int]:
+    """Call sites whose established contract says control never comes back."""
+    return frozenset(
+        at for at, contract in contracts.items() if contract.established and contract.control is runtime.Control.NEVER
+    )
+
+
+def cold(body: mir.MirBody, terminal_calls: frozenset[int]) -> frozenset[int]:
+    """Blocks from which every path ends in a terminal call or a block the frontend marked cold.
+
+    A least fixed point, so a loop that never exits is not cold. When the
+    entry is cold the whole body stops, and no block is colder than another.
+    """
+    found: set[int] = set()
+    changed = True
+    while changed:
+        changed = False
+        for block in body.blocks:
+            if block.at not in found and (block.cold or _ends_cold(block, terminal_calls, found)):
+                found.add(block.at)
+                changed = True
+    return frozenset() if body.entry in found else frozenset(found)
+
+
+def _ends_cold(block: mir.MirBlock, terminal_calls: frozenset[int], found: set[int]) -> bool:
+    for op in block.ops:
+        if op.kind is mir.Kind.RETURN:
+            return False
+        if op.kind is mir.Kind.CALL and op.at in terminal_calls:
+            return True
+    return bool(block.succ) and all(at in found for at in block.succ)
 
 
 def _cannot_return(body: mir.MirBody, terminal_calls: frozenset[int]) -> bool:

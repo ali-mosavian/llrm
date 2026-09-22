@@ -408,6 +408,7 @@ def assembled(
             observe("rotate", body)
         return body
 
+    noreturn: frozenset[str] = frozenset()
     if optimise:
         bodies = {one.name: run_optimiser(one, bodies[one.name]) for one in raised_procedures}
 
@@ -596,6 +597,7 @@ def assembled(
                 {},
                 cpu=target,
                 hints=legalized.hints,
+                terminal=interprocedural.terminal_sites(legalized.calls, noreturn),
             ),
             "lower",
             in_ssa=True,
