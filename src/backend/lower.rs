@@ -11,14 +11,14 @@ use indexmap::IndexMap;
 use iced_x86::Register;
 use num_traits::ToPrimitive;
 
-use super::target;
+use super::{arithmetic, cpu, division, target};
 use crate::abi::runtime;
 use crate::legacy::calls;
 use crate::model::floating::{Format, Rounding};
 use crate::model::lir::{self, Insn};
 use crate::model::ir::nodes::Node;
 use crate::model::ir::{self, Loc, Operation};
-use crate::model::mir::{Arg, Held, Kind, MemRef, MirBody, Op, OpCode};
+use crate::model::mir::{Arg, Held, Kind, MemRef, MirBody, Op, OpCode, Value};
 use crate::objectfile::module::{Addr, Space};
 use crate::support::pyrepr::Repr;
 
@@ -901,7 +901,7 @@ fn _pointer_access(op: &Op, lowering: &mut Lowering) -> Result<Option<Vec<ir::Se
         })
     };
     let node = lowering.node(op).cloned();
-    let Some(access) = current(op, Place::With(&place), node.as_ref())? else {
+    let Some(access) = current(op, Place::With(&place), node.as_deref())? else {
         return Err(Unlowered(format!("whole-pointer access has no operation at {:#x}", op.at)));
     };
     // Materialization is local to the memory instruction. Restore the segment
@@ -1033,40 +1033,6 @@ fn source_width(loc: &Loc) -> u32 {
     }
 }
 
-/// One body being lowered, and the values the expansion invents.
-pub struct Lowering {
-    pub pointer_model: Option<super::pointers::Model>,
-    _read: std::collections::BTreeSet<u32>,
-    /// Which dword values are a word's sign extension, and which word.
-    _extended: std::collections::HashMap<u32, Held>,
-    _dividends: std::collections::HashMap<u32, u32>,
-    _exposed: std::collections::BTreeSet<u32>,
-    _nodes: std::collections::HashMap<u32, Node>,
-    _next: u32,
-}
-
-impl Lowering {
-    /// The decoded occurrence for this source-backed operation, if any.
-    pub fn node(&self, op: &Op) -> Option<&Node> {
-        if op.source_backed { op.id.and_then(|id| self._nodes.get(&id)) } else { None }
-    }
-
-    /// A value id nothing in this body already uses.
-    pub fn fresh(&mut self) -> u32 {
-        self._next += 1;
-        self._next - 1
-    }
-
-    /// The word this dword is the sign extension of, if it is one.
-    pub fn sign_extended(&self, value: u32) -> Option<&Held> {
-        self._extended.get(&value)
-    }
-
-    /// Whether `high` is only ever a divide's high half over that word.
-    pub fn divides(&self, high: u32, word: &Held) -> bool {
-        self._dividends.get(&high).is_some_and(|found| *found == word.value.id)
-    }
-}
 
 /// Python's `Counter`: a missing key reads as zero.
 fn count(counter: &IndexMap<u32, i64>, value: u32) -> i64 {
@@ -1451,4 +1417,533 @@ fn _names() -> IndexMap<Register, BTreeSet<String>> {
             )
         })
         .collect()
+}
+
+fn _word_division(op: &Op, lowering: &mut Lowering) -> Result<Option<Vec<ir::Semantics>>, Unlowered> {
+    if op.args.len() != 2 || op.results.len() != 2 {
+        return Ok(None);
+    }
+    let width = match &op.results[0] {
+        Arg::Held(one) => one.width,
+        _ => 0,
+    };
+    if width == 4 && op.source_backed {
+        return Ok(None); // Legacy folded sites order results by their runtime entry point.
+    }
+    if !matches!(width, 2 | 4)
+        || !std::iter::once(&op.args[0]).chain(&op.results).all(|arg| matches!(arg, Arg::Held(one) if one.width == width))
+        || !held_or_const(&op.args[1])
+        || arg_width(&op.args[1]) != Some(width)
+    {
+        return Ok(None);
+    }
+    let (dividend, mut divisor) = (located(&op.args[0])?, located(&op.args[1])?);
+    let unsigned = op.kind == Kind::Udivmod;
+    if let (Arg::Const(constant), false) = (&op.args[1], unsigned) {
+        let Loc::Held(held_dividend) = dividend else { unreachable!() };
+        let results: Vec<ir::Held> = op
+            .results
+            .iter()
+            .map(|one| match one {
+                Arg::Held(one) => ir::Held { value: one.value.id, width: one.width },
+                _ => unreachable!(),
+            })
+            .collect();
+        let Arg::Held(remainder) = &op.results[1] else { unreachable!() };
+        let remainder = lowering._read.contains(&remainder.value.id);
+        let n = constant.n.to_i64().expect("a word divisor fits an int64");
+        let cpu = lowering.cpu;
+        let reciprocal = division::reciprocal(held_dividend, n, &results, &mut || lowering.fresh(), cpu, remainder)
+            .map_err(Unlowered)?;
+        if reciprocal.is_some() {
+            return Ok(reciprocal);
+        }
+    }
+    let mut setup = vec![];
+    if matches!(op.args[1], Arg::Const(_)) {
+        let into = held(lowering.fresh(), width);
+        setup.push(sem(Operation::Move, "mov", vec![into.clone()], vec![divisor]));
+        divisor = into;
+    }
+    let high = held(lowering.fresh(), width);
+    setup.push(if unsigned {
+        sem(Operation::Move, "mov", vec![high.clone()], vec![immediate(0, width)])
+    } else {
+        sem(Operation::Extend, if width == 2 { "cwd" } else { "cdq" }, vec![high.clone()], vec![dividend.clone()])
+    });
+    let name = if unsigned { "div" } else { "idiv" };
+    let results = op.results.iter().map(located).collect::<Result<_, _>>()?;
+    setup.push(sem(Operation::Divide, name, results, vec![high, dividend, divisor]));
+    Ok(Some(setup))
+}
+
+/// Select a cheaper target-specific chain when multiply flags are unobserved.
+fn _scaled(op: &Op, context: &mut Lowering) -> Result<Option<Vec<ir::Semantics>>, Unlowered> {
+    if op.args.len() != 2 || op.results.len() != 1 {
+        return Ok(None);
+    }
+    let (mut source, mut scale) = (&op.args[0], &op.args[1]);
+    if matches!(source, Arg::Const(_)) {
+        (source, scale) = (scale, source);
+    }
+    let result = &op.results[0];
+    let (Arg::Held(held_source), Arg::Const(constant), Arg::Held(held_result)) = (source, scale, result) else {
+        return Ok(None);
+    };
+    let width = held_source.width;
+    if !(width == held_result.width
+        && matches!(width, 2 | 4)
+        && constant.width == width
+        && num_bigint::BigInt::from(1) < constant.n
+        && constant.n < (num_bigint::BigInt::from(1) << (width * 8))
+        && op.loads.is_empty()
+        && op.stores.is_empty()
+        && op.merges.is_empty())
+    {
+        return Ok(None);
+    }
+    let n = constant.n.to_i64().unwrap();
+    let Some(chain) = arithmetic::scale(n, context.cpu).map_err(Unlowered)? else {
+        return Ok(None);
+    };
+    if chain.iter().any(|(name, count)| *name == "shl" && *count >= i64::from(width) * 8) {
+        return Ok(None);
+    }
+    let mut parts = vec![];
+    let mut current = located(source)?;
+    for (index, (name, count)) in chain.iter().enumerate() {
+        let into = if index == chain.len() - 1 { located(result)? } else { held(context.fresh(), width) };
+        let other = if *name == "shl" { immediate(*count, 1) } else { located(source)? };
+        parts.push(sem(Operation::Binary, name, vec![into.clone()], vec![current, other]));
+        current = into;
+    }
+    Ok(Some(parts))
+}
+
+/// One body being lowered, and the values the expansion invents.
+///
+/// The first instruction an operation becomes is its leader and carries the
+/// operation; every one after it is an insertion with no bytes of its own.
+pub struct Lowering<'a> {
+    pub cpu: &'static cpu::Profile,
+    pub pointer_model: Option<super::pointers::Model>,
+    _read: BTreeSet<u32>,
+    /// Which dword values are a word's sign extension, and which word.
+    _extended: IndexMap<u32, Held>,
+    _dividends: IndexMap<u32, u32>,
+    _exposed: BTreeSet<u32>,
+    _coverage: IndexMap<u32, Vec<(i64, i64)>>,
+    _occurrences: Option<&'a IndexMap<u32, Vec<(i64, i64)>>>,
+    _nodes: IndexMap<u32, Arc<Node>>,
+    _origin: IndexMap<Value, Register>,
+    _calls: &'a IndexMap<i64, String>,
+    _contracts: Option<&'a IndexMap<i64, runtime::Contract>>,
+    /// Python's `set[int] | dict[int, tuple]`: only the id form is ported.
+    /// The dict carries BC's folded-site records, whose answers `_delivered`
+    /// places; with ids alone `_sites` is empty, exactly as Python makes it.
+    _absorbed: BTreeSet<u32>,
+    _next: u32,
+}
+
+/// Python's keyword arguments to `Lowering`.
+#[derive(Default)]
+pub struct Options<'a> {
+    pub coverage: IndexMap<u32, Vec<(i64, i64)>>,
+    pub nodes: IndexMap<u32, Arc<Node>>,
+    pub occurrences: Option<&'a IndexMap<u32, Vec<(i64, i64)>>>,
+    pub origin: IndexMap<Value, Register>,
+    pub pointer_model: Option<super::pointers::Model>,
+}
+
+impl<'a> Lowering<'a> {
+    pub fn new(
+        body: &MirBody,
+        read: BTreeSet<u32>,
+        calls: &'a IndexMap<i64, String>,
+        absorbed: BTreeSet<u32>,
+        contracts: Option<&'a IndexMap<i64, runtime::Contract>>,
+        cpu: impl Into<cpu::ProfileOrName<'static>>,
+        options: Options<'a>,
+    ) -> Result<Self, Unlowered> {
+        let cpu = cpu::profile(cpu).map_err(Unlowered)?;
+        let ops = || body.blocks.iter().flat_map(|block| &block.ops);
+        let mut extended = IndexMap::new();
+        for one in ops() {
+            if let ([Arg::Held(source)], [Arg::Held(result)]) = (&one.args[..], &one.results[..]) {
+                if one.kind == Kind::SignExtend && source.width == 2 && result.width == 4 {
+                    extended.insert(result.value.id, source.clone());
+                }
+            }
+        }
+        // A value used once, as a divide's high half over the low half beside it.
+        let mut readers: IndexMap<u32, i64> = IndexMap::new();
+        let mut dividends: IndexMap<u32, u32> = IndexMap::new();
+        for one in ops() {
+            for arg in &one.args {
+                if let Arg::Held(arg) = arg {
+                    *readers.entry(arg.value.id).or_insert(0) += 1;
+                }
+            }
+            if one.kind == Kind::Div && one.args.len() == 3 {
+                if let (Arg::Held(high), Arg::Held(low)) = (&one.args[0], &one.args[1]) {
+                    dividends.insert(high.value.id, low.value.id);
+                }
+            }
+        }
+        let dividends = dividends.into_iter().filter(|(high, _)| count(&readers, *high) == 1).collect();
+        let mut every: Vec<u32> = ops().flat_map(|op| op.defines.iter().chain(&op.uses)).map(|one| one.id).collect();
+        every.extend(body.blocks.iter().flat_map(|block| &block.phis).map(|phi| phi.result.id));
+        Ok(Self {
+            cpu,
+            pointer_model: options.pointer_model,
+            _read: read,
+            _extended: extended,
+            _dividends: dividends,
+            _exposed: crate::model::mir::exposed(body).into_iter().map(|value| value.id).collect(),
+            _coverage: options.coverage,
+            _occurrences: options.occurrences,
+            _nodes: options.nodes,
+            _origin: options.origin,
+            _calls: calls,
+            _contracts: contracts,
+            _absorbed: absorbed,
+            _next: every.into_iter().max().unwrap_or(0) + 1,
+        })
+    }
+
+    /// The decoded occurrence for this source-backed operation, if any.
+    pub fn node(&self, op: &Op) -> Option<&Arc<Node>> {
+        if op.source_backed { op.id.and_then(|id| self._nodes.get(&id)) } else { None }
+    }
+
+    /// How wide each value an operand-less operation names is.
+    fn _widths(&self, op: &Op) -> Vec<(u32, u32)> {
+        let mut out: IndexMap<u32, u32> = IndexMap::new();
+        for one in op.results.iter().chain(&op.args) {
+            if let Arg::Held(one) = one {
+                if one.width != 0 {
+                    out.insert(one.value.id, one.width);
+                }
+            }
+        }
+        let mut out: Vec<(u32, u32)> = out.into_iter().collect();
+        out.sort();
+        out
+    }
+
+    /// Where an operation that names no operand leaves what it writes.
+    fn _idiom(&self, op: &Op, speaks: bool) -> Result<Vec<(ir::Held, Register)>, Unlowered> {
+        let mut out: indexmap::IndexSet<(ir::Held, Register)> = self._selectors(op, speaks).into_iter().collect();
+        out.extend(self._delivered(op)?);
+        Ok(out.into_iter().collect())
+    }
+
+    /// A selector is delivered in ES by whatever writes ES.
+    fn _selectors(&self, op: &Op, speaks: bool) -> Vec<(ir::Held, Register)> {
+        let carried: BTreeSet<u32> = op
+            .results
+            .iter()
+            .filter_map(|one| match one {
+                Arg::Held(one) => Some(one.value.id),
+                _ => None,
+            })
+            .collect();
+        let mut out = vec![];
+        for one in &op.results {
+            if let Arg::Held(one) = one {
+                if !speaks && self._origin.get(&one.value) == Some(&Register::ES) {
+                    out.push((ir::Held { value: one.value.id, width: one.width }, Register::ES));
+                }
+            }
+        }
+        for one in &op.defines {
+            if !carried.contains(&one.id)
+                && !one.flags
+                && self._read.contains(&one.id)
+                && self._origin.get(one) == Some(&Register::ES)
+            {
+                out.push((ir::Held { value: one.id, width: 2 }, Register::ES));
+            }
+        }
+        out
+    }
+
+    /// Where an operation leaves a result no ordinary destination names.
+    fn _delivered(&self, op: &Op) -> Result<Vec<(ir::Held, Register)>, Unlowered> {
+        if matches!(op.kind, Kind::Call | Kind::Fcompare) {
+            let widths: IndexMap<u32, u32> = self._widths(op).into_iter().collect();
+            let width = |id: u32| widths.get(&id).copied().unwrap_or(2);
+            let mut r#where: IndexMap<Value, Register> = IndexMap::new();
+            if self.node(op).is_none() {
+                // A float result is on the x87, not in a register.
+                let integers = op.defines.iter().filter(|one| !one.flags && widths.get(&one.id) != Some(&10));
+                r#where.extend(integers.copied().zip(_RETURNED));
+            }
+            r#where.extend(self._origin.iter().map(|(value, register)| (*value, *register)));
+            return Ok(op
+                .defines
+                .iter()
+                .filter(|value| !value.flags && self._read.contains(&value.id))
+                .filter_map(|value| {
+                    r#where.get(value).map(|register| {
+                        (
+                            ir::Held { value: value.id, width: width(value.id) },
+                            target::named(*register, i64::from(width(value.id))),
+                        )
+                    })
+                })
+                .collect());
+        }
+        let node = self.node(op).map(|node| &**node);
+        if op.kind == Kind::Opaque && !matches!(node, Some(Node::Restore(_))) {
+            return self._implicit_values(op, false);
+        }
+        if op.kind == Kind::Divmod {
+            // A folded site's answers arrive where its record says; with ids
+            // alone there is no record, and Python returns () here too.
+            return Ok(vec![]);
+        }
+        let Some(Node::Restore(node)) = node else {
+            return Ok(vec![]);
+        };
+        let pair = crate::model::mir::restore_pair(node.pair as i64).unwrap();
+        let mut out = vec![];
+        for one in &op.defines {
+            if one.flags || !self._read.contains(&one.id) {
+                continue;
+            }
+            let root = self._origin.get(one).map(|register| ir::root(*register));
+            if !root.is_some_and(|root| root == pair.0 || root == pair.1) {
+                return Err(Unlowered(format!(
+                    "{:#06x}: the restore's {} is in no register the idiom writes",
+                    op.at,
+                    one.repr()
+                )));
+            }
+            // A half, and the idiom pops one word into each.
+            out.push((ir::Held { value: one.id, width: 2 }, target::named(root.unwrap(), 2)));
+        }
+        Ok(out)
+    }
+
+    fn _abi(&self, op: &Op, what: Option<&ir::Semantics>) -> Result<Vec<(ir::Held, Register)>, Unlowered> {
+        // A cell that names its selector value is placed by allocation; one
+        // emitted without an operand for it still goes through ES.
+        let placed: BTreeSet<u32> = what
+            .map(|what| {
+                what.dests
+                    .iter()
+                    .chain(&what.sources)
+                    .filter_map(|operand| match operand {
+                        Loc::Mem(mem) => mem.selector.map(|selector| selector.value),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut out: indexmap::IndexSet<(ir::Held, Register)> = self._fixed_inputs(op)?.into_iter().collect();
+        for reference in op.loads.iter().chain(&op.stores) {
+            if let Some(segment) = reference.segment.filter(|segment| !placed.contains(&segment.id)) {
+                out.insert((ir::Held { value: segment.id, width: 2 }, Register::ES));
+            }
+        }
+        Ok(out.into_iter().collect())
+    }
+
+    /// Which registers a call reads its arguments in.
+    fn _fixed_inputs(&self, op: &Op) -> Result<Vec<(ir::Held, Register)>, Unlowered> {
+        let node = self.node(op).map(|node| &**node);
+        let materialize = || Unlowered(format!("{:#06x}: return operand needs materialization", op.at));
+        if op.kind == Kind::Return && node.is_none() && !op.args.is_empty() {
+            // Placed by position, not by pinning the value.
+            let integers = op.args.iter().filter(|arg| !matches!(arg, Arg::Held(one) if one.width == 10));
+            let mut returned = vec![];
+            for (arg, register) in integers.zip(_RETURNED) {
+                let Arg::Held(arg) = arg else {
+                    return Err(materialize());
+                };
+                returned.push((ir::Held { value: arg.value.id, width: arg.width }, target::named(register, i64::from(arg.width))));
+            }
+            return Ok(returned);
+        }
+        if let (Kind::Return, Some(node)) = (op.kind, node) {
+            let mut returned = vec![];
+            for (arg, location) in op.args.iter().zip(&node.semantics().sources) {
+                if let Loc::Reg(location) = location {
+                    let Arg::Held(arg) = arg else {
+                        return Err(materialize());
+                    };
+                    returned.push((ir::Held { value: arg.value.id, width: arg.width }, location.register));
+                }
+            }
+            return Ok(returned);
+        }
+        if op.kind == Kind::Opaque && !matches!(node, Some(Node::Restore(_))) {
+            return self._implicit_values(op, true);
+        }
+        // `op.id in self._sites`: never, with ids alone.
+        if let Some(Node::Restore(node)) = node {
+            // The idiom reads the widened value in the pair's own register.
+            let (source, _into) = crate::model::mir::restore_pair(node.pair as i64).unwrap();
+            return Ok(op
+                .uses
+                .iter()
+                .filter(|one| {
+                    !one.flags
+                        && !op.merges.contains_key(one)
+                        && self._origin.get(*one).map(|register| ir::root(*register)) == Some(source)
+                })
+                .map(|one| (ir::Held { value: one.id, width: 4 }, target::named(source, 4)))
+                .collect());
+        }
+        if op.kind != Kind::Call {
+            return self._unencoded(op);
+        }
+        if _indirect_call(op)? {
+            // An indirect call names its target as an ordinary encoded source.
+            return Ok(vec![]);
+        }
+        let name = || self._calls.get(&op.at).cloned();
+        if !op.args_known {
+            return Err(Unlowered(format!(
+                "{:#06x}: {}'s interface is not established",
+                op.at,
+                name().unwrap_or_else(|| "this call".into())
+            )));
+        }
+        let Some(routine) = self._contracts.and_then(|contracts| contracts.get(&op.at)) else {
+            return Err(Unlowered(format!("{:#06x}: no contract for {}", op.at, name().unwrap_or_else(|| "None".into()))));
+        };
+        if !runtime::established_inputs(routine) {
+            return Err(Unlowered(format!(
+                "{:#06x}: {} has no established inputs",
+                op.at,
+                name().unwrap_or_else(|| "None".into())
+            )));
+        }
+        let r#where = runtime::direct_slots(routine);
+        if r#where.is_empty() {
+            return Ok(vec![]);
+        }
+        if r#where.len() != op.args.len() {
+            return Err(Unlowered(format!(
+                "{:#06x}: {} arguments for {} declared inputs",
+                op.at,
+                op.args.len(),
+                r#where.len()
+            )));
+        }
+        let mut made = vec![];
+        for (one, slot) in op.args.iter().zip(r#where) {
+            match one {
+                Arg::Held(held) if !held.value.flags => made.push((
+                    ir::Held { value: held.value.id, width: held.width },
+                    crate::model::mir::as_named(slot).expect("a slot names a register"),
+                )),
+                _ => {
+                    return Err(Unlowered(format!("{:#06x}: {} is not a value a register can hold", op.at, one.repr())));
+                }
+            }
+        }
+        Ok(made)
+    }
+
+    /// Unencoded operands of an opaque instruction still have machine locations.
+    fn _implicit_values(&self, op: &Op, _inputs: bool) -> Result<Vec<(ir::Held, Register)>, Unlowered> {
+        if !matches!(self.node(op).map(|node| &**node), Some(Node::Opaque(_))) {
+            return Ok(vec![]);
+        }
+        Err(Unlowered("not yet ported: qbopt.backend.lower.Lowering._implicit_values".into()))
+    }
+
+    /// An operand the raise left opaque is emitted in BC's registers.
+    fn _unencoded(&self, op: &Op) -> Result<Vec<(ir::Held, Register)>, Unlowered> {
+        let mut registers = false;
+        for arg in &op.args {
+            if let Arg::Opaque(opaque) = arg {
+                registers |= match opaque.machine_payload() {
+                    Some(Loc::Mem(mem)) => mem.through != Register::None || mem.index_through != Register::None,
+                    Some(Loc::Address(address)) => address.through != Register::None || address.index != Register::None,
+                    _ => false,
+                };
+            }
+        }
+        if registers && self.node(op).is_some() {
+            return Err(Unlowered("not yet ported: qbopt.backend.lower.Lowering._positional".into()));
+        }
+        Ok(vec![])
+    }
+
+    /// A value id nothing in this body already uses.
+    pub fn fresh(&mut self) -> u32 {
+        self._next += 1;
+        self._next - 1
+    }
+
+    /// The source ranges this operation owns, resolved at the boundary.
+    fn ownership(&self, op: &Op) -> Result<((i64, i64), Vec<(i64, i64)>), Unlowered> {
+        let Some(occurrences) = self._occurrences else {
+            // Public MIR has no `covers`; a private raising occurrence would.
+            let spread = if op.absorbed.is_empty() {
+                vec![]
+            } else {
+                op.id.and_then(|id| self._coverage.get(&id).cloned()).unwrap_or_default()
+            };
+            return Ok(((op.at, op.at), spread));
+        };
+        if op.absorbed.is_empty() {
+            return Ok(((op.at, op.at), vec![]));
+        }
+        let missing: Vec<u32> =
+            op.absorbed.iter().filter(|identity| !occurrences.contains_key(*identity)).copied().collect();
+        if !missing.is_empty() {
+            return Err(Unlowered(format!(
+                "{:#06x}: source occurrences {} have no byte ranges",
+                op.at,
+                crate::support::pyrepr::tuple(&missing)
+            )));
+        }
+        let mut spans: Vec<(i64, i64)> = op
+            .absorbed
+            .iter()
+            .flat_map(|identity| occurrences[identity].iter().copied())
+            .filter(|span| span.0 < span.1)
+            .collect();
+        spans.sort();
+        let mut ranges: Vec<(i64, i64)> = vec![];
+        for (low, high) in spans {
+            match ranges.last_mut() {
+                Some(last) if low <= last.1 => last.1 = last.1.max(high),
+                _ => ranges.push((low, high)),
+            }
+        }
+        if ranges.is_empty() {
+            return Ok(((op.at, op.at), vec![]));
+        }
+        let identity_ranges = op.id.and_then(|id| occurrences.get(&id)).cloned().unwrap_or_default();
+        let anchor = identity_ranges.first().map_or(op.at, |span| span.0);
+        let primary = ranges.iter().find(|span| span.0 <= anchor && anchor < span.1).copied().unwrap_or(ranges[0]);
+        Ok((primary, if ranges.len() > 1 { ranges } else { vec![] }))
+    }
+
+    /// The word this dword is the sign extension of, if it is one.
+    pub fn sign_extended(&self, value: u32) -> Option<&Held> {
+        self._extended.get(&value)
+    }
+
+    /// Whether `high` is only ever a divide's high half over that word.
+    pub fn divides(&self, high: u32, word: &Held) -> bool {
+        self._dividends.get(&high).is_some_and(|found| *found == word.value.id)
+    }
+
+    /// `add sp` after a call whose contract leaves its arguments to the caller.
+    fn _caller_cleanup(&self, op: &Op) -> Vec<Arc<Insn>> {
+        let contract = if op.kind == Kind::Call { self._contracts.and_then(|one| one.get(&op.at)) } else { None };
+        let count = contract.map_or(0, |contract| contract.caller_cleanup);
+        if count == 0 {
+            return vec![];
+        }
+        let sp = Loc::Reg(ir::Reg { register: Register::SP, width: 2 });
+        vec![_follows(op, sem(Operation::Binary, "add", vec![sp.clone()], vec![sp, immediate(count, 2)]))]
+    }
 }
