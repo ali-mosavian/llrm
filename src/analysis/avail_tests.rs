@@ -63,7 +63,7 @@ fn test_current_mir_decides_whether_a_call_invalidates_memory() {
             let held: Holders = IndexMap::from([(r#ref, Holder::Value(value))]);
             let calls = if metadata { calls(&[(10, "B$HARY")]) } else { IndexMap::new() };
             let expected = if real_call { IndexMap::new() } else { held.clone() };
-            assert_eq!(_after(&call, &held, None, &calls, None), expected);
+            assert_eq!(_after(&call, held.clone(), None, &calls, None), expected);
         }
     }
 }

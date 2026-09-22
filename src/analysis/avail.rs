@@ -225,7 +225,7 @@ pub fn stored_cell(op: &Op) -> Option<&MemRef> {
 /// The map across one op.
 fn _after(
     op: &Op,
-    holders: &Holders,
+    mut holders: Holders,
     dgroup: Option<&RegionLayout>,
     _calls: &IndexMap<i64, String>,
     known: Option<&BTreeMap<Value, Interval>>,
@@ -233,15 +233,13 @@ fn _after(
     if effects::unmodeled_write(op) {
         return IndexMap::new();
     }
-    let mut holders = if op.kind == Kind::Call { _local(holders) } else { holders.clone() };
-
+    if op.kind == Kind::Call {
+        holders.retain(|one, _| _crosses_edges(one));
+    }
     for r#ref in &op.stores {
         // Rust refuses a region endpoint Python's integers can express;
         // either way the store may overlap.
-        holders = holders
-            .into_iter()
-            .filter(|(one, _)| !overlapping(one, r#ref, known, known, dgroup).unwrap_or(true))
-            .collect();
+        holders.retain(|one, _| !overlapping(one, r#ref, known, known, dgroup).unwrap_or(true));
     }
     let found = stored_from(op).or_else(|| loaded_into(op).map(|(r#ref, value)| (r#ref, Holder::Value(value))));
     if let Some((r#ref, value)) = found {
@@ -250,18 +248,14 @@ fn _after(
     holders
 }
 
-/// Without the stack slots, which do not survive a block boundary.
+/// Whether a cell survives a block boundary: stack slots do not.
 ///
 /// A Space.STACK address is a depth measured from the top of the block that
 /// pushed it, so `[sp-8]` in one block and `[sp-8]` in another are two
 /// different addresses that compare equal. Carrying one across an edge is
 /// the one way this analysis could be unsound, so it does not.
-fn _local(holders: &Holders) -> Holders {
-    holders
-        .iter()
-        .filter(|(one, _)| one.addr.is_none_or(|addr| addr.space != Space::Stack))
-        .map(|(one, who)| (one.clone(), who.clone()))
-        .collect()
+fn _crosses_edges(cell: &MemRef) -> bool {
+    cell.addr.is_none_or(|addr| addr.space != Space::Stack)
 }
 
 /// Only what every predecessor agrees on, value and all.
@@ -269,10 +263,14 @@ fn _meet(maps: &[&Holders]) -> Holders {
     let Some(first) = maps.first() else {
         return IndexMap::new();
     };
-    let mut out = _local(first);
+    let mut out: Holders = first
+        .iter()
+        .filter(|(one, _)| _crosses_edges(one))
+        .map(|(one, who)| (one.clone(), who.clone()))
+        .collect();
+    // Every key left crosses edges, so a stack slot in `other` never matches one.
     for other in &maps[1..] {
-        let kept = _local(other);
-        out.retain(|one, who| kept.get(one) == Some(who));
+        out.retain(|one, who| other.get(one) == Some(who));
     }
     out
 }
@@ -306,7 +304,7 @@ pub fn holders(body: &MirBody, dgroup: Option<&RegionLayout>, calls: Option<&Ind
             };
             let mut leaving = arriving.clone();
             for op in &block.ops {
-                leaving = _after(op, &leaving, dgroup, &calls, Some(&known));
+                leaving = _after(op, leaving, dgroup, &calls, Some(&known));
             }
             if arriving != into[&block.at] || leaving != outof[&block.at] {
                 into.insert(block.at, arriving);
@@ -340,7 +338,7 @@ pub fn provider(
             if op.at == at {
                 return current.iter().find(|(one, _)| mir::same_bytes(one, r#ref)).map(|(_, who)| who.clone());
             }
-            current = _after(op, &current, dgroup, &calls, Some(&found.known));
+            current = _after(op, current, dgroup, &calls, Some(&found.known));
         }
     }
     None
@@ -583,7 +581,7 @@ pub fn forwardable<'a>(
                     None => missing.push((memoryssa::Site { block: block.at, index }, op)),
                 }
             }
-            current = _after(op, &current, dgroup, calls, Some(&held.known));
+            current = _after(op, current, dgroup, calls, Some(&held.known));
         }
     }
     if !missing.is_empty() {
@@ -609,10 +607,10 @@ fn _memory_providers<'a>(
         .collect();
     let mut found: Vec<Forward<'a>> = Vec::new();
 
-    let available = |source: memoryssa::Site, site: memoryssa::Site, cell: &MemRef, value: &Holder| -> bool {
+    let available = |source: memoryssa::Site, site: memoryssa::Site, cell: &MemRef| -> bool {
         dominators[&site.block].contains(&source.block)
             && (source.block != site.block || source.index < site.index)
-            && (source.block == site.block || !_local(&IndexMap::from([(cell.clone(), value.clone())])).is_empty())
+            && (source.block == site.block || _crosses_edges(cell))
     };
 
     for (site, op) in missing {
@@ -626,7 +624,7 @@ fn _memory_providers<'a>(
             if let Some(access_site) = access.site {
                 let stored = stored_from(graph.operations[&access_site]);
                 if let Some((cell, value)) = stored {
-                    if available(access_site, site, &cell, &value) && graph.pointers.same_bytes(&cell, &op.loads[0]) {
+                    if available(access_site, site, &cell) && graph.pointers.same_bytes(&cell, &op.loads[0]) {
                         found.push(Forward { at: op.at, value, op: Some(op) });
                         continue;
                     }
@@ -635,7 +633,7 @@ fn _memory_providers<'a>(
         }
         for (source, (cell, value)) in &loads {
             let value = Holder::Value(*value);
-            if available(*source, site, cell, &value)
+            if available(*source, site, cell)
                 && graph.pointers.same_bytes(cell, &op.loads[0])
                 && graph.unchanged(*source, site, cell, dgroup)
             {
