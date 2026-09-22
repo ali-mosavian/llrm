@@ -238,7 +238,7 @@ def counted(body: mir.MirBody, loop: loopy.Loop, facts: dict | None = None) -> t
                 interval.high if interval is not None and interval.width == bound.width and interval.low >= 0 else None
             )
         if maximum is None:
-            maximum = _inbounds_trips(body, loop, shape.latch, still)
+            maximum = _inbounds_trips(body, loop, shape.latch)
         proven.append(
             CountedLoop(
                 counter,
@@ -256,65 +256,49 @@ def counted(body: mir.MirBody, loop: loopy.Loop, facts: dict | None = None) -> t
     return tuple(proven)
 
 
-def _inbounds_trips(body: mir.MirBody, loop: loopy.Loop, latch: int, still: set[int]) -> int | None:
+def advances(body: mir.MirBody, loop: loopy.Loop) -> dict[mir.Value, int]:
+    """How far each counter and each value affine in one advances per iteration.
+
+    The bytes-per-iteration view of `basics` and `derived`; nothing here
+    re-derives which values are affine.
+    """
+    found = basics(body, loop)
+    header = next(block for block in body.blocks if block.at == loop.header)
+    out = {
+        phi.result: _as_signed(one.step.n, one.step.width)
+        for phi in header.phis
+        if (one := found.get(phi.result.id)) is not None and isinstance(one.step, mir.Const)
+    }
+    for one in derived(body, loop, found):
+        if (
+            isinstance(one.of.step, mir.Const)
+            and isinstance(one.by, mir.Const)
+            and one.pointer is None
+            and len(one.op.results) == 1
+            and isinstance(one.op.results[0], mir.Held)
+        ):
+            out[one.op.results[0].value] = _as_signed(one.of.step.n, one.of.step.width) * _as_signed(
+                one.by.n, one.by.width
+            )
+    return {value: step for value, step in out.items() if step}
+
+
+def _inbounds_trips(body: mir.MirBody, loop: loopy.Loop, latch: int) -> int | None:
     """The most iterations an access made every iteration allows, as LLVM's inbounds does.
 
-    Iteration i reaches `b + i*s` within one object, and no object outgrows
-    the 64K a 16-bit offset addresses, so i*s + width <= 65536. A program
-    whose element offsets wrap their segment is outside every frontend's
-    contract.
+    Iteration i reaches `b + i*s` inside one object, and an offset `w` bytes
+    wide addresses at most 2**(8w) of them, so i*s + width <= 2**(8w).
     """
-    # How far each value advances per iteration.
-    header = next(block for block in body.blocks if block.at == loop.header)
-    steps = {
-        one.value: _as_signed(one.step.n, one.step.width)
-        for one in basics(body, loop).values()
-        if isinstance(one.step, mir.Const)
-    }
-    scale = {phi.result: steps[phi.result.id] for phi in header.phis if steps.get(phi.result.id)}
-
-    def scaled(arg: mir.Arg) -> int | None:
-        if isinstance(arg, mir.Held):
-            if arg.value in scale:
-                return scale[arg.value]
-            if arg.value.id in still:
-                return 0
-        return 0 if isinstance(arg, mir.Const) else None
-
+    step = advances(body, loop)
     every = loopy.dominators(body.blocks, body.entry).get(latch, frozenset())
-    ordered = [block for block in body.blocks if block.at in loop.body]
-    for _ in range(2):
-        for block in ordered:
-            for op in block.ops:
-                if len(op.results) != 1 or not isinstance(op.results[0], mir.Held) or op.loads or op.stores:
-                    continue
-                result = op.results[0].value
-                parts = [scaled(one) for one in op.args]
-                if None in parts:
-                    continue
-                match op.kind, op.args, parts:
-                    case mir.Kind.COPY, _, [one]:
-                        found = one
-                    case mir.Kind.ADD, _, [left, right]:
-                        found = left + right
-                    case mir.Kind.SUB, _, [left, right]:
-                        found = left - right
-                    case mir.Kind.MUL, (mir.Const(n=n), _) | (_, mir.Const(n=n)), [left, right]:
-                        found = (left or right) * _as_signed(n, op.results[0].width)
-                    case mir.Kind.SHL, (_, mir.Const(n=n)), [left, _]:
-                        found = left << n
-                    case _:
-                        continue
-                if found:
-                    scale[result] = found
     limits = [
-        (0x10000 - ref.width) // abs(scale[ref.base]) + 1
-        for block in ordered
+        ((1 << 8 * ref.base_width) - ref.width) // abs(step[ref.base]) + 1
+        for block in body.blocks
         # The header also runs the final, failing test: n + 1 times.
-        if block.at in every and block.at != loop.header
+        if block.at in loop.body and block.at in every and block.at != loop.header
         for op in block.ops
         for ref in (*op.loads, *op.stores)
-        if ref.base_width == 2 and scale.get(ref.base)
+        if ref.base in step
     ]
     return min(limits, default=None)
 
