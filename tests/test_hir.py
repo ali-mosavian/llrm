@@ -2914,3 +2914,11 @@ def test_open_compiles_with_its_callee_cleaned_arguments(tmp_path: Path) -> None
     basic.write_bytes(b'open "DATA.DAT" for binary as #1\r\nclose #1\r\n')
     source = qb_driver.parsed(basic, dialect="qb45", runtime="qb45")
     assert "B$OPEN" in masm.text(qb_compile.assembled(source))
+
+
+def test_rnd_without_an_argument_compiles(tmp_path: Path) -> None:
+    """oimad's bare RND was refused: B$RND0 had no audited stack effect."""
+    basic = tmp_path / "RND0.BAS"
+    basic.write_bytes(b"x! = rnd\r\nprint x!\r\n")
+    source = qb_driver.parsed(basic, dialect="qb45", runtime="qb45")
+    assert "B$RND0" in masm.text(qb_compile.assembled(source))

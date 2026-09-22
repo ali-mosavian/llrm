@@ -717,6 +717,20 @@ def _contract(name: str, cleanup: model.StackCleanup, pushed: int, family: model
                 "MAIN.OBJ 07fe..080c pushes the high and low dwords before the call."
             ),
         )
+    if name == "B$RND0" and pushed == 0:
+        return replace(
+            found,
+            cleanup=0,
+            control=runtime.Control.RETURNS,
+            enters_user_code=False,
+            established=True,
+            inputs=frozenset(),
+            i386=True,
+            evidence=(
+                f"{found.evidence} QB45 random.asm declares B$RND0 with no "
+                "parameters and returns its result address in AX with a bare RETF."
+            ),
+        )
     if name == "B$RND1" and pushed == 4:
         return replace(
             found,
