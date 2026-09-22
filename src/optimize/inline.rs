@@ -13,7 +13,6 @@
 //!
 //! Direct port of `qbopt/optimize/inline.py`.
 
-#![allow(dead_code)] // The cfront optimizer port is its first production caller.
 
 use std::collections::{BTreeMap, BTreeSet};
 

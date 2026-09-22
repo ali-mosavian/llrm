@@ -60,7 +60,6 @@ fn unique(values: impl IntoIterator<Item = Value>) -> Vec<Value> {
     unique
 }
 
-#[allow(dead_code)] // Wired by the transform port.
 pub(crate) fn simplified(
     body: &MirBody,
     wanted: &BTreeSet<Value>,

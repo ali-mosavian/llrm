@@ -18,7 +18,8 @@ use indexmap::IndexMap;
 use num_bigint::BigInt;
 
 use super::{hir, libfunc, raise_hir, stream};
-use crate::analysis::alias;
+use crate::analysis::{alias, interprocedural};
+use crate::optimize::{inline, rotate, transform};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -88,7 +89,7 @@ pub fn assembled(
     write(dump, "stream", text)?;
     write(dump, "hir", &hir::text(&unit))?;
     let mut shared = raise_hir::Shared::default();
-    let mut raised_procedures = Vec::new();
+    let mut raised_procedures: Vec<raise_hir::Raised> = Vec::new();
     for proc in &unit.procs {
         raised_procedures.push(raise_hir::raised(&unit, proc, &mut shared)?);
     }
@@ -110,12 +111,300 @@ pub fn assembled(
         body.initial = _body_initializers(&body, &initial);
         bodies.insert(one.name.clone(), body);
     }
+    let address_taken = _address_taken_procedures(&unit);
+    let call_arguments: IndexMap<String, IndexMap<i64, BTreeSet<i64>>> = raised_procedures
+        .iter()
+        .map(|one| (one.name.clone(), interprocedural::argument_sites(&bodies[&one.name], &one.contracts)))
+        .collect();
+
+    let profile = cpu::profile(cpu::ProfileOrName::Name(target)).map_err(hir::Unsupported)?;
+    let mut private = BTreeSet::new();
+    if _optimise {
+        private = raised_procedures
+            .iter()
+            .filter(|one| !one.symbol.exported() && !address_taken.contains(&one.name))
+            .map(|one| one.name.clone())
+            .collect();
+        let sources = raised_procedures
+            .iter()
+            .map(|one| (one.name.clone(), (&one.calls, &one.constants)))
+            .collect::<IndexMap<_, _>>();
+        let constants = interprocedural::constant_parameters(&sources, &private);
+        for raised in &raised_procedures {
+            let Some(constants) = constants.get(&raised.name) else {
+                continue;
+            };
+            let specialized = interprocedural::specialize_parameters(&bodies[&raised.name], &raised.parameters, constants);
+            bodies.insert(raised.name.clone(), specialized);
+        }
+    }
+
+    let run_optimiser = |raised: &raise_hir::Raised, body: &MirBody, prefix: &str| -> Result<MirBody, CompileError> {
+        let mut failed = None;
+        let mut observe = |stage: &str, after: &MirBody| {
+            if failed.is_none() {
+                if let Err(error) =
+                    write(dump, &format!("passes/{}.{prefix}{stage}", raised.name), &_mir_text(&raised.name, after))
+                {
+                    failed = Some(error);
+                }
+            }
+        };
+        let body = transform::applied(
+            body,
+            &BTreeSet::new(),
+            &raised.calls,
+            transform::Applied {
+                found: None,
+                // Borland's medium-model C ABI preserves SI and DI from the
+                // six value registers.
+                registers: Some(profile.register_capacity),
+                call_registers: profile.call_register_capacity,
+                index_scales: Some(profile.address_scales.clone()),
+                address_forms: Some(profile.address_forms.clone()),
+                costs: Some(profile.operations.clone()),
+                max_unroll_iterations: profile.max_unroll_iterations,
+                max_unrolled_operations: profile.max_unrolled_operations,
+                watch: if dump.is_some() { Some(&mut observe) } else { None },
+                ..Default::default()
+            },
+        )
+        .map_err(hir::Unsupported)?;
+        let body = rotate::entered(&body).map_err(|error| hir::Unsupported(error.to_string()))?;
+        if dump.is_some() {
+            observe("rotate", &body);
+        }
+        if let Some(error) = failed {
+            return Err(error.into());
+        }
+        Ok(body)
+    };
+
+    if _optimise {
+        for one in &raised_procedures {
+            let optimised = run_optimiser(one, &bodies[&one.name], "")?;
+            bodies.insert(one.name.clone(), optimised);
+        }
+
+        // Inline only after each independent body has reached its local fixed
+        // point; the splice's result goes straight back through the pipeline.
+        let named_calls = raised_procedures
+            .iter()
+            .map(|one| (one.name.clone(), one.calls.clone()))
+            .collect::<IndexMap<_, _>>();
+        let parameters = raised_procedures
+            .iter()
+            .map(|one| (one.name.clone(), one.parameters.clone()))
+            .collect::<IndexMap<_, _>>();
+        let call_far = profile.cost("call_far").map_err(hir::Unsupported)?;
+        let procedures_of = |bodies: &IndexMap<String, MirBody>| {
+            raised_procedures
+                .iter()
+                .map(|one| (one.name.clone(), (bodies[&one.name].clone(), one.calls.clone())))
+                .collect::<IndexMap<_, _>>()
+        };
+        fn borrowed(
+            owned: &IndexMap<String, (MirBody, IndexMap<i64, String>)>,
+        ) -> IndexMap<String, (&MirBody, &IndexMap<i64, String>)> {
+            owned.iter().map(|(name, (body, calls))| (name.clone(), (body, calls))).collect()
+        }
+        let pure = interprocedural::pure_procedures(&borrowed(&procedures_of(&bodies)));
+        let mut inline_round = 0;
+        loop {
+            let counts = inline::call_counts(&bodies, &named_calls);
+            let available = inline::candidates(&bodies, &parameters, &counts, &private, &pure, call_far);
+            let mut changed = false;
+            for raised in &raised_procedures {
+                let before = bodies[&raised.name].clone();
+                let constant = inline::constant_sites(
+                    &bodies,
+                    &parameters,
+                    &raised.calls,
+                    &raised.constants,
+                    &private,
+                    &pure,
+                    call_far,
+                );
+                let after = inline::expanded(
+                    &before,
+                    &raised.calls,
+                    &call_arguments[&raised.name],
+                    &available,
+                    Some(&constant),
+                )
+                .map_err(hir::Unsupported)?;
+                if after == before {
+                    continue;
+                }
+                let stage = format!("inline{inline_round}");
+                write(dump, &format!("passes/{}.{stage}", raised.name), &_mir_text(&raised.name, &after))?;
+                let optimised = run_optimiser(raised, &after, &format!("{stage}."))?;
+                bodies.insert(raised.name.clone(), optimised);
+                changed = true;
+                inline_round += 1;
+            }
+            if !changed {
+                break;
+            }
+        }
+
+        let mut propagated =
+            raised_procedures.iter().map(|one| (one.name.clone(), BTreeSet::new())).collect::<IndexMap<_, _>>();
+        let mut return_round = 0;
+
+        // Materialize every newly constant result, retaining seen calls.
+        let propagate_constant_returns = |bodies: &mut IndexMap<String, MirBody>,
+                                          propagated: &mut IndexMap<String, BTreeSet<i64>>,
+                                          return_round: &mut i64|
+         -> Result<(), CompileError> {
+            loop {
+                let returns = interprocedural::constant_returns(bodies);
+                let mut changed = false;
+                for raised in &raised_procedures {
+                    let before = bodies[&raised.name].clone();
+                    let (after, done) =
+                        interprocedural::propagate_returns(&before, &raised.calls, &returns, &propagated[&raised.name])
+                            .map_err(hir::Unsupported)?;
+                    propagated.insert(raised.name.clone(), done);
+                    if after == before {
+                        continue;
+                    }
+                    let optimised = run_optimiser(raised, &after, &format!("ipa{return_round}."))?;
+                    bodies.insert(raised.name.clone(), optimised);
+                    changed = true;
+                }
+                if !changed {
+                    return Ok(());
+                }
+                *return_round += 1;
+            }
+        };
+
+        // A return fact may make the actual of a different direct call
+        // constant.  Alternate that current-MIR proof with return propagation
+        // until neither side discovers a new fact.
+        propagate_constant_returns(&mut bodies, &mut propagated, &mut return_round)?;
+        let mut argument_round = 0;
+        loop {
+            let constants = interprocedural::current_parameter_constants(
+                &bodies,
+                &named_calls,
+                &call_arguments,
+                &parameters,
+                &private,
+            );
+            let mut changed = false;
+            for raised in &raised_procedures {
+                let Some(constants_for_body) = constants.get(&raised.name) else {
+                    continue;
+                };
+                let before = bodies[&raised.name].clone();
+                let after = interprocedural::specialize_parameters(&before, &raised.parameters, constants_for_body);
+                if after == before {
+                    continue;
+                }
+                let optimised = run_optimiser(raised, &after, &format!("ipa-args{argument_round}."))?;
+                bodies.insert(raised.name.clone(), optimised);
+                changed = true;
+            }
+            if changed {
+                argument_round += 1;
+                propagate_constant_returns(&mut bodies, &mut propagated, &mut return_round)?;
+            }
+
+            // A single current-MIR constant may be worth cloning even where
+            // another caller keeps the private body dynamic.
+            let counts = inline::call_counts(&bodies, &named_calls);
+            let available = inline::candidates(&bodies, &parameters, &counts, &private, &pure, call_far);
+            let mut inlined = false;
+            for raised in &raised_procedures {
+                let before = bodies[&raised.name].clone();
+                let current = interprocedural::current_call_constants(
+                    &before,
+                    &raised.calls,
+                    &call_arguments[&raised.name],
+                    &parameters,
+                );
+                let constant =
+                    inline::constant_sites(&bodies, &parameters, &raised.calls, &current, &private, &pure, call_far);
+                let after = inline::expanded(
+                    &before,
+                    &raised.calls,
+                    &call_arguments[&raised.name],
+                    &available,
+                    Some(&constant),
+                )
+                .map_err(hir::Unsupported)?;
+                if after == before {
+                    continue;
+                }
+                let optimised = run_optimiser(raised, &after, &format!("ipa-inline{argument_round}."))?;
+                bodies.insert(raised.name.clone(), optimised);
+                inlined = true;
+            }
+            if inlined {
+                propagate_constant_returns(&mut bodies, &mut propagated, &mut return_round)?;
+            }
+            if !changed && !inlined {
+                break;
+            }
+        }
+        let owned = procedures_of(&bodies);
+        let _pure = interprocedural::pure_procedures(&borrowed(&owned));
+        let readonly = interprocedural::readonly_procedures(&borrowed(&owned));
+        for raised in &raised_procedures {
+            let before = bodies[&raised.name].clone();
+            let after = interprocedural::remove_dead_pure_calls(
+                &before,
+                &raised.calls,
+                &readonly,
+                &call_arguments[&raised.name],
+            )
+            .map_err(hir::Unsupported)?;
+            if after != before {
+                let optimised = run_optimiser(raised, &after, "ipa-pure.")?;
+                bodies.insert(raised.name.clone(), optimised);
+            }
+        }
+        // A direct private body whose every path stops makes the tail of every
+        // call site unreachable: keep the physical call, remove only the code
+        // that would require it to return, and repeat.
+        loop {
+            let noreturn = interprocedural::noreturn_procedures(&borrowed(&procedures_of(&bodies)), &private);
+            let mut changed = false;
+            for raised in &raised_procedures {
+                let before = bodies[&raised.name].clone();
+                let after = interprocedural::terminal_calls(&before, &raised.calls, &noreturn);
+                if after == before {
+                    continue;
+                }
+                let optimised = run_optimiser(raised, &after, "ipa-noreturn.")?;
+                bodies.insert(raised.name.clone(), optimised);
+                changed = true;
+            }
+            if !changed {
+                break;
+            }
+        }
+        let mut roots = raised_procedures
+            .iter()
+            .filter(|one| one.symbol.exported())
+            .map(|one| one.name.clone())
+            .collect::<BTreeSet<_>>();
+        roots.extend(address_taken.iter().cloned());
+        let reachable = _reachable_procedures(&raised_procedures, &bodies, &roots);
+        raised_procedures.retain(|one| reachable.contains(&one.name));
+    }
+
     let mut mirs = Vec::new();
     let mut lirs: Vec<String> = Vec::new();
     let mut procedures: Vec<masm::Procedure> = Vec::new();
     for raised in &raised_procedures {
         let body = &bodies[&raised.name];
         mirs.push(_mir_text(&raised.name, body));
+        if _optimise {
+            mirs.push(_mir_text(&format!("{} (opt)", raised.name), body));
+        }
         let legalized =
             lower_int64::expanded(body, Some(&raised.calls), Some(&raised.contracts), Some(&raised.hints))
                 .map_err(|error| hir::Unsupported(error.0))?;
@@ -202,10 +491,15 @@ pub fn assembled(
     write(dump, "lir", &lirs.join("\n"))?;
     let mut externs = _externs(&unit);
     externs.extend(shared.runtime.values().map(|one| (one.object_name(), "far".to_owned())));
-    if _optimise {
-        return Err(CompileError::NotPorted("qbopt.cfront.compile._reachable_data"));
-    }
-    let mut data = _data(&unit, None)?;
+    let mut data = if _optimise {
+        let kept = raised_procedures
+            .iter()
+            .map(|one| (one.name.clone(), bodies[&one.name].clone()))
+            .collect::<IndexMap<_, _>>();
+        _data(&unit, Some(&_reachable_data(&unit, &kept)))?
+    } else {
+        _data(&unit, None)?
+    };
     data.extend(_literals(&shared));
     let built = masm::Module {
         code: format!("{}_TEXT", _module.to_uppercase()),
@@ -223,6 +517,110 @@ pub fn assembled(
     };
     write(dump, "asm", &masm::text(&built)?)?;
     Ok(built)
+}
+
+/// Internal procedure symbols used as values rather than direct callees.
+fn _address_taken_procedures(unit: &hir::Unit) -> BTreeSet<String> {
+    let mut direct = BTreeSet::new();
+    for call in unit.calls.values() {
+        if !call.target.starts_with('n') {
+            continue;
+        }
+        let target = hir::handle(&call.target);
+        if let Some(node) = unit.nodes.get(&target) {
+            if node.call == "CGFEName"
+                && !node.args.is_empty()
+                && node.args[0].starts_with('y')
+                && hir::handle(&node.args[0]) == call.symbol
+            {
+                direct.insert(target);
+            }
+        }
+    }
+
+    let mut referenced = BTreeSet::new();
+    let mut sequences: Vec<Vec<String>> = unit.nodes.values().map(|node| node.args.clone()).collect();
+    sequences.extend(unit.procs.iter().flat_map(|proc| proc.body.iter().map(|statement| statement.args.clone())));
+    sequences.extend(unit.calls.values().flat_map(|call| call.parms.iter().map(|(node, _type)| vec![node.clone()])));
+    for args in &sequences {
+        referenced.extend(
+            args.iter()
+                .filter(|arg| {
+                    arg.starts_with('n') && arg.len() > 1 && arg[1..].chars().all(|char| char.is_ascii_digit())
+                })
+                .map(|arg| hir::handle(arg)),
+        );
+    }
+
+    let mut taken = BTreeSet::new();
+    for (at, node) in &unit.nodes {
+        if node.call == "CGFEName" && !node.args.is_empty() && node.args[0].starts_with('y') {
+            if let Some(symbol) = unit.symbols.get(&hir::handle(&node.args[0])) {
+                if symbol.proc() && (!direct.contains(at) || referenced.contains(at)) {
+                    taken.insert(symbol.object_name());
+                }
+            }
+        }
+    }
+    for symbol in unit.backs.values() {
+        if let Some(symbol) = unit.symbols.get(symbol).filter(|symbol| symbol.proc()) {
+            taken.insert(symbol.object_name());
+        }
+    }
+    for symbol in unit.symbols.values() {
+        for fixup in symbol.code.iter().flat_map(|code| &code.fixups) {
+            if let Some(target) = unit.symbols.get(&fixup.symbol).filter(|target| target.proc()) {
+                taken.insert(target.object_name());
+            }
+        }
+    }
+    for segment in unit.segments.values() {
+        for (call, args) in &segment.items {
+            if call == "DGFEPtr" {
+                if let Some(symbol) = unit.symbols.get(&hir::handle(&args.0[0])).filter(|symbol| symbol.proc()) {
+                    taken.insert(symbol.object_name());
+                }
+            }
+        }
+    }
+    taken
+}
+
+/// Defined procedure bodies reachable through calls that survived MIR.
+fn _reachable_procedures(
+    procedures: &[raise_hir::Raised],
+    bodies: &IndexMap<String, MirBody>,
+    roots: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    let defined = procedures.iter().map(|one| one.name.clone()).collect::<BTreeSet<_>>();
+    if roots.is_empty() {
+        return defined;
+    }
+    let by_name = procedures.iter().map(|one| (one.name.clone(), one)).collect::<IndexMap<_, _>>();
+    let mut reached = BTreeSet::new();
+    let mut pending = roots.intersection(&defined).cloned().collect::<Vec<_>>();
+    while let Some(name) = pending.pop() {
+        if reached.contains(&name) {
+            continue;
+        }
+        reached.insert(name.clone());
+        let procedure = by_name[&name];
+        let sites = bodies[&name]
+            .blocks
+            .iter()
+            .flat_map(|block| &block.ops)
+            .filter(|op| op.kind == mir::Kind::Call)
+            .map(|op| op.at)
+            .collect::<BTreeSet<_>>();
+        pending.extend(
+            procedure
+                .calls
+                .iter()
+                .filter(|(at, target)| sites.contains(at) && defined.contains(*target) && !reached.contains(*target))
+                .map(|(_, target)| target.clone()),
+        );
+    }
+    reached
 }
 
 pub fn _lir_text(name: &str, body: &lir::LirBody) -> String {
@@ -341,6 +739,59 @@ fn _literals(shared: &raise_hir::Shared) -> Vec<(String, Vec<masm::Datum>)> {
 }
 
 /// Each named data object's `(segment, first item, after item)` span.
+/// Named data proven observable from emitted code, linkage, or data.
+///
+/// Only a labelled non-procedure symbol that is neither imported nor public
+/// is deleted, and only after every root has been closed over
+/// data-initializer pointers.
+fn _reachable_data(unit: &hir::Unit, bodies: &IndexMap<String, MirBody>) -> BTreeSet<i64> {
+    let labels = _data_labels(unit);
+    let candidates = labels
+        .keys()
+        .copied()
+        .filter(|symbol| {
+            let one = &unit.symbols[symbol];
+            !one.proc() && !one.imported() && !one.exported()
+        })
+        .collect::<BTreeSet<_>>();
+    let mut kept = labels.keys().copied().filter(|symbol| !candidates.contains(symbol)).collect::<BTreeSet<_>>();
+    for body in bodies.values() {
+        kept.extend(_referenced_data(body, &candidates));
+    }
+    // Inline assembly's relocation table is the exact reference evidence.
+    for symbol in unit.symbols.values() {
+        for fixup in symbol.code.iter().flat_map(|code| &code.fixups) {
+            if candidates.contains(&fixup.symbol) {
+                kept.insert(fixup.symbol);
+            }
+        }
+    }
+
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for symbol in kept.clone() {
+            let Some(&(segment, start, after)) = labels.get(&symbol) else {
+                continue;
+            };
+            for (call, args) in &unit.segments[&segment].items[start..after] {
+                let target = match call.as_str() {
+                    "DGFEPtr" => Some(hir::handle(&args.0[0])),
+                    "DGBackPtr" => unit.backs.get(&hir::handle(&args.0[0])).copied(),
+                    _ => None,
+                };
+                if let Some(target) = target {
+                    if candidates.contains(&target) && !kept.contains(&target) {
+                        kept.insert(target);
+                        changed = true;
+                    }
+                }
+            }
+        }
+    }
+    kept
+}
+
 fn _data_labels(unit: &hir::Unit) -> IndexMap<i64, (i64, usize, usize)> {
     let mut out = IndexMap::new();
     for segment in unit.segments.values() {

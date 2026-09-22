@@ -29,7 +29,7 @@ use crate::model::mir::{
 use crate::model::passes::{AddressForm, OperationCosts};
 use crate::objectfile::module::Space;
 
-use super::transform as passes;
+use super::transform;
 
 #[cfg_attr(not(test), allow(dead_code))]
 static _DEFAULT_COSTS: LazyLock<OperationCosts> = LazyLock::new(OperationCosts::default);
@@ -72,12 +72,58 @@ impl From<ConstructionError> for StrengthError {
     }
 }
 
+pub(crate) struct Strength {
+    pub r#where: crate::model::passes::Where,
+}
+
+impl Strength {
+    pub(crate) fn new(r#where: crate::model::passes::Where) -> Self {
+        Self { r#where }
+    }
+}
+
+impl crate::model::passes::MIRTransform for Strength {
+    fn class_name(&self) -> &'static str {
+        "Strength"
+    }
+
+    fn name(&self) -> &str {
+        "strength"
+    }
+
+    fn transform(&mut self, body: MirBody) -> Result<MirBody, String> {
+        use super::{exitsink, indvars, ivshare, loopexit};
+
+        let layout = self.r#where.bounds.as_ref().map(|bounds| RegionLayout {
+            shared_segments: None,
+            landmarks: bounds.iter().map(|(key, marks)| (*key, marks.clone())).collect(),
+        });
+        let body = reduced(
+            &body,
+            &self.r#where.dgroup,
+            layout.as_ref(),
+            self.r#where.registers,
+            &self.r#where.index_scales,
+            self.r#where.call_registers,
+            &self.r#where.costs,
+            &self.r#where.address_forms,
+            true,
+        )
+        .map_err(|error| error.to_string())?;
+        let body = exitsink::sunk(&transform::dead(&ivshare::shared(&body))?).map_err(|error| error.to_string())?;
+        let body = loopexit::evaluated(&body)?;
+        let body = indvars::rewound(&body, self.r#where.registers, Some(&self.r#where.costs));
+        let body = indvars::simplified(&body).map_err(|error| error.to_string())?;
+        let body = indvars::symbolically_zeroed(&body).map_err(|error| error.to_string())?;
+        indvars::zeroed(&body, true).map_err(|error| error.to_string())
+    }
+}
+
 /// `body` with every multiply of a counter by an invariant made an add.
 ///
-/// `layout` stands for Python's `dgroup` and `bounds`: it is what the Rust
+/// `layout` stands for Python's `bounds`: it is what the Rust
 /// `induction.of` takes for them.
 #[allow(clippy::too_many_arguments)]
-#[allow(dead_code)] // `Strength.transform` is its caller once indvars is ported.
 pub(crate) fn reduced(
     body: &MirBody,
     dgroup: &BTreeSet<i64>,
@@ -138,7 +184,7 @@ pub(crate) fn reduced(
         IndexMap::new()
     };
     for (loop_, _basics, _derived) in &found {
-        let preheader = passes::preheader(body, loop_);
+        let preheader = transform::_preheader(body, loop_);
         let latches = loop_
             .latches
             .iter()

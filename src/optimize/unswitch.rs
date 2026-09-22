@@ -1,11 +1,10 @@
 //! Port of `qbopt/optimize/unswitch.py`: specialize a loop around a pure
 //! invariant condition, entirely in MIR.
 //!
-//! `optimized` is not ported yet: it needs `transform.applied`.
 //! Python's `ValueError`s are the `Err` text.
 //!
-//! Every test in `tests/test_unswitch.py` is skipped: each needs the corpus,
-//! `transform.applied` or `optimized`.
+//! Every test in `tests/test_unswitch.py` is skipped: each needs the corpus
+//! or a monkeypatched pipeline.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -14,7 +13,86 @@ use indexmap::IndexMap;
 use crate::analysis::loops::{self, Loop};
 use crate::analysis::ssa;
 use crate::model::mir::{self, Arg, Held, Kind, MirBlock, MirBody, Op, Value};
-use crate::optimize::{edges, lcssa, loopclone, transform};
+use crate::model::passes::{AddressForm, OperationCosts};
+use crate::optimize::{edges, lcssa, loopclone, profit, transform};
+
+/// `optimized`'s keyword arguments, with Python's defaults.
+pub(crate) struct Optimized<'a> {
+    pub registers: Option<i64>,
+    pub call_registers: i64,
+    pub index_scales: Option<BTreeSet<i64>>,
+    pub address_forms: Option<Vec<AddressForm>>,
+    pub costs: Option<OperationCosts>,
+    pub max_unroll_iterations: i64,
+    pub max_unrolled_operations: i64,
+    pub watch: Option<&'a mut dyn FnMut(&str, &MirBody)>,
+}
+
+pub(crate) fn optimized(
+    body: &MirBody,
+    dgroup: &BTreeSet<i64>,
+    calls: &IndexMap<i64, String>,
+    options: Optimized<'_>,
+) -> Result<MirBody, String> {
+    let candidate = specialized(body)?;
+    // Python's `candidate is body`: `specialized` returns its input unchanged.
+    if candidate == *body {
+        return Ok(body.clone());
+    }
+    let Optimized {
+        registers,
+        call_registers,
+        index_scales,
+        address_forms,
+        costs,
+        max_unroll_iterations,
+        max_unrolled_operations,
+        watch,
+    } = options;
+    let mut stages = vec![("unswitch".to_owned(), candidate.clone())];
+    let prices = costs.clone().unwrap_or_default();
+    let result = {
+        let mut collect = |name: &str, state: &MirBody| stages.push((name.to_owned(), state.clone()));
+        transform::applied(
+            &candidate,
+            dgroup,
+            calls,
+            transform::Applied {
+                unswitch_: false,
+                registers,
+                call_registers,
+                index_scales,
+                address_forms,
+                costs,
+                max_unroll_iterations,
+                max_unrolled_operations,
+                watch: Some(&mut collect),
+                ..Default::default()
+            },
+        )?
+    };
+
+    let size = |state: &MirBody| {
+        state.blocks.iter().flat_map(|block| &block.ops).filter(|op| op.kind != Kind::Nothing).count()
+    };
+    let (before, after) = (profit::weighted(body, &prices, None), profit::weighted(&result, &prices, None));
+    let worse = match (before, after) {
+        (Some(before), Some(after)) => after > before,
+        _ => true,
+    };
+    if loops::loops(&result.blocks, Some(result.entry)).len() >= loops::loops(&body.blocks, Some(body.entry)).len()
+        || size(&result) > size(body)
+        || worse
+    {
+        return Ok(body.clone());
+    }
+    if let Some(watch) = watch {
+        for (name, state) in &stages {
+            watch(name, state);
+        }
+    }
+    Ok(result)
+}
 
 pub(crate) fn specialized(body: &MirBody) -> Result<MirBody, String> {
     let closed = lcssa::closed(body)?;

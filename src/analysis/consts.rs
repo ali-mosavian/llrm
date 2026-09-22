@@ -104,7 +104,6 @@ thread_local! {
 }
 
 /// Reuse ordinary constant facts for identical bodies in one transaction.
-#[allow(dead_code)] // transform.py's, not yet ported
 pub(crate) fn reusing<T>(inside: impl FnOnce() -> T) -> T {
     let token = _reuse.with(|reuse| reuse.replace(Some(HashMap::new())));
     let result = inside();
@@ -167,7 +166,6 @@ fn _width(arg: &Arg) -> u32 {
 }
 
 /// Integer quotient and remainder, excluding the faulting cases.
-#[allow(dead_code)] // transform.py's, not yet ported
 pub(crate) fn division(op: &Op, known: &IndexMap<Value, Known>, here: &Cells) -> Option<(BigInt, BigInt)> {
     if !matches!(op.kind, Kind::Divmod | Kind::Udivmod)
         || op.args.len() != 2
@@ -230,7 +228,6 @@ fn _put(op: &Op, known: &IndexMap<Value, Known>) -> Option<Known> {
 }
 
 /// The complete value a direct constant store writes to a contained cell.
-#[allow(dead_code)] // transform.py's, not yet ported
 pub(crate) fn initialized(op: &Op, reference: &MemRef) -> Option<Known> {
     if op.kind != Kind::Store || !op.loads.is_empty() || op.barrier() || op.stores.len() != 1 {
         return None;

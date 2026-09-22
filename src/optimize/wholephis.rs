@@ -39,7 +39,6 @@ pub(crate) fn _source(arg: &Arg, definitions: &BTreeMap<Value, &Op>) -> Arg {
     arg
 }
 
-#[allow(dead_code)] // Wired by the transform port.
 pub(crate) fn joined(body: &MirBody) -> MirBody {
     let definitions = body
         .blocks
