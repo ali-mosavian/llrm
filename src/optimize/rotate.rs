@@ -23,7 +23,7 @@ use super::{cfg, transform};
 /// this function consumes that one proof and reconstructs its replacement.
 pub(crate) fn counted_down(body: &MirBody) -> Result<MirBody, SubstitutionError> {
     // Keep Python's one immutable fact calculation per recursive snapshot.
-    let facts = consts::known(body);
+    let facts = consts::known(body, None, None, None, None);
     // Python evaluates this comprehension before selecting a loop.  It also
     // deliberately preserves duplicates for the max calculations below.
     let all_values = ssa::values(body).collect::<Vec<_>>();
@@ -46,7 +46,7 @@ pub(crate) fn counted_down(body: &MirBody) -> Result<MirBody, SubstitutionError>
         .collect::<BTreeMap<_, _>>();
 
     for loop_ in loops::loops(&body.blocks, Some(body.entry)) {
-        let proofs = induction::counted_with_facts(body, &loop_, &facts);
+        let proofs = induction::counted(body, &loop_, Some(&facts));
         if proofs.len() != 1 {
             continue;
         }
@@ -443,7 +443,7 @@ fn step_test(body: &MirBody, loop_: &Loop, header: &MirBlock) -> MirBody {
             readers.entry(*value).or_default().push(occurrence);
         }
     }
-    let facts = consts::known(body);
+    let facts = consts::known(body, None, None, None, None);
     let header_index = body
         .blocks
         .iter()
