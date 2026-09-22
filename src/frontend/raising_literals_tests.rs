@@ -5,23 +5,19 @@
 //! FIXUPP instead. Its `loc=99` does not fit the record's four location bits,
 //! so 15, likewise no location a literal pool admits, stands in for it.
 //!
-//! Skipped, needing `mir.bodies`:
-//! `test_nonreturning_call_does_not_justify_narrowing_unknown_memory_reads`,
-//! `test_unknown_literal_pool_layout_does_not_exclude_call_writes`,
-//! `test_fpbench_one_survives_unrelated_pointer_relocations`,
-//! `test_quickbasic_literal_initializers_prove_the_same_floating_exit`,
-//! `test_unknown_write_invalidates_literal_entry_facts`,
-//! `test_literal_entry_requires_unmodified_complete_loader_bytes`.
+//! Skipped, monkeypatching `module.escaped`, `omf.fixups` and `omf.ledata`:
+//! `test_unknown_literal_pool_layout_does_not_exclude_call_writes`.
 //! Skipped, needing `wholeseg`: `test_fpdeep_mix_outputs_fold_across_string_prints`.
 
 use std::rc::Rc;
 
 use super::*;
-use crate::analysis::consts;
+use crate::analysis::{consts, floatfacts};
 use crate::analysis::regions::overlapping;
 use crate::model::ir::Operation;
 use crate::model::mir::{Arg, Cell, Held, MirBlock, MirBody, OpCode, Value};
 use crate::objectfile::omf::Record;
+use crate::support::testing;
 
 fn load(path: &str) -> Module {
     module::load(path).unwrap().unwrap()
@@ -125,5 +121,95 @@ fn test_literal_relocation_exclusion_covers_the_whole_patch() {
         let changed = Module { records, ..found.clone() };
         let result = initialized(raised(body.clone()), &changed, None).unwrap();
         assert_eq!(result.initial.iter().any(|(one, _)| *one == reference), admitted, "{offset} {location}");
+    }
+}
+
+const FPCSE_Q: &str = "fixtures/omf/fpcse-q-o.obj";
+
+/// B$CENP may enter a No RESUME handler before exit; noreturn does not mean no reads.
+#[test]
+fn test_nonreturning_call_does_not_justify_narrowing_unknown_memory_reads() {
+    let routine = runtime::contract(Some("B$CENP"));
+    assert_eq!(routine.control, runtime::Control::Never);
+    assert_eq!(routine.reads, Memory::Any);
+    let found = testing::loaded(FPCSE_Q).unwrap();
+    let body = testing::nth(&testing::raised(FPCSE_Q), 0);
+    let ops = testing::ops(&body);
+    let terminal = ops
+        .iter()
+        .find(|op| op.kind == Kind::Call && found.calls.get(&op.at).map(String::as_str) == Some("B$CENP"))
+        .unwrap();
+    let stored = ops
+        .iter()
+        .flat_map(|op| &op.stores)
+        .find(|one| one.addr.is_some_and(|addr| addr.space == Space::Segment))
+        .unwrap();
+    assert!(terminal.loads.iter().any(|one| testing::overlapping(one, stored, Some(&found.dgroup))));
+}
+
+/// FPBENCH lost its 1.0 literal fact because array descriptors elsewhere have far fixups.
+#[test]
+#[ignore = "fails in Python too: no initial fact at [seg:9+0x0]"]
+fn test_fpbench_one_survives_unrelated_pointer_relocations() {
+    let body = testing::nth(&testing::raised("fixtures/bench/fpbench-v-g3.obj"), 0);
+    let reference = MemRef::new(Some(Addr { index: 9, ..Addr::new(Space::Segment, 0) }), 4);
+    let initial: IndexMap<MemRef, Const> = body.initial.iter().cloned().collect();
+    assert_eq!(initial[&reference], Const::new(0x3F800000, 4));
+}
+
+/// FPCSE's QB object retained ten iterations while PDS/VBDOS proved 487.5.
+#[test]
+fn test_quickbasic_literal_initializers_prove_the_same_floating_exit() {
+    let found = testing::loaded(FPCSE_Q).unwrap();
+    let body = Rc::new(testing::nth(&testing::raised(FPCSE_Q), 0));
+    let proofs = floatfacts::loop_exits(&body, &found.dgroup.members, &found.calls);
+    assert!(proofs.len() == 1 && proofs[0].count == 10.into());
+    assert!(proofs[0].stores.iter().any(|(_, fact)| fact.n == 0x43F3C000.into()));
+    assert_eq!(mir::resolved(&body, None).unwrap().initial, body.initial);
+    assert!(floatfacts::known(&body, &found.dgroup.members, &found.calls, Some(&IndexMap::default())).is_empty());
+}
+
+#[test]
+fn test_unknown_write_invalidates_literal_entry_facts() {
+    let found = testing::loaded(FPCSE_Q).unwrap();
+    let mut body = testing::nth(&testing::raised(FPCSE_Q), 0);
+    let entry = body.blocks.iter().position(|block| block.at == body.entry).unwrap();
+    let mut clobber = body.blocks[entry].ops[0].clone();
+    clobber.kind = Kind::Store;
+    clobber.floating = None;
+    clobber.floating_origin = None;
+    clobber.args = vec![Arg::Const(Const::new(0, 4))];
+    clobber.results = vec![Arg::Cell(Cell { r#ref: MemRef::new(None, 4) })];
+    clobber.stores = vec![MemRef::new(None, 4)];
+    clobber.loads = vec![];
+    clobber.uses = vec![];
+    clobber.defines = vec![];
+    clobber.stack = None;
+    body.blocks[entry].ops.insert(0, clobber);
+    assert!(floatfacts::loop_exits(&Rc::new(body), &found.dgroup.members, &found.calls).is_empty());
+}
+
+#[test]
+fn test_literal_entry_requires_unmodified_complete_loader_bytes() {
+    for change in ["relocation", "missing_byte", "procedure"] {
+        let found = testing::loaded(FPCSE_Q).unwrap();
+        let mut body = testing::nth(&testing::raised(FPCSE_Q), 0);
+        body.initial = vec![];
+        let reference = body.blocks[0].ops[0].loads[0].clone();
+        let addr = reference.addr.unwrap();
+        let (record, index, start, payload) =
+            omf::ledata(&found.records).into_iter().find(|item| item.1 == addr.index && item.2 == addr.disp).unwrap();
+        let mut records = found.records.clone();
+        let at = records.iter().position(|one| Rc::ptr_eq(one, &record)).unwrap();
+        match change {
+            "relocation" => {
+                let template = omf::fixups(&records).into_iter().find(|fixup| fixup.seg == Some(index)).unwrap();
+                records.insert(at + 1, omf::fixupp_record(&[omf::reemit(&template, Some(0), None).unwrap()]));
+            }
+            "missing_byte" => records[at] = omf::ledata_record(index, start + 1, &payload[1..]).unwrap(),
+            _ => body.entry += 1,
+        }
+        let result = initialized(raised(body), &Module { records, ..found.clone() }, None).unwrap();
+        assert!(!result.initial.iter().any(|(one, _)| *one == reference), "{change}");
     }
 }

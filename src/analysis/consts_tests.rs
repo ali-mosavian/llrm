@@ -262,3 +262,17 @@ fn test_a_call_reaching_nonlocal_keeps_an_uncaptured_static_constant() {
 
     assert_eq!(super::_cell(&before[&(0, 2)], &reference), Some(Known::new(7, 2)));
 }
+
+/// `floatfacts.repeated` stores through a fresh clone each iteration; keyed by
+/// address, a later reference reused an earlier one's answer, and FPCSE's QB
+/// loop proved no exit, or the wrong 487.5.
+#[test]
+fn test_a_reference_at_a_reused_address_is_resolved_anew() {
+    let mut queries = super::_MemoryQueries::new(&IndexMap::default(), &BTreeSet::new());
+    let first = MemRef::new(Some(Addr::new(Space::Segment, 0x12)), 4);
+    let second = MemRef::new(Some(Addr::new(Space::Segment, 0x1a)), 4);
+    let mut slot = first.clone();
+    assert_eq!(*queries.resolve(&slot), first);
+    slot = second.clone();
+    assert_eq!(*queries.resolve(&slot), second);
+}
