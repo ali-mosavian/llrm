@@ -19,7 +19,8 @@ use num_bigint::BigInt;
 
 use super::{hir, libfunc, raise_hir, stream};
 use crate::analysis::alias;
-use crate::backend::lower_int64;
+use crate::backend::{cpu, lower, lower_int64};
+use crate::flow;
 use crate::model::lir;
 use crate::model::mir::{self, Arg, Const, MemRef, MirBody};
 use crate::objectfile::module::{Addr, Space};
@@ -59,8 +60,11 @@ pub fn assembled(
     _module: &str,
     _optimise: bool,
     dump: Option<&Path>,
-    _cpu: &str,
+    target: &str,
 ) -> Result<(), CompileError> {
+    // `targets.profile` wants the name the table holds.
+    let target = cpu::names().into_iter().find(|name| *name == target).unwrap_or("");
+
     let unit = hir::unit(&stream::parse(text))?;
     write(dump, "stream", text)?;
     write(dump, "hir", &hir::text(&unit))?;
@@ -88,6 +92,7 @@ pub fn assembled(
         bodies.insert(one.name.clone(), body);
     }
     let mut mirs = Vec::new();
+    let mut lirs: Vec<String> = Vec::new();
     for raised in &raised_procedures {
         let body = &bodies[&raised.name];
         mirs.push(_mir_text(&raised.name, body));
@@ -96,11 +101,32 @@ pub fn assembled(
                 .map_err(|error| hir::Unsupported(error.0))?;
         // Python compares `body is not raised.body`, which is never the same object.
         write(dump, &format!("passes/{}.int64-lower", raised.name), &_mir_text(&raised.name, &legalized.body))?;
+        let low = lower::lowered(
+            &raised.name,
+            &legalized.body,
+            Some(&legalized.calls),
+            BTreeSet::new(),
+            Some(&legalized.contracts),
+            cpu::ProfileOrName::Name(target),
+            lower::Lowered { hints: Some(&legalized.hints), ..Default::default() },
+        )
+        .map_err(|error| hir::Unsupported(error.0));
+        // Until the machine phases are ported, `mir` is written before the
+        // first procedure stops so the raise can still be diffed.
+        let low = match low {
+            Ok(low) => low,
+            Err(error) => {
+                write(dump, "mir", &mirs.join("\n"))?;
+                return Err(error.into());
+            }
+        };
+        let low = flow::verified(low, "lower", true).map_err(|error| hir::Unsupported(error.0))?;
+        write(dump, &format!("passes/{}.lir-lower", raised.name), &_lir_text(&raised.name, &low))?;
+        lirs.push(_lir_text(&raised.name, &low));
     }
-    // Python writes `mir` once every procedure is lowered; until lowering is
-    // ported it is written here so the raise can be diffed.
     write(dump, "mir", &mirs.join("\n"))?;
-    Err(CompileError::NotPorted("qbopt.backend.lower.lowered"))
+    let _ = lirs;
+    Err(CompileError::NotPorted("qbopt.backend.frame.of"))
 }
 
 pub fn _lir_text(name: &str, body: &lir::LirBody) -> String {

@@ -17,7 +17,7 @@ only for a module still `todo`, and never after cutover.
 | 2 | `qbopt/analysis/alias.py` | 773 | `src/analysis/alias.rs` | todo | test_inline, test_mir_alias |
 | 2 | `qbopt/analysis/intervals.py` | 232 | `src/analysis/intervals.rs` | todo | test_allocation, test_coalesce, test_splitkit |
 | 2 | `qbopt/analysis/liveness.py` | 159 | `src/analysis/liveness.rs` | draft | test_regalloc, test_word_arithmetic_carry |
-| 2 | `qbopt/backend/addressforms.py` | 585 | `src/backend/addressforms.rs` | todo | - |
+| 2 | `qbopt/backend/addressforms.py` | 585 | `src/backend/addressforms.rs` | draft | - |
 | 2 | `qbopt/backend/addressvalues.py` | 54 | `src/backend/addressvalues.rs` | todo | - |
 | 2 | `qbopt/backend/allocate.py` | 1650 | `src/backend/allocate.rs` | todo | test_allocation, test_constrain, test_cpu_profile, test_dead_call_deliveries, test_interval_redefinitions, test_lir, test_lower_arguments, test_spiller, test_wholeseg |
 | 2 | `qbopt/backend/arithmetic.py` | 69 | `src/backend/arithmetic.rs` | todo | test_arithmetic_target |
@@ -38,7 +38,7 @@ only for a module still `todo`, and never after cutover.
 | 2 | `qbopt/backend/jumps.py` | 551 | `src/backend/jumps.rs` | todo | - |
 | 2 | `qbopt/backend/layout.py` | 619 | `src/backend/layout.rs` | todo | test_emission_order, test_layout, test_wholeseg |
 | 2 | `qbopt/backend/liveness.py` | 142 | `src/backend/liveness.rs` | todo | test_liveness |
-| 2 | `qbopt/backend/lower.py` | 2117 | `src/backend/lower.rs` | todo | test_addressforms, test_basic_semantics, test_c_segment_addresses, test_call_clobbers, test_constrain, test_consts, test_dead_ownership, test_far_load_identity, test_file_contracts, test_float_values, test_floatalloc, test_floatfold, test_flow, test_frame_addresses, test_hir, test_lir, test_lir_emission_order, test_lower_conditions, test_lower_switches, test_masm, test_native_returns, test_opaque_relocations, test_pointer_offset, test_raising_addresses, test_raising_calls, test_spiller, test_stack_segment, test_symbolic_relocation, test_transform, test_unroll |
+| 2 | `qbopt/backend/lower.py` | 2117 | `src/backend/lower.rs` | draft (C path; BC node paths refuse) | test_addressforms, test_basic_semantics, test_c_segment_addresses, test_call_clobbers, test_constrain, test_consts, test_dead_ownership, test_far_load_identity, test_file_contracts, test_float_values, test_floatalloc, test_floatfold, test_flow, test_frame_addresses, test_hir, test_lir, test_lir_emission_order, test_lower_conditions, test_lower_switches, test_masm, test_native_returns, test_opaque_relocations, test_pointer_offset, test_raising_addresses, test_raising_calls, test_spiller, test_stack_segment, test_symbolic_relocation, test_transform, test_unroll |
 | 2 | `qbopt/backend/lower_floats.py` | 35 | `src/backend/lower_floats.rs` | draft | test_float_values, test_sccp, test_unroll |
 | 2 | `qbopt/backend/lower_int64.py` | 560 | `src/backend/lower_int64.rs` | todo | test_cfront, test_modern_frontend |
 | 2 | `qbopt/backend/lower_switches.py` | 129 | `src/backend/lower_switches.rs` | draft | - |

@@ -609,6 +609,7 @@ def assembled(
         )
         if watch is not None:
             watch("lir-lower", raised.name, low)
+        _write(dump, f"passes/{raised.name}.lir-lower", _lir_text(raised.name, low))
         lirs.append(_lir_text(raised.name, low))
         frame = frames.of(low, legalized.calls)
         in_ssa = True
