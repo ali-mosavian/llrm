@@ -31,6 +31,7 @@ from qbopt.model import ir
 from qbopt.model import mir
 from qbopt.model import memory
 from qbopt.abi import runtime
+from qbopt.analysis import cellmap
 from qbopt.objectfile.module import Space
 
 # What each operation does to two known numbers, within one width. Division
@@ -78,11 +79,14 @@ class _MemoryQueries:
     facts: dict = field(init=False, default_factory=dict)
     addressed: dict[int, mir.MemRef] = field(init=False, default_factory=dict)
     overlaps: dict[tuple[tuple, int], bool] = field(init=False, default_factory=dict)
+    # `named`'s per-byte entries never change; `learn` adds whole symbols only.
+    exact: dict[tuple, "tuple[memory.Object, int] | None"] = field(init=False, default_factory=dict)
 
     def __post_init__(self) -> None:
         self.facts = _intervals(self.known)
         self.addressed = {}
         self.overlaps = {}
+        self.exact = {}
 
     def resolve(self, ref: mir.MemRef) -> mir.MemRef:
         key = id(ref)
@@ -98,18 +102,58 @@ class _MemoryQueries:
         if one.stride == 1 and one.low <= ref.addr.disp and ref.addr.disp + ref.width <= one.high + one.width - 1:
             self.named.setdefault((ref.addr.space, ref.addr.index), one.object)
 
+    def _named(self, where: tuple) -> "tuple[memory.Object, int] | None":
+        """The object and offset every byte of cell `where` names, where they agree."""
+        if where not in self.exact:
+            named = [self.named.get(where[0].plus(byte)) for byte in range(where[1])]
+            agree = named and named[0] is not None and all(one == (named[0][0], named[0][1] + i) for i, one in enumerate(named))
+            self.exact[where] = named[0] if agree else None
+        return self.exact[where]
+
+    def bucket(self, where: tuple) -> tuple:
+        """The object cell `where` lies in (OPEN where its bytes name none), and its symbol."""
+        named = self._named(where)
+        return (cellmap.OPEN if named is None else named[0], where[0].space, where[0].index)
+
+    def reached(self, ref: mir.MemRef, buckets) -> "list | None":
+        """The buckets a write through `ref` may touch; None for all of them.
+
+        A cell with an object is apart from a provenance-carrying write
+        unless their objects may alias (``regions.may_alias``) or both are
+        static addresses in one symbol (``mir._displaced``). Anything else
+        is tested.
+        """
+        if ref.provenance is None:
+            return None
+        symbolic = mir._symbolic_ref(ref)
+        static = (
+            None
+            if ref.pointer or symbolic.addr is None or symbolic.base is not None or symbolic.segment is not None
+            else (symbolic.addr.space, symbolic.addr.index)
+        )
+        objects = {one.object for one in ref.provenance.slices}
+        return [
+            bucket
+            for bucket in buckets
+            if bucket[0] is cellmap.OPEN
+            or bucket[1:] == static
+            or any(memory.objects_may_alias(one, bucket[0]) for one in objects)
+        ]
+
+    def owned(self, here: Cells) -> cellmap.CellMap:
+        """A copy of `here` indexed by this epoch's buckets, for one operation to change."""
+        if isinstance(here, cellmap.CellMap) and here.bucket_of == self.bucket:
+            return here.copy()
+        return cellmap.CellMap(self.bucket, here)
+
     def may_overlap(self, where: tuple, ref: mir.MemRef) -> bool:
         key = (where, id(ref))
         if key not in self.overlaps:
             cell = mir.MemRef(where[0], where[1], None, None)
             named = [self.named.get(where[0].plus(byte)) for byte in range(where[1])]
             whole = self.named.get((where[0].space, where[0].index))
-            if (
-                named
-                and named[0] is not None
-                and all(one == (named[0][0], named[0][1] + i) for i, one in enumerate(named))
-            ):
-                cell = replace(cell, provenance=memory.Provenance.one(named[0][0], named[0][1], named[0][1] + where[1]))
+            if (exact := self._named(where)) is not None:
+                cell = replace(cell, provenance=memory.Provenance.one(exact[0], exact[1], exact[1] + where[1]))
             elif whole is not None and all(
                 one is None or one == (whole, where[0].disp + i) for i, one in enumerate(named)
             ):
@@ -342,6 +386,7 @@ def _kills(
             here = {}
     put = _put(op, known) if op.kind is mir.Kind.STORE else updated(op, known, here)
     queries = queries if queries is not None else _MemoryQueries(known, dgroup)
+    owned = False
     for ref in op.stores:
         ref = queries.resolve(ref)
         if assume is not None and (selector := _selector(ref, known, allowed)) is not None:
@@ -350,12 +395,14 @@ def _kills(
             # so an absolute segment reaches none of them.
             assume.add(selector)
             continue
-        here = {where: fact for where, fact in here.items() if not queries.may_overlap(where, ref)}
+        if not owned:
+            here, owned = queries.owned(here), True
+        here.kill(queries.reached(ref, here.buckets), lambda where: queries.may_overlap(where, ref))
         if put is not None and ref.addr is not None and ref.base is None and ref.segment is None:
             queries.learn(ref)
             here.update(_fragments(ref, put))
     if op.kind is mir.Kind.CALL and op.memory_values:
-        here = dict(here)
+        here = here if owned else queries.owned(here)
         for ref, value in op.memory_values:
             if ref.addr is not None and ref.base is None and ref.segment is None:
                 queries.learn(ref)
