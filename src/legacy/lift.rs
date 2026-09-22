@@ -219,7 +219,7 @@ pub static REDUNDANT_DS: LazyLock<BTreeSet<Register>> =
 ///
 /// Python's resolver receives the raw iced displacement, not the signed
 /// addressing displacement.
-pub type Resolver = dyn Fn(i64, i64) -> Addr;
+pub type Resolver<'a> = dyn Fn(i64, i64) -> Addr + 'a;
 
 /// Where this instruction's memory operand points, or `None` if it has none.
 ///
@@ -628,6 +628,19 @@ mod tests {
     fn omf_lift_classify_refuses_an_operand_size_prefixed_half() {
         assert!(classified(&[0x8B, 0x06, 0x5E, 0x00]).is_some());
         assert_eq!(classified(&[0x66, 0x8B, 0x06, 0x5E, 0x00]), None);
+    }
+
+    /// The resolver was `dyn Fn + 'static`, so a module's own `resolve` --
+    /// a closure borrowing the module -- could not be passed, and production
+    /// decoding could only ever classify against `literal_only`.
+    #[test]
+    fn omf_lift_classify_takes_a_resolver_borrowing_its_module() {
+        let operands = std::collections::BTreeMap::from([(2_i64, Addr::new(Space::Segment, 0x40))]);
+        let resolve = |field_offset: i64, literal: i64| {
+            operands.get(&field_offset).copied().unwrap_or(Addr::new(Space::Literal, literal))
+        };
+        let decoded = super::classify_with(&insn(&[0x8B, 0x06, 0x00, 0x00]), &resolve).unwrap();
+        assert_eq!(decoded.mem, Some(Addr::new(Space::Segment, 0x40)));
     }
 
     #[test]
