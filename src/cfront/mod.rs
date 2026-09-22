@@ -2,5 +2,6 @@
 
 pub mod compile;
 pub mod hir;
+pub mod raise_hir;
 pub mod libfunc;
 pub mod stream;

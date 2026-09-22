@@ -1706,15 +1706,10 @@ pub(crate) fn public(body: RaisedBody) -> MirBody {
     body.body
 }
 
-/// Python `WHOLE_FRAME`.
-pub fn whole_frame() -> (Addr, i64) {
-    (Addr::new(Space::Frame, -(1 << 15)), 1 << 16)
-}
-
 /// Python `_outside`: the frame's bytes no range in `reach` covers, as exclusions.
 fn outside(reach: &BTreeSet<(i64, i64)>) -> Vec<(Addr, u32)> {
-    let (start, size) = whole_frame();
-    let (low, high) = (start.disp, start.disp + size);
+    let (start, size) = WHOLE_FRAME;
+    let (low, high) = (start.disp, start.disp + i64::from(size));
     let mut out = Vec::new();
     let mut at = low;
     for &(start, end) in reach {
