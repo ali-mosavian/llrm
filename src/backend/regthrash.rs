@@ -77,7 +77,7 @@ pub fn _dead_after(block: &LirBlock, dead: Lanes) -> DeadAfter {
         out.insert(id(one), dead.clone());
         if liveness::_terminator(one.what.as_ref()) {
             if one.what.as_ref().is_some_and(|what| what.op == Operation::Branch) {
-                dead = dead.difference(&_flag_lanes(0xFFFF_FFFF)).copied().collect();
+                dead = dead.minus(&_flag_lanes(0xFFFF_FFFF));
             }
             continue;
         }
@@ -95,7 +95,7 @@ pub fn _dead_after(block: &LirBlock, dead: Lanes) -> DeadAfter {
             }
         }
         let (reads, writes) = effects.expect("checked above");
-        dead = dead.union(&writes).copied().collect::<Lanes>().difference(&reads).copied().collect();
+        dead = dead.or(&writes).minus(&reads);
     }
     out
 }
@@ -269,9 +269,9 @@ fn _renamed(one: &Insn, before: Register, after: Register, result_only: bool) ->
     let reads: Lanes = if result_only || was.0.is_disjoint(&mine) {
         was.0.clone()
     } else {
-        was.0.difference(&mine).copied().collect::<Lanes>().union(&theirs).copied().collect()
+        was.0.minus(&mine).or(&theirs)
     };
-    let writes: Lanes = was.1.difference(&mine).copied().collect::<Lanes>().union(&theirs).copied().collect();
+    let writes: Lanes = was.1.minus(&mine).or(&theirs);
     if now != (reads, writes) {
         return None;
     }

@@ -51,7 +51,7 @@ pub fn _backwards(block: &LirBlock, live: Lanes, universe: &Lanes) -> Lanes {
             // for instructions that fall through. It writes nothing.
             let what = one.what.as_ref().expect("a terminator has semantics");
             if what.op == Operation::Branch {
-                live = live.union(&_branch_reads(what)).copied().collect();
+                live = live.or(&_branch_reads(what));
             }
             continue;
         }
@@ -64,7 +64,7 @@ pub fn _backwards(block: &LirBlock, live: Lanes, universe: &Lanes) -> Lanes {
             live = universe.clone();
             continue;
         };
-        live = live.difference(&writes).copied().collect::<Lanes>().union(&reads).copied().collect();
+        live = live.minus(&writes).or(&reads);
     }
     live
 }
@@ -87,7 +87,7 @@ pub fn _declared(one: &Insn) -> Option<(Lanes, Lanes)> {
         for register in _RETURN_STATE {
             reads.extend(_lanes(register));
         }
-        let writes = _universe().difference(&reads).copied().collect();
+        let writes = _universe().minus(&reads);
         return Some((reads, writes));
     }
     if one.clobbers.is_empty() || one.symbol == Some(true) {
@@ -163,7 +163,7 @@ pub fn dead_at_exit(body: &LirBody) -> IndexMap<i64, Lanes> {
             } else {
                 successors[at].iter().flat_map(|to| into[to].iter().copied()).collect()
             };
-            (*at, universe.difference(&live).copied().collect())
+            (*at, universe.minus(&live))
         })
         .collect()
 }

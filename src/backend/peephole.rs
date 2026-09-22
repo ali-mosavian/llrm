@@ -22,10 +22,7 @@ use crate::model::lir::{self, Insn, LirBlock, LirBody};
 use crate::model::mir;
 use crate::model::passes::LIRTransform;
 
-/// One byte of a register root, or one flag bit against `Register::None`.
-pub type Lane = (Register, u32);
-/// Python's `set[tuple[Register_, int]]`.
-pub type Lanes = BTreeSet<Lane>;
+pub use crate::backend::lanes::{Lane, Lanes};
 /// Python's `dict[int, set]` keyed by `id(one)`.
 pub type DeadAfter = HashMap<usize, Lanes>;
 /// Python's `Counter[int]`: read with a 0 default.
@@ -443,7 +440,7 @@ fn _extension_may_move_before(made: &Insn, first: &Insn, crossed: &[Arc<Insn>]) 
     let (Some(original), Some(combined)) = (original, combined) else {
         return false;
     };
-    let newly_written: Lanes = combined.1.difference(&original.1).copied().collect();
+    let newly_written: Lanes = combined.1.minus(&original.1);
     for one in crossed {
         let effects = _register_effects(one, false, true);
         match effects {
@@ -1019,9 +1016,9 @@ fn _register_high_extract(
     let Some(effects) = _register_effects(&with_what(kept, shift.clone()), false, true) else {
         return Ok(None);
     };
-    let upper: Lanes = _lanes(wide_high.register).difference(&_lanes(high.register)).copied().collect();
-    let flags: Lanes = effects.1.intersection(&_flag_lanes(0xFFFF_FFFF)).copied().collect();
-    if !upper.union(&flags).copied().collect::<Lanes>().is_subset(&dead_after[&id(kept)]) {
+    let upper: Lanes = _lanes(wide_high.register).minus(&_lanes(high.register));
+    let flags: Lanes = effects.1.and(&_flag_lanes(0xFFFF_FFFF));
+    if !upper.or(&flags).is_subset(&dead_after[&id(kept)]) {
         return Ok(None);
     }
     let old_cost = cpu.cost("push_r")? + 2 * cpu.cost("pop_r")?;
@@ -1142,7 +1139,7 @@ fn _selected_register_high_extract(
         return Ok(None);
     };
     let low = target::named(destination.register, 2);
-    let upper: Lanes = _lanes(destination.register).difference(&_lanes(low)).copied().collect();
+    let upper: Lanes = _lanes(destination.register).minus(&_lanes(low));
     let flags: Lanes = old_effects
         .1
         .union(&new_effects.1)
@@ -1151,7 +1148,7 @@ fn _selected_register_high_extract(
         .intersection(&_flag_lanes(0xFFFF_FFFF))
         .copied()
         .collect();
-    if !upper.union(&flags).copied().collect::<Lanes>().is_subset(&dead_after[&id(shift)]) {
+    if !upper.or(&flags).is_subset(&dead_after[&id(shift)]) {
         return Ok(None);
     }
     let new_cost = cpu.cost("shift_ri")?;
@@ -1226,10 +1223,10 @@ fn _high_extract(parts: &[Arc<Insn>], dead_after: &DeadAfter) -> Option<Vec<Arc<
     };
 
     let low = reg(target::named(wide.register, 2), 2);
-    let preserved: Lanes = _lanes(wide.register).difference(&_lanes(low.register)).copied().collect();
+    let preserved: Lanes = _lanes(wide.register).minus(&_lanes(low.register));
     let effects = _register_effects(shift, false, true)?;
-    let flags: Lanes = effects.1.intersection(&_flag_lanes(0xFFFF_FFFF)).copied().collect();
-    if !preserved.union(&flags).copied().collect::<Lanes>().is_subset(&dead_after[&id(shift)]) {
+    let flags: Lanes = effects.1.and(&_flag_lanes(0xFFFF_FFFF));
+    if !preserved.or(&flags).is_subset(&dead_after[&id(shift)]) {
         return None;
     }
 
@@ -1333,7 +1330,7 @@ pub fn restored_copies(body: &LirBody) -> LirBody {
                     break;
                 };
                 if !reads.is_disjoint(&temporary_lanes)
-                    || !writes.is_disjoint(&temporary_lanes.union(&source_lanes).copied().collect())
+                    || !writes.is_disjoint(&temporary_lanes.or(&source_lanes))
                 {
                     break;
                 }
@@ -1508,7 +1505,7 @@ pub fn _register_effects(one: &Insn, may_write: bool, flags: bool) -> Option<(La
             return None;
         }
         if flags {
-            let read: Lanes = _flag_lanes(insn.rflags_read()).difference(&writes).copied().collect();
+            let read: Lanes = _flag_lanes(insn.rflags_read()).minus(&writes);
             reads.extend(read);
             // An undefined flag is no more the incoming flag than a defined
             // result is. LLVM models both as physical-register definitions;
@@ -1525,7 +1522,7 @@ pub fn _register_effects(one: &Insn, may_write: bool, flags: bool) -> Option<(La
         for (register, access) in &used {
             let lanes = _lanes(*register);
             if declen::READS.contains(access) {
-                let read: Lanes = lanes.difference(&writes).copied().collect();
+                let read: Lanes = lanes.minus(&writes);
                 reads.extend(read);
             }
         }
@@ -1541,7 +1538,7 @@ pub fn _register_effects(one: &Insn, may_write: bool, flags: bool) -> Option<(La
 }
 
 pub fn _flag_lanes(mask: u32) -> Lanes {
-    (0..32).filter(|bit| mask & (1 << bit) != 0).map(|bit| (Register::None, bit)).collect()
+    Lanes::flags(mask)
 }
 
 /// A bp-relative slot whose bytes the displacement alone names.
@@ -1605,7 +1602,7 @@ pub fn overwritten(body: &LirBody) -> LirBody {
             if liveness::_terminator(one.what.as_ref()) {
                 let what = one.what.as_ref().expect("a terminator has semantics");
                 if what.op == Operation::Branch {
-                    dead = dead.difference(&_branch_reads(what)).copied().collect();
+                    dead = dead.minus(&_branch_reads(what));
                 }
                 continue;
             }
@@ -1679,7 +1676,7 @@ pub fn overwritten(body: &LirBody) -> LirBody {
                 }
             }
             let (reads, writes) = effects;
-            dead = dead.union(&writes).copied().collect::<Lanes>().difference(&reads).copied().collect();
+            dead = dead.or(&writes).minus(&reads);
         }
         let insns = block
             .insns
@@ -1814,8 +1811,8 @@ fn _delays_memory_read(load: &Insn, crossed: &Insn) -> bool {
         }
         _ => return false,
     };
-    let crossed_all: Lanes = crossed_reads.union(&crossed_writes).copied().collect();
-    let load_all: Lanes = load_reads.union(&address_lanes).copied().collect();
+    let crossed_all: Lanes = crossed_reads.or(&crossed_writes);
+    let load_all: Lanes = load_reads.or(&address_lanes);
     !(!load_writes.is_disjoint(&crossed_all)
         || !load_all.is_disjoint(&crossed_writes)
         || load.defines.iter().any(|value| crossed.uses.contains(value)))
@@ -3216,7 +3213,7 @@ pub fn _flags_live_out(body: &LirBody) -> HashMap<i64, Lanes> {
     // No calling convention passes the adjust flag in or out: a callee, a
     // caller after a return, and whatever runs after the body leaves may read
     // any other flag, but only an instruction here that reads AF reads it.
-    let exits: Lanes = every.difference(&_ADJUST).copied().collect();
+    let exits: Lanes = every.minus(&_ADJUST);
 
     let effects = |one: &Insn| -> (Lanes, Lanes) {
         if let Some(what) = &one.what {
@@ -3266,7 +3263,7 @@ pub fn _flags_live_out(body: &LirBody) -> HashMap<i64, Lanes> {
             out.insert(block.at, after.clone());
             let mut live = after;
             for (reads, writes) in steps[&block.at].iter().rev() {
-                live = live.difference(writes).copied().collect::<Lanes>().union(reads).copied().collect();
+                live = live.minus(writes).or(reads);
             }
             if live != live_in[&block.at] {
                 live_in.insert(block.at, live);

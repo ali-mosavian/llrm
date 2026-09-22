@@ -197,7 +197,7 @@ pub fn sunk(body: &LirBody) -> LirBody {
                     .iter()
                     .chain(rest.iter().flat_map(|at| at_of[at].insns.iter()))
                     .collect();
-                let both: Lanes = written.union(&read).copied().collect();
+                let both: Lanes = written.or(&read);
                 if later
                     .iter()
                     .any(|other| _touches(other, &both, false) || _touches(other, &written, true))

@@ -18,6 +18,7 @@ pub mod floatregions;
 pub mod fpu;
 pub mod frame;
 pub mod jumps;
+pub mod lanes;
 pub mod layout;
 pub mod liveness;
 pub mod lower;

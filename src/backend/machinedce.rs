@@ -101,7 +101,7 @@ fn _once(body: &LirBody) -> Option<LirBody> {
             if liveness::_terminator(what) {
                 let what = what.expect("a terminator has semantics");
                 if what.op == Operation::Branch {
-                    dead = dead.difference(&_branch_reads(what)).copied().collect();
+                    dead = dead.minus(&_branch_reads(what));
                 }
                 continue;
             }
@@ -118,7 +118,7 @@ fn _once(body: &LirBody) -> Option<LirBody> {
                 changed = true;
                 continue;
             }
-            dead = dead.union(&writes).copied().collect::<Lanes>().difference(&reads).copied().collect();
+            dead = dead.or(&writes).minus(&reads);
         }
         blocks.push(if redundant.is_empty() {
             block.clone()
