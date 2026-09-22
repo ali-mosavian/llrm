@@ -1,6 +1,7 @@
 """Known-answer C benchmark checks through OMF, LINK, and a real 386."""
 
 import json
+from collections.abc import Callable
 import shutil
 import subprocess
 from pathlib import Path
@@ -97,13 +98,26 @@ end start
 """
 
 
-def _answers(tmp_path: Path, benchmarks) -> dict[str, int]:
+def _python_object(source: Path, target: Path) -> None:
+    module = cfront.assembled(cfront.recorded(source, []), source.stem, optimise=True)
+    target.write_bytes(omfwrite.written(module, source.name))
+
+
+def _rust_object(source: Path, target: Path) -> None:
+    build = subprocess.run(["cargo", "build", "--quiet", "--bin", "llrm-c"], cwd=ROOT, capture_output=True, text=True)
+    assert build.returncode == 0, build.stdout + build.stderr
+    compiled = subprocess.run(
+        [str(ROOT / "target" / "debug" / "llrm-c"), "--opt", "-o", str(target), str(source)],
+        capture_output=True,
+        text=True,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+
+
+def _answers(tmp_path: Path, benchmarks, compiled: Callable[[Path, Path], None] = _python_object) -> dict[str, int]:
     expected = json.loads((ROOT / "bench" / "c" / "expected.json").read_text())
     for name, filename, _argument, _width in benchmarks:
-        source = ROOT / "bench" / "c" / f"{name}.c"
-        stream = cfront.recorded(source, [])
-        module = cfront.assembled(stream, name, optimise=True)
-        (tmp_path / f"{filename}.OBJ").write_bytes(omfwrite.written(module, source.name))
+        compiled(ROOT / "bench" / "c" / f"{name}.c", tmp_path / f"{filename}.OBJ")
     start = tmp_path / "START.ASM"
     start.write_text(_start(benchmarks))
     assembled = subprocess.run(
@@ -141,6 +155,12 @@ def _answers(tmp_path: Path, benchmarks) -> dict[str, int]:
 def test_optimized_c_benchmarks_return_their_independent_answers(tmp_path: Path) -> None:
     """CRC returned FFFFFFFF when unrolling orphaned its inner-loop live-out."""
     _answers(tmp_path, BENCHMARKS)
+
+
+@pytest.mark.skipif(shutil.which("cargo") is None, reason="cargo is not installed")
+def test_rust_optimized_c_benchmarks_return_their_independent_answers(tmp_path: Path) -> None:
+    """The ported llrm-c --opt must reach every benchmark's independent answer."""
+    _answers(tmp_path, BENCHMARKS, _rust_object)
 
 
 def test_cloned_c_nbody_returns_its_independent_answer(tmp_path: Path) -> None:

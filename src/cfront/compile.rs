@@ -993,6 +993,38 @@ struct Args {
     dump: Option<PathBuf>,
     opt: bool,
     cpu: String,
+    include: Vec<String>,
+}
+
+/// The code-generator stream wccq records for one C file.
+pub fn recorded(source: &Path, includes: &[String]) -> Result<String, hir::Unsupported> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let wccq = root.join("owshim/bin/wccq");
+    // Borland's medium model: far code, near data, cdecl, byte-packed structs,
+    // 16-bit enums, x87 inline, no stack probes, no default library. -fp3 is for
+    // inline assembly: qcport's own uses 387 instructions.
+    let borland = format!("-fi={}", root.join("qbopt/cfront/borland.h").display());
+    let flags = ["-mm", "-3", "-fpi87", "-fp3", "-zp1", "-ei", "-ecc", "-s", "-zl", "-zq", borland.as_str()];
+    let failed = |detail: String| hir::Unsupported(format!("wccq failed on {}:\n{detail}", source.display()));
+    let scratch = tempfile::tempdir().map_err(|error| failed(error.to_string()))?;
+    let out = scratch.path().join("unit.cgs");
+    let absolute = |path: &Path| fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let searched = includes.iter().map(|one| format!("-I{}", absolute(Path::new(one)).display()));
+    // In the scratch directory, where wccq also leaves its .err file.
+    let done = std::process::Command::new(&wccq)
+        .args(flags)
+        .args(searched)
+        .arg(format!("-fo={}/unit.obj", scratch.path().display()))
+        .arg(absolute(source))
+        .env("QBOPT_CG_STREAM", &out)
+        .current_dir(scratch.path())
+        .output()
+        .map_err(|error| failed(error.to_string()))?;
+    if !done.status.success() || !out.exists() {
+        let text = String::from_utf8_lossy(&done.stdout).into_owned() + &String::from_utf8_lossy(&done.stderr);
+        return Err(failed(text));
+    }
+    fs::read_to_string(&out).map_err(|error| failed(error.to_string()))
 }
 
 const USAGE: &str =
@@ -1001,6 +1033,7 @@ const USAGE: &str =
 fn parse_args(argv: &[String]) -> Result<Args, String> {
     let (mut source, mut output, mut dump, mut opt, mut cpu) =
         (None, None, None, false, "386".to_owned());
+    let mut include = Vec::new();
     let mut rest = argv.iter();
     while let Some(one) = rest.next() {
         let mut value = |name: &str| {
@@ -1010,9 +1043,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         };
         match one.as_str() {
             "-o" | "--output" => output = Some(PathBuf::from(value("-o/--output")?)),
-            "-I" | "--include" => {
-                value("-I/--include")?;
-            }
+            "-I" | "--include" => include.push(value("-I/--include")?),
             "--dump" => dump = Some(PathBuf::from(value("--dump")?)),
             "--opt" => opt = true,
             "--cpu" => cpu = value("--cpu")?,
@@ -1030,6 +1061,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         dump,
         opt,
         cpu,
+        include,
     })
 }
 
@@ -1042,11 +1074,12 @@ pub fn main(argv: &[String]) -> i32 {
             return 2;
         }
     };
-    let result = (|| {
-        if args.source.extension().and_then(|one| one.to_str()) != Some("cgs") {
-            return Err(CompileError::NotPorted("qbopt.cfront.compile.recorded"));
-        }
-        let text = fs::read_to_string(&args.source)?;
+    let result = (|| -> Result<(), CompileError> {
+        let text = if args.source.extension().and_then(|one| one.to_str()) == Some("cgs") {
+            fs::read_to_string(&args.source)?
+        } else {
+            recorded(&args.source, &args.include)?
+        };
         let output = args
             .output
             .clone()
