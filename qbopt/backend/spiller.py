@@ -280,7 +280,10 @@ def _short_update_runs(
     through that update, make the extended range unspillable, and store only
     its final value.  This is the local split rung of the spill ladder;
     arbitrary updates and non-adjacent uses retain the conservative rewrite.
+    Only a source that dies at the copy: the update now writes its register.
     """
+    index = ranges.indexed(body)
+    live = ranges.intervals(body, index)
     made: set[int] = set()
     blocks = []
     for block in body.blocks:
@@ -297,9 +300,11 @@ def _short_update_runs(
             into, outof = pair
             what = second.what
             width = _width(first, into)
+            after = ranges.Segment(index.at[id(first)] + ranges.DEF, index.at[id(first)] + ranges.DEF + 1)
             eligible = (
                 into in stored
                 and outof not in stored
+                and not any(segment.overlaps(after) for segment in live[outof].segments)
                 and first.covers == (first.at, first.at)
                 and second.group is None
                 and what is not None

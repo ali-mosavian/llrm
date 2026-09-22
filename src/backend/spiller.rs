@@ -324,12 +324,16 @@ pub fn spilled(
 }
 
 /// Keep a just-defined spilled value in a register through one update.
+///
+/// Only a source that dies at the copy: the update now writes its register.
 fn _short_update_runs(
     body: &LirBody,
     stored: &BTreeSet<u32>,
     frame: &mut Frame,
     fresh: u32,
 ) -> Result<(LirBody, u32, BTreeSet<u32>), Error> {
+    let index = ranges::indexed(body);
+    let live = ranges::intervals(body, Some(&index));
     let mut made: BTreeSet<u32> = BTreeSet::new();
     let mut blocks = Vec::new();
     for block in &body.blocks {
@@ -345,8 +349,11 @@ fn _short_update_runs(
             };
             let (into, outof) = pair;
             let width = _width(first, into);
+            let slot = index.at[&key(first)];
+            let after = Segment { start: slot + ranges::DEF, end: slot + ranges::DEF + 1 };
             let eligible = stored.contains(&into)
                 && !stored.contains(&outof)
+                && !live[&outof].segments.iter().any(|segment| segment.overlaps(&after))
                 && first.covers == Some((first.at, first.at))
                 && second.group.is_none()
                 && second.what.as_ref().is_some_and(|what| {
@@ -2167,6 +2174,26 @@ mod tests {
         assert!(matches!(what(update).dests[0], Loc::Held(_)));
         assert!(matches!(what(update).sources[0], Loc::Held(_)));
         assert!(index_of(&insns, spill) > index_of(&insns, update));
+    }
+
+    /// nbody's inner loop base `final = start + distance` overwrote `start`.
+    ///
+    /// The update ran in the copy source's register: `add ax, bx` for
+    /// `mov final, start; add final, bx` with `start` still read by the outer
+    /// latch, which then advanced the wrong value and the answer drifted.
+    #[test]
+    fn test_a_short_update_leaves_a_copy_source_that_is_still_live() {
+        let copied = _move(2, 1, None, 0x10);
+        let shifted = insn(
+            0x11,
+            (0x11, 0x11),
+            semantics(Operation::Binary, "shl", vec![held(2, 2)], vec![held(2, 2), imm(1, 1)]),
+            &[2],
+            &[2],
+        );
+        let insns = _out(&_body(vec![copied, shifted, _move(3, 1, None, 0x12)]), &[2]);
+        let read = insns.iter().position(|one| one.defines == [3]).unwrap();
+        assert!(!insns[..read].iter().any(|one| one.defines.contains(&1)));
     }
 
     #[test]

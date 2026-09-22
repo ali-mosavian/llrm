@@ -6,7 +6,6 @@ the test is then reached only from the latch, which it can merge into.
 """
 
 from dataclasses import replace
-from dataclasses import dataclass
 
 from qbopt.model import ir
 from qbopt.model import mir
@@ -14,54 +13,7 @@ from qbopt.analysis import ssa
 from qbopt.analysis import loops
 from qbopt.analysis import consts
 from qbopt.analysis import induction
-
-
-@dataclass
-class Seeds:
-    """Loop-preheader values, constructed after the symbolic proof is complete."""
-
-    serial: int
-    variable: int
-    at: int
-    width: int
-    ops: list[mir.Op]
-
-    def computed(self, kind: mir.Kind, args: tuple[mir.Arg, ...]) -> mir.Held:
-        value = mir.Value(self.serial, self.at, variable=self.variable)
-        self.serial += 1
-        self.variable += 1
-        self.ops.append(mir.computed(self.at, kind, value, args, self.width))
-        return mir.Held(value, self.width)
-
-
-def skip_guard(proof: induction.CountedLoop, at: int, flags: mir.Value) -> tuple[mir.Op, mir.Op]:
-    """The preheader compare and branch that leave a counted loop before its first trip."""
-    args, test = induction.skipped(proof)
-    compare = replace(
-        proof.compare,
-        at=at,
-        defines=(flags,),
-        uses=tuple(arg.value for arg in args if isinstance(arg, mir.Held)),
-        source_backed=False,
-        args=args,
-        raised=None,
-        absorbed=(),
-        symbol=False,
-    )
-    branch = replace(
-        proof.branch,
-        at=at,
-        name="",
-        defines=(),
-        uses=(flags,),
-        source_backed=False,
-        test=test,
-        target=proof.exit,
-        raised=None,
-        absorbed=(),
-        symbol=False,
-    )
-    return compare, branch
+from qbopt.optimize import counting
 
 
 def entered(body: mir.MirBody) -> mir.MirBody:
@@ -115,12 +67,13 @@ def _counted_down(body: mir.MirBody) -> mir.MirBody:
         width = counter.start.width
         update, stepping = replacement.update, replacement.stepping
         at = blocks[preheader].ops[-1].at if blocks[preheader].ops else preheader
-        seeds = Seeds(
+        seeds = counting.Seeds(
             max((value.id for value in all_values), default=0) + 1,
             max((value.variable for value in all_values), default=0) + 1,
             at,
             width,
             [],
+            facts,
         )
         count = induction.trips(proof, seeds.computed)
         # A constant count is handled more profitably by the ordinary
@@ -128,6 +81,7 @@ def _counted_down(body: mir.MirBody) -> mir.MirBody:
         # symbolic value which may be zero at run time.
         if not isinstance(count, mir.Held):
             continue
+        exits = counting.leaving(replacement, seeds)
 
         step_flags = mir.Value(seeds.serial, stepping.at, flags=True, variable=seeds.variable, version=1)
         guard_flags = mir.Value(seeds.serial + 1, preheader, flags=True, variable=seeds.variable + 1, version=1)
@@ -142,7 +96,7 @@ def _counted_down(body: mir.MirBody) -> mir.MirBody:
             raised=None,
             symbol=False,
         )
-        guard_compare, guard_branch = skip_guard(proof, at, guard_flags)
+        guard_compare, guard_branch = counting.skip_guard(proof, at, guard_flags)
         entry_ops = list(blocks[preheader].ops)
         if entry_ops and entry_ops[-1].kind is mir.Kind.JUMP:
             entry_ops[-1] = mir.cleared(entry_ops[-1])
@@ -156,6 +110,7 @@ def _counted_down(body: mir.MirBody) -> mir.MirBody:
             start_definition is not None
             and not any(start in op.uses for block in body.blocks for op in block.ops)
             and not any(start in op.uses for op in (*seeds.ops, guard_compare))
+            and not exits
             and not any(
                 start in other.incoming.values() for block in body.blocks for other in block.phis if other is not phi
             )
@@ -200,7 +155,7 @@ def _counted_down(body: mir.MirBody) -> mir.MirBody:
                         for other in block.phis
                     )
                     if block.at == header.at
-                    else block.phis,
+                    else tuple(exits.get(id(other), other) for other in block.phis),
                 )
             )
         changed = replace(body, blocks=tuple(rewritten))
@@ -400,7 +355,7 @@ def at_body(
             # latch versions used by the nonzero path.
             if entry_succ is not None and block.at in entry_succ and block.at != first.at:
                 zero = phi.incoming.get(header.at)
-                if zero is not None:
+                if zero is not None and preheader not in phi.incoming:
                     incoming[preheader] = initial.get(zero.id, zero)
             phis.append(replace(phi, incoming=incoming))
         changed = replace(block, phis=tuple(phis), ops=tuple(_swapped(op, swap) for op in block.ops))

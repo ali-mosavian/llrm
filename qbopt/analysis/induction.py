@@ -132,8 +132,6 @@ class CountedLoop:
     entered: int
     exit: int
     maximum: int | None = None
-    # Unsigned `0 ..< bound`: the count is the bound itself.
-    zero_based: bool = False
 
     @property
     def inclusive(self) -> bool:
@@ -148,17 +146,18 @@ _SKIPPED = {
 }
 
 
+Computed = Callable[[mir.Kind, tuple[mir.Arg, ...]], mir.Held | mir.Const]
+
+
 def skipped(proof: CountedLoop) -> tuple[tuple[mir.Held | mir.Const, mir.Held | mir.Const], mir.Kind]:
     """The preheader comparison, and the test on it, under which the loop runs no trips."""
-    width = proof.bound.width
-    if proof.zero_based:
-        return (proof.bound, mir.Const(0, width)), mir.Kind.EQ
-    if isinstance(proof.bound, mir.Const) and isinstance(proof.start, mir.Held):
-        return (proof.start, proof.bound), mir.MIRRORED[_SKIPPED[proof.test]]
-    return (proof.bound, proof.start), _SKIPPED[proof.test]
+    test = _SKIPPED[proof.test]
+    if test is mir.Kind.BELOW_EQ and proof.start == mir.Const(0, proof.start.width):
+        test = mir.Kind.EQ  # nothing is below zero
+    return (proof.bound, proof.start), test
 
 
-def trips(proof: CountedLoop, computed: Callable[[mir.Kind, tuple[mir.Arg, ...]], mir.Held]) -> mir.Held | mir.Const:
+def trips(proof: CountedLoop, computed: Computed) -> mir.Held | mir.Const:
     """Trips on the entered path, exact modulo the counter's width.
 
     `computed(kind, args)` places one preheader operation and returns its
@@ -166,12 +165,18 @@ def trips(proof: CountedLoop, computed: Callable[[mir.Kind, tuple[mir.Arg, ...]]
     the width's size, and an inclusive one is proved finite first.
     """
     width = proof.bound.width
-    if proof.zero_based:
-        return proof.bound
     if isinstance(proof.bound, mir.Const) and isinstance(proof.start, mir.Const):
         return mir.Const(consts.masked(proof.bound.n - proof.start.n + proof.inclusive, width), width)
     count = computed(mir.Kind.SUB, (proof.bound, proof.start))
-    return computed(mir.Kind.ADD, (count, mir.Const(1, width))) if proof.inclusive else count
+    return computed(mir.Kind.ADD, (count, mir.Const(int(proof.inclusive), width)))
+
+
+def exit_value(proof: CountedLoop, computed: Computed) -> mir.Held | mir.Const:
+    """The counter as a loop that ran a trip leaves: the first value failing its test."""
+    width = proof.bound.width
+    if isinstance(proof.bound, mir.Const):
+        return mir.Const(consts.masked(proof.bound.n + proof.inclusive, width), width)
+    return computed(mir.Kind.ADD, (proof.bound, mir.Const(int(proof.inclusive), width)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,6 +193,9 @@ class ControlReplacement:
     update: mir.Value
     aliases: frozenset[mir.Value]
     copies: frozenset[int]
+    # Exit-block phis reading the counter as the loop leaves: `exit_value`
+    # after a trip, `start` after none.
+    exits: tuple[mir.Phi, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -295,38 +303,39 @@ def counted(body: mir.MirBody, loop: loopy.Loop, facts: dict | None = None) -> t
             or stepping.merges
         ):
             continue
-        zero_based = test is mir.Kind.BELOW and _signed(counter.start, facts, width) == 0
         start = _constant(counter.start, facts, width)
         limit = _constant(bound, facts, width)
+        if unsigned:
+            first, last, top = start, limit, (1 << 8 * width) - 1
+        else:
+            first = None if start is None else _as_signed(start, width)
+            last = None if limit is None else _as_signed(limit, width)
+            top = (1 << 8 * width - 1) - 1
+        if inclusive and last == top:
+            continue
+        lowest = first if first is not None else _range(body, counter.start, 0, top)
+        highest = last if last is not None else _range(body, bound, 1, top - inclusive)
         maximum = None
-        if start is not None and limit is not None:
-            first, last = (start, limit) if unsigned else (_as_signed(start, width), _as_signed(limit, width))
-            maximum = max(0, last - first + inclusive)
-        elif zero_based and isinstance(bound, mir.Held):
-            interval = body.integer_ranges.get(bound.value)
-            if interval is not None and interval.width == bound.width and interval.low >= 0:
-                maximum = interval.high
+        if lowest is not None and highest is not None:
+            maximum = max(0, highest - lowest + inclusive)
         if maximum is None:
             maximum = _inbounds_trips(body, loop, shape.latch)
-        if inclusive and maximum is None:
-            top = (1 << 8 * width) - 1 if unsigned else (1 << 8 * width - 1) - 1
-            if limit is None or (limit if unsigned else _as_signed(limit, width)) == top:
-                continue
+        if inclusive and last is None and maximum is None:
+            continue
         proven.append(
             CountedLoop(
                 counter,
                 phi,
                 compare,
                 branch,
-                counter.start,
-                bound,
+                counter.start if start is None else mir.Const(start, width),
+                bound if limit is None else mir.Const(limit, width),
                 test,
                 shape.preheader,
                 shape.latch,
                 shape.entered,
                 shape.exit,
                 maximum,
-                zero_based,
             )
         )
     return tuple(proven)
@@ -357,6 +366,14 @@ def advances(body: mir.MirBody, loop: loopy.Loop) -> dict[mir.Value, int]:
                 one.by.n, one.by.width
             )
     return {value: step for value, step in out.items() if step}
+
+
+def _range(body: mir.MirBody, arg: mir.Arg, end: int, top: int) -> int | None:
+    """The low (`end` 0) or high (`end` 1) of a frontend range on `arg`, if it lies in `0 ..= top`."""
+    interval = body.integer_ranges.get(arg.value) if isinstance(arg, mir.Held) else None
+    if interval is None or interval.width != arg.width or interval.low < 0 or interval.high > top:
+        return None
+    return (interval.low, interval.high)[end]
 
 
 def _inbounds_trips(body: mir.MirBody, loop: loopy.Loop, latch: int) -> int | None:
@@ -415,7 +432,7 @@ def control_replacement(
     proof: CountedLoop,
     covered: frozenset[int] = frozenset(),
 ) -> ControlReplacement | None:
-    """Prove that ``covered`` plus loop control are every counter use."""
+    """Prove that ``covered``, loop control and exit phis are every counter use."""
     blocks = {block.at: block for block in body.blocks}
     predecessors = loopy.predecessors(body.blocks)
     header, latch = blocks[loop.header], blocks[proof.latch]
@@ -440,8 +457,9 @@ def control_replacement(
         for op in block.ops
     ):
         return None
+    exits = tuple(other for other in blocks[proof.exit].phis if other.incoming == {header.at: proof.phi.result})
     if any(
-        other is not proof.phi and ({*aliases, update} & set(other.incoming.values()))
+        other is not proof.phi and other not in exits and ({*aliases, update} & set(other.incoming.values()))
         for block in body.blocks
         for other in block.phis
     ):
@@ -454,7 +472,7 @@ def control_replacement(
         for op in block.ops
     ):
         return None
-    return ControlReplacement(proof, stepping, update, aliases, copies)
+    return ControlReplacement(proof, stepping, update, aliases, copies, exits)
 
 
 def zero_terminating_control(
