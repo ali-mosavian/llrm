@@ -47,8 +47,13 @@ pub fn bodies(relative: impl AsRef<Path>) -> Result<Vec<BodyIR>, String> {
 
 /// `mir.bodies(corpus.loaded(path), corpus.partitioned(path))`.
 pub fn raised(relative: impl AsRef<Path>) -> RaisedBodies {
+    raised_with(relative, false, false)
+}
+
+/// `raised`, with `basic_semantics` and `bounds_checks`.
+pub fn raised_with(relative: impl AsRef<Path>, basic_semantics: bool, bounds_checks: bool) -> RaisedBodies {
     let found = _module(&relative);
-    mir::bodies(&found, &partitioned(&relative), None, false, false).unwrap()
+    mir::bodies(&found, &partitioned(&relative), None, basic_semantics, bounds_checks).unwrap()
 }
 
 /// `[op for block in body.blocks for op in block.ops]`.
