@@ -2718,6 +2718,35 @@ pub(crate) fn folded(body: &Rc<MirBody>, dgroup: &BTreeSet<i64>, calls: &IndexMa
     Ok(floatfold::stored(&floatfold::discarded(&result, &conversions), &floating_facts))
 }
 
+/// A fill's value and count, where they are numbers: a held count was priced as unknown.
+pub(crate) fn _constant_fill(op: &Op, facts: &IndexMap<Value, crate::analysis::consts::Known>) -> Op {
+    use crate::analysis::consts;
+    use crate::model::mir::Const;
+
+    let known = |arg: &Arg| -> Arg {
+        if let Arg::Held(held) = arg {
+            if let Some(fact) = facts.get(&held.value).filter(|fact| fact.width >= held.width) {
+                return Arg::Const(Const::new(consts::masked(&fact.n, held.width), held.width));
+            }
+        }
+        arg.clone()
+    };
+    let args = op.args.iter().take(2).map(known).chain(op.args.iter().skip(2).cloned()).collect::<Vec<_>>();
+    if args == op.args {
+        return op.clone();
+    }
+    let kept = args
+        .iter()
+        .filter_map(|arg| if let Arg::Held(held) = arg { Some(held.value) } else { None })
+        .chain(op.merges.keys().copied())
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut result = op.clone();
+    result.uses = op.uses.iter().copied().filter(|value| kept.contains(value)).collect();
+    result.args = args;
+    result.raised = None;
+    result
+}
+
 /// A near cell reached through a proven constant, as the fixed cell it is.
 ///
 /// Full unrolling leaves `L[k]` with `k` a number; kept based, each copy paid
@@ -2896,6 +2925,9 @@ pub(crate) fn _constant_operands(
     let symbols = symbols.unwrap_or(&no_symbols);
     if op.kind == Kind::Arg {
         return _constant_argument(op, facts, memory, Some(symbols));
+    }
+    if op.kind == Kind::Fill {
+        return _constant_fill(op, facts);
     }
     if op.kind == Kind::Store
         && op.args.len() == op.stores.len()

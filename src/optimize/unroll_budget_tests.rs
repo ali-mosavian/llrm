@@ -6,6 +6,7 @@
 //! `test_oversized_specialization_may_reduce_existing_spill_burden`.
 
 use super::*;
+use std::rc::Rc;
 use crate::model::ir::Operation;
 use crate::model::mir::{Const, Held, OpCode};
 use crate::model::passes::{OperationCosts, Options};
@@ -136,11 +137,11 @@ fn test_large_complete_peel_must_erase_its_growth_to_cross_the_profile_budget() 
         options: Options { max_unroll_iterations: 16, ..Options::default() },
         ..Where::default()
     };
-    let original = _loop();
+    let original = Rc::new(_loop());
 
-    assert_eq!(_rejection(&original, &_straight(3), 1, 64, &r#where), Some("iteration-growth"));
-    assert_eq!(_rejection(&original, &_straight(1), 1, 64, &r#where), None);
-    assert_eq!(_rejection(&original, &_straight(3), 1, 16, &r#where), None);
+    assert_eq!(_rejection(&original, &Rc::new(_straight(3)), 1, 64, &r#where, None), Some("iteration-growth"));
+    assert_eq!(_rejection(&original, &Rc::new(_straight(1)), 1, 64, &r#where, None), None);
+    assert_eq!(_rejection(&original, &Rc::new(_straight(3)), 1, 16, &r#where, None), None);
 }
 
 #[test]
@@ -155,12 +156,12 @@ fn test_default_complete_peel_budget_refuses_sc_init_sized_growth() {
         ..Where::default()
     };
 
-    assert_eq!(_rejection(&_loop(), &_straight(25), 1, 25, &r#where), Some("iteration-growth"));
+    assert_eq!(_rejection(&Rc::new(_loop()), &Rc::new(_straight(25)), 1, 25, &r#where, None), Some("iteration-growth"));
     let unbounded = Where {
         options: Options { max_unroll_iterations: 0, max_unrolled_operations: 0, ..Options::default() },
         ..r#where
     };
-    assert_eq!(_rejection(&_loop(), &_straight(25), 1, 25, &unbounded), None);
+    assert_eq!(_rejection(&Rc::new(_loop()), &Rc::new(_straight(25)), 1, 25, &unbounded, None), None);
 }
 
 #[test]
@@ -177,7 +178,7 @@ fn test_bounded_complete_peel_amortizes_growth_over_its_exact_trip_count() {
         ..Where::default()
     };
 
-    assert_eq!(_rejection(&_loop(), &_straight(25), 1, 9, &r#where), None);
+    assert_eq!(_rejection(&Rc::new(_loop()), &Rc::new(_straight(25)), 1, 9, &r#where, None), None);
 }
 
 #[test]
@@ -196,8 +197,8 @@ fn test_bounded_peel_with_spill_risk_pays_its_complete_growth() {
         ..Where::default()
     };
 
-    assert!(profit::spill_risk(&_pressured(), &costs, r#where.registers, None).unwrap() > 0);
-    assert_eq!(_rejection(&_loop(), &_pressured(), 1, 2, &r#where), Some("growth"));
+    assert!(profit::spill_risk(&Rc::new(_pressured()), &costs, r#where.registers, None).unwrap() > 0);
+    assert_eq!(_rejection(&Rc::new(_loop()), &Rc::new(_pressured()), 1, 2, &r#where, None), Some("growth"));
 }
 
 #[test]
@@ -216,8 +217,8 @@ fn test_spill_prone_complete_peel_respects_the_sequence_budget() {
         ..Where::default()
     };
 
-    assert!(profit::spill_risk(&_large_pressured(), &costs, r#where.registers, None).unwrap() > 0);
-    assert_eq!(_rejection(&_loop(), &_large_pressured(), 1, 8, &r#where), Some("operation-growth"));
+    assert!(profit::spill_risk(&Rc::new(_large_pressured()), &costs, r#where.registers, None).unwrap() > 0);
+    assert_eq!(_rejection(&Rc::new(_loop()), &Rc::new(_large_pressured()), 1, 8, &r#where, None), Some("operation-growth"));
 }
 
 #[test]
@@ -235,7 +236,7 @@ fn test_structural_saving_must_pay_for_unavoidable_pressure() {
         ..Where::default()
     };
 
-    assert_eq!(_rejection(&_loop(), &_pressured(), 1, 8, &r#where), Some("pressure"));
+    assert_eq!(_rejection(&Rc::new(_loop()), &Rc::new(_pressured()), 1, 8, &r#where, None), Some("pressure"));
 }
 
 #[test]
@@ -245,7 +246,7 @@ fn test_pressure_prices_independent_spill_waves() {
         one.store = 10;
     });
 
-    assert_eq!(profit::spill_risk(&_pressure_waves(), &costs, 2, None), Some(40));
+    assert_eq!(profit::spill_risk(&Rc::new(_pressure_waves()), &costs, 2, None), Some(40));
 }
 
 #[test]
@@ -255,5 +256,5 @@ fn test_integer_pressure_does_not_consume_x87_values() {
         one.store = 10;
     });
 
-    assert_eq!(profit::spill_risk(&_floating_pressure(), &costs, 1, None), Some(0));
+    assert_eq!(profit::spill_risk(&Rc::new(_floating_pressure()), &costs, 1, None), Some(0));
 }

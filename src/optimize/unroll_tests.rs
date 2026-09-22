@@ -23,6 +23,7 @@
 //! `test_expansion_provenance_does_not_allow_arbitrary_float_sequences`).
 
 use super::*;
+use std::rc::Rc;
 use crate::backend::cpu;
 use crate::model::ir::Operation;
 use crate::model::mir::OpCode;
@@ -52,6 +53,7 @@ fn test_unroll_profitability_uses_the_selected_cpu() {
         vec![MirBlock::new(0, vec![], moves, vec![2]), MirBlock::new(2, vec![], vec![], vec![])],
     );
     result.repetitions = vec![(1, 2)];
+    let (original, result) = (Rc::new(original), Rc::new(result));
     let with = |name: &str| Where {
         costs: cpu::profile(name).expect("a known cpu").operations.clone(),
         ..Where::default()
