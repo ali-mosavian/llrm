@@ -8,6 +8,9 @@ from iced_x86 import Register
 
 from qbopt import flow
 from qbopt.model import ir
+from qbopt.objectfile import module
+from qbopt.objectfile import omf
+from qbopt.rewrite import rewrite
 from qbopt.model import mir
 from qbopt.backend import masm
 from qbopt.backend import frame
@@ -202,3 +205,19 @@ def test_local_array_fill_uses_the_stack_segment_end_to_end() -> None:
 
     assert "push ss" in body
     assert "push ds" not in body
+
+
+def test_a_frame_descriptor_through_a_near_pointer_has_no_stack_override() -> None:
+    """nestud grew 12 bytes of `ss:` once its descriptor loads carried frame provenance."""
+    out, _ = rewrite(
+        (Path(__file__).resolve().parents[1] / "fixtures" / "omf" / "nestud-q-O.obj").read_bytes(), dry_run=False
+    )
+    code = module.of(omf.parse(out)).code
+
+    overridden = [
+        one
+        for one in Decoder(BITNESS, code, ip=0)
+        if one.segment_prefix == Register.SS and one.memory_base in (Register.SI, Register.DI, Register.BX)
+    ]
+
+    assert not overridden

@@ -986,3 +986,18 @@ def test_provenance_translation_is_never_narrower_than_regions() -> None:
     import provdiff
 
     assert provdiff.main([str(Path(__file__).resolve().parents[1] / "fixtures/omf/harr-p-noO.obj")]) == 0
+
+
+def test_provenance_diff_compares_the_legacy_answer() -> None:
+    """Once the raise attached translated provenance, provdiff compared it with itself and reported all agree.
+
+    procs' REPORT keeps pushes the frame cannot be proven clear of, so some
+    pair must still widen.
+    """
+    from pathlib import Path
+
+    import provdiff
+
+    totals, _, _ = provdiff.compared(Path(__file__).resolve().parents[1] / "fixtures/omf/procs-p-noO.obj", 120)
+
+    assert totals["widened"] > 0

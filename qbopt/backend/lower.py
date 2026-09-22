@@ -451,6 +451,39 @@ def _machine(one, had: tuple, index: int):
     return replace(_addressed(one), selector=_selector(one))
 
 
+def _near_frames(body: "mir.MirBody") -> "mir.MirBody":
+    """A near pointer into the frame as a data reference, DS reaching the stack."""
+    from qbopt.objectfile.module import Space
+
+    def near(ref):
+        if isinstance(ref, mir.Cell):
+            return mir.Cell(near(ref.ref))
+        if isinstance(ref, mir.MemRef) and ref.space is Space.FRAME and ref.addr is not None:
+            if ref.addr.space is Space.LITERAL:
+                return replace(ref, space=None)
+        return ref
+
+    return replace(
+        body,
+        blocks=tuple(
+            replace(
+                block,
+                ops=tuple(
+                    replace(
+                        op,
+                        loads=tuple(map(near, op.loads)),
+                        stores=tuple(map(near, op.stores)),
+                        args=tuple(map(near, op.args)),
+                        results=tuple(map(near, op.results)),
+                    )
+                    for op in block.ops
+                ),
+            )
+            for block in body.blocks
+        ),
+    )
+
+
 def _address(ref: "mir.MemRef") -> "Addr | None":
     """Attach the machine selector implied by an abstract address space."""
     from qbopt.objectfile.module import Space
@@ -570,6 +603,8 @@ def lowered(
     except ValueError as error:
         raise Unlowered(str(error)) from error
     body = narrow.narrowed(canonical.compares(named(body)))
+    if body.stack_in_data:
+        body = _near_frames(body)
     lower_floats.checked(body)
     body = ssa.pruned_phis(body, {phi.result for block in body.blocks for phi in block.phis if not phi.result.flags})
     values = set(ssa.values(body))

@@ -1136,6 +1136,9 @@ class MirBody:
     # resumes inside the body. The raise's to say -- BC's error and event
     # handlers do resume inside one, C has nothing that does.
     sealed: bool = False
+    # SS == DS: the stack is in the data group, so DS reaches a frame object
+    # through a near pointer. The raise's to say -- BC runs so, Watcom C not.
+    stack_in_data: bool = False
     # Source-language pointer facts. These are semantic metadata, not places.
     pointer_values: frozenset[Value] = frozenset()
     pointer_seeds: dict[Value, "memory.Provenance"] = field(default_factory=dict)
@@ -1313,6 +1316,7 @@ def _public(body: MirBody) -> MirBody:
         repetitions=body.repetitions,
         cloned=body.cloned,
         sealed=body.sealed,
+        stack_in_data=body.stack_in_data,
         pointer_values=body.pointer_values,
         pointer_seeds=body.pointer_seeds,
         integer_ranges=body.integer_ranges,
@@ -1404,6 +1408,7 @@ def _with_hints(body: MirBody, hints: AllocationHints) -> _RaisedBody:
         repetitions=body.repetitions,
         cloned=body.cloned,
         sealed=body.sealed,
+        stack_in_data=body.stack_in_data,
         pointer_values=body.pointer_values,
         pointer_seeds=body.pointer_seeds,
         integer_ranges=body.integer_ranges,
@@ -2578,6 +2583,7 @@ def resolved(body: MirBody, calls: dict[int, str] | None = None) -> MirBody | st
         repetitions=body.repetitions,
         cloned=body.cloned,
         sealed=body.sealed,
+        stack_in_data=body.stack_in_data,
         pointer_values=pointer_values | frozenset(pointer_seeds),
         pointer_seeds=pointer_seeds,
         integer_ranges=integer_ranges,
@@ -3212,9 +3218,43 @@ def bodies(
             )
             for name, body in out
         ]
-    out = [(name, _with_live_outs(body)) for name, body in out]
+    out = [(name, _provenanced(replace(_with_live_outs(body), stack_in_data=True), found)) for name, body in out]
     hints = {body.entry: AllocationHints.from_body(body) for _name, body in out}
     return RaisedBodies(tuple((name, _public(body)) for name, body in out), source, hints)
+
+
+def _provenanced(body: MirBody, found: Module) -> MirBody:
+    """Every reference with its region set as provenance, until the raise states it directly."""
+    bounds = module.landmarks(found)
+    private = frozenset() if found.program_data is None else frozenset({found.program_data})
+    refs = [ref for block in body.blocks for op in block.ops for ref in (*op.loads, *op.stores)]
+    spared = frozenset(addr.index for ref in refs for addr, _ in ref.excludes if addr.space is Space.SEGMENT)
+
+    def moved(ref: MemRef) -> MemRef:
+        if ref.provenance is not None:
+            return ref
+        return replace(ref, provenance=regions.provenance(ref, bounds, private=private, spared=spared))
+
+    def operand(one):
+        return Cell(moved(one.ref)) if isinstance(one, Cell) else one
+
+    blocks = tuple(
+        replace(
+            block,
+            ops=tuple(
+                replace(
+                    op,
+                    loads=tuple(map(moved, op.loads)),
+                    stores=tuple(map(moved, op.stores)),
+                    args=tuple(map(operand, op.args)),
+                    results=tuple(map(operand, op.results)),
+                )
+                for op in block.ops
+            ),
+        )
+        for block in body.blocks
+    )
+    return replace(body, blocks=blocks)
 
 
 def _sites(found: Module, blocks: list[Block]) -> dict:

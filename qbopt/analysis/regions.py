@@ -424,9 +424,11 @@ def provenance(
     elif root in spans and not _floor(ref.addr):
         # The push area is unaddressed, so a reference that can reach it names it.
         spans = spans | {(STACK, SP, *WHOLE)}
-    if any(one[:2] == (STACK, SP) for one in spans):
+    framed = any(addr.space is Space.FRAME for addr, _ in ref.excludes)
+    if any(one[:2] == (STACK, SP) for one in spans) and not framed:
         # sp and bp displacements are not comparable: a push is anywhere in
-        # the frame bar what an exclusion proves it misses.
+        # the frame, unless proven clear of the locals, which puts it in the
+        # push area alone.
         spans = spans | {(STACK, BP, *WHOLE)}
     slices = set()
     for region, origin, low, high in spans:

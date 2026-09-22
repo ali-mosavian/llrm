@@ -33,6 +33,12 @@ def translated(ref: mir.MemRef, bounds: dict | None, private: frozenset[int], sp
     return replace(ref, provenance=regions.provenance(ref, bounds, private=private, spared=spared))
 
 
+def legacy(ref: mir.MemRef, bounds: dict | None, private: frozenset[int], spared: frozenset[int]) -> mir.MemRef:
+    """The reference as regions alone answered it: without provenance the raise translated rather than stated."""
+    bare = replace(ref, provenance=None)
+    return bare if translated(bare, bounds, private, spared) == ref else ref
+
+
 def kinds(ref: mir.MemRef) -> str:
     return "+".join(sorted({one.object.kind.value for one in ref.provenance.slices}))
 
@@ -62,6 +68,7 @@ def compared(path: Path, limit: int) -> tuple[Counter, Counter, list[str]]:
         refs = refs[:limit]
         private = frozenset() if found.program_data is None else frozenset({found.program_data})
         spared = frozenset(addr.index for ref in refs for addr, _ in ref.excludes if addr.space is module.Space.SEGMENT)
+        refs = list(dict.fromkeys(legacy(ref, bounds, private, spared) for ref in refs))
         moved = {ref: translated(ref, bounds, private, spared) for ref in refs}
         for one, other in itertools.combinations(refs, 2):
             before = mir.overlapping(one, other, found.dgroup, bounds)

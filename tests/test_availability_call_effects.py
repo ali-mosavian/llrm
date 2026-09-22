@@ -105,3 +105,22 @@ def test_complete_write_only_call_does_not_make_prior_store_observable() -> None
     body = replace(body, blocks=(replace(body.blocks[0], ops=(store, call, replace(store, at=2))),))
 
     assert avail.dead_stores(body, frozenset({1}), {}) == (store,)
+
+
+def test_an_unknown_pointer_does_not_observe_a_private_cell() -> None:
+    """procs' TWICE kept two dead frame stores once its return read through UNKNOWN provenance.
+
+    Provenance naming no object is an unresolved pointer, which reaches a
+    private cell no more than a reference without provenance does.
+    """
+    from qbopt.model import memory
+
+    body = body_with_call(mir.MemRef(None, 0))
+    store, _call, load = body.blocks[0].ops
+    cell = mir.MemRef(Addr(Space.FRAME, -0x18), 2)
+    unknown = mir.MemRef(None, 2, provenance=memory.Provenance.one(memory.Object(memory.Kind.UNKNOWN)))
+    store = replace(store, results=(mir.Cell(cell),), stores=(cell,))
+    load = replace(load, args=(mir.Cell(unknown),), loads=(unknown,))
+    body = replace(body, blocks=(replace(body.blocks[0], ops=(store, load)),))
+
+    assert avail.dead_stores(body, frozenset({1}), {}, private=lambda ref: ref == cell) == (store,)

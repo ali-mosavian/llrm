@@ -788,6 +788,10 @@ def annotated(body: mir.MirBody) -> mir.MirBody:
             # arbitrary SP-relative references conservative; the operation's
             # semantic role is the proof, not the address spelling.
             excludes = (*excludes, mir.WHOLE_FRAME)
+        if outgoing and ref.space is Space.STACK and got is not None:
+            got = memory.Provenance(
+                frozenset(one for one in got.slices if one.object.kind is not memory.Kind.FRAME), got.restrict
+            )
         return (
             replace(ref, provenance=got, space=space, excludes=excludes)
             if got != ref.provenance or space is not ref.space or excludes != ref.excludes
