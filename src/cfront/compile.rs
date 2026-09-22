@@ -23,7 +23,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::backend::{
-    allocate, coalesce, cpu, farcall, floatalloc, frame, lower, lower_int64, masm, parcopy, phielim, twoaddr,
+    allocate, coalesce, cpu, farcall, floatalloc, frame, lower, lower_int64, masm, parcopy, peephole, phielim, prologue,
+    twoaddr,
 };
 use crate::model::passes::LIRTransform;
 use crate::flow;
@@ -131,8 +132,7 @@ pub fn assembled(
         lirs.push(_lir_text(&raised.name, &low));
         let frame = frame::of(&low, Some(&legalized.calls), "", None).map_err(|error| hir::Unsupported(error.0))?;
         let frame = Rc::new(RefCell::new(frame));
-        // `flow.machine`, as far as it is ported.
-        // `flow.machine`, as far as it is ported; `Prologue` (07) runs at emission.
+        // `flow.machine`, as far as it is ported; `Prologue` runs at emission.
         let pinned = low.pins.clone();
         let profile = cpu::profile(cpu::ProfileOrName::Name(target)).map_err(hir::Unsupported)?;
         let mut phases: Vec<Box<dyn LIRTransform + '_>> = vec![
@@ -148,10 +148,15 @@ pub fn assembled(
                     .map_err(hir::Unsupported)?,
             ),
             Box::new(parcopy::ParallelCopy),
+            Box::new(prologue::Prologue::new(Rc::clone(&frame), Some(legalized.calls.clone()))),
+            Box::new(peephole::Peephole::new(Some(Rc::clone(&frame)), profile).map_err(hir::Unsupported)?),
         ];
         let mut in_ssa = true;
         let mut low = low;
         for (number, phase) in phases.iter_mut().enumerate() {
+            if phase.class_name() == "Prologue" {
+                continue;
+            }
             if phase.class_name() == "PhiElimination" {
                 in_ssa = false;
             }
@@ -171,7 +176,7 @@ pub fn assembled(
     }
     write(dump, "mir", &mirs.join("\n"))?;
     let _ = lirs;
-    Err(CompileError::NotPorted("qbopt.backend.peephole.Peephole"))
+    Err(CompileError::NotPorted("qbopt.backend.schedule.Scheduler"))
 }
 
 pub fn _lir_text(name: &str, body: &lir::LirBody) -> String {
