@@ -138,15 +138,16 @@ only for a module still `todo`, and never after cutover.
 | 4 | `qbopt/frontend/qb/driver.py` | 204 | `src/frontend/qb/driver.rs` | todo | test_hir, test_qb_frontend_command |
 | 4 | `qbopt/frontend/qb/inline_x87.py` | 64 | `src/frontend/qb/inline_x87.rs` | todo | - |
 | 4 | `qbopt/frontend/qb/stage_text.py` | 178 | `src/frontend/qb/stage_text.rs` | n/a (tools only) | - |
-| 4 | `qbopt/hir/__init__.py` | 93 | `src/hir/__init__.rs` | todo | test_hir, test_hir_execute, test_modern_e2e, test_modern_frontend, test_qbstages |
+| 4 | `qbopt/hir/__init__.py` | 93 | `src/hir/mod.rs` | ported (test_hir HIR-only cases) | test_hir, test_hir_execute, test_modern_e2e, test_modern_frontend, test_qbstages |
 | 4 | `qbopt/hir/__main__.py` | 29 | `src/hir/__main__.rs` | todo | - |
-| 4 | `qbopt/hir/callmemory.py` | 71 | `src/hir/callmemory.rs` | todo | - |
-| 4 | `qbopt/hir/codec.py` | 129 | `src/hir/codec.rs` | todo | - |
-| 4 | `qbopt/hir/dump.py` | 141 | `src/hir/dump.rs` | todo | - |
+| 4 | `qbopt/hir/callmemory.py` | 71 | `src/hir/callmemory.rs` | ported | - |
+| 4 | `qbopt/hir/codec.py` | 129 | `src/hir/codec.rs` | ported | - |
+| 4 | `qbopt/hir/dump.py` | 141 | `src/hir/dump.rs` | ported | - |
+| 4 | `qbopt/hir/escape.py` | 28 | `src/hir/escape.rs` | ported | - |
 | 4 | `qbopt/hir/execute.py` | 438 | `src/hir/execute.rs` | n/a (tools only) | test_modern_e2e |
-| 4 | `qbopt/hir/lower.py` | 1438 | `src/hir/lower.rs` | todo | - |
-| 4 | `qbopt/hir/model.py` | 370 | `src/hir/model.rs` | todo | test_hir |
-| 4 | `qbopt/hir/verify.py` | 447 | `src/hir/verify.rs` | todo | - |
+| 4 | `qbopt/hir/lower.py` | 1438 | `src/hir/lower.rs` | ported | - |
+| 4 | `qbopt/hir/model.py` | 370 | `src/hir/model.rs` | ported | test_hir |
+| 4 | `qbopt/hir/verify.py` | 447 | `src/hir/verify.rs` | ported | - |
 | 5 | `qbopt/abi/callsite.py` | 52 | `src/abi/callsite.rs` | todo | - |
 | 5 | `qbopt/abi/events.py` | 52 | `src/abi/events.rs` | todo | test_runtime |
 | 5 | `qbopt/abi/handlers.py` | 47 | `src/abi/handlers.rs` | todo | test_extent |
