@@ -594,6 +594,16 @@ def test_three_array_initializer_keeps_the_fixed_frame_address_component() -> No
     assert initializers == cells
 
 
+def test_a_loop_whose_latch_copies_ends_on_its_branch() -> None:
+    """sum_three left the latch's copies in the exit edge, so the loop ran je out plus jmp back."""
+    assembly = masm.text(modern_compile.assembled(driver.parsed(SUM_THREE), entry="main", cpu="486"))
+    function = assembly.split("_sum_three proc far", 1)[1].split("_sum_three endp", 1)[0]
+    top = re.search(r"(L\w+):\n(?:.*\n)*?\s*jne\s+\1\n", function)
+
+    assert top is not None
+    assert "jmp" not in top.group(0)
+
+
 def test_runtime_bounded_array_loop_has_a_symbolic_count_proof() -> None:
     """A runtime descriptor extent is an exact trip count, not an unknown loop."""
     program = driver.parsed(SUM)

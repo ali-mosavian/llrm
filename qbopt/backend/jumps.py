@@ -156,10 +156,83 @@ def _tests(natural: list, entry: int, by_at: dict) -> dict[int, tuple[int, froze
 
 
 def threaded(body: lir.LirBody) -> lir.LirBody:
+    body = _hoisted(body)
     body, changed = _reachable(body, list(body.blocks)), True
     while changed:
         body, changed = _step(body)
     return body
+
+
+def _hoisted(body: lir.LirBody) -> lir.LirBody:
+    """An edge block's anchors moved up before the branch into it, where the other way reads nothing they define.
+
+    A phi copy the allocation made an identity emits nothing, but its anchor
+    keeps a virtual definition on the edge, and `_passage` will not thread
+    around it: sum_three's loop ended `je exit; jmp top` for one. Before the
+    branch it defines the same value on both edges, harmless on the one that
+    never reads it; the edge block is then only a jump.
+    """
+    blocks = list(body.blocks)
+    index = {block.at: position for position, block in enumerate(blocks)}
+    predecessors = _predecessors(blocks)
+    live = None
+    for position, block in enumerate(blocks):
+        anchors = [one for one in block.insns if _inert(one)]
+        rest = [one for one in block.insns if not _inert(one)]
+        if (
+            not anchors
+            or block.phis
+            or len(block.succ) != 1
+            or any(one.what is None or one.what.op is not ir.Operation.JUMP for one in rest)
+            or len(predecessors.get(block.at, ())) != 1
+        ):
+            continue
+        before = blocks[index[next(iter(predecessors[block.at]))]]
+        if len(before.succ) != 2 or block.at not in before.succ:
+            continue
+        other = next(at for at in before.succ if at != block.at)
+        live = _live_values(replace(body, blocks=tuple(blocks))) if live is None else live
+        if {value for one in anchors for value in one.defines} & live.get(other, frozenset()):
+            continue
+        cut = len(before.insns)
+        while cut and before.insns[cut - 1].what is not None and before.insns[cut - 1].what.op in _LEAVING:
+            cut -= 1
+        blocks[index[before.at]] = replace(before, insns=(*before.insns[:cut], *anchors, *before.insns[cut:]))
+        blocks[position] = replace(block, insns=tuple(rest))
+        live = None
+    return replace(body, blocks=tuple(blocks))
+
+
+_LEAVING = (ir.Operation.BRANCH, ir.Operation.JUMP)
+
+
+def _inert(one: lir.Insn) -> bool:
+    """An inserted anchor: no bytes, no machine effect, only a virtual definition."""
+    return one.what is not None and one.what.op is ir.Operation.NOTHING and one.inserted and not one.spread
+
+
+def _live_values(body: lir.LirBody) -> dict[int, frozenset[int]]:
+    """Per block, the virtual values live on entry."""
+    blocks = {block.at: block for block in body.blocks}
+    carried: dict[int, set[int]] = {}
+    for block in body.blocks:
+        for phi in block.phis:
+            for at, value in phi.incoming:
+                carried.setdefault(at, set()).add(value)
+    into = {at: frozenset() for at in blocks}
+    changing = True
+    while changing:
+        changing = False
+        for at, block in blocks.items():
+            live = set(carried.get(at, ())).union(*(into[to] for to in block.succ if to in into))
+            for one in reversed(block.insns):
+                live -= {*one.defines, *(held.value for held, _register in one.delivers)}
+                live |= {*one.uses, *(held.value for held, _register in one.requires)}
+            live -= {phi.result for phi in block.phis}
+            if frozenset(live) != into[at]:
+                into[at] = frozenset(live)
+                changing = True
+    return into
 
 
 def merged(body: lir.LirBody) -> lir.LirBody:
