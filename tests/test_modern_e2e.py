@@ -148,7 +148,7 @@ def test_native_integers_print_as_the_hir_executor_prints_them(tmp_path: Path) -
         "    let e: i32 = -2147483648\n"
         "    let f: u32 = 4294967295\n"
         "    let g: i32 = 0\n"
-        "    print(f\"{a} {b} {c} {d} {e} {f} {g}\")\n"
+        '    print(f"{a} {b} {c} {d} {e} {f} {g}")\n'
         "    return 0\n"
     )
 
@@ -162,3 +162,11 @@ def test_native_matmul_matches_hir(tmp_path: Path) -> None:
     expected = execute.run(driver.parsed(source), "main").output
     assert expected == "matmul: 372432\n"
     assert build(source, tmp_path / "MATMUL.EXE", run=True).output == expected
+
+
+def test_native_operators_conversions_and_repeats_match_hir(tmp_path: Path) -> None:
+    """A shift by a u16 count selected `sar eax,cx`, which has no encoding: x86 counts from cl."""
+    source = ROOT / "frontends" / "modern" / "fixtures" / "operators.mod"
+    expected = execute.run(driver.parsed(source), "main").output
+    assert expected == "49149 -812500 3203125\n1 0 1 0\n447 254 224 121\n"
+    assert build(source, tmp_path / "OPS.EXE", run=True).output == expected

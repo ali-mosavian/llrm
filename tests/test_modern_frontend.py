@@ -852,3 +852,113 @@ def test_fixed_point_arithmetic_has_a_price(tmp_path: Path) -> None:
 
     assert {mir.Kind.FIXED_MUL, mir.Kind.FIXED_DIV} <= kinds
     assert all(profit.static(body, costs) is not None for body in bodies)
+
+
+def _returned(tmp_path: Path, text: str, entry: str = "value") -> object:
+    source = tmp_path / "program.mod"
+    source.write_text(text)
+    return execute.run(driver.parsed(source), entry).value
+
+
+@pytest.mark.parametrize(
+    ("type_", "expression", "expected"),
+    [
+        ("i16", "6 & 3 | 8 ^ 1", 11),
+        ("i16", "1 + 2 << 3", 24),
+        ("i16", "~5", -6),
+        ("i16", "1 << 15", -32768),
+        ("i16", "-16 >> 2", -4),
+        ("u16", "u16(65520) >> 4", 4095),
+        ("i16", "i16(not 1 == 2)", 1),
+        ("i16", "i16(true or false and false)", 1),
+        ("i32", "i32(i16(-2))", -2),
+        ("u32", "u32(u16(65535))", 65535),
+        ("i8", "i8(i16(300))", 44),
+        ("i16", "i16(-7.9)", -7),
+        ("i16", "i16(true) + i16(false)", 1),
+        ("u8", "u8('A')", 65),
+        ("f32", "f32(3) / f32(2)", 1.5),
+    ],
+)
+def test_operators_bind_and_conversions_convert_as_the_spec_says(
+    tmp_path: Path, type_: str, expression: str, expected: object
+) -> None:
+    assert _returned(tmp_path, f"fn value() -> {type_}:\n    return {expression}\n") == expected
+
+
+def test_and_or_evaluate_their_right_operand_only_when_it_decides(tmp_path: Path) -> None:
+    text = (
+        "fn boom(zero: i16) -> bool:\n"
+        "    return 1 / zero == 0\n"
+        "fn value() -> i16:\n"
+        "    let zero: i16 = 0\n"
+        "    return i16(false and boom(zero)) + i16(true or boom(zero))\n"
+    )
+    assert _returned(tmp_path, text) == 1
+
+
+def test_every_bitwise_operator_has_a_compound_assignment(tmp_path: Path) -> None:
+    text = (
+        "fn value() -> u16:\n"
+        "    var x: u16 = 1\n"
+        "    x <<= 4\n"
+        "    x |= 3\n"
+        "    x ^= 1\n"
+        "    x &= 255\n"
+        "    x >>= 1\n"
+        "    return x\n"
+    )
+    assert _returned(tmp_path, text) == 9
+
+
+def test_a_repeat_literal_fills_a_fixed_array(tmp_path: Path) -> None:
+    text = (
+        "fn value() -> i32:\n"
+        "    var a: [i32; 5] = [7; 5]\n"
+        "    a[2] = 1\n"
+        "    var total: i32 = 0\n"
+        "    for item in a:\n"
+        "        total += item\n"
+        "    return total\n"
+    )
+    assert _returned(tmp_path, text) == 29
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "    return i16(1 < 2 < 3)\n",
+        "    return 1 << 16\n",
+        "    let count: i16 = 1\n    return 1 << count\n",
+        "    return i16(bool(1))\n",
+        "    return i16(u8(300))\n",
+        "    return i16(f64(1) & f64(2))\n",
+        "    let a: [i16; 4] = [0; 3]\n    return a[0]\n",
+    ],
+)
+def test_ill_formed_operators_conversions_and_repeats_are_rejected(tmp_path: Path, body: str) -> None:
+    source = tmp_path / "rejected.mod"
+    source.write_text("fn value() -> i16:\n" + body)
+    with pytest.raises(driver.FrontendError):
+        driver.parsed(source)
+
+
+def test_a_repeat_value_reads_the_names_outside_the_new_binding(tmp_path: Path) -> None:
+    """The fill bound the new array first, so `[a[0]; 3]` read the uninitialized new `a`."""
+    text = (
+        "fn value() -> i16:\n"
+        "    let a: [i16; 2] = [5, 6]\n"
+        "    if true:\n"
+        "        let a: [i16; 3] = [a[0]; 3]\n"
+        "        return a[0] + a[2]\n"
+        "    return 0\n"
+    )
+    assert _returned(tmp_path, text) == 10
+
+
+def test_not_is_not_an_operand_of_a_tighter_operator(tmp_path: Path) -> None:
+    """`a + not b == c` parsed as `a + (not (b == c))`; Python rejects it, and so does the spec's ladder."""
+    source = tmp_path / "not.mod"
+    source.write_text("fn value() -> bool:\n    return true == not false\n")
+    with pytest.raises(driver.FrontendError):
+        driver.parsed(source)

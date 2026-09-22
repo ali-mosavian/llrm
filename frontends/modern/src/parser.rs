@@ -319,6 +319,11 @@ impl Parser {
                     TokenKind::StarEqual => Some(Some(BinaryOp::Multiply)),
                     TokenKind::SlashEqual => Some(Some(BinaryOp::Divide)),
                     TokenKind::PercentEqual => Some(Some(BinaryOp::Remainder)),
+                    TokenKind::AmpersandEqual => Some(Some(BinaryOp::BitAnd)),
+                    TokenKind::PipeEqual => Some(Some(BinaryOp::BitOr)),
+                    TokenKind::CaretEqual => Some(Some(BinaryOp::BitXor)),
+                    TokenKind::ShiftLeftEqual => Some(Some(BinaryOp::ShiftLeft)),
+                    TokenKind::ShiftRightEqual => Some(Some(BinaryOp::ShiftRight)),
                     _ => None,
                 };
                 if let Some(operation) = operation {
@@ -473,57 +478,47 @@ impl Parser {
     }
 
     fn expression(&mut self, minimum_binding: u8) -> Result<Expr, Diagnostic> {
-        let mut left = self.prefix()?;
+        let mut left = self.prefix(minimum_binding)?;
+        let mut compared = false;
         loop {
-            if matches!(self.peek().kind, TokenKind::LeftParen) {
-                if 30 < minimum_binding {
+            let postfix = matches!(
+                self.peek().kind,
+                TokenKind::LeftParen | TokenKind::LeftBracket | TokenKind::Dot
+            );
+            if postfix {
+                if POSTFIX < minimum_binding {
                     break;
                 }
-                left = self.call(left)?;
-                continue;
-            }
-            if matches!(self.peek().kind, TokenKind::LeftBracket) {
-                if 30 < minimum_binding {
-                    break;
-                }
-                left = self.index(left)?;
-                continue;
-            }
-            if matches!(self.peek().kind, TokenKind::Dot) {
-                if 30 < minimum_binding {
-                    break;
-                }
-                left = self.member(left)?;
-                continue;
-            }
-            if matches!(self.peek().kind, TokenKind::Is) {
-                if 5 < minimum_binding {
-                    break;
-                }
-                self.bump();
-                let operation = if self.take(|kind| matches!(kind, TokenKind::Not)).is_some() {
-                    BinaryOp::IsNot
-                } else {
-                    BinaryOp::Is
-                };
-                let right = self.expression(6)?;
-                let left_span = left.span();
-                let right_span = right.span();
-                left = Expr::Binary {
-                    op: operation,
-                    left: Box::new(left),
-                    right: Box::new(right),
-                    span: Span::new(left_span.line, left_span.column, right_span.end_column),
+                left = match self.peek().kind {
+                    TokenKind::LeftParen => self.call(left)?,
+                    TokenKind::LeftBracket => self.index(left)?,
+                    _ => self.member(left)?,
                 };
                 continue;
             }
-            let Some((left_binding, right_binding, operation)) = infix(&self.peek().kind) else {
+            let operator = if matches!(self.peek().kind, TokenKind::Is) {
+                Some((COMPARE, COMPARE + 1, BinaryOp::Is))
+            } else {
+                infix(&self.peek().kind)
+            };
+            let Some((left_binding, right_binding, mut operation)) = operator else {
                 break;
             };
             if left_binding < minimum_binding {
                 break;
             }
-            self.bump();
+            let at = self.bump().span;
+            if left_binding == COMPARE {
+                if compared {
+                    return Err(Diagnostic::new(at, "comparisons do not chain"));
+                }
+                compared = true;
+                if operation == BinaryOp::Is
+                    && self.take(|kind| matches!(kind, TokenKind::Not)).is_some()
+                {
+                    operation = BinaryOp::IsNot;
+                }
+            }
             let right = self.expression(right_binding)?;
             let left_span = left.span();
             let right_span = right.span();
@@ -537,8 +532,14 @@ impl Parser {
         Ok(left)
     }
 
-    fn prefix(&mut self) -> Result<Expr, Diagnostic> {
+    fn prefix(&mut self, minimum_binding: u8) -> Result<Expr, Diagnostic> {
         let token = self.bump().clone();
+        if matches!(token.kind, TokenKind::Not) && minimum_binding > NOT {
+            return Err(Diagnostic::new(
+                token.span,
+                "'not' binds looser than this operator; parenthesize it",
+            ));
+        }
         match token.kind {
             TokenKind::Integer(value) => Ok(Expr::Integer(value, token.span)),
             TokenKind::Float(value) => Ok(Expr::Float(value, token.span)),
@@ -583,7 +584,7 @@ impl Parser {
             TokenKind::LeftBrace => self.struct_literal(None, token.span),
             TokenKind::Ampersand => {
                 let mutable = self.take(|kind| matches!(kind, TokenKind::Mut)).is_some();
-                let operand = self.expression(25)?;
+                let operand = self.expression(UNARY)?;
                 let end = operand.span().end_column;
                 Ok(Expr::Borrow {
                     mutable,
@@ -613,6 +614,25 @@ impl Parser {
                             ),
                         });
                     }
+                    if self.take(|kind| matches!(kind, TokenKind::Semicolon)).is_some() {
+                        let mut counts = vec![self.expression(0)?];
+                        while self.take(|kind| matches!(kind, TokenKind::Comma)).is_some() {
+                            counts.push(self.expression(0)?);
+                        }
+                        let close = self.expect(
+                            |kind| matches!(kind, TokenKind::RightBracket),
+                            "expected ']' after a repeat literal's counts",
+                        )?;
+                        return Ok(Expr::Repeat {
+                            value: Box::new(first),
+                            counts,
+                            span: Span::new(
+                                token.span.line,
+                                token.span.column,
+                                close.span.end_column,
+                            ),
+                        });
+                    }
                     values.push(first);
                     loop {
                         if self.take(|kind| matches!(kind, TokenKind::Comma)).is_none() {
@@ -633,18 +653,34 @@ impl Parser {
                     Span::new(token.span.line, token.span.column, close.span.end_column),
                 ))
             }
-            TokenKind::Minus | TokenKind::Not => {
-                let operation = if matches!(token.kind, TokenKind::Minus) {
-                    UnaryOp::Negative
-                } else {
-                    UnaryOp::Not
+            TokenKind::Minus | TokenKind::Tilde | TokenKind::Not => {
+                let (operation, binding) = match token.kind {
+                    TokenKind::Minus => (UnaryOp::Negative, UNARY),
+                    TokenKind::Tilde => (UnaryOp::Complement, UNARY),
+                    _ => (UnaryOp::Not, NOT),
                 };
-                let operand = self.expression(25)?;
+                let operand = self.expression(binding)?;
                 let end = operand.span().end_column;
                 Ok(Expr::Unary {
                     op: operation,
                     operand: Box::new(operand),
                     span: Span::new(token.span.line, token.span.column, end),
+                })
+            }
+            kind if primitive(&kind).is_some() => {
+                self.expect(
+                    |kind| matches!(kind, TokenKind::LeftParen),
+                    "expected '(' after a conversion's type",
+                )?;
+                let value = self.expression(0)?;
+                let close = self.expect(
+                    |kind| matches!(kind, TokenKind::RightParen),
+                    "expected ')' after a conversion's value",
+                )?;
+                Ok(Expr::Conversion {
+                    target: primitive(&kind).expect("matched"),
+                    value: Box::new(value),
+                    span: Span::new(token.span.line, token.span.column, close.span.end_column),
                 })
             }
             TokenKind::LeftParen => {
@@ -961,20 +997,10 @@ impl Parser {
 
     fn type_name(&mut self) -> Result<TypeName, Diagnostic> {
         let token = self.bump().clone();
+        if let Some(type_name) = primitive(&token.kind) {
+            return Ok(type_name);
+        }
         match token.kind {
-            TokenKind::Char => Ok(TypeName::Char),
-            TokenKind::I8 => Ok(TypeName::I8),
-            TokenKind::U8 => Ok(TypeName::U8),
-            TokenKind::I16 => Ok(TypeName::I16),
-            TokenKind::U16 => Ok(TypeName::U16),
-            TokenKind::I32 => Ok(TypeName::I32),
-            TokenKind::U32 => Ok(TypeName::U32),
-            TokenKind::F32 => Ok(TypeName::F32),
-            TokenKind::F64 => Ok(TypeName::F64),
-            TokenKind::StringType => Ok(TypeName::String),
-            TokenKind::Addr => Ok(TypeName::Addr),
-            TokenKind::Bool => Ok(TypeName::Bool),
-            TokenKind::Void => Ok(TypeName::Void),
             TokenKind::Identifier(name) => self.fixed_types.get(&name).copied().ok_or_else(|| {
                 Diagnostic::new(token.span, format!("unknown scalar type {name:?}"))
             }),
@@ -1058,21 +1084,56 @@ fn parse_inline_expression(source: &str, outer: Span) -> Result<Expr, Diagnostic
     Ok(expression)
 }
 
-fn infix(kind: &TokenKind) -> Option<(u8, u8, BinaryOp)> {
+fn primitive(kind: &TokenKind) -> Option<TypeName> {
     Some(match kind {
-        TokenKind::EqualEqual => (5, 6, BinaryOp::Equal),
-        TokenKind::NotEqual => (5, 6, BinaryOp::NotEqual),
-        TokenKind::Less => (5, 6, BinaryOp::Less),
-        TokenKind::LessEqual => (5, 6, BinaryOp::LessEqual),
-        TokenKind::Greater => (5, 6, BinaryOp::Greater),
-        TokenKind::GreaterEqual => (5, 6, BinaryOp::GreaterEqual),
-        TokenKind::Plus => (10, 11, BinaryOp::Add),
-        TokenKind::Minus => (10, 11, BinaryOp::Subtract),
-        TokenKind::Star => (20, 21, BinaryOp::Multiply),
-        TokenKind::Slash => (20, 21, BinaryOp::Divide),
-        TokenKind::Percent => (20, 21, BinaryOp::Remainder),
+        TokenKind::Char => TypeName::Char,
+        TokenKind::I8 => TypeName::I8,
+        TokenKind::U8 => TypeName::U8,
+        TokenKind::I16 => TypeName::I16,
+        TokenKind::U16 => TypeName::U16,
+        TokenKind::I32 => TypeName::I32,
+        TokenKind::U32 => TypeName::U32,
+        TokenKind::F32 => TypeName::F32,
+        TokenKind::F64 => TypeName::F64,
+        TokenKind::StringType => TypeName::String,
+        TokenKind::Addr => TypeName::Addr,
+        TokenKind::Bool => TypeName::Bool,
+        TokenKind::Void => TypeName::Void,
         _ => return None,
     })
+}
+
+/// Binding powers, loosest first; a binary operator's right side binds one tighter.
+const OR: u8 = 2;
+const AND: u8 = 4;
+const NOT: u8 = 6;
+const COMPARE: u8 = 8;
+const UNARY: u8 = 25;
+const POSTFIX: u8 = 30;
+
+fn infix(kind: &TokenKind) -> Option<(u8, u8, BinaryOp)> {
+    let (binding, operation) = match kind {
+        TokenKind::Or => (OR, BinaryOp::Or),
+        TokenKind::And => (AND, BinaryOp::And),
+        TokenKind::EqualEqual => (COMPARE, BinaryOp::Equal),
+        TokenKind::NotEqual => (COMPARE, BinaryOp::NotEqual),
+        TokenKind::Less => (COMPARE, BinaryOp::Less),
+        TokenKind::LessEqual => (COMPARE, BinaryOp::LessEqual),
+        TokenKind::Greater => (COMPARE, BinaryOp::Greater),
+        TokenKind::GreaterEqual => (COMPARE, BinaryOp::GreaterEqual),
+        TokenKind::Pipe => (10, BinaryOp::BitOr),
+        TokenKind::Caret => (12, BinaryOp::BitXor),
+        TokenKind::Ampersand => (14, BinaryOp::BitAnd),
+        TokenKind::ShiftLeft => (16, BinaryOp::ShiftLeft),
+        TokenKind::ShiftRight => (16, BinaryOp::ShiftRight),
+        TokenKind::Plus => (18, BinaryOp::Add),
+        TokenKind::Minus => (18, BinaryOp::Subtract),
+        TokenKind::Star => (20, BinaryOp::Multiply),
+        TokenKind::Slash => (20, BinaryOp::Divide),
+        TokenKind::Percent => (20, BinaryOp::Remainder),
+        _ => return None,
+    };
+    Some((binding, binding + 1, operation))
 }
 
 #[cfg(test)]

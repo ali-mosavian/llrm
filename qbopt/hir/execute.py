@@ -300,6 +300,12 @@ class _Machine:
             if op in (model.Op.COPY, model.Op.CONVERT, model.Op.SIGN_EXTEND, model.Op.ZERO_EXTEND):
                 define(instruction, (args[0],))
                 return
+            if op is model.Op.TRUNCATE:
+                target = value_types[instruction.results[0]]
+                if not math.isfinite(args[0]) or _integer(int(args[0]), target) != int(args[0]):
+                    raise ExecutionError(f"{args[0]} is outside {target.name}")
+                define(instruction, (int(args[0]),))
+                return
             if op in (model.Op.FNEG, model.Op.NEG):
                 define(instruction, (-_number(args[0]),))
                 return
@@ -327,6 +333,10 @@ class _Machine:
                 model.Op.FMUL: lambda a, b: a * b,
                 model.Op.FDIV: lambda a, b: a / b,
             }
+            if op in (model.Op.SHL, model.Op.SHR, model.Op.SAR):
+                bits = operand_type(instruction.operands[0]).width * 8
+                if not 0 <= _whole(args[1]) < bits:
+                    raise ExecutionError(f"shift count {_whole(args[1])} is not less than {bits}")
             if op in binary:
                 define(instruction, (binary[op](args[0], args[1]),))
                 return

@@ -992,6 +992,8 @@ def _function(
             if instruction.op in _X87_INTRINSICS
             else mir.Kind.UDIVMOD
             if instruction.op in (model.Op.UDIV, model.Op.UREM, model.Op.UDIVMOD)
+            else mir.Kind.FSTORE
+            if instruction.op is model.Op.TRUNCATE
             else _KINDS[instruction.op.value]
         )
         if instruction.op in (model.Op.DIV, model.Op.REM, model.Op.UDIV, model.Op.UREM):
@@ -1073,7 +1075,7 @@ def _function(
                 operation_kind, operation_name = ir.Operation.BINARY, "ptr_offset"
             else:
                 kind = mir.Kind.ADD
-        if instruction.op is model.Op.CONVERT:
+        if instruction.op in (model.Op.CONVERT, model.Op.TRUNCATE):
             source_id = (
                 value_types[instruction.operands[0].value]
                 if isinstance(instruction.operands[0], model.ValueRef)
@@ -1121,7 +1123,7 @@ def _function(
                     (floating.Format.EXTENDED80,),
                     _stored_format(target_type),
                     floating.Precision.DESTINATION,
-                    floating.Rounding.DYNAMIC,
+                    floating.Rounding.TOWARD_ZERO if instruction.op is model.Op.TRUNCATE else floating.Rounding.DYNAMIC,
                 )
             elif source_id.kind is model.TypeKind.FLOAT and target_type.kind is model.TypeKind.FLOAT:
                 if target_type.width >= source_id.width:

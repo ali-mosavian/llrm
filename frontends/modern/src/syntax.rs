@@ -194,6 +194,7 @@ impl Statement {
 pub enum UnaryOp {
     Negative,
     Not,
+    Complement,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -211,6 +212,13 @@ pub enum BinaryOp {
     LessEqual,
     Greater,
     GreaterEqual,
+    BitAnd,
+    BitOr,
+    BitXor,
+    ShiftLeft,
+    ShiftRight,
+    And,
+    Or,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -224,6 +232,18 @@ pub enum Expr {
         span: Span,
     },
     Array(Vec<Expr>, Span),
+    /// `[value; count]`, one count per rank.
+    Repeat {
+        value: Box<Expr>,
+        counts: Vec<Expr>,
+        span: Span,
+    },
+    /// `T(value)`.
+    Conversion {
+        target: TypeName,
+        value: Box<Expr>,
+        span: Span,
+    },
     Comprehension {
         element: Box<Expr>,
         binding: String,
@@ -329,6 +349,8 @@ impl Expr {
             | Self::Member { span, .. }
             | Self::StructLiteral { span, .. }
             | Self::Borrow { span, .. }
+            | Self::Repeat { span, .. }
+            | Self::Conversion { span, .. }
             | Self::Unary { span, .. }
             | Self::Binary { span, .. }
             | Self::Call { span, .. }

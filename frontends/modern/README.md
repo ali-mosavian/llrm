@@ -10,12 +10,16 @@ This crate implements the first source-language slice:
 - named signed fixed-point types backed by `i16` or `i32` storage;
 - typed parameters and return values;
 - `let` and `var` bindings;
-- assignment, built-in numeric `+=`, `-=`, `*=`, `/=`, and `%=` operators,
-  calls, `return`, `if`/`else`, `while`, and typed half-open integer ranges;
+- assignment and every compound assignment, calls, `return`, `if`/`else`,
+  `while`, and typed half-open integer ranges;
 - `break` and `continue`;
-- strictly typed integer and floating arithmetic and comparisons;
+- the language's operators at its precedence: strictly typed arithmetic,
+  bitwise operators and shifts, non-chaining comparisons, and short-circuit
+  `and`/`or`;
+- conversions written `T(x)`;
 - fixed one-dimensional arrays, written `[T; length]`, with prefix descriptors,
-  literals, indexed loads and stores, and intrinsic metadata methods;
+  literals, rank-one repeat literals `[value; length]`, indexed loads and
+  stores, and intrinsic metadata methods;
 - source-ordered, nested `struct` layouts, local struct values, struct literals
   and copies, plus allocation-free array iteration through explicit references;
 - scoped `&T` and `&mut T` parameters, including unsized array views written
@@ -28,7 +32,9 @@ This crate implements the first source-language slice:
 making the compiler or runtime Unicode-aware. Decimal floating literals are
 stored once in read-only module data. There are no implicit numeric
 conversions: literals may acquire a type from context, while nonliteral
-operands must already have the same type.
+operands must already have the same type. Native code for float arithmetic
+and conversions waits on strict `f32`/`f64` evaluation; the HIR executor runs
+them.
 
 Fixed-point types make their representation explicit:
 
@@ -134,8 +140,8 @@ Whole-struct assignment is a structural field copy. All source leaves are
 evaluated and loaded before any destination leaf is stored, so overlapping
 copies and literals which read their destination have value semantics. This
 does not introduce a general aggregate runtime operation. Compound assignment
-is defined only for the existing numeric operators; it resolves its destination
-once, applies the corresponding built-in operation, and stores the result.
+resolves its destination once, applies the corresponding built-in operation,
+and stores the result.
 There is no operator overloading.
 `for item in array` copies a scalar element. `for item in &array` gives `item`
 an immutable scoped view of the element;
@@ -253,7 +259,7 @@ and `qbopt.hir.lower`, then follows qbopt's shared optimization, lowering,
 allocation, and OMF object-writing path. The minimal real-mode bootstrap and
 freestanding runtime can link that object into a DOS executable.
 
-Not implemented in this slice are explicit numeric conversions, imports,
+Not implemented in this slice are panics, `checked_to[T]()`, imports,
 general resizable collections, escaping or owning references, patterns,
 lambdas, comprehension filters, or multiple comprehension clauses. General string construction is also
 absent: f-strings are currently a print facility, not heap values. Those
