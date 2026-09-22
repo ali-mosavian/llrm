@@ -1,38 +1,39 @@
-//! Register-root aliases for the direct Python machine-semantics port.
-//!
-//! This is the target-owned counterpart of `qbopt.model.ir:root`.  Generic
-//! machine semantics carries opaque `PhysicalRegister` values and does not
-//! import this x86 alias table.
+//! `ROOT` and `root` from `qbopt/model/ir.py`.
 
-use crate::support::PhysicalRegister;
+use iced_x86::Register;
 
-use crate::old::target::x86::X86Register;
+/// `ROOT`: the 32-bit root of every general-purpose register this pass ever
+/// reasons about, in Python's insertion order.
+pub const ROOT: [(Register, Register); 24] = [
+    (Register::AL, Register::EAX),
+    (Register::AH, Register::EAX),
+    (Register::AX, Register::EAX),
+    (Register::EAX, Register::EAX),
+    (Register::BL, Register::EBX),
+    (Register::BH, Register::EBX),
+    (Register::BX, Register::EBX),
+    (Register::EBX, Register::EBX),
+    (Register::CL, Register::ECX),
+    (Register::CH, Register::ECX),
+    (Register::CX, Register::ECX),
+    (Register::ECX, Register::ECX),
+    (Register::DL, Register::EDX),
+    (Register::DH, Register::EDX),
+    (Register::DX, Register::EDX),
+    (Register::EDX, Register::EDX),
+    (Register::SI, Register::ESI),
+    (Register::ESI, Register::ESI),
+    (Register::DI, Register::EDI),
+    (Register::EDI, Register::EDI),
+    (Register::BP, Register::EBP),
+    (Register::EBP, Register::EBP),
+    (Register::SP, Register::ESP),
+    (Register::ESP, Register::ESP),
+];
 
-/// The 32-bit root of an x86 general-purpose register view.
-///
-/// Direct port of `qbopt.model.ir:root`: direct machine semantics carries a
-/// `PhysicalRegister`, so this public boundary takes and returns that same
-/// value. Unknown target IDs pass through unchanged.
-pub fn root(register: PhysicalRegister) -> PhysicalRegister {
-    X86Register::from_physical(register)
-        .map(root_register)
-        .map(X86Register::physical)
-        .unwrap_or(register)
-}
-
-/// The target-only alias table. Segment/x87 registers have no GPR root.
-const fn root_register(register: X86Register) -> X86Register {
-    match register {
-        X86Register::Al | X86Register::Ah | X86Register::Ax | X86Register::Eax => X86Register::Eax,
-        X86Register::Cl | X86Register::Ch | X86Register::Cx | X86Register::Ecx => X86Register::Ecx,
-        X86Register::Dl | X86Register::Dh | X86Register::Dx | X86Register::Edx => X86Register::Edx,
-        X86Register::Bl | X86Register::Bh | X86Register::Bx | X86Register::Ebx => X86Register::Ebx,
-        X86Register::Sp | X86Register::Esp => X86Register::Esp,
-        X86Register::Bp | X86Register::Ebp => X86Register::Ebp,
-        X86Register::Si | X86Register::Esi => X86Register::Esi,
-        X86Register::Di | X86Register::Edi => X86Register::Edi,
-        other => other,
-    }
+/// `ROOT.get(register, register)`.
+pub fn root(register: Register) -> Register {
+    ROOT.iter().find(|(key, _)| *key == register).map_or(register, |(_, rooted)| *rooted)
 }
 
 #[cfg(test)]
@@ -40,35 +41,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn normalises_every_python_root_family_and_preserves_unknown_ids() {
-        for (rooted, expected) in [
-            (X86Register::Al, X86Register::Eax),
-            (X86Register::Ah, X86Register::Eax),
-            (X86Register::Ax, X86Register::Eax),
-            (X86Register::Eax, X86Register::Eax),
-            (X86Register::Bl, X86Register::Ebx),
-            (X86Register::Bh, X86Register::Ebx),
-            (X86Register::Bx, X86Register::Ebx),
-            (X86Register::Ebx, X86Register::Ebx),
-            (X86Register::Cl, X86Register::Ecx),
-            (X86Register::Ch, X86Register::Ecx),
-            (X86Register::Cx, X86Register::Ecx),
-            (X86Register::Ecx, X86Register::Ecx),
-            (X86Register::Dl, X86Register::Edx),
-            (X86Register::Dh, X86Register::Edx),
-            (X86Register::Dx, X86Register::Edx),
-            (X86Register::Edx, X86Register::Edx),
-            (X86Register::Sp, X86Register::Esp),
-            (X86Register::Esp, X86Register::Esp),
-            (X86Register::Bp, X86Register::Ebp),
-            (X86Register::Ebp, X86Register::Ebp),
-            (X86Register::Si, X86Register::Esi),
-            (X86Register::Esi, X86Register::Esi),
-            (X86Register::Di, X86Register::Edi),
-            (X86Register::Edi, X86Register::Edi),
-        ] {
-            assert_eq!(root(rooted.physical()), expected.physical());
+    fn roots_every_family_and_passes_others_through() {
+        for (register, rooted) in ROOT {
+            assert_eq!(root(register), rooted);
         }
-        assert_eq!(root(PhysicalRegister::new(99)), PhysicalRegister::new(99));
+        assert_eq!(root(Register::ES), Register::ES);
+        assert_eq!(root(Register::ST0), Register::ST0);
     }
 }

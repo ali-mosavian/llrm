@@ -15,7 +15,7 @@ use num_bigint::BigInt;
 use crate::analysis::ranges::{Interval, covering};
 use crate::model::memory::{Provenance, Slice, SliceError};
 use crate::model::mir::{MemRef, Symbol, Value, symbolic_ref};
-use crate::old::object::omf::module::{Addr, NO_REGISTER, Space};
+use crate::objectfile::module::{Addr, Space};
 
 const FLOOR: i64 = -(1_i64 << 31);
 const CEILING: i64 = 1_i64 << 31;
@@ -34,7 +34,7 @@ pub(crate) enum RegionPart {
     Named,
     Absolute,
     Alloc,
-    Segment(u32),
+    Segment(i64),
     Allocation(Symbol),
     Selector(BigInt),
 }
@@ -71,7 +71,7 @@ pub(crate) enum Origin {
     Here,
     Sp,
     Bp,
-    External(u32),
+    External(i64),
 }
 
 /// A half-open byte interval in one region, counted from `origin`.
@@ -131,9 +131,9 @@ pub(crate) struct RegionLayout {
     /// `None` means this is bounds-only context, not a statement that no
     /// segment is COMMON.  That preserves Python's separate `bounds` and
     /// `layout` inputs.
-    pub(crate) shared_segments: Option<BTreeSet<u32>>,
+    pub(crate) shared_segments: Option<BTreeSet<i64>>,
     /// Sorted exact named displacements, keyed by `(Space, segment index)`.
-    pub(crate) landmarks: BTreeMap<(Space, u32), Vec<i64>>,
+    pub(crate) landmarks: BTreeMap<(Space, i64), Vec<i64>>,
 }
 
 /// Failure to express an otherwise-Python-sized span in an existing Rust
@@ -156,7 +156,7 @@ fn endpoint(low: i64, width: u32) -> Result<i64, RegionError> {
 
 fn region(
     space: Option<Space>,
-    index: Option<u32>,
+    index: Option<i64>,
     layout: Option<&RegionLayout>,
 ) -> (Region, Origin) {
     match space {
@@ -203,7 +203,7 @@ fn reach(
     width: u32,
     layout: &RegionLayout,
 ) -> Option<Result<(i64, i64), RegionError>> {
-    if address.base == NO_REGISTER {
+    if address.base == iced_x86::Register::None {
         return Some(endpoint(address.disp, width).map(|high| (address.disp, high)));
     }
     let landmarks = layout.landmarks.get(&(address.space, address.index))?;
@@ -236,7 +236,7 @@ fn at(
     };
     let (low, high) = match span {
         Some(span) => span,
-        None if address.base != NO_REGISTER || indexed => WHOLE,
+        None if address.base != iced_x86::Register::None || indexed => WHOLE,
         None => (address.disp, endpoint(address.disp, width)?),
     };
     let (region, origin) = region(Some(address.space), Some(address.index), layout);
@@ -271,7 +271,7 @@ fn holes(reference: &MemRef, layout: Option<&RegionLayout>) -> Result<BTreeSet<S
     if let Some((owner, reaches)) = &reference.beyond {
         if !reaches
             .iter()
-            .any(|(segment, _)| *segment == i64::from(*owner))
+            .any(|(segment, _)| *segment == *owner)
         {
             let (region, origin) = region(Some(Space::Segment), Some(*owner), layout);
             out.insert(Span::whole(region, origin));
@@ -344,7 +344,7 @@ fn spans(
         Some(address),
         reference.width,
         layout,
-        reference.base.is_some() && address.base == NO_REGISTER,
+        reference.base.is_some() && address.base == iced_x86::Register::None,
     )
 }
 
@@ -577,16 +577,16 @@ mod tests {
         MemoryKind, MemoryObject, ObjectIdentity, ObjectTag, Provenance, RestrictRoot, SliceError,
     };
     use crate::model::mir::{MemRef, Symbol, Value};
-    use crate::old::object::omf::module::{Addr, NO_REGISTER, Space};
-    use crate::support::PhysicalRegister;
+    use crate::objectfile::module::{Addr, Space};
+    use iced_x86::Register;
 
-    fn address(space: Space, disp: i64, index: u32) -> Addr {
+    fn address(space: Space, disp: i64, index: i64) -> Addr {
         Addr {
             space,
             disp,
             index,
-            base: NO_REGISTER,
-            segment: NO_REGISTER,
+            base: iced_x86::Register::None,
+            segment: iced_x86::Register::None,
         }
     }
 
@@ -594,7 +594,7 @@ mod tests {
         MemRef::new(Some(address), width)
     }
 
-    fn object(index: u32, extent: Option<u32>) -> MemoryObject {
+    fn object(index: i64, extent: Option<u32>) -> MemoryObject {
         MemoryObject {
             kind: MemoryKind::Global,
             identity: Some(ObjectIdentity::TaggedIndex {
@@ -743,7 +743,7 @@ mod tests {
     #[test]
     fn indexed_access_stays_in_its_segment_and_landmarks_bound_physical_indexing() {
         // `tests/test_mir_alias.py::test_an_index_stays_inside_its_own_segment`.
-        let base = PhysicalRegister::new(3);
+        let base = iced_x86::Register::DL;
         let indexed = Addr {
             base,
             ..address(Space::Segment, 0x20, 1)
@@ -776,7 +776,7 @@ mod tests {
     fn beyond_and_excludes_remove_only_the_named_bytes() {
         // `tests/test_regions.py::test_an_exclusion_bounds_a_reference...`.
         let mut array = reference(address(Space::Segment, 6, 5), 2);
-        array.addr.as_mut().unwrap().base = PhysicalRegister::new(3);
+        array.addr.as_mut().unwrap().base = iced_x86::Register::DL;
         array.excludes.push((address(Space::Segment, 0x266, 5), 2));
         let field = reference(address(Space::Segment, 0x266, 5), 1);
         let neighbour = reference(address(Space::Segment, 0x300, 5), 1);
@@ -1001,7 +1001,7 @@ mod tests {
         // can name the same address.
         let base = Value::new(1, 0);
         let mut one_address = address(Space::Far, 0x20, 0);
-        one_address.base = PhysicalRegister::new(3);
+        one_address.base = iced_x86::Register::DL;
         let mut one = reference(one_address, 2);
         one.base = Some(base);
         one.segment = Some(Value::new(2, 0));
@@ -1026,7 +1026,7 @@ mod tests {
         // Direct port of tests/test_mir_alias.py::test_an_index_stays_inside_its_own_segment.
         let base = Value::new(1, 0);
         let mut one_address = address(Space::Segment, 0x20, 1);
-        one_address.base = PhysicalRegister::new(3);
+        one_address.base = iced_x86::Register::DL;
         let mut one = reference(one_address, 2);
         one.base = Some(base);
         let mut other = one.clone();

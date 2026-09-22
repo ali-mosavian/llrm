@@ -2254,7 +2254,7 @@ mod tests {
 
     use crate::analysis::consts;
     use crate::analysis::occurrence::{OpOccurrence, operations};
-    use crate::old::object::omf::module::{Addr, Space};
+    use crate::objectfile::module::{Addr, Space};
 
     use super::{
         _as_signed, _composed, _constant, _copied, _counter_bound, _extended, _multiplier,
@@ -2480,7 +2480,7 @@ mod tests {
             ..value(9, 2)
         };
         let mut source = MemRef::new(None, 2);
-        source.space = Some(crate::old::object::omf::module::Space::Frame);
+        source.space = Some(crate::objectfile::module::Space::Frame);
 
         let constant_copy = |at, result, number| {
             let mut operation = op(at, Kind::Copy, vec![result], vec![]);
@@ -4745,7 +4745,7 @@ mod tests {
         let (body, loop_, bound, _) = symbolic_counted_body(0);
         let mut missing = body.clone();
         missing.blocks[1].ops[0].args[1] = Arg::Symbol(crate::model::mir::Symbol::new(
-            crate::old::object::omf::module::Space::Segment,
+            crate::objectfile::module::Space::Segment,
             0,
             0,
             2,

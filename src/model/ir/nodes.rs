@@ -10,8 +10,8 @@ use std::fmt;
 use std::sync::LazyLock;
 
 use super::{Effects, RESTORE_IDIOM, Semantics, TABLE_DATA, UNMODELLED, barrier};
-use crate::old::target::x86::X86Register;
-use crate::support::PhysicalRegister;
+
+use iced_x86::Register;
 
 use crate::frontend::declen::Insn;
 use crate::legacy::lift::Decoded;
@@ -88,13 +88,13 @@ impl Call {
 /// Direct port of `qbopt.model.ir:RESTORE_EFFECTS`.
 pub static RESTORE_EFFECTS: LazyLock<BTreeMap<usize, Effects>> = LazyLock::new(|| {
     BTreeMap::from([
-        (0, restore_effects(X86Register::Eax, X86Register::Edx)),
-        (1, restore_effects(X86Register::Ecx, X86Register::Ebx)),
+        (0, restore_effects(iced_x86::Register::EAX, iced_x86::Register::EDX)),
+        (1, restore_effects(iced_x86::Register::ECX, iced_x86::Register::EBX)),
     ])
 });
 
-fn restore_effects(low: X86Register, high: X86Register) -> Effects {
-    let registers = BTreeSet::from([low.physical(), high.physical()]);
+fn restore_effects(low: iced_x86::Register, high: iced_x86::Register) -> Effects {
+    let registers = BTreeSet::from([low, high]);
     Effects {
         defs: Some(registers.clone()),
         uses: Some(registers),
@@ -240,7 +240,7 @@ impl Node {
 ///
 /// Direct port of `qbopt.model.ir:pinned`.
 #[must_use]
-pub fn pinned(node: &Node) -> Option<BTreeSet<PhysicalRegister>> {
+pub fn pinned(node: &Node) -> Option<BTreeSet<iced_x86::Register>> {
     if !barrier(node.semantics()) {
         return Some(BTreeSet::new());
     }
@@ -275,7 +275,7 @@ mod tests {
     use crate::frontend::declen::decode;
     use crate::legacy::lift::{Decoded, Kind};
     use crate::model::ir::{Effects, RESTORE_IDIOM, TABLE_DATA, UNMODELLED, barrier};
-    use crate::old::target::x86::X86Register;
+    
 
     fn insn(at: usize) -> crate::frontend::declen::Insn {
         let mut bytes = vec![0x90; at];
@@ -321,16 +321,16 @@ mod tests {
         assert_eq!(
             pair_zero.defs,
             Some(BTreeSet::from([
-                X86Register::Eax.physical(),
-                X86Register::Edx.physical()
+                iced_x86::Register::EAX,
+                iced_x86::Register::EDX
             ]))
         );
         assert_eq!(pair_zero.uses, pair_zero.defs);
         assert_eq!(
             pair_one.defs,
             Some(BTreeSet::from([
-                X86Register::Ecx.physical(),
-                X86Register::Ebx.physical()
+                iced_x86::Register::ECX,
+                iced_x86::Register::EBX
             ]))
         );
         assert_eq!(pair_one.uses, pair_one.defs);
@@ -355,15 +355,15 @@ mod tests {
         assert_eq!(pinned(&modelled), Some(BTreeSet::new()));
 
         let mut known_effects = effects();
-        known_effects.defs = Some(BTreeSet::from([X86Register::Eax.physical()]));
-        known_effects.uses = Some(BTreeSet::from([X86Register::Edx.physical()]));
+        known_effects.defs = Some(BTreeSet::from([iced_x86::Register::EAX]));
+        known_effects.uses = Some(BTreeSet::from([iced_x86::Register::EDX]));
         let known = Node::Opaque(Opaque::new(insn(4), known_effects));
         assert!(barrier(known.semantics()));
         assert_eq!(
             pinned(&known),
             Some(BTreeSet::from([
-                X86Register::Eax.physical(),
-                X86Register::Edx.physical()
+                iced_x86::Register::EAX,
+                iced_x86::Register::EDX
             ]))
         );
 

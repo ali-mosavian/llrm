@@ -10,9 +10,8 @@ use std::sync::LazyLock;
 
 use iced_x86::{Code, Register};
 
-use crate::old::object::omf::module::{Addr, Space, far_pointer, frame_relative, literal_only};
-use crate::old::target::x86::X86Register;
-use crate::support::PhysicalRegister;
+use crate::objectfile::module::{Addr, Space, far_pointer, frame_relative, literal_only};
+
 
 use crate::frontend::declen::Insn;
 
@@ -220,7 +219,7 @@ pub static REDUNDANT_DS: LazyLock<BTreeSet<Register>> =
 ///
 /// Python's resolver receives the raw iced displacement, not the signed
 /// addressing displacement.
-pub type Resolver = dyn Fn(usize, u64) -> Addr;
+pub type Resolver = dyn Fn(i64, i64) -> Addr;
 
 /// Where this instruction's memory operand points, or `None` if it has none.
 ///
@@ -237,20 +236,20 @@ pub fn operand(insn: &Insn, resolve: &Resolver) -> Option<Addr> {
             return None;
         }
         if let Some(disp_at) = insn.disp_at {
-            let mut resolved = resolve(disp_at, insn.insn.memory_displacement64());
+            let mut resolved = resolve(disp_at as i64, insn.insn.memory_displacement64() as i64);
             if resolved.space == Space::Group {
                 return None;
             }
             if matches!(resolved.space, Space::Segment | Space::External) {
-                resolved.base = physical(base)?;
-                resolved.segment = physical(override_)?;
+                resolved.base = base;
+                resolved.segment = override_;
                 return Some(resolved);
             }
         }
         return Some(far_pointer(
             insn.displacement(),
-            physical(base)?,
-            physical(override_)?,
+            base,
+            override_,
         ));
     }
     if override_ == Register::DS && !REDUNDANT_DS.contains(&base) {
@@ -260,18 +259,18 @@ pub fn operand(insn: &Insn, resolve: &Resolver) -> Option<Addr> {
         return match base {
             Register::SI | Register::DI => {
                 let mut resolved = literal_only(0, 0);
-                resolved.base = physical(base)?;
+                resolved.base = base;
                 Some(resolved)
             }
             _ => None,
         };
     };
     match base {
-        Register::None => resolved(resolve(disp_at, insn.insn.memory_displacement64())),
+        Register::None => resolved(resolve(disp_at as i64, insn.insn.memory_displacement64() as i64)),
         Register::BP => Some(frame_relative(insn.displacement())),
         Register::BX | Register::SI | Register::DI => {
-            let mut resolved = resolved(resolve(disp_at, insn.insn.memory_displacement64()))?;
-            resolved.base = physical(base)?;
+            let mut resolved = resolved(resolve(disp_at as i64, insn.insn.memory_displacement64() as i64))?;
+            resolved.base = base;
             Some(resolved)
         }
         _ => None,
@@ -280,22 +279,6 @@ pub fn operand(insn: &Insn, resolve: &Resolver) -> Option<Addr> {
 
 fn resolved(address: Addr) -> Option<Addr> {
     (address.space != Space::Group).then_some(address)
-}
-
-fn physical(register: Register) -> Option<PhysicalRegister> {
-    let register = match register {
-        Register::BX => X86Register::Bx,
-        Register::SI => X86Register::Si,
-        Register::DI => X86Register::Di,
-        Register::ES => X86Register::Es,
-        Register::CS => X86Register::Cs,
-        Register::SS => X86Register::Ss,
-        Register::DS => X86Register::Ds,
-        Register::FS => X86Register::Fs,
-        Register::GS => X86Register::Gs,
-        _ => return None,
-    };
-    Some(register.physical())
 }
 
 /// What one instruction is in long terms, or `None`.
@@ -376,8 +359,8 @@ pub fn classify_with(insn: &Insn, resolve: &Resolver) -> Option<Decoded> {
 mod tests {
     use super::{Decoded, FIXUP, Kind, classify, operand};
     use crate::frontend::declen::{Insn, decode};
-    use crate::old::object::omf::module::{Addr, Space, far_pointer, literal_only};
-    use crate::old::target::x86::X86Register;
+    use crate::objectfile::module::{Addr, Space, far_pointer, literal_only};
+    
 
     fn insn(bytes: &[u8]) -> Insn {
         decode(bytes, 0).unwrap()
@@ -442,16 +425,16 @@ mod tests {
     #[test]
     fn omf_lift_classify_resolver_sees_raw_displacement_while_bp_is_signed() {
         let based = insn(&[0x8B, 0x87, 0xE8, 0xFF]);
-        let resolver = |field_offset: usize, literal: u64| {
+        let resolver = |field_offset: i64, literal: i64| {
             assert_eq!((field_offset, literal), (2, 0xFFE8));
             Addr::new(Space::Literal, literal as i64)
         };
         let mut based_wanted = Addr::new(Space::Literal, 0xFFE8);
-        based_wanted.base = X86Register::Bx.physical();
+        based_wanted.base = iced_x86::Register::BX;
         assert_eq!(operand(&based, &resolver), Some(based_wanted));
 
         let frame = insn(&[0x8B, 0x46, 0xE8]);
-        let no_resolver = |_field_offset: usize, _literal: u64| -> Addr {
+        let no_resolver = |_field_offset: i64, _literal: i64| -> Addr {
             panic!("bp-relative displacement is not a relocation")
         };
         assert_eq!(
@@ -463,7 +446,7 @@ mod tests {
     #[test]
     fn omf_lift_classify_redundant_ds_forms_are_ordinary_and_bp_is_refused() {
         let direct = insn(&[0x3E, 0x8B, 0x06, 0x34, 0x12]);
-        let direct_resolver = |field_offset: usize, literal: u64| {
+        let direct_resolver = |field_offset: i64, literal: i64| {
             assert_eq!((field_offset, literal), (3, 0x1234));
             Addr::new(Space::Literal, literal as i64)
         };
@@ -473,20 +456,20 @@ mod tests {
         );
 
         for (bytes, base) in [
-            (&[0x3E, 0x8B, 0x04][..], X86Register::Si),
-            (&[0x3E, 0x8B, 0x05][..], X86Register::Di),
+            (&[0x3E, 0x8B, 0x04][..], iced_x86::Register::SI),
+            (&[0x3E, 0x8B, 0x05][..], iced_x86::Register::DI),
         ] {
             let decoded = insn(bytes);
-            let no_resolver = |_field_offset: usize, _literal: u64| -> Addr {
+            let no_resolver = |_field_offset: i64, _literal: i64| -> Addr {
                 panic!("an absent displacement cannot have a relocation")
             };
             let mut wanted = Addr::new(Space::Literal, 0);
-            wanted.base = base.physical();
+            wanted.base = base;
             assert_eq!(operand(&decoded, &no_resolver), Some(wanted));
         }
 
         let bp = insn(&[0x3E, 0x8B, 0x46, 0xE8]);
-        let no_resolver = |_field_offset: usize, _literal: u64| -> Addr {
+        let no_resolver = |_field_offset: i64, _literal: i64| -> Addr {
             panic!("ds:[bp+disp] is refused before resolution")
         };
         assert_eq!(operand(&bp, &no_resolver), None);
@@ -495,12 +478,12 @@ mod tests {
     #[test]
     fn omf_lift_classify_operand_refuses_a_group_relative_address() {
         let decoded = insn(&[0x8B, 0x06, 0x34, 0x12]);
-        let group_only = |_field_offset: usize, literal: u64| Addr {
+        let group_only = |_field_offset: i64, literal: i64| Addr {
             space: Space::Group,
             disp: literal as i64,
             index: 1,
-            base: crate::old::object::omf::module::NO_REGISTER,
-            segment: crate::old::object::omf::module::NO_REGISTER,
+            base: iced_x86::Register::None,
+            segment: iced_x86::Register::None,
         };
         assert_eq!(operand(&decoded, &group_only), None);
     }
@@ -512,8 +495,8 @@ mod tests {
             operand(&decoded, &literal_only),
             Some(far_pointer(
                 0,
-                X86Register::Bx.physical(),
-                X86Register::Es.physical(),
+                iced_x86::Register::BX,
+                iced_x86::Register::ES,
             ))
         );
     }
@@ -522,14 +505,14 @@ mod tests {
     fn omf_lift_classify_operand_resolver_segment_and_external_keep_override() {
         for (space, index) in [(Space::Segment, 5), (Space::External, 8)] {
             let decoded = insn(&[0x26, 0x8B, 0x87, 0x34, 0x12]);
-            let resolver = move |field_offset: usize, literal: u64| {
+            let resolver = move |field_offset: i64, literal: i64| {
                 assert_eq!((field_offset, literal), (3, 0x1234));
                 Addr {
                     space,
                     disp: 0x40,
                     index,
-                    base: crate::old::object::omf::module::NO_REGISTER,
-                    segment: crate::old::object::omf::module::NO_REGISTER,
+                    base: iced_x86::Register::None,
+                    segment: iced_x86::Register::None,
                 }
             };
             assert_eq!(
@@ -538,8 +521,8 @@ mod tests {
                     space,
                     disp: 0x40,
                     index,
-                    base: X86Register::Bx.physical(),
-                    segment: X86Register::Es.physical(),
+                    base: iced_x86::Register::BX,
+                    segment: iced_x86::Register::ES,
                 })
             );
         }
@@ -656,17 +639,17 @@ mod tests {
     #[test]
     fn omf_lift_classify_implicit_zero_displacement_keeps_si_or_di() {
         for (bytes, base) in [
-            (&[0x8B, 0x04][..], X86Register::Si),
-            (&[0x8B, 0x05][..], X86Register::Di),
-            (&[0x89, 0x04][..], X86Register::Si),
-            (&[0x89, 0x05][..], X86Register::Di),
+            (&[0x8B, 0x04][..], iced_x86::Register::SI),
+            (&[0x8B, 0x05][..], iced_x86::Register::DI),
+            (&[0x89, 0x04][..], iced_x86::Register::SI),
+            (&[0x89, 0x05][..], iced_x86::Register::DI),
         ] {
             let decoded = insn(bytes);
-            let no_field = |_field_offset: usize, _literal: u64| -> Addr {
+            let no_field = |_field_offset: i64, _literal: i64| -> Addr {
                 panic!("an absent displacement cannot have a relocation")
             };
             let mut wanted = Addr::new(Space::Literal, 0);
-            wanted.base = base.physical();
+            wanted.base = base;
             assert_eq!(operand(&decoded, &no_field), Some(wanted));
         }
     }

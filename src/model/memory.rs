@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 
 use crate::model::mir::{Symbol, Value};
-use crate::old::object::omf::module::Space;
+use crate::objectfile::module::Space;
 
 /// Python `qbopt.model.memory:Kind`.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -127,7 +127,7 @@ pub enum ObjectIdentity {
     },
     TaggedIndex {
         tag: ObjectTag,
-        index: u32,
+        index: i64,
     },
     CallAllocation {
         callee: String,

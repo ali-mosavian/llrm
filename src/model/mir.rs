@@ -18,8 +18,8 @@ use crate::analysis::loops;
 use crate::model::floating::Semantics as FloatingSemantics;
 use crate::model::ir::{Loc, Operation, Semantics};
 use crate::model::memory::Provenance;
-use crate::old::object::omf::module::{Addr, Space};
-use crate::support::PhysicalRegister;
+use crate::objectfile::module::{Addr, Space};
+use iced_x86::Register;
 
 /// One SSA variable, deliberately with no register or historical home.
 ///
@@ -112,7 +112,7 @@ impl fmt::Display for Synth {
 
 /// A call's bounded reach: the escaped segment and the exact cells handed
 /// out in it.  Direct port of `raising_call_memory:Reach`.
-pub type Reach = (u32, BTreeSet<(i64, i64)>);
+pub type Reach = (i64, BTreeSet<(i64, i64)>);
 
 /// A memory operand and the values its address depends on.
 ///
@@ -234,14 +234,14 @@ impl Const {
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Symbol {
     pub space: Space,
-    pub index: u32,
+    pub index: i64,
     pub offset: i64,
     pub width: u32,
     pub addend: i64,
 }
 
 impl Symbol {
-    pub const fn new(space: Space, index: u32, offset: i64, width: u32) -> Self {
+    pub const fn new(space: Space, index: i64, offset: i64, width: u32) -> Self {
         Self {
             space,
             index,
@@ -1130,8 +1130,8 @@ impl MirBody {
 #[allow(dead_code)] // Constructed by the direct raiser port; model tests exercise it meanwhile.
 pub(crate) struct RaisedBody {
     pub body: MirBody,
-    pub origin: OrderedMap<Value, PhysicalRegister>,
-    pub pins: OrderedMap<Value, PhysicalRegister>,
+    pub origin: OrderedMap<Value, iced_x86::Register>,
+    pub pins: OrderedMap<Value, iced_x86::Register>,
 }
 
 impl RaisedBody {
@@ -1158,8 +1158,8 @@ impl std::ops::Deref for RaisedBody {
 pub enum AllocationHintsError {
     ConflictingOrigin {
         variable: u32,
-        previous: PhysicalRegister,
-        location: PhysicalRegister,
+        previous: iced_x86::Register,
+        location: iced_x86::Register,
     },
     MissingPinDefinition {
         value: Value,
@@ -1167,8 +1167,8 @@ pub enum AllocationHintsError {
     ConflictingPin {
         operation: u32,
         result: usize,
-        previous: PhysicalRegister,
-        location: PhysicalRegister,
+        previous: iced_x86::Register,
+        location: iced_x86::Register,
     },
 }
 
@@ -1181,7 +1181,7 @@ impl fmt::Display for AllocationHintsError {
                 location,
             } => write!(
                 formatter,
-                "variable {variable} has conflicting allocation hints: {previous} and {location}"
+                "variable {variable} has conflicting allocation hints: {} and {}", *previous as u32, *location as u32
             ),
             Self::MissingPinDefinition { value } => {
                 write!(
@@ -1196,7 +1196,7 @@ impl fmt::Display for AllocationHintsError {
                 location,
             } => write!(
                 formatter,
-                "definition ({operation}, {result}) has conflicting allocation pins: {previous} and {location}"
+                "definition ({operation}, {result}) has conflicting allocation pins: {} and {}", *previous as u32, *location as u32
             ),
         }
     }
@@ -1208,8 +1208,8 @@ impl std::error::Error for AllocationHintsError {}
 /// Direct port of `qbopt.model.mir:AllocationHints`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AllocationHints {
-    pub origins: OrderedMap<u32, PhysicalRegister>,
-    pub pins: OrderedMap<(u32, usize), PhysicalRegister>,
+    pub origins: OrderedMap<u32, iced_x86::Register>,
+    pub pins: OrderedMap<(u32, usize), iced_x86::Register>,
 }
 
 impl AllocationHints {
@@ -1274,12 +1274,12 @@ impl AllocationHints {
     }
 
     /// Python `AllocationHints.origin_of`.
-    pub fn origin_of(&self, value: Value) -> Option<PhysicalRegister> {
+    pub fn origin_of(&self, value: Value) -> Option<iced_x86::Register> {
         self.origins.get(&value.variable).copied()
     }
 
     /// Python `AllocationHints.pin_of`.
-    pub fn pin_of(&self, operation: &Op, result: usize) -> Option<PhysicalRegister> {
+    pub fn pin_of(&self, operation: &Op, result: usize) -> Option<iced_x86::Register> {
         operation
             .id
             .and_then(|id| self.pins.get(&(id, result)).copied())
@@ -1999,8 +1999,8 @@ mod tests {
     use crate::model::floating::{Format, Precision, Rounding, Semantics as FloatingSemantics};
     use crate::model::ir::{Operation, Semantics};
     use crate::model::memory::{MemoryKind, MemoryObject, ObjectIdentity, ObjectTag, Provenance};
-    use crate::old::object::omf::module::{Addr, Space};
-    use crate::support::PhysicalRegister;
+    use crate::objectfile::module::{Addr, Space};
+    use iced_x86::Register;
 
     use super::{
         AllocationHints, AllocationHintsError, Arg, ArrayRequest, Cell, Const, FloatingOrigin,
@@ -3223,12 +3223,12 @@ mod tests {
                 vec![],
             )],
         ));
-        raised.origin.insert(first, PhysicalRegister::new(3));
-        raised.origin.insert(second, PhysicalRegister::new(3));
-        raised.pins.insert(first, PhysicalRegister::new(4));
+        raised.origin.insert(first, iced_x86::Register::DL);
+        raised.origin.insert(second, iced_x86::Register::DL);
+        raised.pins.insert(first, iced_x86::Register::BL);
         let hints = AllocationHints::from_body(&raised).unwrap();
-        assert_eq!(hints.origin_of(second), Some(PhysicalRegister::new(3)));
-        assert_eq!(hints.pin_of(&first_op, 0), Some(PhysicalRegister::new(4)));
+        assert_eq!(hints.origin_of(second), Some(iced_x86::Register::DL));
+        assert_eq!(hints.pin_of(&first_op, 0), Some(iced_x86::Register::BL));
         assert_eq!(hints.pin_of(&second_op, 0), None);
         assert!(raised.pointer_values.is_empty());
     }
@@ -3270,9 +3270,9 @@ mod tests {
         let mut hints = AllocationHints::new();
         hints
             .pins
-            .insert((first_op.id.unwrap(), 0), PhysicalRegister::new(4));
+            .insert((first_op.id.unwrap(), 0), iced_x86::Register::BL);
 
-        assert_eq!(hints.pin_of(&first_op, 0), Some(PhysicalRegister::new(4)));
+        assert_eq!(hints.pin_of(&first_op, 0), Some(iced_x86::Register::BL));
         assert_eq!(hints.pin_of(&second_op, 0), None);
     }
 
@@ -3293,15 +3293,15 @@ mod tests {
             version: 2,
         };
         let mut raised = RaisedBody::new(MirBody::new(0, vec![]));
-        raised.origin.insert(first, PhysicalRegister::new(1));
-        raised.origin.insert(second, PhysicalRegister::new(2));
+        raised.origin.insert(first, iced_x86::Register::AL);
+        raised.origin.insert(second, iced_x86::Register::CL);
         let error = AllocationHints::from_body(&raised).unwrap_err();
         assert_eq!(
             error,
             AllocationHintsError::ConflictingOrigin {
                 variable: 7,
-                previous: PhysicalRegister::new(1),
-                location: PhysicalRegister::new(2),
+                previous: iced_x86::Register::AL,
+                location: iced_x86::Register::CL,
             }
         );
         assert_eq!(
@@ -3310,7 +3310,7 @@ mod tests {
         );
 
         let mut missing = RaisedBody::new(MirBody::new(0, vec![]));
-        missing.pins.insert(first, PhysicalRegister::new(3));
+        missing.pins.insert(first, iced_x86::Register::DL);
         let error = AllocationHints::from_body(&missing).unwrap_err();
         assert_eq!(
             error,
@@ -3334,16 +3334,16 @@ mod tests {
             0,
             vec![MirBlock::new(0, vec![], vec![first_op, second_op], vec![])],
         ));
-        raised.pins.insert(first, PhysicalRegister::new(1));
-        raised.pins.insert(second, PhysicalRegister::new(2));
+        raised.pins.insert(first, iced_x86::Register::AL);
+        raised.pins.insert(second, iced_x86::Register::CL);
         let error = AllocationHints::from_body(&raised).unwrap_err();
         assert_eq!(
             error,
             AllocationHintsError::ConflictingPin {
                 operation: 9,
                 result: 0,
-                previous: PhysicalRegister::new(1),
-                location: PhysicalRegister::new(2),
+                previous: iced_x86::Register::AL,
+                location: iced_x86::Register::CL,
             }
         );
         assert_eq!(

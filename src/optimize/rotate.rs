@@ -831,7 +831,7 @@ mod tests {
     use crate::model::mir::{
         Arg, Cell, Const, Held, IntegerRange, Kind, MemRef, MirBlock, MirBody, Op, Phi, Value,
     };
-    use crate::old::object::omf::module::Space;
+    use crate::objectfile::module::Space;
 
     fn value(id: u32, at: i64) -> Value {
         Value::new(id, at)

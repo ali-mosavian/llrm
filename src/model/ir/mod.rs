@@ -10,8 +10,8 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::sync::LazyLock;
 
-pub use crate::old::object::omf::module::{Addr, NO_REGISTER, Space};
-use crate::support::PhysicalRegister;
+pub use crate::objectfile::module::{Addr, Space};
+use iced_x86::Register;
 
 pub mod nodes;
 mod root;
@@ -23,7 +23,7 @@ pub use root::root;
 /// Direct port of `qbopt.model.ir:Reg`.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct Reg {
-    pub register: PhysicalRegister,
+    pub register: iced_x86::Register,
     pub width: u32,
 }
 
@@ -54,8 +54,8 @@ pub struct Imm {
 #[derive(Clone, Debug)]
 pub struct Address {
     pub addr: Option<Addr>,
-    pub through: PhysicalRegister,
-    pub index: PhysicalRegister,
+    pub through: iced_x86::Register,
+    pub index: iced_x86::Register,
     pub scale: i64,
     pub offset: i64,
     pub disp_width: u32,
@@ -65,8 +65,8 @@ impl Address {
     pub const fn new(addr: Option<Addr>) -> Self {
         Self {
             addr,
-            through: NO_REGISTER,
-            index: NO_REGISTER,
+            through: iced_x86::Register::None,
+            index: iced_x86::Register::None,
             scale: 1,
             offset: 0,
             disp_width: 0,
@@ -97,7 +97,7 @@ impl Hash for Address {
 pub struct Mem {
     pub addr: Option<Addr>,
     pub width: u32,
-    pub through: PhysicalRegister,
+    pub through: iced_x86::Register,
     pub offset: i64,
     pub disp_width: u32,
     pub base: Option<Held>,
@@ -105,7 +105,7 @@ pub struct Mem {
     pub selector: Option<Held>,
     pub index: Option<Held>,
     pub scale: i64,
-    pub index_through: PhysicalRegister,
+    pub index_through: iced_x86::Register,
 }
 
 impl Mem {
@@ -113,7 +113,7 @@ impl Mem {
         Self {
             addr,
             width,
-            through: NO_REGISTER,
+            through: iced_x86::Register::None,
             offset: 0,
             disp_width: 0,
             base: None,
@@ -121,7 +121,7 @@ impl Mem {
             selector: None,
             index: None,
             scale: 1,
-            index_through: NO_REGISTER,
+            index_through: iced_x86::Register::None,
         }
     }
 }
@@ -206,8 +206,8 @@ impl Flag {
 /// Direct port of `qbopt.model.ir:Effects`.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Effects {
-    pub defs: Option<BTreeSet<PhysicalRegister>>,
-    pub uses: Option<BTreeSet<PhysicalRegister>>,
+    pub defs: Option<BTreeSet<iced_x86::Register>>,
+    pub uses: Option<BTreeSet<iced_x86::Register>>,
     pub flags_written: Flag,
     pub flags_read: Flag,
     pub loads: Vec<Mem>,
@@ -449,22 +449,18 @@ pub fn barrier(semantics: &Semantics) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::old::target::x86::{X86Register, root};
-
-    fn physical(register: X86Register) -> PhysicalRegister {
-        register.physical()
-    }
+    use super::root;
 
     #[test]
     fn root_normalises_every_sub_register_of_the_ax_pair() {
         // Port of tests/test_ir.py::test_root_normalises_every_sub_register_of_the_ax_pair.
         for register in [
-            X86Register::Al,
-            X86Register::Ah,
-            X86Register::Ax,
-            X86Register::Eax,
+            iced_x86::Register::AL,
+            iced_x86::Register::AH,
+            iced_x86::Register::AX,
+            iced_x86::Register::EAX,
         ] {
-            assert_eq!(root(physical(register)), physical(X86Register::Eax));
+            assert_eq!(root(register), iced_x86::Register::EAX);
         }
     }
 
@@ -473,10 +469,10 @@ mod tests {
         // Port of tests/test_ir.py::test_two_cells_reached_by_different_values_are_different_cells.
         let mut left = Mem::new(None, 2);
         left.base = Some(Held { value: 1, width: 2 });
-        left.through = physical(X86Register::Bx);
+        left.through = iced_x86::Register::BX;
         let mut right = left.clone();
         right.base = Some(Held { value: 2, width: 2 });
-        right.through = physical(X86Register::Si);
+        right.through = iced_x86::Register::SI;
 
         assert_ne!(left, right);
     }
@@ -486,10 +482,10 @@ mod tests {
         let mut left = Mem::new(Some(Addr::new(Space::Segment, 4)), 2);
         left.base = Some(Held { value: 4, width: 2 });
         let mut right = left.clone();
-        right.through = physical(X86Register::Bx);
+        right.through = iced_x86::Register::BX;
         right.offset = 6;
         right.disp_width = 2;
-        right.index_through = physical(X86Register::Di);
+        right.index_through = iced_x86::Register::DI;
 
         assert_eq!(left, right);
         let hash = |memory: &Mem| {
@@ -527,7 +523,7 @@ mod tests {
         memory.base = Some(Held { value: 1, width: 2 });
         memory.selector = Some(Held { value: 2, width: 2 });
         memory.index = Some(Held { value: 3, width: 2 });
-        memory.through = physical(X86Register::Bx);
+        memory.through = iced_x86::Register::BX;
 
         let Loc::Mem(mapped_memory) = mapped(&Loc::Mem(memory.clone()), |held| Held {
             value: held.value + 10,
@@ -614,8 +610,8 @@ mod tests {
     fn address_identity_ignores_encoding_details_but_not_the_address() {
         let left = Address::new(Some(Addr::new(Space::Literal, 12)));
         let mut right = left.clone();
-        right.through = physical(X86Register::Bx);
-        right.index = physical(X86Register::Si);
+        right.through = iced_x86::Register::BX;
+        right.index = iced_x86::Register::SI;
         right.scale = 4;
         right.offset = -8;
         right.disp_width = 2;

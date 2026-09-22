@@ -11,7 +11,7 @@ use num_bigint::BigInt;
 
 use super::consts;
 use crate::model::mir::{MemRef, MirBody, Value, symbolic_ref};
-use crate::old::object::omf::module::{NO_REGISTER, Space};
+use crate::objectfile::module::{Space};
 
 /// A non-wrapping mathematical interval at a fixed width.
 ///
@@ -79,9 +79,9 @@ pub(crate) fn covering(reference: &MemRef, known: &BTreeMap<Value, Interval>) ->
         return reference;
     };
     let mut covered = reference.clone();
-    covered.addr = Some(crate::old::object::omf::module::Addr {
+    covered.addr = Some(crate::objectfile::module::Addr {
         disp,
-        base: NO_REGISTER,
+        base: iced_x86::Register::None,
         ..address
     });
     covered.base = None;
@@ -99,8 +99,8 @@ mod tests {
     use crate::model::mir::{
         Arg, Const, Held, Kind, MemRef, MirBlock, MirBody, Op, Phi, Symbol, Value,
     };
-    use crate::old::object::omf::module::{Addr, NO_REGISTER, Space};
-    use crate::support::PhysicalRegister;
+    use crate::objectfile::module::{Addr, Space};
+    use iced_x86::Register;
 
     fn value(id: u32, at: i64) -> Value {
         Value::new(id, at)
@@ -120,8 +120,8 @@ mod tests {
     fn indexed(base: Value) -> MemRef {
         let mut address = Addr::new(Space::Segment, 4);
         address.index = 5;
-        address.base = PhysicalRegister::new(1);
-        address.segment = PhysicalRegister::new(2);
+        address.base = iced_x86::Register::AL;
+        address.segment = iced_x86::Register::CL;
         let mut reference = MemRef::new(Some(address), 2);
         reference.base = Some(base);
         reference.base_width = 2;
@@ -156,8 +156,8 @@ mod tests {
         assert_eq!(covered.addr.unwrap().disp, 4);
         assert_eq!(covered.addr.unwrap().space, Space::Segment);
         assert_eq!(covered.addr.unwrap().index, 5);
-        assert_eq!(covered.addr.unwrap().base, NO_REGISTER);
-        assert_eq!(covered.addr.unwrap().segment, PhysicalRegister::new(2));
+        assert_eq!(covered.addr.unwrap().base, iced_x86::Register::None);
+        assert_eq!(covered.addr.unwrap().segment, iced_x86::Register::CL);
         assert_eq!(covered.base, None);
         assert_eq!(covered.width, 22);
     }

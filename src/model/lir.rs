@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use crate::model::ir::nodes::Node;
 use crate::model::ir::{Held, Operation, Semantics};
-use crate::support::PhysicalRegister;
+use iced_x86::Register;
 
 use super::mir::{self, Arg, Kind, Op, OrderedMap};
 
@@ -27,14 +27,14 @@ pub struct Insn {
     pub what: Option<Semantics>,
     pub defines: Vec<u32>,
     pub uses: Vec<u32>,
-    pub clobbers: BTreeSet<PhysicalRegister>,
-    pub clobbers_high: BTreeSet<PhysicalRegister>,
+    pub clobbers: BTreeSet<iced_x86::Register>,
+    pub clobbers_high: BTreeSet<iced_x86::Register>,
     pub spread: Vec<(i64, i64)>,
     pub op: Option<Arc<Op>>,
     pub node: Option<Arc<Node>>,
     pub group: Option<i64>,
-    pub requires: Vec<(Held, PhysicalRegister)>,
-    pub delivers: Vec<(Held, PhysicalRegister)>,
+    pub requires: Vec<(Held, iced_x86::Register)>,
+    pub delivers: Vec<(Held, iced_x86::Register)>,
     pub widths: Vec<(u32, u32)>,
     pub symbol: Option<bool>,
     pub spill_reload: bool,
@@ -218,8 +218,8 @@ pub struct LirBody {
     pub name: String,
     pub entry: i64,
     pub blocks: Vec<LirBlock>,
-    pub origin: OrderedMap<u32, PhysicalRegister>,
-    pub pins: OrderedMap<u32, PhysicalRegister>,
+    pub origin: OrderedMap<u32, iced_x86::Register>,
+    pub pins: OrderedMap<u32, iced_x86::Register>,
     pub inputs: BTreeSet<u32>,
     pub loop_trip_counts: Vec<(i64, i64)>,
     pub ordered: bool,
@@ -233,8 +233,8 @@ impl LirBody {
         name: impl Into<String>,
         entry: i64,
         blocks: Vec<LirBlock>,
-        origin: OrderedMap<u32, PhysicalRegister>,
-        pins: OrderedMap<u32, PhysicalRegister>,
+        origin: OrderedMap<u32, iced_x86::Register>,
+        pins: OrderedMap<u32, iced_x86::Register>,
     ) -> Self {
         Self {
             name: name.into(),
@@ -393,7 +393,7 @@ mod tests {
         source.group = Some(7);
         source.requires = vec![(
             Held { value: 1, width: 2 },
-            crate::support::PhysicalRegister::new(3),
+            iced_x86::Register::DL,
         )];
         source.spill_reload = true;
         let source = Arc::new(source);

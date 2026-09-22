@@ -813,7 +813,7 @@ mod tests {
         Arg, Cell, Const, Held, IntegerRange, Kind, MemRef, MirBlock, MirBody, Op, OrderedMap, Phi,
         Value,
     };
-    use crate::old::object::omf::module::Space;
+    use crate::objectfile::module::Space;
 
     use super::{shift_count, symbolically_zeroed};
 
