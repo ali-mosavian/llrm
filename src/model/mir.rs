@@ -801,6 +801,24 @@ impl Repr for Kind {
     }
 }
 
+/// `a test b` is `b MIRRORED[test] a`.  `MIRRORED.get(test)`.
+#[allow(non_snake_case)]
+pub fn MIRRORED(test: Kind) -> Option<Kind> {
+    Some(match test {
+        Kind::Eq => Kind::Eq,
+        Kind::Ne => Kind::Ne,
+        Kind::Lt => Kind::Gt,
+        Kind::Gt => Kind::Lt,
+        Kind::Le => Kind::Ge,
+        Kind::Ge => Kind::Le,
+        Kind::Below => Kind::Above,
+        Kind::Above => Kind::Below,
+        Kind::BelowEq => Kind::AboveEq,
+        Kind::AboveEq => Kind::BelowEq,
+        _ => return None,
+    })
+}
+
 impl fmt::Display for Kind {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.as_str())
@@ -1191,7 +1209,6 @@ pub struct MirBlock {
     pub phis: Vec<Phi>,
     pub ops: Vec<Op>,
     pub succ: Vec<i64>,
-    // ---- early port (agent C) ----
     // Reached only on a path the frontend expects never to run, such as
     // raising an error. Layout places it after the hot code.
     pub cold: bool,
@@ -1233,7 +1250,6 @@ pub struct MirBody {
     pub repetitions: Vec<(i64, i64)>,
     pub cloned: bool,
     pub sealed: bool,
-    // ---- early port (agent C) ----
     // SS == DS: the stack is in the data group, so DS reaches a frame object
     // through a near pointer. The raise's to say -- BC runs so, Watcom C not.
     pub stack_in_data: bool,
@@ -2214,9 +2230,9 @@ pub fn resolved(body: &MirBody, _calls: Option<&BTreeMap<i64, String>>) -> Resul
         repetitions: body.repetitions.clone(),
         cloned: body.cloned,
         sealed: body.sealed,
+        stack_in_data: body.stack_in_data,
         pointer_values,
         pointer_seeds,
-        stack_in_data: body.stack_in_data,
         integer_ranges,
         loop_trip_counts: body.loop_trip_counts.clone(),
     })
@@ -2901,6 +2917,8 @@ mod tests {
             identity: Some(Identity::Tuple(vec![Identity::Space(Space::Segment), Identity::Int(index)])),
             generation: 0,
             extent: Some(2),
+            addressed: true,
+            captured: true,
         };
         let mut one = MemRef::new(Some(Addr::new(Space::Segment, 0)), 2);
         one.provenance = Some(Provenance::one(object(1)));
@@ -4172,20 +4190,3 @@ pub(crate) fn extracted_whole(high: &Arg, low: &Arg, definitions: &BTreeMap<Valu
     original
 }
 
-// ---- early port (agent C) ----
-
-// `a test b` is `b MIRRORED[test] a`.
-pub static MIRRORED: std::sync::LazyLock<indexmap::IndexMap<Kind, Kind>> = std::sync::LazyLock::new(|| {
-    indexmap::IndexMap::from([
-        (Kind::Eq, Kind::Eq),
-        (Kind::Ne, Kind::Ne),
-        (Kind::Lt, Kind::Gt),
-        (Kind::Gt, Kind::Lt),
-        (Kind::Le, Kind::Ge),
-        (Kind::Ge, Kind::Le),
-        (Kind::Below, Kind::Above),
-        (Kind::Above, Kind::Below),
-        (Kind::BelowEq, Kind::AboveEq),
-        (Kind::AboveEq, Kind::BelowEq),
-    ])
-});

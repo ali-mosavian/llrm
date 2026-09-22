@@ -198,6 +198,28 @@ fn test_complete_write_only_call_does_not_make_prior_store_observable() {
     assert!(std::ptr::eq(removed[0], &body.blocks[0].ops[0]));
 }
 
+#[test]
+fn test_an_unknown_pointer_does_not_observe_a_private_cell() {
+    // procs' TWICE kept two dead frame stores once its return read through UNKNOWN provenance.
+    use crate::model::memory::{MemoryKind, MemoryObject, Provenance};
+
+    let body = body_with_call(MemRef::new(None, 0), false);
+    let (mut store, mut load) = (body.blocks[0].ops[0].clone(), body.blocks[0].ops[2].clone());
+    let cell = MemRef::new(Some(addr(Space::Frame, -0x18, 0)), 2);
+    let mut unknown = MemRef::new(None, 2);
+    unknown.provenance = Some(Provenance::one(MemoryObject::new(MemoryKind::Unknown)));
+    store.results = vec![Arg::Cell(Cell { r#ref: cell.clone() })];
+    store.stores = vec![cell.clone()];
+    load.args = vec![Arg::Cell(Cell { r#ref: unknown.clone() })];
+    load.loads = vec![unknown];
+    let mut body = body;
+    body.blocks[0].ops = vec![store, load];
+
+    let private = |one: &MemRef| *one == cell;
+    let removed = dead_stores(&body, None, &IndexMap::new(), Some(&private), None, true);
+    assert_eq!(removed, vec![&body.blocks[0].ops[0]]);
+}
+
 // ---- tests/test_availability_operands.py ----
 
 #[test]

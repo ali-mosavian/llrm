@@ -1,22 +1,21 @@
-//! Port of `qbopt/optimize/canonical.py`.
-//!
 //! Compares with the constant on the right, as LLVM's InstCombine puts them.
 //!
-//! Folding makes `1 sub v` whenever a compare's left operand becomes known, and
-//! no machine compares an immediate against a register in that order. The
-//! compare is swapped and every test reading its flags mirrored; a reader that
-//! is not a test gets the constant as a copied value instead.
+//! Port of `qbopt/optimize/canonical.py`. Folding makes `1 sub v` whenever a
+//! compare's left operand becomes known, and no machine compares an
+//! immediate against a register in that order. The compare is swapped and
+//! every test reading its flags mirrored; a reader that is not a test gets
+//! the constant as a copied value instead.
 
-// ---- early port (agent C) ----
+use std::collections::BTreeSet;
 
-use std::collections::{BTreeSet, HashMap};
+use indexmap::IndexMap;
 
 use crate::analysis::ssa;
 use crate::model::ir::Operation;
-use crate::model::mir::{self, Arg, Kind, MirBlock, MirBody, Op, OpCode, Value};
+use crate::model::mir::{self, Arg, Held, Kind, MirBody, Op, OpCode, Value};
 
-pub fn compares(body: &MirBody) -> MirBody {
-    let mut readers: HashMap<Value, Vec<&Op>> = HashMap::new();
+pub(crate) fn compares(body: MirBody) -> MirBody {
+    let mut readers = IndexMap::<Value, Vec<&Op>>::new();
     for block in &body.blocks {
         for op in &block.ops {
             for value in &op.uses {
@@ -24,69 +23,70 @@ pub fn compares(body: &MirBody) -> MirBody {
             }
         }
     }
-    let mut swapped: BTreeSet<Value> = BTreeSet::new();
-    // Python's `id(op)`: an operation's position in the body.
-    let mut copied: BTreeSet<(usize, usize)> = BTreeSet::new();
+    let mut swapped = BTreeSet::<Value>::new();
+    // `id(op)`: the block and operation index.
+    let mut copied = BTreeSet::<(usize, usize)>::new();
     for (b, block) in body.blocks.iter().enumerate() {
-        for (o, op) in block.ops.iter().enumerate() {
+        for (i, op) in block.ops.iter().enumerate() {
             if !_constant_left(op) {
                 continue;
             }
-            let tests = readers.get(&op.defines[0]).map_or(true, |reading| {
-                reading.iter().all(|one| {
-                    one.kind == Kind::Branch && one.test.is_some_and(|test| mir::MIRRORED.contains_key(&test))
-                })
+            let tests = readers.get(&op.defines[0]).map_or(&[][..], Vec::as_slice).iter().all(|one| {
+                one.kind == Kind::Branch && one.test.is_some_and(|test| mir::MIRRORED(test).is_some())
             });
             if tests && !matches!(op.args[1], Arg::Const(_)) {
                 swapped.insert(op.defines[0]);
             } else {
-                copied.insert((b, o));
+                copied.insert((b, i));
             }
         }
     }
     if swapped.is_empty() && copied.is_empty() {
-        return body.clone();
+        return body;
     }
 
-    let values: Vec<Value> = ssa::values(body).collect();
+    let values = ssa::values(&body).collect::<Vec<_>>();
     let mut serial = values.iter().map(|value| value.id).max().unwrap_or(0);
     let mut variable = values.iter().map(|value| value.variable).max().unwrap_or(0);
     let mut blocks = Vec::new();
     for (b, block) in body.blocks.iter().enumerate() {
         let mut ops = Vec::new();
-        for (o, op) in block.ops.iter().enumerate() {
+        for (i, op) in block.ops.iter().enumerate() {
             if _constant_left(op) && swapped.contains(&op.defines[0]) {
-                ops.push(Op { args: vec![op.args[1].clone(), op.args[0].clone()], ..op.clone() });
-            } else if copied.contains(&(b, o)) {
+                let mut changed = op.clone();
+                changed.args = vec![op.args[1].clone(), op.args[0].clone()];
+                ops.push(changed);
+            } else if copied.contains(&(b, i)) {
                 serial += 1;
                 variable += 1;
                 let held = Value { variable, version: 1, ..Value::new(serial, op.at) };
                 let Arg::Const(constant) = &op.args[0] else {
-                    unreachable!("_constant_left")
+                    unreachable!("a constant left operand");
                 };
-                let width = constant.width;
-                ops.push(Op {
-                    kind: Kind::Copy,
-                    args: vec![op.args[0].clone()],
-                    results: vec![Arg::Held(mir::Held { value: held, width })],
-                    ..Op::new(op.at, Some(OpCode::Operation(Operation::Move)), "", vec![held], Vec::new())
-                });
-                ops.push(Op {
-                    uses: std::iter::once(held).chain(op.uses.iter().copied()).collect(),
-                    args: std::iter::once(Arg::Held(mir::Held { value: held, width }))
-                        .chain(op.args[1..].iter().cloned())
-                        .collect(),
-                    ..op.clone()
-                });
+                let mut copy = Op::new(op.at, OpCode::Operation(Operation::Move), "", vec![held], Vec::new());
+                copy.kind = Kind::Copy;
+                copy.args = vec![Arg::Const(constant.clone())];
+                copy.results = vec![Arg::Held(Held { value: held, width: constant.width })];
+                ops.push(copy);
+                let mut changed = op.clone();
+                changed.uses = std::iter::once(held).chain(op.uses.iter().copied()).collect();
+                changed.args = std::iter::once(Arg::Held(Held { value: held, width: constant.width }))
+                    .chain(op.args[1..].iter().cloned())
+                    .collect();
+                ops.push(changed);
             } else if op.kind == Kind::Branch && op.uses.iter().any(|value| swapped.contains(value)) {
-                ops.push(Op { test: op.test.map(|test| mir::MIRRORED[&test]), ..op.clone() });
+                let mut changed = op.clone();
+                changed.test = op.test.map(|test| mir::MIRRORED(test).expect("KeyError: a mirrored test"));
+                ops.push(changed);
             } else {
                 ops.push(op.clone());
             }
         }
-        blocks.push(MirBlock { ops, ..block.clone() });
+        let mut block = block.clone();
+        block.ops = ops;
+        blocks.push(block);
     }
-    MirBody { blocks, ..body.clone() }
+    MirBody { blocks, ..body }
 }
 
 fn _constant_left(op: &Op) -> bool {

@@ -19,7 +19,7 @@ use num_bigint::BigInt;
 
 use super::{hir, libfunc, raise_hir, stream};
 use crate::analysis::{alias, interprocedural};
-use crate::optimize::{inline, rotate, transform};
+use crate::optimize::{inline, rotate};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -28,6 +28,7 @@ use crate::backend::{
 };
 use crate::flow;
 use crate::model::lir;
+use crate::model::passes::Options;
 use crate::model::mir::{self, Arg, Const, MemRef, MirBody};
 use crate::objectfile::module::{Addr, Space};
 use crate::support::pyrepr::{self, Repr};
@@ -81,6 +82,7 @@ pub fn assembled(
     _optimise: bool,
     dump: Option<&Path>,
     target: &str,
+    options: &Options,
 ) -> Result<masm::Module, CompileError> {
     // `targets.profile` wants the name the table holds.
     let target = cpu::names().into_iter().find(|name| *name == target).unwrap_or("");
@@ -150,24 +152,16 @@ pub fn assembled(
                 }
             }
         };
-        let body = transform::applied(
+        let body = flow::optimized(
             body,
             &BTreeSet::new(),
             &raised.calls,
-            transform::Applied {
-                found: None,
-                // Borland's medium-model C ABI preserves SI and DI from the
-                // six value registers.
-                registers: Some(profile.register_capacity),
-                call_registers: profile.call_register_capacity,
-                index_scales: Some(profile.address_scales.clone()),
-                address_forms: Some(profile.address_forms.clone()),
-                costs: Some(profile.operations.clone()),
-                max_unroll_iterations: profile.max_unroll_iterations,
-                max_unrolled_operations: profile.max_unrolled_operations,
-                watch: if dump.is_some() { Some(&mut observe) } else { None },
-                ..Default::default()
-            },
+            cpu::ProfileOrName::Profile(profile),
+            options.clone(),
+            None,
+            None,
+            None,
+            if dump.is_some() { Some(&mut observe) } else { None },
         )
         .map_err(hir::Unsupported)?;
         let body = rotate::entered(&body).map_err(|error| hir::Unsupported(error.to_string()))?;
@@ -993,6 +987,7 @@ struct Args {
     dump: Option<PathBuf>,
     opt: bool,
     cpu: String,
+    options: Options,
     include: Vec<String>,
 }
 
@@ -1028,12 +1023,13 @@ pub fn recorded(source: &Path, includes: &[String]) -> Result<String, hir::Unsup
 }
 
 const USAGE: &str =
-    "usage: llrm-c [-h] [-o OUTPUT] [-I INCLUDE] [--dump DUMP] [--opt] [--cpu CPU] source";
+    "usage: llrm-c [-h] [-o OUTPUT] [-I INCLUDE] [--dump DUMP] [--opt] [--cpu CPU] [-O {s,2}] source";
 
 fn parse_args(argv: &[String]) -> Result<Args, String> {
     let (mut source, mut output, mut dump, mut opt, mut cpu) =
         (None, None, None, false, "386".to_owned());
     let mut include = Vec::new();
+    let mut options = crate::model::passes::O2();
     let mut rest = argv.iter();
     while let Some(one) = rest.next() {
         let mut value = |name: &str| {
@@ -1047,6 +1043,10 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "--dump" => dump = Some(PathBuf::from(value("--dump")?)),
             "--opt" => opt = true,
             "--cpu" => cpu = value("--cpu")?,
+            level if level.starts_with("-O") => {
+                let text = if level.len() > 2 { level[2..].to_owned() } else { value("-O")? };
+                options = flow::level_option(&text).map_err(|message| format!("argument -O: {message}"))?;
+            }
             flag if flag.starts_with('-') && flag.len() > 1 => {
                 return Err(format!("unrecognized arguments: {flag}"));
             }
@@ -1061,6 +1061,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         dump,
         opt,
         cpu,
+        options,
         include,
     })
 }
@@ -1089,7 +1090,7 @@ pub fn main(argv: &[String]) -> i32 {
             .file_stem()
             .and_then(|one| one.to_str())
             .unwrap_or_default();
-        let built = assembled(&text, module, args.opt, args.dump.as_deref(), &args.cpu)?;
+        let built = assembled(&text, module, args.opt, args.dump.as_deref(), &args.cpu, &args.options)?;
         let name = args.source.file_name().and_then(|one| one.to_str()).unwrap_or_default();
         if output.extension().and_then(|one| one.to_str()).map(str::to_lowercase).as_deref() == Some("obj") {
             fs::write(&output, omfwrite::written(&built, name)?)?;
@@ -1216,7 +1217,7 @@ mod tests {
     #[test]
     fn test_register_convention_is_refused() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/c/regs.cgs");
-        match assembled(&std::fs::read_to_string(path).unwrap(), "regs", false, None, "386") {
+        match assembled(&std::fs::read_to_string(path).unwrap(), "regs", false, None, "386", &crate::model::passes::O2()) {
             Err(CompileError::Unsupported(refused)) => {
                 assert!(refused.to_string().contains("_twice has a register calling convention"), "{refused}");
             }

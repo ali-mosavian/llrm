@@ -2342,7 +2342,7 @@ pub fn lowered(
     let default_hints = AllocationHints::new();
     let hints = options.hints.unwrap_or(&default_hints);
     let body = lower_switches::expanded(body).map_err(Unlowered)?;
-    let body = narrow::narrowed(&canonical::compares(&named(&body)?));
+    let body = narrow::narrowed(&canonical::compares(named(&body)?));
     let body = if body.stack_in_data { _near_frames(&body) } else { body };
     lower_floats::checked(&body)?;
     let roots: BTreeSet<Value> =

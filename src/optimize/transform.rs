@@ -3375,7 +3375,7 @@ impl crate::model::passes::MIRTransform for Fold {
     }
 
     fn transform(&mut self, body: MirBody) -> Result<MirBody, String> {
-        folded(&body, &self.r#where.dgroup, &self.r#where.named())
+        Ok(crate::optimize::canonical::compares(folded(&body, &self.r#where.dgroup, &self.r#where.named())?))
     }
 }
 
@@ -3641,29 +3641,13 @@ pub(crate) static PASSES_ON: std::sync::LazyLock<Vec<String>> =
 pub(crate) struct Applied<'a> {
     pub blocks: Option<Vec<std::sync::Arc<dyn std::any::Any + Send + Sync>>>,
     pub found: Option<std::sync::Arc<dyn std::any::Any + Send + Sync>>,
-    pub fold: bool,
-    pub lcssa_: bool,
-    pub decide: bool,
-    pub dead: bool,
-    pub hoist: bool,
-    pub forward: bool,
-    pub drop_loads: bool,
-    pub drop_stores: bool,
-    pub promote_: bool,
-    pub strength_: bool,
-    pub floatloop_: bool,
-    pub unroll_: bool,
-    pub peel_: bool,
-    pub fill_: bool,
-    pub unswitch_: bool,
+    pub options: crate::model::passes::Options,
     pub only: Option<String>,
     pub registers: Option<i64>,
     pub call_registers: i64,
     pub index_scales: Option<BTreeSet<i64>>,
     pub address_forms: Option<Vec<crate::model::passes::AddressForm>>,
     pub costs: Option<crate::model::passes::OperationCosts>,
-    pub max_unroll_iterations: i64,
-    pub max_unrolled_operations: i64,
     pub watch: Option<&'a mut dyn FnMut(&str, &MirBody)>,
 }
 
@@ -3672,29 +3656,13 @@ impl Default for Applied<'_> {
         Self {
             blocks: None,
             found: None,
-            fold: true,
-            lcssa_: true,
-            decide: true,
-            dead: true,
-            hoist: true,
-            forward: true,
-            drop_loads: true,
-            drop_stores: true,
-            promote_: true,
-            strength_: true,
-            floatloop_: true,
-            unroll_: true,
-            peel_: true,
-            fill_: true,
-            unswitch_: false,
+            options: crate::model::passes::O2(),
             only: None,
             registers: None,
             call_registers: 0,
             index_scales: None,
             address_forms: None,
             costs: None,
-            max_unroll_iterations: crate::model::passes::DEFAULT_MAX_UNROLL_ITERATIONS,
-            max_unrolled_operations: crate::model::passes::DEFAULT_MAX_UNROLLED_OPERATIONS,
             watch: None,
         }
     }
@@ -3718,6 +3686,9 @@ struct _Transaction<'w, 'a> {
     passes: std::cell::RefCell<Vec<Box<dyn crate::model::passes::MIRTransform>>>,
     unrollers: std::cell::RefCell<Vec<Box<dyn crate::model::passes::MIRTransform>>>,
     only: bool,
+    // Candidates rejected anywhere in this call, including inside another
+    // candidate's own fixed point.
+    tried: std::cell::RefCell<BTreeSet<crate::analysis::peelsize::Signature>>,
     watch: std::cell::RefCell<Option<&'a mut dyn FnMut(&str, &MirBody)>>,
 }
 
@@ -3771,6 +3742,7 @@ impl _Transaction<'_, '_> {
                     &state,
                     self.r#where,
                     &mut optimize,
+                    &self.tried,
                     if watching { Some(&mut watch) } else { None },
                 )?;
             }
@@ -3826,47 +3798,31 @@ fn _applied(
     let Applied {
         blocks,
         found,
-        fold,
-        lcssa_,
-        decide,
-        dead,
-        hoist,
-        forward,
-        drop_loads,
-        drop_stores,
-        promote_,
-        strength_,
-        floatloop_,
-        unroll_,
-        peel_,
-        fill_,
-        unswitch_,
+        options,
         only,
         registers,
         call_registers,
         index_scales,
         address_forms,
         costs,
-        max_unroll_iterations,
-        max_unrolled_operations,
         watch,
     } = options;
     // Every pass can be turned off, which is how a miscompile is bisected.
     let wanted = IndexMap::from([
-        ("lcssa", lcssa_),
-        ("floatloop", floatloop_),
-        ("fold", fold),
-        ("decide", decide),
-        ("dead", dead),
-        ("hoist", hoist),
-        ("gvn", forward && drop_loads),
-        ("drop_stores", drop_stores),
-        ("sroa", promote_),
-        ("promote", promote_),
-        ("strength", strength_),
-        ("unroll", unroll_),
-        ("peel", peel_),
-        ("fill", fill_),
+        ("lcssa", options.lcssa),
+        ("floatloop", options.floatloop),
+        ("fold", options.fold),
+        ("decide", options.decide),
+        ("dead", options.dead),
+        ("hoist", options.hoist),
+        ("gvn", options.forward && options.drop_loads),
+        ("drop_stores", options.drop_stores),
+        ("sroa", options.promote),
+        ("promote", options.promote),
+        ("strength", options.strength),
+        ("unroll", options.unroll),
+        ("peel", options.peel),
+        ("fill", options.fill),
     ]);
     if found.is_some() {
         return Err("not yet ported: qbopt.objectfile.module.landmarks".to_owned());
@@ -3883,8 +3839,7 @@ fn _applied(
         index_scales: index_scales.unwrap_or_else(|| BTreeSet::from([1])),
         address_forms: address_forms.unwrap_or_default(),
         costs: costs.unwrap_or_default(),
-        max_unroll_iterations,
-        max_unrolled_operations,
+        options: options.clone(),
     };
     // Public debugging selectors from before value reuse became one pass.
     let only = match only.as_deref() {
@@ -3912,6 +3867,7 @@ fn _applied(
         passes: std::cell::RefCell::new(passes),
         unrollers: std::cell::RefCell::new(Vec::new()),
         only: only.is_some(),
+        tried: std::cell::RefCell::new(BTreeSet::new()),
         watch: std::cell::RefCell::new(watch),
     };
 
@@ -3941,10 +3897,11 @@ fn _applied(
             &body,
             &r#where,
             &mut optimize,
+            &transaction.tried,
             if watching { Some(&mut watch) } else { None },
         )?;
     }
-    if unswitch_ {
+    if options.unswitch {
         let mut watch = |stage: &str, candidate: &MirBody| transaction.watch(stage, candidate);
         let watching = transaction.watching();
         body = crate::optimize::unswitch::optimized(
@@ -3957,8 +3914,7 @@ fn _applied(
                 index_scales: Some(r#where.index_scales.clone()),
                 address_forms: Some(r#where.address_forms.clone()),
                 costs: Some(r#where.costs.clone()),
-                max_unroll_iterations: r#where.max_unroll_iterations,
-                max_unrolled_operations: r#where.max_unrolled_operations,
+                options: options.clone(),
                 watch: if watching { Some(&mut watch) } else { None },
             },
         )?;

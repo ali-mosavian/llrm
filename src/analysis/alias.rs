@@ -16,7 +16,7 @@ use super::consts::{self, Known};
 use super::{induction, loops, ranges};
 use crate::model::memory::{self, Identity, MemoryKind, MemoryObject, Provenance, Slice};
 use crate::model::mir::{self, Arg, Cell, FrameAddress, Held, Kind, MemRef, MirBody, Op, Symbol, Value};
-use crate::objectfile::module::Space;
+use crate::objectfile::module::{Addr, Space};
 use crate::support::pyrepr::Repr;
 
 pub static UNKNOWN: LazyLock<Provenance> =
@@ -525,11 +525,14 @@ pub fn calls_annotated(procedure: &Procedure, known: &IndexMap<String, Summary>)
                     }
                 }
             };
+            let empty = BTreeSet::new();
             if effect.unknown_read {
-                effect.reads.extend(UNKNOWN.slices.iter().cloned());
+                let visible = _whole(&actual, facts.escaped_before.get(&op.at).unwrap_or(&empty))?;
+                effect.reads.extend(if visible.is_empty() { UNKNOWN.slices.clone() } else { visible });
             }
             if effect.unknown_write {
-                effect.writes.extend(UNKNOWN.slices.iter().cloned());
+                let visible = _whole(&actual, facts.escaped_before.get(&op.at).unwrap_or(&empty))?;
+                effect.writes.extend(if visible.is_empty() { UNKNOWN.slices.clone() } else { visible });
             }
             let sorted = |items: &BTreeSet<Slice>| {
                 let mut items = items.iter().map(|one| (one.repr(), one)).collect::<Vec<_>>();
@@ -620,6 +623,8 @@ fn _direct(op: &Op, values: &IndexMap<Value, Provenance>) -> Result<Option<Prove
                 identity: Some(Identity::Tuple(vec![Identity::Int(*low), Identity::Int(*high)])),
                 generation: 0,
                 extent: Some(high - low),
+                addressed: true,
+                captured: true,
             };
             return Provenance::one_with_slice(object, offset - low, offset - low + 1, 1, 1, BTreeSet::new())
                 .map(Some)
@@ -657,6 +662,8 @@ fn _direct(op: &Op, values: &IndexMap<Value, Provenance>) -> Result<Option<Prove
                 identity: Some(Identity::Tuple(vec![Identity::Space(*space), Identity::Int(*index)])),
                 generation: 0,
                 extent: None,
+                addressed: true,
+                captured: true,
             };
             return Provenance::one_with_slice(object, offset + addend, offset + addend + 1, 1, 1, BTreeSet::new())
                 .map(Some)
@@ -889,6 +896,56 @@ pub fn points_to(
         .collect::<IndexMap<_, _>>();
     let mut escape_out = escape_in.clone();
     let mut escaped_before: IndexMap<i64, BTreeSet<MemoryObject>> = IndexMap::new();
+    let mut pointer_fields: IndexMap<MemoryObject, BTreeSet<MemoryObject>> = IndexMap::new();
+    for block in &body.blocks {
+        for op in &block.ops {
+            if op.stores.is_empty() {
+                continue;
+            }
+            let Some(source) = _union(op.args.iter().filter_map(|arg| match arg {
+                Arg::Held(held) => Some(values.get(&held.value)),
+                _ => None,
+            })) else {
+                continue;
+            };
+            let targets = op
+                .stores
+                .iter()
+                .filter_map(|reference| _resolved_reference(reference, &values))
+                .flat_map(|provenance| provenance.slices.into_iter().map(|one| one.object))
+                .collect::<BTreeSet<_>>();
+            for target in targets {
+                pointer_fields
+                    .entry(target)
+                    .or_default()
+                    .extend(source.slices.iter().map(|one| one.object.clone()));
+            }
+        }
+    }
+
+    // Close publication through pointer-valued fields of known objects.
+    let pointees = |objects: BTreeSet<MemoryObject>, cells: &IndexMap<CellKey, Provenance>| {
+        let mut reached = objects;
+        loop {
+            let before = reached.len();
+            for (key, provenance) in cells {
+                if let CellKey::Object(object, _, _) = key {
+                    if reached.contains(object) {
+                        reached.extend(provenance.slices.iter().map(|one| one.object.clone()));
+                    }
+                }
+            }
+            for object in reached.iter().cloned().collect::<Vec<_>>() {
+                if let Some(fields) = pointer_fields.get(&object) {
+                    reached.extend(fields.iter().cloned());
+                }
+            }
+            if reached.len() == before {
+                return reached;
+            }
+        }
+    };
+
     loop {
         let before = escape_out.clone();
         for block in &body.blocks {
@@ -899,6 +956,7 @@ pub fn points_to(
                 .flat_map(|one| escape_out[one].iter().cloned())
                 .collect::<BTreeSet<_>>();
             escape_in.insert(block.at, state.clone());
+            let mut cells = incoming[&block.at].clone();
             for op in &block.ops {
                 let mut visible = escaped_before.get(&op.at).cloned().unwrap_or_default();
                 visible.extend(state.iter().cloned());
@@ -939,6 +997,15 @@ pub fn points_to(
                         }
                     }
                 }
+                if op.kind == Kind::Call {
+                    for arg in &op.args {
+                        if let Arg::Held(held) = arg {
+                            if let Some(provenance) = values.get(&held.value) {
+                                newly.extend(provenance.slices.iter().map(|one| one.object.clone()));
+                            }
+                        }
+                    }
+                }
                 if matches!(op.kind, Kind::Return | Kind::Escape) {
                     for value in &op.uses {
                         if let Some(provenance) = values.get(value) {
@@ -966,8 +1033,27 @@ pub fn points_to(
                             }
                         }
                     }
+                    let source = _union(op.args.iter().filter_map(|arg| match arg {
+                        Arg::Held(held) => Some(values.get(&held.value)),
+                        _ => None,
+                    }));
+                    for reference in &op.stores {
+                        let mut keyed = reference.clone();
+                        keyed.provenance = _resolved_reference(reference, &values);
+                        let key = _cell_key(&keyed);
+                        cells = cells
+                            .into_iter()
+                            .filter(|(old, _)| Some(old) == key.as_ref() || !_keys_overlap(Some(old), key.as_ref()))
+                            .collect();
+                        if let (Some(key), Some(source)) = (key, &source) {
+                            cells.insert(key, source.clone());
+                        }
+                    }
                 }
-                state.extend(newly);
+                state.extend(pointees(newly, &cells));
+                let mut visible = escaped_before.get(&op.at).cloned().unwrap_or_default();
+                visible.extend(state.iter().cloned());
+                escaped_before.insert(op.at, visible);
             }
             escape_out.insert(block.at, state);
         }
@@ -1138,6 +1224,67 @@ pub fn congruences(body: &MirBody) -> IndexMap<Value, (BigInt, BigInt)> {
     }
 }
 
+/// Python `named_bytes`' dict, keyed by address and by `(space, index)`:
+/// the two key shapes it mixes, as two maps.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct NamedBytes {
+    pub at: IndexMap<Addr, (MemoryObject, i64)>,
+    pub spaces: IndexMap<(Space, i64), MemoryObject>,
+}
+
+/// The object and offset each directly addressed byte is, as the body's own references name it.
+///
+/// Keyed by address, and by (space, index) for a space that is one object
+/// at its own displacements. A cell known only by its address takes its
+/// object from here, so it carries the same object facts every other
+/// reference to it does.
+pub fn named_bytes(body: &MirBody) -> NamedBytes {
+    let mut out: IndexMap<Addr, Option<(MemoryObject, i64)>> = IndexMap::new();
+    let mut refs: Vec<&MemRef> = body.initial.iter().map(|(reference, _)| reference).collect();
+    for block in &body.blocks {
+        for op in &block.ops {
+            let cells = op.args.iter().chain(&op.results).filter_map(|arg| match arg {
+                Arg::Cell(cell) => Some(&cell.r#ref),
+                _ => None,
+            });
+            refs.extend(op.loads.iter().chain(&op.stores).chain(cells).chain(op.memory_values.iter().map(|(reference, _)| reference)));
+        }
+    }
+    for reference in refs.into_iter().map(mir::symbolic_ref) {
+        let (Some(provenance), None, None, Some(addr)) =
+            (&reference.provenance, reference.base, reference.segment, reference.addr)
+        else {
+            continue;
+        };
+        if addr.base != iced_x86::Register::None || provenance.slices.len() != 1 {
+            continue;
+        }
+        let one = provenance.slices.first().expect("one slice");
+        if one.stride != 1 || one.high + one.width - 1 - one.low != i64::from(reference.width) {
+            continue;
+        }
+        for byte in 0..i64::from(reference.width) {
+            let (at, named) = (addr.plus(byte), (one.object.clone(), one.low + byte));
+            let same = out.get(&at).is_none_or(|previous| previous.as_ref() == Some(&named));
+            out.insert(at, same.then_some(named));
+        }
+    }
+    let named: IndexMap<Addr, (MemoryObject, i64)> =
+        out.into_iter().filter_map(|(at, one)| one.map(|one| (at, one))).collect();
+    // A space whose every named byte is one object at its own displacement
+    // is that object throughout: BC's segments and frame are.
+    let mut spaces: IndexMap<(Space, i64), Option<MemoryObject>> = IndexMap::new();
+    for (at, (object, offset)) in &named {
+        let key = (at.space, at.index);
+        let agrees = spaces.get(&key).is_none_or(|previous| previous.as_ref() == Some(object));
+        spaces.insert(key, (*offset == at.disp && agrees).then(|| object.clone()));
+    }
+    NamedBytes {
+        at: named,
+        spaces: spaces.into_iter().filter_map(|(key, one)| one.map(|one| (key, one))).collect(),
+    }
+}
+
 /// Attach solved provenance to every indirect reference in a body.
 pub fn annotated(body: &MirBody) -> Result<MirBody, String> {
     let facts = points_to(body, None, None)?;
@@ -1217,6 +1364,14 @@ pub fn annotated(body: &MirBody) -> Result<MirBody, String> {
             // semantic role is the proof, not the address spelling.
             excludes.push(mir::WHOLE_FRAME);
         }
+        if outgoing && reference.space == Some(Space::Stack) {
+            if let Some(current) = got {
+                got = Some(Provenance {
+                    slices: current.slices.into_iter().filter(|one| one.object.kind != MemoryKind::Frame).collect(),
+                    restrict: current.restrict,
+                });
+            }
+        }
         if got != reference.provenance || space != reference.space || excludes != reference.excludes {
             let mut tagged = reference.clone();
             tagged.provenance = got;
@@ -1273,13 +1428,13 @@ mod tests {
     use indexmap::IndexMap;
 
     use super::{
-        _direct_summary, Actual, Procedure, Summary, UNKNOWN, annotated, calls_annotated, congruences, points_to,
-        summaries,
+        _direct_summary, Actual, Procedure, Summary, UNKNOWN, annotated, calls_annotated, congruences, named_bytes,
+        points_to, summaries,
     };
     use crate::analysis::ranges::tests::guarded_loop;
     use crate::analysis::regions::overlapping;
     use crate::model::ir::Operation;
-    use crate::model::memory::{Identity, MemoryKind, MemoryObject, Provenance, Slice};
+    use crate::model::memory::{self, Identity, MemoryKind, MemoryObject, Provenance, Slice};
     use crate::model::mir::{
         Arg, Cell, Const, FrameAddress, Held, Kind, MemRef, MirBlock, MirBody, Op, OpCode, OrderedMap, Phi, Value,
         WHOLE_FRAME,
@@ -1654,9 +1809,9 @@ mod tests {
         assert_eq!(
             order,
             [
-                "Slice(object=Object(kind=<Kind.FRAME: 'frame'>, identity=('caller', -8), generation=0, extent=4), \
+                "Slice(object=Object(kind=<Kind.FRAME: 'frame'>, identity=('caller', -8), generation=0, extent=4, addressed=True, captured=True), \
                  low=0, high=4, stride=1, width=1)",
-                "Slice(object=Object(kind=<Kind.NONLOCAL: 'nonlocal'>, identity=None, generation=0, extent=None), \
+                "Slice(object=Object(kind=<Kind.NONLOCAL: 'nonlocal'>, identity=None, generation=0, extent=None, addressed=True, captured=True), \
                  low=-2147483648, high=2147483648, stride=1, width=1)",
             ]
         );
@@ -1777,8 +1932,75 @@ mod tests {
             "MemRef(addr=[seg:3+0x4], width=2, base=v6, segment=None, space=None, beyond=None, symbolic=None, \
              allocation=None, base_width=2, pointer=False, excludes=(), typed=None, within=None, \
              provenance=Provenance(slices=frozenset({Slice(object=Object(kind=<Kind.GLOBAL: 'global'>, \
-             identity=(<Space.SEGMENT: 'seg'>, 3), generation=0, extent=64), low=4, high=11, stride=2, width=2)}), \
+             identity=(<Space.SEGMENT: 'seg'>, 3), generation=0, extent=64, addressed=True, captured=True), low=4, high=11, stride=2, width=2)}), \
              restrict=frozenset()), volatile=False)"
         );
+    }
+
+    #[test]
+    fn test_offsets_in_different_objects_are_never_compared() {
+        // A bp slot and an sp push were called disjoint by comparing -0x16 with -2.
+        let r#static = one(&object(MemoryKind::Global, Identity::Str("table".to_owned()), None), 0x16, 0x18);
+        let extern_ = one(&object(MemoryKind::External, Identity::Str("shared".to_owned()), None), 2, 4);
+
+        assert!(r#static.intersects(&extern_));
+    }
+
+    #[test]
+    fn test_capture_decides_what_nonlocal_reaches() {
+        // A call's NONLOCAL reach met every global, so no call left a private static in a register.
+        let private = MemoryObject {
+            captured: false,
+            ..object(MemoryKind::Global, Identity::Str("counter".to_owned()), None)
+        };
+        let unaddressed = MemoryObject {
+            addressed: false,
+            captured: false,
+            ..object(MemoryKind::Global, Identity::Str("total".to_owned()), None)
+        };
+        let nonlocal = MemoryObject::new(MemoryKind::Nonlocal);
+        let unknown = MemoryObject::new(MemoryKind::Unknown);
+
+        assert!(!memory::objects_may_alias(&nonlocal, &private));
+        assert!(memory::objects_may_alias(&unknown, &private));
+        assert!(!memory::objects_may_alias(&unknown, &unaddressed));
+        assert!(memory::objects_may_alias(&unaddressed, &unaddressed));
+    }
+
+    #[test]
+    fn test_one_base_value_settles_provenance_references_by_displacement() {
+        // Two fields off one pointer, each whole-object provenance, were called overlapping.
+        let base = Value::new(1, 2);
+        let whole = Provenance::one(MemoryObject::new(MemoryKind::Unknown));
+        let mut first = MemRef::new(Some(Addr::new(Space::Literal, 0)), 2);
+        first.base = Some(base);
+        first.provenance = Some(whole);
+        let mut second = first.clone();
+        second.addr = Some(Addr::new(Space::Literal, 2));
+        let mut third = first.clone();
+        third.addr = Some(Addr::new(Space::Literal, 1));
+
+        assert_eq!(overlapping(&first, &second, None, None, None), Ok(false));
+        assert_eq!(overlapping(&first, &third, None, None, None), Ok(true));
+    }
+
+    #[test]
+    fn test_a_lane_form_slice_names_every_byte_it_covers() {
+        // A narrowed word slice [6, 7) of width 2 covers bytes 6 and 7; reading its end as 7 named neither.
+        let r#static = object(MemoryKind::Global, segment(5), None);
+        let mut reference = MemRef::new(Some(Addr { index: 5, ..Addr::new(Space::Segment, 6) }), 2);
+        reference.provenance = Some(Provenance {
+            slices: BTreeSet::from([Slice::new(r#static.clone(), 6, 7, 1, 2).unwrap()]),
+            restrict: BTreeSet::new(),
+        });
+        let mut store = op(0, Operation::Move, Kind::Store, vec![], vec![]);
+        store.name = "mov".to_owned();
+        store.args = vec![Arg::Const(Const::new(7, 2))];
+        store.stores = vec![reference];
+        let body = MirBody::new(0, vec![MirBlock::new(0, vec![], vec![store], vec![])]);
+
+        let named = named_bytes(&body);
+
+        assert_eq!(named.at[&Addr { index: 5, ..Addr::new(Space::Segment, 7) }], (r#static, 7));
     }
 }

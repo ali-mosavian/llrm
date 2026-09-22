@@ -503,7 +503,7 @@ fn _at(
             succ = vec![continuation];
             ops.push(_jump(call.at, continuation));
         }
-        cloned.push(MirBlock::new(labels[&callee_block.at], phis, ops, succ));
+        cloned.push(MirBlock { cold: callee_block.cold, ..MirBlock::new(labels[&callee_block.at], phis, ops, succ) });
     }
 
     if return_edges.is_empty() {
