@@ -10,6 +10,7 @@ pub mod frameescape;
 pub(crate) mod induction;
 pub mod intervals;
 pub mod liveness;
+pub mod observers;
 pub mod memoryssa;
 pub(crate) mod loops;
 pub(crate) mod occurrence;
