@@ -575,7 +575,7 @@ mod tests {
             IndexMap::new(),
         );
         let mut slots = frame::of(&low, None, "", Some(plan.clone())).unwrap();
-        assert_eq!(slots.slot(1, 4), Ok(-80));
+        assert_eq!(slots.slot(1_i64, 4), Ok(-80));
         let changed = prologue::reserved(&low, &slots, None).unwrap();
         let adjustments: Vec<(i64, Option<String>)> = changed
             .insns()

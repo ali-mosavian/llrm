@@ -322,7 +322,7 @@ mod tests {
     fn test_spill_reservation_is_inside_the_runtime_frame() {
         let body = procedure();
         let mut slots = Frame::new(-16);
-        slots.slot(1, 2).unwrap();
+        slots.slot(1_i64, 2).unwrap();
         let result = reserved(&body, &slots, Some(&runtime())).unwrap();
         let names: Vec<_> = result.blocks[0]
             .insns
@@ -335,7 +335,7 @@ mod tests {
     #[test]
     fn test_slots_are_below_runtime_metadata_and_declared_locals() {
         let mut slots = frame::of(&procedure(), Some(&runtime()), "", None).unwrap();
-        assert_eq!(slots.slot(9, 2), Ok(-18));
+        assert_eq!(slots.slot(9_i64, 2), Ok(-18));
     }
 
     #[test]
@@ -344,7 +344,7 @@ mod tests {
         let mut body = procedure();
         body.blocks[0].insns.truncate(3);
         let mut slots = Frame::new(-16);
-        slots.slot(1, 4).unwrap();
+        slots.slot(1_i64, 4).unwrap();
         let result = reserved(&body, &slots, Some(&IndexMap::from([(2, "B$CEND".to_owned())]))).unwrap();
         assert_eq!(result.blocks[0].insns[0].what.as_ref().unwrap().name.as_deref(), Some("sub"));
     }

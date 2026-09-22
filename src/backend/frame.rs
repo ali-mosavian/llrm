@@ -32,6 +32,12 @@ impl From<i64> for SlotKey {
     }
 }
 
+impl From<u32> for SlotKey {
+    fn from(value: u32) -> Self {
+        Self::Value(i64::from(value))
+    }
+}
+
 impl From<(&str, i64)> for SlotKey {
     fn from((name, number): (&str, i64)) -> Self {
         Self::Named(name.to_owned(), number)
@@ -83,8 +89,9 @@ impl Frame {
     }
 
     /// This value's displacement, creating one where it has none.
-    pub fn slot(&mut self, value: impl Into<SlotKey>, width: i64) -> Result<i64, Refused> {
+    pub fn slot(&mut self, value: impl Into<SlotKey>, width: impl Into<i64>) -> Result<i64, Refused> {
         let value = value.into();
+        let width: i64 = width.into();
         if self.native.as_ref().is_some_and(|native| !native.framed) {
             return Err(Refused(
                 "a frameless native procedure cannot hold a spill below its caller's BP".to_owned(),
@@ -100,7 +107,8 @@ impl Frame {
     }
 
     /// The memory operand that reads or writes this value's slot.
-    pub fn cell(&mut self, value: impl Into<SlotKey>, width: i64) -> Result<Mem, Refused> {
+    pub fn cell(&mut self, value: impl Into<SlotKey>, width: impl Into<i64>) -> Result<Mem, Refused> {
+        let width: i64 = width.into();
         let disp = self.slot(value, width)?;
         Ok(Mem {
             through: Register::BP,
@@ -231,11 +239,11 @@ mod tests {
             let calls = IndexMap::from([(3, "B$ENRA".to_owned())]);
             let mut owned = of(&body, Some(&calls), "", None).unwrap();
             assert_eq!(owned.floor, -22);
-            assert_eq!(owned.slot(200, 2), Ok(-24));
+            assert_eq!(owned.slot(200_i64, 2), Ok(-24));
             // VBDOS pushes ten words below BP before subtracting CX, not five.
             let mut vbdos = of(&body, Some(&calls), "vbdos", None).unwrap();
             assert_eq!(vbdos.floor, -32);
-            assert_eq!(vbdos.slot(200, 2), Ok(-34));
+            assert_eq!(vbdos.slot(200_i64, 2), Ok(-34));
             let mut address = init.clone();
             address.at = 8;
             address.what = Some(semantics(
@@ -245,7 +253,7 @@ mod tests {
                 vec![Loc::Address(Address::new(Some(Addr::new(Space::Frame, -32))))],
             ));
             let addressed = body_of(vec![init.clone(), call.clone(), address]);
-            assert_eq!(of(&addressed, Some(&calls), "", None).unwrap().slot(200, 2), Ok(-34));
+            assert_eq!(of(&addressed, Some(&calls), "", None).unwrap().slot(200_i64, 2), Ok(-34));
             for required in [vec![], vec![(Held { value: 999, width: 2 }, CX)]] {
                 let mut invalid_call = call.clone();
                 invalid_call.requires = required;

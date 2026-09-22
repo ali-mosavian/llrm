@@ -2,8 +2,11 @@
 
 pub mod addressforms;
 pub mod addressvalues;
+pub mod allocate;
 pub mod arithmetic;
+pub mod coalesce;
 pub mod comparefold;
+pub mod constrain;
 pub mod cpu;
 pub mod division;
 pub mod farcall;
@@ -21,7 +24,10 @@ pub mod pointers;
 pub mod prologue;
 pub mod rmw;
 pub mod select;
+pub mod spiller;
+pub mod splitkit;
 pub mod storecombine;
 pub mod target;
 pub mod timing;
+pub mod twoaddr;
 pub mod verify;
