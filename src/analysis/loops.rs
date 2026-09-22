@@ -7,6 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::support::bits::Bits;
 use crate::support::hash::IndexMap;
 
 use crate::model::mir::MirBlock;
@@ -73,37 +74,57 @@ pub(crate) fn dominators<N: Node>(blocks: &[N], entry: Option<i64>) -> BTreeMap<
     let every = reachable.clone();
     let preds = predecessors(&blocks.iter().filter(|block| reachable.contains(&block.at())).collect::<Vec<_>>());
 
-    let mut doms = blocks
-        .iter()
-        .map(|block| (block.at(), if reachable.contains(&block.at()) { every.clone() } else { BTreeSet::new() }))
-        .collect::<BTreeMap<_, _>>();
-    if indexed.contains_key(&start) {
-        doms.insert(start, BTreeSet::from([start]));
+    // The fixed point runs on bit sets over the distinct block addresses.
+    let ats = blocks.iter().map(Node::at).collect::<BTreeSet<_>>().into_iter().collect::<Vec<_>>();
+    let slot = |at: &i64| ats.binary_search(at).expect("a block address");
+    let mut all = Bits::new(ats.len());
+    for at in &every {
+        all.insert(slot(at));
     }
+    let empty = Bits::new(ats.len());
+    let mut doms = vec![empty.clone(); ats.len()];
+    for block in blocks {
+        doms[slot(&block.at())] = if reachable.contains(&block.at()) { all.clone() } else { empty.clone() };
+    }
+    if indexed.contains_key(&start) {
+        let mut own = empty.clone();
+        own.insert(slot(&start));
+        doms[slot(&start)] = own;
+    }
+    let reaching = |at: i64| preds[&at].iter().map(slot).collect::<Vec<_>>();
+    let reaching = blocks
+        .iter()
+        .map(|block| {
+            if block.at() == start || !reachable.contains(&block.at()) { Vec::new() } else { reaching(block.at()) }
+        })
+        .collect::<Vec<_>>();
 
     let mut changing = true;
     while changing {
         changing = false;
-        for block in blocks {
+        for (block, reaching) in blocks.iter().zip(&reaching) {
             if block.at() == start || !reachable.contains(&block.at()) {
                 continue;
             }
-            let reaching =
-                preds[&block.at()].iter().filter_map(|one| doms.get(one)).collect::<Vec<_>>();
             let mut now = match reaching.split_first() {
-                Some((first, rest)) => rest
-                    .iter()
-                    .fold((*first).clone(), |shared, one| shared.intersection(one).copied().collect()),
-                None => BTreeSet::new(),
+                Some((first, rest)) => rest.iter().fold(doms[*first].clone(), |mut shared, one| {
+                    shared.intersect_with(&doms[*one]);
+                    shared
+                }),
+                None => empty.clone(),
             };
-            now.insert(block.at());
-            if now != doms[&block.at()] {
-                doms.insert(block.at(), now);
+            let at = slot(&block.at());
+            now.insert(at);
+            if now != doms[at] {
+                doms[at] = now;
                 changing = true;
             }
         }
     }
-    doms
+    ats.iter()
+        .zip(doms)
+        .map(|(at, set)| (*at, set.iter().map(|one| ats[one]).collect()))
+        .collect()
 }
 
 /// One natural loop: where control comes back to, and what is inside.
