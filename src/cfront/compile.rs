@@ -23,8 +23,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::backend::{
-    allocate, coalesce, cpu, farcall, floatalloc, frame, lower, lower_int64, masm, parcopy, peephole, phielim, prologue,
-    twoaddr,
+    allocate, coalesce, cpu, farcall, floatalloc, frame, lower, jumps, lower_int64, masm, omfwrite, parcopy, peephole, phielim,
+    prologue, schedule, twoaddr,
 };
 use crate::model::passes::LIRTransform;
 use crate::flow;
@@ -38,6 +38,7 @@ pub enum CompileError {
     Unsupported(hir::Unsupported),
     NotPorted(&'static str),
     Io(std::io::Error),
+    Emission(omfwrite::Error),
 }
 
 impl fmt::Display for CompileError {
@@ -46,6 +47,7 @@ impl fmt::Display for CompileError {
             Self::Unsupported(error) => write!(formatter, "{error}"),
             Self::NotPorted(function) => write!(formatter, "not yet ported: {function}"),
             Self::Io(error) => write!(formatter, "{error}"),
+            Self::Emission(error) => write!(formatter, "{error}"),
         }
     }
 }
@@ -53,6 +55,18 @@ impl fmt::Display for CompileError {
 impl From<hir::Unsupported> for CompileError {
     fn from(error: hir::Unsupported) -> Self {
         Self::Unsupported(error)
+    }
+}
+
+impl From<omfwrite::Error> for CompileError {
+    fn from(error: omfwrite::Error) -> Self {
+        Self::Emission(error)
+    }
+}
+
+impl From<masm::Unprintable> for CompileError {
+    fn from(error: masm::Unprintable) -> Self {
+        Self::Emission(omfwrite::Error::Unprintable(error))
     }
 }
 
@@ -68,7 +82,7 @@ pub fn assembled(
     _optimise: bool,
     dump: Option<&Path>,
     target: &str,
-) -> Result<(), CompileError> {
+) -> Result<masm::Module, CompileError> {
     // `targets.profile` wants the name the table holds.
     let target = cpu::names().into_iter().find(|name| *name == target).unwrap_or("");
 
@@ -100,6 +114,7 @@ pub fn assembled(
     }
     let mut mirs = Vec::new();
     let mut lirs: Vec<String> = Vec::new();
+    let mut procedures: Vec<masm::Procedure> = Vec::new();
     for raised in &raised_procedures {
         let body = &bodies[&raised.name];
         mirs.push(_mir_text(&raised.name, body));
@@ -172,11 +187,61 @@ pub fn assembled(
                 &_lir_text(&raised.name, &low),
             )?;
         }
-        let _ = low;
+        let reserve = {
+            let frame = frame.borrow();
+            -std::cmp::min(frame.slots.values().copied().min().unwrap_or(0), frame.floor)
+        };
+        let mut callees: IndexMap<i64, masm::Callee> = raised
+            .callees
+            .iter()
+            .map(|(at, one)| {
+                let code = raised.inline.get(at).cloned().unwrap_or_default();
+                (*at, masm::Callee { name: one.object_name(), far: one.far(), code })
+            })
+            .collect();
+        for (at, code) in &legalized.inline {
+            let code = code.iter().map(|one| masm::InlinePart::Bytes(one.clone())).collect();
+            callees.insert(*at, masm::Callee { name: legalized.calls[at].clone(), far: false, code });
+        }
+        let procedure = masm::Procedure {
+            name: raised.name.clone(),
+            public: raised.symbol.exported(),
+            far: raised.symbol.far(),
+            body: low,
+            reserve,
+            callees,
+        };
+        let overhead = masm::return_overhead_bytes(&procedure)?;
+        let masm::Procedure { name, public, far, body, reserve, callees } = procedure;
+        let low = jumps::duplicated_returns(body, overhead)?;
+        lirs.push(_lir_text(&format!("{} (allocated)", raised.name), &low));
+        procedures.push(masm::Procedure { name, public, far, body: low, reserve, callees });
     }
     write(dump, "mir", &mirs.join("\n"))?;
-    let _ = lirs;
-    Err(CompileError::NotPorted("qbopt.backend.schedule.Scheduler"))
+    write(dump, "lir", &lirs.join("\n"))?;
+    let mut externs = _externs(&unit);
+    externs.extend(shared.runtime.values().map(|one| (one.object_name(), "far".to_owned())));
+    if _optimise {
+        return Err(CompileError::NotPorted("qbopt.cfront.compile._reachable_data"));
+    }
+    let mut data = _data(&unit, None)?;
+    data.extend(_literals(&shared));
+    let built = masm::Module {
+        code: format!("{}_TEXT", _module.to_uppercase()),
+        names: raise_hir::names(&unit, Some(&shared)),
+        externs,
+        publics: unit.symbols.values().filter(|one| one.exported()).map(|one| one.object_name()).collect(),
+        data,
+        procedures,
+        private: unit
+            .segments
+            .values()
+            .filter(|one| one.attr & hir::PRIVATE != 0)
+            .map(|one| one.name.clone())
+            .collect(),
+    };
+    write(dump, "asm", &masm::text(&built)?)?;
+    Ok(built)
 }
 
 pub fn _lir_text(name: &str, body: &lir::LirBody) -> String {
@@ -550,7 +615,7 @@ pub fn main(argv: &[String]) -> i32 {
             return Err(CompileError::NotPorted("qbopt.cfront.compile.recorded"));
         }
         let text = fs::read_to_string(&args.source)?;
-        let _output = args
+        let output = args
             .output
             .clone()
             .unwrap_or_else(|| args.source.with_extension("asm"));
@@ -559,7 +624,14 @@ pub fn main(argv: &[String]) -> i32 {
             .file_stem()
             .and_then(|one| one.to_str())
             .unwrap_or_default();
-        assembled(&text, module, args.opt, args.dump.as_deref(), &args.cpu)
+        let built = assembled(&text, module, args.opt, args.dump.as_deref(), &args.cpu)?;
+        let name = args.source.file_name().and_then(|one| one.to_str()).unwrap_or_default();
+        if output.extension().and_then(|one| one.to_str()).map(str::to_lowercase).as_deref() == Some("obj") {
+            fs::write(&output, omfwrite::written(&built, name)?)?;
+        } else {
+            fs::write(&output, masm::text(&built)?)?;
+        }
+        Ok(())
     })();
     match result {
         Ok(()) => 0,

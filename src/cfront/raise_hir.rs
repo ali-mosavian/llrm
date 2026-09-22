@@ -579,12 +579,7 @@ pub struct Raised {
     pub inline: IndexMap<i64, Vec<InlinePart>>,
 }
 
-/// One piece of an inline-assembly site: bytes, or a symbol reference `(kind, name, offset)`.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum InlinePart {
-    Bytes(Vec<u8>),
-    Symbol(String, String, i64),
-}
+pub use crate::backend::masm::InlinePart;
 
 /// What a module's procedures raise into together.
 #[derive(Clone, Debug, Default)]
@@ -2303,7 +2298,7 @@ impl<'a> _Raise<'a> {
                 named.push(self.frame[&key]);
             } else if matches!(fixup.kind.as_str(), "offset" | "segment") && !target.proc() {
                 parts.push(InlinePart::Bytes(data[start.min(at)..at].to_vec()));
-                parts.push(InlinePart::Symbol(fixup.kind.clone(), target.object_name(), fixup.offset));
+                parts.push(InlinePart::Fixup(fixup.kind.clone(), target.object_name(), fixup.offset));
                 start = at + 2;
             } else {
                 return self.unsupported(format!("inline code's {} of {}", fixup.kind, target.name));
