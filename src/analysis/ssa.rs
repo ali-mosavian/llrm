@@ -215,6 +215,41 @@ pub(crate) fn values(body: &MirBody) -> impl Iterator<Item = Value> + '_ {
     })
 }
 
+/// Drop phis nothing needs, including cycles only other dead phis read.
+///
+/// Direct port of `qbopt.analysis.ssa:pruned_phis`.
+pub(crate) fn pruned_phis(body: &MirBody, roots: &BTreeSet<Value>) -> MirBody {
+    let mut needed: BTreeSet<Value> = roots | &crate::model::mir::exposed(body);
+    for op in body.blocks.iter().flat_map(|block| &block.ops) {
+        needed.extend(operation_consumed(op));
+        for reference in op.loads.iter().chain(&op.stores) {
+            needed.extend(reference.base.iter().chain(&reference.segment).copied());
+        }
+    }
+    let phis: BTreeMap<Value, &crate::model::mir::Phi> =
+        body.blocks.iter().flat_map(|block| &block.phis).map(|phi| (phi.result, phi)).collect();
+    let mut pending: Vec<Value> = needed.iter().filter(|value| phis.contains_key(value)).copied().collect();
+    while let Some(next) = pending.pop() {
+        let incoming: BTreeSet<Value> =
+            phis[&next].incoming.values().filter(|value| !needed.contains(value)).copied().collect();
+        needed.extend(incoming.iter().copied());
+        pending.extend(incoming.into_iter().filter(|value| phis.contains_key(value)));
+    }
+    let removed: BTreeSet<Value> = phis.keys().filter(|value| !needed.contains(value)).copied().collect();
+    if removed.is_empty() {
+        return body.clone();
+    }
+    let mut body = body.clone();
+    for block in &mut body.blocks {
+        block.phis.retain(|phi| !removed.contains(&phi.result));
+        for op in &mut block.ops {
+            op.uses.retain(|value| !removed.contains(value));
+            op.merges = op.merges.iter().filter(|(source, _)| !removed.contains(source)).map(|(&s, &t)| (s, t)).collect();
+        }
+    }
+    body
+}
+
 /// Reconstruct SSA for only the supplied variable names.
 ///
 /// This is the direct Rust port of `qbopt.analysis.ssa:constructed`.  The
@@ -425,8 +460,41 @@ mod tests {
     };
 
     use super::{
-        SubstitutionError, constructed, operations, provider, substituted, use_index, values,
+        SubstitutionError, constructed, operations, provider, pruned_phis, substituted, use_index, values,
     };
+
+    #[test]
+    fn test_unused_phi_cycles_are_pruned_but_real_dependencies_survive() {
+        for reader in ["none", "argument", "memory", "root"] {
+            let (seed, first, second) = (Value::new(1, 0), Value::new(2, 1), Value::new(3, 1));
+            let phis = vec![
+                Phi { result: first, incoming: [(0, seed), (1, second)].into_iter().collect() },
+                Phi { result: second, incoming: [(0, seed), (1, first)].into_iter().collect() },
+            ];
+            let mut ops = vec![];
+            if reader == "argument" {
+                let mut op = Op::new(2, OpCode::Operation(Operation::Push), "push", vec![], vec![first]);
+                op.kind = Kind::Arg;
+                op.args = vec![Arg::Held(Held { value: first, width: 2 })];
+                ops.push(op);
+            }
+            if reader == "memory" {
+                let reference = MemRef { base: Some(first), ..MemRef::new(None, 2) };
+                let mut op = Op::new(2, OpCode::Operation(Operation::Move), "mov", vec![], vec![]);
+                op.kind = Kind::Load;
+                op.loads = vec![reference.clone()];
+                op.args = vec![Arg::Cell(Cell { r#ref: reference })];
+                ops.push(op);
+            }
+            let body = MirBody::new(
+                0,
+                vec![MirBlock::new(0, vec![], vec![], vec![1]), MirBlock::new(1, phis.clone(), ops, vec![1])],
+            );
+            let roots = if reader == "root" { BTreeSet::from([first]) } else { BTreeSet::new() };
+            let result = pruned_phis(&body, &roots);
+            assert_eq!(result.blocks[1].phis, if reader == "none" { vec![] } else { phis }, "{reader}");
+        }
+    }
 
     fn value(id: u32, at: i64, variable: u32, version: u32) -> Value {
         Value {
