@@ -12,6 +12,10 @@ use crate::support::hash::{HashMap, HashSet, IndexMap};
 use crate::analysis::{liveness, loops};
 use crate::model::mir::{Arg, Kind, MirBlock, MirBody, Op, Value};
 use crate::model::passes::OperationCosts;
+use num_traits::ToPrimitive;
+
+// Trips assumed of a loop, and cells of a fill, whose count is not a number.
+pub(crate) const UNKNOWN_TRIPS: i64 = 10;
 
 pub(crate) const _ALU: [Kind; 21] = [
     Kind::Add,
@@ -96,6 +100,12 @@ pub(crate) fn operation(one: &Op, costs: &OperationCosts) -> Option<i64> {
         costs.float_multiply
     } else if matches!(one.kind, Kind::Fdiv | Kind::Fsqrt) {
         costs.float_divide
+    } else if one.kind == Kind::Fill {
+        let cells = match &one.args[1] {
+            Arg::Const(count) => count.n.to_i64().expect("a cell count"),
+            _ => UNKNOWN_TRIPS,
+        };
+        return Some(costs.fill + cells * costs.fill_cell);
     } else if one.kind == Kind::Fcheck {
         costs.float_store
     } else if one.kind == Kind::Call {
@@ -134,7 +144,7 @@ pub(crate) fn _frequencies(body: &MirBody, trips: Option<&IndexMap<i64, i64>>) -
         if exact.len() > 1 {
             return None;
         }
-        let factor = exact.iter().next().copied().unwrap_or(10);
+        let factor = exact.iter().next().copied().unwrap_or(UNKNOWN_TRIPS);
         for at in &loop_.body {
             if let Some(count) = frequency.get_mut(at) {
                 *count *= factor;

@@ -147,6 +147,8 @@ pub struct OperationCosts {
     pub float_load: i64,
     pub float_store: i64,
     pub extend: i64,
+    pub fill: i64,
+    pub fill_cell: i64,
 }
 
 impl Default for OperationCosts {
@@ -171,6 +173,8 @@ impl Default for OperationCosts {
             float_load: 1,
             float_store: 1,
             extend: 1,
+            fill: 1,
+            fill_cell: 1,
         }
     }
 }

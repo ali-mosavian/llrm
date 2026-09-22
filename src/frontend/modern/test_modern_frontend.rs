@@ -864,6 +864,22 @@ fn test_a_repeat_literal_in_the_frame_is_one_string_fill() {
 }
 
 #[test]
+fn test_a_fill_leaves_the_rest_of_its_function_priceable() {
+    // FILL had no price, so any function holding one refused every unroll: the 4-trip sum stayed a loop.
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "priced_fill.mod",
+        "fn value(v: &[i16]) -> i32:\n    var a: [i32; 64] = [0; 64]\n    var total: i16 = 0\n    for i in 0..4:\n        total += v[i]\n    a[total] = 5\n    return a[1]\nfn main() -> i16:\n    let v: [i16; 4] = [1, 2, 3, 4]\n    return i16(value(&v))\n",
+    );
+    let assembly = listing(&parsed(&source), "main", &O2());
+    let body = &assembly[assembly.find("_value proc").unwrap()..assembly.find("_value endp").unwrap()];
+
+    assert!(body.contains("rep stosd"));
+    assert!(!Regex::new(r"\bj\w+\s").unwrap().is_match(body));
+}
+
+#[test]
 fn test_an_unrolled_fill_stores_to_fixed_frame_cells() {
     // Each unrolled store of `[0; 8, 8]` loaded its constant offset into a register first: 64 extra movs.
     let directory = tempfile::tempdir().expect("a directory");
