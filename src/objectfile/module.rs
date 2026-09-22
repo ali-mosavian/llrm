@@ -125,7 +125,7 @@ pub struct Addr {
 
 impl Addr {
     /// `Addr(space, disp)`.
-    pub fn new(space: Space, disp: i64) -> Self {
+    pub const fn new(space: Space, disp: i64) -> Self {
         Addr { space, disp, index: 0, base: Register::None, segment: Register::None }
     }
 

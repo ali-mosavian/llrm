@@ -1,5 +1,6 @@
 //! Ports of `qbopt/analysis`.
 
+pub mod alias;
 pub(crate) mod constant_cycles;
 pub mod flags;
 pub(crate) mod consts;

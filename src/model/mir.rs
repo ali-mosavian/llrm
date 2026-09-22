@@ -402,6 +402,9 @@ pub(crate) fn kind_of(what: &Semantics, args: &[Arg], results: &[Arg]) -> Kind {
     }
 }
 
+/// Direct port of `qbopt.model.mir:WHOLE_FRAME`: every BP-relative frame byte.
+pub const WHOLE_FRAME: (Addr, u32) = (Addr::new(Space::Frame, -(1 << 15)), 1 << 16);
+
 /// Direct port of `qbopt.model.mir:same_bytes`.
 ///
 /// This is the forwarding question: both references must certainly name the
