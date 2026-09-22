@@ -146,6 +146,8 @@ class OperationCosts:
     float_load: int = 1
     float_store: int = 1
     extend: int = 1
+    fill: int = 1
+    fill_cell: int = 1
 
 
 DEFAULT_MAX_UNROLL_ITERATIONS = 16

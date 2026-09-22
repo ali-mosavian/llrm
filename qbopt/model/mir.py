@@ -973,6 +973,26 @@ class Op:
         return not self.absorbed
 
 
+def jump(beside: Op, destination: int) -> Op:
+    """`beside`, a block's last operation, as an unconditional jump to `destination`."""
+    return replace(
+        beside,
+        kind=Kind.JUMP,
+        name="",
+        args=(),
+        results=(),
+        uses=(),
+        defines=(),
+        loads=(),
+        stores=(),
+        merges={},
+        source_backed=False,
+        raised=((), ()),
+        target=destination,
+        test=None,
+    )
+
+
 def computed(at: int, kind: Kind, result: Value, args: tuple[Arg, ...], width: int) -> Op:
     """A source-free MIR computation invented by a semantic transform.
 
