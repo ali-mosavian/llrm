@@ -39,9 +39,9 @@ only for a module still `todo`, and never after cutover.
 | 2 | `qbopt/backend/layout.py` | 619 | `src/backend/layout.rs` | todo | test_emission_order, test_layout, test_wholeseg |
 | 2 | `qbopt/backend/liveness.py` | 142 | `src/backend/liveness.rs` | todo | test_liveness |
 | 2 | `qbopt/backend/lower.py` | 2117 | `src/backend/lower.rs` | todo | test_addressforms, test_basic_semantics, test_c_segment_addresses, test_call_clobbers, test_constrain, test_consts, test_dead_ownership, test_far_load_identity, test_file_contracts, test_float_values, test_floatalloc, test_floatfold, test_flow, test_frame_addresses, test_hir, test_lir, test_lir_emission_order, test_lower_conditions, test_lower_switches, test_masm, test_native_returns, test_opaque_relocations, test_pointer_offset, test_raising_addresses, test_raising_calls, test_spiller, test_stack_segment, test_symbolic_relocation, test_transform, test_unroll |
-| 2 | `qbopt/backend/lower_floats.py` | 35 | `src/backend/lower_floats.rs` | todo | test_float_values, test_sccp, test_unroll |
+| 2 | `qbopt/backend/lower_floats.py` | 35 | `src/backend/lower_floats.rs` | draft | test_float_values, test_sccp, test_unroll |
 | 2 | `qbopt/backend/lower_int64.py` | 560 | `src/backend/lower_int64.rs` | todo | test_cfront, test_modern_frontend |
-| 2 | `qbopt/backend/lower_switches.py` | 129 | `src/backend/lower_switches.rs` | todo | - |
+| 2 | `qbopt/backend/lower_switches.py` | 129 | `src/backend/lower_switches.rs` | draft | - |
 | 2 | `qbopt/backend/machinecse.py` | 245 | `src/backend/machinecse.rs` | todo | test_machinecse |
 | 2 | `qbopt/backend/machinedce.py` | 135 | `src/backend/machinedce.rs` | todo | test_machinedce |
 | 2 | `qbopt/backend/masm.py` | 423 | `src/backend/masm.rs` | todo | test_cfront_frontend, test_hir, test_hir_execute, test_memory_folding, test_modern_frontend, test_peephole |
@@ -99,7 +99,7 @@ only for a module still `todo`, and never after cutover.
 | 3 | `qbopt/analysis/ssa.py` | 344 | `src/analysis/ssa.rs` | draft | test_algebraic, test_float_values, test_induction_identity, test_mir, test_pointer_memory, test_rule5, test_ssa_phis, test_ssa_unreachable, test_transform |
 | 3 | `qbopt/optimize/algebraic.py` | 1027 | `src/optimize/algebraic.rs` | todo | test_algebraic, test_invariant_values |
 | 3 | `qbopt/optimize/cfg.py` | 77 | `src/optimize/cfg.rs` | draft | - |
-| 3 | `qbopt/optimize/edges.py` | 40 | `src/optimize/edges.rs` | todo | - |
+| 3 | `qbopt/optimize/edges.py` | 40 | `src/optimize/edges.rs` | draft | - |
 | 3 | `qbopt/optimize/exitsink.py` | 107 | `src/optimize/exitsink.rs` | todo | - |
 | 3 | `qbopt/optimize/fill.py` | 301 | `src/optimize/fill.rs` | todo | - |
 | 3 | `qbopt/optimize/floatfold.py` | 234 | `src/optimize/floatfold.rs` | todo | test_floatfold, test_unroll |
@@ -180,7 +180,7 @@ only for a module still `todo`, and never after cutover.
 | 5 | `qbopt/frontend/raising_float_calls.py` | 244 | `src/frontend/raising_float_calls.rs` | todo | - |
 | 5 | `qbopt/frontend/raising_float_results.py` | 56 | `src/frontend/raising_float_results.rs` | todo | - |
 | 5 | `qbopt/frontend/raising_float_values.py` | 175 | `src/frontend/raising_float_values.rs` | todo | test_fpstack |
-| 5 | `qbopt/frontend/raising_floats.py` | 113 | `src/frontend/raising_floats.rs` | todo | - |
+| 5 | `qbopt/frontend/raising_floats.py` | 113 | `src/frontend/raising_floats.rs` | draft | - |
 | 5 | `qbopt/frontend/raising_frame.py` | 172 | `src/frontend/raising_frame.rs` | todo | test_raising_frame |
 | 5 | `qbopt/frontend/raising_literals.py` | 199 | `src/frontend/raising_literals.rs` | todo | test_literal_initializers, test_raising_copies |
 | 5 | `qbopt/frontend/raising_longs.py` | 515 | `src/frontend/raising_longs.rs` | todo | test_raising_longs, test_raising_unary |

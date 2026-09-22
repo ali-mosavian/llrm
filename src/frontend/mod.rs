@@ -2,5 +2,6 @@
 
 pub mod blocks;
 pub mod declen;
+pub mod raising_floats;
 pub mod modern;
 pub mod qb;
