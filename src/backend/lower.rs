@@ -2316,4 +2316,159 @@ mod tests {
         let op = &named.blocks[0].ops[0];
         assert_eq!((op.op, op.name.as_str()), (Some(OpCode::Operation(Operation::Move)), "mov"));
     }
+    fn switched() -> MirBody {
+        let selector = Value { variable: 1, version: 1, ..Value::new(1, 0) };
+        let merged = Value { variable: 2, version: 1, ..Value::new(2, 20) };
+        let mut op = Op::new(5, OpCode::Operation(Operation::Jump), "", vec![], vec![selector]);
+        op.kind = Kind::Switch;
+        op.args = vec![Arg::Held(Held { value: selector, width: 2 })];
+        op.target = Some(30);
+        op.cases = vec![(1, 20), (2, 20), (3, 30)];
+        op.absorbed = vec![5];
+        let phi = crate::model::mir::Phi { result: merged, incoming: [(0, selector)].into_iter().collect() };
+        MirBody::new(
+            0,
+            vec![
+                MirBlock::new(0, vec![], vec![op], vec![20, 30]),
+                MirBlock::new(20, vec![phi], vec![], vec![]),
+                MirBlock::new(30, vec![], vec![], vec![]),
+            ],
+        )
+    }
+
+    fn occurrences() -> IndexMap<u32, Vec<(i64, i64)>> {
+        [(5, vec![(5, 12)])].into_iter().collect()
+    }
+
+    fn lower(name: &str, body: &MirBody) -> Result<lir::LirBody, Unlowered> {
+        let occurrences = occurrences();
+        let contracts = IndexMap::new();
+        lowered(
+            name,
+            body,
+            Some(&IndexMap::new()),
+            BTreeSet::new(),
+            Some(&contracts),
+            "386",
+            Lowered { occurrences: Some(&occurrences), ..Default::default() },
+        )
+    }
+
+    #[test]
+    fn test_switch_comparisons_cannot_overwrite_a_live_condition() {
+        let mut body = switched();
+        let flags = Value { flags: true, ..Value::new(9, 0) };
+        let mut branch = Op::new(20, OpCode::Operation(Operation::Branch), "", vec![], vec![flags]);
+        branch.kind = Kind::Branch;
+        branch.test = Some(Kind::Eq);
+        branch.target = Some(30);
+        body.blocks[1].ops = vec![branch];
+        body.blocks[1].succ = vec![30];
+        let error = lower("condition", &body).unwrap_err();
+        assert!(error.0.contains("live condition"), "{error}");
+    }
+
+    #[test]
+    fn test_lowering_consumes_switches_as_compare_and_branch_operations() {
+        let body = lower("switch", &switched()).unwrap();
+        let names: Vec<Option<String>> = body
+            .blocks
+            .iter()
+            .flat_map(|block| &block.insns)
+            .map(|insn| insn.what.as_ref().and_then(|what| what.name.clone()))
+            .collect();
+        assert_eq!(names.iter().filter(|name| name.as_deref() == Some("cmp")).count(), 2);
+        assert_eq!(names.iter().filter(|name| name.as_deref() == Some("je")).count(), 2);
+    }
+
+    #[test]
+    fn test_constant_switch_emits_only_a_jump() {
+        for (value, target) in [(1, 20), (2, 20), (3, 30), (0, 30), (65537, 20)] {
+            let mut body = switched();
+            let op = &mut body.blocks[0].ops[0];
+            op.args = vec![Arg::Const(crate::model::mir::Const::new(value, 2))];
+            op.uses = vec![];
+            let lowered = lower("constant", &body).unwrap();
+            let [jump] = &lowered.blocks[0].insns[..] else { panic!("{value}: not one instruction") };
+            assert_eq!(jump.what.as_ref().unwrap().name.as_deref(), Some("jmp"));
+            assert_eq!(lowered.blocks[0].succ, [target], "{value}");
+        }
+    }
+
+    #[test]
+    fn test_invalid_switch_is_rejected_atomically() {
+        for invalid in ["duplicate", "missing", "effects", "successors"] {
+            let mut body = switched();
+            let block = &mut body.blocks[0];
+            match invalid {
+                "duplicate" => block.ops[0].cases = vec![(1, 20), (65537, 30)],
+                "missing" => block.ops[0].target = Some(40),
+                "effects" => block.ops[0].defines = vec![Value::new(9, 5)],
+                _ => block.succ = vec![20],
+            }
+            assert!(lower("invalid", &body).is_err(), "{invalid}");
+            assert_eq!(switched(), switched());
+        }
+    }
+
+    fn pointer_offset() -> Op {
+        let (base, offset, result) = (Value::new(1, 0), Value::new(2, 0), Value::new(3, 0));
+        let mut op = Op::new(0, OpCode::Operation(Operation::Nothing), "", vec![result], vec![base, offset]);
+        op.kind = Kind::PtrOffset;
+        op.args = vec![Arg::Held(Held { value: base, width: 4 }), Arg::Held(Held { value: offset, width: 4 })];
+        op.results = vec![Arg::Held(Held { value: result, width: 4 })];
+        op
+    }
+
+    /// A huge INTEGER at byte 65536 must advance the selector, not read element zero again.
+    #[test]
+    fn test_dos_pointer_offset_carries_and_borrows() {
+        for (pointer, offset, expected) in [
+            (0x2000_0000, 0, 0x2000_0000),
+            (0x2000_fffe, 2, 0x3000_0000),
+            (0x2000_0000, 0x20002, 0x4000_0002),
+            (0x2000_0004, -8, 0x1000_fffc),
+            (0xf000_fffe_i64, 2, 0x0000_0000),
+        ] {
+            let op = pointer_offset();
+            let body = MirBody::new(0, vec![MirBlock::new(0, vec![], vec![op.clone()], vec![])]);
+            let calls = IndexMap::new();
+            let model = super::super::pointers::Model::new(super::super::pointers::HugeShift::Fixed(12)).unwrap();
+            let mut making = Lowering::new(
+                &body,
+                BTreeSet::from([1, 2, 3]),
+                &calls,
+                BTreeSet::new(),
+                None,
+                "386",
+                Options { pointer_model: Some(model), ..Default::default() },
+            )
+            .unwrap();
+            let parts: Vec<ir::Semantics> =
+                making.expand(&op, true).unwrap().iter().map(|part| part.what.clone().unwrap()).collect();
+            let none = std::collections::HashMap::new();
+            let got = super::super::pointers::tests::execute(&parts, pointer, offset & 0xffff_ffff, &none);
+            assert_eq!(got, expected);
+            assert!(parts
+                .iter()
+                .flat_map(|part| part.sources.iter().chain(&part.dests))
+                .all(|arg| matches!(arg, Loc::Held(_) | Loc::Imm(_))));
+        }
+    }
+
+    #[test]
+    fn test_pointer_abi_is_not_inferred_from_cpu() {
+        let op = pointer_offset();
+        let body = MirBody::new(0, vec![MirBlock::new(0, vec![], vec![op.clone()], vec![])]);
+        let calls = IndexMap::new();
+        let mut making =
+            Lowering::new(&body, BTreeSet::from([3]), &calls, BTreeSet::new(), None, "386", Options::default()).unwrap();
+        assert!(making.expand(&op, true).unwrap_err().0.contains("pointer ABI"));
+    }
+
+    #[test]
+    fn test_pointer_lowering_cannot_destroy_an_unrelated_live_condition() {
+        let leaving = BTreeSet::from([Value { flags: true, ..Value::new(4, 0) }]);
+        assert!(_check_inserted_conditions(&[pointer_offset()], &leaving).unwrap_err().0.contains("live condition"));
+    }
 }
