@@ -14,6 +14,7 @@ from dataclasses import dataclass
 
 class Kind(StrEnum):
     UNKNOWN = "unknown"
+    # The outgoing push area: only pushes, pops and calls name it.
     STACK = "stack"
     FRAME = "frame"
     GLOBAL = "global"
@@ -34,10 +35,14 @@ class Object:
     identity: object | None = None
     generation: int = 0
     extent: int | None = None
-    # False when no pointer, call or other object ever holds this object's
-    # address. A fact about the object, not its identity: two spellings of
-    # one object are still the same object.
-    escapes: bool = field(default=True, compare=False)
+    # Facts about the object, not its identity: two spellings of one object
+    # are the same object whatever they say. LLVM's split, stated once:
+    # `addressed` -- some code computes its address, so a pointer of unknown
+    # origin may hold it. `captured` -- that address can be found from
+    # outside this activation (memory, a return, a callee that keeps it), so
+    # NONLOCAL and PARAMETER may reach it. Unaddressed implies uncaptured.
+    addressed: bool = field(default=True, compare=False)
+    captured: bool = field(default=True, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,11 +69,11 @@ class Slice:
     def intersects(self, other: "Slice") -> bool:
         if not objects_may_alias(self.object, other.object):
             return False
-        if self.low >= other.high + other.width - 1 or other.low >= self.high + self.width - 1:
-            return False
         # Byte offsets have a common origin only for the same concrete object.
         if self.object != other.object:
             return True
+        if self.low >= other.high + other.width - 1 or other.low >= self.high + self.width - 1:
+            return False
         divisor = gcd(self.stride, other.stride)
         for mine in range(self.width):
             for theirs in range(other.width):
@@ -131,21 +136,21 @@ class Provenance:
 def objects_may_alias(one: Object, other: Object) -> bool:
     if one == other:
         return True
-    # Only a reference naming an unescaped object reaches it. An absolute
-    # address is not a pointer the program was given, so it is left alone.
-    if not (one.escapes and other.escapes) and Kind.ABSOLUTE not in (one.kind, other.kind):
+    # Only a reference naming an unaddressed object reaches it.
+    if not (one.addressed and other.addressed):
         return False
-    if one.kind is Kind.UNKNOWN or other.kind is Kind.UNKNOWN:
-        return True
-    if one.kind is Kind.NONLOCAL or other.kind is Kind.NONLOCAL:
-        return Kind.FRAME not in (one.kind, other.kind) and Kind.STACK not in (one.kind, other.kind)
-    if one.kind is Kind.PARAMETER or other.kind is Kind.PARAMETER:
-        # An incoming pointer predates this activation and cannot designate
-        # one of its frame objects. At a call site the parameter object is
-        # replaced by the actual provenance before caller-side queries.
-        return Kind.FRAME not in (one.kind, other.kind)
-    if {one.kind, other.kind} <= {Kind.STACK, Kind.FRAME}:
-        return one.kind is Kind.STACK or other.kind is Kind.STACK
+    for this, that in ((one, other), (other, one)):
+        if this.kind is Kind.UNKNOWN:
+            return True
+    for this, that in ((one, other), (other, one)):
+        if this.kind is Kind.NONLOCAL:
+            return that.captured and that.kind not in (Kind.FRAME, Kind.STACK)
+    for this, that in ((one, other), (other, one)):
+        if this.kind is Kind.PARAMETER:
+            # An incoming pointer predates this activation and cannot designate
+            # one of its frame objects. At a call site the parameter object is
+            # replaced by the actual provenance before caller-side queries.
+            return that.captured and that.kind is not Kind.FRAME
     if {one.kind, other.kind} <= {Kind.GLOBAL, Kind.EXTERNAL}:
         return Kind.EXTERNAL in (one.kind, other.kind)
     return False

@@ -73,7 +73,7 @@ def _object(place: model.Place, escaped: frozenset[int]) -> memory.Object:
     if _space(place) is Space.FRAME:
         return memory.Object(memory.Kind.FRAME, identity, extent=place.extent)
     private = place.storage in (model.Storage.STATIC, model.Storage.MODULE) and place.symbol not in escaped
-    return memory.Object(memory.Kind.GLOBAL, identity, extent=place.extent, escapes=not private)
+    return memory.Object(memory.Kind.GLOBAL, identity, extent=place.extent, addressed=not private, captured=not private)
 
 
 def _ref(place: model.Place, type_: model.Type, escaped: frozenset[int]) -> mir.MemRef:

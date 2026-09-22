@@ -100,6 +100,7 @@ may put one inside the other, so they meet; one symbol is displacement
 arithmetic; and an exclusion can name one symbol and no other.
 """
 
+from dataclasses import replace
 from dataclasses import dataclass
 
 from qbopt.model import memory
@@ -119,6 +120,9 @@ ABSOLUTE = ("absolute",)
 NAMED = ("named",)
 # Bytes the link places: every extern, and every COMMON-combined segment.
 LINKED = (*DGROUP, "linked")
+
+# Only the translation to provenance uses this: DGROUP less its uncaptured segments.
+NONLOCAL = ("nonlocal",)
 
 # Displacements counted from sp, from bp, and from the segment itself.
 SP, BP, HERE = "sp", "bp", ""
@@ -389,3 +393,95 @@ def may_alias(
 def addresses(a, a_width: int, b, b_width: int, bounds: dict | None = None, layout=None) -> bool:
     """The same question for a caller that holds addresses and no reference."""
     return addressed(a, a_width, bounds, layout).intersects(addressed(b, b_width, bounds, layout))
+
+
+def provenance(
+    ref,
+    bounds: dict | None = None,
+    known: dict | None = None,
+    layout=None,
+    private: frozenset[int] = frozenset(),
+    spared: frozenset[int] = frozenset(),
+) -> memory.Provenance:
+    """The region set as objects, for migrating references onto provenance alone.
+
+    `private` are the segments no pointer reaches unless handed out: their
+    objects are uncaptured, and a call reaches one only where `beyond` names
+    it. `spared` are segments some call is proven to miss part of: named by
+    every reference that reaches them, as GCC's ipa-reference does, so that
+    the exclusion has an object to be taken from. Holes are subtracted from the objects they fall in. An exclusion
+    from a coarse region has no object form, so it widens; see
+    `tools/provdiff.py`.
+    """
+    if ref.symbolic is not None:
+        symbol = ref.symbolic
+        at = module.Addr(symbol.space, symbol.offset + symbol.addend, symbol.index)
+        ref = replace(ref, addr=at, base=None, segment=None)
+    spans = _spans(ref, bounds, known, layout)
+    root = (ROOT, HERE, *WHOLE)
+    if root in spans and ref.beyond is not None:
+        spans = spans - {root} | _reached(ref.beyond, layout)
+    elif root in spans and not _floor(ref.addr):
+        # The push area is unaddressed, so a reference that can reach it names it.
+        spans = spans | {(STACK, SP, *WHOLE)}
+    if any(one[:2] == (STACK, SP) for one in spans):
+        # sp and bp displacements are not comparable: a push is anywhere in
+        # the frame bar what an exclusion proves it misses.
+        spans = spans | {(STACK, BP, *WHOLE)}
+    slices = set()
+    for region, origin, low, high in spans:
+        if region == DGROUP:
+            # Some segment of the group: the private ones are named, being uncaptured.
+            slices |= {
+                memory.Slice(_object((*DGROUP, f"seg:{one}"), HERE, private | spared)) for one in private | spared
+            }
+        if region == NONLOCAL:
+            slices |= {
+                memory.Slice(_object((*DGROUP, f"seg:{one}"), HERE, private | spared)) for one in spared - private
+            }
+        object_ = _object(region, origin, private | spared)
+        if (low, high) == WHOLE or object_.kind in (memory.Kind.UNKNOWN, memory.Kind.NONLOCAL):
+            slices.add(memory.Slice(object_))
+        else:
+            slices.add(memory.Slice(object_, low, high))
+    for addr, width in ref.excludes:
+        hole = _object(*_region(addr.space, addr.index, layout), private | spared)
+        slices = {part for one in slices for part in _without(one, hole, addr.disp, addr.disp + width)}
+    return memory.Provenance(frozenset(slices))
+
+
+def _reached(beyond, layout) -> frozenset[Span]:
+    """A bounded call's reach, positively: everything but the program's own segment, and that where handed out."""
+    owner, reaches = beyond
+    out = {(NONLOCAL, HERE, *WHOLE), (STACK, SP, *WHOLE)}
+    if any(segment == owner for segment, _ in reaches):
+        out.add((*_region(Space.SEGMENT, owner, layout), *WHOLE))
+    return frozenset(out)
+
+
+def _without(one: memory.Slice, hole: memory.Object, low: int, high: int) -> list[memory.Slice]:
+    if one.object != hole or one.stride != 1 or high <= one.low or one.high <= low:
+        return [one]
+    parts = ((one.low, low), (high, one.high))
+    return [memory.Slice(one.object, start, end) for start, end in parts if start < end]
+
+
+def _object(region: tuple[str, ...], origin: str, private: frozenset[int] = frozenset()) -> memory.Object:
+    if region == STACK:
+        if origin == SP:
+            return memory.Object(memory.Kind.STACK, origin, addressed=False, captured=False)
+        return memory.Object(memory.Kind.FRAME, origin)
+    if region[:1] == ALLOCATION:
+        return memory.Object(memory.Kind.ALLOCATION, region[1:])
+    if region[:1] == ABSOLUTE and len(region) > 1:
+        return memory.Object(memory.Kind.ABSOLUTE, region[1])
+    if region == NAMED:
+        return memory.Object(memory.Kind.NAMED)
+    if region[-1:] and region[-1].startswith("seg:"):
+        index = int(region[-1][4:])
+        return memory.Object(memory.Kind.GLOBAL, (Space.SEGMENT, index), captured=index not in private)
+    if region == LINKED:
+        return memory.Object(memory.Kind.EXTERNAL, origin or None)
+    if region in (DGROUP, NONLOCAL):
+        return memory.Object(memory.Kind.NONLOCAL)
+    return memory.Object(memory.Kind.UNKNOWN)

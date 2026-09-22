@@ -2733,7 +2733,7 @@ def _unescaped(ref: MemRef) -> bool:
     return (
         ref.provenance is not None
         and bool(ref.provenance.slices)
-        and not any(one.object.escapes or one.object.kind is memory.Kind.ABSOLUTE for one in ref.provenance.slices)
+        and not any(one.object.addressed or one.object.kind is memory.Kind.ABSOLUTE for one in ref.provenance.slices)
     )
 
 
@@ -2767,7 +2767,8 @@ def overlapping(
     # value available to the canonical range query; the legacy covering
     # rewrite below erases it after widening the address to a byte hull.
     if one.provenance is not None and other.provenance is not None:
-        return regions.may_alias(one, other, bounds, known, other_known, dgroup)
+        apart = None if one.pointer or other.pointer else _displaced(_symbolic_ref(one), _symbolic_ref(other))
+        return not apart if apart is not None else regions.may_alias(one, other, bounds, known, other_known, dgroup)
     if (_unescaped(one) and _through_pointer(other)) or (_unescaped(other) and _through_pointer(one)):
         return False
     if not (one.pointer or other.pointer):
@@ -2776,17 +2777,29 @@ def overlapping(
 
             one, other = ranges.covering(one, known or {}), ranges.covering(other, other_known or {})
         one, other = _symbolic_ref(one), _symbolic_ref(other)
-        if (
-            one.base == other.base
-            and one.addr is not None
-            and other.addr is not None
-            and one.addr.space is other.addr.space
-            and one.addr.index == other.addr.index
-            and one.segment == other.segment
-            and (one.addr.space is not Space.FAR or one.segment is not None)
-        ):
-            return one.addr.disp < other.addr.disp + other.width and other.addr.disp < one.addr.disp + one.width
+        apart = _displaced(one, other)
+        if apart is not None:
+            return not apart
     return regions.may_alias(one, other, bounds, known, other_known, dgroup)
+
+
+def _displaced(one: MemRef, other: MemRef) -> bool | None:
+    """Whether two references off one base value are disjoint by displacement; None if not one base.
+
+    LLVM's constant-offset GEP compare: a fact about values, so it holds
+    whatever object either reference names.
+    """
+    if (
+        one.base == other.base
+        and one.addr is not None
+        and other.addr is not None
+        and one.addr.space is other.addr.space
+        and one.addr.index == other.addr.index
+        and one.segment == other.segment
+        and (one.addr.space is not Space.FAR or one.segment is not None)
+    ):
+        return not (one.addr.disp < other.addr.disp + other.width and other.addr.disp < one.addr.disp + one.width)
+    return None
 
 
 def _symbolic_ref(ref: MemRef) -> MemRef:

@@ -347,23 +347,18 @@ def test_nbody_identity_uses_the_paired_byte_recurrences() -> None:
     assert len(re.findall(r"    mov (?:[sd]i|word ptr \[[^]]+\]), 65440\n", force_loops)) == 2
 
 
-def test_nbody_velocity_updates_write_the_array_cells_in_place() -> None:
-    """nbody loaded each velocity field, added its acceleration, then stored it.
+def test_nbody_velocity_fields_are_stored_once_per_update() -> None:
+    """nbody stored vel.x after `+= acc.x`, stored vel.y, then reloaded vel.x for `-= vel.x / 16`.
 
-    The destination is private to the compound update, so x86 can select its
-    memory-destination ADD directly.  Keeping the source load is both smaller
-    and one register cheaper than materializing the old field value as well.
+    Both fields are displacements off one base, so the store at +12 cannot
+    reach +8: the first store is dead and the value stays in a register.
     """
     assembly = masm.text(modern_compile.assembled(driver.parsed(NBODY), entry="main"))
     interaction = assembly.split("L0_7:\n", 1)[1].split("L0_2:\n", 1)[0]
 
-    assert re.search(r"    add dword ptr \[bp\+[sd]i\+8\], e(?:ax|bx|cx|dx|si|di)\n", interaction)
-    assert re.search(r"    add dword ptr \[bp\+[sd]i\+12\], e(?:ax|bx|cx|dx|si|di)\n", interaction)
-    assert not re.search(
-        r"    mov (?P<temporary>e(?:ax|bx|cx|dx|si|di)), dword ptr \[bp\+[sd]i\+(?:8|12)\]\n"
-        r"    add (?P=temporary),",
-        interaction,
-    )
+    for field in (8, 12):
+        assert len(re.findall(rf"dword ptr \[bp\+[sd]i\+{field}\], e(?:ax|bx|cx|dx|si|di)\n", interaction)) == 1
+        assert len(re.findall(rf"e(?:ax|bx|cx|dx|si|di), dword ptr \[bp\+[sd]i\+{field}\]\n", interaction)) == 1
 
 
 def test_counted_struct_loop_uses_its_record_width_as_the_byte_stride(tmp_path: Path) -> None:
