@@ -49,6 +49,16 @@ def test_a_runtime_lower_bound_loop_ends_on_its_shared_offset(dynamic_sum: Path,
     assert not re.search(r"    (?:inc|lea|cmp) |\[bp", loop)
 
 
+def test_a_loop_whose_exit_moves_a_value_closes_on_its_branch() -> None:
+    """The exit's `mov ax,cx` sat after `retf`, so every trip ran `je` out and `jmp` back."""
+    text = masm.text(qb_compile.assembled(driver.parsed(ROOT / "bench" / "parity" / "sum_three.bas")))
+    procedure = text[text.index("SUMTHREE proc") : text.index("SUMTHREE endp")]
+    loop = _backward_loop(procedure)
+
+    assert re.search(r"\bjne \w+\n$", loop)
+    assert "jmp" not in loop
+
+
 def _backward_loop(procedure: str) -> str:
     """From the first label a later jump returns to, through that jump."""
     for jump in re.finditer(r"\bj\w+ (\w+)\n", procedure):

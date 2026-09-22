@@ -28,7 +28,7 @@ def optimized(body: lir.LirBody) -> lir.LirBody:
     """Choose the cheapest common-tail fixed point without adding hot work."""
     from qbopt.backend import machinedce
 
-    candidate = placed(body)
+    candidate = placed(_hoisted(body))
     baseline = threaded(candidate)
     # Merging one physical tail may make the condition selecting between its
     # former copies dead; deleting that compare can in turn make predecessor
@@ -125,11 +125,20 @@ def _onward(
     # A cold successor goes last; see mir.MirBlock.cold.
     if by_at is not None:
         targets = sorted(targets, key=lambda target: target in by_at and by_at[target].cold)
+
+    def spent(target: int) -> bool:
+        # Only a jump to a placed block: threading removes it, and placing it
+        # next would strand the other edge behind a jump of its own.
+        return by_at is not None and target in by_at and _passage(by_at[target]) in done
+
     # Keep a loop chain together before following an exit.  The final jump is
     # still preferred when both edges stay in the loop, preserving the source
     # fall-through unless doing so would strand the rest of the loop.
     for target in targets:
-        if target not in done and target in inside:
+        if target not in done and target in inside and not spent(target):
+            return target
+    for target in targets:
+        if target not in done and not spent(target):
             return target
     for target in targets:
         if target not in done:
