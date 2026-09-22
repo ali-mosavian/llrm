@@ -29,6 +29,19 @@ pub(crate) fn _without(ops: &[crate::model::mir::Op], drop: impl Fn(&crate::mode
 // ==== END S0 ====
 
 // ==== BEGIN A: transform.py 130-784 (agent A) ====
+
+pub(crate) fn _unchanged_float_environment(op: &Op) -> bool {
+    use crate::model::floating::Exceptions;
+
+    if op.barrier() || matches!(op.kind, Kind::Call | Kind::Opaque | Kind::Fcheck) {
+        return false;
+    }
+    match &op.floating {
+        None => op.stack.is_none(),
+        Some(floating) => floating.exceptions == Exceptions::Deferred,
+    }
+}
+
 // ==== END A ====
 
 /// Keep opaque source ownership, but no computation or memory effect.
