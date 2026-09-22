@@ -1772,6 +1772,28 @@ def test_nested_integer_division_keeps_each_dividend(tmp_path: Path) -> None:
     assert "idiv ax" not in scale
 
 
+def test_a_float_compare_status_word_does_not_overwrite_a_live_ax(tmp_path: Path) -> None:
+    """-2 ^ 3 printed 8: the exponent's parity sat in eax across `fnstsw ax`."""
+    basic = tmp_path / "POWSIGN.BAS"
+    basic.write_bytes(b"b! = -2\r\ne! = 3\r\nr! = b! ^ e!\r\nprint r!\r\n")
+    source = qb_driver.parsed(basic, dialect="qb45", runtime="qb45")
+    lines = [" ".join(line.split(";")[0].split()) for line in masm.text(qb_compile.assembled(source)).splitlines()]
+    ax = re.compile(r"\b(e?ax|al|ah)\b")
+    for index, line in enumerate(lines):
+        if line != "fnstsw ax":
+            continue
+        for later in lines[index + 1 :]:
+            if later == "sahf" or later.startswith(("j", "L0_")):
+                continue
+            mnemonic, _, operands = later.partition(" ")
+            destination, _, sources = operands.partition(",")
+            assert not ax.search(sources) and not (ax.search(destination) and mnemonic not in ("mov", "fnstsw")), (
+                f"AX read after fnstsw: {later}"
+            )
+            if ax.search(destination):
+                break
+
+
 def test_byref_dynamic_array_field_copies_through_a_near_formal(tmp_path: Path) -> None:
     """ENT_MOVE_TRIGS passed a four-byte far field address to a two-byte scalar formal."""
     basic = tmp_path / "FARFIELD.BAS"
