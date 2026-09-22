@@ -3450,7 +3450,8 @@ impl crate::model::passes::MIRTransform for Fold {
     }
 
     fn transform(&mut self, body: Rc<MirBody>) -> Result<Rc<MirBody>, String> {
-        Ok(crate::optimize::canonical::compares(folded(&body, &self.r#where.dgroup, &self.r#where.named())?))
+        use crate::optimize::canonical;
+        Ok(canonical::identities(canonical::compares(folded(&body, &self.r#where.dgroup, &self.r#where.named())?)))
     }
 }
 
