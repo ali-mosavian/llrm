@@ -1,20 +1,17 @@
 //! Port of `tests/test_promote.py`.
 //!
-//! Skipped, needing modules not yet ported (OMF fixtures, `mir.bodies`,
-//! `wholeseg`, `transform`, `loopmotion`):
+//! Skipped, needing `wholeseg`:
 //! test_guarded_indexed_accumulators_do_not_reload_in_loop,
+//! test_production_press_keeps_the_loop_counter_in_a_value.
+//! Skipped, monkeypatching `promote`:
+//! test_nested_memory_update_becomes_a_value_and_preserves_its_store.
+//! Skipped, failing in Python at this commit:
 //! test_procedure_frame_fields_reuse_stored_values,
 //! test_unpromotable_memory_update_does_not_cancel_other_cells,
-//! test_nested_memory_update_becomes_a_value_and_preserves_its_store,
-//! test_promotion_preserves_existing_cse_value_edges,
-//! test_hotlop_keeps_initialization_for_memory_arithmetic,
 //! test_hotlop_multiply_uses_the_initialized_value,
-//! test_a_read_before_assignment_keeps_its_memory_value,
-//! test_promoted_global_remains_visible_outside_the_body,
-//! test_production_press_keeps_the_loop_counter_in_a_value,
-//! test_only_an_intervening_call_invalidates_a_stored_value,
-//! test_spill_accumulator_is_a_loop_carried_value,
-//! test_addrm_long_accumulator_survives_split_initialization.
+//! test_promoted_global_remains_visible_outside_the_body, and
+//! test_addrm_long_accumulator_survives_split_initialization's p-g2 and q-O
+//! cases (a load stays in the loop).
 
 use std::collections::BTreeSet;
 
@@ -22,14 +19,18 @@ use num_bigint::BigInt;
 
 use super::*;
 use crate::analysis::ranges::Interval;
+use crate::analysis::regions::{self, RegionLayout};
+use crate::analysis::{consts, loops};
+use crate::frontend::blocks::Block;
 use crate::model::ir::Operation;
 use crate::model::memory::{Identity, MemoryKind, MemoryObject, Provenance};
 use crate::model::mir::{
     Arg, ArrayRequest, Cell, Const, FrameAddress, Held, Kind, MemRef, MirBlock, MirBody, Op,
     OpCode, OrderedMap, Symbol, Value,
 };
-use crate::model::passes::{MIRTransform, Where};
-use crate::objectfile::module::{Addr, Space};
+use crate::model::passes::{MIRTransform, Options, Where};
+use crate::objectfile::module::{self, Addr, Module, Space};
+use crate::optimize::{testcorpus, transform};
 
 fn value(id: u32, at: i64) -> Value {
     Value {
@@ -813,4 +814,158 @@ fn test_split_initializer_requires_every_byte() {
             );
         }
     }
+}
+
+fn raised_main(path: &str) -> (Rc<Module>, Rc<Vec<Block>>, Rc<MirBody>) {
+    let found = testcorpus::loaded(path);
+    let blocks = testcorpus::partitioned(&found);
+    let body = testcorpus::main_body(&found, &blocks);
+    (found, blocks, body)
+}
+
+fn all_ops(body: &MirBody) -> impl Iterator<Item = &Op> {
+    body.blocks.iter().flat_map(|block| &block.ops)
+}
+
+fn applied(found: &Rc<Module>, blocks: &Rc<Vec<Block>>, body: &Rc<MirBody>, options: Options) -> Rc<MirBody> {
+    transform::applied(
+        body,
+        &found.dgroup.members,
+        &found.calls,
+        transform::Applied {
+            blocks: Some(blocks.clone()),
+            found: Some(found.clone()),
+            options,
+            ..Default::default()
+        },
+    )
+    .unwrap()
+}
+
+fn promoted_with_landmarks(body: &MirBody, found: &Module) -> Rc<MirBody> {
+    let bounds = module::landmarks(found);
+    promoted(&Rc::new(body.clone()), &found.dgroup.members, Some(&bounds), false, true, false).unwrap()
+}
+
+/// flags printed BOTH=nonzero for zero after promotion rebound CSE's constant to an entry phi.
+#[test]
+fn test_promotion_preserves_existing_cse_value_edges() {
+    let (found, blocks, body) = raised_main("fixtures/omf/flags-p-g2.obj");
+    let body = applied(&found, &blocks, &body, Options { promote: false, ..Default::default() });
+    let stored = all_ops(&body).find(|op| op.at == 0x122).unwrap();
+    let result = promoted_with_landmarks(&body, &found);
+    let after = all_ops(&result).find(|op| op.id == stored.id).unwrap();
+    assert_eq!(after.args, stored.args);
+}
+
+/// hotlop's multiply at 0x4b still reads the cell initialized to 7.
+///
+/// Promotion removed that initialization but left the multiply in memory,
+/// so the loop consumed the old memory contents instead of 7.
+#[test]
+fn test_hotlop_keeps_initialization_for_memory_arithmetic() {
+    let (found, _, body) = raised_main("fixtures/omf/hotlop-p-g2.obj");
+    let multiply = all_ops(&body).find(|op| op.at == 0x4B).unwrap();
+    let cell = &multiply.loads[0];
+    let stores: Vec<&Op> =
+        all_ops(&body).filter(|op| consts::initialized(op, cell) == Some(consts::Known::new(7, 2))).collect();
+    assert!(!stores.is_empty());
+    let result = promoted_with_landmarks(&body, &found);
+    let remaining: Vec<&Op> = all_ops(&result).collect();
+    assert!(stores.iter().all(|before| remaining.contains(before)));
+}
+
+/// A load arriving before the first store must not become an undefined SSA input.
+#[test]
+fn test_a_read_before_assignment_keeps_its_memory_value() {
+    let (found, _, body) = raised_main("fixtures/omf/press-p-g2.obj");
+    let load = all_ops(&body).find(|op| op.at == 0x94).unwrap().clone();
+    let store = all_ops(&body).find(|op| op.at == 0x98).unwrap().clone();
+    let mut body = (*body).clone();
+    body.entry = 0;
+    body.blocks = vec![MirBlock::new(0, vec![], vec![load.clone(), store], vec![])];
+    let result = promoted_with_landmarks(&body, &found);
+    assert_eq!(result.blocks[0].ops[0].loads, load.loads);
+}
+
+/// A later call cannot invalidate an earlier read; an intervening call must.
+#[test]
+fn test_only_an_intervening_call_invalidates_a_stored_value() {
+    let (found, _, body) = raised_main("fixtures/omf/press-p-g2.obj");
+    let ops: Vec<&Op> = all_ops(&body).collect();
+    let load = ops.iter().find(|op| op.at == 0x94).unwrap();
+    let store = ops.iter().find(|op| op.at == 0x98).unwrap();
+    for effect in ["explicit", "unspecified", "barrier"] {
+        for (position, reused) in [(0, true), (1, false), (2, true)] {
+            let mut call = ops[ops.len() - 1].clone();
+            call.stores = vec![MemRef::new(None, 0)];
+            if effect != "explicit" {
+                call.stores = vec![];
+            }
+            if effect == "barrier" {
+                call.op = Some(OpCode::Operation(Operation::Barrier));
+                call.kind = Kind::Opaque;
+            }
+            let mut sequence = vec![(*store).clone(), (*load).clone()];
+            sequence.insert(position, call);
+            let mut altered = (*body).clone();
+            altered.entry = 0;
+            altered.blocks = vec![MirBlock::new(0, vec![], sequence, vec![])];
+            let result = promoted_with_landmarks(&altered, &found);
+            let after = result.blocks[0].ops.iter().find(|op| op.at == load.at).unwrap();
+            assert_eq!(after.loads.is_empty(), reused, "{effect} {position}");
+        }
+    }
+}
+
+/// SPILL's packed zero initializer prevented promotion of t across its hundred inner iterations.
+#[test]
+fn test_spill_accumulator_is_a_loop_carried_value() {
+    for tag in ["p-g2", "q-o", "v-g3"] {
+        let (found, blocks, body) = raised_main(&format!("fixtures/omf/spill-{tag}.obj"));
+        let result = applied(&found, &blocks, &body, Options::default());
+        let every = loops::loops(&result.blocks, Some(result.entry));
+        let inner: BTreeSet<i64> = every
+            .iter()
+            .filter(|one| !every.iter().any(|other| other.body.is_subset(&one.body) && other.body != one.body))
+            .flat_map(|one| one.body.iter().copied())
+            .collect();
+        assert!(
+            !result
+                .blocks
+                .iter()
+                .filter(|block| inner.contains(&block.at))
+                .flat_map(|block| &block.ops)
+                .any(|op| !op.loads.is_empty() || !op.stores.is_empty()),
+            "{tag}"
+        );
+    }
+}
+
+/// ADDRM reloaded u on all 20 iterations despite initializing both words to zero.
+#[test]
+fn test_addrm_long_accumulator_survives_split_initialization() {
+    let (found, blocks, body) = raised_main("fixtures/omf/addrm-v-g3.obj");
+    let cell = all_ops(&body).flat_map(|op| &op.loads).find(|one| one.width == 4 && one.base.is_none()).unwrap();
+    let layout = RegionLayout { shared_segments: Some(found.dgroup.shared.clone()), ..Default::default() };
+    let output: Vec<Option<u32>> = all_ops(&body)
+        .filter(|op| {
+            op.kind == Kind::Arg
+                && op.loads.iter().any(|one| regions::overlapping(one, cell, None, None, Some(&layout)).unwrap())
+        })
+        .map(|op| op.id)
+        .collect();
+    let result = applied(&found, &blocks, &body, Options::default());
+    let inside: BTreeSet<i64> =
+        loops::loops(&result.blocks, Some(result.entry)).into_iter().flat_map(|one| one.body).collect();
+    assert!(!result
+        .blocks
+        .iter()
+        .filter(|block| inside.contains(&block.at))
+        .flat_map(|block| &block.ops)
+        .any(|op| op.loads.contains(cell)));
+    assert!(!output.is_empty());
+    // PRINT still gets u, from the cell or from the value promoted out of it.
+    let remaining: BTreeSet<Option<u32>> = all_ops(&result).filter(|op| op.kind == Kind::Arg).map(|op| op.id).collect();
+    assert!(output.iter().all(|id| remaining.contains(id)));
 }
