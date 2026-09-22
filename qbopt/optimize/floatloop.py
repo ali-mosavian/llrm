@@ -106,12 +106,6 @@ def _store(beside, ref, value):
                   id=beside.id, symbol=True)
 
 
-def _jump(beside, destination):
-    return replace(beside, kind=mir.Kind.JUMP, name="", args=(), results=(),
-                   uses=(), defines=(), loads=(), stores=(), merges={}, source_backed=False,
-                   raised=((), ()), target=destination, test=None)
-
-
 def _rewritten(body, header, latch, exit_at, checkpoint, seeds, counter, final):
     exit_block = next(block for block in body.blocks if block.at == exit_at)
     values = tuple(ssa.values(body))
@@ -125,7 +119,7 @@ def _rewritten(body, header, latch, exit_at, checkpoint, seeds, counter, final):
     out = []
     for block in body.blocks:
         if block.at == header.at:
-            block = replace(block, succ=(latch.at,), ops=(*block.ops[:-1], _jump(block.ops[-1], latch.at)))
+            block = replace(block, succ=(latch.at,), ops=(*block.ops[:-1], mir.jump(block.ops[-1], latch.at)))
         elif block.at == latch.at:
             ops = []
             for op in block.ops:
@@ -133,7 +127,7 @@ def _rewritten(body, header, latch, exit_at, checkpoint, seeds, counter, final):
                 if op is checkpoint:
                     ops.extend(seeds)
             end = block.ops[-1].at
-            jump = _jump(header.ops[-1], exit_at)
+            jump = mir.jump(header.ops[-1], exit_at)
             block = replace(block, succ=(exit_at,), ops=(*ops, replace(jump, at=end, absorbed=())))
         elif block.at in following:
             ops = tuple(ssa.substituted(op, {counter.id: result}) for op in block.ops)

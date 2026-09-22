@@ -972,6 +972,25 @@ def test_a_fill_leaves_the_rest_of_its_function_priceable(tmp_path: Path) -> Non
     assert not re.search(r"\bj\w+\s", body)
 
 
+def test_a_ranked_repeat_literal_at_os_is_one_string_fill(tmp_path: Path) -> None:
+    """`[0; 8, 8]` at -Os was an 8-trip loop around an 8-cell loop: its count was unproved and nested fills never merged."""
+    source = tmp_path / "nested_fill.mod"
+    source.write_text(
+        "fn value(k: i16) -> i32:\n"
+        "    var a: [i32; 8, 8] = [0; 8, 8]\n"
+        "    a[k, 1] = 5\n"
+        "    return a[k, 2]\n"
+        "fn main() -> i16:\n"
+        "    return i16(value(3))\n"
+    )
+    assembly = masm.text(modern_compile.assembled(driver.parsed(source), entry="main", options=LEVELS["Os"]))
+    body = assembly[assembly.index("_value proc") : assembly.index("_value endp")]
+
+    assert body.count("rep stosd") == 1
+    assert "mov cx, 64" in body
+    assert not re.search(r"\bj\w+\s", body)
+
+
 def test_an_unrolled_fill_stores_to_fixed_frame_cells(tmp_path: Path) -> None:
     """Each unrolled store of `[0; 8, 8]` loaded its constant offset into a register first: 64 extra movs."""
     source = tmp_path / "unrolled_fill.mod"

@@ -68,7 +68,7 @@ def _offset(
     if not isinstance(derived.step, mir.Const) or not isinstance(derived.start, (mir.Held, mir.Const)):
         return None
     width = derived.start.width
-    root, at = _anchor(derived.start, definitions, width)
+    root, at = induction.anchored(derived.start, definitions, width)
     seed = definitions.get(derived.start.value.id) if isinstance(derived.start, mir.Held) else None
     direct = seed.args if seed is not None and seed.kind is mir.Kind.ADD else ()
     for one in sorted(counters.values(), key=lambda one: (one.start not in direct, one.value)):
@@ -76,30 +76,11 @@ def _offset(
             continue
         if one.start not in direct and one.value > derived.value:
             continue
-        if one.start.width != width or _anchor(one.start, definitions, width)[0] != root:
+        if one.start.width != width or induction.anchored(one.start, definitions, width)[0] != root:
             continue
-        distance = at - _anchor(one.start, definitions, width)[1]
+        distance = at - induction.anchored(one.start, definitions, width)[1]
         return one, mir.Const(consts.masked(distance, width), width), seed
     return None
-
-
-def _anchor(arg: mir.Held | mir.Const, definitions: dict[int, mir.Op], width: int) -> tuple[mir.Value | None, int]:
-    """`arg` as a root value plus a constant, through copies and constant adds; a constant has no root."""
-    offset = 0
-    while isinstance(arg, mir.Held) and arg.width == width:
-        op = definitions.get(arg.value.id)
-        if op is None or op.loads or op.stores or op.barrier or op.merges or op.results != (arg,):
-            break
-        if op.kind is mir.Kind.COPY and len(op.args) == 1 and isinstance(op.args[0], (mir.Held, mir.Const)):
-            arg = op.args[0]
-        elif op.kind is mir.Kind.ADD and len(op.args) == 2 and sum(isinstance(one, mir.Const) for one in op.args) == 1:
-            constant, arg = sorted(op.args, key=lambda one: not isinstance(one, mir.Const))
-            offset += constant.n
-        else:
-            break
-    if isinstance(arg, mir.Const):
-        return None, consts.masked(arg.n + offset, width)
-    return arg.value, offset
 
 
 def _twin(counters, derived, header, required):
