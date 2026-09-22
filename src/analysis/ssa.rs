@@ -1,17 +1,19 @@
-//! SSA use relations over source-neutral MIR.
+//! Port of `qbopt/analysis/ssa.py`.
 //!
-//! Direct port of `qbopt.analysis.ssa:use_index`.  Python returns operation
-//! objects, whose identity distinguishes otherwise equal operations.  Rust
-//! returns snapshot-local [`OpOccurrence`] keys for that same relation.
+//! `use_index` returns snapshot-local [`OpOccurrence`] keys where Python
+//! returns operation objects, whose identity distinguishes equal operations.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use super::occurrence::{OpOccurrence, operations};
 use crate::model::ir::Operation;
+use crate::model::memory::Provenance;
 use crate::model::mir::{
-    Arg, Cell, Held, MemRef, MirBody, Op, OpCode, OrderedMap, Value, consumed as operation_consumed,
+    Arg, Cell, Held, IntegerRange, MemRef, MirBlock, MirBody, Op, OpCode, OrderedMap, Phi, Value,
+    consumed as operation_consumed,
 };
+use crate::support::pyset::PySet;
 
 /// A substitution followed an id-keyed cycle.
 ///
@@ -87,6 +89,41 @@ pub(crate) fn use_index(
         }
     }
     users
+}
+
+/// Drop phis nothing needs, including cycles only other dead phis read.
+///
+/// Direct port of `qbopt.analysis.ssa:pruned_phis`.
+pub(crate) fn pruned_phis(body: &MirBody, roots: &BTreeSet<Value>) -> MirBody {
+    let mut needed: BTreeSet<Value> = roots | &crate::model::mir::exposed(body);
+    for op in body.blocks.iter().flat_map(|block| &block.ops) {
+        needed.extend(operation_consumed(op));
+        for reference in op.loads.iter().chain(&op.stores) {
+            needed.extend(reference.base.iter().chain(&reference.segment).copied());
+        }
+    }
+    let phis: BTreeMap<Value, &crate::model::mir::Phi> =
+        body.blocks.iter().flat_map(|block| &block.phis).map(|phi| (phi.result, phi)).collect();
+    let mut pending: Vec<Value> = needed.iter().filter(|value| phis.contains_key(value)).copied().collect();
+    while let Some(next) = pending.pop() {
+        let incoming: BTreeSet<Value> =
+            phis[&next].incoming.values().filter(|value| !needed.contains(value)).copied().collect();
+        needed.extend(incoming.iter().copied());
+        pending.extend(incoming.into_iter().filter(|value| phis.contains_key(value)));
+    }
+    let removed: BTreeSet<Value> = phis.keys().filter(|value| !needed.contains(value)).copied().collect();
+    if removed.is_empty() {
+        return body.clone();
+    }
+    let mut body = body.clone();
+    for block in &mut body.blocks {
+        block.phis.retain(|phi| !removed.contains(&phi.result));
+        for op in &mut block.ops {
+            op.uses.retain(|value| !removed.contains(value));
+            op.merges = op.merges.iter().filter(|(source, _)| !removed.contains(source)).map(|(&s, &t)| (s, t)).collect();
+        }
+    }
+    body
 }
 
 /// Follow an id-keyed substitution until its provider is unchanged.
@@ -198,56 +235,101 @@ pub(crate) fn substituted(op: &Op, swap: &BTreeMap<u32, Value>) -> Result<Op, Su
     Ok(substituted)
 }
 
-/// Every value mentioned by a body, in its source declaration order.
+/// Carry semantic pointer facts onto fresh SSA definitions.
 ///
-/// Direct port of `qbopt.analysis.ssa:values`.
-pub(crate) fn values(body: &MirBody) -> impl Iterator<Item = Value> + '_ {
-    body.blocks.iter().flat_map(|block| {
-        block
-            .ops
-            .iter()
-            .flat_map(|op| op.defines.iter().chain(&op.uses).chain(&op.exits).copied())
-            .chain(
-                block.phis.iter().flat_map(|phi| {
-                    std::iter::once(phi.result).chain(phi.incoming.values().copied())
-                }),
-            )
-    })
+/// Structural transformations clone values by id; every clone needs the
+/// original's side-table entry before alias analysis runs again.
+pub(crate) fn cloned_pointer_metadata<'a>(
+    body: &MirBody,
+    mappings: impl Iterator<Item = &'a BTreeMap<u32, Value>>,
+) -> (BTreeSet<Value>, OrderedMap<Value, Provenance>) {
+    let pointer_ids = body.pointer_values.iter().map(|value| value.id).collect::<BTreeSet<_>>();
+    let seeds = body.pointer_seeds.iter().map(|(value, provenance)| (value.id, provenance)).collect::<BTreeMap<_, _>>();
+    let mut pointer_values = body.pointer_values.clone();
+    let mut pointer_seeds = body.pointer_seeds.clone();
+    for mapping in mappings {
+        for (original, cloned) in mapping {
+            if pointer_ids.contains(original) {
+                pointer_values.insert(*cloned);
+            }
+            if let Some(&provenance) = seeds.get(original) {
+                pointer_seeds.insert(*cloned, provenance.clone());
+            }
+        }
+    }
+    (pointer_values, pointer_seeds)
 }
 
-/// Drop phis nothing needs, including cycles only other dead phis read.
-///
-/// Direct port of `qbopt.analysis.ssa:pruned_phis`.
-pub(crate) fn pruned_phis(body: &MirBody, roots: &BTreeSet<Value>) -> MirBody {
-    let mut needed: BTreeSet<Value> = roots | &crate::model::mir::exposed(body);
-    for op in body.blocks.iter().flat_map(|block| &block.ops) {
-        needed.extend(operation_consumed(op));
-        for reference in op.loads.iter().chain(&op.stores) {
-            needed.extend(reference.base.iter().chain(&reference.segment).copied());
+/// Carry frontend integer facts onto structurally cloned values.
+pub(crate) fn cloned_integer_ranges<'a>(
+    body: &MirBody,
+    mappings: impl Iterator<Item = &'a BTreeMap<u32, Value>>,
+) -> OrderedMap<Value, IntegerRange> {
+    let ranges = body.integer_ranges.iter().map(|(value, interval)| (value.id, interval)).collect::<BTreeMap<_, _>>();
+    let mut cloned_ranges = body.integer_ranges.clone();
+    for mapping in mappings {
+        for (original, cloned) in mapping {
+            if let Some(&interval) = ranges.get(original) {
+                cloned_ranges.insert(*cloned, interval.clone());
+            }
         }
     }
-    let phis: BTreeMap<Value, &crate::model::mir::Phi> =
-        body.blocks.iter().flat_map(|block| &block.phis).map(|phi| (phi.result, phi)).collect();
-    let mut pending: Vec<Value> = needed.iter().filter(|value| phis.contains_key(value)).copied().collect();
-    while let Some(next) = pending.pop() {
-        let incoming: BTreeSet<Value> =
-            phis[&next].incoming.values().filter(|value| !needed.contains(value)).copied().collect();
-        needed.extend(incoming.iter().copied());
-        pending.extend(incoming.into_iter().filter(|value| phis.contains_key(value)));
+    cloned_ranges
+}
+
+/// Make one variable's versions run from one without a gap.
+pub(crate) fn renumbered(body: &MirBody, variable: u32) -> MirBody {
+    let mut order = values(body)
+        .filter(|one| one.variable == variable)
+        .collect::<PySet<_>>()
+        .iter()
+        .copied()
+        .collect::<Vec<_>>();
+    order.sort_by_key(|one| one.version);
+    let mut swap = BTreeMap::new();
+    for (index, one) in order.iter().enumerate() {
+        swap.insert(one.id, Value { version: index as u32 + 1, ..*one });
     }
-    let removed: BTreeSet<Value> = phis.keys().filter(|value| !needed.contains(value)).copied().collect();
-    if removed.is_empty() {
+    if order.iter().all(|one| one.version == swap[&one.id].version) {
         return body.clone();
     }
-    let mut body = body.clone();
-    for block in &mut body.blocks {
-        block.phis.retain(|phi| !removed.contains(&phi.result));
-        for op in &mut block.ops {
-            op.uses.retain(|value| !removed.contains(value));
-            op.merges = op.merges.iter().filter(|(source, _)| !removed.contains(source)).map(|(&s, &t)| (s, t)).collect();
-        }
+
+    let named = |one: Value| swap.get(&one.id).copied().unwrap_or(one);
+    let reference = |one: &MemRef| MemRef { base: one.base.map(named), segment: one.segment.map(named), ..one.clone() };
+    let operand = |one: &Arg| match one {
+        Arg::Held(Held { value, width }) => Arg::Held(Held { value: named(*value), width: *width }),
+        Arg::Cell(Cell { r#ref }) => Arg::Cell(Cell { r#ref: reference(r#ref) }),
+        _ => one.clone(),
+    };
+
+    let mut blocks = Vec::new();
+    for block in &body.blocks {
+        let phis = block
+            .phis
+            .iter()
+            .map(|phi| Phi {
+                result: named(phi.result),
+                incoming: phi.incoming.iter().map(|(&at, &one)| (at, named(one))).collect(),
+            })
+            .collect();
+        let ops = block
+            .ops
+            .iter()
+            .map(|op| Op {
+                defines: op.defines.iter().copied().map(named).collect(),
+                uses: op.uses.iter().copied().map(named).collect(),
+                exits: op.exits.iter().copied().map(named).collect(),
+                args: op.args.iter().map(operand).collect(),
+                results: op.results.iter().map(operand).collect(),
+                loads: op.loads.iter().map(reference).collect(),
+                stores: op.stores.iter().map(reference).collect(),
+                merges: op.merges.iter().map(|(&source, &mask)| (named(source), mask)).collect(),
+                ..op.clone()
+            })
+            .collect();
+        blocks.push(MirBlock { phis, ops, ..block.clone() });
     }
-    body
+    MirBody { blocks, ..body.clone() }
 }
 
 /// Reconstruct SSA for only the supplied variable names.
@@ -448,6 +530,23 @@ pub(crate) fn constructed(
         }
     }
     Ok(result)
+}
+
+/// Every value mentioned by a body, in its source declaration order.
+///
+/// Direct port of `qbopt.analysis.ssa:values`.
+pub(crate) fn values(body: &MirBody) -> impl Iterator<Item = Value> + '_ {
+    body.blocks.iter().flat_map(|block| {
+        block
+            .ops
+            .iter()
+            .flat_map(|op| op.defines.iter().chain(&op.uses).chain(&op.exits).copied())
+            .chain(
+                block.phis.iter().flat_map(|phi| {
+                    std::iter::once(phi.result).chain(phi.incoming.values().copied())
+                }),
+            )
+    })
 }
 
 #[cfg(test)]
