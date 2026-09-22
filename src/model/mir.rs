@@ -4075,3 +4075,79 @@ mod tests {
         );
     }
 }
+
+// ---- early port (agent D) ----
+
+/// Follow only exact word copies to their common source.
+///
+/// Direct port of `qbopt.model.mir:_copied_word`.
+pub(crate) fn _copied_word(arg: &Arg, definitions: &BTreeMap<Value, &Op>) -> Arg {
+    let mut arg = arg.clone();
+    let mut seen = BTreeSet::new();
+    loop {
+        let Arg::Held(held) = &arg else { break };
+        if held.width != 2 || !seen.insert(held.value) {
+            break;
+        }
+        let Some(copy) = definitions.get(&held.value) else { break };
+        if copy.kind != Kind::Copy
+            || !copy.loads.is_empty()
+            || !copy.stores.is_empty()
+            || copy.barrier()
+            || copy.results != [arg.clone()]
+            || copy.args.len() != 1
+            || !matches!(&copy.args[0], Arg::Held(source) if source.width == held.width)
+        {
+            break;
+        }
+        arg = copy.args[0].clone();
+    }
+    arg
+}
+
+/// The scalar whose exact high and low words are these operands.
+///
+/// Direct port of `qbopt.model.mir:extracted_whole`.
+pub(crate) fn extracted_whole(high: &Arg, low: &Arg, definitions: &BTreeMap<Value, &Op>) -> Option<Held> {
+    let mut original: Option<Held> = None;
+    for (arg, offset) in [(high, 16), (low, 0)] {
+        let arg = _copied_word(arg, definitions);
+        let Arg::Held(held) = arg else { return None };
+        if held.width != 2 {
+            return None;
+        }
+        if offset == 0 {
+            if let Some(whole) = original {
+                if let Some(extension) = definitions.get(&whole.value) {
+                    if extension.kind == Kind::SignExtend
+                        && extension.args.len() == 1
+                        && _copied_word(&extension.args[0], definitions) == Arg::Held(held)
+                        && extension.results == [Arg::Held(whole)]
+                        && extension.loads.is_empty()
+                        && extension.stores.is_empty()
+                        && !extension.barrier()
+                    {
+                        return Some(whole);
+                    }
+                }
+            }
+        }
+        let op = definitions.get(&held.value)?;
+        let source = match op.args.as_slice() {
+            [Arg::Held(source), Arg::Const(constant)]
+                if op.kind == Kind::Extract
+                    && op.results == [Arg::Held(held)]
+                    && source.width == 4
+                    && constant.n == BigInt::from(offset) =>
+            {
+                *source
+            }
+            _ => return None,
+        };
+        if original.is_some_and(|one| one != source) {
+            return None;
+        }
+        original = Some(source);
+    }
+    original
+}

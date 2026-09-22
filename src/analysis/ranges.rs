@@ -250,7 +250,7 @@ fn _unsigned_span(interval: &Interval) -> (BigInt, BigInt) {
 }
 
 /// Direct port of `qbopt.analysis.ranges:_operand`.
-fn _operand(
+pub(crate) fn _operand(
     arg: &Arg,
     known: &IndexMap<Value, Interval>,
     facts: &BTreeMap<Value, consts::Known>,
@@ -1001,6 +1001,55 @@ pub(crate) mod tests {
             let (made, source) = unary(Kind::Shl, Operation::Binary, 2, Some(Arg::Const(Const::new(count, 1))));
             let known = IndexMap::from([(source, interval(low, high, 2))]);
             assert_eq!(_computed(&made, &known, &BTreeMap::new()), expected, "{low} {high} {count}");
+        }
+    }
+}
+
+// ---- early port (agent D) ----
+
+pub(crate) mod early_d {
+    use std::collections::BTreeMap;
+
+    use indexmap::IndexMap;
+
+    use super::{_computed, Interval};
+    use crate::model::mir::{Arg, MirBody, Value};
+
+    /// Exact values computed without consulting memory.
+    ///
+    /// Direct port of `qbopt.analysis.ranges:singletons`.
+    pub(crate) fn singletons(body: &MirBody) -> IndexMap<Value, Interval> {
+        let mut known = IndexMap::<Value, Interval>::new();
+        loop {
+            let before = known.len();
+            for block in &body.blocks {
+                for phi in &block.phis {
+                    if known.contains_key(&phi.result) || phi.incoming.is_empty() {
+                        continue;
+                    }
+                    let incoming = phi.incoming.values().map(|value| known.get(value).cloned()).collect::<Vec<_>>();
+                    if !incoming.is_empty()
+                        && !incoming.contains(&None)
+                        && incoming.iter().all(|one| *one == incoming[0])
+                    {
+                        let first = incoming[0].clone().expect("known");
+                        known.insert(phi.result, first);
+                    }
+                }
+                for op in &block.ops {
+                    let Some(Arg::Held(result)) = op.results.first() else { continue };
+                    if known.contains_key(&result.value) {
+                        continue;
+                    }
+                    let interval = _computed(op, &known, &BTreeMap::new());
+                    if let Some(interval) = interval.filter(|interval| interval.low == interval.high) {
+                        known.insert(result.value, interval);
+                    }
+                }
+            }
+            if known.len() == before {
+                return known;
+            }
         }
     }
 }

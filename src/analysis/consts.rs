@@ -750,3 +750,425 @@ mod tests {
         assert_eq!(_result(&mixed, &BTreeMap::new(), None), None);
     }
 }
+
+// ---- early port (agent D) ----
+
+/// Items of `qbopt.analysis.consts` that promote and algebraic need and the
+/// value-only slice above lacks.  Nested so the parent's partial `_operand`
+/// is not redefined; the merge keeps one of each.
+#[allow(non_snake_case)]
+pub(crate) mod early_d {
+    use std::collections::{BTreeMap, BTreeSet, HashMap};
+
+    use indexmap::IndexMap;
+    use num_bigint::BigInt;
+
+    use super::{_read, Known, masked};
+    use crate::abi::runtime;
+    use crate::analysis::effects;
+    use crate::analysis::ranges::{self, Interval};
+    use crate::analysis::regions;
+    use crate::model::mir::{self, Arg, Cell, Held, Kind, MemRef, MirBody, Op};
+    use crate::objectfile::module::{Addr, Space};
+
+    /// Python `ARITH[kind]`.
+    pub(crate) fn ARITH(kind: Kind) -> Option<fn(&BigInt, &BigInt) -> BigInt> {
+        Some(match kind {
+            Kind::Add => |a, b| a + b,
+            Kind::Sub => |a, b| a - b,
+            Kind::And => |a, b| a & b,
+            Kind::Or => |a, b| a | b,
+            Kind::Xor => |a, b| a ^ b,
+            Kind::Shl => |a, b| a << u32::try_from(b & BigInt::from(31_u8)).expect("masked"),
+            Kind::Shr => |a, b| {
+                (a & BigInt::from(0xFFFF_FFFF_u64)) >> u32::try_from(b & BigInt::from(31_u8)).expect("masked")
+            },
+            Kind::Mul => |a, b| a * b,
+            _ => return None,
+        })
+    }
+
+    /// Python `UNARY[kind]`.
+    pub(crate) fn UNARY(kind: Kind) -> Option<fn(&BigInt) -> BigInt> {
+        Some(match kind {
+            Kind::Neg => |a| -a,
+            Kind::Not => |a| !a,
+            _ => return None,
+        })
+    }
+
+    /// Memory facts as bytes: `(address, width) -> Known`.
+    pub(crate) type Cells = IndexMap<(Addr, u32), Known>;
+
+    /// Alias questions for one immutable known-value epoch.
+    ///
+    /// Python keys both caches by `id(ref)`; here both are keyed by the
+    /// unresolved reference's address, whose resolution is fixed.
+    pub(crate) struct _MemoryQueries<'a> {
+        pub known: &'a BTreeMap<mir::Value, Known>,
+        pub dgroup: &'a BTreeSet<i64>,
+        pub facts: BTreeMap<mir::Value, Interval>,
+        pub addressed: BTreeMap<usize, MemRef>,
+        pub overlaps: HashMap<((Addr, u32), usize), bool>,
+    }
+
+    impl<'a> _MemoryQueries<'a> {
+        pub(crate) fn new(known: &'a BTreeMap<mir::Value, Known>, dgroup: &'a BTreeSet<i64>) -> Self {
+            Self {
+                known,
+                dgroup,
+                facts: _intervals(known),
+                addressed: BTreeMap::new(),
+                overlaps: HashMap::new(),
+            }
+        }
+
+        pub(crate) fn resolve(&mut self, r#ref: &MemRef) -> MemRef {
+            let key = std::ptr::from_ref(r#ref) as usize;
+            let known = self.known;
+            self.addressed.entry(key).or_insert_with(|| _addressed(r#ref, known)).clone()
+        }
+
+        /// `resolved` is `resolve(source)`.
+        pub(crate) fn may_overlap(&mut self, r#where: (Addr, u32), source: &MemRef, resolved: &MemRef) -> bool {
+            let key = (r#where, std::ptr::from_ref(source) as usize);
+            if let Some(answer) = self.overlaps.get(&key) {
+                return *answer;
+            }
+            // Python hands `dgroup` to regions as its layout, which only a
+            // `module.Group` informs: that is no layout.  A span Rust cannot
+            // represent is answered conservatively.
+            let _ = self.dgroup;
+            let answer = regions::overlapping(
+                &MemRef::new(Some(r#where.0), r#where.1),
+                resolved,
+                Some(&self.facts),
+                Some(&self.facts),
+                None,
+            )
+            .unwrap_or(true);
+            self.overlaps.insert(key, answer);
+            answer
+        }
+    }
+
+    /// What this store puts in the cell, where that is a number.
+    pub(crate) fn _put(op: &Op, known: &BTreeMap<mir::Value, Known>) -> Option<Known> {
+        if op.kind != Kind::Store || op.args.len() != 1 {
+            return None;
+        }
+        match &op.args[0] {
+            Arg::Const(source) => Some(Known::new(masked(&source.n, source.width), source.width)),
+            Arg::Held(source) => known.get(&source.value).cloned(),
+            _ => None,
+        }
+    }
+
+    /// The value of an exact scalar read-modify-write, before its store kills the facts.
+    pub(crate) fn updated(op: &Op, known: &BTreeMap<mir::Value, Known>, here: &Cells) -> Option<Known> {
+        if op.barrier()
+            || op.floating.is_some()
+            || !op.merges.is_empty()
+            || op.stores.len() != 1
+            || op.loads != op.stores
+            || op.results != [Arg::Cell(Cell { r#ref: op.stores[0].clone() })]
+            || op.defines.iter().any(|value| !value.flags)
+        {
+            return None;
+        }
+        let width = op.stores[0].width;
+        if !matches!(width, 2 | 4) {
+            return None;
+        }
+        let parts = op.args.iter().map(|arg| _operand(op, arg, known, Some(here))).collect::<Vec<_>>();
+        if parts.is_empty() || parts.iter().any(|fact| fact.as_ref().is_none_or(|fact| fact.width < width)) {
+            return None;
+        }
+        let parts = parts.into_iter().flatten().collect::<Vec<_>>();
+        let result = match (ARITH(op.kind), UNARY(op.kind)) {
+            (Some(arith), _) if parts.len() == 2 => arith(&parts[0].n, &parts[1].n),
+            (_, Some(unary)) if parts.len() == 1 => unary(&parts[0].n),
+            _ => {
+                let step = if parts.len() == 1 {
+                    mir::stepping(&Op { loads: vec![], stores: vec![], ..op.clone() })
+                } else {
+                    None
+                };
+                let Some((_, step)) = step else { return None };
+                let Arg::Const(step) = step else { return None };
+                &parts[0].n + &step.n
+            }
+        };
+        Some(Known::new(masked(&result, width), width))
+    }
+
+    pub(crate) fn _fragments(r#ref: &MemRef, fact: &Known) -> Cells {
+        let addr = r#ref.addr.expect("direct cell");
+        (0..r#ref.width.min(fact.width))
+            .map(|offset| {
+                (
+                    (addr.plus(i64::from(offset)), 1),
+                    Known::new((&fact.n >> (offset * 8)) & BigInt::from(255), 1),
+                )
+            })
+            .collect()
+    }
+
+    /// A far store's selector, where nothing yet says which segment it is
+    /// and it is still one this run may take on faith.
+    pub(crate) fn _selector(
+        r#ref: &MemRef,
+        known: &BTreeMap<mir::Value, Known>,
+        allowed: Option<&BTreeSet<mir::Value>>,
+    ) -> Option<mir::Value> {
+        let addr = r#ref.addr?;
+        if addr.space != Space::Far {
+            return None;
+        }
+        let segment = r#ref.segment?;
+        if known.contains_key(&segment) || allowed.is_some_and(|allowed| !allowed.contains(&segment)) {
+            return None;
+        }
+        Some(segment)
+    }
+
+    /// What each value is, as the alias lattice asks for it.
+    pub(crate) fn _intervals(known: &BTreeMap<mir::Value, Known>) -> BTreeMap<mir::Value, Interval> {
+        known
+            .iter()
+            .map(|(value, fact)| (*value, Interval { low: fact.n.clone(), high: fact.n.clone(), width: fact.width }))
+            .collect()
+    }
+
+    /// The cell facts still standing after this operation.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn _kills<'q>(
+        here: &Cells,
+        op: &Op,
+        known: &'q BTreeMap<mir::Value, Known>,
+        dgroup: &'q BTreeSet<i64>,
+        calls: &IndexMap<i64, String>,
+        mut assume: Option<&mut BTreeSet<mir::Value>>,
+        allowed: Option<&BTreeSet<mir::Value>>,
+        edge_facts: bool,
+        queries: Option<&mut _MemoryQueries<'q>>,
+    ) -> Cells {
+        let mut here = here.clone();
+        if edge_facts && op.kind == Kind::Call {
+            here = Cells::new();
+        }
+        if effects::unmodeled_write(op) && (op.barrier() || !calls.contains_key(&op.at)) {
+            here = Cells::new();
+        }
+        if op.kind == Kind::Call && op.stores.is_empty() {
+            if let Some(name) = calls.get(&op.at) {
+                let contract = runtime::contract(Some(name));
+                if runtime::barrier(&contract) || runtime::writes_caller_memory(&contract) {
+                    here = Cells::new();
+                }
+            }
+        }
+        let put = if op.kind == Kind::Store { _put(op, known) } else { updated(op, known, &here) };
+        let mut owned;
+        let queries = match queries {
+            Some(queries) => queries,
+            None => {
+                owned = _MemoryQueries::new(known, dgroup);
+                &mut owned
+            }
+        };
+        for source in &op.stores {
+            let r#ref = queries.resolve(source);
+            if let Some(assume) = assume.as_deref_mut() {
+                if let Some(selector) = _selector(&r#ref, known, allowed) {
+                    // Taken on faith, and recorded so the caller can check it.
+                    assume.insert(selector);
+                    continue;
+                }
+            }
+            here.retain(|r#where, _fact| !queries.may_overlap(*r#where, source, &r#ref));
+            if let Some(put) = &put {
+                if r#ref.addr.is_some() && r#ref.base.is_none() && r#ref.segment.is_none() {
+                    here.extend(_fragments(&r#ref, put));
+                }
+            }
+        }
+        if op.kind == Kind::Call && !op.memory_values.is_empty() {
+            for (r#ref, value) in &op.memory_values {
+                if r#ref.addr.is_some() && r#ref.base.is_none() && r#ref.segment.is_none() {
+                    here.extend(_fragments(r#ref, &Known::new(masked(&value.n, value.width), value.width)));
+                }
+            }
+        }
+        here
+    }
+
+    /// What each memory cell holds before each operation, where it is a number.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn cells(
+        body: &MirBody,
+        dgroup: &BTreeSet<i64>,
+        calls: &IndexMap<i64, String>,
+        known: Option<&BTreeMap<mir::Value, Known>>,
+        initial: Option<&Cells>,
+        edges: Option<&IndexMap<(i64, i64), Cells>>,
+        mut assume: Option<&mut BTreeSet<mir::Value>>,
+        allowed: Option<&BTreeSet<mir::Value>>,
+    ) -> IndexMap<(i64, usize), Cells> {
+        let empty = BTreeMap::new();
+        let known = known.unwrap_or(&empty);
+        let mut queries = _MemoryQueries::new(known, dgroup);
+        let initial = match initial {
+            Some(initial) => initial.clone(),
+            None => {
+                let mut initial = Cells::new();
+                for (r#ref, value) in &body.initial {
+                    initial.extend(_fragments(r#ref, &Known::new(value.n.clone(), value.width)));
+                }
+                initial
+            }
+        };
+        let mut outof = body.blocks.iter().map(|block| (block.at, None)).collect::<IndexMap<i64, Option<Cells>>>();
+        let preds = body
+            .blocks
+            .iter()
+            .map(|block| {
+                (
+                    block.at,
+                    body.blocks.iter().filter(|one| one.succ.contains(&block.at)).map(|one| one.at).collect::<Vec<_>>(),
+                )
+            })
+            .collect::<IndexMap<i64, Vec<i64>>>();
+        let edge_facts = edges.is_some_and(|edges| !edges.is_empty());
+
+        let entering = |at: i64, outof: &IndexMap<i64, Option<Cells>>| -> Option<Cells> {
+            if preds[&at].is_empty() {
+                return Some(if at == body.entry { initial.clone() } else { Cells::new() });
+            }
+            let mut seen = Vec::new();
+            for one in &preds[&at] {
+                let Some(here) = &outof[one] else { continue };
+                let mut here = here.clone();
+                if let Some(extra) = edges.and_then(|edges| edges.get(&(*one, at))).filter(|extra| !extra.is_empty()) {
+                    here.retain(|r#where, _fact| {
+                        !(0..r#where.1).any(|offset| extra.contains_key(&(r#where.0.plus(i64::from(offset)), 1)))
+                    });
+                    here.extend(extra.iter().map(|(key, fact)| (*key, fact.clone())));
+                }
+                seen.push(here);
+            }
+            if at == body.entry {
+                seen.push(initial.clone());
+            }
+            let (first, rest) = seen.split_first()?;
+            Some(
+                first
+                    .iter()
+                    .filter(|(r#where, fact)| rest.iter().all(|one| one.get(*r#where) == Some(*fact)))
+                    .map(|(key, fact)| (*key, fact.clone()))
+                    .collect(),
+            )
+        };
+
+        let mut changing = true;
+        while changing {
+            changing = false;
+            for block in &body.blocks {
+                let Some(mut here) = entering(block.at, &outof) else { continue };
+                for op in &block.ops {
+                    here = _kills(
+                        &here,
+                        op,
+                        known,
+                        dgroup,
+                        calls,
+                        assume.as_deref_mut(),
+                        allowed,
+                        edge_facts,
+                        Some(&mut queries),
+                    );
+                }
+                if outof[&block.at].as_ref() != Some(&here) {
+                    outof.insert(block.at, Some(here));
+                    changing = true;
+                }
+            }
+        }
+
+        let mut found = IndexMap::new();
+        for block in &body.blocks {
+            let mut here = entering(block.at, &outof).unwrap_or_default();
+            for (index, op) in block.ops.iter().enumerate() {
+                found.insert((block.at, index), here.clone());
+                here = _kills(
+                    &here,
+                    op,
+                    known,
+                    dgroup,
+                    calls,
+                    assume.as_deref_mut(),
+                    allowed,
+                    edge_facts,
+                    Some(&mut queries),
+                );
+            }
+        }
+        found
+    }
+
+    pub(crate) fn _cell(here: &Cells, r#ref: &MemRef) -> Option<Known> {
+        let r#ref = mir::symbolic_ref(r#ref);
+        let addr = r#ref.addr?;
+        if r#ref.base.is_some() || r#ref.segment.is_some() {
+            return None;
+        }
+        if let Some(exact) = _read(here.get(&(addr, r#ref.width)), r#ref.width) {
+            return Some(exact);
+        }
+        let mut number = BigInt::from(0);
+        for offset in 0..r#ref.width {
+            let wanted = addr.plus(i64::from(offset));
+            let mut fragments = BTreeSet::new();
+            for ((address, width), fact) in here {
+                for byte in 0..(*width).min(fact.width) {
+                    if address.plus(i64::from(byte)) == wanted {
+                        fragments.insert((&fact.n >> (8 * byte)) & BigInt::from(255));
+                    }
+                }
+            }
+            if fragments.len() != 1 {
+                return None;
+            }
+            number |= fragments.pop_first().expect("one") << (8 * offset);
+        }
+        Some(Known::new(number, r#ref.width))
+    }
+
+    /// Resolve one proven constant offset using the existing no-wrap address proof.
+    pub(crate) fn _addressed(r#ref: &MemRef, known: &BTreeMap<mir::Value, Known>) -> MemRef {
+        let r#ref = mir::symbolic_ref(r#ref);
+        let Some(base) = r#ref.base else { return r#ref };
+        let Some(interval) =
+            ranges::_operand(&Arg::Held(Held { value: base, width: r#ref.base_width }), &IndexMap::new(), known)
+        else {
+            return r#ref;
+        };
+        ranges::covering(&r#ref, &BTreeMap::from([(base, interval)]))
+    }
+
+    /// One operand as a number, if it is one.
+    pub(crate) fn _operand(
+        _op: &Op,
+        one: &Arg,
+        known: &BTreeMap<mir::Value, Known>,
+        here: Option<&Cells>,
+    ) -> Option<Known> {
+        match one {
+            Arg::Const(one) => Some(Known::new(masked(&one.n, one.width), one.width)),
+            Arg::Held(one) => _read(known.get(&one.value), one.width),
+            // A cell whose content is known is as good as a constant.
+            Arg::Cell(one) => here.and_then(|here| _cell(here, &_addressed(&one.r#ref, known))),
+            _ => None,
+        }
+    }
+}
