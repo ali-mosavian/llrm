@@ -12,8 +12,6 @@ from dataclasses import dataclass
 from qbopt.cycles import timings
 from qbopt.model.passes import AddressForm
 from qbopt.model.passes import OperationCosts
-from qbopt.model.passes import DEFAULT_MAX_UNROLL_ITERATIONS
-from qbopt.model.passes import DEFAULT_MAX_UNROLLED_OPERATIONS
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,14 +40,6 @@ class Profile:
     # it is legal but never silently promoted to a native/free scale, and is
     # nevertheless considered before spill/recompute.
     address_forms: tuple[AddressForm, ...] = ()
-    # GCC's target-independent complete-peel default is sixteen iterations.
-    # Keep it in the immutable profile so another target can extend the
-    # policy without teaching MIR a CPU name.
-    max_unroll_iterations: int = DEFAULT_MAX_UNROLL_ITERATIONS
-    # GCC's target-independent ``max-completely-peeled-insns`` default. This
-    # is a machine-neutral semantic-operation budget at the MIR boundary, not
-    # an opcode count; targets may tune it without exposing machine form.
-    max_unrolled_operations: int = DEFAULT_MAX_UNROLLED_OPERATIONS
     # A 67h address-size override changes the decoded instruction length on
     # targets whose predecoder tracks the default address form.  Keep this
     # separate from the ordinary prefix issue cost: the final cycle scorer

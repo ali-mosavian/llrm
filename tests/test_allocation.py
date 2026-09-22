@@ -22,15 +22,15 @@ from iced_x86 import Formatter
 from iced_x86 import FormatterSyntax
 
 from qbopt.model import ir
-from qbopt.backend import asm
 from qbopt.model import lir
 from qbopt.model import mir
-from qbopt.objectfile import omf
-from qbopt.objectfile import module
+from qbopt.abi import runtime
+from qbopt.backend import asm
 from qbopt.backend import select
 from qbopt.backend import target
-from qbopt.abi import runtime
+from qbopt.objectfile import omf
 from qbopt.legacy import regalloc
+from qbopt.objectfile import module
 from qbopt.frontend import blocks as split
 from qbopt.frontend.blocks import code_map
 
@@ -144,9 +144,7 @@ def test_a_two_address_operation_keeps_both_halves_in_one_register() -> None:
         results=(mir.Held(made, 2),),
         node=SimpleNamespace(semantics=what),
     )
-    body = mir._RaisedBody(
-        0x10, (mir.MirBlock(0x10, (), (op,), ()),), origin={made: Register.EAX, read: Register.EAX}
-    )
+    body = mir._RaisedBody(0x10, (mir.MirBlock(0x10, (), (op,), ()),), origin={made: Register.EAX, read: Register.EAX})
     klass = regalloc.congruent(body)
     # Both present, not both absent: `.get` on two values neither of which
     # is in the map returns None twice, which compares equal and says
@@ -254,9 +252,7 @@ def test_resolving_after_a_move_relinks_by_register() -> None:
         ),
         (),
     )
-    body = mir._RaisedBody(
-        0x10, (head,), origin={first: Register.EAX, second: Register.EAX, third: Register.EAX}
-    )
+    body = mir._RaisedBody(0x10, (head,), origin={first: Register.EAX, second: Register.EAX, third: Register.EAX})
 
     got = mir.resolved(body, {})
     assert not isinstance(got, str), got
@@ -472,8 +468,8 @@ def test_folded_spill_cost_depends_on_the_selected_cpu() -> None:
     replaced.  Core prices both ALU forms equally, so value 7 really is the
     cheapest spill there.
     """
-    from qbopt.backend import allocate
     from qbopt.model import ir
+    from qbopt.backend import allocate
 
     holds = tuple(_mov(value, value, 0x100 + 2 * (value - 1)) for value in range(1, 8))
     folded = lir.Insn(
@@ -562,14 +558,14 @@ def test_the_rewriter_hands_on_the_bytes_a_dropped_copy_stood_for(stem: str) -> 
     it, so layout could not account for them."""
     from pathlib import Path
 
-    from qbopt.model import mir
-    from qbopt.objectfile import omf
     from qbopt import flow
+    from qbopt.model import mir
     from qbopt.backend import lower
+    from qbopt.objectfile import omf
     from qbopt.objectfile import module
     from qbopt.optimize import transform
-    from qbopt.frontend import blocks as split
     from qbopt.backend import frame as frames
+    from qbopt.frontend import blocks as split
     from qbopt.frontend.blocks import code_map
 
     found = module.of(omf.parse(Path(f"fixtures/omf/{stem}.obj").read_bytes()))
@@ -706,8 +702,8 @@ def test_a_fixed_call_argument_reaches_its_register_through_the_whole_phase() ->
 
     from qbopt.model import ir
     from qbopt.model import lir
-
-    from qbopt.objectfile.module import Addr, Space
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
 
     # Loaded, not a constant: a constant is simply made in cx.
     made = lir.Insn(
@@ -864,8 +860,8 @@ def test_a_hard_register_assignment_is_not_an_eviction_victim() -> None:
     still meet DI's requirement.  A hard assignment has no such recovery;
     this must be reported as pressure or resolved by an explicit split.
     """
-    from qbopt.analysis import intervals
     from qbopt.backend import allocate
+    from qbopt.analysis import intervals
 
     held = intervals.Interval(1, (intervals.Segment(0, 4),), weight=0.1)
     incoming = intervals.Interval(2, (intervals.Segment(0, 4),), weight=10.0)
@@ -890,9 +886,9 @@ def test_an_unspillable_range_without_a_register_is_unplaceable() -> None:
     ``spilled``; final rewriting failed much later with ``no register``.
     The allocation boundary must report the impossible pressure directly.
     """
-    from qbopt.backend import allocate
-    from qbopt.backend import target
     from qbopt.model import ir
+    from qbopt.backend import target
+    from qbopt.backend import allocate
 
     holds = tuple(_mov(value, value, 2 * (value - 1)) for value in range(1, 8))
     use_all = lir.Insn(
@@ -907,3 +903,37 @@ def test_an_unspillable_range_without_a_register_is_unplaceable() -> None:
 
     with pytest.raises(allocate.Unplaced, match=r"value#7 cannot be spilled"):
         allocate.allocate(_one_block(*holds, use_all), pinned=pins, unspillable=frozenset({7}))
+
+
+def test_a_rejected_allocation_trial_leaves_no_frame_slot(monkeypatch: pytest.MonkeyPatch) -> None:
+    """sum_three.c's loop-base trial spilled its index, lost, and kept the slot.
+
+    The index was later spilled for real into that stale slot, already shared
+    with the first array's base, and the program returned 330 for 1110. A
+    value that ends in a register must hold no frame slot.
+    """
+    from qbopt.backend import allocate
+    from qbopt.cfront import compile as cfront
+
+    seen = []
+    transform = allocate.RegAlloc.transform
+
+    def recorded(self, body):
+        out = transform(self, body)
+        seen.append(self.frame)
+        return out
+
+    applied = allocate.applied
+    placed = []
+
+    def recording(body, got):
+        placed.append(got.where)
+        return applied(body, got)
+
+    monkeypatch.setattr(allocate.RegAlloc, "transform", recorded)
+    monkeypatch.setattr(allocate, "applied", recording)
+    source = Path(__file__).resolve().parents[1] / "bench" / "parity" / "sum_three.c"
+    cfront.assembled(cfront.recorded(source, []), source.stem, optimise=True)
+    assert seen and len(seen) == len(placed)
+    for frame, where in zip(seen, placed):
+        assert not {value for value in frame.slots if value in where}

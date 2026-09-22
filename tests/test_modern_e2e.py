@@ -15,6 +15,9 @@ from qbopt.frontend.modern import driver
 ROOT = Path(__file__).resolve().parents[1]
 NBODY = ROOT / "frontends" / "modern" / "fixtures" / "nbody.mod"
 SUM = ROOT / "frontends" / "modern" / "fixtures" / "sum.mod"
+DESCRIPTORS = ROOT / "frontends" / "modern" / "fixtures" / "descriptors.mod"
+COLLECTIONS = ROOT / "frontends" / "modern" / "fixtures" / "collections.mod"
+SUM_THREE = ROOT / "frontends" / "modern" / "fixtures" / "sum_three.mod"
 
 pytestmark = [
     pytest.mark.e2e,
@@ -100,3 +103,34 @@ def test_native_sum_reads_length_from_the_prefix_descriptor(tmp_path: Path) -> N
     made = build(SUM, tmp_path / "SUM.EXE", run=True)
 
     assert made.output == expected
+
+
+def test_native_three_array_sum_shares_one_index_without_losing_frame_base(tmp_path: Path) -> None:
+    """sum_three once addressed initialized locals through EAX+SI instead of BP+SI."""
+    oracle = execute.run(driver.parsed(SUM_THREE), "main")
+    assert (oracle.output, oracle.value) == ("sum_three: ok\n", 1110)
+
+    made = build(SUM_THREE, tmp_path / "SUM3.EXE", run=True)
+
+    assert made.output == oracle.output
+    assert made.size < 3 * 1024
+
+
+@pytest.mark.parametrize(
+    ("source", "executable", "expected"),
+    [
+        (DESCRIPTORS, "DESCRIPT.EXE", "descriptors: ok\n"),
+        (COLLECTIONS, "COLLECT.EXE", "collections: ok\n"),
+    ],
+)
+def test_native_modern_collection_examples_match_hir(
+    tmp_path: Path, source: Path, executable: str, expected: str
+) -> None:
+    """Descriptor views and bounded collections must survive real OMF linking."""
+    oracle = execute.run(driver.parsed(source), "main")
+    assert (oracle.output, oracle.value) == (expected, 0)
+
+    made = build(source, tmp_path / executable, run=True)
+
+    assert made.output == expected
+    assert made.size < 3 * 1024

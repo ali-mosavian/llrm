@@ -13,6 +13,7 @@ from qbopt.frontend import blocks
 from qbopt.objectfile import module
 from qbopt.optimize import unswitch
 from qbopt.optimize import transform
+from qbopt.model.passes import Options
 from qbopt.model.passes import AddressForm
 from qbopt.model.passes import OperationCosts
 
@@ -52,7 +53,7 @@ def test_specialized_main_and_legacy_procedure_emit_together(tag):
 def original(tag):
     found = module.load(Path(f"fixtures/regressions/ivarm-{tag}.obj"))
     body = mir.bodies(found, blocks.partition(found, blocks.code_map(found)))[0][1]
-    return found, transform.applied(body, found.dgroup, found.calls, found=found, unroll_=False)
+    return found, transform.applied(body, found.dgroup, found.calls, found=found, options=Options(unroll=False))
 
 
 @pytest.mark.parametrize("tag", ["q-O", "p-g2", "v-g3"])
@@ -65,7 +66,7 @@ def test_invariant_branch_specialization_exposes_loop_deletion(tag):
     for block in candidate.blocks:
         for phi in block.phis:
             assert set(phi.incoming) == set(predecessors[block.at])
-    result = transform.applied(candidate, found.dgroup, found.calls, unroll_=False)
+    result = transform.applied(candidate, found.dgroup, found.calls, options=Options(unroll=False))
     assert not loops.loops(result.blocks, result.entry)
 
 

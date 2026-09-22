@@ -9,6 +9,7 @@ from qbopt.model import memory
 from qbopt.backend import lower
 from qbopt.analysis import alias
 from qbopt.optimize import transform
+from qbopt.model.passes import Options
 from qbopt.objectfile.module import Addr
 from qbopt.objectfile.module import Space
 
@@ -882,7 +883,7 @@ def test_pointer_fact_refines_coarse_operand_provenance_before_gvn() -> None:
         pointer_seeds={pointer: memory.Provenance.one(allocation, 0, 1)},
     )
 
-    optimized = transform.applied(body, frozenset({7}), {}, unroll_=False, peel_=False, fill_=False)
+    optimized = transform.applied(body, frozenset({7}), {}, options=Options(unroll=False, peel=False, fill=False))
     descriptor_loads = [
         op for block in optimized.blocks for op in block.ops if op.kind is mir.Kind.LOAD and op.loads == (descriptor,)
     ]

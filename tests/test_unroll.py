@@ -14,6 +14,7 @@ from qbopt.model.passes import Where
 from qbopt.optimize import transform
 from qbopt.analysis import floatfacts
 from qbopt.backend import lower_floats
+from qbopt.model.passes import Options
 from qbopt.model.passes import OperationCosts
 
 
@@ -287,9 +288,7 @@ def body():
         found.dgroup,
         found.calls,
         found=found,
-        floatloop_=False,
-        peel_=False,
-        unroll_=False,
+        options=Options(floatloop=False, peel=False, unroll=False),
     )
     return found, optimized
 
@@ -307,9 +306,7 @@ def test_production_fpdeep_unrolls_through_lcssa_exits(tag):
         found.calls,
         blocks=partition,
         found=found,
-        floatloop_=False,
-        peel_=False,
-        unroll_=False,
+        options=Options(floatloop=False, peel=False, unroll=False),
     )
     (loop,) = loops.loops(original.blocks, original.entry)
     (exit_at,) = set(original.block(loop.header).succ) - loop.body
@@ -333,7 +330,9 @@ def test_normal_pipeline_expands_and_folds_fpdeep_to_a_fixed_point():
     assert changed.repetitions == ((0x66, 3),)
     assert not loops.loops(changed.blocks, changed.entry)
     assert transform.applied(changed, found.dgroup, found.calls, found=found) == changed
-    assert not transform.applied(original, found.dgroup, found.calls, found=found, unroll_=False).repetitions
+    assert not transform.applied(
+        original, found.dgroup, found.calls, found=found, options=Options(unroll=False)
+    ).repetitions
 
 
 def test_fpcse_exact_ten_iteration_sum_folds_in_source_order():

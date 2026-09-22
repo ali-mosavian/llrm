@@ -9,6 +9,7 @@ from qbopt.model import mir
 from qbopt.optimize import profit
 from qbopt.optimize import unroll
 from qbopt.model.passes import Where
+from qbopt.model.passes import Options
 from qbopt.model.passes import OperationCosts
 
 
@@ -138,7 +139,7 @@ def test_large_complete_peel_must_erase_its_growth_to_cross_the_profile_budget()
     Short profitable loops remain governed by the ordinary cost calculation.
     """
     costs = OperationCosts(add=1, branch=50, move=1)
-    where = Where(costs=costs, max_unroll_iterations=16)
+    where = Where(costs=costs, options=Options(max_unroll_iterations=16))
     original = _loop()
 
     assert unroll._rejection(original, _straight(3), 1, 64, where) == "iteration-growth"
@@ -163,7 +164,7 @@ def test_default_complete_peel_budget_refuses_sc_init_sized_growth() -> None:
             _straight(25),
             1,
             25,
-            replace(where, max_unroll_iterations=0, max_unrolled_operations=0),
+            replace(where, options=Options(max_unroll_iterations=0, max_unrolled_operations=0)),
         )
         is None
     )
@@ -178,7 +179,7 @@ def test_bounded_complete_peel_amortizes_growth_over_its_exact_trip_count() -> N
     cost; the profile iteration ceiling remains the independent size guard.
     """
     costs = OperationCosts(add=2, branch=7, move=2)
-    where = Where(costs=costs, registers=6, max_unroll_iterations=16)
+    where = Where(costs=costs, registers=6, options=Options(max_unroll_iterations=16))
 
     assert unroll._rejection(_loop(), _straight(25), 1, 9, where) is None
 
@@ -194,7 +195,7 @@ def test_bounded_peel_with_spill_risk_pays_its_complete_growth() -> None:
     erase its expansion before it can replace the loop.
     """
     costs = OperationCosts(add=1, branch=5, move=2, load=1, store=1)
-    where = Where(costs=costs, registers=3, max_unroll_iterations=16)
+    where = Where(costs=costs, registers=3, options=Options(max_unroll_iterations=16))
 
     assert profit.spill_risk(_pressured(), costs, where.registers) > 0
     assert unroll._rejection(_loop(), _pressured(), 1, 2, where) == "growth"
@@ -213,8 +214,7 @@ def test_spill_prone_complete_peel_respects_the_sequence_budget() -> None:
     where = Where(
         costs=costs,
         registers=3,
-        max_unroll_iterations=16,
-        max_unrolled_operations=200,
+        options=Options(max_unroll_iterations=16, max_unrolled_operations=200),
     )
 
     assert profit.spill_risk(_large_pressured(), costs, where.registers) > 0
@@ -240,7 +240,7 @@ def test_sequence_budget_counts_the_source_loop_before_candidate_folding(
     )
     candidate = _straight(150)
     costs = OperationCosts(add=1, branch=1_000, move=1, load=1, store=1)
-    where = Where(costs=costs, registers=3, max_unrolled_operations=200)
+    where = Where(costs=costs, registers=3, options=Options(max_unrolled_operations=200))
 
     def spill_risk(
         body: mir.MirBody,
@@ -274,7 +274,7 @@ def test_negligible_spill_improvement_does_not_bypass_the_sequence_budget(
     )
     candidate = _straight(150)
     costs = OperationCosts(add=1, branch=18, move=1, load=1, store=1)
-    where = Where(costs=costs, registers=3, max_unrolled_operations=200)
+    where = Where(costs=costs, registers=3, options=Options(max_unrolled_operations=200))
 
     def spill_risk(
         body: mir.MirBody,
@@ -301,7 +301,7 @@ def test_oversized_specialization_may_reduce_existing_spill_burden(
     original = _loop()
     candidate = _large_pressured()
     costs = OperationCosts(add=1, branch=1_000, move=1, load=1, store=1)
-    where = Where(costs=costs, registers=3, max_unrolled_operations=200)
+    where = Where(costs=costs, registers=3, options=Options(max_unrolled_operations=200))
 
     def spill_risk(
         body: mir.MirBody,

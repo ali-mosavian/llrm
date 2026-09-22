@@ -555,6 +555,31 @@ impl Parser {
                     Ok(Expr::Name(name, token.span))
                 }
             }
+            TokenKind::LeftBrace if self.brace_has_comprehension() => {
+                let key = self.expression(0)?;
+                self.expect(
+                    |kind| matches!(kind, TokenKind::Colon),
+                    "expected ':' between dictionary key and value",
+                )?;
+                let value = self.expression(0)?;
+                self.expect(
+                    |kind| matches!(kind, TokenKind::For),
+                    "expected 'for' in dictionary comprehension",
+                )?;
+                let (binding, mode, iterable) = self.comprehension_clause()?;
+                let close = self.expect(
+                    |kind| matches!(kind, TokenKind::RightBrace),
+                    "expected '}' after dictionary comprehension",
+                )?;
+                Ok(Expr::DictComprehension {
+                    key: Box::new(key),
+                    value: Box::new(value),
+                    binding,
+                    mode,
+                    iterable: Box::new(iterable),
+                    span: Span::new(token.span.line, token.span.column, close.span.end_column),
+                })
+            }
             TokenKind::LeftBrace => self.struct_literal(None, token.span),
             TokenKind::Ampersand => {
                 let mutable = self.take(|kind| matches!(kind, TokenKind::Mut)).is_some();
@@ -569,14 +594,34 @@ impl Parser {
             TokenKind::LeftBracket => {
                 let mut values = Vec::new();
                 if !matches!(self.peek().kind, TokenKind::RightBracket) {
+                    let first = self.expression(0)?;
+                    if self.take(|kind| matches!(kind, TokenKind::For)).is_some() {
+                        let (binding, mode, iterable) = self.comprehension_clause()?;
+                        let close = self.expect(
+                            |kind| matches!(kind, TokenKind::RightBracket),
+                            "expected ']' after comprehension",
+                        )?;
+                        return Ok(Expr::Comprehension {
+                            element: Box::new(first),
+                            binding,
+                            mode,
+                            iterable: Box::new(iterable),
+                            span: Span::new(
+                                token.span.line,
+                                token.span.column,
+                                close.span.end_column,
+                            ),
+                        });
+                    }
+                    values.push(first);
                     loop {
-                        values.push(self.expression(0)?);
                         if self.take(|kind| matches!(kind, TokenKind::Comma)).is_none() {
                             break;
                         }
                         if matches!(self.peek().kind, TokenKind::RightBracket) {
                             break;
                         }
+                        values.push(self.expression(0)?);
                     }
                 }
                 let close = self.expect(
@@ -604,6 +649,20 @@ impl Parser {
             }
             TokenKind::LeftParen => {
                 let expression = self.expression(0)?;
+                if self.take(|kind| matches!(kind, TokenKind::For)).is_some() {
+                    let (binding, mode, iterable) = self.comprehension_clause()?;
+                    let close = self.expect(
+                        |kind| matches!(kind, TokenKind::RightParen),
+                        "expected ')' after generator",
+                    )?;
+                    return Ok(Expr::Generator {
+                        element: Box::new(expression),
+                        binding,
+                        mode,
+                        iterable: Box::new(iterable),
+                        span: Span::new(token.span.line, token.span.column, close.span.end_column),
+                    });
+                }
                 self.expect(
                     |kind| matches!(kind, TokenKind::RightParen),
                     "expected ')' after expression",
@@ -612,6 +671,42 @@ impl Parser {
             }
             _ => Err(Diagnostic::new(token.span, "expected expression")),
         }
+    }
+
+    fn comprehension_clause(&mut self) -> Result<(String, IterationMode, Expr), Diagnostic> {
+        let (binding, _) = self.identifier("expected comprehension binding")?;
+        self.expect(
+            |kind| matches!(kind, TokenKind::In),
+            "expected 'in' after comprehension binding",
+        )?;
+        let mode = if self
+            .take(|kind| matches!(kind, TokenKind::Ampersand))
+            .is_some()
+        {
+            if self.take(|kind| matches!(kind, TokenKind::Mut)).is_some() {
+                IterationMode::Mutable
+            } else {
+                IterationMode::Shared
+            }
+        } else {
+            IterationMode::Value
+        };
+        Ok((binding, mode, self.expression(0)?))
+    }
+
+    fn brace_has_comprehension(&self) -> bool {
+        let mut depth = 0_i32;
+        for token in &self.tokens[self.at..] {
+            match token.kind {
+                TokenKind::LeftParen | TokenKind::LeftBracket | TokenKind::LeftBrace => depth += 1,
+                TokenKind::RightParen | TokenKind::RightBracket => depth -= 1,
+                TokenKind::RightBrace if depth == 0 => return false,
+                TokenKind::RightBrace => depth -= 1,
+                TokenKind::For if depth == 0 => return true,
+                _ => {}
+            }
+        }
+        false
     }
 
     fn call(&mut self, callee: Expr) -> Result<Expr, Diagnostic> {
@@ -656,7 +751,34 @@ impl Parser {
     fn index(&mut self, base: Expr) -> Result<Expr, Diagnostic> {
         let start = base.span();
         self.bump();
-        let index = self.expression(0)?;
+        let first = if matches!(self.peek().kind, TokenKind::Range) {
+            None
+        } else {
+            Some(self.expression(0)?)
+        };
+        if self.take(|kind| matches!(kind, TokenKind::Range)).is_some() {
+            let end = if matches!(self.peek().kind, TokenKind::RightBracket) {
+                None
+            } else {
+                Some(Box::new(self.expression(0)?))
+            };
+            let close = self.expect(
+                |kind| matches!(kind, TokenKind::RightBracket),
+                "expected ']' after slice",
+            )?;
+            return Ok(Expr::Slice {
+                base: Box::new(base),
+                start: first.map(Box::new),
+                end,
+                span: Span::new(start.line, start.column, close.span.end_column),
+            });
+        }
+        let Some(index) = first else {
+            return Err(Diagnostic::new(
+                self.peek().span,
+                "expected slice end after '..'",
+            ));
+        };
         let close = self.expect(
             |kind| matches!(kind, TokenKind::RightBracket),
             "expected ']' after index",
@@ -855,6 +977,7 @@ impl Parser {
             TokenKind::F32 => Ok(TypeName::F32),
             TokenKind::F64 => Ok(TypeName::F64),
             TokenKind::StringType => Ok(TypeName::String),
+            TokenKind::Addr => Ok(TypeName::Addr),
             TokenKind::Bool => Ok(TypeName::Bool),
             TokenKind::Void => Ok(TypeName::Void),
             TokenKind::Identifier(name) => self.fixed_types.get(&name).copied().ok_or_else(|| {

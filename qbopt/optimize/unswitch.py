@@ -7,8 +7,10 @@ from qbopt.analysis import ssa
 from qbopt.analysis import loops
 from qbopt.optimize import edges
 from qbopt.optimize import lcssa
+from qbopt.model.passes import O2
 from qbopt.optimize import profit
 from qbopt.optimize import loopclone
+from qbopt.model.passes import Options
 from qbopt.model.passes import AddressForm
 from qbopt.model.passes import OperationCosts
 
@@ -23,8 +25,7 @@ def optimized(
     index_scales: frozenset[int] | None = None,
     address_forms: tuple[AddressForm, ...] | None = None,
     costs: OperationCosts | None = None,
-    max_unroll_iterations: int = 0,
-    max_unrolled_operations: int = 0,
+    options: Options = O2,
     watch=None,
 ) -> mir.MirBody:
     from qbopt.optimize import transform
@@ -37,14 +38,12 @@ def optimized(
         candidate,
         dgroup,
         calls,
-        unswitch_=False,
+        options=replace(options, unswitch=False),
         registers=registers,
         call_registers=call_registers,
         index_scales=index_scales,
         address_forms=address_forms,
         costs=costs,
-        max_unroll_iterations=max_unroll_iterations,
-        max_unrolled_operations=max_unrolled_operations,
         watch=lambda name, state: stages.append((name, state)),
     )
 

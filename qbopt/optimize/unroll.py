@@ -14,6 +14,7 @@ from qbopt.analysis import ssa
 from qbopt.analysis import loops
 from qbopt.analysis import consts
 from qbopt.optimize import profit
+from qbopt.analysis import peelsize
 from qbopt.analysis import induction
 from qbopt.model.passes import Where
 from qbopt.analysis import floatfacts
@@ -27,18 +28,20 @@ class Unroll(MIRTransform):
         self.where = where
 
     def transform(self, body):
-        return expanded(body, self.where.dgroup, self.where.calls)
+        return expanded(body, self.where, self.where.calls)
 
 
 def expanded(
     body: mir.MirBody,
-    dgroup: frozenset[int],
+    where: Where,
     calls: dict,
     *,
     skip: frozenset[int] = frozenset(),
+    tried: "set[tuple] | None" = None,
 ) -> mir.MirBody:
     blocks = {block.at: block for block in body.blocks}
     predecessors = loops.predecessors(body.blocks)
+    dgroup = where.dgroup
     facts = consts.known(body, dgroup, calls)
     for loop in loops.loops(body.blocks, body.entry):
         if len(loop.latches) != 1:
@@ -142,12 +145,9 @@ def expanded(
         count = induction.trip_count(body, loop, facts)
         if count is None:
             continue
-        # This is only a compile-time/resource guard.  Whether the expanded
-        # body is worth keeping is decided below with the selected CPU's
-        # operation costs.  Keep enough room to evaluate a useful multi-block
-        # loop while bounding the quadratic scalar analyses on cloned MIR.
-        emitted = sum(op.kind is not mir.Kind.NOTHING for op in (*repeated_ops, *header.ops))
-        if count < 2 or count * emitted > 512:
+        if count < 2 or not peelsize.admitted(body, loop, count, facts, where):
+            continue
+        if tried is not None and peelsize.signature(body, loop, count, facts) in tried:
             continue
         if any(set(phi.incoming) != {entry, latch.at} for phi in header.phis):
             continue
@@ -220,7 +220,13 @@ def _rejection(
     """
     if len(loops.loops(after.blocks, after.entry)) >= len(loops.loops(before.blocks, before.entry)):
         return "residual-loops"
-    if where.max_unroll_iterations and count > where.max_unroll_iterations and _size(after) > _size(before):
+    if not where.options.grows and _size(after) > _size(before):
+        return "size-growth"
+    if (
+        where.options.max_unroll_iterations
+        and count > where.options.max_unroll_iterations
+        and _size(after) > _size(before)
+    ):
         # A large exact loop may still be an excellent constant-folding
         # vehicle: allow it when scalar optimization erases all expansion
         # growth. Otherwise obey the target's complete-peel budget before an
@@ -241,8 +247,8 @@ def _rejection(
     sequence = _expanded_operations(before, after, latch, count)
     if (
         pressure_after > 0
-        and where.max_unrolled_operations
-        and sequence > where.max_unrolled_operations
+        and where.options.max_unrolled_operations
+        and sequence > where.options.max_unrolled_operations
         and (pressure_after >= pressure_before or total_before - total_after <= sequence * where.costs.move)
     ):
         # GCC's target-independent ``max-completely-peeled-insns`` is 200.
@@ -273,11 +279,17 @@ def _rejection(
     return "growth" if total_before - total_after <= growth else None
 
 
-def optimized(body: mir.MirBody, where: Where, *, optimize, watch=None) -> mir.MirBody:
-    """Repeatedly expand one profitable exact loop and re-run scalar MIR."""
+def optimized(body: mir.MirBody, where: Where, *, optimize, tried: set[tuple], watch=None) -> mir.MirBody:
+    """Repeatedly expand one profitable exact loop and re-run scalar MIR.
+
+    `tried` outlives this call: the fixed point asks every round, and a loop
+    it already rejected, unchanged, is not asked about again.
+    """
+    if not priced(body, where):
+        return body
     rejected: set[int] = set()
     while True:
-        candidate = expanded(body, where.dgroup, where.named, skip=frozenset(rejected))
+        candidate = expanded(body, where, where.named, skip=frozenset(rejected), tried=tried)
         if candidate is body:
             return body
         additions = candidate.repetitions[len(body.repetitions) :]
@@ -294,11 +306,22 @@ def optimized(body: mir.MirBody, where: Where, *, optimize, watch=None) -> mir.M
             if watch is not None:
                 watch(f"unroll-rejected-{rejection}", result)
             rejected.add(latch)
+            tried.add(_signature(body, latch, count, where))
             continue
         body = result
         if watch is not None:
             watch("unroll-accepted", body)
         rejected.clear()
+
+
+def priced(body: mir.MirBody, where: Where) -> bool:
+    """Whether a candidate here could be accepted at all: `_rejection` prices both sides."""
+    return profit.static(body, where.costs) is not None
+
+
+def _signature(body: mir.MirBody, latch: int, count: int, where: Where) -> tuple:
+    (loop,) = (one for one in loops.loops(body.blocks, body.entry) if latch in one.latches)
+    return peelsize.signature(body, loop, count, consts.known(body, where.dgroup, where.named))
 
 
 def _expanded(body, loop, header, latch, bridge_ops, latch_ops, exit_at, entry, count):

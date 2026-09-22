@@ -3,13 +3,21 @@
 from dataclasses import replace
 
 import pytest
-from iced_x86 import Decoder, Register
+from iced_x86 import Decoder
+from iced_x86 import Register
 
+from qbopt.model import ir
+from qbopt.model import lir
+from qbopt.model import mir
 from qbopt.analysis import ssa
-from qbopt.backend import allocate, lower, pointers, select
-from qbopt.model import ir, lir, mir
-from qbopt.objectfile.module import Addr, Space
+from qbopt.backend import lower
+from qbopt.backend import select
+from qbopt.backend import allocate
+from qbopt.backend import pointers
 from qbopt.optimize import transform
+from qbopt.model.passes import Options
+from qbopt.objectfile.module import Addr
+from qbopt.objectfile.module import Space
 
 
 def access(store=False):
@@ -158,7 +166,7 @@ def test_optimizer_splits_a_packed_far_pointer_before_its_access() -> None:
     )
     body = mir.MirBody(0, (mir.MirBlock(0, (), ops, ()),))
 
-    optimized = transform.applied(body, frozenset(), {}, unroll_=False, peel_=False)
+    optimized = transform.applied(body, frozenset(), {}, options=Options(unroll=False, peel=False))
     operations = tuple(op for block in optimized.blocks for op in block.ops)
     stores = [ref for op in operations for ref in op.stores]
 

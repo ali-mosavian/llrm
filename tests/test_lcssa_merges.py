@@ -8,6 +8,7 @@ from qbopt.model import mir
 from qbopt.analysis import loops
 from qbopt.optimize import lcssa
 from qbopt.optimize import transform
+from qbopt.model.passes import Options
 
 
 def multiple_exits() -> tuple[mir.MirBody, mir.Value]:
@@ -86,7 +87,12 @@ def test_compiled_early_exit_accumulator_is_closed() -> None:
     assert found is not None
     partition = corpus.partitioned(path)
     body = transform.applied(
-        mir.bodies(found, partition)[0][1], found.dgroup, found.calls, blocks=partition, found=found, lcssa_=False
+        mir.bodies(found, partition)[0][1],
+        found.dgroup,
+        found.calls,
+        blocks=partition,
+        found=found,
+        options=Options(lcssa=False),
     )
     (loop,) = loops.loops(body.blocks, body.entry)
     result = lcssa.closed(body)

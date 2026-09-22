@@ -2,6 +2,7 @@ import argparse
 from pathlib import Path
 
 from qbopt import hir
+from qbopt import flow
 from qbopt.frontend.qb import compile
 from qbopt.frontend.qb.driver import parsed
 
@@ -36,6 +37,7 @@ def main(arguments: list[str] | None = None) -> int:
     parser.add_argument("--include", action="append", default=[], type=Path)
     parser.add_argument("--mir", action="store_true")
     parser.add_argument("-o", "--output", type=Path)
+    flow.level_option(parser)
     options = parser.parse_args(arguments)
     program = parsed(
         options.source,
@@ -51,7 +53,7 @@ def main(arguments: list[str] | None = None) -> int:
     if options.output is not None:
         if options.mir:
             parser.error("--mir and --output cannot be used together")
-        options.output.write_bytes(compile.object_bytes(program, options.source.name))
+        options.output.write_bytes(compile.object_bytes(program, options.source.name, options=options.options))
     elif options.mir:
         for body in hir.lower(program):
             print(hir.mir_text(body), end="")

@@ -27,6 +27,7 @@ pub enum TypeName {
     F32,
     F64,
     String,
+    Addr,
     Bool,
     Void,
     I64,
@@ -223,11 +224,39 @@ pub enum Expr {
         span: Span,
     },
     Array(Vec<Expr>, Span),
+    Comprehension {
+        element: Box<Expr>,
+        binding: String,
+        mode: IterationMode,
+        iterable: Box<Expr>,
+        span: Span,
+    },
+    Generator {
+        element: Box<Expr>,
+        binding: String,
+        mode: IterationMode,
+        iterable: Box<Expr>,
+        span: Span,
+    },
+    DictComprehension {
+        key: Box<Expr>,
+        value: Box<Expr>,
+        binding: String,
+        mode: IterationMode,
+        iterable: Box<Expr>,
+        span: Span,
+    },
     Boolean(bool, Span),
     Name(String, Span),
     Index {
         base: Box<Expr>,
         index: Box<Expr>,
+        span: Span,
+    },
+    Slice {
+        base: Box<Expr>,
+        start: Option<Box<Expr>>,
+        end: Option<Box<Expr>>,
         span: Span,
     },
     Member {
@@ -292,7 +321,11 @@ impl Expr {
             | Self::Boolean(_, span)
             | Self::Name(_, span) => *span,
             Self::FString { span, .. }
+            | Self::Comprehension { span, .. }
+            | Self::Generator { span, .. }
+            | Self::DictComprehension { span, .. }
             | Self::Index { span, .. }
+            | Self::Slice { span, .. }
             | Self::Member { span, .. }
             | Self::StructLiteral { span, .. }
             | Self::Borrow { span, .. }

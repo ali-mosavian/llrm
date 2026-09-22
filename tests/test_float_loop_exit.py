@@ -9,6 +9,7 @@ import corpus
 from qbopt.model import mir
 from qbopt.analysis import loops
 from qbopt.analysis import floatfacts
+from qbopt.model.passes import Options
 
 
 @pytest.mark.parametrize("effect", ["value", "memory", "barrier"])
@@ -101,7 +102,7 @@ def test_floatloop_can_be_disabled_for_stage_bisection():
         found.dgroup,
         found.calls,
         found=found,
-        floatloop_=False,
+        options=Options(floatloop=False),
         only="floatloop",
     )
     assert not loops.loops(enabled.blocks, enabled.entry)

@@ -112,8 +112,7 @@ class AddressForm:
         direct = self.extension_cost + self.use_cost <= costs.load
         amortized = (
             self.extension_cost <= costs.move
-            and self.extension_cost + self.use_cost
-            <= costs.shift + costs.address + costs.move + costs.store
+            and self.extension_cost + self.use_cost <= costs.shift + costs.address + costs.move + costs.store
         )
         return not self.secondary or direct or amortized
 
@@ -149,12 +148,45 @@ class OperationCosts:
     extend: int = 1
 
 
-# Target-independent complete-peel safeguards.  They are named here because
-# MIR consumes only numeric policy, never a CPU profile or machine form.  A
-# selected target may override them; an omitted selection receives the public
-# default 386 policy instead of accidentally requesting unbounded expansion.
 DEFAULT_MAX_UNROLL_ITERATIONS = 16
 DEFAULT_MAX_UNROLLED_OPERATIONS = 200
+
+
+@dataclass(frozen=True, slots=True)
+class Options:
+    """What GCC's command line says about optimization, as one value.
+
+    `-O` picks the defaults, `--param` the copy budgets, `-f` each pass. They
+    are independent of the CPU, as in GCC. `grows=False` is -Os's
+    `UL_NO_GROWTH` (tree-ssa-loop-ivcanon.cc): a copy is taken only when it
+    is no larger.
+    """
+
+    level: str = "O2"
+    # --param max-completely-peel-times
+    max_unroll_iterations: int = DEFAULT_MAX_UNROLL_ITERATIONS
+    # --param max-completely-peeled-insns
+    max_unrolled_operations: int = DEFAULT_MAX_UNROLLED_OPERATIONS
+    grows: bool = True
+    lcssa: bool = True
+    floatloop: bool = True
+    fold: bool = True
+    decide: bool = True
+    dead: bool = True
+    hoist: bool = True
+    forward: bool = True
+    drop_loads: bool = True
+    drop_stores: bool = True
+    promote: bool = True
+    strength: bool = True
+    unroll: bool = True
+    peel: bool = True
+    fill: bool = True
+    unswitch: bool = False
+
+
+LEVELS = {"O2": Options(), "Os": Options("Os", grows=False)}
+O2 = LEVELS["O2"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,13 +245,7 @@ class Where:
     # Semantic work only. The profile boundary translates instruction forms
     # once; no MIR pass can recover an opcode or register from these prices.
     costs: OperationCosts = OperationCosts()
-    # Complete peeling beyond this exact trip count is allowed only when the
-    # optimized expansion erases its own static growth. A caller deliberately
-    # requesting an unbounded policy may still pass zero explicitly.
-    max_unroll_iterations: int = DEFAULT_MAX_UNROLL_ITERATIONS
-    # Maximum optimized semantic operations in one completely expanded
-    # sequence. An explicit zero leaves this policy unbounded.
-    max_unrolled_operations: int = DEFAULT_MAX_UNROLLED_OPERATIONS
+    options: Options = Options()
 
     @property
     def named(self) -> dict:

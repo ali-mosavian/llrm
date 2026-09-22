@@ -265,8 +265,15 @@ def _function(module: model.Module, function: model.Function, types: dict[int, m
                         raise InvalidHIR(f"{prefix}: array element has no element type")
                     operand_types[index] = element
             result_types = [values[one].type for one in instruction.results]
-            if instruction.op is model.Op.COPY and (len(operand_types) != 1 or result_types != operand_types):
-                raise InvalidHIR(f"{prefix}: copy changes type without a conversion")
+            if instruction.op is model.Op.COPY:
+                pointer_retype = (
+                    len(operand_types) == len(result_types) == 1
+                    and types[operand_types[0]].kind is model.TypeKind.POINTER
+                    and types[result_types[0]].kind is model.TypeKind.POINTER
+                    and types[operand_types[0]].width == types[result_types[0]].width
+                )
+                if len(operand_types) != 1 or (result_types != operand_types and not pointer_retype):
+                    raise InvalidHIR(f"{prefix}: copy changes representation without a conversion")
             if instruction.op is model.Op.LOAD:
                 if len(operand_types) != 1 or result_types != operand_types:
                     raise InvalidHIR(f"{prefix}: load result type does not match its place")
@@ -399,8 +406,8 @@ def _function(module: model.Module, function: model.Function, types: dict[int, m
                 if isinstance(operand, model.DescriptorPlace):
                     pointer = types[values[operand.base].type]
                     field = types[operand.type]
-                    if pointer.kind is not model.TypeKind.POINTER or pointer.element not in types or pointer.rank != 1:
-                        raise InvalidHIR(f"{prefix}: descriptor place needs a slice pointer")
+                    if pointer.kind is not model.TypeKind.POINTER or pointer.element not in types:
+                        raise InvalidHIR(f"{prefix}: descriptor place needs a sequence pointer")
                     if field.kind is not model.TypeKind.INTEGER or field.width != 2 or field.signed is not False:
                         raise InvalidHIR(f"{prefix}: descriptor field is not u16")
         term = block.terminator

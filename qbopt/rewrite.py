@@ -24,6 +24,8 @@ from qbopt import wholeseg
 from qbopt.abi import profile
 from qbopt.abi import runtime
 from qbopt.objectfile import omf
+from qbopt.model.passes import O2
+from qbopt.model.passes import Options
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +56,7 @@ def rewrite(
     external_contracts: dict[str, runtime.Contract] | None = None,
     contract_fingerprint: str | None = None,
     allow_unchanged: bool = False,
+    options: Options = O2,
 ) -> tuple[bytes, list[Region]]:
     """Optimize one raised body and lower it once.
 
@@ -88,7 +91,7 @@ def rewrite(
     # for 2,764 lines whose every matcher is an address and an adjacency --
     # which is what stops any pass above from moving anything. The suite
     # links and runs on the MIR arm alone.
-    made_by = _configuration(whole_segment, native_fpu, absorb_calls, cpu, basic_semantics, bounds_checks)
+    made_by = _configuration(whole_segment, native_fpu, absorb_calls, cpu, basic_semantics, bounds_checks, options)
     fingerprints = tuple(
         one
         for one in (contract_fingerprint, contract_profile.fingerprint if contract_profile is not None else None)
@@ -120,6 +123,7 @@ def rewrite(
         basic_semantics,
         bounds_checks,
         combined or None,
+        options,
     )
     if terminal:
         return b"".join(one.emit() for one in omf.finalised(omf.parse(out), made_by)), regions
@@ -145,6 +149,7 @@ def _configuration(
     cpu: str = "386",
     basic_semantics: bool = False,
     bounds_checks: bool = False,
+    options: Options = O2,
 ) -> str:
     """Every option that can change what the emitter writes, as one string.
 
@@ -159,6 +164,7 @@ def _configuration(
         + (f",cpu={cpu}" if cpu != "386" else "")
         + (",basic-semantics" if basic_semantics else "")
         + (",bounds-checks" if bounds_checks else "")
+        + (f",{options.level}" if options.level != O2.level else "")
     )
 
 
@@ -171,6 +177,7 @@ def _written(
     basic_semantics: bool = False,
     bounds_checks: bool = False,
     external_contracts: dict[str, runtime.Contract] | None = None,
+    options: Options = O2,
 ) -> tuple[bytes, bool, str]:
     """Lower and emit once; report whether the allocating backend completed."""
     if not whole_segment:
@@ -182,6 +189,7 @@ def _written(
         basic_semantics=basic_semantics,
         bounds_checks=bounds_checks,
         external_contracts=external_contracts,
+        options=options,
     )
     if not bounds_checks and got.reason.startswith("unchecked array lowering unsupported"):
         raise ValueError(got.reason + "; use --bounds-checks to retain the checked helper")
@@ -199,6 +207,9 @@ def main(argv: list[str] | None = None) -> int:
     from qbopt.backend import cpu as targets
 
     ap.add_argument("--cpu", choices=targets.names(), default="386", help="code-generation tuning target")
+    from qbopt import flow
+
+    flow.level_option(ap)
     ap.add_argument("-o", "--output", type=Path, help="output file; valid for a single input OBJ")
     ap.add_argument("--output-dir", type=Path, help="directory receiving every optimized input OBJ")
     ap.add_argument("--manifest", type=Path)
@@ -279,6 +290,7 @@ def main(argv: list[str] | None = None) -> int:
                     external_contracts=unit.contracts_for(source),
                     contract_fingerprint=unit.fingerprint,
                     allow_unchanged=args.allow_unchanged,
+                    options=args.options,
                 )
             except Unsupported as error:
                 raise Unsupported(f"{source.path}: {error}") from error
@@ -311,6 +323,7 @@ def main(argv: list[str] | None = None) -> int:
     common = {
         "dry_run": args.dry_run,
         "cpu": args.cpu,
+        "level": args.options.level,
         "semantics": "basic" if args.basic_semantics else "native",
         "bounds_checks": args.bounds_checks,
         "link_inputs": [str(path) for path in unit.inputs],

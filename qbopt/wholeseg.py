@@ -18,6 +18,7 @@ anything downstream could reason about.
 """
 
 from enum import StrEnum
+from dataclasses import replace
 from dataclasses import dataclass
 from collections.abc import Callable
 
@@ -26,10 +27,11 @@ from qbopt.abi import runtime
 from qbopt.objectfile import omf
 from qbopt.abi import nativecalls
 from qbopt.frontend import extent
+from qbopt.model.passes import O2
 from qbopt.objectfile import module
 from qbopt.frontend import fppatches
-from qbopt.optimize import transform
 from qbopt.backend import nativeframe
+from qbopt.model.passes import Options
 from qbopt.backend import cpu as targets
 from qbopt.frontend import blocks as split
 from qbopt.frontend.blocks import code_map
@@ -86,6 +88,7 @@ def emitted(
     bounds_checks: bool = False,
     *,
     external_contracts: dict[str, runtime.Contract] | None = None,
+    options: Options = O2,
 ) -> Emitted:
     """The object rewritten, and which emitter did it.
 
@@ -106,6 +109,7 @@ def emitted(
         basic_semantics,
         bounds_checks,
         external_contracts=external_contracts,
+        options=options,
     )
     if why != REBUILT:
         return Emitted(out, Emission.REFUSED, why)
@@ -137,6 +141,7 @@ def _rebuilt(
     bounds_checks: bool = False,
     *,
     external_contracts: dict[str, runtime.Contract] | None = None,
+    options: Options = O2,
 ) -> tuple[bytes, str, str | None]:
     """The object with its code segment rewritten, and what happened.
 
@@ -236,22 +241,18 @@ def _rebuilt(
                 if watch is not None:
                     watch("mir-widen", name, body)
                 return body
-            done = transform.applied(
+            from qbopt import flow
+
+            done = flow.optimized(
                 body,
                 found.dgroup,
                 found.calls,
+                target,
+                replace(options, unswitch=True),
                 blocks=blocks,
                 found=found,
                 coverage=source.coverage,
                 only=only,
-                unswitch_=True,
-                registers=target.register_capacity,
-                call_registers=target.call_register_capacity,
-                index_scales=target.address_scales,
-                address_forms=target.address_forms,
-                costs=target.operations,
-                max_unroll_iterations=target.max_unroll_iterations,
-                max_unrolled_operations=target.max_unrolled_operations,
                 watch=(lambda stage, state: watch(f"mir-{stage}", name, state)) if watch is not None else None,
             )
             if only is None:

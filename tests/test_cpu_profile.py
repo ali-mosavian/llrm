@@ -11,6 +11,7 @@ from qbopt.model import mir
 from qbopt.backend import cpu
 from qbopt.backend import lower
 from qbopt.cycles import cycles
+from qbopt.model.passes import O2
 from qbopt.optimize import unroll
 from qbopt.backend import allocate
 from qbopt.backend import schedule
@@ -44,8 +45,6 @@ def test_every_public_cpu_name_has_one_immutable_profile() -> None:
         assert target.operations.float_divide == target.cost("x87_div")
         assert target.operations.float_load == target.cost("x87_load")
         assert target.operations.float_store == target.cost("x87_store")
-        assert target.max_unroll_iterations == 16
-        assert target.max_unrolled_operations == 200
     assert cpu.profile("P5").pentium_pairing
     assert not any(cpu.profile(name).pentium_pairing for name in cpu.names() if name != "P5")
 
@@ -198,8 +197,8 @@ def test_direct_mir_default_has_a_bounded_complete_peel_budget(monkeypatch: pyte
     """
     observed = []
 
-    def recording(body, where, *, optimize, watch=None):
-        observed.append((where.max_unroll_iterations, where.max_unrolled_operations))
+    def recording(body, where, *, optimize, tried, watch=None):
+        observed.append((where.options.max_unroll_iterations, where.options.max_unrolled_operations))
         return body
 
     monkeypatch.setattr(unroll, "optimized", recording)
@@ -263,7 +262,7 @@ def test_c_frontend_threads_machine_neutral_cpu_costs_to_mir(monkeypatch: pytest
                 kwargs.get("costs"),
                 kwargs.get("index_scales"),
                 kwargs.get("address_forms"),
-                kwargs.get("max_unroll_iterations"),
+                kwargs.get("options"),
             )
         )
         return real(*args, **kwargs)
@@ -275,7 +274,7 @@ def test_c_frontend_threads_machine_neutral_cpu_costs_to_mir(monkeypatch: pytest
     assert {costs for costs, _scales, _forms, _limit in observed} == {cpu.profile("P5").operations}
     assert {scales for _costs, scales, _forms, _limit in observed} == {cpu.profile("P5").address_scales}
     assert {forms for _costs, _scales, forms, _limit in observed} == {cpu.profile("P5").address_forms}
-    assert {limit for _costs, _scales, _forms, limit in observed} == {cpu.profile("P5").max_unroll_iterations}
+    assert {options for _costs, _scales, _forms, options in observed} == {O2}
 
 
 def test_formula_selection_prices_complete_sibling_groups() -> None:
@@ -448,3 +447,40 @@ def test_secondary_address_form_is_ranked_against_reload_and_spill_work() -> Non
     }
 
     assert selected == {"386", "K5", "K6", "K7", "Core"}
+
+
+def test_every_frontend_optimizes_with_the_options_it_was_given(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """C, QB and modern each passed their own optimizer switches; sum_three took three paths."""
+    from qbopt.backend import masm
+    from qbopt.optimize import transform
+    from qbopt.model.passes import LEVELS
+    from qbopt.cfront import compile as cfront
+    from qbopt.frontend.qb import driver as qb_driver
+    from qbopt.frontend.qb import compile as qb_compile
+    from qbopt.frontend.modern import driver as modern_driver
+    from qbopt.frontend.modern import compile as modern_compile
+
+    seen: dict[str, set[str]] = {}
+    real = transform.applied
+    frontend = ""
+
+    def recording(*args, **kwargs):
+        seen.setdefault(frontend, set()).add(kwargs.get("options", transform.O2).level)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(transform, "applied", recording)
+    size = LEVELS["Os"]
+    root = Path(__file__).resolve().parents[1]
+    frontend = "c"
+    cfront.compiled((root / "fixtures" / "c" / "halve.cgs").read_text(), "halve", optimise=True, options=size)
+    frontend = "qb"
+    basic = tmp_path / "LOOP.BAS"
+    basic.write_text("DEFINT A-Z\nFOR i = 1 TO 5\n  t = t + i\nNEXT i\nPRINT t\n")
+    qb_compile.object_bytes(qb_driver.parsed(basic), basic.name, options=size)
+    frontend = "modern"
+    modern = modern_driver.parsed(root / "frontends/modern/fixtures/sum_three.mod")
+    masm.text(modern_compile.assembled(modern, entry="main", options=size))
+
+    assert seen == {"c": {"Os"}, "qb": {"Os"}, "modern": {"Os"}}

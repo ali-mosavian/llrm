@@ -8,5 +8,6 @@
   "qbsp": 120,
   "qlight": 200100255,
   "qmove": 100405,
-  "scalar": 1789
+  "scalar": 1789,
+  "sum_three": 1110
 }

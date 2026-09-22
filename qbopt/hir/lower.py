@@ -602,7 +602,15 @@ def _function(
                     )
                 )
             case model.DescriptorPlace(base, field, type_id):
-                offset = -4 if field is model.DescriptorField.LENGTH else -2
+                pointer_type = value_types[base]
+                pointee = types[pointer_type.element] if pointer_type.element is not None else None
+                scoped_view = (
+                    pointee is not None and pointee.kind is model.TypeKind.OPAQUE and pointee.name.startswith("$slice[")
+                )
+                if scoped_view:
+                    offset = 0 if field is model.DescriptorField.LENGTH else 2
+                else:
+                    offset = -4 if field is model.DescriptorField.LENGTH else -2
                 return operand(model.IndirectPlace(base, offset, type_id), before)
 
     def operation(instruction: model.Instruction) -> tuple[mir.Op, ...]:
@@ -945,8 +953,11 @@ def _function(
         ):
             descriptor = instruction.operands[0]
             pointer = value_types[descriptor.base]
-            assert pointer.element is not None and pointer.rank == 1
+            assert pointer.element is not None
             element = types[pointer.element]
+            if element.kind is model.TypeKind.OPAQUE and element.name.startswith("$slice["):
+                assert element.element is not None
+                element = types[element.element]
             # Translate the target ABI rule here, at the HIR boundary.  A
             # descriptor-backed slice fits in one pointer-offset domain, so
             # its element count cannot exceed that domain divided by the

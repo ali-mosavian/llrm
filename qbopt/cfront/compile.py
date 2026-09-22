@@ -27,10 +27,12 @@ from qbopt.backend import lower
 from qbopt.cfront import stream
 from qbopt.cfront import libfunc
 from qbopt.backend import phielim
+from qbopt.model.passes import O2
 from qbopt.backend import omfwrite
 from qbopt.backend import prologue
 from qbopt.cfront import raise_hir
 from qbopt.backend import lower_int64
+from qbopt.model.passes import Options
 from qbopt.backend import cpu as targets
 from qbopt.objectfile.module import Addr
 from qbopt.backend import frame as frames
@@ -338,6 +340,7 @@ def assembled(
     optimise: bool = False,
     dump: Path | None = None,
     cpu: str | targets.Profile = "386",
+    options: Options = O2,
     watch: Watch | None = None,
 ) -> masm.Module:
     target = targets.profile(cpu)
@@ -385,7 +388,6 @@ def assembled(
 
     def run_optimiser(raised: raise_hir.Raised, body: mir.MirBody, prefix: str = "") -> mir.MirBody:
         from qbopt.optimize import rotate
-        from qbopt.optimize import transform
 
         def observe(stage: str, after: mir.MirBody, name: str = raised.name) -> None:
             stage = f"{prefix}{stage}"
@@ -393,21 +395,12 @@ def assembled(
             if watch is not None:
                 watch(f"mir-{stage}", name, after)
 
-        body = transform.applied(
+        body = flow.optimized(
             body,
             frozenset(),
             raised.calls,
-            found=None,
-            # Borland's medium-model C ABI preserves SI and DI from the
-            # six value registers. A recurrence live through a call has
-            # two places available, not the full register file.
-            registers=target.register_capacity,
-            call_registers=target.call_register_capacity,
-            index_scales=target.address_scales,
-            address_forms=target.address_forms,
-            costs=target.operations,
-            max_unroll_iterations=target.max_unroll_iterations,
-            max_unrolled_operations=target.max_unrolled_operations,
+            target,
+            options=options,
             watch=observe if dump is not None or watch is not None else None,
         )
         body = rotate.entered(body)
@@ -661,10 +654,11 @@ def compiled(
     optimise: bool = False,
     dump: Path | None = None,
     cpu: str | targets.Profile = "386",
+    options: Options = O2,
     watch: Watch | None = None,
 ) -> str:
     """The module as jwasm source."""
-    return masm.text(assembled(text, module, optimise=optimise, dump=dump, cpu=cpu, watch=watch))
+    return masm.text(assembled(text, module, optimise=optimise, dump=dump, cpu=cpu, options=options, watch=watch))
 
 
 def _externs(unit: hir.Unit) -> tuple[tuple[str, str], ...]:
@@ -768,10 +762,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dump", type=Path)
     parser.add_argument("--opt", action="store_true")
     parser.add_argument("--cpu", choices=targets.names(), default="386", help="code-generation tuning target")
+    flow.level_option(parser)
     args = parser.parse_args(argv)
     text = args.source.read_text() if args.source.suffix == ".cgs" else recorded(args.source, args.include)
     output = args.output or args.source.with_suffix(".asm")
-    built = assembled(text, args.source.stem, optimise=args.opt, dump=args.dump, cpu=args.cpu)
+    built = assembled(text, args.source.stem, optimise=args.opt, dump=args.dump, cpu=args.cpu, options=args.options)
     if output.suffix.lower() == ".obj":
         output.write_bytes(omfwrite.written(built, args.source.name))
     else:

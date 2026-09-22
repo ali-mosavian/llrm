@@ -551,6 +551,7 @@ def lowered(
     from qbopt.model import lir
     from qbopt.backend import rmw
     from qbopt.analysis import ssa
+    from qbopt.backend import narrow
     from qbopt.backend import farload
     from qbopt.backend import comparefold
     from qbopt.backend import addressforms
@@ -567,7 +568,7 @@ def lowered(
         body = lower_switches.expanded(body)
     except ValueError as error:
         raise Unlowered(str(error)) from error
-    body = named(body)
+    body = narrow.narrowed(named(body))
     lower_floats.checked(body)
     body = ssa.pruned_phis(body, {phi.result for block in body.blocks for phi in block.phis if not phi.result.flags})
     values = set(ssa.values(body))
@@ -597,7 +598,8 @@ def lowered(
     # observable (ADDRM printed 264 for 210).  They remain visible through
     # ``mir.exposed`` wherever instruction selection must not discard them.
     read = {one.id for block in body.blocks for op in block.ops for one in op.uses}
-    read |= {value.id for block in body.blocks for phi in block.phis for value in phi.incoming.values()}
+    read_by_phis = {value.id for block in body.blocks for phi in block.phis for value in phi.incoming.values()}
+    read |= read_by_phis
     calls = calls or {}
     making = Lowering(
         body,
@@ -636,7 +638,8 @@ def lowered(
     # instruction.  Select it before allocation can rematerialize its owner
     # into unrelated physical bases; the final peephole retains the analogous
     # source-byte-backed fusion.
-    made = {at: farload.selected(insns) for at, insns in made.items()}
+    selecting = farload.selectors(made, frozenset(read_by_phis))
+    made = {at: farload.selected(insns, selecting) for at, insns in made.items()}
     try:
         made = addressforms.promote(made, making._address_promoted, making.fresh)
     except ValueError as error:
@@ -1299,8 +1302,12 @@ def _fill(op: mir.Op, lowering: "Lowering", *, preserve_flags: bool = False) -> 
         bulk, tail = divmod(count.n, factor)
         if bulk:
             plan.append((repeated(value, 4), mir.Const(bulk, 2), 4))
-        if tail:
-            plan.append((value, mir.Const(tail, 2), value.width))
+        remaining = tail * value.width
+        for width in (2, 1):
+            if remaining >= width and width >= value.width:
+                plan.append((repeated(value, width), mir.Const(1, 2), width))
+                remaining -= width
+        assert remaining == 0
     elif factor > 1:
         counted = held(count, 2)
         bulk = ir.Held(lowering.fresh(), 2)
@@ -1328,6 +1335,14 @@ def _fill(op: mir.Op, lowering: "Lowering", *, preserve_flags: bool = False) -> 
     if not plan:
         return (ir.Semantics(ir.Operation.NOTHING, ""),)
 
+    # STOSW and STOSB read aliases of the accumulator used by STOSD.  Give
+    # every constant-width part the same widest pattern so allocation keeps
+    # one value in EAX and the residual stores reuse AX and AL.
+    if isinstance(value, mir.Const):
+        widest = max(width for _, _, width in plan)
+        pattern = repeated(value, widest)
+        plan = [(pattern, counted_arg, width) for _, counted_arg, width in plan]
+
     through = held(address, 2)
     if selector:
         segment = held(selector[0], 2)
@@ -1347,18 +1362,38 @@ def _fill(op: mir.Op, lowering: "Lowering", *, preserve_flags: bool = False) -> 
 
     parts = [*setup, *before]
     current = through
+    constant_values: dict[mir.Const, ir.Loc] = {}
     for stored_arg, counted_arg, width in plan:
-        stored = held(stored_arg, width, parts)
-        counted = held(counted_arg, 2, parts)
-        stepped, emptied = ir.Held(lowering.fresh(), 2), ir.Held(lowering.fresh(), 2)
-        parts.append(
-            ir.Semantics(
-                ir.Operation.FILL,
-                names[width],
-                (ir.Mem(None, 0), stepped, emptied),
-                (stored, counted, current, segment),
+        if isinstance(stored_arg, mir.Const):
+            stored = constant_values.get(stored_arg)
+            if stored is None:
+                stored = held(stored_arg, stored_arg.width, parts)
+                constant_values[stored_arg] = stored
+        else:
+            stored = held(stored_arg, width, parts)
+        stepped = ir.Held(lowering.fresh(), 2)
+        if isinstance(counted_arg, mir.Const) and counted_arg.n == 1:
+            # One string store needs neither a count register nor REP.  Its
+            # shorter semantic shape records exactly that machine effect.
+            parts.append(
+                ir.Semantics(
+                    ir.Operation.FILL,
+                    names[width],
+                    (ir.Mem(None, 0), stepped),
+                    (stored, current, segment),
+                )
             )
-        )
+        else:
+            counted = held(counted_arg, 2, parts)
+            emptied = ir.Held(lowering.fresh(), 2)
+            parts.append(
+                ir.Semantics(
+                    ir.Operation.FILL,
+                    names[width],
+                    (ir.Mem(None, 0), stepped, emptied),
+                    (stored, counted, current, segment),
+                )
+            )
         current = stepped
     return (*parts, *after)
 

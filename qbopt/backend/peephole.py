@@ -1939,6 +1939,7 @@ def secondary_bases(body: lir.LirBody, *, cpu: str | targets.Profile = "386") ->
     and compares both the selected CPU cost and exact encoded byte totals.
     """
     from qbopt.backend import select
+    from qbopt.objectfile.module import Space
 
     profile = targets.profile(cpu)
     secondary = next((form for form in profile.address_forms if form.secondary and form.index_width == 4), None)
@@ -1993,6 +1994,11 @@ def secondary_bases(body: lir.LirBody, *, cpu: str | targets.Profile = "386") ->
                         and operand.base == held
                         and operand.index is None
                         and not selector_alias
+                        # A frame cell has two independent address
+                        # components: fixed BP and the allocated dynamic
+                        # index.  This rewrite widens one value only, so it
+                        # cannot legally turn the pair into a 32-bit address.
+                        and not (operand.addr is not None and operand.addr.space is Space.FRAME)
                         and target.width_of(operand.through) == 2
                     ):
                         return None
@@ -2304,7 +2310,12 @@ def _flags_before(one: lir.Insn, flags_dead: bool) -> bool:
             | ir.Semantics(ir.Operation.FILL)
         ):
             return flags_dead
-    return False
+    # Anything else by what it encodes: a far load writes no flag, and
+    # missing from the list above it kept `mov ax,0` from becoming `xor`.
+    effects = _register_effects(one, flags=True)
+    if effects is None or effects[0] & _ARITHMETIC_LANES:
+        return False
+    return flags_dead or _ARITHMETIC_LANES <= effects[1]
 
 
 _ZERO_BRANCHES = {"je": RflagsBits.ZF, "jne": RflagsBits.ZF, "js": RflagsBits.SF, "jns": RflagsBits.SF}
@@ -2621,7 +2632,7 @@ def waits(body: lir.LirBody) -> lir.LirBody:
 
 
 def constants(body: lir.LirBody) -> lir.LirBody:
-    """Reuse identical scalar register contents within a straight-line move sequence."""
+    """Reuse identical scalar register contents until an instruction overwrites them."""
     blocks = []
     for block in body.blocks:
         held = {}
@@ -2647,7 +2658,12 @@ def constants(body: lir.LirBody) -> lir.LirBody:
                 and all(isinstance(arg, ir.Reg) for arg in (*what.dests, *what.sources))
             )
             if not move and not extend:
-                held.clear()
+                effects = _register_effects(one, may_write=True)
+                if effects is None:
+                    held.clear()
+                else:
+                    _reads, writes = effects
+                    held = {dest: value for dest, value in held.items() if _lanes(dest.register).isdisjoint(writes)}
                 continue
             candidate = None
             if move and len(what.dests) == len(what.sources) == 1:

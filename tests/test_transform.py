@@ -20,6 +20,7 @@ from qbopt.backend import lower
 from qbopt.objectfile import omf
 from qbopt.objectfile import module
 from qbopt.optimize import transform
+from qbopt.model.passes import Options
 
 
 def test_half_liveness_reuses_each_immutable_body_across_a_transaction(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -159,8 +160,7 @@ def test_structural_candidate_pass_stages_are_named_tentative(monkeypatch) -> No
         body,
         frozenset(),
         {},
-        peel_=False,
-        unswitch_=False,
+        options=Options(peel=False, unswitch=False),
         watch=lambda stage, _state: stages.append(stage),
     )
 

@@ -1993,20 +1993,33 @@ def test_vbdos_nibbles_screen_calls_have_fixed_stack_contracts() -> None:
         assert contract.inputs == frozenset()
 
 
-def test_qb_frontend_does_not_build_speculative_peel_candidates(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Nibbles INITCOLORS spent minutes optimizing rejected 50x80 peel candidates."""
-    program = qb_driver.parsed(ROOT / "frontends/qb/fixtures/timer-basic.bas")
+def test_an_oversized_exact_loop_is_never_cloned_as_a_peel_candidate(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Nibbles INITCOLORS spent minutes optimizing rejected 50x80 peel candidates.
+
+    Its size is known before cloning, as GCC estimates it; the peeler must not
+    build a candidate the target budget already refuses.
+    """
+    from qbopt.optimize import loopclone
+
+    source = tmp_path / "ARENA.BAS"
+    source.write_text(
+        "DEFINT A-Z\nDIM arena(1 TO 50, 1 TO 80)\n"
+        "FOR row = 1 TO 50\n  FOR col = 1 TO 80\n    arena(row, col) = row + col\n  NEXT col\nNEXT row\n"
+        "PRINT arena(3, 4)\n"
+    )
+    program = qb_driver.parsed(source)
     function = program.modules[0].functions[0]
     body = hir.lower(program)[0]
-    seen: dict[str, object] = {}
+    peeled = loopclone.peeled
 
-    def applied(candidate: mir.MirBody, *args: object, **kwargs: object) -> mir.MirBody:
-        seen.update(kwargs)
-        return candidate
+    def refusing(candidate: mir.MirBody, loop: object, count: int) -> "mir.MirBody | None":
+        assert count <= 16, f"cloned a {count}-trip peel candidate"
+        return peeled(candidate, loop, count)
 
-    monkeypatch.setattr(qb_compile.transform, "applied", applied)
+    monkeypatch.setattr(loopclone, "peeled", refusing)
     qb_compile.optimized(program, function, body)
-    assert seen.get("peel_", True) is False
 
 
 def test_double_runtime_argument_is_split_high_to_low_at_the_qb_abi_boundary() -> None:

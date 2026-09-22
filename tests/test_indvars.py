@@ -6,8 +6,10 @@ import pytest
 
 import corpus
 from qbopt import wholeseg
+from qbopt.model import ir
+from qbopt.model import mir
 from qbopt.analysis import loops
-from qbopt.model import ir, mir
+from qbopt.model.passes import Options
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O"])
@@ -66,7 +68,8 @@ def test_harr_reuses_an_existing_recurrence_for_termination(
 
 def test_harr_initializes_the_reused_counter_before_its_exit_bound():
     """HARR printed 12327 instead of 1100 when the bound read SI before SI was initialized."""
-    from iced_x86 import Mnemonic, OpKind
+    from iced_x86 import OpKind
+    from iced_x86 import Mnemonic
 
     result = wholeseg.emitted(Path("fixtures/omf/harr-v-g3.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
@@ -121,7 +124,7 @@ def test_indvar_simplify_reads_through_an_lcssa_exit(monkeypatch) -> None:
             found.calls,
             blocks=partition,
             found=found,
-            lcssa_=False,
+            options=Options(lcssa=False),
         )
     closed = lcssa.closed(body)
 
@@ -473,8 +476,10 @@ def test_cross_width_recurrence_replaces_counter_only_for_its_full_period(
     if reused:
         assert condition.args[0] == mir.Held(coordinate, coordinate_width)
         assert isinstance(condition.args[1], mir.Held) and condition.args[1].width == coordinate_width
-        from qbopt.analysis import consts, induction, loops
+        from qbopt.analysis import loops
+        from qbopt.analysis import consts
         from qbopt.optimize import rotate
+        from qbopt.analysis import induction
 
         loop = loops.loops(changed.blocks, changed.entry)[0]
         assert induction.trip_count(changed, loop, consts.known(changed)) == 4
@@ -495,8 +500,8 @@ def test_c_mandel_reuses_coordinate_recurrences_for_both_outer_loops() -> None:
     themselves remain redundant, so only the required iteration increment is
     present too.
     """
-    from qbopt.cfront import compile as cfront
     from tools import quality
+    from qbopt.cfront import compile as cfront
 
     source = Path("bench/c/mandel.c")
     module = cfront.assembled(cfront.recorded(source, []), source.stem, optimise=True)
@@ -517,9 +522,7 @@ def test_c_mandel_reuses_coordinate_recurrences_for_both_outer_loops() -> None:
         if mnemonic == "inc" or mnemonic == "add" and immediate(operands) == 1
     ]
     coordinate_steps = [
-        (mnemonic, operands)
-        for _raw, mnemonic, operands in rows
-        if mnemonic == "add" and immediate(operands) == 24
+        (mnemonic, operands) for _raw, mnemonic, operands in rows if mnemonic == "add" and immediate(operands) == 24
     ]
     frame_shifts = [
         (mnemonic, operands)
@@ -564,8 +567,8 @@ def test_c_mandel_reuses_coordinate_recurrences_for_both_outer_loops() -> None:
 
 def _trip_counts(data: bytes) -> list[int]:
     """How often each emitted counted loop runs: its counter's start, step and exit test, simulated."""
-    from iced_x86 import Mnemonic
     from iced_x86 import OpKind
+    from iced_x86 import Mnemonic
 
     insns = [one.insn for block in corpus.partitioned(data) for one in block.insns]
     immediates = (OpKind.IMMEDIATE8, OpKind.IMMEDIATE8TO16, OpKind.IMMEDIATE16)

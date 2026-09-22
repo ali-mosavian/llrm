@@ -507,6 +507,10 @@ def test_basic_frontend_returns_the_independent_parity_answer(tmp_path: Path) ->
         ("qmove", "quake_move_demo"),
         ("qbsp", "quake_bsp_demo"),
         ("qlight", "quake_light_demo"),
+        # Three far bases and one shared index: a rejected allocation trial
+        # left the index's frame slot behind and a static use count read the
+        # loop-invariant base as dying, so the object returned 330.
+        ("sum_three", "sum_three_demo"),
     ],
 )
 @pytest.mark.e2e

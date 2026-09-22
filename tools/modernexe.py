@@ -14,7 +14,10 @@ from configs import CONFIGS
 from dosbox import dos_file
 from dosbox import read_dos
 
+from qbopt import flow
+from qbopt.model.passes import O2
 from qbopt.backend import omfwrite
+from qbopt.model.passes import Options
 from qbopt.frontend.modern import driver
 from qbopt.cfront import compile as cfront
 from qbopt.frontend.modern import compile as modern
@@ -60,6 +63,7 @@ def build(
     *,
     entry: str = "main",
     run: bool = False,
+    options: Options = O2,
 ) -> Built:
     """Compile, link and optionally run ``source`` through the minimal runtime."""
     source = source.resolve()
@@ -73,11 +77,11 @@ def build(
     with tempfile.TemporaryDirectory(prefix="qbopt-modern-") as scratch_name:
         scratch = Path(scratch_name)
         program = driver.parsed(source)
-        (scratch / "PROGRAM.OBJ").write_bytes(modern.written(program, entry=entry, source=source))
+        (scratch / "PROGRAM.OBJ").write_bytes(modern.written(program, entry=entry, source=source, options=options))
 
         runtime_source = RUNTIME / "rt.c"
         runtime_stream = cfront.recorded(runtime_source, [])
-        runtime_module = cfront.assembled(runtime_stream, "rt", optimise=True)
+        runtime_module = cfront.assembled(runtime_stream, "rt", optimise=True, options=options)
         (scratch / "RT.OBJ").write_bytes(omfwrite.written(runtime_module, runtime_source.name))
 
         assembler = _jwasm()
@@ -111,10 +115,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-o", "--output", type=Path)
     parser.add_argument("--entry", default="main")
     parser.add_argument("--run", action="store_true", help="run under DOSBox-X and print stdout")
+    flow.level_option(parser)
     options = parser.parse_args(argv)
     output = options.output or options.source.with_suffix(".exe")
     try:
-        made = build(options.source, output, entry=options.entry, run=options.run)
+        made = build(options.source, output, entry=options.entry, run=options.run, options=options.options)
     except (BuildError, driver.FrontendError, cfront.hir.Unsupported) as error:
         parser.error(str(error))
     print(f"{made.executable} ({made.size} bytes)")

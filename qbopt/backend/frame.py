@@ -65,6 +65,14 @@ class Frame:
             self.capacities[self.slots[value]] = capacity
         return self.slots[value]
 
+    def saved(self) -> tuple[dict[SlotKey, int], dict[int, int]]:
+        return dict(self.slots), dict(self.capacities)
+
+    def restore(self, saved: tuple[dict[SlotKey, int], dict[int, int]]) -> None:
+        """Forget a discarded trial's slots. Kept, a later spill of the same
+        value reuses its stale slot without an overlap check."""
+        self.slots, self.capacities = dict(saved[0]), dict(saved[1])
+
     def cell(self, value: SlotKey, width: int) -> ir.Mem:
         """The memory operand that reads or writes this value's slot."""
         return ir.Mem(ir.Addr(Space.FRAME, self.slot(value, width)), width, Register.BP, 0, 2)
