@@ -24,7 +24,7 @@ use crate::model::lir::{self, Insn};
 use crate::model::ir::nodes::Node;
 use crate::model::ir::{self, Loc, Operation};
 use crate::model::mir::{self, AllocationHints, Arg, Held, Kind, MemRef, MirBody, Op, OpCode, Value};
-use crate::objectfile::module::{Addr, Space};
+use crate::objectfile::module::{Addr, Object, Space};
 use crate::support::pyrepr::Repr;
 
 /// An operand nothing here can turn into a machine location.
@@ -1721,10 +1721,10 @@ pub struct Lowering<'a> {
     _origin: IndexMap<Value, Register>,
     _calls: &'a IndexMap<i64, String>,
     _contracts: Option<&'a IndexMap<i64, runtime::Contract>>,
-    /// Python's `set[int] | dict[int, tuple]`: only the id form is ported.
-    /// The dict carries BC's folded-site records, whose answers `_delivered`
-    /// places; with ids alone `_sites` is empty, exactly as Python makes it.
+    /// Python's `set[int] | dict[int, tuple]`: the ids, and in `_sites` the
+    /// dict's folded-site records where the caller had them.
     _absorbed: BTreeSet<u32>,
+    _sites: IndexMap<u32, Object>,
     _address_forms: IndexMap<u32, (ir::Held, num_bigint::BigInt)>,
     _indexed: IndexMap<u32, addressforms::FoldedForm>,
     _folded: BTreeSet<u32>,
@@ -1740,6 +1740,8 @@ pub struct Options<'a> {
     pub occurrences: Option<&'a IndexMap<u32, Vec<(i64, i64)>>>,
     pub origin: IndexMap<Value, Register>,
     pub pointer_model: Option<super::pointers::Model>,
+    /// `mir._folded`'s `(CallSite, Flag)` per absorbed op id.
+    pub sites: IndexMap<u32, Object>,
 }
 
 impl<'a> Lowering<'a> {
@@ -1798,6 +1800,7 @@ impl<'a> Lowering<'a> {
             _calls: calls,
             _contracts: contracts,
             _absorbed: absorbed,
+            _sites: options.sites,
             _address_forms: address_forms,
             _indexed: indexed,
             _folded: folded,
@@ -1894,9 +1897,34 @@ impl<'a> Lowering<'a> {
             return self._implicit_values(op, false);
         }
         if op.kind == Kind::Divmod {
-            // A folded site's answers arrive where its record says; with ids
-            // alone there is no record, and Python returns () here too.
-            return Ok(vec![]);
+            // A folded site leaves its answers in registers its operands name
+            // nowhere: the one the routine returned in and the one calls.py
+            // keeps the other in.
+            let Some(folded) = op.id.and_then(|id| self._sites.get(&id)) else {
+                return Ok(vec![]);
+            };
+            if op.results.len() != 2 {
+                return Ok(vec![]);
+            }
+            let (site, _) = folded.downcast_ref::<(calls::CallSite, crate::analysis::flags::Flag)>().expect("a folded site");
+            let Some(other) = calls::other_result(site) else {
+                return Ok(vec![]);
+            };
+            // By role, the way the raise ordered them.
+            let (visible, kept) = (calls::RESULT, other);
+            let order = if site.name.to_uppercase() == calls::REMAINDER { [kept, visible] } else { [visible, kept] };
+            return Ok(op
+                .results
+                .iter()
+                .zip(order)
+                .filter_map(|(one, r#where)| match one {
+                    Arg::Held(one) if self._read.contains(&one.value.id) => Some((
+                        ir::Held { value: one.value.id, width: one.width },
+                        target::named(r#where, i64::from(one.width)),
+                    )),
+                    _ => None,
+                })
+                .collect());
         }
         let Some(Node::Restore(node)) = node else {
             return Ok(vec![]);
@@ -1976,7 +2004,18 @@ impl<'a> Lowering<'a> {
         if op.kind == Kind::Opaque && !matches!(node, Some(Node::Restore(_))) {
             return self._implicit_values(op, true);
         }
-        // `op.id in self._sites`: never, with ids alone.
+        if op.id.is_some_and(|id| self._sites.contains_key(&id)) {
+            // These selected sequences still encode their original addressing
+            // registers, so allocation supplies the current address value there.
+            return Ok(op
+                .loads
+                .iter()
+                .filter_map(|one| {
+                    let (base, addr) = (one.base?, one.addr.as_ref()?);
+                    Some((ir::Held { value: base.id, width: 2 }, target::named(addr.base, 2)))
+                })
+                .collect());
+        }
         if let Some(Node::Restore(node)) = node {
             // The idiom reads the widened value in the pair's own register.
             let (source, _into) = crate::model::mir::restore_pair(node.pair as i64).unwrap();
@@ -2363,6 +2402,8 @@ pub struct Lowered<'a> {
     /// Calls proven not to return beyond their contracts, such as calls to a
     /// local body that cannot return.
     pub terminal: BTreeSet<i64>,
+    /// `mir._folded`'s `(CallSite, Flag)` per absorbed op id.
+    pub sites: IndexMap<u32, Object>,
 }
 
 fn recount(made: &IndexMap<i64, Vec<Arc<Insn>>>, body: &MirBody) -> IndexMap<u32, i64> {
@@ -2439,6 +2480,7 @@ pub fn lowered(
             occurrences: options.occurrences,
             origin: origin.clone(),
             pointer_model: options.pointer_model,
+            sites: options.sites,
         },
     )?;
     let mut readers: crate::support::hash::HashMap<Value, usize> = crate::support::hash::HashMap::default();
