@@ -221,13 +221,13 @@ pub fn narrowed(body: &LirBody, pinned: &IndexMap<u32, Register>) -> (LirBody, I
             made.clobbers.extend(gone.values().copied());
             insns.push(Arc::new(made));
         }
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
     if dropped.is_empty() {
         return (body.clone(), pinned.clone());
     }
     (
-        LirBody { blocks, ..body.clone() },
+        body.with_blocks(blocks),
         pinned
             .iter()
             .filter(|(value, _where)| !dropped.contains_key(*value))
@@ -583,9 +583,9 @@ pub fn explicit_selectors(body: &LirBody, pinned: Option<&IndexMap<u32, Register
             made.uses = uses.into_iter().collect();
             insns.push(Arc::new(made));
         }
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    LirBody { blocks, ..body.clone() }
+    body.with_blocks(blocks)
 }
 
 fn _copy_hints(body: &LirBody) -> IndexMap<u32, Vec<u32>> {
@@ -1637,7 +1637,7 @@ pub fn applied(body: &LirBody, got: &Assignment) -> Result<LirBody, Error> {
     if let Some(error) = failed.into_inner() {
         return Err(error.into());
     }
-    Ok(LirBody { blocks, origin: body.origin.clone(), pins: body.pins.clone(), ordered: body.ordered, ..body.clone() })
+    Ok(LirBody { origin: body.origin.clone(), pins: body.pins.clone(), ordered: body.ordered, ..body.with_blocks(blocks) })
 }
 
 /// Delete unused allocator copies before physical identity loses their use graph.
@@ -1690,17 +1690,11 @@ fn _dead_insertions(body: &LirBody) -> LirBody {
         if dead.is_empty() {
             return body;
         }
-        body = LirBody {
-            blocks: body
+        body = body.with_blocks(body
                 .blocks
                 .iter()
-                .map(|block| LirBlock {
-                    insns: block.insns.iter().filter(|one| !dead.contains(&ranges::key(one))).cloned().collect(),
-                    ..block.clone()
-                })
-                .collect(),
-            ..body.clone()
-        };
+                .map(|block| block.with_insns(block.insns.iter().filter(|one| !dead.contains(&ranges::key(one))).cloned().collect()))
+                .collect());
     }
 }
 

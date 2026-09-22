@@ -252,16 +252,9 @@ pub(crate) fn _counted_down(body: &MirBody) -> Result<MirBody, SubstitutionError
                     })
                     .collect()
             };
-            rewritten.push(MirBlock {
-                ops,
-                phis,
-                ..block.clone()
-            });
+            rewritten.push(MirBlock { phis, ..block.with_ops(ops) });
         }
-        let changed = MirBody {
-            blocks: rewritten,
-            ..body.clone()
-        };
+        let changed = body.with_blocks(rewritten);
         let changed_header = changed.block(header.at).expect("header is a block");
         let changed_latch = changed.block(latch.at).expect("latch is a block");
         return _counted_down(&at_body(
@@ -524,15 +517,9 @@ pub(crate) fn _step_test(body: &MirBody, loop_: &Loop, header: &MirBlock) -> Mir
                 };
                 ops.push(op);
             }
-            rewritten.push(MirBlock {
-                ops,
-                ..block.clone()
-            });
+            rewritten.push(block.with_ops(ops));
         }
-        return MirBody {
-            blocks: rewritten,
-            ..body.clone()
-        };
+        return body.with_blocks(rewritten);
     }
     body.clone()
 }

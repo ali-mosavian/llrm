@@ -132,17 +132,11 @@ pub(crate) fn simplified(
         _simplified(&op, &seen, wide).into_owned()
     };
 
-    let changed = MirBody {
-        blocks: body
+    let changed = body.with_blocks(body
             .blocks
             .iter()
-            .map(|block| MirBlock {
-                ops: block.ops.iter().map(simplify).collect(),
-                ..block.clone()
-            })
-            .collect(),
-        ..body.clone()
-    };
+            .map(|block| block.with_ops(block.ops.iter().map(simplify).collect()))
+            .collect());
     let changed = _shared_shifts(&changed, &seen);
     let before = body
         .blocks
@@ -161,12 +155,10 @@ pub(crate) fn simplified(
     if removed.is_empty() {
         return Ok(changed);
     }
-    Ok(MirBody {
-        blocks: changed
+    Ok(changed.with_blocks(changed
             .blocks
             .iter()
-            .map(|block| MirBlock {
-                ops: block
+            .map(|block| block.with_ops(block
                     .ops
                     .iter()
                     .map(|op| Op {
@@ -186,12 +178,8 @@ pub(crate) fn simplified(
                             .collect(),
                         ..op.clone()
                     })
-                    .collect(),
-                ..block.clone()
-            })
-            .collect(),
-        ..changed.clone()
-    })
+                    .collect()))
+            .collect()))
 }
 
 const _ZERO_FLAGS: [Kind; 11] = [
@@ -307,15 +295,9 @@ pub(crate) fn _forwarded_zero_tests(body: &MirBody) -> Result<MirBody, String> {
             .iter()
             .map(|op| ssa::substituted(op, &swaps).map_err(|error| error.to_string()))
             .collect::<Result<Vec<_>, _>>()?;
-        blocks.push(MirBlock {
-            ops,
-            ..block.clone()
-        });
+        blocks.push(block.with_ops(ops));
     }
-    Ok(MirBody {
-        blocks,
-        ..body.clone()
-    })
+    Ok(body.with_blocks(blocks))
 }
 
 /// Put a loop-carried operand at the root of an integer ADD tree.
@@ -473,21 +455,15 @@ pub(crate) fn _reassociated_recurrences(body: &MirBody) -> MirBody {
     if replacements.is_empty() {
         return body.clone();
     }
-    MirBody {
-        blocks: body
+    body.with_blocks(body
             .blocks
             .iter()
-            .map(|block| MirBlock {
-                ops: block
+            .map(|block| block.with_ops(block
                     .ops
                     .iter()
                     .map(|op| replacements.get(&id(op)).unwrap_or(op).clone())
-                    .collect(),
-                ..block.clone()
-            })
-            .collect(),
-        ..body.clone()
-    }
+                    .collect()))
+            .collect())
 }
 
 /// Negating a single-use modular difference reverses its operands.
@@ -625,15 +601,9 @@ pub(crate) fn _shared_shifts(body: &MirBody, wanted: &BTreeSet<Value>) -> MirBod
             }
             ops.push(op);
         }
-        blocks.push(MirBlock {
-            ops,
-            ..block.clone()
-        });
+        blocks.push(block.with_ops(ops));
     }
-    MirBody {
-        blocks,
-        ..body.clone()
-    }
+    body.with_blocks(blocks)
 }
 
 pub(crate) fn _scale(op: &Op, wanted: &BTreeSet<Value>, tied: bool) -> Option<(Held, BigInt)> {
@@ -1316,17 +1286,11 @@ pub(crate) fn _halved(body: &MirBody) -> MirBody {
         }
     };
 
-    MirBody {
-        blocks: body
+    body.with_blocks(body
             .blocks
             .iter()
-            .map(|block| MirBlock {
-                ops: block.ops.iter().flat_map(&mut rewritten).collect(),
-                ..block.clone()
-            })
-            .collect(),
-        ..body.clone()
-    }
+            .map(|block| block.with_ops(block.ops.iter().flat_map(&mut rewritten).collect()))
+            .collect())
 }
 
 pub(crate) fn _shift_chain<'a>(
@@ -1557,15 +1521,9 @@ pub(crate) fn _divisions(body: &MirBody) -> MirBody {
             );
             ops.extend(sequence);
         }
-        blocks.push(MirBlock {
-            ops,
-            ..block.clone()
-        });
+        blocks.push(block.with_ops(ops));
     }
-    MirBody {
-        blocks,
-        ..body.clone()
-    }
+    body.with_blocks(blocks)
 }
 
 pub(crate) fn _product<'a>(op: &'a Op, wanted: &BTreeSet<Value>, wide: &BTreeSet<Value>) -> Cow<'a, Op> {

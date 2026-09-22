@@ -268,7 +268,7 @@ pub(crate) fn _specialized(
         }
         changed.push(block);
     }
-    let mut result = MirBody { blocks: changed, ..copied.clone() };
+    let mut result = copied.with_blocks(changed);
     for header in [loop_.header, cloned_header] {
         let label = edges::fresh(&result);
         result = edges::split(&result, entry, header, label, Vec::new())?;

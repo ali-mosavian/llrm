@@ -55,5 +55,5 @@ pub fn split(body: &MirBody, source: i64, target: i64, label: i64, ops: Vec<Op>)
         blocks.push(block);
     }
     blocks.push(bridge);
-    Ok(MirBody { blocks, ..body.clone() })
+    Ok(body.with_blocks(blocks))
 }

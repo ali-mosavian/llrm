@@ -123,17 +123,14 @@ fn _once(body: &LirBody) -> Option<LirBody> {
         blocks.push(if redundant.is_empty() {
             block.clone()
         } else {
-            LirBlock {
-                insns: block
+            block.with_insns(block
                     .insns
                     .iter()
                     .map(|one| if redundant.contains(&id(one)) { lir::anchor(Arc::clone(one)) } else { Arc::clone(one) })
-                    .collect(),
-                ..block.clone()
-            }
+                    .collect())
         });
     }
-    if changed { Some(LirBody { blocks, ..body.clone() }) } else { None }
+    if changed { Some(body.with_blocks(blocks)) } else { None }
 }
 
 /// Remove dead pure machine work to a fixed point across CFG edges.

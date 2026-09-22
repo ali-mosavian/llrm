@@ -236,9 +236,9 @@ pub fn constrained(
             insns.push(Arc::new(made));
             insns.extend(after);
         }
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    Ok((LirBody { blocks, ..body.clone() }, pins))
+    Ok((body.with_blocks(blocks), pins))
 }
 
 /// Where each value the body's instructions require has to live.
@@ -364,9 +364,9 @@ pub fn addressed(body: &LirBody, values: &BTreeSet<u32>) -> (LirBody, BTreeSet<u
             made.uses = one.uses.iter().map(|value| swap.get(value).copied().unwrap_or(*value)).collect();
             insns.push(Arc::new(made));
         }
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    (LirBody { blocks, ..body.clone() }, eligible)
+    (body.with_blocks(blocks), eligible)
 }
 
 /// Each value this instruction writes in a register it names nowhere.

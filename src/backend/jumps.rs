@@ -128,7 +128,7 @@ pub fn placed(body: &LirBody) -> Result<LirBody, String> {
         done.insert(at);
         (current, source) = (_onward(block, &done, inside.get(&block.at).unwrap_or(&empty), Some(&by_at)), Some(at));
     }
-    Ok(LirBody { blocks: order, ..body.clone() })
+    Ok(body.with_blocks(order))
 }
 
 /// The block to place next: where the final jump goes, or else where the branch before it goes.
@@ -336,14 +336,10 @@ pub fn _redirected(body: &LirBody, redirect: &IndexMap<i64, i64>) -> LirBody {
             insns.push(one);
         }
         let successors: IndexSet<i64> = block.succ.iter().map(|at| target(*at)).collect();
-        blocks.push(_fold_converged(LirBlock {
-            insns,
-            succ: successors.into_iter().collect(),
-            ..block.clone()
-        }));
+        blocks.push(_fold_converged(LirBlock { succ: successors.into_iter().collect(), ..block.with_insns(insns) }));
     }
     let entry = target(body.entry);
-    LirBody { entry, blocks, ..body.clone() }
+    LirBody { entry, ..body.with_blocks(blocks) }
 }
 
 /// A conditional whose two CFG edges became one is an unconditional edge.
@@ -541,7 +537,7 @@ pub fn _with_return(parent: &LirBlock, tail: &LirBlock) -> LirBlock {
         .insns
         .iter()
         .map(|one| Arc::new(Insn { at: anchor, covers: Some((anchor, anchor)), spread: Vec::new(), ..(**one).clone() }));
-    LirBlock { insns: kept.chain(copies).collect(), succ: tail.succ.clone(), ..parent.clone() }
+    LirBlock { succ: tail.succ.clone(), ..parent.with_insns(kept.chain(copies).collect()) }
 }
 
 pub fn _step(body: &LirBody) -> (LirBody, bool) {
@@ -723,15 +719,11 @@ pub fn _retargeted(block: &LirBlock, last: &Arc<Insn>, target: i64) -> LirBlock 
     let moved = Arc::new(Insn { what: Some(Semantics { target: Some(target), ..what.clone() }), ..(**last).clone() });
     let succ: IndexSet<i64> =
         block.succ.iter().map(|one| if Some(*one) == old { target } else { *one }).collect();
-    LirBlock {
-        insns: block
+    LirBlock { succ: succ.into_iter().collect(), ..block.with_insns(block
             .insns
             .iter()
             .map(|one| if Arc::ptr_eq(one, last) { Arc::clone(&moved) } else { Arc::clone(one) })
-            .collect(),
-        succ: succ.into_iter().collect(),
-        ..block.clone()
-    }
+            .collect()) }
 }
 
 pub fn _predecessors(blocks: &[LirBlock]) -> IndexMap<i64, BTreeSet<i64>> {
@@ -776,16 +768,13 @@ pub fn _reachable(body: &LirBody, blocks: Vec<LirBlock>) -> LirBody {
         })
         .map(|block| block.at)
         .collect();
-    LirBody {
-        blocks: blocks
+    body.with_blocks(blocks
             .iter()
             .filter(|block| reached.contains(&block.at) || ownership.contains(&block.at))
             .map(|block| {
                 if ownership.contains(&block.at) { LirBlock { succ: Vec::new(), ..block.clone() } } else { block.clone() }
             })
-            .collect(),
-        ..body.clone()
-    }
+            .collect())
 }
 
 #[cfg(test)]

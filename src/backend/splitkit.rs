@@ -329,7 +329,7 @@ fn _carved(body: &LirBody, value: u32, fresh: u32, width: u32, region: &Region) 
             let last = Arc::clone(insns.last().expect("checked above"));
             let place = if _terminates(&last) { insns.len() - 1 } else { insns.len() };
             insns.insert(place, _copy(&last, fresh, value, width));
-            blocks.push(LirBlock { insns, ..block.clone() });
+            blocks.push(block.with_insns(insns));
             changed = true;
             continue;
         }
@@ -368,7 +368,7 @@ fn _carved(body: &LirBody, value: u32, fresh: u32, width: u32, region: &Region) 
             let beside = interior.last().expect("not empty");
             deferred.extend(outside.iter().map(|place| (block.at, *place, Arc::clone(beside))));
         }
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
     if !changed && deferred.is_empty() {
         return None;
@@ -396,11 +396,7 @@ fn _carved(body: &LirBody, value: u32, fresh: u32, width: u32, region: &Region) 
             .collect();
         by_at.insert(
             source,
-            LirBlock {
-                insns: rewritten,
-                succ: original.succ.iter().map(|one| if *one == outside { bridge } else { *one }).collect(),
-                ..original.clone()
-            },
+            LirBlock { succ: original.succ.iter().map(|one| if *one == outside { bridge } else { *one }).collect(), ..original.with_insns(rewritten) },
         );
         let back = _copy(&beside, value, fresh, width);
         let mut jump = Insn::new(
@@ -415,7 +411,7 @@ fn _carved(body: &LirBody, value: u32, fresh: u32, width: u32, region: &Region) 
     }
     let mut out: Vec<LirBlock> = blocks.iter().map(|block| by_at[&block.at].clone()).collect();
     out.extend(bridges);
-    Some(LirBody { blocks: out, ..body.clone() })
+    Some(body.with_blocks(out))
 }
 
 /// Region blocks control can reach from outside it.
@@ -764,7 +760,7 @@ mod tests {
                 if one.at == 0x10 {
                     insns.insert(0, Arc::clone(&first));
                 }
-                LirBlock { insns, ..one.clone() }
+                one.with_insns(insns)
             })
             .collect();
         let body = LirBody { blocks, ..body };

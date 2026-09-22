@@ -160,10 +160,7 @@ pub fn checks(body: &MirBody) -> MirBody {
         block.ops = ops;
         blocks.push(block);
     }
-    MirBody {
-        blocks,
-        ..body.clone()
-    }
+    body.with_blocks(blocks)
 }
 
 /// Write exact storage bits and retain checks for the now-unused computation.
@@ -229,10 +226,7 @@ pub fn stored(body: &MirBody, facts: &IndexMap<Value, Finite>) -> MirBody {
         blocks.push(block);
     }
     _dead_values(
-        MirBody {
-            blocks,
-            ..body.clone()
-        },
+        body.with_blocks(blocks),
         facts,
     )
 }
@@ -335,10 +329,7 @@ pub fn discarded(body: &MirBody, converted: &IndexMap<Value, Known>) -> MirBody 
         block.ops = ops;
         blocks.push(block);
     }
-    MirBody {
-        blocks,
-        ..body.clone()
-    }
+    body.with_blocks(blocks)
 }
 
 #[cfg(test)]

@@ -173,7 +173,7 @@ pub fn expanded(body: &MirBody) -> Result<MirBody, String> {
             blocks.push(MirBlock { phis, ..block });
         }
     }
-    Ok(MirBody { blocks, cloned: true, ..body.clone() })
+    Ok(MirBody { cloned: true, ..body.with_blocks(blocks) })
 }
 
 #[cfg(test)]

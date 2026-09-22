@@ -210,7 +210,7 @@ pub fn forwarded(body: &LirBody) -> LirBody {
             .iter()
             .map(|one| if redundant.contains(&id(one)) { lir::anchor(Arc::clone(one)) } else { Arc::clone(one) })
             .collect();
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    LirBody { blocks, ..body.clone() }
+    body.with_blocks(blocks)
 }

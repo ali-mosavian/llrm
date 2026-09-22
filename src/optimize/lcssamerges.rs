@@ -209,9 +209,9 @@ pub(crate) fn _merged(
             }
             None => block.ops.clone(),
         };
-        blocks.push(MirBlock { phis: phis_here, ops, ..block.clone() });
+        blocks.push(MirBlock { phis: phis_here, ..block.with_ops(ops) });
     }
-    Ok(MirBody { blocks, ..body.clone() })
+    Ok(body.with_blocks(blocks))
 }
 
 #[cfg(test)]

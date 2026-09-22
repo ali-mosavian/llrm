@@ -57,10 +57,7 @@ pub fn converted(body: &LirBody) -> LirBody {
     converted.blocks = body
         .blocks
         .iter()
-        .map(|block| LirBlock {
-            insns: block.insns.iter().map(instruction).collect(),
-            ..block.clone()
-        })
+        .map(|block| block.with_insns(block.insns.iter().map(instruction).collect()))
         .collect();
     converted
 }

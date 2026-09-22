@@ -253,7 +253,7 @@ pub(crate) fn peeled(body: &MirBody, loop_: &Loop, count: i64) -> Result<Option<
     let (pointer_values, pointer_seeds) = ssa::cloned_pointer_metadata(body, copies.iter());
     let integer_ranges = ssa::cloned_integer_ranges(body, copies.iter());
     changed.extend(cloned);
-    Ok(Some(MirBody { blocks: changed, cloned: true, pointer_values, pointer_seeds, integer_ranges, ..body.clone() }))
+    Ok(Some(MirBody { cloned: true, pointer_values, pointer_seeds, integer_ranges, ..body.with_blocks(changed) }))
 }
 
 #[cfg(test)]

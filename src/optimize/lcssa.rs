@@ -184,11 +184,11 @@ pub(crate) fn _closed_loop(body: &MirBody, loop_: &Loop) -> Result<MirBody, Stri
         } else {
             block.ops.clone()
         };
-        Ok(MirBlock { phis: existing, ops, ..block.clone() })
+        Ok(MirBlock { phis: existing, ..block.with_ops(ops) })
     };
 
     let blocks = body.blocks.iter().map(rewritten).collect::<Result<Vec<_>, _>>()?;
-    Ok(MirBody { blocks, ..body.clone() })
+    Ok(body.with_blocks(blocks))
 }
 
 #[cfg(test)]

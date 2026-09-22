@@ -218,7 +218,7 @@ pub(crate) fn subexpressions(body: &MirBody, dgroup: &BTreeSet<i64>, avoid_store
             .map(|op| _substituted(op, &swap))
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| error.to_string())?;
-        blocks.push(MirBlock { phis, ops, ..block.clone() });
+        blocks.push(MirBlock { phis, ..block.with_ops(ops) });
     }
     Ok(MirBody { blocks, ..body })
 }
@@ -398,8 +398,7 @@ pub(crate) fn _reclaimed(body: &MirBody, gone: &BTreeSet<OpOccurrence>) -> MirBo
         .blocks
         .iter()
         .enumerate()
-        .map(|(block_index, block)| MirBlock {
-            ops: block
+        .map(|(block_index, block)| block.with_ops(block
                 .ops
                 .iter()
                 .enumerate()
@@ -410,11 +409,9 @@ pub(crate) fn _reclaimed(body: &MirBody, gone: &BTreeSet<OpOccurrence>) -> MirBo
                         op.clone()
                     }
                 })
-                .collect(),
-            ..block.clone()
-        })
+                .collect()))
         .collect();
-    MirBody { blocks, ..body.clone() }
+    body.with_blocks(blocks)
 }
 
 /// The width each value was defined at, keyed by value id.
@@ -664,12 +661,9 @@ pub(crate) fn reused_divides(
     let blocks = body
         .blocks
         .iter()
-        .map(|block| MirBlock {
-            ops: block.ops.iter().map(|op| into.get(&std::ptr::from_ref(op)).unwrap_or(op).clone()).collect(),
-            ..block.clone()
-        })
+        .map(|block| block.with_ops(block.ops.iter().map(|op| into.get(&std::ptr::from_ref(op)).unwrap_or(op).clone()).collect()))
         .collect();
-    Ok(MirBody { blocks, ..body.clone() })
+    Ok(body.with_blocks(blocks))
 }
 
 /// Each divide whose answers the divide before it already computed, as
@@ -1931,7 +1925,7 @@ pub(crate) fn _threaded(body: &MirBody) -> Result<MirBody, String> {
             }
             *ops.last_mut().expect("a last operation") = last;
         }
-        blocks.push(MirBlock { ops, succ: successors, ..block.clone() });
+        blocks.push(MirBlock { succ: successors, ..block.with_ops(ops) });
     }
 
     // If both arms reach the same block through otherwise empty jump
@@ -1956,7 +1950,7 @@ pub(crate) fn _threaded(body: &MirBody) -> Result<MirBody, String> {
         converged.push(MirBlock { ops, succ: vec![target], ..block });
         changed = true;
     }
-    Ok(if changed { _unreachable(&MirBody { blocks: converged, ..body.clone() }) } else { body.clone() })
+    Ok(if changed { _unreachable(&body.with_blocks(converged)) } else { body.clone() })
 }
 
 /// A branch on two numbers, resolved.
@@ -2007,7 +2001,7 @@ pub(crate) fn decided(
             };
             let mut ops = block.ops.clone();
             *ops.last_mut().expect("a last operation") = jump;
-            out.push(MirBlock { ops, succ: vec![target], ..block.clone() });
+            out.push(MirBlock { succ: vec![target], ..block.with_ops(ops) });
             changed = true;
             continue;
         }
@@ -2045,18 +2039,14 @@ pub(crate) fn decided(
             };
             let mut ops = block.ops.clone();
             *ops.last_mut().expect("a last operation") = jump;
-            out.push(MirBlock { ops, succ: vec![target], ..block.clone() });
+            out.push(MirBlock { succ: vec![target], ..block.with_ops(ops) });
         } else {
             let kept = _absorb(&block.ops, &BTreeSet::from([last.at]));
             if kept == block.ops {
                 out.push(block.clone());
                 continue;
             }
-            out.push(MirBlock {
-                ops: kept,
-                succ: block.succ.iter().copied().filter(|at| *at != target).collect(),
-                ..block.clone()
-            });
+            out.push(MirBlock { succ: block.succ.iter().copied().filter(|at| *at != target).collect(), ..block.with_ops(kept) });
         }
     }
     if !changed {
@@ -2086,16 +2076,11 @@ pub(crate) fn _unreachable(body: &MirBody) -> MirBody {
             if reached.contains(&block.at) {
                 block.clone()
             } else {
-                crate::model::mir::MirBlock {
-                    succ: Vec::new(),
-                    phis: Vec::new(),
-                    ops: block.ops.iter().map(_empty_operation).collect(),
-                    ..block.clone()
-                }
+                crate::model::mir::MirBlock { succ: Vec::new(), phis: Vec::new(), ..block.with_ops(block.ops.iter().map(_empty_operation).collect()) }
             }
         })
         .collect();
-    MirBody { blocks: kept, ..body.clone() }
+    body.with_blocks(kept)
 }
 
 /// Resolve single-valued joins after an edge disappears, without discarding
@@ -2136,7 +2121,7 @@ pub(crate) fn _trivial_phis(body: &MirBody) -> Result<MirBody, String> {
                 .map(|op| ssa::substituted(op, &swaps))
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|error| error.to_string())?;
-            out.push(MirBlock { phis, ops, ..block.clone() });
+            out.push(MirBlock { phis, ..block.with_ops(ops) });
         }
         body = MirBody { blocks: out, ..body };
         if !changed {
@@ -2216,7 +2201,7 @@ pub(crate) fn dead(body: &MirBody) -> Result<MirBody, String> {
             .map(|(index, op)| if gone.contains(&index) { _empty_operation(op) } else { op.clone() })
             .collect();
         changed = true;
-        out.push(MirBlock { ops, ..block.clone() });
+        out.push(block.with_ops(ops));
     }
     if !changed {
         return Ok(body.clone());
@@ -2230,8 +2215,7 @@ pub(crate) fn dead(body: &MirBody) -> Result<MirBody, String> {
         .filter(|value| !after.contains(value))
         .copied()
         .collect::<BTreeSet<_>>();
-    Ok(MirBody {
-        blocks: out
+    Ok(body.with_blocks(out
             .into_iter()
             .map(|block| MirBlock {
                 ops: block
@@ -2255,9 +2239,7 @@ pub(crate) fn dead(body: &MirBody) -> Result<MirBody, String> {
                     .collect(),
                 ..block
             })
-            .collect(),
-        ..body.clone()
-    })
+            .collect()))
 }
 
 /// Results replaced before reaching an opaque reader or a block exit.
@@ -2550,15 +2532,12 @@ pub(crate) fn _folded_phi_edges(
                         ops.len()
                     };
                     ops.insert(position, copy);
-                    changed[&parent_at] = MirBlock { ops, ..parent.clone() };
+                    changed[&parent_at] = parent.with_ops(ops);
                 }
 
                 changed[&block.at].phis.push(Phi { result: target, incoming });
                 changed[&operation_block.at].ops[index] = _empty_operation(op);
-                return Ok(MirBody {
-                    blocks: body.blocks.iter().map(|one| changed[&one.at].clone()).collect(),
-                    ..body.clone()
-                });
+                return Ok(body.with_blocks(body.blocks.iter().map(|one| changed[&one.at].clone()).collect()));
             }
         }
     }
@@ -2616,10 +2595,10 @@ pub(crate) fn folded(body: &MirBody, dgroup: &BTreeSet<i64>, calls: &IndexMap<i6
             );
             ops.push(made);
         }
-        out.push(MirBlock { ops, ..block.clone() });
+        out.push(block.with_ops(ops));
     }
 
-    let result = MirBody { blocks: out, ..body.clone() };
+    let result = body.with_blocks(out);
     let result = _folded_phi_edges(&result, &facts, &wanted)?;
     // An exact exit fact describes only the path leaving a numeric loop.  It
     // may fold a successor load, but it is not permission for ordinary

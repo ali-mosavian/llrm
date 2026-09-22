@@ -625,14 +625,7 @@ fn _expanded(
     let integer_ranges = ssa::cloned_integer_ranges(body, copies.iter());
     let mut repetitions = body.repetitions.clone();
     repetitions.push((latch.at, count));
-    Ok(MirBody {
-        blocks: changed,
-        repetitions,
-        pointer_values,
-        pointer_seeds,
-        integer_ranges,
-        ..body.clone()
-    })
+    Ok(MirBody { repetitions, pointer_values, pointer_seeds, integer_ranges, ..body.with_blocks(changed) })
 }
 
 #[cfg(test)]

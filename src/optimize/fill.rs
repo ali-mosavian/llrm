@@ -400,10 +400,7 @@ fn _filled(body: &MirBody, loop_: &Loop) -> Option<MirBody> {
         }
         blocks.push(block);
     }
-    Some(MirBody {
-        blocks,
-        ..body.clone()
-    })
+    Some(body.with_blocks(blocks))
 }
 
 fn _stepping(counter: &Affine, by: u32) -> bool {

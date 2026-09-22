@@ -294,18 +294,15 @@ pub fn eliminated(body: &LirBody) -> Result<LirBody, String> {
         .blocks
         .iter()
         .map(|block| match redundant.get(&block.at) {
-            Some(gone) if !gone.is_empty() => LirBlock {
-                insns: block
+            Some(gone) if !gone.is_empty() => block.with_insns(block
                     .insns
                     .iter()
                     .map(|one| if gone.contains(&id(one)) { lir::anchor(Arc::clone(one)) } else { Arc::clone(one) })
-                    .collect(),
-                ..block.clone()
-            },
+                    .collect()),
             _ => block.clone(),
         })
         .collect();
-    Ok(LirBody { blocks, ..body.clone() })
+    Ok(body.with_blocks(blocks))
 }
 
 #[cfg(test)]

@@ -498,12 +498,10 @@ fn _rewritten_refs(
         }),
         other => other.clone(),
     };
-    MirBody {
-        blocks: body
+    body.with_blocks(body
             .blocks
             .iter()
-            .map(|block| MirBlock {
-                ops: block
+            .map(|block| block.with_ops(block
                     .ops
                     .iter()
                     .map(|op| {
@@ -523,12 +521,8 @@ fn _rewritten_refs(
                             ..op.clone()
                         }
                     })
-                    .collect(),
-                ..block.clone()
-            })
-            .collect(),
-        ..body.clone()
-    }
+                    .collect()))
+            .collect())
 }
 
 /// Attach exact relative leaves to affine accesses of one allocation.
@@ -940,16 +934,10 @@ pub(crate) fn _split_copies(body: &MirBody) -> MirBody {
             changed = true;
             index += 2;
         }
-        blocks.push(MirBlock {
-            ops,
-            ..block.clone()
-        });
+        blocks.push(block.with_ops(ops));
     }
     if changed {
-        MirBody {
-            blocks,
-            ..body.clone()
-        }
+        body.with_blocks(blocks)
     } else {
         body.clone()
     }
@@ -1440,19 +1428,13 @@ pub(crate) fn promoted(
             }
             ops.push(made);
         }
-        blocks.push(MirBlock {
-            ops,
-            ..block.clone()
-        });
+        blocks.push(block.with_ops(ops));
     }
     if !changed {
         return Ok(body.clone());
     }
     ssa::constructed(
-        &MirBody {
-            blocks,
-            ..body.clone()
-        },
+        &body.with_blocks(blocks),
         &holds.values().copied().collect(),
     )
     .map_err(|error| error.to_string())
@@ -1528,15 +1510,9 @@ pub(crate) fn _separated(body: &MirBody, objects: Option<&BTreeSet<MemoryObject>
                 ..op.clone()
             });
         }
-        blocks.push(MirBlock {
-            ops,
-            ..block.clone()
-        });
+        blocks.push(block.with_ops(ops));
     }
-    MirBody {
-        blocks,
-        ..body.clone()
-    }
+    body.with_blocks(blocks)
 }
 
 /// The value operation paired with a store, or replacing a memory read.

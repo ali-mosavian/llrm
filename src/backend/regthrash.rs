@@ -63,7 +63,7 @@ fn _once(body: &LirBody) -> Option<LirBody> {
         let done = _block(&blocks[index], exits[&blocks[index].at].clone());
         if let Some(done) = done {
             blocks[index] = done;
-            return Some(LirBody { blocks, ..body.clone() });
+            return Some(body.with_blocks(blocks));
         }
     }
     None
@@ -137,7 +137,7 @@ fn _block(block: &LirBlock, dead: Lanes) -> Option<LirBlock> {
                     }
                 })
                 .collect();
-            return Some(LirBlock { insns, ..block.clone() });
+            return Some(block.with_insns(insns));
         }
         // Two-address: the producer reads Y as well as writing it, so the
         // renamed form reads Z and Z has to arrive first. Watcom's
@@ -155,7 +155,7 @@ fn _block(block: &LirBlock, dead: Lanes) -> Option<LirBlock> {
                 insns.push(Arc::clone(insn));
             }
         }
-        return Some(LirBlock { insns, ..block.clone() });
+        return Some(block.with_insns(insns));
     }
     None
 }

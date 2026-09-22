@@ -1228,6 +1228,11 @@ impl MirBlock {
             cold: false,
         }
     }
+
+    /// Python's `replace(block, ops=ops)`: the old ops are never copied.
+    pub fn with_ops(&self, ops: Vec<Op>) -> Self {
+        Self { at: self.at, phis: self.phis.clone(), ops, succ: self.succ.clone(), cold: self.cold }
+    }
 }
 
 /// One source-neutral MIR body.  Direct port of `qbopt.model.mir:MirBody`.
@@ -1278,6 +1283,23 @@ impl MirBody {
             pointer_seeds: OrderedMap::new(),
             integer_ranges: OrderedMap::new(),
             loop_trip_counts: Vec::new(),
+        }
+    }
+
+    /// Python's `replace(body, blocks=blocks)`: the old blocks are never copied.
+    pub fn with_blocks(&self, blocks: Vec<MirBlock>) -> Self {
+        Self {
+            entry: self.entry,
+            blocks,
+            initial: self.initial.clone(),
+            repetitions: self.repetitions.clone(),
+            cloned: self.cloned,
+            sealed: self.sealed,
+            stack_in_data: self.stack_in_data,
+            pointer_values: self.pointer_values.clone(),
+            pointer_seeds: self.pointer_seeds.clone(),
+            integer_ranges: self.integer_ranges.clone(),
+            loop_trip_counts: self.loop_trip_counts.clone(),
         }
     }
 

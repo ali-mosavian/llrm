@@ -1190,7 +1190,7 @@ pub fn physicalize(
         if block.at == lowered.body.entry {
             operations = entry_loads.iter().cloned().chain(operations).collect();
         }
-        blocks.push(mir::MirBlock { ops: operations, ..block.clone() });
+        blocks.push(block.with_ops(operations));
     }
     // HIR represents a source-level terminal statement with an explicit
     // UNREACHABLE terminator. Once this frontend's audited call contract says
@@ -1215,7 +1215,7 @@ pub fn physicalize(
             }
         })
         .collect();
-    let body = mir::MirBody { blocks, ..lowered.body.clone() };
+    let body = lowered.body.with_blocks(blocks);
     let mut checked = body.clone();
     let mut external: IndexSet<i64> = IndexSet::default();
     external.insert(body.entry);
@@ -1223,13 +1223,9 @@ pub fn physicalize(
     external.extend(function.error_handler);
     if external.len() > 1 {
         let root = body.blocks.iter().map(|block| block.at).max().expect("a body has blocks") + 1;
-        checked = mir::MirBody {
-            entry: root,
-            blocks: std::iter::once(mir::MirBlock::new(root, vec![], vec![], external.into_iter().collect()))
+        checked = mir::MirBody { entry: root, ..body.with_blocks(std::iter::once(mir::MirBlock::new(root, vec![], vec![], external.into_iter().collect()))
                 .chain(body.blocks.iter().cloned())
-                .collect(),
-            ..body.clone()
-        };
+                .collect()) };
     }
     let problems = mir::verify(&checked);
     if !problems.is_empty() {

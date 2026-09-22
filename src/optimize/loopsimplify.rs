@@ -119,7 +119,7 @@ pub(crate) fn grouped(body: &MirBody, target: i64, sources: &BTreeSet<i64>) -> M
         changed.push(block);
     }
     changed.push(bridge);
-    MirBody { blocks: changed, ..body.clone() }
+    body.with_blocks(changed)
 }
 
 pub(crate) fn simplified(body: &MirBody) -> MirBody {

@@ -286,35 +286,23 @@ pub fn spilled(
             insns.extend(after);
             made.extend(rename.values().copied());
         }
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    let mut result = LirBody { blocks, ..body.clone() };
+    let mut result = body.with_blocks(blocks);
     let never = None::<fn(&Arc<Insn>) -> Arc<Insn>>;
     if !rematerialized_definitions.is_empty() {
-        result = LirBody {
-            blocks: result
+        result = result.with_blocks(result
                 .blocks
                 .iter()
-                .map(|block| LirBlock {
-                    insns: lir::without(&block.insns, |one| rematerialized_definitions.contains(&key(one)), never),
-                    ..block.clone()
-                })
-                .collect(),
-            ..result.clone()
-        };
+                .map(|block| block.with_insns(lir::without(&block.insns, |one| rematerialized_definitions.contains(&key(one)), never)))
+                .collect());
     }
     if !identities.is_empty() {
-        result = LirBody {
-            blocks: result
+        result = result.with_blocks(result
                 .blocks
                 .iter()
-                .map(|block| LirBlock {
-                    insns: lir::without(&block.insns, |one| identities.contains(&key(one)), never),
-                    ..block.clone()
-                })
-                .collect(),
-            ..result.clone()
-        };
+                .map(|block| block.with_insns(lir::without(&block.insns, |one| identities.contains(&key(one)), never)))
+                .collect());
     }
     let result = _remove_abandoned(&result, &abandoned);
     let surviving: BTreeSet<u32> =
@@ -382,9 +370,9 @@ fn _short_update_runs(
             made.insert(outof);
             position += 2;
         }
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    Ok((LirBody { blocks, ..body.clone() }, fresh, made))
+    Ok((body.with_blocks(blocks), fresh, made))
 }
 
 /// A move between two spilled values that share one slot.
@@ -639,9 +627,9 @@ fn _existing_colors(body: &LirBody, frame: &mut Frame) -> Vec<(i64, u32, Vec<Int
                 made.uses = one.uses.iter().copied().chain(used).collect::<IndexSet<u32>>().into_iter().collect();
             }));
         }
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    let tracked = LirBody { blocks, ..body.clone() };
+    let tracked = body.with_blocks(blocks);
     let live = ranges::intervals(&tracked, None);
     let end = ranges::indexed(&tracked).span.values().map(|(_first, last)| *last).max().unwrap_or(1);
     let mut colors = Vec::new();
@@ -1128,20 +1116,14 @@ pub fn _remove_abandoned(body: &LirBody, abandoned: &BTreeSet<usize>) -> LirBody
         })
     };
 
-    LirBody {
-        blocks: body
+    body.with_blocks(body
             .blocks
             .iter()
-            .map(|block| LirBlock {
-                insns: lir::without(&block.insns, removable, None::<fn(&Arc<Insn>) -> Arc<Insn>>)
+            .map(|block| block.with_insns(lir::without(&block.insns, removable, None::<fn(&Arc<Insn>) -> Arc<Insn>>)
                     .into_iter()
                     .map(anchor)
-                    .collect(),
-                ..block.clone()
-            })
-            .collect(),
-        ..body.clone()
-    }
+                    .collect()))
+            .collect())
 }
 
 /// Where a rebuilt value already is, in the shape `_source` asks a frame.
@@ -1257,12 +1239,12 @@ pub fn unfolded_indexes(body: &LirBody, values: &BTreeSet<u32>) -> (LirBody, BTr
             insns.push(rewritten.get(&position).cloned().unwrap_or_else(|| Arc::clone(one)));
             insns.extend(after.get(&position).into_iter().flatten().cloned());
         }
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
     if changed.is_empty() {
         return (body.clone(), BTreeSet::new());
     }
-    (LirBody { blocks, ..body.clone() }, changed)
+    (body.with_blocks(blocks), changed)
 }
 
 /// Whether an early inserted add's flags die before anything can read them.

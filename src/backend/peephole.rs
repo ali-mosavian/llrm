@@ -116,10 +116,7 @@ impl Peephole {
         let blocks = body
             .blocks
             .iter()
-            .map(|block| LirBlock {
-                insns: lir::without(&block.insns, |one| one.frame_adjust, None::<fn(&Arc<Insn>) -> Arc<Insn>>),
-                ..block.clone()
-            })
+            .map(|block| block.with_insns(lir::without(&block.insns, |one| one.frame_adjust, None::<fn(&Arc<Insn>) -> Arc<Insn>>)))
             .collect();
         LirBody { blocks, ..body }
     }
@@ -251,9 +248,9 @@ pub fn concatenated(body: &LirBody) -> LirBody {
             insns[index + 1] = Arc::new(with_what(&low_push, shifted));
             insns[index + 2] = Arc::new(with_what(&wide_pop, funnelled));
         }
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    LirBody { blocks, ..body.clone() }
+    body.with_blocks(blocks)
 }
 
 /// Use a dead GPR for an allocated frame-to-frame parallel copy.
@@ -360,9 +357,9 @@ pub fn frame_copies<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) -> Re
             insns[index] = Arc::new(load);
             insns[index + 1] = Arc::new(store);
         }
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    Ok(LirBody { blocks, ..body.clone() })
+    Ok(body.with_blocks(blocks))
 }
 
 /// Fold a load or transitive extension into one widening instruction.
@@ -422,9 +419,9 @@ pub fn extensions(body: &LirBody) -> LirBody {
                 }
             }
         }
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    LirBody { blocks, ..body.clone() }
+    body.with_blocks(blocks)
 }
 
 /// Whether widening the load at its original position crosses no register use.
@@ -610,9 +607,9 @@ pub fn pushed_constants(body: &LirBody) -> LirBody {
             }
             out.push(Arc::clone(one));
         }
-        blocks.push(LirBlock { insns: out, ..block.clone() });
+        blocks.push(block.with_insns(out));
     }
-    LirBody { blocks, ..body.clone() }
+    body.with_blocks(blocks)
 }
 
 /// Two adjacent immediate word pushes have one dword's stack layout.
@@ -671,9 +668,9 @@ pub fn pushes(body: &LirBody) -> LirBody {
             out.push(Arc::clone(&block.insns[index]));
             index += 1;
         }
-        blocks.push(LirBlock { insns: out, ..block.clone() });
+        blocks.push(block.with_insns(out));
     }
-    LirBody { blocks, ..body.clone() }
+    body.with_blocks(blocks)
 }
 
 pub fn _lanes(register: Register) -> Lanes {
@@ -747,9 +744,9 @@ pub fn narrowed_moves(body: &LirBody) -> LirBody {
             }
             insns.push(changed.unwrap_or_else(|| Arc::clone(one)));
         }
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    LirBody { blocks, ..body.clone() }
+    body.with_blocks(blocks)
 }
 
 /// Use a saved accumulator in place for commutative two-address operations.
@@ -804,9 +801,9 @@ pub fn commuted(body: &LirBody) -> LirBody {
             }
         }
         let insns = lir::without(&insns, |one| removed.contains(&id(one)), None::<fn(&Arc<Insn>) -> Arc<Insn>>);
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    LirBody { blocks, ..body.clone() }
+    body.with_blocks(blocks)
 }
 
 /// Write a commutative result directly into its copied destination.
@@ -835,9 +832,9 @@ pub fn transferred(body: &LirBody) -> LirBody {
             insns.push(Arc::clone(&block.insns[index]));
             index += 1;
         }
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    LirBody { blocks, ..body.clone() }
+    body.with_blocks(blocks)
 }
 
 fn _transferred(parts: &[Arc<Insn>], dead_after: &DeadAfter) -> Option<Vec<Arc<Insn>>> {
@@ -957,9 +954,9 @@ pub fn high_extracts<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) -> R
             insns.push(Arc::clone(&block.insns[index]));
             index += 1;
         }
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    Ok(LirBody { blocks, ..body.clone() })
+    Ok(body.with_blocks(blocks))
 }
 
 fn _register_high_extract(
@@ -1266,9 +1263,9 @@ pub fn shuttles(body: &LirBody) -> LirBody {
             out.push(Arc::clone(&block.insns[index]));
             index += 1;
         }
-        blocks.push(LirBlock { insns: out, ..block.clone() });
+        blocks.push(block.with_insns(out));
     }
-    LirBody { blocks, ..body.clone() }
+    body.with_blocks(blocks)
 }
 
 /// Remove a synthetic save/restore when the source survives between them.
@@ -1336,9 +1333,9 @@ pub fn restored_copies(body: &LirBody) -> LirBody {
                 }
             }
         }
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    LirBody { blocks, ..body.clone() }
+    body.with_blocks(blocks)
 }
 
 fn _synthetic_register_copy(one: &Insn) -> bool {
@@ -1683,9 +1680,9 @@ pub fn overwritten(body: &LirBody) -> LirBody {
             .iter()
             .map(|one| if redundant.contains(&id(one)) { lir::anchor(Arc::clone(one)) } else { Arc::clone(one) })
             .collect();
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    LirBody { blocks, ..body.clone() }
+    body.with_blocks(blocks)
 }
 
 const _FUSED_BINARY: [&str; 5] = ["add", "sub", "and", "or", "xor"];
@@ -1758,9 +1755,9 @@ pub fn fused(body: &LirBody) -> LirBody {
                 at += 1;
             }
         }
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    LirBody { blocks, ..body.clone() }
+    body.with_blocks(blocks)
 }
 
 /// Whether `load` may read its cell after this register materialization.
@@ -1985,9 +1982,9 @@ pub fn far_loads(body: &LirBody) -> LirBody {
             .filter(|(index, _)| !removed.contains(index))
             .map(|(_, one)| one)
             .collect();
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    LirBody { blocks, ..body.clone() }
+    body.with_blocks(blocks)
 }
 
 fn _far_load(first: &Insn, second: &Insn) -> Option<Arc<Insn>> {
@@ -2327,7 +2324,7 @@ fn _loaded_addresses(block: &LirBlock, uses: &Counter, cpu: &Profile) -> Result<
     }
     let insns =
         insns.into_iter().enumerate().filter(|(index, _)| !removed.contains(index)).map(|(_, one)| one).collect();
-    Ok(LirBlock { insns, ..block.clone() })
+    Ok(block.with_insns(insns))
 }
 
 /// Whether replacing `parts` drops a value read outside that region.
@@ -2456,9 +2453,9 @@ pub fn addresses<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) -> Resul
                 index += 1;
             }
         }
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    Ok(LirBody { blocks, ..body.clone() })
+    Ok(body.with_blocks(blocks))
 }
 
 /// `ir.ROOT.get(register)`: `ROOT` itself is private to `ir`, and its keys
@@ -2707,9 +2704,9 @@ pub fn secondary_bases<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) ->
                 insns.push(Arc::clone(extension));
             }
         }
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    Ok(LirBody { blocks, ..body.clone() })
+    Ok(body.with_blocks(blocks))
 }
 
 /// Fold `mov result,left; add result,term` into one 67h LEA.
@@ -2956,9 +2953,9 @@ pub fn increments(body: &LirBody) -> LirBody {
             }
             insns.push(one);
         }
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    LirBody { blocks, ..body.clone() }
+    body.with_blocks(blocks)
 }
 
 fn _flags_before(one: &Insn, flags_dead: bool) -> bool {
@@ -3085,9 +3082,9 @@ pub fn tested(body: &LirBody) -> LirBody {
                 }
             }
         }
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    LirBody { blocks, ..body.clone() }
+    body.with_blocks(blocks)
 }
 
 static _ADJUST: LazyLock<Lanes> = LazyLock::new(|| _flag_lanes(RflagsBits::AF));
@@ -3145,9 +3142,9 @@ pub fn zero_compares(body: &LirBody) -> LirBody {
                 }
             }
         }
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    LirBody { blocks, ..body.clone() }
+    body.with_blocks(blocks)
 }
 
 /// A plain move, writing nothing that shares a root with `register`.
@@ -3319,9 +3316,9 @@ pub fn zeroes(body: &LirBody) -> LirBody {
             insns.push(one);
         }
         insns.reverse();
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    LirBody { blocks, ..body.clone() }
+    body.with_blocks(blocks)
 }
 
 const _WAITING: [&str; 36] = [
@@ -3355,9 +3352,9 @@ pub fn waits(body: &LirBody) -> LirBody {
             }
         }
         let insns = lir::without(&block.insns, |one| redundant.contains(&id(one)), None::<fn(&Arc<Insn>) -> Arc<Insn>>);
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    LirBody { blocks, ..body.clone() }
+    body.with_blocks(blocks)
 }
 
 /// What `constants` believes a register holds: a literal, or a fresh
@@ -3454,9 +3451,9 @@ pub fn constants(body: &LirBody) -> LirBody {
             .iter()
             .map(|one| if redundant.contains(&id(one)) { lir::anchor(Arc::clone(one)) } else { Arc::clone(one) })
             .collect();
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    LirBody { blocks, ..body.clone() }
+    body.with_blocks(blocks)
 }
 
 #[cfg(test)]

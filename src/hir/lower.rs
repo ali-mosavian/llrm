@@ -1768,7 +1768,7 @@ fn _function(
         let root = body.blocks.iter().map(|block| block.at).max().expect("a function has a block") + 1;
         let mut blocks = vec![mir::MirBlock::new(root, Vec::new(), Vec::new(), external)];
         blocks.extend(body.blocks.iter().cloned());
-        checked = mir::MirBody { entry: root, blocks, ..body.clone() };
+        checked = mir::MirBody { entry: root, ..body.with_blocks(blocks) };
     }
     let problems = mir::verify(&checked);
     if !problems.is_empty() {

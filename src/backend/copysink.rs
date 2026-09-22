@@ -186,7 +186,7 @@ pub fn sunk(body: &LirBody) -> LirBody {
                     .filter(|to| inside.contains(to))
                     .flat_map(|to| round_into[to].iter().copied())
                     .collect();
-                let rest_of_block = LirBlock { insns: block.insns[index + 1..].to_vec(), ..block.clone() };
+                let rest_of_block = block.with_insns(block.insns[index + 1..].to_vec());
                 if !written.is_disjoint(&_backwards(&rest_of_block, after, &universe)) {
                     continue;
                 }
@@ -222,9 +222,9 @@ pub fn sunk(body: &LirBody) -> LirBody {
         if let Some(moved) = moved.get(&block.at) {
             insns = moved.iter().cloned().chain(insns).collect();
         }
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    LirBody { blocks, ..body.clone() }
+    body.with_blocks(blocks)
 }
 
 #[cfg(test)]

@@ -274,7 +274,7 @@ pub fn reused(body: &MirBody, dgroup: Option<&RegionLayout>, insert: bool) -> Re
             copy.symbol = Some(false);
             ops.push(copy);
         }
-        blocks.push(MirBlock { phis, ops, ..block.clone() });
+        blocks.push(MirBlock { phis, ..block.with_ops(ops) });
     }
     for block in &mut blocks {
         let mut ordered = insertions.get(&block.at).cloned().unwrap_or_default();
@@ -283,7 +283,7 @@ pub fn reused(body: &MirBody, dgroup: Option<&RegionLayout>, insert: bool) -> Re
             block.ops.insert(cut, load);
         }
     }
-    let mut result = MirBody { blocks, ..body.clone() };
+    let mut result = body.with_blocks(blocks);
     for ((parent, target), (label, loads)) in bridges {
         result = edges::split(&result, parent, target, label, loads)?;
     }

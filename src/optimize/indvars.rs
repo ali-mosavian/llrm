@@ -251,7 +251,7 @@ pub(crate) fn rewound(body: &MirBody, registers: i64, costs: Option<&OperationCo
             }
             let mut counts = body.loop_trip_counts.iter().copied().collect::<BTreeMap<_, _>>();
             counts.insert(inner.header, i64::try_from(&count).expect("trip count fits the MIR table"));
-            return MirBody { blocks: changed, loop_trip_counts: counts.into_iter().collect(), ..body.clone() };
+            return MirBody { loop_trip_counts: counts.into_iter().collect(), ..body.with_blocks(changed) };
         }
     }
     body.clone()
@@ -465,7 +465,7 @@ pub(crate) fn simplified(body: &MirBody) -> Result<MirBody, SubstitutionError> {
                     if block.at == preheader {
                         _before_leaving(&mut ops, vec![seed.clone()]);
                     }
-                    out.push(MirBlock { ops, ..block.clone() });
+                    out.push(block.with_ops(ops));
                 }
                 return Ok(MirBody { blocks: out, ..changed });
             }
@@ -908,7 +908,7 @@ pub(crate) fn symbolically_zeroed(body: &MirBody) -> Result<MirBody, Substitutio
                 };
                 rewritten.push(MirBlock { at: block.at, phis, ops, succ: block.succ.clone(), cold: block.cold });
             }
-            let changed = MirBody { blocks: rewritten, ..body.clone() };
+            let changed = body.with_blocks(rewritten);
             let rotated = rotate::at_body(
                 &changed,
                 &loop_,

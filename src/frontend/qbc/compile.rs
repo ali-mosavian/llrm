@@ -385,8 +385,7 @@ fn _statement_table_blocks(function: &model::Function) -> BTreeSet<i64> {
 
 /// Remove semantic RESUME dispatch edges after they served allocation.
 fn _drop_resume_successors(body: &lir::LirBody, calls: &IndexMap<i64, String>) -> lir::LirBody {
-    lir::LirBody {
-        blocks: body
+    body.with_blocks(body
             .blocks
             .iter()
             .map(|block| {
@@ -396,9 +395,7 @@ fn _drop_resume_successors(body: &lir::LirBody, calls: &IndexMap<i64, String>) -
                     block.clone()
                 }
             })
-            .collect(),
-        ..body.clone()
-    }
+            .collect())
 }
 
 fn _insn(at: i64, what: Semantics) -> Arc<lir::Insn> {
@@ -481,13 +478,13 @@ fn _split_statement_blocks(body: &lir::LirBody, markers: &BTreeSet<i64>) -> (lir
             let end = if segment + 1 < boundaries.len() { boundaries[segment + 1] } else { block.insns.len() };
             let at = ids[segment];
             let successors = if segment + 1 < ids.len() { vec![ids[segment + 1]] } else { block.succ.clone() };
-            made.push(lir::LirBlock { at, insns: block.insns[*start..end].to_vec(), succ: successors, ..block.clone() });
+            made.push(lir::LirBlock { at, succ: successors, ..block.with_insns(block.insns[*start..end].to_vec()) });
             for marker in positions.get(start).into_iter().flatten() {
                 labels.insert(*marker, at);
             }
         }
     }
-    (lir::LirBody { blocks: made, ..body.clone() }, labels)
+    (body.with_blocks(made), labels)
 }
 
 fn _sorted_repr(values: &BTreeSet<i64>) -> String {
@@ -526,13 +523,13 @@ fn _resume_label_transfers(
             }
             instructions.push(Arc::clone(instruction));
         }
-        blocks.push(lir::LirBlock { insns: instructions, ..block.clone() });
+        blocks.push(block.with_insns(instructions));
     }
     let missing: BTreeSet<i64> = resume_blocks.keys().copied().filter(|one| !found.contains(one)).collect();
     if !missing.is_empty() {
         return emission(format!("RESUME call sites vanished before final layout: {}", _sorted_repr(&missing)));
     }
-    Ok(lir::LirBody { blocks, ..body.clone() })
+    Ok(body.with_blocks(blocks))
 }
 
 /// Replace a typed placeholder push with RESTORE's relocated DATA label.
@@ -570,13 +567,13 @@ fn _restore_label_arguments(
             instructions[index - 1] = Arc::new(replaced);
             found.insert(source);
         }
-        blocks.push(lir::LirBlock { insns: instructions, ..block.clone() });
+        blocks.push(block.with_insns(instructions));
     }
     let missing: BTreeSet<i64> = restores.keys().copied().filter(|one| !found.contains(one)).collect();
     if !missing.is_empty() {
         return emission(format!("RESTORE label calls vanished before final layout: {}", _sorted_repr(&missing)));
     }
-    Ok(lir::LirBody { blocks, ..body.clone() })
+    Ok(body.with_blocks(blocks))
 }
 
 /// Turn DATA marker calls into BC's one-byte labeled NOPs.
@@ -632,13 +629,13 @@ fn _remove_data_markers(
                 retained.insert(source);
             }
         }
-        blocks.push(lir::LirBlock { insns: instructions, ..block.clone() });
+        blocks.push(block.with_insns(instructions));
     }
     let missing: BTreeSet<i64> = markers.keys().copied().filter(|one| !found.contains(one)).collect();
     if !missing.is_empty() {
         return emission(format!("DATA markers vanished before final layout: {}", _sorted_repr(&missing)));
     }
-    Ok(lir::LirBody { blocks, ..body.clone() })
+    Ok(body.with_blocks(blocks))
 }
 
 /// Return the measured BC `U_FLAG` word for this compilation profile.
@@ -709,9 +706,9 @@ fn _ends_program(body: &lir::LirBody) -> (lir::LirBody, IndexMap<i64, masm::Call
         // blocks retain their CFG edges; MASM listing uses the untaken edge to
         // insert an explicit jump when it is not the next laid-out block.
         let succ = if exits { vec![] } else { block.succ.clone() };
-        blocks.push(lir::LirBlock { insns: instructions, succ, ..block.clone() });
+        blocks.push(lir::LirBlock { succ, ..block.with_insns(instructions) });
     }
-    (lir::LirBody { blocks, noreturn: true, ..body.clone() }, sites)
+    (lir::LirBody { noreturn: true, ..body.with_blocks(blocks) }, sites)
 }
 
 /// Replace source-positioned ON ERROR markers with the runtime protocol.
@@ -761,9 +758,9 @@ fn _materialize_error_registrations(
             serial += 1;
             callees.insert(call_at, masm::Callee::new(if *local { "B$OEGP" } else { "B$OEGA" }, true));
         }
-        blocks.push(lir::LirBlock { insns: made, ..block.clone() });
+        blocks.push(block.with_insns(made));
     }
-    (lir::LirBody { blocks, ..body.clone() }, callees)
+    (body.with_blocks(blocks), callees)
 }
 
 /// Zero a native frame as BASIC's runtime entry routines do.
@@ -791,7 +788,7 @@ fn _initialize_frame(
         .map(|block| {
             if block.at == body.entry {
                 let insns = std::iter::once(Arc::clone(&initialize)).chain(block.insns.iter().cloned()).collect();
-                lir::LirBlock { insns, ..block.clone() }
+                block.with_insns(insns)
             } else {
                 block.clone()
             }
@@ -806,7 +803,7 @@ fn _initialize_frame(
     ]
     .concat();
     Ok((
-        lir::LirBody { blocks, ..body.clone() },
+        body.with_blocks(blocks),
         IndexMap::from_iter([(
             at,
             masm::Callee { name: "$frame_zero".into(), far: false, code: vec![masm::InlinePart::Bytes(code)] },
@@ -868,7 +865,7 @@ fn _runtime_frame(
             } else {
                 block.insns.clone()
             };
-            lir::LirBlock { insns, ..block.clone() }
+            block.with_insns(insns)
         })
         .collect();
     let framed: Vec<lir::LirBlock> = framed
@@ -925,7 +922,7 @@ fn _runtime_frame(
         })
         .collect();
     Ok((
-        lir::LirBody { blocks: framed, ..body.clone() },
+        body.with_blocks(framed),
         IndexMap::from_iter([(serial + 2, masm::Callee::new("B$ENRA", true)), (leave_at, masm::Callee::new("B$EXSA", true))]),
     ))
 }
@@ -946,17 +943,11 @@ fn _temporary_string_slots(module: &model::Module, function: &model::Function) -
 
 /// Drop source-generated ESCAPE markers, which own no legacy bytes.
 fn _source_instructions(body: &lir::LirBody) -> lir::LirBody {
-    lir::LirBody {
-        blocks: body
+    body.with_blocks(body
             .blocks
             .iter()
-            .map(|block| lir::LirBlock {
-                insns: block.insns.iter().filter(|one| one.what.is_some()).cloned().collect(),
-                ..block.clone()
-            })
-            .collect(),
-        ..body.clone()
-    }
+            .map(|block| block.with_insns(block.insns.iter().filter(|one| one.what.is_some()).cloned().collect()))
+            .collect())
 }
 
 fn _handler_at(function: &model::Function) -> Option<i64> {
@@ -1019,9 +1010,9 @@ fn _optimizer_resume_edges(body: &mir::MirBody) -> Result<(mir::MirBody, Restore
         restored.insert(serial, if source_form { Some(block.ops[count - 1].clone()) } else { None });
         let prefix = if source_form { &block.ops[..count - 1] } else { &block.ops[..] };
         let ops = prefix.iter().cloned().chain(std::iter::once(jump)).collect();
-        blocks.push(mir::MirBlock { ops, succ: vec![target], ..block.clone() });
+        blocks.push(mir::MirBlock { succ: vec![target], ..block.with_ops(ops) });
     }
-    Ok((mir::MirBody { blocks, ..body.clone() }, restored))
+    Ok((body.with_blocks(blocks), restored))
 }
 
 fn _drop_optimizer_resume_edges(body: &mir::MirBody, restored: &Restored) -> Result<mir::MirBody, CompileError> {
@@ -1044,12 +1035,12 @@ fn _drop_optimizer_resume_edges(body: &mir::MirBody, restored: &Restored) -> Res
         missing.remove(&marker.at);
         let original = &restored[&marker.at];
         let ops = block.ops[..block.ops.len() - 1].iter().cloned().chain(original.iter().cloned()).collect();
-        blocks.push(mir::MirBlock { ops, succ: vec![], ..block.clone() });
+        blocks.push(mir::MirBlock { succ: vec![], ..block.with_ops(ops) });
     }
     if !missing.is_empty() {
         return emission(format!("optimizer deleted temporary RESUME edges {}", _sorted_repr(&missing)));
     }
-    Ok(mir::MirBody { blocks, ..body.clone() })
+    Ok(body.with_blocks(blocks))
 }
 
 /// `tuple(dict.fromkeys((*function.external_entries, *handler)))`.
@@ -1210,13 +1201,9 @@ pub(crate) fn _machine_side_entry(body: &mir::MirBody, entries: &[i64]) -> Resul
     switch.target = Some(entries[0]);
     switch.cases = entries[1..].iter().enumerate().map(|(number, target)| (number as i64 + 1, *target)).collect();
     switch.reads_complete = true;
-    let made = mir::MirBody {
-        entry: root,
-        blocks: std::iter::once(mir::MirBlock::new(root, vec![], vec![switch], entries))
+    let made = mir::MirBody { entry: root, ..body.with_blocks(std::iter::once(mir::MirBlock::new(root, vec![], vec![switch], entries))
             .chain(body.blocks.iter().cloned())
-            .collect(),
-        ..body.clone()
-    };
+            .collect()) };
     let problems = mir::verify(&made);
     if !problems.is_empty() {
         return emission(format!("temporary ON ERROR root is invalid: {}", pyrepr::list(&problems[..problems.len().min(3)])));
@@ -1249,7 +1236,7 @@ fn _drop_machine_side_entry(
         let jump = _insn(at, Semantics { target: Some(entry_fallback), ..(_semantics(Operation::Jump, "jmp", vec![], vec![])) });
         blocks.insert(0, lir::LirBlock { succ: vec![entry_fallback], ..lir::LirBlock::new(entry, vec![jump]) });
     }
-    Ok(lir::LirBody { entry, blocks, ..body.clone() })
+    Ok(lir::LirBody { entry, ..body.with_blocks(blocks) })
 }
 
 #[allow(non_snake_case)]

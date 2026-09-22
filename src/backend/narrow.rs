@@ -70,23 +70,17 @@ pub fn narrowed(body: &MirBody) -> MirBody {
     if halves.is_empty() {
         return body.clone();
     }
-    MirBody {
-        blocks: body
+    body.with_blocks(body
             .blocks
             .iter()
             .enumerate()
-            .map(|(b, block)| MirBlock {
-                ops: block
+            .map(|(b, block)| block.with_ops(block
                     .ops
                     .iter()
                     .enumerate()
                     .flat_map(|(o, op)| _rewritten(op, (b, o), &halves, &gone))
-                    .collect(),
-                ..block.clone()
-            })
-            .collect(),
-        ..body.clone()
-    }
+                    .collect()))
+            .collect())
 }
 
 fn _result(op: &Op) -> Value {

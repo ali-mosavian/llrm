@@ -75,9 +75,9 @@ pub fn tied(body: &LirBody) -> LirBody {
             insns.extend(fix);
             changed = true;
         }
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    if changed { LirBody { blocks, ..body.clone() } } else { body.clone() }
+    if changed { body.with_blocks(blocks) } else { body.clone() }
 }
 
 /// Which values each value is copied to or from.

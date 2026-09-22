@@ -322,7 +322,7 @@ pub fn forwarded(body: &LirBody) -> LirBody {
                 if redundant.contains(&id(original)) { lir::anchor(Arc::clone(original)) } else { replacement }
             })
             .collect();
-        result.push(LirBlock { insns, ..block.clone() });
+        result.push(block.with_insns(insns));
     }
-    LirBody { blocks: result, ..body.clone() }
+    body.with_blocks(result)
 }

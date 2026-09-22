@@ -532,12 +532,10 @@ fn _near_frames(body: &MirBody) -> MirBody {
             _ => arg.clone(),
         }
     }
-    MirBody {
-        blocks: body
+    body.with_blocks(body
             .blocks
             .iter()
-            .map(|block| mir::MirBlock {
-                ops: block
+            .map(|block| block.with_ops(block
                     .ops
                     .iter()
                     .map(|op| Op {
@@ -547,12 +545,8 @@ fn _near_frames(body: &MirBody) -> MirBody {
                         results: op.results.iter().map(near).collect(),
                         ..op.clone()
                     })
-                    .collect(),
-                ..block.clone()
-            })
-            .collect(),
-        ..body.clone()
-    }
+                    .collect()))
+            .collect())
 }
 
 /// Attach the machine selector implied by an abstract address space.

@@ -278,7 +278,7 @@ pub(crate) fn joined(body: &MirBody, insert: bool) -> Result<MirBody, String> {
             ops.push(erased);
             changed = true;
         }
-        blocks.push(MirBlock { phis, ops, ..block.clone() });
+        blocks.push(MirBlock { phis, ..block.with_ops(ops) });
     }
     if !changed {
         return Ok(body.clone());
@@ -313,5 +313,5 @@ pub(crate) fn joined(body: &MirBody, insert: bool) -> Result<MirBody, String> {
             .map_err(|error| error.to_string())?;
         out.push(MirBlock { phis, ops, ..block });
     }
-    Ok(MirBody { blocks: out, ..body.clone() })
+    Ok(body.with_blocks(out))
 }

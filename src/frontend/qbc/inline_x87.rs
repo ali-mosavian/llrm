@@ -74,9 +74,9 @@ pub fn finalized(body: &lir::LirBody, parameter_bytes: i64) -> Result<Finalized,
             replaced.what = Some(Semantics { name: Some(name), ..Semantics::new(Operation::Call) });
             instructions.push(Arc::new(replaced));
         }
-        blocks.push(lir::LirBlock { insns: instructions, ..block.clone() });
+        blocks.push(block.with_insns(instructions));
     }
-    Ok(Finalized { body: lir::LirBody { blocks, ..body.clone() }, callees: sites })
+    Ok(Finalized { body: body.with_blocks(blocks), callees: sites })
 }
 
 /// Return one audited expansion for diagnostics and stage dumps.

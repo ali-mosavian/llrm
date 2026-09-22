@@ -202,26 +202,18 @@ pub fn joined(body: &LirBody, pinned: Option<&IndexMap<u32, Register>>) -> LirBo
         swap.insert(one, found);
     }
     let swap = |value: u32| swap.get(&value).copied().unwrap_or(value);
-    LirBody {
-        inputs: body.inputs.iter().map(|value| swap(*value)).collect(),
-        blocks: body
+    LirBody { inputs: body.inputs.iter().map(|value| swap(*value)).collect(), ..body.with_blocks(body
             .blocks
             .iter()
-            .map(|block| LirBlock {
-                insns: _kept(block, &swap),
-                phis: block
+            .map(|block| LirBlock { phis: block
                     .phis
                     .iter()
                     .map(|phi| Phi {
                         result: swap(phi.result),
                         incoming: phi.incoming.iter().map(|(at, value)| (*at, swap(*value))).collect(),
                     })
-                    .collect(),
-                ..block.clone()
-            })
-            .collect(),
-        ..body.clone()
-    }
+                    .collect(), ..block.with_insns(_kept(block, &swap)) })
+            .collect()) }
 }
 
 /// Whether `gone` can join `kept` without making `kept` harder to colour.

@@ -255,14 +255,7 @@ pub(crate) fn joined(body: &MirBody) -> MirBody {
             .cloned()
             .chain(new_phis.get(&block.at).into_iter().flatten().cloned())
             .collect();
-        changed.push(MirBlock {
-            ops,
-            phis,
-            ..block.clone()
-        });
+        changed.push(MirBlock { phis, ..block.with_ops(ops) });
     }
-    MirBody {
-        blocks: changed,
-        ..body.clone()
-    }
+    body.with_blocks(changed)
 }
