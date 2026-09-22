@@ -10,7 +10,7 @@ use num_traits::ToPrimitive;
 use crate::model::floating::{Format, Rounding};
 use crate::model::ir::nodes::Node;
 use crate::model::ir::{self, Loc, Operation};
-use crate::model::mir::{Arg, Kind, MemRef, MirBody, Op, OpCode};
+use crate::model::mir::{Arg, Held, Kind, MemRef, MirBody, Op, OpCode};
 use crate::objectfile::module::{Addr, Space};
 use crate::support::pyrepr::Repr;
 
@@ -549,4 +549,513 @@ pub(crate) fn _addressed(one: &MemRef) -> Result<ir::Mem, Unlowered> {
         return Ok(mem(addr, addr.base, 0));
     }
     Err(Unlowered(format!("a cell at {} in {} has no encoding this can derive", addr.repr(), addr.space)))
+}
+
+fn sem(op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>) -> ir::Semantics {
+    ir::Semantics { name: Some(name.to_owned()), dests, sources, ..ir::Semantics::new(op) }
+}
+
+fn held(value: u32, width: u32) -> Loc {
+    Loc::Held(ir::Held { value, width })
+}
+
+fn immediate(value: i64, width: u32) -> Loc {
+    Loc::Imm(ir::Imm { value, width, address: None })
+}
+
+/// `operand(arg)` where the caller needs a machine location, as every
+/// expansion does: Python would carry a cell on into LIR and fail later.
+fn located(arg: &Arg) -> Result<Loc, Unlowered> {
+    match operand(arg) {
+        Placed::Loc(loc) => Ok(loc),
+        other => Err(Unlowered(format!("{other:?} is no machine operand"))),
+    }
+}
+
+/// Python's `arg.width`, which a cell and an opaque operand lack.
+fn arg_width(arg: &Arg) -> Option<u32> {
+    match arg {
+        Arg::Held(one) => Some(one.width),
+        Arg::Const(one) => Some(one.width),
+        Arg::Symbol(one) => Some(one.width),
+        Arg::FrameAddress(one) => Some(one.width),
+        Arg::FrameSelector(one) => Some(one.width),
+        Arg::Cell(_) | Arg::Opaque(_) => None,
+    }
+}
+
+fn held_or_const(arg: &Arg) -> bool {
+    matches!(arg, Arg::Held(_) | Arg::Const(_))
+}
+
+fn const_n(arg: &Arg) -> Option<i64> {
+    match arg {
+        Arg::Const(one) => one.n.to_i64(),
+        _ => None,
+    }
+}
+
+pub(crate) fn _check_inserted_conditions(
+    ops: &[Op],
+    leaving: &std::collections::BTreeSet<crate::model::mir::Value>,
+) -> Result<(), Unlowered> {
+    let mut alive: std::collections::BTreeSet<_> = leaving.iter().filter(|value| value.flags).copied().collect();
+    for op in ops.iter().rev() {
+        let preserved = alive.iter().any(|value| !op.defines.contains(value));
+        if !op.source_backed && matches!(op.kind, Kind::Add | Kind::Mul | Kind::Smulhi | Kind::PtrOffset) && preserved {
+            return Err(Unlowered(format!("inserted {} at {:#x} crosses a live condition", op.kind.as_str(), op.at)));
+        }
+        for one in &op.defines {
+            alive.remove(one);
+        }
+        alive.extend(op.uses.iter().filter(|value| value.flags).copied());
+    }
+    Ok(())
+}
+
+/// Keep a pure single-use comparison adjacent to its branch during selection.
+pub(crate) fn _branch_condition(
+    block: &crate::model::mir::MirBlock,
+    readers: &std::collections::HashMap<crate::model::mir::Value, usize>,
+) -> Vec<Op> {
+    let Some(branch) = block.ops.last().filter(|op| op.kind == Kind::Branch) else {
+        return block.ops.clone();
+    };
+    let conditions: Vec<_> = branch.uses.iter().filter(|value| value.flags).collect();
+    if conditions.len() != 1 || readers.get(conditions[0]).copied().unwrap_or(0) != 1 {
+        return block.ops.clone();
+    }
+    let last = block.ops.len() - 1;
+    for (index, op) in block.ops[..last].iter().enumerate() {
+        if op.op == Some(OpCode::Operation(Operation::Compare))
+            && op.defines == [*conditions[0]]
+            && !(!op.loads.is_empty() || !op.stores.is_empty() || op.barrier())
+            && op.args.iter().all(|arg| matches!(arg, Arg::Held(_) | Arg::Const(_) | Arg::Symbol(_)))
+        {
+            let mut out = block.ops[..index].to_vec();
+            out.extend_from_slice(&block.ops[index + 1..last]);
+            out.push(op.clone());
+            out.push(branch.clone());
+            return out;
+        }
+    }
+    block.ops.clone()
+}
+
+type Parts = Result<Vec<ir::Semantics>, Unlowered>;
+
+fn _extract(op: &Op, lowering: &mut Lowering) -> Parts {
+    if let ([Arg::Held(source), Arg::Const(offset)], [Arg::Held(result)]) = (&op.args[..], &op.results[..]) {
+        let offset = offset.n.to_i64();
+        if source.width == 4 && result.width == 2 && matches!(offset, Some(0 | 16)) {
+            let (source, result) = (source.value, result.value);
+            // The low word of a dword register is itself an encodable word operand.
+            if offset == Some(0) {
+                return Ok(vec![sem(Operation::Move, "mov", vec![held(result.id, 2)], vec![held(source.id, 2)])]);
+            }
+            // The halves of a sign extension are the word itself and its sign.
+            if let Some(word) = lowering.sign_extended(source.id).cloned() {
+                let kept = held(result.id, 2);
+                // Only where a divide already wanted dx:ax.
+                if lowering.divides(result.id, &word) {
+                    return Ok(vec![sem(Operation::Extend, "cwd", vec![kept], vec![located(&Arg::Held(word))?])]);
+                }
+            }
+            let discarded = held(lowering.fresh(), 2);
+            let kept = held(result.id, 2);
+            return Ok(vec![
+                sem(Operation::Push, "push", vec![], vec![held(source.id, 4)]),
+                sem(Operation::Pop, "pop", vec![if offset == Some(0) { kept.clone() } else { discarded.clone() }], vec![]),
+                sem(Operation::Pop, "pop", vec![if offset == Some(0) { discarded } else { kept }], vec![]),
+            ]);
+        }
+    }
+    Err(Unlowered(format!("unsupported extraction at {:#x}", op.at)))
+}
+
+fn _fixed_multiply(op: &Op, lowering: &mut Lowering) -> Parts {
+    let valid = op.args.len() == 3
+        && matches!(op.results[..], [Arg::Held(ref result)] if result.width == 4)
+        && const_n(&op.args[2]).is_some_and(|n| (1..32).contains(&n))
+        && op.args[..2].iter().all(|arg| held_or_const(arg) && arg_width(arg) == Some(4));
+    if !valid {
+        return Err(Unlowered(format!("unsupported fixed multiply at {:#x}", op.at)));
+    }
+    let mut setup = vec![];
+    let mut factors = vec![];
+    for arg in &op.args[..2] {
+        let mut factor = located(arg)?;
+        if matches!(arg, Arg::Const(_)) {
+            let into = held(lowering.fresh(), 4);
+            setup.push(sem(Operation::Move, "mov", vec![into.clone()], vec![factor]));
+            factor = into;
+        }
+        factors.push(factor);
+    }
+    let (low, high) = (held(lowering.fresh(), 4), held(lowering.fresh(), 4));
+    let result = located(&op.results[0])?;
+    setup.push(sem(Operation::Multiply, "imul", vec![low.clone(), high.clone()], factors));
+    setup.push(sem(Operation::Funnel, "shrd", vec![result], vec![low, high, immediate(const_n(&op.args[2]).unwrap(), 1)]));
+    Ok(setup)
+}
+
+/// Compute wrapping fixed i32 division without general i64 arithmetic.
+fn _fixed_division(op: &Op, lowering: &mut Lowering) -> Parts {
+    let valid = op.args.len() == 3
+        && matches!(op.results[..], [Arg::Held(ref result)] if result.width == 4)
+        && const_n(&op.args[2]).is_some_and(|n| (1..32).contains(&n))
+        && op.args[..2].iter().all(|arg| held_or_const(arg) && arg_width(arg) == Some(4));
+    if !valid {
+        return Err(Unlowered(format!("unsupported fixed divide at {:#x}", op.at)));
+    }
+    let fraction = const_n(&op.args[2]).unwrap();
+    let (left_arg, right_arg) = (&op.args[0], &op.args[1]);
+    let scale = num_bigint::BigInt::from(1) << fraction;
+    let shifted_constant = match left_arg {
+        Arg::Const(left) => Some(&left.n << fraction),
+        _ => None,
+    };
+    let mut quotient_fits = shifted_constant.as_ref().is_some_and(|shifted| {
+        num_bigint::BigInt::from(-(1i64 << 31)) <= *shifted && *shifted < num_bigint::BigInt::from(1i64 << 31)
+    });
+    if let Arg::Const(right) = right_arg {
+        // |right| >= 1.0 cannot enlarge the stored numerator.
+        quotient_fits |= right.n >= scale || right.n < -scale.clone();
+    }
+    let mut setup = vec![];
+    let mut materialize = |arg: &Arg, setup: &mut Vec<ir::Semantics>, lowering: &mut Lowering| -> Result<Loc, Unlowered> {
+        let value = located(arg)?;
+        if matches!(value, Loc::Held(_)) {
+            return Ok(value);
+        }
+        let into = held(lowering.fresh(), 4);
+        setup.push(sem(Operation::Move, "mov", vec![into.clone()], vec![value]));
+        Ok(into)
+    };
+    let divisor = materialize(right_arg, &mut setup, lowering)?;
+    let result = located(&op.results[0])?;
+
+    if quotient_fits {
+        let mut low = held(lowering.fresh(), 4);
+        let high;
+        if let Some(shifted) = &shifted_constant {
+            setup.push(sem(Operation::Move, "mov", vec![low.clone()], vec![immediate(shifted.to_i64().unwrap(), 4)]));
+            high = held(lowering.fresh(), 4);
+            setup.push(sem(Operation::Extend, "cdq", vec![high.clone()], vec![low.clone()]));
+        } else {
+            let left = materialize(left_arg, &mut setup, lowering)?;
+            let unshifted_high = held(lowering.fresh(), 4);
+            setup.push(sem(Operation::Move, "mov", vec![low.clone()], vec![left]));
+            setup.push(sem(Operation::Extend, "cdq", vec![unshifted_high.clone()], vec![low.clone()]));
+            high = held(lowering.fresh(), 4);
+            setup.push(sem(
+                Operation::Funnel,
+                "shld",
+                vec![high.clone()],
+                vec![unshifted_high, low.clone(), immediate(fraction, 1)],
+            ));
+            let shifted_low = held(lowering.fresh(), 4);
+            setup.push(sem(Operation::Binary, "shl", vec![shifted_low.clone()], vec![low, immediate(fraction, 1)]));
+            low = shifted_low;
+        }
+        let remainder = held(lowering.fresh(), 4);
+        setup.push(sem(Operation::Divide, "idiv", vec![result, remainder], vec![high, low, divisor]));
+        return Ok(setup);
+    }
+
+    let left = materialize(left_arg, &mut setup, lowering)?;
+    let (sign_left, sign_right) = (held(lowering.fresh(), 4), held(lowering.fresh(), 4));
+    setup.push(sem(Operation::Binary, "sar", vec![sign_left.clone()], vec![left.clone(), immediate(31, 1)]));
+    setup.push(sem(Operation::Binary, "sar", vec![sign_right.clone()], vec![divisor.clone(), immediate(31, 1)]));
+    let mut magnitude = |value: Loc, sign: Loc, setup: &mut Vec<ir::Semantics>, lowering: &mut Lowering| {
+        let changed = held(lowering.fresh(), 4);
+        let absolute = held(lowering.fresh(), 4);
+        setup.push(sem(Operation::Binary, "xor", vec![changed.clone()], vec![value, sign.clone()]));
+        setup.push(sem(Operation::Binary, "sub", vec![absolute.clone()], vec![changed, sign]));
+        absolute
+    };
+    let absolute_left = magnitude(left, sign_left.clone(), &mut setup, lowering);
+    let absolute_divisor = magnitude(divisor, sign_right.clone(), &mut setup, lowering);
+    let result_sign = held(lowering.fresh(), 4);
+    let (high, low) = (held(lowering.fresh(), 4), held(lowering.fresh(), 4));
+    let zero = held(lowering.fresh(), 4);
+    setup.push(sem(Operation::Binary, "xor", vec![result_sign.clone()], vec![sign_left, sign_right]));
+    setup.push(sem(Operation::Binary, "shr", vec![high.clone()], vec![absolute_left.clone(), immediate(32 - fraction, 1)]));
+    setup.push(sem(Operation::Binary, "shl", vec![low.clone()], vec![absolute_left, immediate(fraction, 1)]));
+    setup.push(sem(Operation::Move, "mov", vec![zero.clone()], vec![immediate(0, 4)]));
+    let (upper_quotient, upper_remainder) = (held(lowering.fresh(), 4), held(lowering.fresh(), 4));
+    let (low_quotient, low_remainder) = (held(lowering.fresh(), 4), held(lowering.fresh(), 4));
+    let signed = held(lowering.fresh(), 4);
+    setup.push(sem(
+        Operation::Divide,
+        "div",
+        vec![upper_quotient, upper_remainder.clone()],
+        vec![zero, high, absolute_divisor.clone()],
+    ));
+    setup.push(sem(
+        Operation::Divide,
+        "div",
+        vec![low_quotient.clone(), low_remainder],
+        vec![upper_remainder, low, absolute_divisor],
+    ));
+    setup.push(sem(Operation::Binary, "xor", vec![signed.clone()], vec![low_quotient, result_sign.clone()]));
+    setup.push(sem(Operation::Binary, "sub", vec![result], vec![signed, result_sign]));
+    Ok(setup)
+}
+
+fn _concat(op: &Op, _lowering: &mut Lowering) -> Parts {
+    let word = |arg: &Arg| held_or_const(arg) && arg_width(arg) == Some(2);
+    if op.args.len() == 2 && word(&op.args[0]) && word(&op.args[1]) {
+        if let [Arg::Held(result)] = &op.results[..] {
+            if result.width == 4 {
+                let (high, low) = (located(&op.args[0])?, located(&op.args[1])?);
+                return Ok(vec![
+                    sem(Operation::Push, "push", vec![], vec![high]),
+                    sem(Operation::Push, "push", vec![], vec![low]),
+                    sem(Operation::Pop, "pop", vec![located(&op.results[0])?], vec![]),
+                ]);
+            }
+        }
+    }
+    Err(Unlowered(format!("unsupported concatenation at {:#x}", op.at)))
+}
+
+fn _signed_high_product(op: &Op, lowering: &mut Lowering) -> Parts {
+    let result = match &op.results[..] {
+        [Arg::Held(result)] if op.args.len() == 2 && matches!(result.width, 2 | 4) => Some(result),
+        _ => None,
+    };
+    let Some(result) =
+        result.filter(|result| op.args.iter().all(|arg| held_or_const(arg) && arg_width(arg) == Some(result.width)))
+    else {
+        return Err(Unlowered(format!("unsupported signed high product at {:#x}", op.at)));
+    };
+    let (mut setup, mut sources) = (vec![], vec![]);
+    for arg in &op.args {
+        let mut source = located(arg)?;
+        if matches!(arg, Arg::Const(_)) {
+            let into = held(lowering.fresh(), result.width);
+            setup.push(sem(Operation::Move, "mov", vec![into.clone()], vec![source]));
+            source = into;
+        }
+        sources.push(source);
+    }
+    let low = held(lowering.fresh(), result.width);
+    setup.push(sem(Operation::Multiply, "imul", vec![low, located(&op.results[0])?], sources));
+    Ok(setup)
+}
+
+fn _pointer_offset(op: &Op, lowering: &mut Lowering) -> Parts {
+    let Some(model) = lowering.pointer_model.clone() else {
+        return Err(Unlowered(format!("pointer offset at {:#x} needs an established pointer ABI", op.at)));
+    };
+    if op.args.len() != 2 || op.results.len() != 1 {
+        return Err(Unlowered(format!("unsupported pointer offset at {:#x}", op.at)));
+    }
+    let (pointer, displacement, result) = (located(&op.args[0])?, located(&op.args[1])?, located(&op.results[0])?);
+    model.offset(&pointer, &displacement, &result, &mut || lowering.fresh()).map_err(Unlowered)
+}
+
+fn _pointer_access(op: &Op, lowering: &mut Lowering) -> Result<Option<Vec<ir::Semantics>>, Unlowered> {
+    let mut references: Vec<&MemRef> = vec![];
+    for arg in op.args.iter().chain(&op.results) {
+        if let Arg::Cell(cell) = arg {
+            if cell.r#ref.pointer && !references.contains(&&cell.r#ref) {
+                references.push(&cell.r#ref);
+            }
+        }
+    }
+    if references.is_empty() {
+        return Ok(None);
+    }
+    if lowering.pointer_model.is_none() {
+        return Err(Unlowered(format!("pointer access at {:#x} needs an established pointer ABI", op.at)));
+    }
+    if references.len() != 1 || !matches!(op.kind, Kind::Load | Kind::Store) {
+        return Err(Unlowered(format!("unsupported whole-pointer memory operation at {:#x}", op.at)));
+    }
+    let reference = references[0].clone();
+    let Some(base) = reference.base.filter(|_| {
+        reference.base_width == 4 && reference.addr.is_none() && reference.segment.is_none()
+    }) else {
+        return Err(Unlowered(format!("whole-pointer access has an unnormalized address at {:#x}", op.at)));
+    };
+    let offset = ir::Held { value: lowering.fresh(), width: 2 };
+    let selector = Loc::Reg(ir::Reg { register: Register::ES, width: 2 });
+    let cell = ir::Mem {
+        base: Some(offset),
+        ..ir::Mem::new(Some(Addr { segment: Register::ES, ..Addr::new(Space::Far, 0) }), reference.width)
+    };
+    let place = |arg: &Arg, had: &[Loc], index: usize| -> Result<Placed, Unlowered> {
+        Ok(match arg {
+            Arg::Cell(one) if one.r#ref == reference => Placed::Loc(Loc::Mem(cell.clone())),
+            _ => as_a_value(arg, had, index),
+        })
+    };
+    let node = lowering.node(op).cloned();
+    let Some(access) = current(op, Place::With(&place), node.as_ref())? else {
+        return Err(Unlowered(format!("whole-pointer access has no operation at {:#x}", op.at)));
+    };
+    // Materialization is local to the memory instruction. Restore the segment
+    // resource so other MIR addresses retain their address-space identity.
+    Ok(Some(vec![
+        sem(Operation::Push, "push", vec![], vec![selector.clone()]),
+        sem(Operation::Push, "push", vec![], vec![held(base.id, 4)]),
+        sem(Operation::Pop, "pop", vec![Loc::Held(offset)], vec![]),
+        sem(Operation::Pop, "pop", vec![selector.clone()], vec![]),
+        access,
+        sem(Operation::Pop, "pop", vec![selector], vec![]),
+    ]))
+}
+
+fn _constant_store(op: &Op, lowering: &mut Lowering) -> Result<Option<Vec<ir::Semantics>>, Unlowered> {
+    if let ([Arg::Const(bits)], [Arg::Cell(cell)]) = (&op.args[..], &op.results[..]) {
+        let reference = &cell.r#ref;
+        if bits.width == 8 && reference.width == 8 {
+            let Some(addr) = reference.addr.filter(|_| reference.base.is_none() && reference.segment.is_none()) else {
+                return Err(Unlowered("wide constant store needs a static address".into()));
+            };
+            let mut parts = vec![];
+            for offset in [0i64, 4] {
+                let half = MemRef { width: 4, addr: Some(Addr { disp: addr.disp + offset, ..addr }), ..reference.clone() };
+                let word = ((&bits.n >> (offset * 8)) & num_bigint::BigInt::from(0xFFFF_FFFFu32)).to_i64().unwrap();
+                parts.push(sem(Operation::Move, "mov", vec![Loc::Mem(_addressed(&half)?)], vec![immediate(word, 4)]));
+            }
+            return Ok(Some(parts));
+        }
+    }
+    _pointer_access(op, lowering)
+}
+
+/// `rep stos`: the count in cx, the value in the accumulator, the cells through es:di.
+fn _fill(op: &Op, lowering: &mut Lowering) -> Parts {
+    let [value, count, address, selector @ ..] = &op.args[..] else {
+        return Err(Unlowered(format!("fill at {:#x} has too few operands", op.at)));
+    };
+    let value_width = arg_width(value).ok_or_else(|| Unlowered(format!("fill of a cell at {:#x}", op.at)))?;
+    let name = match value_width {
+        1 => "stosb",
+        2 => "stosw",
+        4 => "stosd",
+        _ => return Err(Unlowered(format!("fill of {value_width}-byte cells at {:#x}", op.at))),
+    };
+    let mut setup = vec![];
+    let mut in_register = |arg: &Arg, width: u32, setup: &mut Vec<ir::Semantics>| -> Result<Loc, Unlowered> {
+        if matches!(arg, Arg::Held(_)) {
+            return located(arg);
+        }
+        let into = held(lowering.fresh(), width);
+        setup.push(sem(Operation::Move, "mov", vec![into.clone()], vec![located(arg)?]));
+        Ok(into)
+    };
+    let stored = in_register(value, value_width, &mut setup)?;
+    let counted = in_register(count, 2, &mut setup)?;
+    let through = in_register(address, 2, &mut setup)?;
+    let selected = match selector.first() {
+        Some(selector) => Some(in_register(selector, 2, &mut setup)?),
+        None => None,
+    };
+    let (stepped, emptied) = (held(lowering.fresh(), 2), held(lowering.fresh(), 2));
+    let cells = Loc::Mem(ir::Mem::new(None, 0));
+    if let Some(selected) = selected {
+        setup.push(sem(Operation::Fill, name, vec![cells, stepped, emptied], vec![stored, counted, through, selected]));
+        return Ok(setup);
+    }
+    let extra = Loc::Reg(ir::Reg { register: Register::ES, width: 2 });
+    let source_segment =
+        if op.stores.iter().any(|one| one.space == Some(Space::Frame)) { Register::SS } else { Register::DS };
+    setup.extend([
+        sem(Operation::Push, "push", vec![], vec![extra.clone()]),
+        sem(Operation::Push, "push", vec![], vec![Loc::Reg(ir::Reg { register: source_segment, width: 2 })]),
+        sem(Operation::Pop, "pop", vec![extra.clone()], vec![]),
+        sem(Operation::Fill, name, vec![cells, stepped, emptied], vec![stored, counted, through, extra.clone()]),
+        sem(Operation::Pop, "pop", vec![extra], vec![]),
+    ]);
+    Ok(setup)
+}
+
+/// A dead AND destination needs flags, not a two-address temporary.
+fn _flag_test(op: &Op, context: &Lowering) -> Option<Vec<ir::Semantics>> {
+    if op.kind != Kind::And
+        || !op.loads.is_empty()
+        || !op.stores.is_empty()
+        || !op.merges.is_empty()
+        || op.barrier()
+        || op.results.len() != 1
+        || op.args.len() != 2
+    {
+        return None;
+    }
+    let Arg::Held(result) = &op.results[0] else {
+        return None;
+    };
+    if context._read.contains(&result.value.id)
+        || context._exposed.contains(&result.value.id)
+        || !matches!(result.width, 2 | 4)
+        || op.args.iter().any(|arg| !matches!(arg, Arg::Held(one) if one.width == result.width))
+        || op.defines.iter().any(|value| *value != result.value && !value.flags)
+    {
+        return None;
+    }
+    Some(vec![sem(Operation::Compare, "test", vec![], op.args.iter().map(|arg| located(arg).unwrap()).collect())])
+}
+
+fn _sign_word(op: &Op) -> Option<Vec<ir::Semantics>> {
+    if op.op != Some(OpCode::Operation(Operation::Extend)) || op.args.len() != 1 || op.results.len() != 1 {
+        return None;
+    }
+    let (Arg::Held(source), Arg::Held(result)) = (&op.args[0], &op.results[0]) else {
+        return None;
+    };
+    if source.width != result.width || !matches!(source.width, 2 | 4) {
+        return None;
+    }
+    let (source, result) = (held(source.value.id, source.width), held(result.value.id, result.width));
+    let width = source_width(&source);
+    Some(vec![
+        sem(Operation::Move, "mov", vec![result.clone()], vec![source]),
+        sem(Operation::Binary, "sar", vec![result.clone()], vec![result, immediate(i64::from(width) * 8 - 1, 1)]),
+    ])
+}
+
+fn source_width(loc: &Loc) -> u32 {
+    match loc {
+        Loc::Held(one) => one.width,
+        _ => unreachable!(),
+    }
+}
+
+/// One body being lowered, and the values the expansion invents.
+pub struct Lowering {
+    pub pointer_model: Option<super::pointers::Model>,
+    _read: std::collections::BTreeSet<u32>,
+    /// Which dword values are a word's sign extension, and which word.
+    _extended: std::collections::HashMap<u32, Held>,
+    _dividends: std::collections::HashMap<u32, u32>,
+    _exposed: std::collections::BTreeSet<u32>,
+    _nodes: std::collections::HashMap<u32, Node>,
+    _next: u32,
+}
+
+impl Lowering {
+    /// The decoded occurrence for this source-backed operation, if any.
+    pub fn node(&self, op: &Op) -> Option<&Node> {
+        if op.source_backed { op.id.and_then(|id| self._nodes.get(&id)) } else { None }
+    }
+
+    /// A value id nothing in this body already uses.
+    pub fn fresh(&mut self) -> u32 {
+        self._next += 1;
+        self._next - 1
+    }
+
+    /// The word this dword is the sign extension of, if it is one.
+    pub fn sign_extended(&self, value: u32) -> Option<&Held> {
+        self._extended.get(&value)
+    }
+
+    /// Whether `high` is only ever a divide's high half over that word.
+    pub fn divides(&self, high: u32, word: &Held) -> bool {
+        self._dividends.get(&high).is_some_and(|found| *found == word.value.id)
+    }
 }
