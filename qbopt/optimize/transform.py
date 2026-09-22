@@ -2310,6 +2310,7 @@ def folded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirB
                 memory.get((block.at, index), {}),
                 symbols,
             )
+            made = _constant_based(made, facts)
             changed = changed or made is not op
             ops.append(made)
         out.append(replace(block, ops=tuple(ops)))
@@ -2327,6 +2328,54 @@ def folded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirB
     if loopy.loops(result.blocks, result.entry):
         return result
     return floatfold.stored(floatfold.discarded(result, conversions), floating_facts)
+
+
+def _constant_based(op: Op, facts: dict) -> Op:
+    """A near cell reached through a proven constant, as the fixed cell it is.
+
+    Full unrolling leaves `L[k]` with `k` a number; kept based, each copy paid
+    a register load of `k` to address one fixed byte.
+    """
+
+    def fixed(ref: mir.MemRef) -> mir.MemRef:
+        if (
+            ref.base is None
+            or ref.segment is not None
+            or ref.addr is None
+            or ref.addr.space not in (module.Space.FRAME, module.Space.SEGMENT)
+            or ref.base_width != 2
+            or ref.symbolic is not None
+            or ref.allocation is not None
+            or (fact := facts.get(ref.base)) is None
+            or fact.width < ref.base_width
+        ):
+            return ref
+        disp = (ref.addr.disp + fact.n) & 0xFFFF
+        if ref.addr.space is module.Space.FRAME:
+            disp = (disp ^ 0x8000) - 0x8000
+        return replace(ref, addr=replace(ref.addr, disp=disp, base=0), base=None)
+
+    refs = {ref: fixed(ref) for ref in (*op.loads, *op.stores)}
+    refs.update((one.ref, fixed(one.ref)) for one in (*op.args, *op.results) if isinstance(one, mir.Cell))
+    if all(new == old for old, new in refs.items()):
+        return op
+
+    def cell(one):
+        return mir.Cell(refs[one.ref]) if isinstance(one, mir.Cell) else one
+
+    kept = {one.value for one in (*op.args, *op.results) if isinstance(one, mir.Held)}
+    kept |= {value for ref in refs.values() for value in (ref.base, ref.segment) if value is not None}
+    dropped = {old.base for old, new in refs.items() if new != old} - kept - set(op.merges)
+    return replace(
+        op,
+        loads=tuple(refs[ref] for ref in op.loads),
+        stores=tuple(refs[ref] for ref in op.stores),
+        args=tuple(map(cell, op.args)),
+        results=tuple(map(cell, op.results)),
+        uses=tuple(value for value in op.uses if value not in dropped),
+        source_backed=False,
+        raised=None,
+    )
 
 
 def _constant_update(op: Op, facts: dict, memory: dict, wanted: set) -> Op:

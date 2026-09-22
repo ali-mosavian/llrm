@@ -2,6 +2,7 @@ from dataclasses import replace
 
 from qbopt.model import mir
 from qbopt.analysis import loops
+from qbopt.analysis import consts
 from qbopt.analysis import induction
 
 
@@ -18,31 +19,11 @@ def shared(body: mir.MirBody) -> mir.MirBody:
             twin = _twin(counters, derived, header, required)
             if twin is not None:
                 return _replacing(body, header, derived, twin, derived.start.width)
-            if not isinstance(derived.start, mir.Held) or not isinstance(derived.step, mir.Const):
+            found = _offset(counters, derived, definitions)
+            if found is None:
                 continue
-            seed = definitions.get(derived.start.value.id)
-            if seed is None or seed.kind is not mir.Kind.ADD or seed.loads or seed.stores or seed.barrier:
-                continue
-            match seed.args:
-                case (mir.Held() as source, mir.Const() as offset):
-                    pass
-                case (mir.Const() as offset, mir.Held() as source):
-                    pass
-                case _:
-                    continue
+            base, offset, seed = found
             width = derived.start.width
-            if source.width != width or offset.width != width:
-                continue
-            base = next(
-                (
-                    one
-                    for one in counters.values()
-                    if one.value != derived.value and one.start == source and one.step == derived.step
-                ),
-                None,
-            )
-            if base is None:
-                continue
             phi = next(one for one in header.phis if one.result.id == derived.value)
             upper = None
             if width < 4 and (phi.result, transform.HIGH) in required:
@@ -62,7 +43,9 @@ def shared(body: mir.MirBody) -> mir.MirBody:
                 if upper is None or upper.id not in induction.invariant(body, set(loop.body)):
                     continue
             root = next(one.result for one in header.phis if one.result.id == base.value)
-            operation = _made(mir.Kind.ADD, "add", phi.result, (mir.Held(root, width), offset), header.at, seed)
+            operation = _made(
+                mir.Kind.ADD, "add", phi.result, (mir.Held(root, width), offset), header.at, seed or header.ops[0]
+            )
             if upper is not None:
                 operation = replace(operation, merges={upper: phi.result}, uses=(*operation.uses, upper))
             changed = replace(
@@ -70,6 +53,53 @@ def shared(body: mir.MirBody) -> mir.MirBody:
             )
             return replace(body, blocks=tuple(changed if block is header else block for block in body.blocks))
     return body
+
+
+def _offset(
+    counters: dict[int, induction.Affine], derived: induction.Affine, definitions: dict[int, mir.Op]
+) -> tuple[induction.Affine, mir.Const, mir.Op | None] | None:
+    """Another counter stepping as `derived` does a constant distance behind it, the distance, and a seed.
+
+    Two starts are that far apart when both are one root plus a constant:
+    `add source,c` over the other's start, or strength reduction's `a[i].x`
+    and `a[i].y`, starting 4 apart from the same or no root. Otherwise the
+    canonical counter is the lower id, so the pair converges.
+    """
+    if not isinstance(derived.step, mir.Const) or not isinstance(derived.start, (mir.Held, mir.Const)):
+        return None
+    width = derived.start.width
+    root, at = _anchor(derived.start, definitions, width)
+    seed = definitions.get(derived.start.value.id) if isinstance(derived.start, mir.Held) else None
+    direct = seed.args if seed is not None and seed.kind is mir.Kind.ADD else ()
+    for one in sorted(counters.values(), key=lambda one: (one.start not in direct, one.value)):
+        if one.value == derived.value or one.step != derived.step or not isinstance(one.start, (mir.Held, mir.Const)):
+            continue
+        if one.start not in direct and one.value > derived.value:
+            continue
+        if one.start.width != width or _anchor(one.start, definitions, width)[0] != root:
+            continue
+        distance = at - _anchor(one.start, definitions, width)[1]
+        return one, mir.Const(consts.masked(distance, width), width), seed
+    return None
+
+
+def _anchor(arg: mir.Held | mir.Const, definitions: dict[int, mir.Op], width: int) -> tuple[mir.Value | None, int]:
+    """`arg` as a root value plus a constant, through copies and constant adds; a constant has no root."""
+    offset = 0
+    while isinstance(arg, mir.Held) and arg.width == width:
+        op = definitions.get(arg.value.id)
+        if op is None or op.loads or op.stores or op.barrier or op.merges or op.results != (arg,):
+            break
+        if op.kind is mir.Kind.COPY and len(op.args) == 1 and isinstance(op.args[0], (mir.Held, mir.Const)):
+            arg = op.args[0]
+        elif op.kind is mir.Kind.ADD and len(op.args) == 2 and sum(isinstance(one, mir.Const) for one in op.args) == 1:
+            constant, arg = sorted(op.args, key=lambda one: not isinstance(one, mir.Const))
+            offset += constant.n
+        else:
+            break
+    if isinstance(arg, mir.Const):
+        return None, consts.masked(arg.n + offset, width)
+    return arg.value, offset
 
 
 def _twin(counters, derived, header, required):
