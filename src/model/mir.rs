@@ -4207,7 +4207,7 @@ mod tests {
 /// Follow only exact word copies to their common source.
 ///
 /// Direct port of `qbopt.model.mir:_copied_word`.
-pub(crate) fn _copied_word(arg: &Arg, definitions: &BTreeMap<Value, &Op>) -> Arg {
+pub(crate) fn _copied_word<D: std::borrow::Borrow<Op>>(arg: &Arg, definitions: &BTreeMap<Value, D>) -> Arg {
     let mut arg = arg.clone();
     let mut seen = BTreeSet::new();
     loop {
@@ -4215,7 +4215,7 @@ pub(crate) fn _copied_word(arg: &Arg, definitions: &BTreeMap<Value, &Op>) -> Arg
         if held.width != 2 || !seen.insert(held.value) {
             break;
         }
-        let Some(copy) = definitions.get(&held.value) else { break };
+        let Some(copy) = definitions.get(&held.value).map(std::borrow::Borrow::<Op>::borrow) else { break };
         if copy.kind != Kind::Copy
             || !copy.loads.is_empty()
             || !copy.stores.is_empty()
@@ -4234,7 +4234,7 @@ pub(crate) fn _copied_word(arg: &Arg, definitions: &BTreeMap<Value, &Op>) -> Arg
 /// The scalar whose exact high and low words are these operands.
 ///
 /// Direct port of `qbopt.model.mir:extracted_whole`.
-pub(crate) fn extracted_whole(high: &Arg, low: &Arg, definitions: &BTreeMap<Value, &Op>) -> Option<Held> {
+pub(crate) fn extracted_whole<D: std::borrow::Borrow<Op>>(high: &Arg, low: &Arg, definitions: &BTreeMap<Value, D>) -> Option<Held> {
     let mut original: Option<Held> = None;
     for (arg, offset) in [(high, 16), (low, 0)] {
         let arg = _copied_word(arg, definitions);
@@ -4244,7 +4244,7 @@ pub(crate) fn extracted_whole(high: &Arg, low: &Arg, definitions: &BTreeMap<Valu
         }
         if offset == 0 {
             if let Some(whole) = original {
-                if let Some(extension) = definitions.get(&whole.value) {
+                if let Some(extension) = definitions.get(&whole.value).map(std::borrow::Borrow::<Op>::borrow) {
                     if extension.kind == Kind::SignExtend
                         && extension.args.len() == 1
                         && _copied_word(&extension.args[0], definitions) == Arg::Held(held)
@@ -4258,7 +4258,7 @@ pub(crate) fn extracted_whole(high: &Arg, low: &Arg, definitions: &BTreeMap<Valu
                 }
             }
         }
-        let op = definitions.get(&held.value)?;
+        let op: &Op = definitions.get(&held.value)?.borrow();
         let source = match op.args.as_slice() {
             [Arg::Held(source), Arg::Const(constant)]
                 if op.kind == Kind::Extract
