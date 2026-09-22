@@ -1090,6 +1090,23 @@ fn test_the_bound_error_call_is_placed_after_the_hot_path() {
     assert!(procedure.find("B$UBND").expect("B$UBND") > returned);
 }
 
+/// An ELSE that only raises an error was laid out before the return.
+///
+/// Nothing marks it cold: B$SERR never returns, and that is enough.
+#[test]
+fn test_an_error_statement_is_placed_after_the_hot_path() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let source = written(
+        &directory,
+        "RAISE.BAS",
+        b"DEFINT A-Z\nDECLARE SUB Check (n)\nCheck 3\nSUB Check (n)\n  IF n >= 0 THEN\n    PRINT n\n  ELSE\n    ERROR 5\n  END IF\nEND SUB\n",
+    );
+    let text = listing(&parsed(&source));
+    let procedure = &text[text.find("CHECK proc").expect("CHECK proc")..text.find("CHECK endp").expect("CHECK endp")];
+
+    assert!(procedure.find("B$SERR").expect("B$SERR") > procedure.find("retf").expect("retf"));
+}
+
 /// LBOUND(a, 1) compared the rank against 1 before reading the descriptor.
 ///
 /// Every allocated array has a first dimension, so only the allocation

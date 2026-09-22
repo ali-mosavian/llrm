@@ -554,3 +554,53 @@ fn test_loop_trace_is_kept_before_its_exit() {
         && !printed[index].starts_with("jmp ")
         && printed[index + 1].starts_with("jmp ")));
 }
+
+/// An error call on the branch's fall-through edge was laid out before the return.
+///
+/// No frontend marked it cold; the call's NEVER contract is what says so.
+#[test]
+fn test_a_block_that_only_reaches_a_terminal_call_is_placed_after_the_return() {
+    use crate::abi::runtime;
+    use crate::backend::lower;
+    use crate::model::mir::{self, Arg, Const, Held, Kind, MirBlock, MirBody};
+
+    let x = mir::Value::new(1, 0);
+    let flags = mir::Value { flags: true, ..mir::Value::new(2, 0) };
+    let mut compare = mir::Op::new(1, mir::OpCode::Operation(Operation::Compare), "", vec![flags], vec![x]);
+    compare.kind = Kind::Sub;
+    compare.args = vec![Arg::Held(Held { value: x, width: 2 }), Arg::Const(Const::new(0, 2))];
+    let mut branch = mir::Op::new(2, mir::OpCode::Operation(Operation::Branch), "", vec![], vec![flags]);
+    branch.kind = Kind::Branch;
+    branch.test = Some(Kind::Ge);
+    branch.target = Some(20);
+    let mut raised = mir::Op::new(10, mir::OpCode::Operation(Operation::Call), "call", vec![], vec![]);
+    raised.kind = Kind::Call;
+    raised.args_known = true;
+    let mut returned = mir::Op::new(20, mir::OpCode::Operation(Operation::Return), "ret", vec![], vec![]);
+    returned.kind = Kind::Return;
+    let body = MirBody {
+        sealed: true,
+        ..MirBody::new(
+            0,
+            vec![
+                MirBlock::new(0, vec![], vec![compare, branch], vec![10, 20]),
+                MirBlock::new(10, vec![], vec![raised], vec![]),
+                MirBlock::new(20, vec![], vec![returned], vec![]),
+            ],
+        )
+    };
+    let never = runtime::Contract {
+        cleanup: Some(0),
+        control: runtime::Control::Never,
+        established: true,
+        inputs: Some(BTreeSet::new()),
+        ..runtime::worst("B$RUNERR")
+    };
+    let calls: IndexMap<i64, String> = [(10, "B$RUNERR".to_owned())].into_iter().collect();
+    let contracts: IndexMap<i64, runtime::Contract> = [(10, never)].into_iter().collect();
+
+    let low = lower::lowered("checked", &body, Some(&calls), BTreeSet::new(), Some(&contracts), "386", Default::default())
+        .unwrap();
+
+    assert_eq!(placed(&low).unwrap().blocks.iter().map(|block| block.at).collect::<Vec<_>>(), vec![0, 20, 10]);
+}

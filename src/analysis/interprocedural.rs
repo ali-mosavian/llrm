@@ -537,12 +537,12 @@ pub(crate) fn noreturn_procedures(
 
 /// Apply the shared MIR terminal-call cleanup to named direct C calls.
 pub(crate) fn terminal_calls(body: &Rc<MirBody>, calls: &IndexMap<i64, String>, noreturn: &BTreeSet<String>) -> Rc<MirBody> {
-    let sites = calls
-        .iter()
-        .filter(|(_, target)| noreturn.contains(*target))
-        .map(|(at, _)| *at)
-        .collect::<BTreeSet<_>>();
-    control::after_terminal_calls(body, &sites)
+    control::after_terminal_calls(body, &terminal_sites(calls, noreturn))
+}
+
+/// Direct call sites whose named callee cannot return.
+pub(crate) fn terminal_sites(calls: &IndexMap<i64, String>, noreturn: &BTreeSet<String>) -> BTreeSet<i64> {
+    calls.iter().filter(|(_, target)| noreturn.contains(*target)).map(|(at, _)| *at).collect()
 }
 
 /// Associate each call with the exact stack ARG operations that feed it.

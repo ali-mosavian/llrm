@@ -7,7 +7,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::support::hash::IndexMap;
 
-use crate::model::mir::{Kind, MirBody};
+use crate::abi::runtime::{Contract, Control};
+use crate::model::mir::{Kind, MirBlock, MirBody};
 use crate::optimize::transform;
 
 /// Bodies whose CFG cannot reach a normal return.
@@ -36,6 +37,50 @@ pub(crate) fn inferred(
         }
         proven = found;
     }
+}
+
+/// Call sites whose established contract says control never comes back.
+pub(crate) fn terminal_sites(contracts: &IndexMap<i64, Contract>) -> BTreeSet<i64> {
+    contracts
+        .iter()
+        .filter(|(_, contract)| contract.established && contract.control == Control::Never)
+        .map(|(at, _)| *at)
+        .collect()
+}
+
+/// Blocks from which every path ends in a terminal call or a block the frontend marked cold.
+///
+/// A least fixed point, so a loop that never exits is not cold. When the
+/// entry is cold the whole body stops, and no block is colder than another.
+pub(crate) fn cold(body: &MirBody, terminal_calls: &BTreeSet<i64>) -> BTreeSet<i64> {
+    let mut found = BTreeSet::new();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for block in &body.blocks {
+            if !found.contains(&block.at) && (block.cold || _ends_cold(block, terminal_calls, &found)) {
+                found.insert(block.at);
+                changed = true;
+            }
+        }
+    }
+    if found.contains(&body.entry) {
+        BTreeSet::new()
+    } else {
+        found
+    }
+}
+
+fn _ends_cold(block: &MirBlock, terminal_calls: &BTreeSet<i64>, found: &BTreeSet<i64>) -> bool {
+    for op in &block.ops {
+        if op.kind == Kind::Return {
+            return false;
+        }
+        if op.kind == Kind::Call && terminal_calls.contains(&op.at) {
+            return true;
+        }
+    }
+    !block.succ.is_empty() && block.succ.iter().all(|at| found.contains(at))
 }
 
 pub(crate) fn _cannot_return(body: &MirBody, terminal_calls: &BTreeSet<i64>) -> bool {

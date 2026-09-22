@@ -17,7 +17,7 @@ use super::{addressforms, arithmetic, comparefold, cpu, division, farload, lower
 use crate::optimize::canonical;
 use crate::abi::runtime;
 use crate::legacy::calls;
-use crate::analysis::{consts, induction, liveness, loops, ssa};
+use crate::analysis::{consts, induction, liveness, loops, noreturn, ssa};
 use crate::model::floating::{Format, Rounding};
 use crate::support::pyset::PySet;
 use crate::model::lir::{self, Insn};
@@ -2301,6 +2301,9 @@ pub struct Lowered<'a> {
     pub hints: Option<&'a AllocationHints>,
     pub pointer_model: Option<super::pointers::Model>,
     pub noreturn: bool,
+    /// Calls proven not to return beyond their contracts, such as calls to a
+    /// local body that cannot return.
+    pub terminal: BTreeSet<i64>,
 }
 
 fn recount(made: &IndexMap<i64, Vec<Arc<Insn>>>, body: &MirBody) -> IndexMap<u32, i64> {
@@ -2436,6 +2439,10 @@ pub fn lowered(
         .collect();
     let live = _phis_worth_keeping(&body, &made);
     let facts = consts::known(&body, None, None, None, None);
+    let no_contracts = IndexMap::default();
+    let mut terminal = noreturn::terminal_sites(contracts.unwrap_or(&no_contracts));
+    terminal.extend(options.terminal.iter().copied());
+    let cold = noreturn::cold(&body, &terminal);
     let mut trip_counts: Vec<(i64, i64)> = loops::loops(&body.blocks, Some(body.entry))
         .iter()
         .filter_map(|one| {
@@ -2460,7 +2467,7 @@ pub fn lowered(
                     incoming: phi.incoming.iter().map(|(at, value)| (*at, value.id)).collect(),
                 })
                 .collect(),
-            cold: block.cold,
+            cold: cold.contains(&block.at) || block.cold,
         })
         .collect();
     let mut all_pins: IndexMap<u32, Register> = pins.iter().map(|(value, r#where)| (value.id, *r#where)).collect();

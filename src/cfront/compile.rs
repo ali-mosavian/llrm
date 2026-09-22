@@ -174,6 +174,7 @@ pub fn assembled(
         Ok(body)
     };
 
+    let mut noreturn: BTreeSet<String> = BTreeSet::new();
     if _optimise {
         for one in &raised_procedures {
             let optimised = run_optimiser(one, &bodies[&one.name], "")?;
@@ -364,7 +365,7 @@ pub fn assembled(
         // call site unreachable: keep the physical call, remove only the code
         // that would require it to return, and repeat.
         loop {
-            let noreturn = interprocedural::noreturn_procedures(&borrowed(&procedures_of(&bodies)), &private);
+            noreturn = interprocedural::noreturn_procedures(&borrowed(&procedures_of(&bodies)), &private);
             let mut changed = false;
             for raised in &raised_procedures {
                 let before = bodies[&raised.name].clone();
@@ -411,7 +412,11 @@ pub fn assembled(
             BTreeSet::new(),
             Some(&legalized.contracts),
             cpu::ProfileOrName::Name(target),
-            lower::Lowered { hints: Some(&legalized.hints), ..Default::default() },
+            lower::Lowered {
+                hints: Some(&legalized.hints),
+                terminal: interprocedural::terminal_sites(&legalized.calls, &noreturn),
+                ..Default::default()
+            },
         )
         .map_err(|error| hir::Unsupported(error.0));
         // Until the machine phases are ported, `mir` is written before the
