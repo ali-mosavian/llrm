@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::model::mir::{Arg, Kind, MirBody, Op, Value};
 
@@ -18,7 +18,7 @@ pub struct Escapes {
 pub fn analysed(body: &MirBody) -> Escapes {
     // Origins are not allocation bounds. Absence here says nothing about
     // runtime frame walking, callbacks, or pointers loaded from memory.
-    let mut origins: IndexMap<Value, BTreeSet<i64>> = IndexMap::new();
+    let mut origins: IndexMap<Value, BTreeSet<i64>> = IndexMap::default();
     let operations: Vec<&Op> = body.blocks.iter().flat_map(|block| &block.ops).collect();
     let phis: Vec<_> = body.blocks.iter().flat_map(|block| &block.phis).collect();
 
@@ -94,7 +94,7 @@ pub fn analysed(body: &MirBody) -> Escapes {
         .filter(|op| op.kind == Kind::Address && op.args.iter().any(|arg| matches!(arg, Arg::Opaque(_))))
         .map(|op| op.at)
         .collect();
-    let mut extents: IndexMap<i64, BTreeSet<Option<(i64, i64)>>> = IndexMap::new();
+    let mut extents: IndexMap<i64, BTreeSet<Option<(i64, i64)>>> = IndexMap::default();
     for op in &operations {
         for arg in &op.args {
             if let Arg::FrameAddress(address) = arg {
@@ -140,7 +140,7 @@ pub fn framed(body: &MirBody) -> IndexMap<Value, BTreeSet<(i64, i64)>> {
     let phis: Vec<_> = body.blocks.iter().flat_map(|block| &block.phis).collect();
     let mut defined: BTreeSet<Value> = phis.iter().map(|phi| phi.result).collect();
     defined.extend(ops.iter().flat_map(|op| op.defines.iter().copied()));
-    let mut moving: IndexMap<Value, &Op> = IndexMap::new();
+    let mut moving: IndexMap<Value, &Op> = IndexMap::default();
     let mut refuted: BTreeSet<Value> = BTreeSet::new();
     for op in &ops {
         let held = op.results.len() == 1 && matches!(&op.results[0], Arg::Held(one) if one.width == 2);
@@ -159,7 +159,7 @@ pub fn framed(body: &MirBody) -> IndexMap<Value, BTreeSet<(i64, i64)>> {
         }
     }
     refuted.extend(phis.iter().flat_map(|phi| phi.incoming.values()).filter(|one| !defined.contains(one)).copied());
-    let mut state: IndexMap<Value, BTreeSet<(i64, i64)>> = IndexMap::new();
+    let mut state: IndexMap<Value, BTreeSet<(i64, i64)>> = IndexMap::default();
 
     let side = |arg: &Arg, state: &IndexMap<Value, BTreeSet<(i64, i64)>>, refuted: &BTreeSet<Value>| match arg {
         Arg::Const(_) => Side::Number,

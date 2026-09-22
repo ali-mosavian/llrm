@@ -10,7 +10,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use iced_x86::Register;
-use indexmap::{IndexMap, IndexSet};
+use crate::support::hash::{IndexMap, IndexSet};
 
 use crate::analysis::effects;
 use crate::analysis::intervals::{self as ranges, Interval, Segment, key};
@@ -169,7 +169,7 @@ pub fn spilled(
                     }
                 }
             }
-            let mut remade: IndexMap<u32, u32> = IndexMap::new();
+            let mut remade: IndexMap<u32, u32> = IndexMap::default();
             for value in one.uses.clone() {
                 if (!constants.contains_key(&value)
                     && !addresses.contains_key(&value)
@@ -246,7 +246,7 @@ pub fn spilled(
             }
             let mut before: Vec<Arc<Insn>> = Vec::new();
             let mut after: Vec<Arc<Insn>> = Vec::new();
-            let mut rename: IndexMap<u32, u32> = IndexMap::new();
+            let mut rename: IndexMap<u32, u32> = IndexMap::default();
             for value in &one.uses {
                 if !stored.contains(value) || rename.contains_key(value) {
                     continue;
@@ -375,7 +375,7 @@ fn _short_update_runs(
                 position += 1;
                 continue;
             }
-            let renamed = IndexMap::from([(into, outof)]);
+            let renamed = IndexMap::from_iter([(into, outof)]);
             let updated = _renamed(second, &renamed);
             insns.push(updated);
             insns.push(_store(second, outof, &frame.cell(into, width)?));
@@ -429,7 +429,7 @@ pub fn siblings(
     if values.is_empty() {
         return Ok(BTreeSet::new());
     }
-    let mut adjacent: IndexMap<u32, BTreeSet<u32>> = IndexMap::new();
+    let mut adjacent: IndexMap<u32, BTreeSet<u32>> = IndexMap::default();
     for one in body.blocks.iter().flat_map(|block| &block.insns) {
         let Some(pair) = _plain_move(one) else {
             continue;
@@ -449,7 +449,7 @@ pub fn siblings(
     let near = coalesce::_interference(body);
     let deep = ranges::depths(body);
     let wanted: BTreeSet<u32> = adjacent.keys().copied().collect();
-    let mut occurs: IndexMap<u32, Vec<(f64, Arc<Insn>)>> = IndexMap::new();
+    let mut occurs: IndexMap<u32, Vec<(f64, Arc<Insn>)>> = IndexMap::default();
     for block in &body.blocks {
         let each = ranges::level(deep.get(&block.at).copied().unwrap_or(0));
         for one in &block.insns {
@@ -676,9 +676,9 @@ pub fn frame_rematerializable(body: &LirBody, values: &BTreeSet<u32>) -> BTreeSe
 /// Values loaded from a cell nothing changes before they are used again.
 pub fn _stable_loads(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Mem> {
     if values.is_empty() {
-        return IndexMap::new();
+        return IndexMap::default();
     }
-    let mut definitions: IndexMap<u32, Vec<(Arc<Insn>, Option<Mem>)>> = IndexMap::new();
+    let mut definitions: IndexMap<u32, Vec<(Arc<Insn>, Option<Mem>)>> = IndexMap::default();
     let mut uses: IndexMap<u32, Vec<Arc<Insn>>> = values.iter().map(|value| (*value, Vec::new())).collect();
     for block in &body.blocks {
         for one in &block.insns {
@@ -710,7 +710,7 @@ pub fn _stable_loads(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Me
         }
     }
 
-    let mut result: IndexMap<u32, Mem> = IndexMap::new();
+    let mut result: IndexMap<u32, Mem> = IndexMap::default();
     for value in values {
         let Some(found) = definitions.get(value) else {
             continue;
@@ -856,7 +856,7 @@ fn _unchanged(body: &LirBody, define: &Arc<Insn>, cell: &Mem, uses: &[Arc<Insn>]
     let predecessors = _predecessors(body);
     let blocks: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut into: IndexMap<i64, bool> = blocks.keys().map(|at| (*at, *at != body.entry)).collect();
-    let mut outof: IndexMap<i64, bool> = IndexMap::new();
+    let mut outof: IndexMap<i64, bool> = IndexMap::default();
     let mut changing = true;
     while changing {
         changing = false;
@@ -904,10 +904,10 @@ fn _frame_loads(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Mem> {
         .filter(|value| pinned.get(value).is_some_and(|register| target::SEGMENTS.contains(register)))
         .collect();
     if candidates.is_empty() {
-        return IndexMap::new();
+        return IndexMap::default();
     }
 
-    let mut definitions: IndexMap<u32, (usize, usize, Arc<Insn>, Mem)> = IndexMap::new();
+    let mut definitions: IndexMap<u32, (usize, usize, Arc<Insn>, Mem)> = IndexMap::default();
     let mut uses: IndexMap<u32, Vec<(usize, usize)>> = candidates.iter().map(|value| (*value, Vec::new())).collect();
     let mut excluded: BTreeSet<u32> = BTreeSet::new();
     for (block_index, block) in body.blocks.iter().enumerate() {
@@ -946,7 +946,7 @@ fn _frame_loads(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Mem> {
         }
     }
 
-    let mut result = IndexMap::new();
+    let mut result = IndexMap::default();
     for value in candidates.difference(&excluded) {
         let Some(definition) = definitions.get(value) else {
             continue;
@@ -977,7 +977,7 @@ fn _frame_loads(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Mem> {
 /// Existing stable frame stores which can hold a spilled SSA value.
 fn _frame_homes(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, (Mem, usize)> {
     if values.is_empty() {
-        return IndexMap::new();
+        return IndexMap::default();
     }
     let mut definitions: IndexMap<u32, Vec<(usize, usize)>> = values.iter().map(|value| (*value, Vec::new())).collect();
     let mut uses: IndexMap<u32, Vec<(usize, usize, Arc<Insn>)>> =
@@ -1015,7 +1015,7 @@ fn _frame_homes(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, (Mem, u
         }
     }
 
-    let mut result = IndexMap::new();
+    let mut result = IndexMap::default();
     for value in values {
         let homes = &candidates[value];
         // The store reads the definition kept in a register.
@@ -1065,7 +1065,7 @@ fn _home_holds(body: &LirBody, value: u32, home: &Mem, store: &Arc<Insn>) -> boo
     let blocks: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     // A must-analysis: unreached is "holds".
     let mut into: IndexMap<i64, bool> = blocks.keys().map(|at| (*at, *at != body.entry)).collect();
-    let mut outof: IndexMap<i64, bool> = IndexMap::new();
+    let mut outof: IndexMap<i64, bool> = IndexMap::default();
     let mut changing = true;
     while changing {
         changing = false;
@@ -1223,9 +1223,9 @@ pub fn unfolded_indexes(body: &LirBody, values: &BTreeSet<u32>) -> (LirBody, BTr
     let mut changed: BTreeSet<u32> = BTreeSet::new();
     let mut blocks = Vec::new();
     for block in &body.blocks {
-        let mut rewritten: IndexMap<i64, Arc<Insn>> = IndexMap::new();
-        let mut after: IndexMap<i64, Vec<Arc<Insn>>> = IndexMap::new();
-        let mut definitions: IndexMap<u32, i64> = IndexMap::new();
+        let mut rewritten: IndexMap<i64, Arc<Insn>> = IndexMap::default();
+        let mut after: IndexMap<i64, Vec<Arc<Insn>>> = IndexMap::default();
+        let mut definitions: IndexMap<u32, i64> = IndexMap::default();
         for (position, one) in block.insns.iter().enumerate() {
             let position = position as i64;
             definitions.extend(one.defines.iter().map(|value| (*value, position)));
@@ -1547,9 +1547,9 @@ fn _group_source(one: &Insn) -> Option<Held> {
 
 /// Literal values, including full-width copies with one unambiguous definition.
 pub fn _constants(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Imm> {
-    let mut definitions: IndexMap<u32, Vec<Arc<Insn>>> = IndexMap::new();
+    let mut definitions: IndexMap<u32, Vec<Arc<Insn>>> = IndexMap::default();
     let mut excluded: BTreeSet<u32> = BTreeSet::new();
-    let mut widths: IndexMap<u32, u32> = IndexMap::new();
+    let mut widths: IndexMap<u32, u32> = IndexMap::default();
     for one in body.blocks.iter().flat_map(|block| &block.insns) {
         for value in &one.defines {
             definitions.entry(*value).or_default().push(Arc::clone(one));
@@ -1567,7 +1567,7 @@ pub fn _constants(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Imm> 
     }
     // Python iterates `definitions.keys() - excluded`, a set; the fixed
     // point below reaches the same answer in any order.
-    let mut sources: IndexMap<u32, Loc> = IndexMap::new();
+    let mut sources: IndexMap<u32, Loc> = IndexMap::default();
     for (value, defining) in &definitions {
         if excluded.contains(value) || defining.len() != 1 {
             continue;
@@ -1598,7 +1598,7 @@ pub fn _constants(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Imm> 
             sources.insert(*value, source.clone());
         }
     }
-    let mut result: IndexMap<u32, Imm> = IndexMap::new();
+    let mut result: IndexMap<u32, Imm> = IndexMap::default();
     loop {
         let before = result.len();
         for (value, source) in &sources {
@@ -1619,7 +1619,7 @@ pub fn _constants(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Imm> 
 
 /// Pure addresses cheap enough to recreate at every use.
 fn _addresses(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Address> {
-    let mut definitions: IndexMap<u32, Vec<Arc<Insn>>> = IndexMap::new();
+    let mut definitions: IndexMap<u32, Vec<Arc<Insn>>> = IndexMap::default();
     for one in body.blocks.iter().flat_map(|block| &block.insns) {
         for value in &one.defines {
             if values.contains(value) {
@@ -1628,7 +1628,7 @@ fn _addresses(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Address> 
         }
     }
 
-    let mut result = IndexMap::new();
+    let mut result = IndexMap::default();
     for (value, defining) in &definitions {
         if defining.len() != 1 {
             continue;
@@ -1666,7 +1666,7 @@ fn _addresses(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Address> 
 
 /// One-use integer extensions that are cheaper to recreate than spill.
 fn _extensions(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Arc<Insn>> {
-    let mut definitions: IndexMap<u32, Vec<(usize, usize, Arc<Insn>)>> = IndexMap::new();
+    let mut definitions: IndexMap<u32, Vec<(usize, usize, Arc<Insn>)>> = IndexMap::default();
     let mut uses: IndexMap<u32, Vec<(usize, usize, Arc<Insn>)>> =
         values.iter().map(|value| (*value, Vec::new())).collect();
     for (block_index, block) in body.blocks.iter().enumerate() {
@@ -1680,7 +1680,7 @@ fn _extensions(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Arc<Insn
         }
     }
 
-    let mut result = IndexMap::new();
+    let mut result = IndexMap::default();
     let none = Vec::new();
     for value in values {
         let found = definitions.get(value).unwrap_or(&none);
@@ -1730,7 +1730,7 @@ fn _extensions(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Arc<Insn
 
 /// How wide each value is read or written anywhere, which is how big its slot has to be.
 fn _widest(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, u32> {
-    let mut widths: IndexMap<u32, u32> = IndexMap::new();
+    let mut widths: IndexMap<u32, u32> = IndexMap::default();
     for one in body.blocks.iter().flat_map(|block| &block.insns) {
         let named: BTreeSet<u32> = one.defines.iter().chain(&one.uses).copied().collect();
         for value in values.intersection(&named) {
@@ -1986,7 +1986,7 @@ fn _tied(one: &Insn, values: &BTreeSet<u32>, frame: &mut Frame) -> Result<Option
 
 /// Whether this form exists, asked of the one place that knows.
 fn _encodable(what: &Semantics) -> Result<bool, Error> {
-    let mut taken: IndexMap<u32, Register> = IndexMap::new();
+    let mut taken: IndexMap<u32, Register> = IndexMap::default();
     let rows: IndexMap<u32, Vec<Register>> = [1_u32, 2, 4]
         .into_iter()
         .map(|width| {
@@ -2043,7 +2043,7 @@ mod tests {
     use std::sync::Arc;
 
     use iced_x86::Register;
-    use indexmap::IndexMap;
+    use crate::support::hash::IndexMap;
 
     use super::{_color_slots, _constants, spilled};
     use crate::backend::frame::{Frame, SlotKey};
@@ -2097,8 +2097,8 @@ mod tests {
             "one",
             0,
             vec![LirBlock::new(0, insns.into_iter().map(Arc::new).collect())],
-            IndexMap::new(),
-            IndexMap::new(),
+            IndexMap::default(),
+            IndexMap::default(),
         )
     }
 
@@ -2529,7 +2529,7 @@ mod tests {
                 vec![Loc::Reg(Reg { register: Register::BX, width: 2 })],
                 vec![Loc::Address(source)],
             );
-            let names: IndexMap<(Space, i64), String> = IndexMap::from([((space, 7), "_descriptor".to_owned())]);
+            let names: IndexMap<(Space, i64), String> = IndexMap::from_iter([((space, 7), "_descriptor".to_owned())]);
             let emitted = omfwrite::_encoded(&lea, &names).expect("encodes");
             assert_eq!(emitted.code, [0x8D, 0x1E, 0x0C, 0x00]);
             assert_eq!(emitted.fixups, [omfwrite::Fixup::new(2, omfwrite::OFFSET, "_descriptor")]);
@@ -2616,8 +2616,8 @@ mod tests {
                 LirBlock { succ: vec![0x20, 0x30], ..LirBlock::new(0x20, vec![Arc::new(use_), Arc::new(branch)]) },
                 LirBlock::new(0x30, vec![]),
             ],
-            IndexMap::new(),
-            IndexMap::new(),
+            IndexMap::default(),
+            IndexMap::default(),
         );
         let mut frame = Frame::new(0);
         spilled(&body, &set(&[2]), Some(&mut frame)).expect("spills");
@@ -2662,7 +2662,7 @@ mod tests {
         let mut frame = Frame::new(0);
         frame.slots.insert(slot(1), -2);
         frame.capacities.insert(-2, 2);
-        _color_slots(&_overlapping(), &set(&[1, 2]), &IndexMap::from([(1, 2), (2, 2)]), &mut frame).expect("colors");
+        _color_slots(&_overlapping(), &set(&[1, 2]), &IndexMap::from_iter([(1, 2), (2, 2)]), &mut frame).expect("colors");
         assert_ne!(frame.slots[&slot(1)], frame.slots[&slot(2)]);
     }
 
@@ -3046,7 +3046,7 @@ mod tests {
         assert!(result.iter().all(|one| !one.uses.contains(&1)));
         let adds: Vec<&Arc<Insn>> = result.iter().filter(|one| name(one) == Some("add")).collect();
         let [add] = adds.as_slice() else { panic!("{} adds", adds.len()) };
-        let mut made: IndexMap<u32, &Arc<Insn>> = IndexMap::new();
+        let mut made: IndexMap<u32, &Arc<Insn>> = IndexMap::default();
         for one in &result[..index_of(&result, add)] {
             for value in &one.defines {
                 made.insert(*value, one);
@@ -3227,12 +3227,12 @@ mod tests {
                 ),
                 block(0x30, vec![at(0x30, semantics(Operation::Return, "ret", vec![], vec![]), &[], &[])], vec![]),
             ],
-            IndexMap::new(),
-            IndexMap::new(),
+            IndexMap::default(),
+            IndexMap::default(),
         );
         let (done, _made) = spilled(&body, &set(&[1]), Some(&mut Frame::new(0))).expect("spills");
-        let mut held_: IndexMap<u32, i64> = IndexMap::new();
-        let mut memory: IndexMap<i64, i64> = IndexMap::new();
+        let mut held_: IndexMap<u32, i64> = IndexMap::default();
+        let mut memory: IndexMap<i64, i64> = IndexMap::default();
         let mut pushed: Vec<i64> = Vec::new();
         let read = |held_: &IndexMap<u32, i64>, memory: &IndexMap<i64, i64>, operand: &Loc| match operand {
             Loc::Imm(one) => one.value,
@@ -3274,7 +3274,7 @@ mod tests {
     }
 
     fn _spilled_one(name: &str, insns: Vec<Insn>) -> LirBody {
-        let body = LirBody::new(name, 0, vec![LirBlock::new(0, insns.into_iter().map(Arc::new).collect())], IndexMap::new(), IndexMap::new());
+        let body = LirBody::new(name, 0, vec![LirBlock::new(0, insns.into_iter().map(Arc::new).collect())], IndexMap::default(), IndexMap::default());
         spilled(&body, &set(&[1]), Some(&mut Frame::new(0))).expect("spills").0
     }
 

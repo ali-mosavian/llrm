@@ -8,7 +8,7 @@
 //! control flow, trapping arithmetic, x87 work and relocations are deliberately
 //! outside it.
 
-use std::collections::HashSet;
+use crate::support::hash::HashSet;
 use std::sync::Arc;
 
 use iced_x86::Register;
@@ -95,7 +95,7 @@ fn _once(body: &LirBody) -> Option<LirBody> {
     let mut changed = false;
     for block in &body.blocks {
         let mut dead = exits[&block.at].clone();
-        let mut redundant: HashSet<usize> = HashSet::new();
+        let mut redundant: HashSet<usize> = HashSet::default();
         for one in block.insns.iter().rev() {
             let what = one.what.as_ref();
             if liveness::_terminator(what) {
@@ -154,7 +154,7 @@ mod tests {
     use std::sync::Arc;
 
     use iced_x86::Register;
-    use indexmap::IndexMap;
+    use crate::support::hash::IndexMap;
 
     use super::eliminated;
     use crate::model::ir::{Imm, Loc, Mem, Operation, Reg, Semantics};
@@ -187,7 +187,7 @@ mod tests {
     }
 
     fn body(blocks: Vec<LirBlock>) -> LirBody {
-        LirBody::new("machine-dce", 0, blocks, IndexMap::new(), IndexMap::new())
+        LirBody::new("machine-dce", 0, blocks, IndexMap::default(), IndexMap::default())
     }
 
     fn branch(at: i64, name: &str, uses: Vec<u32>) -> Arc<Insn> {

@@ -95,7 +95,7 @@ mod tests {
     use std::rc::Rc;
     use std::sync::Arc;
 
-    use indexmap::IndexMap;
+    use crate::support::hash::IndexMap;
 
     use super::FarIndirectCalls;
     use crate::backend::frame::{Frame, SlotKey};
@@ -123,7 +123,7 @@ mod tests {
         };
         let far = call(4, 5, 4);
         let block = LirBlock::new(0, vec![Arc::clone(&far), call(8, 6, 2), far]);
-        let body = LirBody::new("far", 0, vec![block], IndexMap::new(), IndexMap::new());
+        let body = LirBody::new("far", 0, vec![block], IndexMap::default(), IndexMap::default());
         let frame = Rc::new(RefCell::new(Frame::new(-16)));
         let out = FarIndirectCalls::new(Rc::clone(&frame)).transform(body).unwrap();
         let cell = "Mem(addr=[bp-0x14], width=4, through=26, offset=0, disp_width=2, base=None, \
@@ -147,7 +147,7 @@ mod tests {
             })
             .collect();
         assert_eq!(got, vec![store.clone(), called.clone(), near, store, called]);
-        assert_eq!(frame.borrow().slots, IndexMap::from([(SlotKey::from(("far-indirect-call", 0)), -20)]));
+        assert_eq!(frame.borrow().slots, IndexMap::from_iter([(SlotKey::from(("far-indirect-call", 0)), -20)]));
         assert_eq!(frame.borrow().size(), 4);
     }
 }

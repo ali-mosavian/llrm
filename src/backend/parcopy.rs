@@ -10,7 +10,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use iced_x86::Register;
-use indexmap::{IndexMap, IndexSet};
+use crate::support::hash::{IndexMap, IndexSet};
 
 use crate::backend::target;
 use crate::model::ir::{self, Loc, Operation, Reg, Semantics};
@@ -214,7 +214,7 @@ type Rotation = (Vec<Arc<Insn>>, Vec<Arc<Insn>>);
 /// and so on. When adjacent places are both spilled, save the first on the
 /// machine stack, perform the remaining moves, then pop into the last.
 fn _rotated(left: &[Arc<Insn>]) -> Result<Option<Rotation>, Malformed> {
-    let mut writes: IndexMap<String, &Arc<Insn>> = IndexMap::new();
+    let mut writes: IndexMap<String, &Arc<Insn>> = IndexMap::default();
     for one in left {
         writes.insert(_into(one)?, one);
     }
@@ -357,7 +357,7 @@ mod tests {
     use std::sync::Arc;
 
     use iced_x86::Register;
-    use indexmap::IndexMap;
+    use crate::support::hash::IndexMap;
 
     use super::{_into, _named, _outof, Refused, scheduled};
     use crate::backend::verify;
@@ -403,7 +403,7 @@ mod tests {
 
     fn _body(insns: Vec<Insn>) -> LirBody {
         let block = LirBlock::new(0, insns.into_iter().map(Arc::new).collect());
-        LirBody::new("one", 0, vec![block], IndexMap::new(), IndexMap::new())
+        LirBody::new("one", 0, vec![block], IndexMap::default(), IndexMap::default())
     }
 
     fn name(one: &Insn) -> String {

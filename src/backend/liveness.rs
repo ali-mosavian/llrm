@@ -8,7 +8,7 @@
 //! it again.
 
 use iced_x86::Register;
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::backend::peephole::{_branch_reads, _flag_lanes, _lanes, _register_effects, Lanes};
 use crate::backend::target;
@@ -126,7 +126,7 @@ pub fn _declared(one: &Insn) -> Option<(Lanes, Lanes)> {
 /// Per block, the lanes live on entry -- with its successors and the universe.
 pub fn live_into(body: &LirBody) -> (IndexMap<i64, Lanes>, IndexMap<i64, Vec<i64>>, Lanes) {
     let universe = _universe();
-    let at_of: std::collections::HashSet<i64> = body.blocks.iter().map(|block| block.at).collect();
+    let at_of: crate::support::hash::HashSet<i64> = body.blocks.iter().map(|block| block.at).collect();
     let successors: IndexMap<i64, Vec<i64>> = body
         .blocks
         .iter()
@@ -173,7 +173,7 @@ mod tests {
     use std::sync::Arc;
 
     use iced_x86::Register;
-    use indexmap::IndexMap;
+    use crate::support::hash::IndexMap;
 
     use super::live_into;
     use crate::backend::peephole::_lanes;
@@ -205,7 +205,7 @@ mod tests {
                 _insn(2, Operation::Return, "ret", vec![], vec![]),
             ],
         );
-        let body = LirBody::new("f", 1, vec![block], IndexMap::new(), IndexMap::new());
+        let body = LirBody::new("f", 1, vec![block], IndexMap::default(), IndexMap::default());
         let (into, _successors, _universe) = live_into(&body);
         assert!(_lanes(Register::DX).is_disjoint(&into[&1]));
         assert!(_lanes(Register::AX).is_subset(&into[&1]));
@@ -232,7 +232,7 @@ mod tests {
             1,
             vec![_insn(1, Operation::Move, "mov", vec![Loc::Reg(cx)], vec![Loc::Reg(AX)]), Arc::new(ret)],
         );
-        let body = LirBody::new("f", 1, vec![block], IndexMap::new(), IndexMap::new());
+        let body = LirBody::new("f", 1, vec![block], IndexMap::default(), IndexMap::default());
         let (into, _successors, _universe) = live_into(&body);
         assert!(_lanes(Register::AX).is_subset(&into[&1]));
         assert!(_lanes(Register::SI).is_disjoint(&into[&1]));

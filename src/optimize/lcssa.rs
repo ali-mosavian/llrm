@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::analysis::loops::{self, Loop};
 use crate::analysis::ssa;
@@ -63,7 +63,7 @@ pub(crate) fn _closed_loop(body: &MirBody, loop_: &Loop) -> Result<MirBody, Stri
         return Ok(body.clone());
     }
 
-    let mut defined: IndexMap<Value, i64> = IndexMap::new();
+    let mut defined: IndexMap<Value, i64> = IndexMap::default();
     for block in body.blocks.iter().filter(|block| loop_.body.contains(&block.at)) {
         let values = block.phis.iter().map(|phi| phi.result).chain(block.ops.iter().flat_map(|op| op.defines.iter().copied()));
         for value in values.filter(|value| !value.flags) {
@@ -76,7 +76,7 @@ pub(crate) fn _closed_loop(body: &MirBody, loop_: &Loop) -> Result<MirBody, Stri
 
     // Phi inputs are used on their incoming edge.  A phi in the dedicated
     // exit is already the LCSSA boundary, so only downstream phis count here.
-    let mut use_sites: IndexMap<Value, BTreeSet<i64>> = IndexMap::new();
+    let mut use_sites: IndexMap<Value, BTreeSet<i64>> = IndexMap::default();
     for block in &body.blocks {
         if loop_.body.contains(&block.at) {
             continue;

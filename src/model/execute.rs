@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use iced_x86::Register;
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 use num_bigint::BigInt;
 use num_traits::{Signed, ToPrimitive, Zero};
 

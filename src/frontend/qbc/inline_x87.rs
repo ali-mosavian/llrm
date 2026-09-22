@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::backend::masm;
 use crate::model::ir::{self, Loc, Operation, Semantics};
@@ -38,7 +38,7 @@ pub fn finalized(body: &lir::LirBody, parameter_bytes: i64) -> Result<Finalized,
     if !(0..=0xFFFF).contains(&parameter_bytes) {
         return Err("QB far-return cleanup exceeds 16 bits".into());
     }
-    let mut sites: IndexMap<i64, masm::Callee> = IndexMap::new();
+    let mut sites: IndexMap<i64, masm::Callee> = IndexMap::default();
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let mut instructions = Vec::new();

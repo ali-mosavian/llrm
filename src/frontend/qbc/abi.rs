@@ -11,7 +11,7 @@ use std::fmt;
 use std::sync::LazyLock;
 
 use iced_x86::Register;
-use indexmap::{IndexMap, IndexSet};
+use crate::support::hash::{IndexMap, IndexSet};
 
 use crate::abi::runtime::{self, Contract, Control};
 use crate::backend::pointers;
@@ -43,7 +43,7 @@ impl std::error::Error for AbiError {}
 // 5b1c7a6f..., 873fde67..., and 59ad49b0...; tools/libdump.py records the
 // member, entry offset and RETF for every row.  SCAT is family-specific (the
 // VBDOS far-string entry consumes an extra word), so it is not generalized.
-static _AUDITED_STRING_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(|| IndexMap::from([
+static _AUDITED_STRING_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(|| IndexMap::from_iter([
     ("B$ASSN", 12),
     ("B$FASC", 2),
     ("B$FCHR", 2),
@@ -82,7 +82,7 @@ static _AUDITED_STRING_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(|| I
 // Stack widths read from actual QB 4.5 /A listings for the graphics forms,
 // then checked against their runtime RETF cleanup. Coordinate state is latched
 // by N1/N2 before the drawing call; it is deliberately not hidden in MIR.
-static _AUDITED_GRAPHICS_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(|| IndexMap::from([
+static _AUDITED_GRAPHICS_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(|| IndexMap::from_iter([
     ("B$PAL2", 6),
     ("B$N1I2", 4),
     ("B$N2I2", 4),
@@ -102,7 +102,7 @@ static _AUDITED_GRAPHICS_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(||
     ("B$FTAB", 2),
 ]));
 
-static _AUDITED_STATEMENT_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(|| IndexMap::from([("B$BEEP", 0), ("B$LNIN", 10), ("B$SLEP", 4)]));
+static _AUDITED_STATEMENT_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(|| IndexMap::from_iter([("B$BEEP", 0), ("B$LNIN", 10), ("B$SLEP", 4)]));
 
 #[derive(Clone, Debug)]
 pub struct Physicalized {
@@ -184,7 +184,7 @@ pub(crate) fn _contract(
     } else {
         name
     };
-    let found = runtime::per_call(&IndexMap::from([(0, physical_name.to_owned())]), family.value(), &BTreeSet::new())
+    let found = runtime::per_call(&IndexMap::from_iter([(0, physical_name.to_owned())]), family.value(), &BTreeSet::new())
         .swap_remove(&0)
         .expect("one call in, one contract out");
     let evidence = &found.evidence;
@@ -721,8 +721,8 @@ pub fn physicalize(
     };
     let sites: IndexMap<i64, &model::CallAbi> = function.calls.iter().map(|one| (one.instruction, one)).collect();
     let mut next_at = lowered.body.blocks.iter().flat_map(|block| &block.ops).map(|op| op.at).max().unwrap_or(0) + 1;
-    let mut calls: IndexMap<i64, String> = IndexMap::new();
-    let mut contracts: IndexMap<i64, Contract> = IndexMap::new();
+    let mut calls: IndexMap<i64, String> = IndexMap::default();
+    let mut contracts: IndexMap<i64, Contract> = IndexMap::default();
     let mut far: BTreeSet<i64> = BTreeSet::new();
     let module = program
         .modules
@@ -750,7 +750,7 @@ pub fn physicalize(
         })
     };
 
-    let mut hary_results: IndexSet<(mir::Value, mir::Value)> = IndexSet::new();
+    let mut hary_results: IndexSet<(mir::Value, mir::Value)> = IndexSet::default();
     for source_block in &lowered.body.blocks {
         for source_operation in &source_block.ops {
             if source_operation.kind != Kind::Call || call_name(source_operation)? != "B$HARY" {
@@ -768,7 +768,7 @@ pub fn physicalize(
             hary_results.insert((offset.value, selector.value));
         }
     }
-    let mut hary_pointers: IndexMap<mir::Value, (mir::Value, mir::Value)> = IndexMap::new();
+    let mut hary_pointers: IndexMap<mir::Value, (mir::Value, mir::Value)> = IndexMap::default();
     for source_block in &lowered.body.blocks {
         for source_operation in &source_block.ops {
             if source_operation.kind == Kind::Concat
@@ -820,7 +820,7 @@ pub fn physicalize(
                 other => other.clone(),
             })
         };
-        let mut uses: IndexSet<mir::Value> = IndexSet::new();
+        let mut uses: IndexSet<mir::Value> = IndexSet::default();
         for value in &operation.uses {
             match replaced.get(value) {
                 Some((offset, selector)) => {
@@ -1217,7 +1217,7 @@ pub fn physicalize(
         .collect();
     let body = mir::MirBody { blocks, ..lowered.body.clone() };
     let mut checked = body.clone();
-    let mut external: IndexSet<i64> = IndexSet::new();
+    let mut external: IndexSet<i64> = IndexSet::default();
     external.insert(body.entry);
     external.extend(function.external_entries.iter().copied());
     external.extend(function.error_handler);

@@ -2,12 +2,13 @@
 //! target register stack.
 
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::VecDeque;
+use crate::support::hash::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
 use iced_x86::Register;
-use indexmap::{IndexMap, IndexSet};
+use crate::support::hash::{IndexMap, IndexSet};
 
 use crate::analysis::regions;
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
@@ -258,7 +259,7 @@ fn _two_values(what: Option<&Semantics>) -> Option<(String, Held, Held)> {
 /// edges from the allocator's live control-flow facts.
 fn _reachable_blocks(blocks: &[LirBlock], entry: i64) -> HashSet<i64> {
     let at_of: HashMap<i64, &LirBlock> = blocks.iter().map(|block| (block.at, block)).collect();
-    let (mut reached, mut pending) = (HashSet::new(), vec![entry]);
+    let (mut reached, mut pending) = (HashSet::default(), vec![entry]);
     while let Some(at) = pending.pop() {
         if reached.contains(&at) || !at_of.contains_key(&at) {
             continue;
@@ -404,8 +405,8 @@ fn _rereadable(sequence: &[Arc<Insn>], position: usize, reads: &VecDeque<i64>) -
 /// ``_may_write``; this is deliberately the same memory proof used by the
 /// existing memory-operand reuse path.
 fn _equivalent_loads(sequence: &[Arc<Insn>]) -> IndexMap<u32, u32> {
-    let mut available: IndexMap<(Option<String>, Mem), u32> = IndexMap::new();
-    let mut aliases: IndexMap<u32, u32> = IndexMap::new();
+    let mut available: IndexMap<(Option<String>, Mem), u32> = IndexMap::default();
+    let mut aliases: IndexMap<u32, u32> = IndexMap::default();
     for one in sequence {
         // A volatile load is observable and may be backed by changing device
         // state.  It must neither be removed nor let an earlier ordinary read
@@ -446,7 +447,7 @@ type Region = (Vec<Arc<Insn>>, IndexMap<u32, VecDeque<i64>>, IndexMap<u32, u32>)
 fn _region(blocks: &[LirBlock], mut index: usize, mut offset: usize, continues: &HashSet<usize>) -> Region {
     let finished = |sequence: Vec<Arc<Insn>>| -> Region {
         let aliases = _equivalent_loads(&sequence);
-        let mut reads: IndexMap<u32, VecDeque<i64>> = IndexMap::new();
+        let mut reads: IndexMap<u32, VecDeque<i64>> = IndexMap::default();
         for (position, instruction) in sequence.iter().enumerate() {
             for arg in &instruction.what.as_ref().expect("a region instruction has semantics").sources {
                 if let Loc::Held(arg) = arg {
@@ -504,16 +505,16 @@ impl<'f, 'c> _Stack<'f, 'c> {
             cpu,
             retain_homes,
             values: Vec::new(),
-            home: IndexMap::new(),
-            defined: HashMap::new(),
+            home: IndexMap::default(),
+            defined: HashMap::default(),
             sequence: Vec::new(),
-            reads: IndexMap::new(),
-            aliases: IndexMap::new(),
+            reads: IndexMap::default(),
+            aliases: IndexMap::default(),
             here: -1,
             out: Vec::new(),
             one: None,
-            keep: HashSet::new(),
-            retained: HashSet::new(),
+            keep: HashSet::default(),
+            retained: HashSet::default(),
         }
     }
 
@@ -1154,7 +1155,7 @@ fn _allocate_stack(
 ) -> Result<Candidate, Raised> {
     let mut stack = _Stack::new(frame, floating.clone(), target, retain_homes);
     let mut blocks = Vec::new();
-    let mut labels: IndexMap<i64, Vec<i64>> = IndexMap::new();
+    let mut labels: IndexMap<i64, Vec<i64>> = IndexMap::default();
     let mut region = 0;
     for (index, block) in body.blocks.iter().enumerate() {
         if index == 0 || !continues.contains(&(index - 1)) {
@@ -1209,9 +1210,9 @@ fn _region_scores(
     labels: &IndexMap<i64, Vec<i64>>,
     target: &Profile,
 ) -> Result<IndexMap<i64, (i64, i64)>, Raised> {
-    let mut costs: HashMap<i64, i64> = HashMap::new();
-    let mut counts: IndexMap<i64, i64> = IndexMap::new();
-    let mut unpriced: HashSet<i64> = HashSet::new();
+    let mut costs: HashMap<i64, i64> = HashMap::default();
+    let mut counts: IndexMap<i64, i64> = IndexMap::default();
+    let mut unpriced: HashSet<i64> = HashSet::default();
     for block in &body.blocks {
         let regions = &labels[&block.at];
         if regions.len() != block.insns.len() {
@@ -1256,8 +1257,8 @@ fn _compose_regions(baseline: &Candidate, retained: &Candidate, target: &Profile
     let mut blocks = Vec::new();
     for block in &baseline_body.blocks {
         let other = retained_at[&block.at];
-        let mut baseline_groups: HashMap<i64, Vec<Arc<Insn>>> = HashMap::new();
-        let mut retained_groups: HashMap<i64, Vec<Arc<Insn>>> = HashMap::new();
+        let mut baseline_groups: HashMap<i64, Vec<Arc<Insn>>> = HashMap::default();
+        let mut retained_groups: HashMap<i64, Vec<Arc<Insn>>> = HashMap::default();
         for (one, region) in block.insns.iter().zip(&baseline_labels[&block.at]) {
             baseline_groups.entry(*region).or_default().push(Arc::clone(one));
         }
@@ -1309,7 +1310,7 @@ pub fn allocated<'a>(
         return Ok(body);
     }
     let reachable = _reachable_blocks(&body.blocks, body.entry);
-    let mut predecessors: IndexMap<i64, HashSet<i64>> = body.blocks.iter().map(|block| (block.at, HashSet::new())).collect();
+    let mut predecessors: IndexMap<i64, HashSet<i64>> = body.blocks.iter().map(|block| (block.at, HashSet::default())).collect();
     for block in &body.blocks {
         if !reachable.contains(&block.at) {
             continue;
@@ -1329,7 +1330,7 @@ pub fn allocated<'a>(
                 && block.succ.len() == 1
                 && block.succ[0] != body.entry
                 && reachable.contains(&block.succ[0])
-                && predecessors.get(&block.succ[0]) == Some(&HashSet::from([block.at]))
+                && predecessors.get(&block.succ[0]) == Some(&HashSet::from_iter([block.at]))
         })
         .map(|block| (block.at, block.succ[0]))
         .collect();
@@ -1337,7 +1338,7 @@ pub fn allocated<'a>(
     let destinations: HashSet<i64> = next_blocks.values().copied().collect();
     let mut roots: Vec<i64> = order.iter().copied().filter(|at| reachable.contains(at) && !destinations.contains(at)).collect();
     roots.extend(order.iter().copied().filter(|at| !reachable.contains(at)));
-    let (mut scheduled, mut seen): (Vec<LirBlock>, HashSet<i64>) = (Vec::new(), HashSet::new());
+    let (mut scheduled, mut seen): (Vec<LirBlock>, HashSet<i64>) = (Vec::new(), HashSet::default());
     for root in roots.iter().chain(&order) {
         let mut at = Some(*root);
         while let Some(here) = at {
@@ -1360,7 +1361,7 @@ pub fn allocated<'a>(
 
     // A region is keyed by instruction position: a phi is defined at -1 and
     // read at its predecessor's end.
-    let (mut regions, mut region): (HashMap<(i64, i64), i64>, i64) = (HashMap::new(), 0);
+    let (mut regions, mut region): (HashMap<(i64, i64), i64>, i64) = (HashMap::default(), 0);
     for (index, block) in body.blocks.iter().enumerate() {
         if index == 0 || !continues.contains(&(index - 1)) {
             region += 1;

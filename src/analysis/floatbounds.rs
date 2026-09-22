@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 use num_bigint::BigInt;
 
 use super::consts::{self, Cells};
@@ -177,7 +177,7 @@ pub(crate) fn exact(
             }
         }
     }
-    let memory = floatfacts::cells(&shadow, dgroup, &IndexMap::new());
+    let memory = floatfacts::cells(&shadow, dgroup, &IndexMap::default());
     let scoped = ranges::bounded(body)?;
     let definitions = body
         .blocks
@@ -185,7 +185,7 @@ pub(crate) fn exact(
         .flat_map(|block| block.ops.iter())
         .flat_map(|op| op.defines.iter().map(move |value| (*value, op)))
         .collect::<IndexMap<_, _>>();
-    let mut values = IndexMap::<Value, Bounds>::new();
+    let mut values = IndexMap::<Value, Bounds>::default();
     let mut pending = operations(body)
         .filter(|(_, _, op)| op.floating.is_some() && !op.barrier() && !matches!(op.kind, Kind::Call | Kind::Opaque))
         .map(|(occurrence, block, op)| (block.at, occurrence.operation_index(), op, occurrence))
@@ -196,8 +196,8 @@ pub(crate) fn exact(
         .flat_map(|block| block.phis.iter())
         .filter(|phi| !phi.result.flags)
         .collect::<Vec<_>>();
-    let empty_cells = Cells::new();
-    let empty_scope = IndexMap::new();
+    let empty_cells = Cells::default();
+    let empty_scope = IndexMap::default();
     let mut changed = true;
     while changed {
         changed = false;

@@ -14,7 +14,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use iced_x86::Register;
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::peephole::{_lanes, _register_effects, Lanes};

@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 use num_bigint::BigInt;
 
 use crate::analysis::consts::{Known, masked};

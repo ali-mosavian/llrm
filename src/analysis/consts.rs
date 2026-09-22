@@ -5,11 +5,12 @@
 //! operation only folds where the widths agree.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
+use crate::support::hash::HashMap;
 use std::fmt;
 use std::rc::Rc;
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 use num_bigint::BigInt;
 
 use super::alias::NamedBytes;
@@ -66,8 +67,8 @@ impl _MemoryQueries {
             dgroup: dgroup.clone(),
             named,
             facts: _intervals(known),
-            addressed: HashMap::new(),
-            overlaps: HashMap::new(),
+            addressed: HashMap::default(),
+            overlaps: HashMap::default(),
         }
     }
 
@@ -166,7 +167,7 @@ thread_local! {
 
 /// Reuse ordinary constant facts for identical bodies in one transaction.
 pub(crate) fn reusing<T>(inside: impl FnOnce() -> T) -> T {
-    let token = _reuse.with(|reuse| reuse.replace(Some(HashMap::new())));
+    let token = _reuse.with(|reuse| reuse.replace(Some(HashMap::default())));
     let result = inside();
     _reuse.with(|reuse| *reuse.borrow_mut() = token);
     result
@@ -297,8 +298,8 @@ pub(crate) fn initialized(op: &Op, reference: &MemRef) -> Option<Known> {
     if written.addr.is_none() || written.base.is_some() || written.segment.is_some() {
         return None;
     }
-    let fact = _put(op, &IndexMap::new())?;
-    _cell(&Cells::from([((written.addr?, written.width), fact)]), reference)
+    let fact = _put(op, &IndexMap::default())?;
+    _cell(&Cells::from_iter([((written.addr?, written.width), fact)]), reference)
 }
 
 /// The value of an exact scalar read-modify-write, before its store kills the facts.
@@ -432,17 +433,17 @@ pub(crate) fn _kills(
     // A fact supplied for one CFG edge is a proof about reaching that edge,
     // not a durable summary of a callee.
     if edge_facts && op.kind == Kind::Call {
-        here = Cells::new();
+        here = Cells::default();
     }
     if effects::unmodeled_write(op) && (op.barrier() || !calls.contains_key(&op.at)) {
-        here = Cells::new();
+        here = Cells::default();
     }
     if op.kind == Kind::Call && op.stores.is_empty() {
         if let Some(name) = calls.get(&op.at) {
             // Only a call with no stores has to be taken at its word.
             let contract = runtime::contract(Some(name));
             if runtime::barrier(&contract) || runtime::writes_caller_memory(&contract) {
-                here = Cells::new();
+                here = Cells::default();
             }
         }
     }
@@ -512,13 +513,13 @@ pub(crate) fn cells(
     mut assume: Option<&mut BTreeSet<Value>>,
     allowed: Option<&BTreeSet<Value>>,
 ) -> IndexMap<(i64, usize), Cells> {
-    let empty = IndexMap::new();
+    let empty = IndexMap::default();
     let known = known.unwrap_or(&empty);
     let mut queries = memory_queries(body, known, dgroup);
     let initial = match initial {
         Some(initial) => initial.clone(),
         None => {
-            let mut initial = Cells::new();
+            let mut initial = Cells::default();
             for (reference, value) in &body.initial {
                 for (where_, fact) in _fragments(reference, &Known::new(value.n.clone(), value.width)) {
                     initial.insert(where_, fact);
@@ -546,20 +547,20 @@ pub(crate) fn cells(
             )
         })
         .collect::<IndexMap<_, _>>();
-    let no_edges = IndexMap::new();
+    let no_edges = IndexMap::default();
     let edge_map = edges.unwrap_or(&no_edges);
     let edge_facts = edges.is_some_and(|edges| !edges.is_empty());
 
     let entering = |outof: &IndexMap<i64, Option<Cells>>, at: i64| -> Option<Cells> {
         if preds[&at].is_empty() {
-            return Some(if at == body.entry { initial.clone() } else { Cells::new() });
+            return Some(if at == body.entry { initial.clone() } else { Cells::default() });
         }
         let mut seen = Vec::new();
         for one in &preds[&at] {
             let Some(here) = &outof[one] else {
                 continue;
             };
-            let none = Cells::new();
+            let none = Cells::default();
             let extra = edge_map.get(&(*one, at)).unwrap_or(&none);
             if extra.is_empty() {
                 seen.push(here.clone());
@@ -617,7 +618,7 @@ pub(crate) fn cells(
         }
     }
 
-    let mut found = IndexMap::new();
+    let mut found = IndexMap::default();
     for block in &body.blocks {
         let mut here = entering(&outof, block.at).unwrap_or_default();
         for (index, op) in block.ops.iter().enumerate() {
@@ -685,7 +686,7 @@ fn _addressed(reference: &MemRef, known: &IndexMap<Value, Known>) -> MemRef {
             value: base,
             width: reference.base_width,
         }),
-        &IndexMap::new(),
+        &IndexMap::default(),
         known,
     );
     let Some(interval) = interval else {
@@ -906,7 +907,7 @@ fn _pointer_stores(body: &MirBody, _dgroup: &BTreeSet<i64>) -> IndexMap<Value, A
         })
         .collect::<Vec<_>>();
     if candidates.is_empty() {
-        return IndexMap::new();
+        return IndexMap::default();
     }
     let graph = memoryssa::built(body);
     let accesses = graph
@@ -915,7 +916,7 @@ fn _pointer_stores(body: &MirBody, _dgroup: &BTreeSet<i64>) -> IndexMap<Value, A
         .map(|access| (access.id, access))
         .collect::<IndexMap<_, _>>();
     let dominators = loops::dominators(&body.blocks, Some(body.entry));
-    let mut providers = IndexMap::new();
+    let mut providers = IndexMap::default();
     for (site, op) in candidates {
         // A plain `dgroup` set is no layout to `regions`; only a `Group` is.
         let clobbers = graph.clobbers(site, &op.loads[0], None);
@@ -1013,14 +1014,14 @@ fn _solved(
     mut assume: Option<BTreeSet<Value>>,
     allowed: Option<&BTreeSet<Value>>,
 ) -> (IndexMap<Value, Known>, BTreeSet<Value>) {
-    let mut facts = IndexMap::<Value, Known>::new();
-    let mut carries = IndexMap::<Value, BigInt>::new();
-    let mut held = IndexMap::<(i64, usize), Cells>::new();
+    let mut facts = IndexMap::<Value, Known>::default();
+    let mut carries = IndexMap::<Value, BigInt>::default();
+    let mut held = IndexMap::<(i64, usize), Cells>::default();
     let pointer_stores = match (dgroup, calls) {
         (Some(dgroup), Some(_)) => _pointer_stores(body, dgroup),
-        _ => IndexMap::new(),
+        _ => IndexMap::default(),
     };
-    let empty = Cells::new();
+    let empty = Cells::default();
     let mut changing = true;
     while changing {
         changing = false;

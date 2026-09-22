@@ -12,7 +12,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::abi::runtime::Contract;
 use crate::analysis::{consts, noreturn as control, ssa};
@@ -70,8 +70,8 @@ pub(crate) fn current_parameter_constants(
     parameters: &IndexMap<String, Vec<MemRef>>,
     eligible: &BTreeSet<String>,
 ) -> Parameters {
-    let empty_calls = IndexMap::new();
-    let empty_arguments = IndexMap::new();
+    let empty_calls = IndexMap::default();
+    let empty_arguments = IndexMap::default();
     let mut actuals = eligible.iter().map(|name| (name.clone(), Vec::new())).collect::<IndexMap<_, _>>();
     for (owner, body) in bodies {
         let owner_calls = calls.get(owner).unwrap_or(&empty_calls);
@@ -99,7 +99,7 @@ pub(crate) fn current_call_constants(
     parameters: &IndexMap<String, Vec<MemRef>>,
 ) -> IndexMap<i64, Vec<Option<Const>>> {
     let facts = consts::known(body, None, None, None, None);
-    let mut out = IndexMap::new();
+    let mut out = IndexMap::default();
     for block in &body.blocks {
         for (index, call) in block.ops.iter().enumerate() {
             if call.kind != Kind::Call {
@@ -143,7 +143,7 @@ fn _constant_argument(argument: &Arg, facts: &IndexMap<Value, consts::Known>) ->
 
 /// Facts shared by every call in an already-normalized actual map.
 fn _agreed_parameters(actuals: &IndexMap<String, Vec<Vec<Option<Const>>>>) -> Parameters {
-    let mut out = Parameters::new();
+    let mut out = Parameters::default();
     for (name, sites) in actuals {
         if sites.is_empty() || sites.iter().map(Vec::len).collect::<BTreeSet<_>>().len() != 1 {
             continue;
@@ -189,7 +189,7 @@ pub(crate) fn specialize_parameters(body: &MirBody, parameters: &[MemRef], const
 /// disagreeing returns.  Values are read from SCCP's fixed point, so copies,
 /// promoted locals, phis and folded expressions need no special cases here.
 pub(crate) fn constant_returns(bodies: &IndexMap<String, MirBody>) -> Returns {
-    let mut out = Returns::new();
+    let mut out = Returns::default();
     for (name, body) in bodies {
         let facts = consts::known(body, None, None, None, None);
         let mut returned = Vec::new();
@@ -546,7 +546,7 @@ pub(crate) fn terminal_calls(body: &MirBody, calls: &IndexMap<i64, String>, nore
 
 /// Associate each call with the exact stack ARG operations that feed it.
 pub(crate) fn argument_sites(body: &MirBody, contracts: &IndexMap<i64, Contract>) -> IndexMap<i64, BTreeSet<i64>> {
-    let mut out = IndexMap::new();
+    let mut out = IndexMap::default();
     for block in &body.blocks {
         for (index, op) in block.ops.iter().enumerate() {
             if op.kind != Kind::Call || !contracts.contains_key(&op.at) {

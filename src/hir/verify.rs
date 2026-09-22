@@ -1,10 +1,10 @@
 //! Port of `qbopt/hir/verify.py`: structural and semantic checks at the
 //! source/frontend boundary.
 
-use std::collections::HashSet;
+use crate::support::hash::HashSet;
 use std::fmt;
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::hir::model;
 use crate::support::pyrepr::{self, Repr};
@@ -170,7 +170,7 @@ pub fn verify(program: &model::Program) -> Result<(), InvalidHIR> {
     if program.target != model::TargetProfile::I386RealMode {
         invalid!("unsupported target {}", program.target.repr());
     }
-    let mut module_ids = HashSet::new();
+    let mut module_ids = HashSet::default();
     for module in &program.modules {
         if module_ids.contains(&module.id) {
             invalid!("duplicate module {}", module.id);
@@ -240,7 +240,7 @@ pub fn verify(program: &model::Program) -> Result<(), InvalidHIR> {
                 invalid!("{}: {} has an incomplete signature", module.name, callable_.name);
             }
         }
-        let mut function_ids = HashSet::new();
+        let mut function_ids = HashSet::default();
         for function in &module.functions {
             if function_ids.contains(&function.id) {
                 invalid!("{}: duplicate function {}", module.name, function.id);
@@ -348,7 +348,7 @@ fn _function(
             }
         }
     }
-    let mut defined: HashSet<i64> = HashSet::new();
+    let mut defined: HashSet<i64> = HashSet::default();
     for block in &function.blocks {
         for instruction in &block.instructions {
             let expected = _RESULTS(instruction.op).unwrap_or(Some(1));

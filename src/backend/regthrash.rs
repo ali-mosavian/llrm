@@ -72,7 +72,7 @@ fn _once(body: &LirBody) -> Option<LirBody> {
 /// Per instruction, the register lanes dead once it has run.
 pub fn _dead_after(block: &LirBlock, dead: Lanes) -> DeadAfter {
     let mut dead = dead;
-    let mut out = DeadAfter::new();
+    let mut out = DeadAfter::default();
     for one in block.insns.iter().rev() {
         out.insert(id(one), dead.clone());
         if liveness::_terminator(one.what.as_ref()) {
@@ -280,11 +280,11 @@ fn _renamed(one: &Insn, before: Register, after: Register, result_only: bool) ->
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use crate::support::hash::HashMap;
     use std::sync::Arc;
 
     use iced_x86::{Decoder, DecoderOptions, Mnemonic, OpKind, Register};
-    use indexmap::IndexMap;
+    use crate::support::hash::IndexMap;
 
     use super::thrashed;
     use crate::backend::{select, verify};
@@ -374,7 +374,7 @@ mod tests {
                 .collect(),
         );
         let first = LirBlock { succ: vec![1], ..LirBlock::new(0, insns.into_iter().map(Arc::new).collect()) };
-        LirBody::new("thrash", 0, vec![first, after], IndexMap::new(), IndexMap::new())
+        LirBody::new("thrash", 0, vec![first, after], IndexMap::default(), IndexMap::default())
     }
 
     #[test]
@@ -422,7 +422,7 @@ mod tests {
             Register::EDX,
         );
         let result = thrashed(body);
-        let start = HashMap::from([(Register::ECX, 5), (Register::EDX, 7)]);
+        let start = HashMap::from_iter([(Register::ECX, 5), (Register::EDX, 7)]);
         assert_eq!(_run(&result.blocks[0], &start)[&Register::EDX], 12);
     }
 

@@ -207,7 +207,7 @@ fn _values(body: &LirBody, in_ssa: bool) -> Vec<String> {
 mod tests {
     use std::sync::Arc;
 
-    use indexmap::IndexMap;
+    use crate::support::hash::IndexMap;
 
     use super::*;
     use crate::model::lir::Insn;
@@ -221,7 +221,7 @@ mod tests {
     }
 
     fn body(name: &str, blocks: Vec<LirBlock>) -> LirBody {
-        LirBody::new(name, 1, blocks, IndexMap::new(), IndexMap::new())
+        LirBody::new(name, 1, blocks, IndexMap::default(), IndexMap::default())
     }
 
     /// C crc32 returned -1141145971 after an eliminated phi lost its definition.

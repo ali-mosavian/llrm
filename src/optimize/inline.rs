@@ -16,7 +16,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::analysis::ssa;
 use crate::model::mir::{self, Arg, Const, Held, Kind, MemRef, MirBlock, MirBody, Op, OpCode, OrderedMap, Phi, Value};
@@ -86,7 +86,7 @@ pub(crate) fn candidates(
     call_cost: i64,
 ) -> IndexMap<String, Candidate> {
     let budget = 6.max(24.min(call_cost.div_euclid(2)));
-    let mut out = IndexMap::new();
+    let mut out = IndexMap::default();
     for name in private.intersection(pure) {
         let body = &bodies[name];
         let parms = &parameters[name];
@@ -124,7 +124,7 @@ pub(crate) fn constant_sites(
     call_cost: i64,
 ) -> IndexMap<i64, Candidate> {
     let budget = 6.max(24.min(call_cost.div_euclid(2)));
-    let mut out = IndexMap::new();
+    let mut out = IndexMap::default();
     for (at, name) in calls {
         let known = constants.get(at).map_or(&[][..], Vec::as_slice);
         if !known.iter().any(Option::is_some) {
@@ -198,7 +198,7 @@ pub(crate) fn call_counts(
     bodies: &IndexMap<String, MirBody>,
     calls: &IndexMap<String, IndexMap<i64, String>>,
 ) -> Counter {
-    let mut counts = Counter::new();
+    let mut counts = Counter::default();
     for (name, body) in bodies {
         let named = &calls[name];
         for op in body.blocks.iter().flat_map(|block| &block.ops) {
@@ -218,7 +218,7 @@ pub(crate) fn expanded(
     available: &IndexMap<String, Candidate>,
     constant: Option<&IndexMap<i64, Candidate>>,
 ) -> Result<MirBody, String> {
-    let empty = IndexMap::new();
+    let empty = IndexMap::default();
     let constant = constant.unwrap_or(&empty);
     let mut used = BTreeSet::new();
     for block in &body.blocks {

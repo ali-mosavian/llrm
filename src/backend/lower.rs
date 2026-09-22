@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::Arc;
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use iced_x86::Register;
 use num_bigint::BigInt;
@@ -670,7 +670,7 @@ pub(crate) fn _check_inserted_conditions(
 /// Keep a pure single-use comparison adjacent to its branch during selection.
 pub(crate) fn _branch_condition(
     block: &crate::model::mir::MirBlock,
-    readers: &std::collections::HashMap<crate::model::mir::Value, usize>,
+    readers: &crate::support::hash::HashMap<crate::model::mir::Value, usize>,
 ) -> Vec<Op> {
     let Some(branch) = block.ops.last().filter(|op| op.kind == Kind::Branch) else {
         return block.ops.clone();
@@ -1130,7 +1130,7 @@ fn _fill(op: &Op, lowering: &mut Lowering, preserve_flags: bool) -> Parts {
     let mut parts = setup;
     parts.extend(before);
     let mut current = through;
-    let mut constant_values: IndexMap<mir::Const, Loc> = IndexMap::new();
+    let mut constant_values: IndexMap<mir::Const, Loc> = IndexMap::default();
     let cells = Loc::Mem(ir::Mem::new(None, 0));
     for (stored_arg, counted_arg, width) in plan {
         let stored = match &stored_arg {
@@ -1255,10 +1255,10 @@ fn _rematerialized_arguments(
     uses: &IndexMap<u32, i64>,
     exposed: &BTreeSet<u32>,
 ) -> Vec<Arc<Insn>> {
-    let mut literals: IndexMap<u32, (Arc<Insn>, ir::Imm)> = IndexMap::new();
+    let mut literals: IndexMap<u32, (Arc<Insn>, ir::Imm)> = IndexMap::default();
     // Only values whose every known use is an eligible PUSH may be recreated
     // independently of an ordered setup sequence.
-    let mut pushed: IndexMap<u32, i64> = IndexMap::new();
+    let mut pushed: IndexMap<u32, i64> = IndexMap::default();
     for one in insns {
         if let Some(what) = &one.what {
             if what.op == Operation::Push
@@ -1274,7 +1274,7 @@ fn _rematerialized_arguments(
             }
         }
     }
-    let mut consumed: IndexMap<u32, i64> = IndexMap::new();
+    let mut consumed: IndexMap<u32, i64> = IndexMap::default();
     let mut out = Vec::new();
     for one in insns {
         let mut one = Arc::clone(one);
@@ -1327,8 +1327,8 @@ fn _rematerialized_arguments(
 
 /// Fold a single-use load into the PUSH that consumes it.
 fn _memory_arguments(insns: &[Arc<Insn>], uses: &IndexMap<u32, i64>, exposed: &BTreeSet<u32>) -> Vec<Arc<Insn>> {
-    let mut loaded: IndexMap<u32, (Arc<Insn>, ir::Mem)> = IndexMap::new();
-    let mut consumed: IndexMap<u32, i64> = IndexMap::new();
+    let mut loaded: IndexMap<u32, (Arc<Insn>, ir::Mem)> = IndexMap::default();
+    let mut consumed: IndexMap<u32, i64> = IndexMap::default();
     let mut out: Vec<Arc<Insn>> = Vec::new();
     for one in insns {
         let mut one = Arc::clone(one);
@@ -1521,7 +1521,7 @@ fn _read(what: &ir::Semantics) -> Vec<u32> {
 
 /// What an absorbed divide destroys, for a caller with no call map.
 pub fn clobbering(op: &Op) -> BTreeSet<Register> {
-    if op.kind == Kind::Divmod { _clobbers(op, &IndexMap::new(), None, None) } else { BTreeSet::new() }
+    if op.kind == Kind::Divmod { _clobbers(op, &IndexMap::default(), None, None) } else { BTreeSet::new() }
 }
 
 /// Which registers this instruction destroys without naming them.
@@ -1759,7 +1759,7 @@ impl<'a> Lowering<'a> {
     ) -> Result<Self, Unlowered> {
         let cpu = cpu::profile(cpu).map_err(Unlowered)?;
         let ops = || body.blocks.iter().flat_map(|block| &block.ops);
-        let mut extended = IndexMap::new();
+        let mut extended = IndexMap::default();
         for one in ops() {
             if let ([Arg::Held(source)], [Arg::Held(result)]) = (&one.args[..], &one.results[..]) {
                 if one.kind == Kind::SignExtend && source.width == 2 && result.width == 4 {
@@ -1768,8 +1768,8 @@ impl<'a> Lowering<'a> {
             }
         }
         // A value used once, as a divide's high half over the low half beside it.
-        let mut readers: IndexMap<u32, i64> = IndexMap::new();
-        let mut dividends: IndexMap<u32, u32> = IndexMap::new();
+        let mut readers: IndexMap<u32, i64> = IndexMap::default();
+        let mut dividends: IndexMap<u32, u32> = IndexMap::default();
         for one in ops() {
             for arg in &one.args {
                 if let Arg::Held(arg) = arg {
@@ -1818,7 +1818,7 @@ impl<'a> Lowering<'a> {
 
     /// How wide each value an operand-less operation names is.
     fn _widths(&self, op: &Op) -> Vec<(u32, u32)> {
-        let mut out: IndexMap<u32, u32> = IndexMap::new();
+        let mut out: IndexMap<u32, u32> = IndexMap::default();
         for one in op.results.iter().chain(&op.args) {
             if let Arg::Held(one) = one {
                 if one.width != 0 {
@@ -1833,7 +1833,7 @@ impl<'a> Lowering<'a> {
 
     /// Where an operation that names no operand leaves what it writes.
     fn _idiom(&self, op: &Op, speaks: bool) -> Result<Vec<(ir::Held, Register)>, Unlowered> {
-        let mut out: indexmap::IndexSet<(ir::Held, Register)> = self._selectors(op, speaks).into_iter().collect();
+        let mut out: crate::support::hash::IndexSet<(ir::Held, Register)> = self._selectors(op, speaks).into_iter().collect();
         out.extend(self._delivered(op)?);
         Ok(out.into_iter().collect())
     }
@@ -1873,7 +1873,7 @@ impl<'a> Lowering<'a> {
         if matches!(op.kind, Kind::Call | Kind::Fcompare) {
             let widths: IndexMap<u32, u32> = self._widths(op).into_iter().collect();
             let width = |id: u32| widths.get(&id).copied().unwrap_or(2);
-            let mut r#where: IndexMap<Value, Register> = IndexMap::new();
+            let mut r#where: IndexMap<Value, Register> = IndexMap::default();
             if self.node(op).is_none() {
                 // A float result is on the x87, not in a register.
                 let integers = op.defines.iter().filter(|one| !one.flags && widths.get(&one.id) != Some(&10));
@@ -1941,7 +1941,7 @@ impl<'a> Lowering<'a> {
                     .collect()
             })
             .unwrap_or_default();
-        let mut out: indexmap::IndexSet<(ir::Held, Register)> = self._fixed_inputs(op)?.into_iter().collect();
+        let mut out: crate::support::hash::IndexSet<(ir::Held, Register)> = self._fixed_inputs(op)?.into_iter().collect();
         for reference in op.loads.iter().chain(&op.stores) {
             if let Some(segment) = reference.segment.filter(|segment| !placed.contains(&segment.id)) {
                 out.insert((ir::Held { value: segment.id, width: 2 }, Register::ES));
@@ -2245,10 +2245,10 @@ impl<'a> Lowering<'a> {
             } else {
                 op.uses.iter().filter(|one| !one.flags && !floats.contains(&one.id)).map(|one| one.id).collect()
             };
-            let inputs: indexmap::IndexSet<u32> =
+            let inputs: crate::support::hash::IndexSet<u32> =
                 inputs.into_iter().chain(requires.iter().map(|(held, _)| held.value)).collect();
             let defines: Vec<u32> = if speaks && op.kind != Kind::Call {
-                made.into_iter().chain(delivers.iter().map(|(held, _)| held.value)).collect::<indexmap::IndexSet<u32>>().into_iter().collect()
+                made.into_iter().chain(delivers.iter().map(|(held, _)| held.value)).collect::<crate::support::hash::IndexSet<u32>>().into_iter().collect()
             } else {
                 op.defines
                     .iter()
@@ -2309,7 +2309,7 @@ pub struct Lowered<'a> {
 }
 
 fn recount(made: &IndexMap<i64, Vec<Arc<Insn>>>, body: &MirBody) -> IndexMap<u32, i64> {
-    let mut uses: IndexMap<u32, i64> = IndexMap::new();
+    let mut uses: IndexMap<u32, i64> = IndexMap::default();
     for one in made.values().flatten() {
         for value in &one.uses {
             *uses.entry(*value).or_insert(0) += 1;
@@ -2351,7 +2351,7 @@ pub fn lowered(
     let values: PySet<Value> = ssa::values(&body).collect();
     let origin: IndexMap<Value, Register> =
         values.iter().filter_map(|value| hints.origin_of(*value).map(|r#where| (*value, r#where))).collect();
-    let mut pins: IndexMap<Value, Register> = IndexMap::new();
+    let mut pins: IndexMap<Value, Register> = IndexMap::default();
     for op in body.blocks.iter().flat_map(|block| &block.ops) {
         for (index, value) in op.defines.iter().enumerate() {
             if let Some(r#where) = hints.pin_of(op, index) {
@@ -2367,7 +2367,7 @@ pub fn lowered(
     let read_by_phis: BTreeSet<u32> =
         body.blocks.iter().flat_map(|block| &block.phis).flat_map(|phi| phi.incoming.values()).map(|v| v.id).collect();
     read.extend(read_by_phis.iter().copied());
-    let no_calls = IndexMap::new();
+    let no_calls = IndexMap::default();
     let calls = calls.unwrap_or(&no_calls);
     let mut making = Lowering::new(
         &body,
@@ -2384,7 +2384,7 @@ pub fn lowered(
             pointer_model: options.pointer_model,
         },
     )?;
-    let mut readers: std::collections::HashMap<Value, usize> = std::collections::HashMap::new();
+    let mut readers: crate::support::hash::HashMap<Value, usize> = crate::support::hash::HashMap::default();
     for value in body.blocks.iter().flat_map(|block| &block.ops).flat_map(|op| &op.uses) {
         *readers.entry(*value).or_insert(0) += 1;
     }
@@ -2397,7 +2397,7 @@ pub fn lowered(
     for block in &body.blocks {
         _check_inserted_conditions(&scheduled[&block.at], &live.live_out[&block.at])?;
     }
-    let mut made: IndexMap<i64, Vec<Arc<Insn>>> = IndexMap::new();
+    let mut made: IndexMap<i64, Vec<Arc<Insn>>> = IndexMap::default();
     for block in &body.blocks {
         let ops = &scheduled[&block.at];
         let mut alive: BTreeSet<Value> = live.live_out[&block.at].iter().filter(|value| value.flags).copied().collect();
@@ -2530,11 +2530,11 @@ mod tests {
 
     fn lower(name: &str, body: &MirBody) -> Result<lir::LirBody, Unlowered> {
         let occurrences = occurrences();
-        let contracts = IndexMap::new();
+        let contracts = IndexMap::default();
         lowered(
             name,
             body,
-            Some(&IndexMap::new()),
+            Some(&IndexMap::default()),
             BTreeSet::new(),
             Some(&contracts),
             "386",
@@ -2638,7 +2638,7 @@ mod tests {
         ] {
             let op = pointer_offset();
             let body = MirBody::new(0, vec![MirBlock::new(0, vec![], vec![op.clone()], vec![])]);
-            let calls = IndexMap::new();
+            let calls = IndexMap::default();
             let model = super::super::pointers::Model::new(super::super::pointers::HugeShift::Fixed(12)).unwrap();
             let mut making = Lowering::new(
                 &body,
@@ -2652,7 +2652,7 @@ mod tests {
             .unwrap();
             let parts: Vec<ir::Semantics> =
                 making.expand(&op, true).unwrap().iter().map(|part| part.what.clone().unwrap()).collect();
-            let none = std::collections::HashMap::new();
+            let none = crate::support::hash::HashMap::default();
             let got = super::super::pointers::tests::execute(&parts, pointer, offset & 0xffff_ffff, &none);
             assert_eq!(got, expected);
             assert!(parts
@@ -2666,7 +2666,7 @@ mod tests {
     fn test_pointer_abi_is_not_inferred_from_cpu() {
         let op = pointer_offset();
         let body = MirBody::new(0, vec![MirBlock::new(0, vec![], vec![op.clone()], vec![])]);
-        let calls = IndexMap::new();
+        let calls = IndexMap::default();
         let mut making =
             Lowering::new(&body, BTreeSet::from([3]), &calls, BTreeSet::new(), None, "386", Options::default()).unwrap();
         assert!(making.expand(&op, true).unwrap_err().0.contains("pointer ABI"));
@@ -2686,7 +2686,7 @@ mod tests {
         op.kind = Kind::Fill;
         op.args = vec![value, count, Arg::Const(mir::Const::new(0, 2))];
         op.stores = vec![MemRef { space: Some(space), ..MemRef::new(Some(Addr::new(space, offset)), width) }];
-        let calls = IndexMap::new();
+        let calls = IndexMap::default();
         let body = MirBody::new(0, vec![]);
         let mut lowering =
             Lowering::new(&body, BTreeSet::new(), &calls, BTreeSet::new(), None, "386", Options::default()).unwrap();
@@ -2744,7 +2744,7 @@ mod tests {
             let listing: Vec<String> = lowered
                 .iter()
                 .filter(|one| one.op == Operation::Fill)
-                .flat_map(|one| super::super::masm::_instruction(one, &IndexMap::new(), 0).unwrap())
+                .flat_map(|one| super::super::masm::_instruction(one, &IndexMap::default(), 0).unwrap())
                 .collect();
             assert_eq!(listing, expected, "{count}");
         }
@@ -2763,7 +2763,7 @@ mod tests {
 
         let emitted = super::super::select::emit(&one, 0, None, false, false, None).unwrap();
         assert_eq!(emitted.code, [0xaa]);
-        assert_eq!(super::super::masm::_instruction(&one, &IndexMap::new(), 0).unwrap(), ["stosb"]);
+        assert_eq!(super::super::masm::_instruction(&one, &IndexMap::default(), 0).unwrap(), ["stosb"]);
     }
 
     #[test]

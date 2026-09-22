@@ -7,7 +7,7 @@
 //! `test_nbody_counts_its_inner_loop_in_one_register`,
 //! `test_a_long_handed_to_a_sub_keeps_both_halves_stored`.
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::analysis::avail;
 use crate::model::ir::Operation;
@@ -45,7 +45,7 @@ fn _call(at: i64) -> Op {
 }
 
 fn _dead(body: &MirBody, private: Option<&dyn Fn(&MemRef) -> bool>) -> Vec<i64> {
-    avail::dead_stores(body, None, &IndexMap::new(), private, None, true).iter().map(|op| op.at).collect()
+    avail::dead_stores(body, None, &IndexMap::default(), private, None, true).iter().map(|op| op.at).collect()
 }
 
 fn _everything(_ref: &MemRef) -> bool {

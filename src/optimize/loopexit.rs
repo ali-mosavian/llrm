@@ -8,7 +8,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 use num_bigint::BigInt;
 
 use crate::analysis::consts::{self, Known};
@@ -251,7 +251,7 @@ fn _exit_terms(
             .map(|(value, counter)| (value.id, counter.clone())),
     );
     let counters = merged;
-    let mut exits = IndexMap::new();
+    let mut exits = IndexMap::default();
     for phi in &header.phis {
         if let Some(counter) = counters.get(&phi.result.id) {
             exits.insert(
@@ -301,7 +301,7 @@ fn _exit_terms(
             &headers,
             width,
             &BTreeSet::new(),
-            &mut IndexMap::new(),
+            &mut IndexMap::default(),
         );
         let Some(mut linear) = linear else {
             continue;
@@ -373,10 +373,10 @@ fn _widened_counters(
         .flat_map(|block| block.ops.iter())
         .any(|op| op.kind == Kind::SignExtend)
     {
-        return Ok(IndexMap::new());
+        return Ok(IndexMap::default());
     }
     let bounds = ranges::bounded(body)?;
-    let mut widened = IndexMap::new();
+    let mut widened = IndexMap::default();
     for block in &body.blocks {
         if !loop_.body.contains(&block.at) {
             continue;
@@ -517,7 +517,7 @@ fn _constant_exits(
         .collect::<Vec<_>>();
     used.extend(aliased);
     let mut added = Vec::new();
-    let mut swap = IndexMap::<u32, Value>::new();
+    let mut swap = IndexMap::<u32, Value>::default();
     for (value, terms) in exits {
         if !used.contains(value) || unavailable.contains(value) {
             continue;
@@ -679,7 +679,7 @@ fn _linear(
     let Some(held) =
         held.filter(|held| !headers.contains(&held.value) && made.contains_key(&held.value))
     else {
-        return Some(IndexMap::from([(arg.clone(), BigInt::from(1))]));
+        return Some(IndexMap::from_iter([(arg.clone(), BigInt::from(1))]));
     };
     if visiting.contains(&held.value) {
         return None;
@@ -718,7 +718,7 @@ fn _linear(
     } else {
         return None;
     };
-    let mut result = IndexMap::<Arg, BigInt>::new();
+    let mut result = IndexMap::<Arg, BigInt>::default();
     let mut deeper = visiting.clone();
     deeper.insert(held.value);
     for (source, coefficient) in parts {

@@ -415,7 +415,7 @@ fn test_a_held_operand_names_a_value_and_not_a_register() {
 #[test]
 fn test_an_unresolved_held_is_refused_rather_than_guessed() {
     let what = sem(Operation::Move, Some("mov"), vec![Loc::Held(h(9, 2))], vec![imm(1, 2)], None, false);
-    assert!(emit(&what, 0, None, false, false, Some(&HeldMap::new())).is_none(), "no register for value 9");
+    assert!(emit(&what, 0, None, false, false, Some(&HeldMap::default())).is_none(), "no register for value 9");
     let held: HeldMap = [(9, Register::EBX)].into_iter().collect();
     assert!(emit(&what, 0, None, false, false, Some(&held)).is_some(), "and it emits once there is");
 }

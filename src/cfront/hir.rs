@@ -5,10 +5,10 @@
 //! and its operands are the handles of the nodes it was built from. Nothing is
 //! lowered here; `raise_hir` does that.
 
-use std::collections::HashSet;
+use crate::support::hash::HashSet;
 use std::fmt;
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use super::stream::Record;
 use crate::support::pyrepr::{self, Repr, Tuple};
@@ -260,7 +260,7 @@ impl Unit {
 
     pub fn canonical_type(&self, type_: &str) -> String {
         let mut type_ = type_.to_owned();
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         while let Some(next) = self.aliases.get(&type_) {
             if !seen.insert(type_.clone()) {
                 break;

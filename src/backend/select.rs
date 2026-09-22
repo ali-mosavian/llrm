@@ -6,13 +6,13 @@
 //! refuses outside a `try`, an index out of range) panics here with the
 //! same message.
 
-use std::collections::HashMap;
+use crate::support::hash::HashMap;
 use std::sync::LazyLock;
 
 use iced_x86::{
     Code, Decoder, DecoderOptions, Encoder, Instruction, MemoryOperand, Register, RepPrefixKind,
 };
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::backend::target;
 use crate::frontend::declen::BITNESS;
@@ -434,7 +434,7 @@ pub fn fits_in_a_byte(value: i64) -> bool {
 /// Python binds `ACCUMULATOR` twice, `{2: AX, 4: EAX}` and later this; every
 /// function reads the global at call time, so only this binding is ever seen.
 pub static ACCUMULATOR: LazyLock<IndexMap<i64, Register>> =
-    LazyLock::new(|| IndexMap::from([(1, Register::AL), (2, Register::AX), (4, Register::EAX)]));
+    LazyLock::new(|| IndexMap::from_iter([(1, Register::AL), (2, Register::AX), (4, Register::EAX)]));
 
 /// `<name> dest, imm`, in the shortest form the value and register allow.
 pub fn arith_imm(name: &str, dest: Register, value: i64, at: u64, relocated: bool) -> Option<Emitted> {
@@ -511,10 +511,10 @@ pub fn push_imm(value: i64, width: i64, at: u64, relocated: bool) -> Option<Emit
 }
 
 pub static MOFFS_LOAD: LazyLock<IndexMap<i64, &'static str>> = LazyLock::new(|| {
-    IndexMap::from([(1, "MOV_AL_MOFFS8"), (2, "MOV_AX_MOFFS16"), (4, "MOV_EAX_MOFFS32")])
+    IndexMap::from_iter([(1, "MOV_AL_MOFFS8"), (2, "MOV_AX_MOFFS16"), (4, "MOV_EAX_MOFFS32")])
 });
 pub static MOFFS_STORE: LazyLock<IndexMap<i64, &'static str>> = LazyLock::new(|| {
-    IndexMap::from([(1, "MOV_MOFFS8_AL"), (2, "MOV_MOFFS16_AX"), (4, "MOV_MOFFS32_EAX")])
+    IndexMap::from_iter([(1, "MOV_MOFFS8_AL"), (2, "MOV_MOFFS16_AX"), (4, "MOV_MOFFS32_EAX")])
 });
 
 /// The accumulator form, where this is one it applies to.
@@ -638,7 +638,7 @@ pub fn call_far(_at: u64) -> Option<Emitted> {
 
 /// The forms that carry no address and no target.
 pub static BARE: LazyLock<IndexMap<&'static str, &'static str>> = LazyLock::new(|| {
-    IndexMap::from([
+    IndexMap::from_iter([
         ("wait", "WAIT"),
         ("nop", "NOPW"),
         ("ret", "RETNW"),
@@ -659,7 +659,7 @@ pub static BARE: LazyLock<IndexMap<&'static str, &'static str>> = LazyLock::new(
 });
 /// The x87 control and status words, each against a word of memory.
 pub static CONTROL_WORD: LazyLock<IndexMap<&'static str, &'static str>> =
-    LazyLock::new(|| IndexMap::from([("fldcw", "FLDCW_M2BYTE"), ("fnstcw", "FNSTCW_M2BYTE")]));
+    LazyLock::new(|| IndexMap::from_iter([("fldcw", "FLDCW_M2BYTE"), ("fnstcw", "FNSTCW_M2BYTE")]));
 
 /// An instruction with no operands at all.
 pub fn bare(name: &str, at: u64) -> Option<Emitted> {
@@ -722,9 +722,9 @@ pub fn compare(dest: &Loc, value: i64, at: u64, relocated: bool) -> Option<Emitt
 }
 
 pub static FLOAT_SIZED: LazyLock<IndexMap<u32, &'static str>> =
-    LazyLock::new(|| IndexMap::from([(4, "M32FP"), (8, "M64FP"), (10, "M80FP")]));
+    LazyLock::new(|| IndexMap::from_iter([(4, "M32FP"), (8, "M64FP"), (10, "M80FP")]));
 pub static INT_SIZED: LazyLock<IndexMap<u32, &'static str>> =
-    LazyLock::new(|| IndexMap::from([(2, "M16INT"), (4, "M32INT"), (8, "M64INT")]));
+    LazyLock::new(|| IndexMap::from_iter([(2, "M16INT"), (4, "M32INT"), (8, "M64INT")]));
 pub const FLOAT_MEMORY: [&str; 11] =
     ["fld", "fstp", "fst", "fadd", "fsub", "fmul", "fdiv", "fsubr", "fdivr", "fcom", "fcomp"];
 pub const INT_MEMORY: [&str; 9] = ["fild", "fistp", "fist", "fiadd", "fisub", "fimul", "fidiv", "fisubr", "fidivr"];
@@ -924,7 +924,7 @@ pub fn compare_mem(dest: Register, cell: &ir::Mem, at: u64) -> Option<Emitted> {
 /// The segment registers, which are not values and which an instruction
 /// still names.
 pub static SEGMENTS: LazyLock<IndexMap<Register, &'static str>> = LazyLock::new(|| {
-    IndexMap::from([
+    IndexMap::from_iter([
         (Register::CS, "CS"),
         (Register::DS, "DS"),
         (Register::ES, "ES"),
@@ -1181,7 +1181,7 @@ pub fn multiply_into(dest: Register, source: RegisterOrCell<'_>, value: Option<i
 
 /// Each segment register a far pointer can be loaded into with its offset.
 pub static FAR_LOADS: LazyLock<IndexMap<Register, (&'static str, &'static str)>> = LazyLock::new(|| {
-    IndexMap::from([
+    IndexMap::from_iter([
         (Register::ES, ("les", "LES_R16_M1616")),
         (Register::FS, ("lfs", "LFS_R16_M1616")),
         (Register::GS, ("lgs", "LGS_R16_M1616")),
@@ -1240,7 +1240,7 @@ pub fn move_segment(into: Register, outof: RegisterOrCell<'_>, at: u64) -> Optio
 
 /// `pop cs` is 8086-only, so cs is not here.
 pub static _POP_SEGMENT: LazyLock<IndexMap<Register, &'static str>> = LazyLock::new(|| {
-    IndexMap::from([
+    IndexMap::from_iter([
         (Register::DS, "POPW_DS"),
         (Register::ES, "POPW_ES"),
         (Register::SS, "POPW_SS"),

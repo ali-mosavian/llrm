@@ -16,7 +16,7 @@ fn _removed(op: &Op) -> Result<bool, Unlowered> {
 }
 
 pub fn checked(body: &MirBody) -> Result<(), Unlowered> {
-    let repetitions: std::collections::HashMap<i64, i64> = body.repetitions.iter().copied().collect();
+    let repetitions: crate::support::hash::HashMap<i64, i64> = body.repetitions.iter().copied().collect();
     if repetitions.len() != body.repetitions.len()
         || body.repetitions.iter().any(|&(at, count)| {
             body.block(at).is_none_or(|block| !(2 <= count && count <= block.ops.len() as i64))

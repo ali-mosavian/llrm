@@ -14,7 +14,7 @@ use std::fmt;
 use std::rc::Rc;
 use std::sync::LazyLock;
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::backend::masm;
 use crate::backend::select;
@@ -26,9 +26,9 @@ use crate::support::pyrepr::{self, Repr};
 pub const OFFSET: i64 = 1;
 pub const BASE: i64 = 2;
 pub const POINTER: i64 = 3;
-pub static WIDE: LazyLock<IndexMap<i64, usize>> = LazyLock::new(|| IndexMap::from([(OFFSET, 2), (BASE, 2), (POINTER, 4)]));
+pub static WIDE: LazyLock<IndexMap<i64, usize>> = LazyLock::new(|| IndexMap::from_iter([(OFFSET, 2), (BASE, 2), (POINTER, 4)]));
 pub static CLASSES: LazyLock<IndexMap<&'static str, &'static str>> =
-    LazyLock::new(|| IndexMap::from([("_DATA", "DATA"), ("_BSS", "BSS"), ("CONST", "CONST")]));
+    LazyLock::new(|| IndexMap::from_iter([("_DATA", "DATA"), ("_BSS", "BSS"), ("CONST", "CONST")]));
 /// DGROUP, the only group.
 pub const GROUP: i64 = 1;
 /// LEDATA payload per record. A fixup's offset into its record has ten bits.
@@ -193,7 +193,7 @@ fn pack_into(buffer: &mut [u8], at: usize, value: i64) {
 
 pub fn written(module: &masm::Module, source: &str) -> Result<Vec<u8>, Error> {
     let mut segments = vec![Segment::new(&module.code, "CODE", false)];
-    let mut named: IndexMap<String, Segment> = IndexMap::from([("_DATA".to_owned(), Segment::new("_DATA", "DATA", true))]);
+    let mut named: IndexMap<String, Segment> = IndexMap::from_iter([("_DATA".to_owned(), Segment::new("_DATA", "DATA", true))]);
     for (name, _items) in &module.data {
         if !named.contains_key(name) {
             let private = module.private.contains(name);
@@ -202,7 +202,7 @@ pub fn written(module: &masm::Module, source: &str) -> Result<Vec<u8>, Error> {
         }
     }
     segments.extend(named.into_values());
-    let mut symbols: IndexMap<String, (usize, usize)> = IndexMap::new();
+    let mut symbols: IndexMap<String, (usize, usize)> = IndexMap::default();
     for (name, items) in &module.data {
         let index = segments
             .iter()
@@ -330,7 +330,7 @@ pub fn _encoded(what: &Semantics, names: &IndexMap<(Space, i64), String>) -> Res
         return Err(Unencodable(what.repr()));
     };
     let mut code = made.code.clone();
-    let mut fixups: IndexMap<usize, Fixup> = IndexMap::new();
+    let mut fixups: IndexMap<usize, Fixup> = IndexMap::default();
     for one in what.dests.iter().chain(&what.sources) {
         let (at, loc, addend, addr) = match one {
             Loc::Mem(ir::Mem { addr: Some(addr), .. }) | Loc::Address(ir::Address { addr: Some(addr), .. })
@@ -362,7 +362,7 @@ pub fn _encoded(what: &Semantics, names: &IndexMap<(Space, i64), String>) -> Res
 /// only moves targets further away, so it ends, and at the smallest layout.
 pub fn _relaxed(items: &mut [Encoded]) -> Result<IndexMap<String, i64>, Unencodable> {
     loop {
-        let (mut labels, mut at) = (IndexMap::new(), 0i64);
+        let (mut labels, mut at) = (IndexMap::default(), 0i64);
         for item in items.iter() {
             if let Encoded::Label(label) = item {
                 labels.insert(label.name.clone(), at);
@@ -523,7 +523,7 @@ pub fn _ledata(
 ) -> Result<Vec<Rc<omf::Record>>, Error> {
     let mut fixups = segments[index - 1].fixups.clone();
     fixups.sort_by_key(|one| one.at);
-    let mut subrecords: IndexMap<usize, Vec<u8>> = IndexMap::new();
+    let mut subrecords: IndexMap<usize, Vec<u8>> = IndexMap::default();
     for one in &fixups {
         let made = _subrecord(one, index - 1, segments, symbols, externs, kinds)?;
         subrecords.insert(one.at, made);
@@ -641,7 +641,7 @@ mod tests {
     }
 
     fn body(name: &str, blocks: Vec<lir::LirBlock>) -> lir::LirBody {
-        lir::LirBody::new(name, 1, blocks, IndexMap::new(), IndexMap::new())
+        lir::LirBody::new(name, 1, blocks, IndexMap::default(), IndexMap::default())
     }
 
     fn procedure(name: &str, far: bool, body: lir::LirBody, reserve: i64, callees: Vec<(i64, masm::Callee)>) -> masm::Procedure {
@@ -691,7 +691,7 @@ mod tests {
         let procedure = procedure("_next", false, body, 0, vec![]);
 
         let lines: Vec<String> =
-            masm::_procedure(&procedure, &IndexMap::new(), 0).unwrap().iter().map(|one| one.trim().to_owned()).collect();
+            masm::_procedure(&procedure, &IndexMap::default(), 0).unwrap().iter().map(|one| one.trim().to_owned()).collect();
         assert_eq!(lines, ["_next proc near", "L0_1:", "L0_2:", "ret", "_next endp"]);
     }
 
@@ -729,7 +729,7 @@ mod tests {
         let insns = vec![insn(1, load), insn(2, call), insn(3, leave)];
         let built = masm::Module {
             code: "GET_TEXT".into(),
-            names: IndexMap::from([((Space::External, 7), "_d".to_owned())]),
+            names: IndexMap::from_iter([((Space::External, 7), "_d".to_owned())]),
             externs: vec![("_f".into(), "far".into()), ("_d".into(), "byte".into())],
             publics: strings(&["_get"]),
             data: vec![("_DATA".into(), vec![])],
@@ -793,7 +793,7 @@ mod tests {
         ];
         let rich = masm::Module {
             code: "RICH_TEXT".into(),
-            names: IndexMap::from([((Space::Segment, 1), "_table".to_owned()), ((Space::Group, 1), "DGROUP".to_owned())]),
+            names: IndexMap::from_iter([((Space::Segment, 1), "_table".to_owned()), ((Space::Group, 1), "DGROUP".to_owned())]),
             externs: vec![("_ext".into(), "far".into()), ("_unused".into(), "near".into()), ("_b".into(), "byte".into())],
             publics: strings(&["_f", "_table"]),
             data: vec![

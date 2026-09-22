@@ -4,7 +4,7 @@
 //! so a malformed document is refused with Python's exact message, and of
 //! `json.encoder`'s `ensure_ascii` spelling.
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::support::pyrepr;
 
@@ -246,7 +246,7 @@ fn scanstring(s: &[char], mut end: usize) -> Result<(String, usize), String> {
 
 /// `JSONObject((s, end), strict=True, ...)`.
 fn parse_object(s: &[char], mut end: usize) -> Result<(Json, usize), String> {
-    let mut pairs: IndexMap<String, Json> = IndexMap::new();
+    let mut pairs: IndexMap<String, Json> = IndexMap::default();
     let mut nextchar = s.get(end).copied();
     if nextchar != Some('"') {
         if nextchar.is_some_and(|one| WHITESPACE.contains(&one)) {

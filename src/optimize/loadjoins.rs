@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::analysis::loops::{self, Loop};
 use crate::analysis::regions::RegionLayout;
@@ -155,8 +155,8 @@ pub fn reused(body: &MirBody, dgroup: Option<&RegionLayout>, insert: bool) -> Re
     definitions.extend(
         body.blocks.iter().flat_map(|block| block.phis.iter().map(move |phi| (phi.result, (block.at, -1)))),
     );
-    let mut insertions: IndexMap<i64, Vec<(usize, Op)>> = IndexMap::new();
-    let mut bridges: IndexMap<(i64, i64), (i64, Vec<Op>)> = IndexMap::new();
+    let mut insertions: IndexMap<i64, Vec<(usize, Op)>> = IndexMap::default();
+    let mut bridges: IndexMap<(i64, i64), (i64, Vec<Op>)> = IndexMap::default();
     let mut label = edges::fresh(body);
     let mut blocks: Vec<MirBlock> = Vec::new();
     for block in &body.blocks {
@@ -168,8 +168,8 @@ pub fn reused(body: &MirBody, dgroup: Option<&RegionLayout>, insert: bool) -> Re
         let (mut phis, mut ops) = (block.phis.clone(), Vec::new());
         for (index, op) in block.ops.iter().enumerate() {
             let loaded = if op.kind == Kind::Load { _value(op) } else { None };
-            let mut incoming: IndexMap<i64, Value> = IndexMap::new();
-            let mut missing: IndexMap<i64, (usize, Vec<Value>, MemRef)> = IndexMap::new();
+            let mut incoming: IndexMap<i64, Value> = IndexMap::default();
+            let mut missing: IndexMap<i64, (usize, Vec<Value>, MemRef)> = IndexMap::default();
             let Some((r#ref, result)) = loaded else {
                 ops.push(op.clone());
                 continue;

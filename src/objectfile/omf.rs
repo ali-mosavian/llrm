@@ -9,13 +9,13 @@
 //! A Python `list[Record]` holds references, and callers compare them by
 //! identity (`is`, `id()`), so records are carried as `Rc<Record>`.
 
-use std::collections::HashSet;
+use crate::support::hash::HashSet;
 use std::fmt;
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::LazyLock;
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::support::pyrepr::{self, Repr};
 
@@ -33,7 +33,7 @@ pub const LEDATA: u8 = 0xA0;
 pub const LIDATA: u8 = 0xA2;
 
 pub static NAMES: LazyLock<IndexMap<u8, &'static str>> = LazyLock::new(|| {
-    IndexMap::from([
+    IndexMap::from_iter([
         (0x80, "THEADR"),
         (0x88, "COMENT"),
         (0x8A, "MODEND"),
@@ -341,7 +341,7 @@ pub const COMBINE_COMMON: i64 = 6;
 /// COMMON (6) lays every object's copy of the segment over the same bytes;
 /// PUBLIC (2, 4, 7) concatenates them and private (0) keeps them apart.
 pub fn combines(recs: &[Rc<Record>]) -> IndexMap<i64, i64> {
-    let (mut out, mut index) = (IndexMap::new(), 0i64);
+    let (mut out, mut index) = (IndexMap::default(), 0i64);
     for r in recs {
         if r.r#type & 0xFE != SEGDEF {
             continue;
@@ -358,7 +358,7 @@ pub fn combines(recs: &[Rc<Record>]) -> IndexMap<i64, i64> {
 /// pairs -- 0xFF is the only component type BC emits, "segment index".
 pub fn groups(recs: &[Rc<Record>]) -> IndexMap<String, Vec<i64>> {
     let nm = names(recs);
-    let mut out: IndexMap<String, Vec<i64>> = IndexMap::new();
+    let mut out: IndexMap<String, Vec<i64>> = IndexMap::default();
     for r in recs {
         if r.r#type & 0xFE != GRPDEF {
             continue;
@@ -416,7 +416,7 @@ pub fn pubdef_names(records: &[Rc<Record>], seg: i64) -> Result<IndexMap<i64, St
 pub fn public_definitions(
     records: &[Rc<Record>],
 ) -> Result<IndexMap<String, (i64, i64)>, ValueError> {
-    let mut out: IndexMap<String, (i64, i64)> = IndexMap::new();
+    let mut out: IndexMap<String, (i64, i64)> = IndexMap::default();
     for r in records {
         if r.r#type & 0xFE != PUBDEF {
             continue;
@@ -527,10 +527,10 @@ pub const LOC_HIBYTE: i64 = 4;
 pub const LOC_OFF32: i64 = 9;
 
 pub static TARGET_KIND: LazyLock<IndexMap<i64, &'static str>> =
-    LazyLock::new(|| IndexMap::from([(0, "segment"), (1, "group"), (2, "external")]));
+    LazyLock::new(|| IndexMap::from_iter([(0, "segment"), (1, "group"), (2, "external")]));
 
 pub static LOCNAME: LazyLock<IndexMap<i64, &'static str>> = LazyLock::new(|| {
-    IndexMap::from([
+    IndexMap::from_iter([
         (0, "lobyte"),
         (1, "offset16"),
         (2, "base"),
@@ -708,7 +708,7 @@ pub const COMDAT: [u8; 2] = [0xC2, 0xC3];
 ///
 /// The value is the record's `id()`.
 pub fn last_writers(records: &[Rc<Record>], seg: i64, size: i64) -> IndexMap<i64, usize> {
-    let mut owner = IndexMap::new();
+    let mut owner = IndexMap::default();
     for (record, index, offset, payload) in ledata(records) {
         if index == seg {
             for at in offset..(offset + payload.len() as i64).min(size) {
@@ -849,7 +849,7 @@ pub fn fixups(records: &[Rc<Record>]) -> Vec<Fixup> {
 /// Not the THREAD declarations: one may name an external no fixup ever
 /// uses, and dropping the EXTDEF it names is exactly what pruning is for.
 pub fn names_externals(one: &Fixup) -> HashSet<i64> {
-    let mut out: HashSet<i64> = HashSet::new();
+    let mut out: HashSet<i64> = HashSet::default();
     if one.target == "external" {
         out.insert(one.index);
     }
@@ -1258,7 +1258,7 @@ pub fn main(path: impl AsRef<Path>) -> Result<(), ReadError> {
     let path = path.as_ref();
     let recs = read(path)?;
     let (segs, exts) = (segments(&recs), externals(&recs));
-    let mut counts: IndexMap<String, i64> = IndexMap::new();
+    let mut counts: IndexMap<String, i64> = IndexMap::default();
     for r in &recs {
         *counts.entry(r.name()).or_insert(0) += 1;
     }
@@ -1586,7 +1586,7 @@ mod tests {
     fn test_every_byte_of_a_fixupp_is_accounted_for() {
         for obj in objects() {
             let records = read(&obj).unwrap();
-            let mut by_record: IndexMap<usize, Vec<Fixup>> = IndexMap::new();
+            let mut by_record: IndexMap<usize, Vec<Fixup>> = IndexMap::default();
             for fixup in fixups(&records) {
                 by_record.entry(id(&fixup.record)).or_default().push(fixup);
             }

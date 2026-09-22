@@ -1781,7 +1781,7 @@ fn outside(reach: &BTreeSet<(i64, i64)>) -> Vec<(Addr, u32)> {
 }
 
 /// Python `_through_frame`.
-fn through_frame(body: MirBody, framed: &indexmap::IndexMap<Value, BTreeSet<(i64, i64)>>) -> MirBody {
+fn through_frame(body: MirBody, framed: &crate::support::hash::IndexMap<Value, BTreeSet<(i64, i64)>>) -> MirBody {
     if framed.is_empty() {
         return body;
     }

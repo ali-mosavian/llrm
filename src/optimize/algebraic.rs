@@ -2,7 +2,8 @@
 //!
 //! Direct port of `qbopt/optimize/algebraic.py`.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
+use crate::support::hash::HashMap;
 
 use num_bigint::BigInt;
 use num_traits::{One, Zero};
@@ -370,7 +371,7 @@ pub(crate) fn _reassociated_recurrences(body: &MirBody) -> MirBody {
         .iter()
         .flat_map(|block| block.ops.iter().map(move |op| (id(op), block.at)))
         .collect::<HashMap<_, _>>();
-    let mut replacements = HashMap::<usize, Op>::new();
+    let mut replacements = HashMap::<usize, Op>::default();
 
     let plain = |op: Option<&Op>| {
         op.is_some_and(|op| {

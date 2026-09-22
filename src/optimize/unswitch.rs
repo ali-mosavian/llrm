@@ -8,7 +8,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::analysis::loops::{self, Loop};
 use crate::analysis::ssa;
@@ -92,7 +92,7 @@ pub(crate) fn optimized(
 
 pub(crate) fn specialized(body: &MirBody) -> Result<MirBody, String> {
     let closed = lcssa::closed(body)?;
-    let mut owners: IndexMap<Value, i64> = IndexMap::new();
+    let mut owners: IndexMap<Value, i64> = IndexMap::default();
     for block in &closed.blocks {
         let values = block.phis.iter().map(|phi| phi.result).chain(block.ops.iter().flat_map(|op| op.defines.iter().copied()));
         for value in values {

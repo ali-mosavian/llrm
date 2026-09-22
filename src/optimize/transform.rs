@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::analysis::loops::{self as loopy, Loop};
 use crate::analysis::occurrence::OpOccurrence;
@@ -89,16 +89,16 @@ pub(crate) fn subexpressions(body: &MirBody, dgroup: &BTreeSet<i64>, avoid_store
     let demanded = halves(body);
 
     let exact = if body.blocks.iter().any(|block| block.ops.iter().any(|op| op.floating.is_some())) {
-        floatfacts::known(body, dgroup, &IndexMap::new(), None)
+        floatfacts::known(body, dgroup, &IndexMap::default(), None)
     } else {
-        IndexMap::new()
+        IndexMap::default()
     };
     let bounded = floatbounds::exact(body, &exact, dgroup)?;
 
-    let mut seen: IndexMap<_Computation, Vec<(usize, usize, Op)>> = IndexMap::new();
+    let mut seen: IndexMap<_Computation, Vec<(usize, usize, Op)>> = IndexMap::default();
     // What a name numbers as -- copies included.  `standing` mirrors it for
     // `_provider`, which takes an ordered map.
-    let mut stands: IndexMap<u32, Value> = IndexMap::new();
+    let mut stands: IndexMap<u32, Value> = IndexMap::default();
     let mut standing: BTreeMap<u32, Value> = BTreeMap::new();
     let mut swap: BTreeMap<u32, Value> = BTreeMap::new(); // what a name is rewritten to -- only what folded
     let mut gone: BTreeSet<OpOccurrence> = BTreeSet::new();
@@ -422,7 +422,7 @@ pub(crate) fn _reclaimed(body: &MirBody, gone: &BTreeSet<OpOccurrence>) -> MirBo
 /// A half of one is `Held(value, 2)` and so is the other half, so anything
 /// narrow is refused rather than told apart.
 pub(crate) fn _widths(body: &MirBody) -> IndexMap<u32, u32> {
-    let mut out: IndexMap<u32, u32> = IndexMap::new();
+    let mut out: IndexMap<u32, u32> = IndexMap::default();
     for block in &body.blocks {
         for op in &block.ops {
             for one in &op.results {
@@ -505,7 +505,7 @@ pub(crate) struct _Computation {
 
 /// What this operation computes, or None where that is not only its operands.
 pub(crate) fn _computation(op: &Op, stands: &IndexMap<u32, Value>, whole: &IndexMap<u32, u32>) -> Option<_Computation> {
-    use std::collections::HashSet;
+    use crate::support::hash::HashSet;
 
     let floating = op.floating.is_some()
         && matches!(op.kind, Kind::Fload | Kind::Fadd | Kind::Fsub | Kind::Fmul | Kind::Fdiv | Kind::Fsqrt);
@@ -618,7 +618,7 @@ pub(crate) fn reused_divides(
         return Ok(body.clone());
     }
     let alive = live(body);
-    let mut into: IndexMap<*const Op, Op> = IndexMap::new();
+    let mut into: IndexMap<*const Op, Op> = IndexMap::default();
     for (_at, earlier, one) in pairs_found {
         if one.results.len() != 2 || earlier.results.len() != 2 {
             continue;
@@ -915,17 +915,17 @@ pub(crate) fn forwarded(
     if want.is_empty() {
         return Ok(body.clone());
     }
-    let mut served: IndexMap<*const Op, Holder> = IndexMap::new();
+    let mut served: IndexMap<*const Op, Holder> = IndexMap::default();
     for one in avail::forwardable(body, None, calls, &want) {
         if let Some(op) = one.op {
             served.insert(op as *const Op, one.value);
         }
     }
     if avoid_store_crossing {
-        let mut locations: IndexMap<*const Op, (i64, usize)> = IndexMap::new();
-        let mut definitions: IndexMap<Value, (i64, usize)> = IndexMap::new();
-        let mut by_at: IndexMap<i64, &MirBlock> = IndexMap::new();
-        let mut op_by_id: IndexMap<*const Op, &Op> = IndexMap::new();
+        let mut locations: IndexMap<*const Op, (i64, usize)> = IndexMap::default();
+        let mut definitions: IndexMap<Value, (i64, usize)> = IndexMap::default();
+        let mut by_at: IndexMap<i64, &MirBlock> = IndexMap::default();
+        let mut op_by_id: IndexMap<*const Op, &Op> = IndexMap::default();
         for block in &body.blocks {
             by_at.insert(block.at, block);
             for (index, op) in block.ops.iter().enumerate() {
@@ -1121,7 +1121,7 @@ pub(crate) fn _preheader(body: &MirBody, loop_: &Loop) -> Option<i64> {
 pub(crate) fn _effective(body: &MirBody, calls: &IndexMap<i64, String>) -> BTreeSet<Value> {
     let _ = calls;
     let mut wanted: BTreeSet<Value> = BTreeSet::new();
-    let mut carrying: IndexMap<Value, BTreeSet<Value>> = IndexMap::new();
+    let mut carrying: IndexMap<Value, BTreeSet<Value>> = IndexMap::default();
     for block in &body.blocks {
         for phi in &block.phis {
             for value in phi.incoming.values() {
@@ -1247,7 +1247,7 @@ pub(crate) fn _invariant_run<'a>(
     bounds: Option<&IndexMap<(crate::objectfile::module::Space, i64), Vec<i64>>>,
     starts: Option<&BTreeSet<Value>>,
     readable: Option<&BTreeSet<Value>>,
-    intervals: Option<&std::collections::HashMap<usize, &BTreeMap<Value, crate::analysis::ranges::Interval>>>,
+    intervals: Option<&crate::support::hash::HashMap<usize, &BTreeMap<Value, crate::analysis::ranges::Interval>>>,
     nonempty: bool,
     floating_allowed: &BTreeSet<usize>,
 ) -> Result<Vec<&'a Op>, String> {
@@ -1484,7 +1484,7 @@ pub(crate) fn _leaving(body: &MirBody) -> std::collections::BTreeSet<crate::mode
 pub(crate) const LOW: u8 = 0;
 pub(crate) const HIGH: u8 = 1;
 
-type _HalvesReuse = std::collections::HashMap<usize, (MirBody, BTreeSet<(Value, u8)>)>;
+type _HalvesReuse = crate::support::hash::HashMap<usize, (MirBody, BTreeSet<(Value, u8)>)>;
 
 thread_local! {
     /// Python's `_halves_reuse` context variable.  The saved body is compared
@@ -1495,7 +1495,7 @@ thread_local! {
 
 /// Share half-liveness for immutable states in one transaction.
 pub(crate) fn _reusing_halves<T>(inside: impl FnOnce() -> T) -> T {
-    let token = _halves_reuse.with(|reuse| reuse.replace(Some(std::collections::HashMap::new())));
+    let token = _halves_reuse.with(|reuse| reuse.replace(Some(crate::support::hash::HashMap::default())));
     let result = inside();
     _halves_reuse.with(|reuse| *reuse.borrow_mut() = token);
     result
@@ -2507,7 +2507,7 @@ pub(crate) fn _folded_phi_edges(
                 }
 
                 let width = results[0].width;
-                let mut numbers: IndexMap<i64, num_bigint::BigInt> = IndexMap::new();
+                let mut numbers: IndexMap<i64, num_bigint::BigInt> = IndexMap::default();
                 for &parent in parents {
                     let swap = phis
                         .iter()
@@ -2583,7 +2583,7 @@ pub(crate) fn folded(body: &MirBody, dgroup: &BTreeSet<i64>, calls: &IndexMap<i6
     let floating_facts = if body.blocks.iter().any(|block| block.ops.iter().any(|op| op.floating.is_some())) {
         floatfacts::known(body, dgroup, calls, None)
     } else {
-        IndexMap::new()
+        IndexMap::default()
     };
     let conversions = floatfacts::converted(body, dgroup, calls, Some(&floating_facts));
     let mut argument_facts = facts.clone();
@@ -2595,7 +2595,7 @@ pub(crate) fn folded(body: &MirBody, dgroup: &BTreeSet<i64>, calls: &IndexMap<i6
     {
         consts::cells(body, dgroup, calls, Some(&facts), None, Some(&edges), None, None)
     } else {
-        IndexMap::new()
+        IndexMap::default()
     };
     let symbols = _symbol_copies(body);
     if facts.is_empty() && memory.is_empty() && argument_facts.is_empty() && symbols.is_empty() {
@@ -2605,7 +2605,7 @@ pub(crate) fn folded(body: &MirBody, dgroup: &BTreeSet<i64>, calls: &IndexMap<i6
     // Live, not merely mentioned: see live()'s own note on hotlop's dx.
     let wanted = live(body);
 
-    let nothing = consts::Cells::new();
+    let nothing = consts::Cells::default();
     let mut out = Vec::new();
     for block in &body.blocks {
         let mut ops = Vec::new();
@@ -2728,8 +2728,8 @@ pub(crate) fn _constant_operands(
     use crate::analysis::consts;
     use crate::model::mir::Const;
 
-    let no_memory = consts::Cells::new();
-    let no_symbols = _SymbolCopies::new();
+    let no_memory = consts::Cells::default();
+    let no_symbols = _SymbolCopies::default();
     let memory = memory.unwrap_or(&no_memory);
     let symbols = symbols.unwrap_or(&no_symbols);
     if op.kind == Kind::Arg {
@@ -3021,7 +3021,7 @@ pub(crate) fn _reparented(body: &MirBody, crossed: &crate::support::pyset::PySet
         .unwrap_or(0);
     let mut sorted = crossed.iter().copied().collect::<Vec<_>>();
     sorted.sort_by_key(|one| (one.variable, one.version));
-    let mut instead: IndexMap<Value, Value> = IndexMap::new();
+    let mut instead: IndexMap<Value, Value> = IndexMap::default();
     for (number, one) in sorted.into_iter().enumerate() {
         instead.insert(
             one,
@@ -3166,7 +3166,7 @@ pub(crate) fn hoisted(
     calls: &IndexMap<i64, String>,
     bounds: Option<&IndexMap<(crate::objectfile::module::Space, i64), Vec<i64>>>,
 ) -> Result<MirBody, String> {
-    use std::collections::HashMap;
+    use crate::support::hash::HashMap;
 
     use crate::analysis::ranges::{self, Interval};
     use crate::support::pyset::PySet;
@@ -3201,9 +3201,9 @@ pub(crate) fn hoisted(
     let effective = _effective(body, calls);
     let mut crossed: PySet<Value> = PySet::new();
     let demanded = halves(body);
-    let mut moved: IndexMap<i64, Vec<Op>> = IndexMap::new();
+    let mut moved: IndexMap<i64, Vec<Op>> = IndexMap::default();
     let mut gone: BTreeSet<usize> = BTreeSet::new();
-    let mut placing: IndexMap<i64, usize> = IndexMap::new();
+    let mut placing: IndexMap<i64, usize> = IndexMap::default();
 
     for loop_ in &inside {
         let Some(into) = _preheader(body, loop_) else {
@@ -3626,7 +3626,7 @@ pub(crate) fn pipeline(
 
 // The order, from the pipeline itself rather than beside it.
 pub(crate) static PASSES: std::sync::LazyLock<Vec<String>> = std::sync::LazyLock::new(|| {
-    pipeline(&crate::model::passes::Where::default(), &IndexMap::new())
+    pipeline(&crate::model::passes::Where::default(), &IndexMap::default())
         .iter()
         .map(|one| one.name().to_owned())
         .collect()
@@ -3808,7 +3808,7 @@ fn _applied(
         watch,
     } = options;
     // Every pass can be turned off, which is how a miscompile is bisected.
-    let wanted = IndexMap::from([
+    let wanted = IndexMap::from_iter([
         ("lcssa", options.lcssa),
         ("floatloop", options.floatloop),
         ("fold", options.fold),

@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use iced_x86::Register;
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use super::*;
 use crate::backend::cpu;
@@ -21,7 +21,7 @@ fn _insn(at: i64, operation: Operation, name: &str, dests: Vec<Loc>, sources: Ve
 }
 
 fn _body(insns: Vec<Arc<Insn>>) -> LirBody {
-    LirBody::new("latency", 0, vec![LirBlock::new(0, insns)], IndexMap::new(), IndexMap::new())
+    LirBody::new("latency", 0, vec![LirBlock::new(0, insns)], IndexMap::default(), IndexMap::default())
 }
 
 fn reg(register: Register, width: u32) -> Loc {

@@ -3,7 +3,7 @@
 
 use std::collections::BTreeSet;
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::hir::escape;
 use crate::hir::model;
@@ -209,7 +209,7 @@ fn _materialized_booleans(function: &model::Function, types: &IndexMap<i64, &mod
         blocks.iter().flat_map(|block| &block.instructions).map(|one| one.id).max().unwrap_or(0) + 1;
 
     loop {
-        let mut uses: IndexMap<i64, i64> = IndexMap::new();
+        let mut uses: IndexMap<i64, i64> = IndexMap::default();
         for block in &blocks {
             for operand in block
                 .instructions
@@ -1464,14 +1464,14 @@ fn _function(
         .min()
         .unwrap_or(0);
     let next_value = values.keys().copied().max().unwrap_or(0) + 1;
-    let mut definitions: IndexMap<i64, &model::Instruction> = IndexMap::new();
+    let mut definitions: IndexMap<i64, &model::Instruction> = IndexMap::default();
     for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
         for result in &instruction.results {
             definitions.insert(*result, instruction);
         }
     }
 
-    let mut use_counts: IndexMap<i64, i64> = IndexMap::new();
+    let mut use_counts: IndexMap<i64, i64> = IndexMap::default();
     for block in &function.blocks {
         let operands = block
             .instructions
@@ -1507,7 +1507,7 @@ fn _function(
     // recorded entries such as ON ERROR handlers and RESUME statement rows.
     let block_at: IndexMap<i64, i64> = function.blocks.iter().map(|one| (one.id, one.id)).collect();
     let mut blocks = Vec::new();
-    let mut source_instructions: IndexMap<i64, i64> = IndexMap::new();
+    let mut source_instructions: IndexMap<i64, i64> = IndexMap::default();
     for source in &function.blocks {
         let mut ops: Vec<mir::Op> = Vec::new();
         let mut pending_source: Vec<i64> = Vec::new();

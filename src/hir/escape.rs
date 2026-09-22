@@ -7,7 +7,7 @@
 
 use std::collections::BTreeSet;
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::hir::model;
 

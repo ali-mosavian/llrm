@@ -1,7 +1,7 @@
 //! Port of `qbopt/hir/callmemory.py`: whole-module call memory effects for
 //! source-neutral HIR lowering.
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::analysis::alias::{self, Actual};
 use crate::hir::lower::Lowered;
@@ -26,12 +26,12 @@ pub fn annotated(
     assert_eq!(functions.len(), semantic.len(), "zip(strict=True)");
     let types: IndexMap<i64, &model::Type> = module.types.iter().map(|one| (one.id, one)).collect();
     let callables: IndexMap<i64, &model::Callable> = module.callables.iter().map(|one| (one.id, one)).collect();
-    let mut procedures: IndexMap<String, alias::Procedure> = IndexMap::new();
-    let mut lowered_by_name: IndexMap<String, Lowered> = IndexMap::new();
+    let mut procedures: IndexMap<String, alias::Procedure> = IndexMap::default();
+    let mut lowered_by_name: IndexMap<String, Lowered> = IndexMap::default();
     for (function, lowered) in functions.iter().zip(semantic) {
         let body = alias::annotated(&lowered.body)?;
-        let mut calls: IndexMap<i64, String> = IndexMap::new();
-        let mut arguments: IndexMap<i64, Vec<Actual>> = IndexMap::new();
+        let mut calls: IndexMap<i64, String> = IndexMap::default();
+        let mut arguments: IndexMap<i64, Vec<Actual>> = IndexMap::default();
         let abi_sites: Vec<i64> = function.calls.iter().map(|site| site.instruction).collect();
         let instructions: IndexMap<i64, &model::Instruction> = function
             .blocks

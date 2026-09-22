@@ -23,7 +23,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use super::memoryssa;
 use super::ranges::{self, Interval};
@@ -231,7 +231,7 @@ fn _after(
     known: Option<&BTreeMap<Value, Interval>>,
 ) -> Holders {
     if effects::unmodeled_write(op) {
-        return IndexMap::new();
+        return IndexMap::default();
     }
     if op.kind == Kind::Call {
         holders.retain(|one, _| _crosses_edges(one));
@@ -261,7 +261,7 @@ fn _crosses_edges(cell: &MemRef) -> bool {
 /// Only what every predecessor agrees on, value and all.
 fn _meet(maps: &[&Holders]) -> Holders {
     let Some(first) = maps.first() else {
-        return IndexMap::new();
+        return IndexMap::default();
     };
     let mut out: Holders = first
         .iter()
@@ -290,15 +290,15 @@ pub fn holders(body: &MirBody, dgroup: Option<&RegionLayout>, calls: Option<&Ind
         }
     }
 
-    let mut into: IndexMap<i64, Holders> = body.blocks.iter().map(|block| (block.at, IndexMap::new())).collect();
-    let mut outof: IndexMap<i64, Holders> = body.blocks.iter().map(|block| (block.at, IndexMap::new())).collect();
+    let mut into: IndexMap<i64, Holders> = body.blocks.iter().map(|block| (block.at, IndexMap::default())).collect();
+    let mut outof: IndexMap<i64, Holders> = body.blocks.iter().map(|block| (block.at, IndexMap::default())).collect();
 
     let mut changing = true;
     while changing {
         changing = false;
         for block in &body.blocks {
             let arriving = if block.at == body.entry {
-                IndexMap::new()
+                IndexMap::default()
             } else {
                 _meet(&preds[&block.at].iter().map(|one| &outof[one]).collect::<Vec<_>>())
             };
@@ -418,7 +418,7 @@ fn _dead_in(
                 let private = private.expect("kept needs private");
                 overwritten.into_iter().filter(|(one, _)| private(one)).collect()
             } else {
-                IndexMap::new()
+                IndexMap::default()
             };
             if !caught {
                 continue;
@@ -512,7 +512,7 @@ pub fn dead_stores<'a>(
             .filter(|r#ref| private(r#ref))
             .map(|r#ref| (r#ref.clone(), -1))
             .collect(),
-        None => IndexMap::new(),
+        None => IndexMap::default(),
     };
 
     let mut sorted: Vec<&MirBlock> = body.blocks.iter().collect();

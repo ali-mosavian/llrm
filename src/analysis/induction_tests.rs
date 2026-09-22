@@ -34,7 +34,7 @@
 
 use std::collections::BTreeSet;
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 use num_bigint::BigInt;
 
 use super::{_counter_bound, Affine, AffineMap, AffineOperand, Derived, basics, derived, relation, trip_count};
@@ -204,7 +204,7 @@ fn test_affine_map_carries_the_modular_injectivity_proof() {
         header: 1,
     };
 
-    let mapping = relation(&source, &byte_offset, &IndexMap::new()).unwrap();
+    let mapping = relation(&source, &byte_offset, &IndexMap::default()).unwrap();
 
     assert_eq!(
         mapping,

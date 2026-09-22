@@ -2,12 +2,13 @@
 //! final physical register assignment.
 
 use std::cell::RefCell;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::BTreeSet;
+use crate::support::hash::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::{Arc, LazyLock};
 
 use iced_x86::{Decoder, DecoderOptions, FlowControl, OpAccess, Register, RflagsBits};
-use indexmap::{IndexMap, IndexSet};
+use crate::support::hash::{IndexMap, IndexSet};
 
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::frame::Frame;
@@ -377,7 +378,7 @@ pub fn frame_copies<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) -> Re
 /// incidental register byte.  A plain load may use another register only
 /// when its SSA value has no other reader.
 pub fn extensions(body: &LirBody) -> LirBody {
-    let mut users = Counter::new();
+    let mut users = Counter::default();
     for block in &body.blocks {
         for one in &block.insns {
             for value in &one.uses {
@@ -541,7 +542,7 @@ fn _extension(first: &Insn, second: &Insn, users: &Counter) -> Option<Arc<Insn>>
             .copied()
             .chain(second.uses.iter().copied().filter(|value| !first.defines.contains(value))),
     );
-    let mut widths: IndexMap<u32, u32> = IndexMap::new();
+    let mut widths: IndexMap<u32, u32> = IndexMap::default();
     for (value, width) in first.widths.iter().chain(&second.widths) {
         widths.insert(*value, *width);
     }
@@ -759,7 +760,7 @@ pub fn commuted(body: &LirBody) -> LirBody {
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let mut insns = block.insns.clone();
-        let mut removed: HashSet<usize> = HashSet::new();
+        let mut removed: HashSet<usize> = HashSet::default();
         for index in 2..insns.len() {
             let (saved, copied, combined) =
                 (Arc::clone(&insns[index - 2]), Arc::clone(&insns[index - 1]), Arc::clone(&insns[index]));
@@ -916,7 +917,7 @@ fn _transferred(parts: &[Arc<Insn>], dead_after: &DeadAfter) -> Option<Vec<Arc<I
 /// selected `mov`/`shr` pair converges to that same final form.
 pub fn high_extracts<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) -> Result<LirBody, String> {
     let profile = targets::profile(cpu)?;
-    let mut virtual_uses = Counter::new();
+    let mut virtual_uses = Counter::default();
     for block in &body.blocks {
         for one in &block.insns {
             for value in &one.uses {
@@ -1287,7 +1288,7 @@ pub fn restored_copies(body: &LirBody) -> LirBody {
     for block in &body.blocks {
         let dead_after = regthrash::_dead_after(block, exits[&block.at].clone());
         let mut insns = block.insns.clone();
-        let mut changed: HashSet<usize> = HashSet::new();
+        let mut changed: HashSet<usize> = HashSet::default();
         // `enumerate(insns)` walks the live list: later replacements are seen.
         for index in 0..insns.len() {
             let saved = Arc::clone(&insns[index]);
@@ -1599,7 +1600,7 @@ pub fn overwritten(body: &LirBody) -> LirBody {
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let mut dead = exits[&block.at].clone();
-        let mut redundant: HashSet<usize> = HashSet::new();
+        let mut redundant: HashSet<usize> = HashSet::default();
         for one in block.insns.iter().rev() {
             if liveness::_terminator(one.what.as_ref()) {
                 let what = one.what.as_ref().expect("a terminator has semantics");
@@ -1970,7 +1971,7 @@ pub fn far_loads(body: &LirBody) -> LirBody {
             .filter(|(_, one)| !_skippable_nothing(one))
             .map(|(index, _)| index)
             .collect();
-        let mut removed: HashSet<usize> = HashSet::new();
+        let mut removed: HashSet<usize> = HashSet::default();
         let mut at = 0;
         while at + 1 < work.len() {
             let Some(made) = _far_load(&insns[work[at]], &insns[work[at + 1]]) else {
@@ -2281,7 +2282,7 @@ fn _loaded_scaled_add<'a>(
 
 /// Select physically adjacent load/scale/add tails across inert anchors.
 fn _loaded_addresses(block: &LirBlock, uses: &Counter, cpu: &Profile) -> Result<LirBlock, String> {
-    let mut dead: HashSet<usize> = HashSet::new();
+    let mut dead: HashSet<usize> = HashSet::default();
     let mut flags_dead = false;
     for one in block.insns.iter().rev() {
         if flags_dead {
@@ -2297,7 +2298,7 @@ fn _loaded_addresses(block: &LirBlock, uses: &Counter, cpu: &Profile) -> Result<
         .filter(|(_, one)| !_skippable_nothing(one))
         .map(|(index, _)| index)
         .collect();
-    let mut removed: HashSet<usize> = HashSet::new();
+    let mut removed: HashSet<usize> = HashSet::default();
     let mut at = 0;
     while at + 2 < work.len() {
         let indexes = &work[at..at + 3];
@@ -2349,7 +2350,7 @@ fn _loses_live_definition(parts: &[Arc<Insn>], combined: &Insn, users: &Counter)
     if eliminated.is_empty() {
         return false;
     }
-    let mut local = Counter::new();
+    let mut local = Counter::default();
     for one in parts {
         for value in &one.uses {
             *local.entry(*value).or_insert(0) += 1;
@@ -2366,7 +2367,7 @@ fn _loses_live_definition(parts: &[Arc<Insn>], combined: &Insn, users: &Counter)
 /// Select LEA for allocated arithmetic when the replaced flags are dead.
 pub fn addresses<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) -> Result<LirBody, String> {
     let target_cpu = targets::profile(cpu)?;
-    let mut virtual_uses = Counter::new();
+    let mut virtual_uses = Counter::default();
     for block in &body.blocks {
         for one in &block.insns {
             for value in &one.uses {
@@ -2391,7 +2392,7 @@ pub fn addresses<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) -> Resul
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let block = _loaded_addresses(block, &virtual_uses, target_cpu)?;
-        let mut dead: HashSet<usize> = HashSet::new();
+        let mut dead: HashSet<usize> = HashSet::default();
         let mut flags_dead = false;
         for one in block.insns.iter().rev() {
             if flags_dead {
@@ -2499,8 +2500,8 @@ pub fn secondary_bases<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) ->
         return Ok(body.clone());
     };
 
-    let mut definitions: IndexMap<u32, Option<Arc<Insn>>> = IndexMap::new();
-    let mut uses: IndexMap<u32, Vec<Arc<Insn>>> = IndexMap::new();
+    let mut definitions: IndexMap<u32, Option<Arc<Insn>>> = IndexMap::default();
+    let mut uses: IndexMap<u32, Vec<Arc<Insn>>> = IndexMap::default();
     for one in body.insns() {
         for value in &one.defines {
             if definitions.contains_key(value) {
@@ -2605,9 +2606,9 @@ pub fn secondary_bases<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) ->
         })
     };
 
-    let mut substitutions: IndexMap<u32, (u32, Register)> = IndexMap::new();
-    let mut remove: HashSet<usize> = HashSet::new();
-    let mut insert_after: HashMap<usize, Arc<Insn>> = HashMap::new();
+    let mut substitutions: IndexMap<u32, (u32, Register)> = IndexMap::default();
+    let mut remove: HashSet<usize> = HashSet::default();
+    let mut insert_after: HashMap<usize, Arc<Insn>> = HashMap::default();
     for (candidate, definition) in definitions.clone() {
         let Some(definition) = definition else {
             continue;
@@ -2635,7 +2636,7 @@ pub fn secondary_bases<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) ->
         }
         let trial_substitutions: IndexMap<u32, (u32, Register)> =
             group.iter().map(|(value, _made, _consumers)| (*value, (candidate, root))).collect();
-        let mut consumers: IndexMap<usize, Arc<Insn>> = IndexMap::new();
+        let mut consumers: IndexMap<usize, Arc<Insn>> = IndexMap::default();
         for (_v, _d, found) in &group {
             for one in found {
                 consumers.insert(id(one), rewritten(one, &trial_substitutions));
@@ -3252,7 +3253,7 @@ pub fn _flags_live_out(body: &LirBody) -> HashMap<i64, Lanes> {
         .map(|block| (block.at, block.insns.iter().map(|one| effects(one)).collect()))
         .collect();
     let mut live_in: HashMap<i64, Lanes> = body.blocks.iter().map(|block| (block.at, Lanes::new())).collect();
-    let mut out: HashMap<i64, Lanes> = HashMap::new();
+    let mut out: HashMap<i64, Lanes> = HashMap::default();
     let mut changed = true;
     while changed {
         changed = false;
@@ -3340,7 +3341,7 @@ pub fn waits(body: &LirBody) -> LirBody {
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let mut following: Option<&Semantics> = None;
-        let mut redundant: HashSet<usize> = HashSet::new();
+        let mut redundant: HashSet<usize> = HashSet::default();
         for one in block.insns.iter().rev() {
             let what = one.what.as_ref();
             if what.is_some_and(|what| what.op == Operation::Nothing && what.name.as_deref().is_none_or(str::is_empty)) {
@@ -3375,8 +3376,8 @@ pub fn constants(body: &LirBody) -> LirBody {
     let mut objects = 0usize;
     let mut blocks = Vec::new();
     for block in &body.blocks {
-        let mut held: IndexMap<Reg, Known> = IndexMap::new();
-        let mut redundant: HashSet<usize> = HashSet::new();
+        let mut held: IndexMap<Reg, Known> = IndexMap::default();
+        let mut redundant: HashSet<usize> = HashSet::default();
         for one in &block.insns {
             let what = one.what.as_ref();
             if what.is_some_and(|what| {

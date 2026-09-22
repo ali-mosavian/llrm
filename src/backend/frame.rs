@@ -7,7 +7,7 @@
 use std::fmt;
 
 use iced_x86::Register;
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::backend::nativeframe::{self, Plan};
 use crate::model::ir::{Addr, Loc, Mem, Operation, Space};
@@ -82,10 +82,10 @@ impl Frame {
     pub fn new(floor: i64) -> Self {
         Self {
             floor,
-            slots: IndexMap::new(),
+            slots: IndexMap::default(),
             native: None,
-            native_pins: IndexMap::new(),
-            capacities: IndexMap::new(),
+            native_pins: IndexMap::default(),
+            capacities: IndexMap::default(),
         }
     }
 
@@ -147,7 +147,7 @@ pub fn of(
     let mut floor = native.as_ref().map_or(0, |native| native.entry.floor);
     // VBDCL10E rtenexit 0024..0036 pushes ten words before SUB SP,CX.
     let runtime_size = if family == "vbdos" { 20 } else { RUNTIME_SIZE };
-    let mut constants: IndexMap<u32, i64> = IndexMap::new();
+    let mut constants: IndexMap<u32, i64> = IndexMap::default();
     for block in &body.blocks {
         for one in &block.insns {
             let Some(what) = &one.what else { continue };
@@ -195,7 +195,7 @@ pub fn of(
             "native frame references extend below its established reservation".to_owned(),
         ));
     }
-    let native_pins = native.as_ref().map_or_else(IndexMap::new, |native| nativeframe::pins(body, native));
+    let native_pins = native.as_ref().map_or_else(IndexMap::default, |native| nativeframe::pins(body, native));
     Ok(Frame {
         native,
         native_pins,
@@ -208,7 +208,7 @@ mod tests {
     use std::sync::Arc;
 
     use iced_x86::Register;
-    use indexmap::IndexMap;
+    use crate::support::hash::IndexMap;
 
     use super::{Refused, of};
     use crate::model::ir::{Addr, Address, Held, Imm, Loc, Operation, Semantics, Space};
@@ -220,7 +220,7 @@ mod tests {
 
     fn body_of(insns: Vec<Insn>) -> LirBody {
         let block = LirBlock::new(0, insns.into_iter().map(Arc::new).collect());
-        LirBody::new("entry", 0, vec![block], IndexMap::new(), IndexMap::new())
+        LirBody::new("entry", 0, vec![block], IndexMap::default(), IndexMap::default())
     }
 
     #[test]
@@ -254,7 +254,7 @@ mod tests {
             );
             call.requires = operands.iter().copied().zip(registers.iter().copied()).collect();
             let body = body_of(vec![init.clone(), call.clone()]);
-            let calls = IndexMap::from([(3, "B$ENRA".to_owned())]);
+            let calls = IndexMap::from_iter([(3, "B$ENRA".to_owned())]);
             let mut owned = of(&body, Some(&calls), "", None).unwrap();
             assert_eq!(owned.floor, -22);
             assert_eq!(owned.slot(200_i64, 2), Ok(-24));

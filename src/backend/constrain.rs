@@ -9,7 +9,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use iced_x86::Register;
-use indexmap::{IndexMap, IndexSet};
+use crate::support::hash::{IndexMap, IndexSet};
 
 use crate::backend::{spiller, target};
 use crate::model::ir::{self, Held, Loc, Mem, Operation, Semantics};
@@ -82,7 +82,7 @@ pub fn constrained(
     };
 
     let mut fresh = _next_value(body).max(pinned.keys().copied().max().unwrap_or(0) + 1);
-    let mut pins: IndexMap<u32, Register> = IndexMap::new();
+    let mut pins: IndexMap<u32, Register> = IndexMap::default();
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let mut insns: Vec<Arc<Insn>> = Vec::new();
@@ -90,7 +90,7 @@ pub fn constrained(
             let mut one = Arc::clone(one);
             // CSE may feed several ABI slots from one value.
             let mut inputs: Vec<(Held, Register)> = Vec::new();
-            let mut slots: IndexMap<(u32, u32, Register), Held> = IndexMap::new();
+            let mut slots: IndexMap<(u32, u32, Register), Held> = IndexMap::default();
             let mut extra: Vec<u32> = Vec::new();
             for (held, register) in &one.requires {
                 let key = (held.value, held.width, *register);
@@ -134,9 +134,9 @@ pub fn constrained(
             }
             let mut before: Vec<Arc<Insn>> = Vec::new();
             let mut after: Vec<Arc<Insn>> = Vec::new();
-            let mut swap: IndexMap<u32, u32> = IndexMap::new();
-            let mut input_values: IndexMap<u32, u32> = IndexMap::new();
-            let mut output_values: IndexMap<u32, u32> = IndexMap::new();
+            let mut swap: IndexMap<u32, u32> = IndexMap::default();
+            let mut input_values: IndexMap<u32, u32> = IndexMap::default();
+            let mut output_values: IndexMap<u32, u32> = IndexMap::default();
             let what = one.what.clone();
             let mut dests: Vec<Loc> = what.as_ref().map_or_else(Vec::new, |what| what.dests.clone());
             let mut sources: Vec<Loc> = what.as_ref().map_or_else(Vec::new, |what| what.sources.clone());
@@ -243,7 +243,7 @@ pub fn constrained(
 
 /// Where each value the body's instructions require has to live.
 pub fn required(body: &LirBody) -> Result<IndexMap<u32, Register>, Impossible> {
-    let mut out: IndexMap<u32, Register> = IndexMap::new();
+    let mut out: IndexMap<u32, Register> = IndexMap::default();
     for block in &body.blocks {
         for one in &block.insns {
             for (value, (register, _where)) in _wanted(one)? {
@@ -317,7 +317,7 @@ pub fn addressed(body: &LirBody, values: &BTreeSet<u32>) -> (LirBody, BTreeSet<u
                 insns.push(Arc::clone(one));
                 continue;
             };
-            let mut widths: IndexMap<u32, u32> = IndexMap::new();
+            let mut widths: IndexMap<u32, u32> = IndexMap::default();
             for operand in what.dests.iter().chain(&what.sources) {
                 let Loc::Mem(cell) = operand else {
                     continue;
@@ -376,7 +376,7 @@ fn _delivered(one: &Insn) -> IndexMap<u32, Register> {
 
 /// Each value this instruction requires somewhere, and where it sits.
 fn _wanted(one: &Insn) -> Result<IndexMap<u32, (Register, Vec<(&'static str, usize)>)>, Impossible> {
-    let mut out: IndexMap<u32, (Register, Vec<(&'static str, usize)>)> = IndexMap::new();
+    let mut out: IndexMap<u32, (Register, Vec<(&'static str, usize)>)> = IndexMap::default();
     for (held, register) in &one.requires {
         if let Some(found) = out.get(&held.value) {
             if !_same_register(found.0, *register, held.width) {
@@ -494,7 +494,7 @@ mod tests {
     use std::sync::Arc;
 
     use iced_x86::Register;
-    use indexmap::IndexMap;
+    use crate::support::hash::IndexMap;
 
     use super::{addressed, constrained, required};
     use crate::backend::cpu::ProfileOrName;
@@ -522,8 +522,8 @@ mod tests {
             "one",
             0,
             vec![LirBlock::new(0, insns.into_iter().map(Arc::new).collect())],
-            IndexMap::new(),
-            IndexMap::new(),
+            IndexMap::default(),
+            IndexMap::default(),
         )
     }
 
@@ -650,8 +650,8 @@ mod tests {
         op.args = vec![cell];
         op.results = vec![mir::Arg::Held(mir::Held { value: segment, width: 2 })];
         let context = mir::MirBody::new(0xFCC, vec![mir::MirBlock::new(0xFCC, vec![], vec![op.clone()], vec![])]);
-        let calls = IndexMap::new();
-        let contracts = IndexMap::new();
+        let calls = IndexMap::default();
+        let contracts = IndexMap::default();
         let options = lower::Options { origin: [(segment, Register::ES)].into_iter().collect(), ..Default::default() };
         let mut lowering = lower::Lowering::new(
             &context,
@@ -671,7 +671,7 @@ mod tests {
         };
         let use_ =
             _insn(semantics(Operation::Move, "mov", vec![Loc::Mem(far)], vec![imm(7, 2)]), &[], &[segment.id], 0xFCF);
-        let (body, pins) = constrained(&_body(vec![(**load).clone(), use_]), Some(&IndexMap::new())).unwrap();
+        let (body, pins) = constrained(&_body(vec![(**load).clone(), use_]), Some(&IndexMap::default())).unwrap();
         let (spilled, _) = spiller::spilled(&body, &BTreeSet::from([segment.id]), Some(&mut Frame::new(0))).unwrap();
         let wanted = merged(&pins, &required(&spilled).unwrap());
         let placed = allocate::applied(&spilled, &allocated(&spilled, &wanted)).unwrap();
@@ -718,8 +718,8 @@ mod tests {
         let context = mir::MirBody::new(0, vec![mir::MirBlock::new(0, vec![], vec![op.clone()], vec![])]);
         // Python's `SimpleNamespace(semantics=machine)`: only the semantics is read.
         let node = Node::Opaque(Opaque { semantics: machine, ..Opaque::new(_any_insn(), Effects::no_effect()) });
-        let calls = IndexMap::new();
-        let contracts = IndexMap::new();
+        let calls = IndexMap::default();
+        let contracts = IndexMap::default();
         let options = lower::Options {
             nodes: [(8, Arc::new(node))].into_iter().collect(),
             origin: [(segment, Register::ES)].into_iter().collect(),
@@ -962,8 +962,8 @@ mod tests {
             "one",
             0x10,
             vec![LirBlock::new(0x10, vec![Arc::new(one)])],
-            IndexMap::new(),
-            IndexMap::new(),
+            IndexMap::default(),
+            IndexMap::default(),
         );
         let (got, fixed) = constrained(&body, Some(&pinned(&[(2, Register::EAX)]))).unwrap();
         assert!(fixed.is_empty(), "a copy was minted for a value already in eax: {fixed:?}");

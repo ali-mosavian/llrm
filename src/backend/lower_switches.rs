@@ -1,6 +1,7 @@
 //! Port of `qbopt/backend/lower_switches.py`.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
+use crate::support::hash::HashMap;
 
 use num_bigint::BigInt;
 
@@ -66,8 +67,8 @@ pub fn expanded(body: &MirBody) -> Result<MirBody, String> {
     }
     let mut serial = ssa::values(body).map(|value| value.id).max().unwrap_or(0);
     let mut label = edges::fresh(body);
-    let mut replacements: HashMap<i64, Vec<MirBlock>> = HashMap::new();
-    let mut incoming: HashMap<(i64, i64), Vec<i64>> = HashMap::new();
+    let mut replacements: HashMap<i64, Vec<MirBlock>> = HashMap::default();
+    let mut incoming: HashMap<(i64, i64), Vec<i64>> = HashMap::default();
     for block in &switches {
         let mut op = block.ops.last().unwrap().clone();
         let default = op.target.unwrap();

@@ -6,11 +6,11 @@
 //! incoming edge, which is an availability problem and not something the first
 //! instruction of a block and the last of its predecessor can answer.
 
-use std::collections::HashSet;
+use crate::support::hash::HashSet;
 use std::sync::Arc;
 
 use iced_x86::Register;
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::backend::peephole::{_frame_cell, _frame_written, _lanes, _overlapping, _register_effects, id};
 use crate::model::ir::{Loc, Mem, Operation, Reg};
@@ -46,7 +46,7 @@ fn _held(one: &Insn, facts: Facts) -> (Facts, bool) {
         return (facts, false);
     }
     let Some(what) = &one.what else {
-        return (Facts::new(), false);
+        return (Facts::default(), false);
     };
     if [Operation::Branch, Operation::Jump].contains(&what.op)
         && what.dests.is_empty()
@@ -59,11 +59,11 @@ fn _held(one: &Insn, facts: Facts) -> (Facts, bool) {
         return (facts, false);
     }
     let Some(effects) = _register_effects(one, false, false) else {
-        return (Facts::new(), false);
+        return (Facts::default(), false);
     };
     let writes = effects.1;
     if !writes.is_disjoint(&_lanes(Register::EBP)) {
-        return (Facts::new(), false);
+        return (Facts::default(), false);
     }
 
     // `op.stores` is the last word only for an instruction that is its own op.
@@ -75,7 +75,7 @@ fn _held(one: &Insn, facts: Facts) -> (Facts, bool) {
     let mut facts = facts;
     let written = if writing {
         let Some(written) = _frame_written(one) else {
-            return (Facts::new(), false);
+            return (Facts::default(), false);
         };
         facts.retain(|(_register, cell)| !_overlapping(cell, &written));
         Some(written)
@@ -139,11 +139,11 @@ fn _available(body: &LirBody) -> IndexMap<i64, Facts> {
         .map(|block| {
             (
                 block.at,
-                if block.at == body.entry || predecessors[&block.at].is_empty() { Some(Facts::new()) } else { None },
+                if block.at == body.entry || predecessors[&block.at].is_empty() { Some(Facts::default()) } else { None },
             )
         })
         .collect();
-    let mut outof: IndexMap<i64, Facts> = IndexMap::new();
+    let mut outof: IndexMap<i64, Facts> = IndexMap::default();
     let mut changing = true;
     while changing {
         changing = false;

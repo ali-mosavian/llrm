@@ -69,7 +69,7 @@ pub fn converted(body: &LirBody) -> LirBody {
 mod tests {
     use std::sync::Arc;
 
-    use indexmap::IndexMap;
+    use crate::support::hash::IndexMap;
     use iced_x86::Register;
 
     use super::converted;
@@ -117,8 +117,8 @@ mod tests {
                     insn(2, semantics(Operation::Move, vec![held(9)], vec![Loc::Mem(seg)])),
                 ],
             )],
-            IndexMap::new(),
-            IndexMap::new(),
+            IndexMap::default(),
+            IndexMap::default(),
         );
 
         let printed: Vec<String> = converted(&body).blocks[0].insns.iter().map(|one| one.what.repr()).collect();

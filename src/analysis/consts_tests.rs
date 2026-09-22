@@ -18,7 +18,7 @@
 
 use std::collections::BTreeSet;
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 use num_bigint::BigInt;
 
 use super::{_defined, _result, ARITH, Cells, Known, UNARY, known, masked, reusing};
@@ -37,7 +37,7 @@ fn held(value: Value, width: u32) -> Arg {
 }
 
 fn facts<const N: usize>(items: [(Value, Known); N]) -> IndexMap<Value, Known> {
-    IndexMap::from(items)
+    IndexMap::from_iter(items)
 }
 
 #[test]
@@ -61,7 +61,7 @@ fn test_an_index_constant_is_not_the_value_of_an_indexed_store() {
     load.loads = vec![reference];
     let body = MirBody::new(0, vec![MirBlock::new(0, vec![], vec![set_index, store, load], vec![])]);
 
-    let found = known(&body, Some(&BTreeSet::from([5])), Some(&IndexMap::new()), None, None);
+    let found = known(&body, Some(&BTreeSet::from([5])), Some(&IndexMap::default()), None, None);
     assert!(!found.contains_key(&loaded));
 }
 
@@ -123,8 +123,8 @@ fn test_extension_of_a_known_memory_cell_folds_to_the_extended_value() {
     widen.args = vec![Arg::Cell(Cell { r#ref: reference.clone() })];
     widen.results = vec![held(result, 4)];
     widen.loads = vec![reference];
-    let here = Cells::from([((address, 1), Known::new(0xF1, 1))]);
-    assert_eq!(_result(&widen, &IndexMap::new(), Some(&here), None), Some(Known::new(0xF1, 4)));
+    let here = Cells::from_iter([((address, 1), Known::new(0xF1, 1))]);
+    assert_eq!(_result(&widen, &IndexMap::default(), Some(&here), None), Some(Known::new(0xF1, 4)));
 }
 
 #[test]
@@ -156,7 +156,7 @@ fn test_equal_integer_operands_are_zero_without_input_facts() {
             let mut cancel = op(1, OpCode::Operation(Operation::Binary), "", vec![result], vec![source], kind);
             cancel.args = vec![held(source, width), held(source, width)];
             cancel.results = vec![held(result, width)];
-            assert_eq!(_result(&cancel, &IndexMap::new(), None, None), Some(Known::new(0, width)));
+            assert_eq!(_result(&cancel, &IndexMap::default(), None, None), Some(Known::new(0, width)));
         }
     }
 }
@@ -209,7 +209,7 @@ fn test_constant_steps_wrap_at_the_value_width() {
             step.args = vec![Arg::Const(Const::new(number, width))];
             step.results = vec![held(result, width)];
             assert_eq!(
-                _result(&step, &IndexMap::new(), None, None),
+                _result(&step, &IndexMap::default(), None, None),
                 Some(Known::new(masked(&BigInt::from(answer), width), width))
             );
         }
@@ -257,7 +257,7 @@ fn test_a_call_reaching_nonlocal_keeps_an_uncaptured_static_constant() {
     read.loads = vec![reference.clone()];
     let body = MirBody::new(0, vec![MirBlock::new(0, vec![], vec![store, call, read], vec![])]);
 
-    let before = super::cells(&body, &BTreeSet::from([5]), &IndexMap::new(), None, None, None, None, None);
+    let before = super::cells(&body, &BTreeSet::from([5]), &IndexMap::default(), None, None, None, None, None);
 
     assert_eq!(super::_cell(&before[&(0, 2)], &reference), Some(Known::new(7, 2)));
 }

@@ -12,7 +12,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use iced_x86::Register;
-use indexmap::{IndexMap, IndexSet};
+use crate::support::hash::{IndexMap, IndexSet};
 
 use crate::analysis::intervals::{self as ranges, Indexes, Interval};
 use crate::analysis::loops;
@@ -140,7 +140,7 @@ pub fn live(body: &LirBody) -> (Live, Live) {
             (block.at, found)
         })
         .collect();
-    let mut exposed: IndexMap<i64, BTreeSet<u32>> = IndexMap::new();
+    let mut exposed: IndexMap<i64, BTreeSet<u32>> = IndexMap::default();
     for block in &body.blocks {
         let mut alive: BTreeSet<u32> = BTreeSet::new();
         let mut index = block.insns.len() as i64 - 1;
@@ -193,7 +193,7 @@ pub fn narrowed(body: &LirBody, pinned: &IndexMap<u32, Register>) -> (LirBody, I
         .flat_map(|block| block.insns.iter().flat_map(|one| one.uses.iter().copied()))
         .collect();
     read.extend(body.blocks.iter().flat_map(LirBlock::arrives));
-    let mut dropped: IndexMap<u32, Register> = IndexMap::new();
+    let mut dropped: IndexMap<u32, Register> = IndexMap::default();
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let mut insns = Vec::new();
@@ -239,7 +239,7 @@ pub fn narrowed(body: &LirBody, pinned: &IndexMap<u32, Register>) -> (LirBody, I
 /// Which values are ever live at the same moment.
 pub fn interference(body: &LirBody) -> IndexMap<u32, BTreeSet<u32>> {
     let (_into, out_of) = live(body);
-    let mut graph: IndexMap<u32, BTreeSet<u32>> = IndexMap::new();
+    let mut graph: IndexMap<u32, BTreeSet<u32>> = IndexMap::default();
 
     let meet = |graph: &mut IndexMap<u32, BTreeSet<u32>>, alive: &BTreeSet<u32>| {
         for one in alive {
@@ -301,7 +301,7 @@ fn _restrict(out: &mut Classes, value: u32, choices: &BTreeSet<Register>) {
 
 /// The register class each value is confined to, where it is confined.
 pub fn classes(body: &LirBody, prefer_indexes: &BTreeSet<u32>) -> Classes {
-    let mut out: Classes = IndexMap::new();
+    let mut out: Classes = IndexMap::default();
     let mut selecting: BTreeSet<u32> = BTreeSet::new();
     let mut numeric: BTreeSet<u32> = BTreeSet::new();
     let mut word_pairs: Vec<(u32, u32)> = Vec::new();
@@ -383,7 +383,7 @@ fn _word_address_roles(
     body: &LirBody,
     prefer_indexes: &BTreeSet<u32>,
 ) {
-    let mut adjacent: IndexMap<u32, BTreeSet<u32>> = IndexMap::new();
+    let mut adjacent: IndexMap<u32, BTreeSet<u32>> = IndexMap::default();
     for (base, index) in pairs {
         adjacent.entry(*base).or_default().insert(*index);
         adjacent.entry(*index).or_default().insert(*base);
@@ -416,7 +416,7 @@ fn _word_address_roles(
     };
 
     while let Some(&seed) = unseen.iter().next() {
-        let mut colors: IndexMap<u32, u8> = IndexMap::from([(seed, 0)]);
+        let mut colors: IndexMap<u32, u8> = IndexMap::from_iter([(seed, 0)]);
         let mut work = vec![seed];
         let mut bipartite = true;
         while let Some(value) = work.pop() {
@@ -508,7 +508,7 @@ pub fn _unread_move(one: &Insn) -> bool {
 pub fn explicit_selectors(body: &LirBody, pinned: Option<&IndexMap<u32, Register>>) -> LirBody {
     let confined = classes(body, &BTreeSet::new());
     let selectors: BTreeSet<Register> = target::SELECTORS.into_iter().collect();
-    let empty = IndexMap::new();
+    let empty = IndexMap::default();
     let pinned = pinned.unwrap_or(&empty);
     let mut conflicted: BTreeSet<u32> = BTreeSet::new();
     for block in &body.blocks {
@@ -589,7 +589,7 @@ pub fn explicit_selectors(body: &LirBody, pinned: Option<&IndexMap<u32, Register
 }
 
 fn _copy_hints(body: &LirBody) -> IndexMap<u32, Vec<u32>> {
-    let mut hints: IndexMap<u32, Vec<u32>> = IndexMap::new();
+    let mut hints: IndexMap<u32, Vec<u32>> = IndexMap::default();
     for block in &body.blocks {
         for one in &block.insns {
             if let Some(what) = &one.what {
@@ -669,15 +669,15 @@ pub fn allocate(
     let confined = classes(body, protected);
     let fixed: IndexMap<u32, Register> = pinned.cloned().unwrap_or_default();
     let hints = _copy_hints(body);
-    let no_preference = IndexMap::new();
+    let no_preference = IndexMap::default();
     let preferred = preferred.unwrap_or(&no_preference);
 
-    let mut union: IndexMap<Register, Vec<u32>> = IndexMap::new();
-    let mut r#where: IndexMap<u32, Register> = IndexMap::new();
-    let mut stage: IndexMap<u32, Stage> = IndexMap::new();
+    let mut union: IndexMap<Register, Vec<u32>> = IndexMap::default();
+    let mut r#where: IndexMap<u32, Register> = IndexMap::default();
+    let mut stage: IndexMap<u32, Stage> = IndexMap::default();
     let mut spilled: BTreeSet<u32> = BTreeSet::new();
     let mut cost = 0.0;
-    let mut cascades: IndexMap<u32, i64> = IndexMap::new();
+    let mut cascades: IndexMap<u32, i64> = IndexMap::default();
     let mut newest = 1;
 
     let queued = |value: u32, live: &IndexMap<u32, Interval>, stage: &IndexMap<u32, Stage>| {
@@ -715,7 +715,7 @@ pub fn allocate(
                 .collect();
         }
         if !fixed.contains_key(&value) {
-            let mut votes: IndexMap<Register, i64> = IndexMap::new();
+            let mut votes: IndexMap<Register, i64> = IndexMap::default();
             for other in hints.get(&value).into_iter().flatten() {
                 if let Some(register) = fixed.get(other).or_else(|| r#where.get(other)) {
                     *votes.entry(_whole(*register)).or_insert(0) += 1;
@@ -865,7 +865,7 @@ fn _reserves_word_base(body: &LirBody, value: u32, confined: &Classes) -> bool {
 
 /// How wide each value is anywhere it is read or written.
 pub fn _widest(body: &LirBody) -> IndexMap<u32, u32> {
-    let mut out: IndexMap<u32, u32> = IndexMap::new();
+    let mut out: IndexMap<u32, u32> = IndexMap::default();
     for block in &body.blocks {
         for one in &block.insns {
             let mut held: Vec<Held> = match &one.what {
@@ -1359,7 +1359,7 @@ fn _sibling_priced(body: &LirBody, live: IndexMap<u32, Interval>) -> IndexMap<u3
     }
     let near = coalesce::_interference(body);
     let deep = ranges::depths(body);
-    let mut free: IndexMap<u32, f64> = IndexMap::new();
+    let mut free: IndexMap<u32, f64> = IndexMap::default();
     for (at, (into, out_of)) in moves {
         if impure.contains(&into)
             || impure.contains(&out_of)
@@ -1456,7 +1456,7 @@ fn _retainable_bases(body: &LirBody, spilled: &BTreeSet<u32>) -> BTreeSet<u32> {
         return BTreeSet::new();
     }
     let deep = ranges::depths(body);
-    let mut references: IndexMap<u32, i64> = IndexMap::new();
+    let mut references: IndexMap<u32, i64> = IndexMap::default();
     for block in &body.blocks {
         let weight = ranges::PER_LEVEL.pow(deep.get(&block.at).copied().unwrap_or(0));
         for one in &block.insns {
@@ -1543,7 +1543,7 @@ fn _fold_discount(one: &Insn, profile: &Profile) -> f64 {
 /// Discount reads by the target-specific saving from folding them.
 fn _fold_priced(body: &LirBody, live: IndexMap<u32, Interval>, profile: &Profile) -> IndexMap<u32, Interval> {
     let deep = ranges::depths(body);
-    let mut free: IndexMap<u32, f64> = IndexMap::new();
+    let mut free: IndexMap<u32, f64> = IndexMap::default();
     for block in &body.blocks {
         let each = ranges::level(deep.get(&block.at).copied().unwrap_or(0));
         for one in &block.insns {
@@ -1833,7 +1833,7 @@ mod tests {
     use std::sync::Arc;
 
     use iced_x86::Register;
-    use indexmap::IndexMap;
+    use crate::support::hash::IndexMap;
 
     use super::*;
     use crate::analysis::intervals::Segment;
@@ -1861,7 +1861,7 @@ mod tests {
     }
 
     fn body_of(name: &str, entry: i64, insns: Vec<Insn>) -> LirBody {
-        LirBody::new(name, entry, vec![block(entry, insns)], IndexMap::new(), IndexMap::new())
+        LirBody::new(name, entry, vec![block(entry, insns)], IndexMap::default(), IndexMap::default())
     }
 
     fn _one_block(insns: Vec<Insn>) -> LirBody {
@@ -2138,7 +2138,7 @@ mod tests {
     fn test_a_placed_cell_reaches_memory_by_the_register_its_value_got() {
         for register in [Register::EBX, Register::ESI] {
             let was = cell_of(&_based_cell());
-            let got = _settled(&Loc::Mem(was.clone()), &pins(&[(21, register)]), &IndexMap::new()).expect("placed");
+            let got = _settled(&Loc::Mem(was.clone()), &pins(&[(21, register)]), &IndexMap::default()).expect("placed");
             let Loc::Mem(got) = got else { panic!("not a cell: {got:?}") };
             assert_eq!(got.through, target::named(register, 2), "{register:?}: {:?}", got.through);
             assert_eq!(got.base, Some(Held { value: 21, width: 2 }), "the cell stopped naming its value");
@@ -2239,8 +2239,8 @@ mod tests {
     fn test_a_hard_register_assignment_is_not_an_eviction_victim() {
         let kept = Interval { weight: 0.1, ..Interval::new(1, vec![Segment { start: 0, end: 4 }]) };
         let incoming = Interval { weight: 10.0, ..Interval::new(2, vec![Segment { start: 0, end: 4 }]) };
-        let union: IndexMap<Register, Vec<u32>> = IndexMap::from([(_whole(Register::DI), vec![1])]);
-        let live: IndexMap<u32, Interval> = IndexMap::from([(1, kept), (2, incoming.clone())]);
+        let union: IndexMap<Register, Vec<u32>> = IndexMap::from_iter([(_whole(Register::DI), vec![1])]);
+        let live: IndexMap<u32, Interval> = IndexMap::from_iter([(1, kept), (2, incoming.clone())]);
         let got =
             _evict(&incoming, &[Register::DI], &union, &live, &Vec::new(), &|_, _| false, &values(&[1]), 4, None, None);
         assert!(got.is_none(), "{got:?}");
@@ -2467,7 +2467,7 @@ mod tests {
         let body = body_of("retention-fallback", 0, insns);
 
         let (result, retained) =
-            _assigned_plan(&body, &IndexMap::new(), &values(&[2]), &values(&[1, 3]), cpu::profile("386").expect("386"))
+            _assigned_plan(&body, &IndexMap::default(), &values(&[2]), &values(&[1, 3]), cpu::profile("386").expect("386"))
                 .expect("allocates");
 
         assert_eq!(retained, BTreeSet::new());

@@ -234,7 +234,7 @@ pub fn reciprocal<'a>(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use crate::support::hash::HashMap;
 
     use super::*;
 
@@ -274,7 +274,7 @@ mod tests {
                 divisor,
                 2147483647,
             ] {
-                let mut values: HashMap<u32, i64> = HashMap::from([(1, number)]);
+                let mut values: HashMap<u32, i64> = HashMap::from_iter([(1, number)]);
                 for part in &parts {
                     let args: Vec<i64> = part
                         .sources

@@ -10,7 +10,7 @@ use std::fmt;
 use std::sync::{Arc, LazyLock};
 
 use iced_x86::Register;
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::backend::{select, target};
 use crate::model::ir::{self, Addr, Loc, Operation, Semantics, Space};
@@ -19,15 +19,15 @@ use crate::support::pyrepr::Repr;
 
 /// `SIZES`.
 pub static SIZES: LazyLock<IndexMap<u32, &'static str>> =
-    LazyLock::new(|| IndexMap::from([(1, "byte"), (2, "word"), (4, "dword"), (8, "qword"), (10, "tbyte")]));
+    LazyLock::new(|| IndexMap::from_iter([(1, "byte"), (2, "word"), (4, "dword"), (8, "qword"), (10, "tbyte")]));
 /// `SAVED`: callee-saved under the C convention. A Borland caller keeps SI
 /// and DI, not their upper halves, and a caller built here keeps nothing
 /// across a call.
 pub static SAVED: LazyLock<IndexMap<Register, Register>> =
-    LazyLock::new(|| IndexMap::from([(Register::ESI, Register::SI), (Register::EDI, Register::DI)]));
+    LazyLock::new(|| IndexMap::from_iter([(Register::ESI, Register::SI), (Register::EDI, Register::DI)]));
 /// `SEGMENTS`.
 pub static SEGMENTS: LazyLock<IndexMap<&'static str, &'static str>> =
-    LazyLock::new(|| IndexMap::from([("_DATA", ".data"), ("_BSS", ".data?"), ("CONST", ".const")]));
+    LazyLock::new(|| IndexMap::from_iter([("_DATA", ".data"), ("_BSS", ".data?"), ("CONST", ".const")]));
 
 /// An instruction or operand this printer has no spelling for.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -620,7 +620,7 @@ mod tests {
     use crate::model::mir;
 
     fn no_names() -> IndexMap<(Space, i64), String> {
-        IndexMap::new()
+        IndexMap::default()
     }
 
     fn insn(at: i64, what: Semantics) -> Arc<lir::Insn> {
@@ -664,9 +664,9 @@ mod tests {
         let r#move = insn(0, semantics(Operation::Move, "mov", vec![ax()], sources));
         let leave = insn(1, semantics(Operation::Return, "retf", vec![], vec![]));
         let blocks = vec![lir::LirBlock::new(1, vec![r#move, leave])];
-        let body = lir::LirBody::new("get", 1, blocks, IndexMap::new(), IndexMap::new());
+        let body = lir::LirBody::new("get", 1, blocks, IndexMap::default(), IndexMap::default());
         let procedure =
-            Procedure { name: "_get".into(), public: true, far: true, body, reserve, callees: IndexMap::new() };
+            Procedure { name: "_get".into(), public: true, far: true, body, reserve, callees: IndexMap::default() };
         _procedure(&procedure, &no_names(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect()
     }
 
@@ -704,14 +704,14 @@ mod tests {
         let r#move = insn(0, semantics(Operation::Move, "mov", vec![ax()], vec![through_bp()]));
         let returned = insn(1, semantics(Operation::Return, "retf", vec![], vec![]));
         let blocks = vec![lir::LirBlock::new(1, vec![r#move, returned])];
-        let body = lir::LirBody::new("get", 1, blocks, IndexMap::new(), IndexMap::new());
+        let body = lir::LirBody::new("get", 1, blocks, IndexMap::default(), IndexMap::default());
         let procedure = |reserve| Procedure {
             name: "_get".into(),
             public: true,
             far: true,
             body: body.clone(),
             reserve,
-            callees: IndexMap::new(),
+            callees: IndexMap::default(),
         };
 
         assert_eq!(return_overhead_bytes(&procedure(0)).unwrap(), 1);

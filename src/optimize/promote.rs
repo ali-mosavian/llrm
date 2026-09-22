@@ -4,9 +4,10 @@
 //! a store also defines a fresh variable, a load becomes a use of it, and
 //! `ssa::constructed` places the phis.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
+use crate::support::hash::{HashMap, HashSet};
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 use num_bigint::BigInt;
 
 use crate::analysis::consts::Known;
@@ -134,7 +135,7 @@ pub(crate) fn _leaf(r#ref: &MemRef) -> Option<_Leaf> {
 /// Equal ranges are one leaf, disjoint ranges independent leaves; a proper
 /// overlap or ambiguous multi-object provenance keeps the object in memory.
 pub(crate) fn _blocked_objects(refs: &[&MemRef]) -> BTreeSet<MemoryObject> {
-    let mut accesses = IndexMap::<MemoryObject, Vec<_Leaf>>::new();
+    let mut accesses = IndexMap::<MemoryObject, Vec<_Leaf>>::default();
     let mut blocked = BTreeSet::new();
     for r#ref in refs {
         let Some(provenance) = &r#ref.provenance else {
@@ -257,7 +258,7 @@ pub(crate) fn _order(key: &Key) -> (u8, String, String, i64, i64, i64, String) {
 pub(crate) fn _aggregate_objects<'a>(
     leaves: impl IntoIterator<Item = &'a Key>,
 ) -> BTreeSet<MemoryObject> {
-    let mut ranges = IndexMap::<MemoryObject, BTreeSet<(i64, i64)>>::new();
+    let mut ranges = IndexMap::<MemoryObject, BTreeSet<(i64, i64)>>::default();
     for leaf in leaves {
         if let Key::Leaf(leaf) = leaf {
             ranges
@@ -356,7 +357,7 @@ pub(crate) fn _signed(number: &BigInt, width: u32) -> BigInt {
 /// width conversion retain that root and combine only byte displacements;
 /// two roots, products, phis and unknown operations are refused.
 pub(crate) fn _affine_values(body: &MirBody) -> IndexMap<Value, _Affine> {
-    let mut definitions = IndexMap::<Value, &Op>::new();
+    let mut definitions = IndexMap::<Value, &Op>::default();
     for op in body.blocks.iter().flat_map(|block| &block.ops) {
         for result in &op.results {
             if let Arg::Held(result) = result {
@@ -364,8 +365,8 @@ pub(crate) fn _affine_values(body: &MirBody) -> IndexMap<Value, _Affine> {
             }
         }
     }
-    let mut cache = HashMap::<Value, Option<_Affine>>::new();
-    let mut active = HashSet::<Value>::new();
+    let mut cache = HashMap::<Value, Option<_Affine>>::default();
+    let mut active = HashSet::<Value>::default();
 
     fn operand(
         arg: &Arg,
@@ -536,7 +537,7 @@ fn _rewritten_refs(
 /// Grouping by opaque root and normalizing constant differences makes those
 /// byte ranges canonical provenance; the minimum offset is only an origin.
 pub(crate) fn _allocation_leaves(body: &MirBody) -> MirBody {
-    let mut requests = IndexMap::<Symbol, Vec<(i64, i64)>>::new();
+    let mut requests = IndexMap::<Symbol, Vec<(i64, i64)>>::default();
     for op in body.blocks.iter().flat_map(|block| &block.ops) {
         let Some(request) = &op.array else { continue };
         if request.replaces || request.element_width == 0 {
@@ -568,7 +569,7 @@ pub(crate) fn _allocation_leaves(body: &MirBody) -> MirBody {
     }
 
     let affine = _affine_values(body);
-    let mut grouped = IndexMap::<(Symbol, i64, i64, Identity), Vec<(MemRef, i64)>>::new();
+    let mut grouped = IndexMap::<(Symbol, i64, i64, Identity), Vec<(MemRef, i64)>>::default();
     for op in body.blocks.iter().flat_map(|block| &block.ops) {
         for r#ref in op.loads.iter().chain(&op.stores) {
             let request = r#ref
@@ -596,7 +597,7 @@ pub(crate) fn _allocation_leaves(body: &MirBody) -> MirBody {
         }
     }
 
-    let mut exact = IndexMap::<MemRef, Provenance>::new();
+    let mut exact = IndexMap::<MemRef, Provenance>::default();
     for ((descriptor, generation, extent, root), accesses) in grouped {
         let origin = accesses
             .iter()
@@ -752,7 +753,7 @@ pub(crate) fn _bounded_leaves(body: &MirBody) -> Result<MirBody, String> {
 /// carries the field's type; they are the same bytes.  Two explicit,
 /// distinct type classes retain the union/type-pun rejection.
 pub(crate) fn _canonical_leaf_types(body: &MirBody) -> MirBody {
-    let mut types = IndexMap::<(MemoryObject, i64, i64), BTreeSet<String>>::new();
+    let mut types = IndexMap::<(MemoryObject, i64, i64), BTreeSet<String>>::default();
     for op in body.blocks.iter().flat_map(|block| &block.ops) {
         if op.source_backed || !op.absorbed.is_empty() || op.id.is_none() {
             continue;
@@ -1048,8 +1049,8 @@ pub(crate) fn promotable(
         .flat_map(|op| op.loads.iter().chain(&op.stores))
         .collect::<Vec<_>>();
     let blocked = _blocked_objects(&every);
-    let mut seen = IndexMap::<Key, usize>::new();
-    let mut widths = HashMap::<Key, BTreeSet<u32>>::new();
+    let mut seen = IndexMap::<Key, usize>::default();
+    let mut widths = HashMap::<Key, BTreeSet<u32>>::default();
     for one in &every {
         let Some(key) = _key(one, &blocked) else {
             continue;
@@ -1083,7 +1084,7 @@ pub(crate) fn promotable(
             .retain(|addr, _| matches!(addr, Key::Leaf(leaf) if aggregates.contains(&leaf.object)));
     }
     let usable = _available(body, &candidates, dgroup, bounds);
-    let mut used = HashSet::new();
+    let mut used = HashSet::default();
     for (block_index, block) in body.blocks.iter().enumerate() {
         for (op_index, op) in block.ops.iter().enumerate() {
             if usable.contains(&(block_index, op_index)) {
@@ -1123,9 +1124,9 @@ pub(crate) fn _initializers(
         .map(|op| (op.at, String::new()))
         .collect::<IndexMap<_, _>>();
     let memory = consts::cells(body, dgroup, &calls, None, None, None, None, None);
-    let nothing = IndexMap::new();
+    let nothing = IndexMap::default();
     let mut asked = consts::memory_queries(body, &nothing, dgroup);
-    let mut initialized = HashMap::new();
+    let mut initialized = HashMap::default();
     for (block_index, block) in body.blocks.iter().enumerate() {
         for (index, op) in block.ops.iter().enumerate() {
             let cell = _cell(op);
@@ -1142,7 +1143,7 @@ pub(crate) fn _initializers(
             let after = consts::_kills(
                 &before, op, &nothing, dgroup, &calls, None, None, false, Some(&mut asked),
             );
-            let mut facts = IndexMap::new();
+            let mut facts = IndexMap::default();
             for (addr, width) in cells {
                 let Key::Addr(addr) = addr else { continue };
                 if (Some(*addr), *width) == (cell.addr, cell.width) {
@@ -1194,7 +1195,7 @@ pub(crate) fn _available(
             .filter(|parent| reachable.contains(parent))
             .collect::<Vec<_>>();
         if parents.is_empty() || at == body.entry {
-            return HashSet::new();
+            return HashSet::default();
         }
         let mut result = leaving[parents[0]].clone();
         for parent in &parents[1..] {
@@ -1269,7 +1270,7 @@ pub(crate) fn _available(
             break;
         }
     }
-    let mut reads = HashSet::new();
+    let mut reads = HashSet::default();
     for (block_index, block) in body.blocks.iter().enumerate() {
         if reachable.contains(&block.at) {
             through(block_index, entering(block.at, &leaving), Some(&mut reads));
@@ -1359,7 +1360,7 @@ pub(crate) fn promoted(
     let mut fresh = _next(body);
     let mut sorted = found.keys().cloned().collect::<Vec<_>>();
     sorted.sort_by_cached_key(_order);
-    let mut holds = IndexMap::<Key, u32>::new();
+    let mut holds = IndexMap::<Key, u32>::default();
     for (number, addr) in (1..).zip(sorted) {
         holds.insert(addr, taken + number);
     }

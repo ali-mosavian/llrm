@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 use num_bigint::BigInt;
 
 use crate::analysis::{consts, loops, ssa};
@@ -56,10 +56,10 @@ pub(crate) fn joined(body: &MirBody) -> MirBody {
     let values = ssa::values(body).collect::<Vec<_>>();
     let mut serial = values.iter().map(|value| value.id).max().unwrap_or(0);
     let mut variable = values.iter().map(|value| value.variable).max().unwrap_or(0);
-    let mut additions = IndexMap::<i64, Vec<Op>>::new();
+    let mut additions = IndexMap::<i64, Vec<Op>>::default();
     let mut replacements = BTreeMap::<(usize, usize), Op>::new();
-    let mut new_phis = IndexMap::<i64, Vec<Phi>>::new();
-    let mut extracts = IndexMap::<i64, Vec<Op>>::new();
+    let mut new_phis = IndexMap::<i64, Vec<Phi>>::default();
+    let mut extracts = IndexMap::<i64, Vec<Op>>::default();
     let mut removed = BTreeSet::<Value>::new();
 
     let mut fresh = |at: i64, variable: u32| {
@@ -112,7 +112,7 @@ pub(crate) fn joined(body: &MirBody) -> MirBody {
             {
                 continue;
             }
-            let mut sources = IndexMap::<i64, Arg>::new();
+            let mut sources = IndexMap::<i64, Arg>::default();
             for (at, upper) in high.incoming.iter() {
                 let lower = low.incoming.get(at).expect("same keys");
                 let whole = mir::extracted_whole(

@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use iced_x86::Register;
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::analysis::intervals::{self as ranges, Indexes, Interval, Segment};
 use crate::analysis::loops;
@@ -72,7 +72,7 @@ pub fn split(
     let mut order: Vec<u32> = wanted.into_iter().filter(|value| live.contains_key(value)).collect();
     order.sort_by_key(|value| (-live[value].size(), *value));
     let mut cut: Option<LirBody> = None;
-    let confined = if r#where.is_some() { allocate::classes(body, &BTreeSet::new()) } else { IndexMap::new() };
+    let confined = if r#where.is_some() { allocate::classes(body, &BTreeSet::new()) } else { IndexMap::default() };
     let forms: [Form; 3] = [_regional, _local, _per_block];
     for value in order {
         let Some(width) = widths.get(&value).copied() else {
@@ -179,7 +179,7 @@ fn _fits(
         return false;
     }
     let carved = Interval::new(value, piece);
-    let mut occupants: IndexMap<Register, Vec<u32>> = IndexMap::new();
+    let mut occupants: IndexMap<Register, Vec<u32>> = IndexMap::default();
     for (other, register) in r#where {
         if *other != value && live.contains_key(other) {
             occupants.entry(allocate::_whole(*register)).or_default().push(*other);
@@ -196,7 +196,7 @@ fn _fits(
 
 /// Per block, the positions in it that name this value.
 fn _references(body: &LirBody, value: u32) -> IndexMap<i64, Vec<usize>> {
-    let mut out = IndexMap::new();
+    let mut out = IndexMap::default();
     for block in &body.blocks {
         let found: Vec<usize> = block
             .insns
@@ -293,7 +293,7 @@ pub struct Region {
 fn _carved(body: &LirBody, value: u32, fresh: u32, width: u32, region: &Region) -> Option<LirBody> {
     let live_out = _live_out(body, value);
     let entered = _entries(body, region);
-    let mut predecessors: IndexMap<i64, BTreeSet<i64>> = IndexMap::new();
+    let mut predecessors: IndexMap<i64, BTreeSet<i64>> = IndexMap::default();
     for block in &body.blocks {
         for place in &block.succ {
             predecessors.entry(*place).or_default().insert(block.at);
@@ -322,7 +322,7 @@ fn _carved(body: &LirBody, value: u32, fresh: u32, width: u32, region: &Region) 
     let mut blocks: Vec<LirBlock> = Vec::new();
     let mut changed = false;
     let mut deferred: Vec<(i64, i64, Arc<Insn>)> = Vec::new();
-    let rename = IndexMap::from([(value, fresh)]);
+    let rename = IndexMap::from_iter([(value, fresh)]);
     for block in &body.blocks {
         if feeding.contains(&block.at) {
             let mut insns = block.insns.clone();
@@ -490,7 +490,7 @@ fn _copy(beside: &Insn, into: u32, out_of: u32, width: u32) -> Arc<Insn> {
 
 /// How wide each value is, from the widest operand naming it.
 fn _widths(body: &LirBody) -> IndexMap<u32, u32> {
-    let mut out: IndexMap<u32, u32> = IndexMap::new();
+    let mut out: IndexMap<u32, u32> = IndexMap::default();
     let mut widen = |value: u32, width: u32| {
         let had = out.get(&value).copied().unwrap_or(0);
         out.insert(value, had.max(width));
@@ -533,11 +533,12 @@ fn _next_value(body: &LirBody) -> u32 {
 mod tests {
     //! Port of `tests/test_splitkit.py`.
 
-    use std::collections::{BTreeSet, HashMap};
+    use std::collections::BTreeSet;
+    use crate::support::hash::HashMap;
     use std::sync::Arc;
 
     use iced_x86::Register;
-    use indexmap::IndexMap;
+    use crate::support::hash::IndexMap;
 
     use super::{_carved, _local, loop_bases, split, Region};
     use crate::analysis::intervals::{self, Indexes};
@@ -582,7 +583,7 @@ mod tests {
     }
 
     fn body(name: &str, blocks: Vec<LirBlock>) -> LirBody {
-        LirBody::new(name, 0, blocks, IndexMap::new(), IndexMap::new())
+        LirBody::new(name, 0, blocks, IndexMap::default(), IndexMap::default())
     }
 
     fn where_() -> Addr {
@@ -659,7 +660,7 @@ mod tests {
 
     /// What the pushes along `path` write, running moves, adds and pushes.
     fn _pushed(body: &LirBody, path: &[i64]) -> Vec<i64> {
-        let mut values: HashMap<u32, i64> = HashMap::new();
+        let mut values: HashMap<u32, i64> = HashMap::default();
         let mut pushed = Vec::new();
         let blocks: HashMap<i64, &LirBlock> = body.blocks.iter().map(|one| (one.at, one)).collect();
         for at in path {
@@ -767,8 +768,8 @@ mod tests {
             })
             .collect();
         let body = LirBody { blocks, ..body };
-        let empty = Indexes { at: IndexMap::new(), span: IndexMap::new(), order: Vec::new() };
-        let plan = _local(&body, 3, &IndexMap::new(), &empty, &IndexMap::new());
+        let empty = Indexes { at: IndexMap::default(), span: IndexMap::default(), order: Vec::new() };
+        let plan = _local(&body, 3, &IndexMap::default(), &empty, &IndexMap::default());
         assert_eq!(plan, Some(region(&[0x10], Some(2))));
     }
 
@@ -838,7 +839,7 @@ mod tests {
     /// Values after executing the body: moves, add, cmp, jge, jmp and ret.
     fn _run(body: &LirBody) -> HashMap<u32, i64> {
         let blocks: HashMap<i64, &LirBlock> = body.blocks.iter().map(|one| (one.at, one)).collect();
-        let mut values: HashMap<u32, i64> = HashMap::new();
+        let mut values: HashMap<u32, i64> = HashMap::default();
         let (mut at, mut flags) = (body.entry, 0);
         for _step in 0..1000 {
             let (block, mut following) = (blocks[&at], None);

@@ -7,7 +7,7 @@
 //! SYM y1 name="pal_now" attr=0x42 seg=11  a record the shim adds
 //! ```
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Record {
@@ -41,7 +41,7 @@ pub fn parse(text: &str) -> Vec<Record> {
             tokens.remove(0);
         }
         let mut args = Vec::new();
-        let mut fields = IndexMap::new();
+        let mut fields = IndexMap::default();
         for one in &tokens[1..] {
             match one.split_once('=') {
                 Some((key, value)) if is_identifier(key) => {

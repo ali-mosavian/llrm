@@ -1,11 +1,12 @@
 //! Port of `tests/test_floatalloc.py` and the floatalloc-only test in
 //! `tests/test_float_constants.py`.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
+use crate::support::hash::HashMap;
 use std::sync::Arc;
 
 use iced_x86::Register;
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use super::{_equivalent_loads, _truncating, allocated};
 use crate::backend::cpu;
@@ -68,7 +69,7 @@ fn _body(operations: Vec<Semantics>) -> LirBody {
             Arc::new(Insn::new(at, Some((at, at + 8)), Some(what), defines, uses))
         })
         .collect();
-    LirBody::new("floating", 0, vec![LirBlock::new(0, insns)], IndexMap::new(), IndexMap::new())
+    LirBody::new("floating", 0, vec![LirBlock::new(0, insns)], IndexMap::default(), IndexMap::default())
 }
 
 fn block(at: i64, insns: Vec<Arc<Insn>>, succ: Vec<i64>) -> LirBlock {
@@ -195,7 +196,7 @@ fn test_truncation_saves_the_control_word_once_per_body() {
     ];
     let mut frame = Frame::new(-8);
     let result =
-        _truncating(&LirBody::new("t", 0, blocks, IndexMap::new(), IndexMap::new()), Some(&mut frame)).unwrap();
+        _truncating(&LirBody::new("t", 0, blocks, IndexMap::default(), IndexMap::default()), Some(&mut frame)).unwrap();
     let names: Vec<(i64, Vec<&str>)> = result
         .blocks
         .iter()
@@ -525,7 +526,7 @@ fn test_conversion_result_is_kept_for_non_operand_readers() {
         let mut body = _body(vec![_load(1, &cell), sem(Operation::FloatStore, "fistp", vec![result.clone()], vec![fl(1)])]);
         let first = body.blocks[0].clone();
         match reader {
-            "pinned" => body.pins = IndexMap::from([(2, Register::None)]),
+            "pinned" => body.pins = IndexMap::from_iter([(2, Register::None)]),
             "phi" => {
                 let joined = LirBlock { phis: vec![Phi { result: 3, incoming: vec![(0, 2)] }], ..LirBlock::new(32, vec![]) };
                 body.blocks = vec![first, joined];
@@ -611,7 +612,7 @@ fn test_float_survives_fork_join_and_loop_without_rereading_source() {
         // Python used Fraction(1) + 2**-63: any value only moved, never computed.
         let precise = 1.25;
         let disp = |cell: &Mem| cell.addr.unwrap().disp;
-        let mut memory: HashMap<i64, f64> = HashMap::from([(disp(&source), precise)]);
+        let mut memory: HashMap<i64, f64> = HashMap::from_iter([(disp(&source), precise)]);
         let (mut stack, mut answers) = (Vec::new(), Vec::new());
         let by_at: HashMap<i64, &LirBlock> = result.blocks.iter().map(|block| (block.at, block)).collect();
         for at in &path {
@@ -661,7 +662,7 @@ fn test_floating_bridge_never_reads_an_unestablished_slot() {
                 body.entry = 48;
                 blocks.push(block(48, vec![], vec![0, 16]));
             }
-            "pinned" => body.pins = IndexMap::from([(1, Register::None)]),
+            "pinned" => body.pins = IndexMap::from_iter([(1, Register::None)]),
             _ => blocks[0].insns = vec![Arc::clone(&load), load],
         }
         body.blocks = blocks;
@@ -702,7 +703,7 @@ fn test_floating_loop_phis_swap_in_parallel_on_the_critical_backedge() {
         assert_eq!(by_at[&16].phis, vec![Phi { result: 93, incoming: vec![(0, 91), (edge, 92)] }]);
         assert_eq!(what(by_at[&16].insns.last().unwrap()).target, Some(edge));
         let disp = |cell: &Mem| cell.addr.unwrap().disp;
-        let mut memory: HashMap<i64, f64> = HashMap::from([(disp(&cells[0]), 1.0), (disp(&cells[1]), 2.0)]);
+        let mut memory: HashMap<i64, f64> = HashMap::from_iter([(disp(&cells[0]), 1.0), (disp(&cells[1]), 2.0)]);
         let (mut stack, mut answers): (Vec<f64>, Vec<f64>) = (Vec::new(), Vec::new());
         for at in [0, 16, edge, 16, 48] {
             for one in &by_at[&at].insns {
@@ -1203,7 +1204,7 @@ fn test_exact_float_constants_need_no_frame() {
         for width in [2, 4] {
             let constant = sem(Operation::FloatLoad, "fild", vec![st(0)], vec![Loc::Imm(Imm { value, width, address: None })]);
             let instruction = Arc::new(Insn::new(0, Some((0, 2)), Some(constant), vec![], vec![]));
-            let body = LirBody::new("constant", 0, vec![LirBlock::new(0, vec![instruction])], IndexMap::new(), IndexMap::new());
+            let body = LirBody::new("constant", 0, vec![LirBlock::new(0, vec![instruction])], IndexMap::default(), IndexMap::default());
             let allocated = run(&body);
             let insns = allocated.insns();
             assert_eq!(insns.len(), 1);

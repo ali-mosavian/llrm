@@ -12,7 +12,7 @@ use std::rc::Rc;
 use std::sync::{Arc, LazyLock};
 
 use iced_x86::Register;
-use indexmap::{IndexMap, IndexSet};
+use crate::support::hash::{IndexMap, IndexSet};
 
 use super::abi::{physicalize, AbiError};
 use super::inline_x87::finalized;
@@ -159,7 +159,7 @@ type Names = IndexMap<(Space, i64), String>;
 
 #[allow(clippy::type_complexity)]
 fn _data(module: &model::Module) -> Result<(Names, IndexMap<String, Vec<masm::Datum>>), CompileError> {
-    let mut names: Names = IndexMap::from([((Space::Group, 0), "DGROUP".to_owned())]);
+    let mut names: Names = IndexMap::from_iter([((Space::Group, 0), "DGROUP".to_owned())]);
     let reserved = [_READ_DATA_OBJECT, _STATEMENT_TABLE_OBJECT];
     let internal: IndexMap<i64, &model::DataObject> = module
         .data
@@ -331,9 +331,9 @@ pub fn _empty_procedure(name: &str) -> masm::Procedure {
         name: name.to_owned(),
         public: false,
         far: false,
-        body: lir::LirBody::new(name, 1, vec![], IndexMap::new(), IndexMap::new()),
+        body: lir::LirBody::new(name, 1, vec![], IndexMap::default(), IndexMap::default()),
         reserve: 0,
-        callees: IndexMap::new(),
+        callees: IndexMap::default(),
     }
 }
 
@@ -430,8 +430,8 @@ fn _statement_procedure(entries: &[(i64, i64, String, i64)]) -> masm::Procedure 
         "$QB$STAT",
         1,
         vec![lir::LirBlock::new(1, vec![Arc::new(instruction)])],
-        IndexMap::new(),
-        IndexMap::new(),
+        IndexMap::default(),
+        IndexMap::default(),
     );
     masm::Procedure {
         name: "$QB$STAT".into(),
@@ -439,7 +439,7 @@ fn _statement_procedure(entries: &[(i64, i64, String, i64)]) -> masm::Procedure 
         far: false,
         body,
         reserve: 0,
-        callees: IndexMap::from([(1, masm::Callee { name: "$statement-table".into(), far: false, code })]),
+        callees: IndexMap::from_iter([(1, masm::Callee { name: "$statement-table".into(), far: false, code })]),
     }
 }
 
@@ -452,10 +452,10 @@ fn _statement_procedure(entries: &[(i64, i64, String, i64)]) -> masm::Procedure 
 fn _split_statement_blocks(body: &lir::LirBody, markers: &BTreeSet<i64>) -> (lir::LirBody, IndexMap<i64, i64>) {
     let mut next_block = body.blocks.iter().map(|block| block.at).max().unwrap_or(0) + 1;
     let mut made: Vec<lir::LirBlock> = Vec::new();
-    let mut labels: IndexMap<i64, i64> = IndexMap::new();
+    let mut labels: IndexMap<i64, i64> = IndexMap::default();
     let mut located: BTreeSet<i64> = BTreeSet::new();
     for block in &body.blocks {
-        let mut positions: IndexMap<usize, Vec<i64>> = IndexMap::new();
+        let mut positions: IndexMap<usize, Vec<i64>> = IndexMap::default();
         for (index, instruction) in block.insns.iter().enumerate() {
             // MIR addresses are unique within a body. MIR operation ids are
             // not a source-statement key: source instruction 22 and an
@@ -689,7 +689,7 @@ fn _header(program: &model::Program) -> Result<Vec<u8>, CompileError> {
 
 /// Spell BASIC module fallthrough as the runtime's implicit B$CENP.
 fn _ends_program(body: &lir::LirBody) -> (lir::LirBody, IndexMap<i64, masm::Callee>) {
-    let mut sites: IndexMap<i64, masm::Callee> = IndexMap::new();
+    let mut sites: IndexMap<i64, masm::Callee> = IndexMap::default();
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let mut instructions = Vec::new();
@@ -720,10 +720,10 @@ fn _materialize_error_registrations(
     sites: &IndexMap<i64, (Option<Addr>, bool)>,
 ) -> (lir::LirBody, IndexMap<i64, masm::Callee>) {
     if sites.is_empty() {
-        return (body.clone(), IndexMap::new());
+        return (body.clone(), IndexMap::default());
     }
     let mut serial = body.blocks.iter().flat_map(|block| &block.insns).map(|one| one.at).max().unwrap_or(0) + 1;
-    let mut callees: IndexMap<i64, masm::Callee> = IndexMap::new();
+    let mut callees: IndexMap<i64, masm::Callee> = IndexMap::default();
     let mut blocks: Vec<lir::LirBlock> = Vec::new();
     let ax = _reg(Register::AX);
     for block in &body.blocks {
@@ -778,7 +778,7 @@ fn _initialize_frame(
 ) -> Result<(lir::LirBody, IndexMap<i64, masm::Callee>), CompileError> {
     let size = size + (size & 1);
     if size == 0 {
-        return Ok((body.clone(), IndexMap::new()));
+        return Ok((body.clone(), IndexMap::default()));
     }
     if size > 0x7FFE {
         return emission(format!("{}: {size} byte native frame exceeds a 16-bit BP displacement", body.name));
@@ -807,7 +807,7 @@ fn _initialize_frame(
     .concat();
     Ok((
         lir::LirBody { blocks, ..body.clone() },
-        IndexMap::from([(
+        IndexMap::from_iter([(
             at,
             masm::Callee { name: "$frame_zero".into(), far: false, code: vec![masm::InlinePart::Bytes(code)] },
         )]),
@@ -926,7 +926,7 @@ fn _runtime_frame(
         .collect();
     Ok((
         lir::LirBody { blocks: framed, ..body.clone() },
-        IndexMap::from([(serial + 2, masm::Callee::new("B$ENRA", true)), (leave_at, masm::Callee::new("B$EXSA", true))]),
+        IndexMap::from_iter([(serial + 2, masm::Callee::new("B$ENRA", true)), (leave_at, masm::Callee::new("B$EXSA", true))]),
     ))
 }
 
@@ -983,7 +983,7 @@ type Restored = IndexMap<i64, Option<mir::Op>>;
 fn _optimizer_resume_edges(body: &mir::MirBody) -> Result<(mir::MirBody, Restored), CompileError> {
     let labels: BTreeSet<i64> = body.blocks.iter().map(|block| block.at).collect();
     let mut serial = body.blocks.iter().flat_map(|block| &block.ops).map(|op| op.at).max().unwrap_or(0);
-    let mut restored: Restored = IndexMap::new();
+    let mut restored: Restored = IndexMap::default();
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let resumes: Vec<usize> = block
@@ -1283,7 +1283,7 @@ fn _basic_segment_classes(data: &[u8], code: &str) -> Result<Vec<u8>, CompileErr
             names.push(name.to_owned());
         }
     }
-    let mut name_index: IndexMap<String, i64> = IndexMap::new();
+    let mut name_index: IndexMap<String, i64> = IndexMap::default();
     for (index, name) in names.iter().enumerate() {
         if index != 0 {
             name_index.insert(name.clone(), index as i64);
@@ -1431,7 +1431,7 @@ pub fn assembled(
     let statement_metadata = _statement_metadata(module)?;
     let mut statement_targets: Vec<(i64, i64, String, i64)> = Vec::new();
     let mut referenced_calls: BTreeSet<String> = BTreeSet::new();
-    let empty_occurrences = IndexMap::new();
+    let empty_occurrences = IndexMap::default();
     for (function, body) in functions.iter().copied().zip(&semantic) {
         let handler_at = _handler_at(function);
         _observe(&mut observer, "source-mir", StageValue::Lowered(body), Some(function), None)?;
@@ -1482,7 +1482,7 @@ pub fn assembled(
         let owned_frame = Rc::new(RefCell::new(owned_frame));
         let mut in_ssa = true;
         let mut phases = flow::machine(
-            &IndexMap::new(),
+            &IndexMap::default(),
             Some(Rc::clone(&owned_frame)),
             Some(&physical.calls),
             true,
@@ -1504,11 +1504,11 @@ pub fn assembled(
         let low = _drop_machine_side_entry(&low, &temporary_blocks, ordinary_entry, ordinary_fallback)?;
         let final_ = finalized(&low, function.abi.as_ref().map_or(0, |abi| abi.parameter_bytes))?;
         let mut callees = final_.callees.clone();
-        let mut resume_blocks: IndexMap<i64, i64> = IndexMap::new();
-        let mut data_markers: IndexMap<i64, i64> = IndexMap::new();
-        let mut restore_markers: IndexMap<i64, i64> = IndexMap::new();
-        let mut error_registrations: IndexMap<i64, (Option<Addr>, bool)> = IndexMap::new();
-        let mut error_labels: IndexMap<i64, i64> = IndexMap::new();
+        let mut resume_blocks: IndexMap<i64, i64> = IndexMap::default();
+        let mut data_markers: IndexMap<i64, i64> = IndexMap::default();
+        let mut restore_markers: IndexMap<i64, i64> = IndexMap::default();
+        let mut error_registrations: IndexMap<i64, (Option<Addr>, bool)> = IndexMap::default();
+        let mut error_labels: IndexMap<i64, i64> = IndexMap::default();
         for (at, name) in &physical.calls {
             let object_name: String;
             if name.starts_with("$QB$RESA:") {
@@ -1602,7 +1602,7 @@ pub fn assembled(
         let final_body = _drop_resume_successors(&final_body, &physical.calls);
         let procedure_number = procedures.len();
         let statement_blocks = _statement_table_blocks(function);
-        let empty = IndexMap::new();
+        let empty = IndexMap::default();
         let source_instructions = body.source_instructions.as_ref().unwrap_or(&empty);
         let all_rows: Vec<(i64, i64, i64)> = statement_metadata
             .iter()
@@ -1852,14 +1852,14 @@ pub fn object_bytes(
     // LINK establish the DATA class before BC_DATA, unlike BC/PDS/VBDOS, and
     // the BASIC runtime then initializes its local heap against the wrong
     // DGROUP boundary.
-    let mut named: IndexSet<String> = IndexSet::new();
+    let mut named: IndexSet<String> = IndexSet::default();
     for (name, _items) in &module.data {
         if named.insert(name.clone()) {
             let private = module.private.contains(name);
             segments.push(omfwrite::Segment::new(name, if private { "FAR_DATA" } else { "DATA" }, !private));
         }
     }
-    let mut symbols: IndexMap<String, (usize, usize)> = IndexMap::new();
+    let mut symbols: IndexMap<String, (usize, usize)> = IndexMap::default();
     for (name, items) in &module.data {
         let index = segments.iter().position(|one| &one.name == name).expect("every data segment was made");
         _object_data(&mut segments[index], index, items, &mut symbols);

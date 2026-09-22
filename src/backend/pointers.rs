@@ -92,7 +92,7 @@ fn binary(
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use std::collections::HashMap;
+    use crate::support::hash::HashMap;
 
     use super::*;
     use crate::objectfile::module::{Addr, Space};
@@ -115,7 +115,7 @@ pub(crate) mod tests {
 
     /// The test file's `execute`: interpret the parts over 32-bit values.
     pub(crate) fn execute(parts: &[ir::Semantics], pointer: i64, offset: i64, memory: &HashMap<Addr, i64>) -> i64 {
-        let mut values: HashMap<u32, i64> = HashMap::from([(1, pointer), (2, offset)]);
+        let mut values: HashMap<u32, i64> = HashMap::from_iter([(1, pointer), (2, offset)]);
         let dest = |part: &ir::Semantics| match &part.dests[0] {
             Loc::Held(one) => one.value,
             other => panic!("{other:?}"),
@@ -151,7 +151,7 @@ pub(crate) mod tests {
     fn test_huge_pointer_advance_does_not_rebuild_both_halves() {
         let parts = parts(&Model::new(HugeShift::Fixed(12)).unwrap());
         assert!(parts.len() <= 8);
-        assert_eq!(execute(&parts, 0x2000_fffe, 2, &HashMap::new()), 0x3000_0000);
+        assert_eq!(execute(&parts, 0x2000_fffe, 2, &HashMap::default()), 0x3000_0000);
     }
 
     /// NDARR/HUGELP strides must retain carries and borrows for every supported selector ABI.
@@ -166,7 +166,7 @@ pub(crate) mod tests {
                     let sum = (pointer & 0xffff) + displacement;
                     let (pages, offset) = (sum / 65536, sum % 65536);
                     let selector = ((pointer >> 16) + pages * (1 << shift)) & 0xffff;
-                    assert_eq!(execute(&parts, pointer, displacement, &HashMap::new()), (selector << 16) | offset);
+                    assert_eq!(execute(&parts, pointer, displacement, &HashMap::default()), (selector << 16) | offset);
                 }
             }
         }
@@ -187,7 +187,7 @@ pub(crate) mod tests {
             let model =
                 Model::new(HugeShift::Cell(ir::Mem { disp_width: 2, ..ir::Mem::new(Some(address), 1) })).unwrap();
             let parts = parts(&model);
-            assert_eq!(execute(&parts, 0x2000_fffe, 2, &HashMap::from([(address, shift)])), expected);
+            assert_eq!(execute(&parts, 0x2000_fffe, 2, &HashMap::from_iter([(address, shift)])), expected);
         }
     }
 
@@ -197,7 +197,7 @@ pub(crate) mod tests {
         for shift in [0, 3, 12] {
             for (start, stride) in [(65534, 2), (1934, 402), (2, -4), (0xffff_fffe_i64, 4)] {
                 let parts = parts(&Model::new(HugeShift::Fixed(shift)).unwrap());
-                let none = HashMap::new();
+                let none = HashMap::default();
                 let base = 0xf000_fffe;
                 let mut current = execute(&parts, base, start, &none);
                 for iteration in 0..5 {

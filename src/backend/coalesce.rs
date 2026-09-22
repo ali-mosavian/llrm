@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use iced_x86::Register;
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::analysis::intervals::{self as ranges, Interval, Segment};
 use crate::backend::{allocate, target};
@@ -82,7 +82,7 @@ pub fn joined(body: &LirBody, pinned: Option<&IndexMap<u32, Register>>) -> LirBo
     }
     let mut held: IndexMap<u32, Register> = pinned.clone();
     let mut near = _interference(body);
-    let mut parent: IndexMap<u32, u32> = IndexMap::new();
+    let mut parent: IndexMap<u32, u32> = IndexMap::default();
     let empty = BTreeSet::new();
 
     for block in &body.blocks {
@@ -187,7 +187,7 @@ pub fn joined(body: &LirBody, pinned: Option<&IndexMap<u32, Register>>) -> LirBo
 
     // No early return where nothing joined: `_kept` also removes what was
     // already an identity.
-    let mut swap: IndexMap<u32, u32> = IndexMap::new();
+    let mut swap: IndexMap<u32, u32> = IndexMap::default();
     for block in &body.blocks {
         for insn in &block.insns {
             for one in insn.defines.iter().chain(&insn.uses) {
@@ -248,7 +248,7 @@ fn _george(
 
 pub fn _interference(body: &LirBody) -> Graph {
     let (incoming, outgoing) = allocate::live(body);
-    let mut widths: IndexMap<u32, u32> = IndexMap::new();
+    let mut widths: IndexMap<u32, u32> = IndexMap::default();
     for one in body.blocks.iter().flat_map(|block| &block.insns) {
         let mut held: Vec<Held> = match &one.what {
             Some(what) => what.dests.iter().chain(&what.sources).flat_map(ir::values).collect(),
@@ -264,7 +264,7 @@ pub fn _interference(body: &LirBody) -> Graph {
             widths.insert(*value, had.max(*width));
         }
     }
-    let mut graph: Graph = IndexMap::new();
+    let mut graph: Graph = IndexMap::default();
 
     let edge = |graph: &mut Graph, one: u32, other: u32| {
         if one != other {
@@ -431,7 +431,7 @@ mod tests {
     use std::sync::Arc;
 
     use iced_x86::Register;
-    use indexmap::IndexMap;
+    use crate::support::hash::IndexMap;
 
     use super::{_interference, _merged, joined};
     use crate::analysis::intervals;
@@ -477,7 +477,7 @@ mod tests {
             name,
             0,
             vec![LirBlock::new(0, insns.into_iter().map(Arc::new).collect())],
-            IndexMap::new(),
+            IndexMap::default(),
             pins.iter().copied().collect(),
         )
     }
@@ -661,7 +661,7 @@ mod tests {
             vec![2],
         );
         let body = body("pointer", vec![_define(0, 1), _move(3, 2, 1), load], &[]);
-        let pins: IndexMap<u32, Register> = IndexMap::from([(1, Register::EAX)]);
+        let pins: IndexMap<u32, Register> = IndexMap::from_iter([(1, Register::EAX)]);
         assert_eq!(joined(&body, Some(&pins)).insns().len(), 3);
         let pinned = LirBody { pins: pins.clone(), ..body };
         assert_eq!(joined(&pinned, None).insns().len(), 3);
@@ -670,12 +670,12 @@ mod tests {
     #[test]
     fn test_coalescing_keeps_the_pinned_return_as_representative() {
         let body = body("return", vec![_define(0, 1), _move(3, 2, 1), _use(5, 2)], &[]);
-        let done = joined(&body, Some(&IndexMap::from([(2, Register::EAX)])));
+        let done = joined(&body, Some(&IndexMap::from_iter([(2, Register::EAX)])));
         let insns = done.insns();
         assert_eq!(insns[0].defines, vec![2]);
         assert_eq!(insns[insns.len() - 1].uses, vec![2]);
         for register in [Register::EAX, Register::EBX, Register::ECX, Register::EDX] {
-            let pins = IndexMap::from([(2, register)]);
+            let pins = IndexMap::from_iter([(2, register)]);
             let joined = joined(&body, Some(&pins));
             let emitted = allocate::applied(&joined, &allocated(&joined, &pins)).expect("applies");
             let insns = emitted.insns();
@@ -697,7 +697,7 @@ mod tests {
             block
         };
         let last = LirBlock::new(0x20, vec![Arc::new(_use(0x20, 2))]);
-        let body = LirBody::new("two arms", 0, vec![arm(0, 61), arm(0x10, 63), last], IndexMap::new(), IndexMap::new());
+        let body = LirBody::new("two arms", 0, vec![arm(0, 61), arm(0x10, 63), last], IndexMap::default(), IndexMap::default());
         let done = joined(&body, None);
         let made: BTreeSet<u32> = done.insns().iter().flat_map(|one| one.defines.clone()).collect();
         let read: BTreeSet<u32> = done.insns().iter().flat_map(|one| one.uses.clone()).collect();

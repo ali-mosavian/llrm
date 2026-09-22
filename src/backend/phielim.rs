@@ -7,7 +7,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::model::ir::{self, Held, Loc, Operation, Semantics};
 use crate::model::lir::{Insn, LirBlock, LirBody, Phi};
@@ -63,19 +63,19 @@ pub fn eliminated(body: &LirBody) -> Result<LirBody, String> {
     let once = _read_once(body);
     // One per predecessor->successor edge. Every move a phi becomes on
     // that edge is simultaneous with the others and with none outside it.
-    let mut groups: IndexMap<(i64, i64), i64> = IndexMap::new();
+    let mut groups: IndexMap<(i64, i64), i64> = IndexMap::default();
     let mut edge_group = |where_: i64, into: i64| -> i64 {
         let next = groups.len() as i64 + 1;
         *groups.entry((where_, into)).or_insert(next)
     };
 
-    let mut split: IndexMap<(i64, i64), Split> = IndexMap::new();
-    let mut copies: IndexMap<i64, Vec<Arc<Insn>>> = IndexMap::new();
-    let mut rename: IndexMap<u32, u32> = IndexMap::new();
-    let mut kept: IndexMap<i64, Vec<Phi>> = IndexMap::new();
+    let mut split: IndexMap<(i64, i64), Split> = IndexMap::default();
+    let mut copies: IndexMap<i64, Vec<Arc<Insn>>> = IndexMap::default();
+    let mut rename: IndexMap<u32, u32> = IndexMap::default();
+    let mut kept: IndexMap<i64, Vec<Phi>> = IndexMap::default();
     for block in &body.blocks {
         let mut stays = Vec::new();
-        let mut crossing: IndexMap<i64, Vec<(u32, u32)>> = IndexMap::new();
+        let mut crossing: IndexMap<i64, Vec<(u32, u32)>> = IndexMap::default();
         for phi in &block.phis {
             let edges: Vec<(i64, u32)> =
                 phi.incoming.iter().copied().filter(|(where_, _)| at_of.contains_key(where_)).collect();
@@ -212,7 +212,7 @@ pub fn _observed(body: &LirBody, at_of: &IndexMap<i64, &LirBlock>, where_: i64, 
 
 /// How many times each value is read, phi edges included.
 fn _read_once(body: &LirBody) -> IndexMap<u32, i64> {
-    let mut out: IndexMap<u32, i64> = IndexMap::new();
+    let mut out: IndexMap<u32, i64> = IndexMap::default();
     for block in &body.blocks {
         for one in &block.insns {
             for &value in &one.uses {
@@ -310,7 +310,7 @@ fn _renamed_phi(phi: &Phi, rename: &IndexMap<u32, u32>) -> Result<Phi, String> {
 }
 
 fn _widths(body: &LirBody) -> IndexMap<u32, u32> {
-    let mut widths: IndexMap<u32, u32> = IndexMap::new();
+    let mut widths: IndexMap<u32, u32> = IndexMap::default();
     for block in &body.blocks {
         for op in &block.insns {
             let mut operands: Vec<Held> = op.requires.iter().chain(&op.delivers).map(|(held, _)| *held).collect();
@@ -403,8 +403,8 @@ fn _leaves(one: &Insn) -> bool {
 /// Place already selected parallel transfers on their exact CFG edges.
 pub fn placed_on_edges(body: &LirBody, transfers: &IndexMap<(i64, i64), Vec<Arc<Insn>>>) -> LirBody {
     let at_of: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
-    let mut copies: IndexMap<i64, Vec<Arc<Insn>>> = IndexMap::new();
-    let mut split: IndexMap<(i64, i64), Split> = IndexMap::new();
+    let mut copies: IndexMap<i64, Vec<Arc<Insn>>> = IndexMap::default();
+    let mut split: IndexMap<(i64, i64), Split> = IndexMap::default();
     for (&(where_, into), insns) in transfers {
         if at_of[&where_].succ.len() > 1 {
             split.insert((where_, into), Split::Selected(insns.clone()));
@@ -420,7 +420,7 @@ pub fn placed_on_edges(body: &LirBody, transfers: &IndexMap<(i64, i64), Vec<Arc<
         return out;
     }
     let kept: IndexMap<i64, Vec<Phi>> = body.blocks.iter().map(|block| (block.at, block.phis.clone())).collect();
-    _split_edges(body, &split, &copies, &IndexMap::new(), &kept, &IndexMap::new(), true)
+    _split_edges(body, &split, &copies, &IndexMap::default(), &kept, &IndexMap::default(), true)
         .expect("an empty rename cannot cycle")
 }
 
@@ -439,8 +439,8 @@ pub fn _split_edges(
     selected: bool,
 ) -> Result<LirBody, String> {
     let at_of: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
-    let mut made: IndexMap<(i64, i64), LirBlock> = IndexMap::new();
-    let mut landing: IndexMap<(i64, i64), i64> = IndexMap::new();
+    let mut made: IndexMap<(i64, i64), LirBlock> = IndexMap::default();
+    let mut landing: IndexMap<(i64, i64), i64> = IndexMap::default();
     let mut edges: Vec<(&(i64, i64), &Split)> = split.iter().collect();
     edges.sort_by_key(|(key, _)| **key);
     let highest = at_of.keys().copied().max().expect("a body has a block");
@@ -575,7 +575,7 @@ fn _retargeted(one: &Arc<Insn>, landing: &IndexMap<(i64, i64), i64>, here: i64) 
 #[must_use]
 pub fn unsplit(body: &LirBody) -> LirBody {
     let floor = (body.entry + 1) << 32;
-    let mut bypass: IndexMap<i64, i64> = IndexMap::new();
+    let mut bypass: IndexMap<i64, i64> = IndexMap::default();
     for block in &body.blocks {
         if block.at < floor || !block.phis.is_empty() || block.succ.len() != 1 {
             continue;
@@ -662,7 +662,7 @@ mod tests {
     use std::sync::Arc;
 
     use iced_x86::Register;
-    use indexmap::IndexMap;
+    use crate::support::hash::IndexMap;
 
     use super::{Split, _observed, _settled, _split_edges, eliminated, unsplit};
     use crate::backend::verify;
@@ -678,7 +678,7 @@ mod tests {
     }
 
     fn body(name: &str, blocks: Vec<LirBlock>) -> LirBody {
-        LirBody::new(name, 0, blocks, IndexMap::new(), IndexMap::new())
+        LirBody::new(name, 0, blocks, IndexMap::default(), IndexMap::default())
     }
 
     fn held(value: u32, width: u32) -> Loc {
@@ -740,11 +740,11 @@ mod tests {
         let edge_body = body("edge", vec![block(0, vec![Arc::clone(&jz)], vec![10, 20], vec![])]);
         let done = _split_edges(
             &edge_body,
-            &IndexMap::from([((0, 10), Split::Pairs(vec![(2, 1)]))]),
-            &IndexMap::new(),
-            &IndexMap::new(),
-            &IndexMap::from([(0, vec![])]),
-            &IndexMap::from([(2, 2)]),
+            &IndexMap::from_iter([((0, 10), Split::Pairs(vec![(2, 1)]))]),
+            &IndexMap::default(),
+            &IndexMap::default(),
+            &IndexMap::from_iter([(0, vec![])]),
+            &IndexMap::from_iter([(2, 2)]),
             false,
         )
         .unwrap();
@@ -904,7 +904,7 @@ mod tests {
             base: Some(Held { value: 21, width: 2 }),
             ..Mem::new(Some(where_), 2)
         };
-        let Loc::Mem(got) = _settled(&Loc::Mem(cell.clone()), &IndexMap::from([(21, 99)])).unwrap() else {
+        let Loc::Mem(got) = _settled(&Loc::Mem(cell.clone()), &IndexMap::from_iter([(21, 99)])).unwrap() else {
             panic!("a cell stays a cell");
         };
         assert_eq!(got.base, Some(Held { value: 99, width: 2 }), "the cell kept {:?}", got.base);

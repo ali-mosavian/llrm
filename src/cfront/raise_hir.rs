@@ -8,7 +8,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 use num_bigint::BigInt;
 use num_traits::{Signed, ToPrimitive, Zero};
 
@@ -668,18 +668,18 @@ impl<'a> _Raise<'a> {
             blocks: Vec::new(),
             current: None,
             done: BTreeMap::new(),
-            calls: IndexMap::new(),
-            callees: IndexMap::new(),
-            contracts: IndexMap::new(),
-            arguments: IndexMap::new(),
-            constants: IndexMap::new(),
-            inline: IndexMap::new(),
-            frame: IndexMap::new(),
+            calls: IndexMap::default(),
+            callees: IndexMap::default(),
+            contracts: IndexMap::default(),
+            arguments: IndexMap::default(),
+            constants: IndexMap::default(),
+            inline: IndexMap::default(),
+            frame: IndexMap::default(),
             objects: Vec::new(),
             pointer_values: BTreeSet::new(),
             pointer_seeds: mir::OrderedMap::new(),
-            parameter_at: IndexMap::new(),
-            selects: IndexMap::new(),
+            parameter_at: IndexMap::default(),
+            selects: IndexMap::default(),
             down: 0,
             symbol,
         };
@@ -896,7 +896,7 @@ impl<'a> _Raise<'a> {
         // Even an unknown C callee has a precise language-level boundary.
         let procedure =
             alias::Procedure { body: body.body.clone(), calls: self.calls.clone(), arguments: self.arguments.clone() };
-        let body = RaisedBody { body: alias::calls_annotated(&procedure, &IndexMap::new()).map_err(Unsupported)?, ..body };
+        let body = RaisedBody { body: alias::calls_annotated(&procedure, &IndexMap::default()).map_err(Unsupported)?, ..body };
         let body = mir::with_live_outs(body);
         let problems = mir::verify(&body);
         if !problems.is_empty() {

@@ -7,11 +7,12 @@
 //! direction for operand substitution.  Selection and decoded effects are both
 //! checked again before a source is renamed.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
+use crate::support::hash::{HashMap, HashSet};
 use std::sync::Arc;
 
 use iced_x86::Register;
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::analysis::loops;
 use crate::backend::peephole::{Lane, Lanes, _lanes, _register_effects, id};
@@ -50,13 +51,13 @@ pub fn forwarded(body: &LirBody) -> LirBody {
             universe.insert((*left, *right));
         }
     }
-    let mut register_for: IndexMap<Vec<Lane>, Register> = IndexMap::new();
+    let mut register_for: IndexMap<Vec<Lane>, Register> = IndexMap::default();
     for register in target::WIDTHS.keys() {
         if !_lanes(*register).is_empty() && ir::root(*register) != Register::ESP {
             register_for.insert(_lanes(*register).into_iter().collect(), *register);
         }
     }
-    let mut recipes: HashMap<usize, Recipe> = HashMap::new();
+    let mut recipes: HashMap<usize, Recipe> = HashMap::default();
     for one in body.insns() {
         let what = one.what.as_ref();
         if what.is_some_and(|what| {
@@ -136,7 +137,7 @@ pub fn forwarded(body: &LirBody) -> LirBody {
 
         let oldest = |lane: Lane| -> Lane {
             let mut lane = lane;
-            let mut seen: HashSet<Lane> = HashSet::new();
+            let mut seen: HashSet<Lane> = HashSet::default();
             while before.contains_key(&lane) && !seen.contains(&lane) {
                 seen.insert(lane);
                 lane = before[&lane];
@@ -232,7 +233,7 @@ pub fn forwarded(body: &LirBody) -> LirBody {
     };
 
     let blocks: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
-    let mut reachable: HashSet<i64> = HashSet::new();
+    let mut reachable: HashSet<i64> = HashSet::default();
     let mut pending = vec![body.entry];
     while let Some(at) = pending.pop() {
         if reachable.contains(&at) || !blocks.contains_key(&at) {
@@ -291,7 +292,7 @@ pub fn forwarded(body: &LirBody) -> LirBody {
     let mut result = Vec::new();
     for block in &body.blocks {
         let mut facts = entries.get(&block.at).cloned().unwrap_or_default();
-        let mut redundant: HashSet<usize> = HashSet::new();
+        let mut redundant: HashSet<usize> = HashSet::default();
         let mut directed = directed_entries.get(&block.at).cloned().unwrap_or_default();
         let mut rewritten = Vec::new();
         for one in &block.insns {

@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 use std::sync::{Arc, LazyLock};
 
-use indexmap::{IndexMap, IndexSet};
+use crate::support::hash::{IndexMap, IndexSet};
 
 use crate::model::ir::{self, Held, Loc, Mem, Operation, Semantics};
 use crate::model::lir::{self, Insn};
@@ -26,13 +26,13 @@ type Definitions = IndexMap<u32, (usize, Arc<Insn>)>;
 
 /// Select `load; op; store-same-cell` as a memory-destination operation.
 fn _fold_integer(insns: &[Arc<Insn>], users: &IndexMap<u32, i64>) -> Vec<Arc<Insn>> {
-    let mut definitions: Definitions = IndexMap::new();
+    let mut definitions: Definitions = IndexMap::default();
     for (index, one) in insns.iter().enumerate() {
         for value in &one.defines {
             definitions.insert(*value, (index, Arc::clone(one)));
         }
     }
-    let mut replaced: IndexMap<usize, Arc<Insn>> = IndexMap::new();
+    let mut replaced: IndexMap<usize, Arc<Insn>> = IndexMap::default();
     let mut erased: BTreeSet<usize> = BTreeSet::new();
     for (store_at, store) in insns.iter().enumerate() {
         let Some((load_at, operation_at, cell, source, name)) = _integer_chain(insns, store_at, &definitions, users)
@@ -164,13 +164,13 @@ fn _integer_chain(
 }
 
 fn _fold_byte(insns: &[Arc<Insn>], users: &IndexMap<u32, i64>) -> Vec<Arc<Insn>> {
-    let mut definitions: Definitions = IndexMap::new();
+    let mut definitions: Definitions = IndexMap::default();
     for (index, one) in insns.iter().enumerate() {
         for value in &one.defines {
             definitions.insert(*value, (index, Arc::clone(one)));
         }
     }
-    let mut replaced: IndexMap<usize, Arc<Insn>> = IndexMap::new();
+    let mut replaced: IndexMap<usize, Arc<Insn>> = IndexMap::default();
     let mut erased: BTreeSet<usize> = BTreeSet::new();
     for (store_at, store) in insns.iter().enumerate() {
         let Some((load_at, mask, erase)) = _chain(insns, store_at, &definitions, users) else {
@@ -451,7 +451,7 @@ mod tests {
 
     use std::sync::Arc;
 
-    use indexmap::IndexMap;
+    use crate::support::hash::IndexMap;
 
     use super::selected;
     use crate::model::ir::{Held, Loc, Mem, Operation, Semantics};
@@ -467,7 +467,7 @@ mod tests {
     }
 
     fn _users(insns: &[Arc<Insn>]) -> IndexMap<u32, i64> {
-        let mut users = IndexMap::new();
+        let mut users = IndexMap::default();
         for value in insns.iter().flat_map(|one| one.uses.iter()) {
             *users.entry(*value).or_insert(0) += 1;
         }

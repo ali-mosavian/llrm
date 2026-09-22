@@ -8,7 +8,7 @@ use std::cmp::Ordering;
 use std::collections::BTreeSet;
 use std::ops::{Add, Div, Mul, Neg, Sub};
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 use num_bigint::BigInt;
 
 use super::consts::{self, Cells, Known};
@@ -328,11 +328,11 @@ pub(crate) fn repeated(
         .collect::<IndexMap<_, _>>();
     let mut memory = initial.clone();
     let allowed = [Kind::Nothing, Kind::Copy, Kind::Add, Kind::Sub, Kind::Increment, Kind::Decrement];
-    let no_calls = IndexMap::new();
+    let no_calls = IndexMap::default();
     let count = u64::try_from(count).expect("a repetition count Python could iterate");
     for _ in 0..count {
         let mut integers = invariant.clone();
-        let mut floating = IndexMap::<Value, Finite>::new();
+        let mut floating = IndexMap::<Value, Finite>::default();
         for op in ops {
             if checkpoint(op) {
                 continue; // exact operations add no pending exception; the check is retained by specialization
@@ -516,14 +516,14 @@ pub(crate) fn exit_cells(
 ) -> IndexMap<(i64, i64), Cells> {
     let proofs = loop_exits(body, dgroup, calls);
     if proofs.is_empty() {
-        return IndexMap::new();
+        return IndexMap::default();
     }
     let regions = loops::loops(&body.blocks, Some(body.entry))
         .into_iter()
         .map(|loop_| (loop_.header, loop_.body))
         .collect::<IndexMap<_, _>>();
     let blocks = body.blocks.iter().map(|block| (block.at, block)).collect::<IndexMap<_, _>>();
-    let mut edges = IndexMap::new();
+    let mut edges = IndexMap::default();
     for proof in proofs {
         let leaving = blocks[&proof.header]
             .succ
@@ -534,7 +534,7 @@ pub(crate) fn exit_cells(
         let [destination] = leaving[..] else {
             panic!("expected 1 exit from {}, got {}", proof.header, leaving.len());
         };
-        let mut memory = Cells::new();
+        let mut memory = Cells::default();
         for (reference, fact) in &proof.stores {
             for (where_, fact) in consts::_fragments(&mir::symbolic_ref(reference), fact) {
                 memory.insert(where_, fact);
@@ -568,7 +568,7 @@ pub(crate) fn converted(
             .iter()
             .any(|op| op.kind == Kind::Fstore && !op.results.is_empty() && op.stores.is_empty())
     }) {
-        return IndexMap::new();
+        return IndexMap::default();
     }
     let computed;
     let facts = match facts {
@@ -578,7 +578,7 @@ pub(crate) fn converted(
             &computed
         }
     };
-    let mut results = IndexMap::new();
+    let mut results = IndexMap::default();
     for block in &body.blocks {
         for op in &block.ops {
             let Some(rule) = &op.floating else {
@@ -632,8 +632,8 @@ fn _analyzed(
             .collect::<Cells>()
     });
     let integers = consts::known(body, Some(dgroup), Some(calls), None, seed.as_ref());
-    let mut facts = IndexMap::<Value, Finite>::new();
-    let mut memory = IndexMap::new();
+    let mut facts = IndexMap::<Value, Finite>::default();
+    let mut memory = IndexMap::default();
     let mut changed = true;
     while changed {
         changed = false;
@@ -663,7 +663,7 @@ fn _analyzed(
             block.ops = block.ops.iter().map(stored).collect();
         }
         memory = consts::cells(&shadow, dgroup, calls, Some(&integers), seed.as_ref(), None, None, None);
-        let empty = Cells::new();
+        let empty = Cells::default();
         for block in &body.blocks {
             for (index, op) in block.ops.iter().enumerate() {
                 let Some(inputs) = _inputs(op, &integers, memory.get(&(block.at, index)).unwrap_or(&empty), &facts)

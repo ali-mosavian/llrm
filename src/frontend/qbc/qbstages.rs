@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use super::compile::{self as qb_compile, Stage, StageValue};
 use super::driver::parsed;
@@ -47,7 +47,7 @@ const CP437: [char; 128] = [
 ];
 
 pub(super) fn _lir(body: &lir::LirBody, callees: Option<&IndexMap<i64, masm::Callee>>) -> String {
-    let empty = IndexMap::new();
+    let empty = IndexMap::default();
     let callees = callees.unwrap_or(&empty);
     let mut lines = vec![format!("; entry L0_{}", body.entry), format!("{} proc", body.name)];
     for block in &body.blocks {
@@ -84,7 +84,7 @@ pub(super) fn _lir(body: &lir::LirBody, callees: Option<&IndexMap<i64, masm::Cal
 /// Diagnostic-only: the frontend owns BASIC's spelling of source globals,
 /// while the shared MASM writer owns the bytes.
 fn _source_globals(program: &model::Program, module: &masm::Module) -> IndexMap<String, (i64, String)> {
-    let mut globals_ = IndexMap::new();
+    let mut globals_ = IndexMap::default();
     for source_module in &program.modules {
         let types: IndexMap<i64, &model::Type> = source_module.types.iter().map(|one| (one.id, one)).collect();
         for function in &source_module.functions {
@@ -280,7 +280,7 @@ pub(super) fn _display_assembly(text: &str) -> String {
 /// its semantics carry the immediate the OMF writer encodes; keep this
 /// showcase truthful without changing the shared backend.
 fn _emitted_asm(program: &model::Program, module: &masm::Module, pretty: bool) -> Result<String, String> {
-    let mut cleanup: IndexMap<String, i64> = IndexMap::new();
+    let mut cleanup: IndexMap<String, i64> = IndexMap::default();
     for (number, procedure) in module.procedures.iter().enumerate() {
         for item in masm::listing(procedure, number).map_err(|error| error.0)? {
             if let masm::Item::Semantics(item) = item {

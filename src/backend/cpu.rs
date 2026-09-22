@@ -7,7 +7,7 @@
 use std::collections::BTreeSet;
 use std::sync::LazyLock;
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::cycles::timings;
 use crate::model::passes::{
@@ -129,7 +129,7 @@ impl<'a> From<&'a Profile> for ProfileOrName<'a> {
 }
 
 static _I386_COSTS: LazyLock<IndexMap<&'static str, i64>> = LazyLock::new(|| {
-    IndexMap::from([
+    IndexMap::from_iter([
         ("alu_rr", 2),
         ("alu_rm", 6),
         ("alu_mr", 8),

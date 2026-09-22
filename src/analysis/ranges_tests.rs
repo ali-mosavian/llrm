@@ -7,7 +7,7 @@
 //! `test_nbody_scaled_index_is_bounded_only_inside_its_loop`,
 //! `test_rngarm_writes_its_counter_only_after_the_loop`.
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 use num_bigint::BigInt;
 
 use super::{_computed, _recurrence_span, Interval, bounded, on_edge};
@@ -116,7 +116,7 @@ fn test_signed_comparison_edges() {
         };
         let counter = held.value;
         block.ops[1].test = Some(test);
-        let known = IndexMap::from([(counter, interval(0, 9, 2))]);
+        let known = IndexMap::from_iter([(counter, interval(0, 9, 2))]);
 
         let result = on_edge(&block, successor, &known, None).unwrap().unwrap();
 
@@ -132,7 +132,7 @@ fn test_non_comparison_flags_do_not_establish_a_bound() {
         let Arg::Held(held) = &block.ops[0].args[0] else {
             panic!("the comparison reads the counter");
         };
-        let known = IndexMap::from([(held.value, interval(0, 9, 2))]);
+        let known = IndexMap::from_iter([(held.value, interval(0, 9, 2))]);
         block.ops[0].op = Some(OpCode::Operation(operation));
         block.ops[0].kind = kind;
 
@@ -161,8 +161,8 @@ fn test_unit_steps_require_nonwrapping_intervals() {
         (Kind::Increment, 0, 32767, None),
     ] {
         let (made, source) = unary(kind, Operation::Unary, 2, None);
-        let known = IndexMap::from([(source, interval(low, high, 2))]);
-        assert_eq!(_computed(&made, &known, &IndexMap::new()), expected);
+        let known = IndexMap::from_iter([(source, interval(low, high, 2))]);
+        assert_eq!(_computed(&made, &known, &IndexMap::default()), expected);
     }
 }
 
@@ -171,8 +171,8 @@ fn test_signed_widening_keeps_the_numeric_range() {
     // `tests/test_ranges.py`: ADDRM's bounded 1..20 counter lost its interval when converted to a long.
     for (low, high) in [(1, 20), (-32768, -1), (-10, 10)] {
         let (made, source) = unary(Kind::SignExtend, Operation::Extend, 4, None);
-        let known = IndexMap::from([(source, interval(low, high, 2))]);
-        assert_eq!(_computed(&made, &known, &IndexMap::new()), Some(interval(low, high, 4)));
+        let known = IndexMap::from_iter([(source, interval(low, high, 2))]);
+        assert_eq!(_computed(&made, &known, &IndexMap::default()), Some(interval(low, high, 4)));
     }
 }
 
@@ -204,8 +204,8 @@ fn test_shift_ranges_refuse_wraparound() {
         (0, 5, 32, None),
     ] {
         let (made, source) = unary(Kind::Shl, Operation::Binary, 2, Some(Arg::Const(Const::new(count, 1))));
-        let known = IndexMap::from([(source, interval(low, high, 2))]);
-        assert_eq!(_computed(&made, &known, &IndexMap::new()), expected, "{low} {high} {count}");
+        let known = IndexMap::from_iter([(source, interval(low, high, 2))]);
+        assert_eq!(_computed(&made, &known, &IndexMap::default()), expected, "{low} {high} {count}");
     }
 }
 
@@ -249,7 +249,7 @@ fn test_unsigned_edge_never_removes_a_possible_selector() {
                     block.ops[0].args = vec![Arg::Held(Held { value: counter, width }), Arg::Const(Const::new(255, width))];
                     block.ops[1].test = Some(kind);
                     let target = block.ops[1].target.unwrap();
-                    let known = IndexMap::from([(counter, interval(span.0, span.1, width))]);
+                    let known = IndexMap::from_iter([(counter, interval(span.0, span.1, width))]);
                     let answer = |value: i64| match kind {
                         Kind::Above => value > 255,
                         Kind::AboveEq => value >= 255,

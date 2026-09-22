@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::analysis::consts::Known;
 use crate::analysis::floatfacts::{self, Finite};

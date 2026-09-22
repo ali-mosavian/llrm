@@ -11,7 +11,7 @@ use std::sync::Arc;
 use crate::model::ir::nodes::Node;
 use crate::model::ir::{Held, Operation, Semantics};
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use super::mir::{self, Arg, Kind, Op};
 use crate::support::pyrepr::{self, Repr};

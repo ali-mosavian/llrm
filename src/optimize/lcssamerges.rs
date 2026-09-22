@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::analysis::loops::{self, Loop};
 use crate::analysis::ssa;
@@ -26,14 +26,14 @@ pub(crate) fn closed(body: &MirBody, loop_: &Loop) -> Result<MirBody, String> {
     }) {
         return Ok(body);
     }
-    let mut definitions: IndexMap<Value, i64> = IndexMap::new();
+    let mut definitions: IndexMap<Value, i64> = IndexMap::default();
     for block in body.blocks.iter().filter(|block| loop_.body.contains(&block.at)) {
         let values = block.phis.iter().map(|phi| phi.result).chain(block.ops.iter().flat_map(|op| op.defines.iter().copied()));
         for value in values.filter(|value| !value.flags) {
             definitions.insert(value, block.at);
         }
     }
-    let mut sites: IndexMap<Value, BTreeSet<i64>> = IndexMap::new();
+    let mut sites: IndexMap<Value, BTreeSet<i64>> = IndexMap::default();
     for block in &body.blocks {
         if loop_.body.contains(&block.at) {
             continue;

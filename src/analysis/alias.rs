@@ -9,7 +9,7 @@
 use std::collections::BTreeSet;
 use std::sync::LazyLock;
 
-use indexmap::{IndexMap, IndexSet};
+use crate::support::hash::{IndexMap, IndexSet};
 use num_bigint::BigInt;
 
 use super::consts::{self, Known};
@@ -770,7 +770,7 @@ pub fn points_to(
     let mut incoming = body
         .blocks
         .iter()
-        .map(|block| (block.at, IndexMap::<CellKey, Provenance>::new()))
+        .map(|block| (block.at, IndexMap::<CellKey, Provenance>::default()))
         .collect::<IndexMap<_, _>>();
     let mut outgoing = incoming.clone();
     let none = BTreeSet::new();
@@ -781,7 +781,7 @@ pub fn points_to(
         for block in &body.blocks {
             let parents_at = predecessors.get(&block.at).unwrap_or(&none);
             let has_back_edge = parents_at.iter().any(|parent| back_edges.contains(&(*parent, block.at)));
-            let mut state = IndexMap::new();
+            let mut state = IndexMap::default();
             {
                 let parents = parents_at.iter().map(|one| &outgoing[one]).collect::<Vec<_>>();
                 let previous_incoming = &incoming[&block.at];
@@ -896,8 +896,8 @@ pub fn points_to(
         .map(|block| (block.at, BTreeSet::<MemoryObject>::new()))
         .collect::<IndexMap<_, _>>();
     let mut escape_out = escape_in.clone();
-    let mut escaped_before: IndexMap<i64, BTreeSet<MemoryObject>> = IndexMap::new();
-    let mut pointer_fields: IndexMap<MemoryObject, BTreeSet<MemoryObject>> = IndexMap::new();
+    let mut escaped_before: IndexMap<i64, BTreeSet<MemoryObject>> = IndexMap::default();
+    let mut pointer_fields: IndexMap<MemoryObject, BTreeSet<MemoryObject>> = IndexMap::default();
     for block in &body.blocks {
         for op in &block.ops {
             if op.stores.is_empty() {
@@ -1105,10 +1105,10 @@ fn _keys_overlap(one: Option<&CellKey>, other: Option<&CellKey>) -> bool {
 pub fn congruences(body: &MirBody) -> IndexMap<Value, (BigInt, BigInt)> {
     let constants = consts::known(body, None, None, None, None);
     let values = body.values().into_iter().map(|value| (value.id, value)).collect::<IndexMap<_, _>>();
-    let mut result: IndexMap<Value, (BigInt, BigInt)> = IndexMap::new();
+    let mut result: IndexMap<Value, (BigInt, BigInt)> = IndexMap::default();
     let zero = BigInt::from(0_u8);
 
-    fn number(arg: &Arg, constants: &indexmap::IndexMap<Value, Known>) -> Option<BigInt> {
+    fn number(arg: &Arg, constants: &crate::support::hash::IndexMap<Value, Known>) -> Option<BigInt> {
         match arg {
             Arg::Const(constant) => Some(constant.n.clone()),
             Arg::Held(held) => constants.get(&held.value).map(|fact| fact.n.clone()),
@@ -1136,7 +1136,7 @@ pub fn congruences(body: &MirBody) -> IndexMap<Value, (BigInt, BigInt)> {
     fn computed(
         op: &Op,
         result: &IndexMap<Value, (BigInt, BigInt)>,
-        constants: &indexmap::IndexMap<Value, Known>,
+        constants: &crate::support::hash::IndexMap<Value, Known>,
     ) -> Option<(BigInt, BigInt)> {
         let zero = BigInt::from(0_u8);
         let Some(Arg::Held(held)) = op.results.first().filter(|_| op.results.len() == 1) else {
@@ -1241,7 +1241,7 @@ pub struct NamedBytes {
 /// object from here, so it carries the same object facts every other
 /// reference to it does.
 pub fn named_bytes(body: &MirBody) -> NamedBytes {
-    let mut out: IndexMap<Addr, Option<(MemoryObject, i64)>> = IndexMap::new();
+    let mut out: IndexMap<Addr, Option<(MemoryObject, i64)>> = IndexMap::default();
     let mut refs: Vec<&MemRef> = body.initial.iter().map(|(reference, _)| reference).collect();
     for block in &body.blocks {
         for op in &block.ops {
@@ -1275,7 +1275,7 @@ pub fn named_bytes(body: &MirBody) -> NamedBytes {
         out.into_iter().filter_map(|(at, one)| one.map(|one| (at, one))).collect();
     // A space whose every named byte is one object at its own displacement
     // is that object throughout: BC's segments and frame are.
-    let mut spaces: IndexMap<(Space, i64), Option<MemoryObject>> = IndexMap::new();
+    let mut spaces: IndexMap<(Space, i64), Option<MemoryObject>> = IndexMap::default();
     for (at, (object, offset)) in &named {
         let key = (at.space, at.index);
         let agrees = spaces.get(&key).is_none_or(|previous| previous.as_ref() == Some(object));
@@ -1427,7 +1427,7 @@ mod tests {
 
     use std::collections::BTreeSet;
 
-    use indexmap::IndexMap;
+    use crate::support::hash::IndexMap;
 
     use super::{
         _direct_summary, Actual, Procedure, Summary, UNKNOWN, annotated, calls_annotated, congruences, named_bytes,
@@ -1751,7 +1751,7 @@ mod tests {
             vec![(2, vec![Actual::Provenance(one(&actual, 4, 5))])],
         );
 
-        let procedures = IndexMap::from([("caller".to_owned(), caller.clone()), ("callee".to_owned(), callee)]);
+        let procedures = IndexMap::from_iter([("caller".to_owned(), caller.clone()), ("callee".to_owned(), callee)]);
         let known = summaries(&procedures, None).unwrap();
         let annotated_body = calls_annotated(&caller, &known).unwrap();
         let effect = &annotated_body.blocks[0].ops[0];
@@ -1775,7 +1775,7 @@ mod tests {
         );
         let recursive = procedure(made, &[(2, "recursive")], vec![(2, vec![Actual::Pointer(pointer, 1)])]);
 
-        let summary = summaries(&IndexMap::from([("recursive".to_owned(), recursive)]), None).unwrap()["recursive"]
+        let summary = summaries(&IndexMap::from_iter([("recursive".to_owned(), recursive)]), None).unwrap()["recursive"]
             .clone();
 
         assert_eq!(summary.writes, BTreeSet::from([Slice::whole(parameter)]));
@@ -1792,7 +1792,7 @@ mod tests {
             vec![(4, vec![Actual::Provenance(one(&passed, 0, 1)), Actual::Absent])],
         );
 
-        let annotated_body = calls_annotated(&unknown, &IndexMap::new()).unwrap();
+        let annotated_body = calls_annotated(&unknown, &IndexMap::default()).unwrap();
         let effect = &annotated_body.blocks[0].ops[0];
         let passed_ref = with_provenance(4, one(&passed, 0, 4));
         let passed_tail = with_provenance(1, one(&passed, 3, 4));
@@ -1837,7 +1837,7 @@ mod tests {
         );
         let unknown = procedure(made, &[(4, "external")], vec![(4, vec![])]);
 
-        let annotated_body = calls_annotated(&unknown, &IndexMap::new()).unwrap();
+        let annotated_body = calls_annotated(&unknown, &IndexMap::default()).unwrap();
         let effect = annotated_body.blocks[0].ops.last().unwrap();
         let escaped_ref = with_provenance(4, one(&escaped, 0, 4));
         let private_ref = with_provenance(4, one(&private, 0, 4));
@@ -1864,12 +1864,12 @@ mod tests {
         let reference = with_provenance(4, one(&local, 0, 4));
 
         let borrowed_body =
-            calls_annotated(&caller, &IndexMap::from([("known".to_owned(), Summary::default())])).unwrap();
+            calls_annotated(&caller, &IndexMap::from_iter([("known".to_owned(), Summary::default())])).unwrap();
         let captured = Summary {
             captures: BTreeSet::from([Some(Identity::Int(0))]),
             ..Summary::default()
         };
-        let captured_body = calls_annotated(&caller, &IndexMap::from([("known".to_owned(), captured)])).unwrap();
+        let captured_body = calls_annotated(&caller, &IndexMap::from_iter([("known".to_owned(), captured)])).unwrap();
         let borrowed = borrowed_body.blocks[0].ops.last().unwrap();
         let captured = captured_body.blocks[0].ops.last().unwrap();
 

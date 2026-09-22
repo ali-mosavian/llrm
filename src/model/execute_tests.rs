@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 use num_bigint::BigInt;
 
 use super::{Memory, run};
@@ -44,7 +44,7 @@ fn test_a_near_pointer_to_a_dgroup_cell_reaches_that_cell() {
     let static_ = MemRef::new(Some(Addr { index: 3, ..Addr::new(Space::Segment, 4) }), 2);
 
     let body = _through_pointer(Arg::Const(Const::new(0x44, 2)), near, static_, false);
-    let got = run(&body, &IndexMap::new(), &Memory::new(), None, 1_000_000, &BTreeMap::from([(3, 0x40)])).unwrap();
+    let got = run(&body, &IndexMap::default(), &Memory::default(), None, 1_000_000, &BTreeMap::from([(3, 0x40)])).unwrap();
     assert_eq!(got.returned, vec![BigInt::from(0x1234)]);
 }
 
@@ -56,6 +56,6 @@ fn test_a_frame_slot_is_reached_through_a_near_pointer_when_the_stack_is_in_data
 
     let pointer = Arg::FrameAddress(FrameAddress { offset: -4, width: 2, extent: None });
     let body = _through_pointer(pointer, slot, near, true);
-    let got = run(&body, &IndexMap::new(), &Memory::new(), None, 1_000_000, &BTreeMap::new()).unwrap();
+    let got = run(&body, &IndexMap::default(), &Memory::default(), None, 1_000_000, &BTreeMap::new()).unwrap();
     assert_eq!(got.returned, vec![BigInt::from(0x1234)]);
 }

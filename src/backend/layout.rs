@@ -8,7 +8,7 @@
 
 use std::sync::LazyLock;
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 /// Each condition and the one that is true exactly when it is false. `jcxz`
 /// and `loop*` are absent on purpose: they have no inverse to name, so a
