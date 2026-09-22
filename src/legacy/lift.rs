@@ -654,3 +654,18 @@ mod tests {
         }
     }
 }
+
+/// Port of `qbopt/legacy/lift.py:Emitted`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Emitted {
+    pub code: Vec<u8>,
+    /// (offset within `code`, where the operand's field was) for each
+    /// displacement that has to be relocated.
+    pub relocations: Vec<(usize, usize)>,
+}
+
+/// Port of `qbopt/legacy/lift.py:relocated_memory`: a relocated address,
+/// always emitted as zero.
+pub fn relocated_memory(base: Register, segment: Register) -> iced_x86::MemoryOperand {
+    iced_x86::MemoryOperand::new(base, Register::None, 1, 0, 2, false, segment)
+}

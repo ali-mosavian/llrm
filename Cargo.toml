@@ -7,7 +7,7 @@ description = "LLVM-style optimizing compiler and object rewriter for 16-bit x86
 default-run = "llrm-qb"
 
 [dependencies]
-iced-x86 = { version = "=1.21.0", default-features = false, features = ["std", "decoder", "instr_info"] }
+iced-x86 = { version = "=1.21.0", default-features = false, features = ["std", "decoder", "block_encoder", "instr_info"] }
 indexmap = "2"
 num-bigint = "0.4"
 num-traits = "0.2"
