@@ -6722,9 +6722,9 @@ fn sweep_16() {
     check(sem(Op::Address, Some("lea"), vec![rg(R::ES, 2)], vec![ad(None, R::BX, R::None, 1, 4, 2)], None, false), 0, false, false, None, None, None);
     check(sem(Op::Address, Some("lea"), vec![rg(R::ES, 2)], vec![ad(None, R::None, R::None, 1, 4, 0)], None, false), 0, false, false, None, None, None);
     check(sem(Op::Address, Some("lea"), vec![rg(R::ES, 2)], vec![ad(None, R::None, R::ESI, 8, 4, 0)], None, false), 0, false, false, None, None, None);
-    check(sem(Op::Fill, Some("stosb"), vec![], vec![], None, false), 0, false, false, None, None, Some(("f3aa", None, None, vec![], true)));
-    check(sem(Op::Fill, Some("stosw"), vec![], vec![], None, false), 0, false, false, None, None, Some(("f3ab", None, None, vec![], true)));
-    check(sem(Op::Fill, Some("stosd"), vec![], vec![], None, false), 0, false, false, None, None, Some(("66f3ab", None, None, vec![], true)));
+    check(sem(Op::Fill, Some("stosb"), vec![], vec![], None, false), 0, false, false, None, None, None);
+    check(sem(Op::Fill, Some("stosw"), vec![], vec![], None, false), 0, false, false, None, None, None);
+    check(sem(Op::Fill, Some("stosd"), vec![], vec![], None, false), 0, false, false, None, None, None);
     check(sem(Op::Fill, Some("movsb"), vec![], vec![], None, false), 0, false, false, None, None, None);
     check(sem(Op::Fill, Some(""), vec![], vec![], None, false), 0, false, false, None, None, None);
     check(sem(Op::Nothing, None, vec![], vec![], None, false), 0, false, false, None, None, Some(("", None, None, vec![], true)));

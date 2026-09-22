@@ -103,14 +103,14 @@ pub fn placed(body: &LirBody) -> Result<LirBody, String> {
     let mut source: Option<i64> = None;
     let empty = BTreeSet::new();
     while order.len() < explicit.len() {
+        if current.is_some_and(|at| by_at.get(&at).is_some_and(|block| block.cold))
+            && explicit.iter().any(|one| !one.cold && !done.contains(&one.at))
+        {
+            current = None; // after the hot blocks
+        }
         if current.is_none_or(|at| done.contains(&at) || !by_at.contains_key(&at)) {
-            current = Some(
-                explicit
-                    .iter()
-                    .map(|block| block.at)
-                    .find(|at| !done.contains(at))
-                    .expect("StopIteration"),
-            );
+            let waiting: Vec<&LirBlock> = explicit.iter().filter(|block| !done.contains(&block.at)).collect();
+            current = Some(waiting.iter().find(|block| !block.cold).unwrap_or(&waiting[0]).at);
             source = None;
         }
         let at = current.expect("set above");
@@ -166,6 +166,10 @@ pub fn _onward(
         if arm.is_some_and(|arm| arm.succ.len() == 1 && Some(arm.succ[0]) == join) {
             targets = vec![branch_target, jump_target];
         }
+    }
+    // A cold successor goes last; see mir.MirBlock.cold.
+    if let Some(by_at) = by_at {
+        targets.sort_by_key(|target| target.is_some_and(|at| by_at.get(&at).is_some_and(|block| block.cold)));
     }
     // Keep a loop chain together before following an exit.  The final jump is
     // still preferred when both edges stay in the loop, preserving the source

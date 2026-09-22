@@ -2561,6 +2561,11 @@ pub fn secondary_bases<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) ->
                         if cell.base == Some(held)
                             && cell.index.is_none()
                             && !selector_alias
+                            // A frame cell has two independent address
+                            // components: fixed BP and the allocated dynamic
+                            // index.  This rewrite widens one value only, so it
+                            // cannot legally turn the pair into a 32-bit address.
+                            && !cell.addr.is_some_and(|addr| addr.space == Space::Frame)
                             && target::width_of(cell.through) == Some(2))
                     {
                         return None;
@@ -2977,7 +2982,17 @@ fn _flags_before(one: &Insn, flags_dead: bool) -> bool {
         (Operation::Extend, Some("movsx" | "movzx" | "cwd" | "cdq")) => flags_dead,
         (Operation::Push, Some("push")) | (Operation::Pop, Some("pop")) => flags_dead,
         (Operation::Nothing, None | Some("")) | (Operation::Jump, _) | (Operation::Fill, _) => flags_dead,
-        _ => false,
+        _ => {
+            // Anything else by what it encodes: a far load writes no flag, and
+            // missing from the list above it kept `mov ax,0` from becoming `xor`.
+            let Some((reads, writes)) = _register_effects(one, false, true) else {
+                return false;
+            };
+            if !reads.is_disjoint(&_ARITHMETIC_LANES) {
+                return false;
+            }
+            flags_dead || _ARITHMETIC_LANES.is_subset(&writes)
+        }
     }
 }
 
@@ -3355,7 +3370,7 @@ enum Known {
     Object(usize),
 }
 
-/// Reuse identical scalar register contents within a straight-line move sequence.
+/// Reuse identical scalar register contents until an instruction overwrites them.
 pub fn constants(body: &LirBody) -> LirBody {
     let mut objects = 0usize;
     let mut blocks = Vec::new();
@@ -3383,7 +3398,10 @@ pub fn constants(body: &LirBody) -> LirBody {
                     && what.dests.iter().chain(&what.sources).all(|arg| matches!(arg, Loc::Reg(_)))
             });
             if !moved && !extend {
-                held.clear();
+                match _register_effects(one, true, false) {
+                    None => held.clear(),
+                    Some((_reads, writes)) => held.retain(|dest, _| _lanes(dest.register).is_disjoint(&writes)),
+                }
                 continue;
             }
             let what = what.expect("a move or extension has semantics");

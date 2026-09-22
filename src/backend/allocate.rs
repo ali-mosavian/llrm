@@ -363,6 +363,15 @@ pub fn classes(body: &LirBody, prefer_indexes: &BTreeSet<u32>) -> Classes {
     for value in selecting.difference(&numeric) {
         _restrict(&mut out, *value, &selectors);
     }
+    for one in body.blocks.iter().flat_map(|block| &block.insns) {
+        if let Some(what) = &one.what {
+            if target::far_load(what) {
+                if let Loc::Held(held) = &what.dests[1] {
+                    _restrict(&mut out, held.value, &selectors);
+                }
+            }
+        }
+    }
     _word_address_roles(&word_pairs, &mut out, body, prefer_indexes);
     out
 }
@@ -1132,6 +1141,7 @@ impl RegAlloc {
                     let (mut opened_body, opened) = spiller::unfolded_indexes(&scoped, &folded);
                     if !opened.is_empty() {
                         let mut opened_reloads = reloads.clone();
+                        let before = self.frame.as_ref().map(|frame| frame.borrow().saved());
                         let mut trial = trial_of(&opened_body, &reloads, &keep)?;
                         if let Some(found) = &trial {
                             let rematerializable = spiller::rematerializable(&opened_body, &found.spilled);
@@ -1145,18 +1155,24 @@ impl RegAlloc {
                                 }
                             }
                         }
-                        if let Some(trial) = trial {
-                            if keep.is_disjoint(&trial.spilled)
-                                && _traffic(&opened_body, &trial.spilled) < _traffic(&body, &got.spilled)
-                            {
-                                body = opened_body;
-                                retained = keep.clone();
-                                got = trial;
-                                reloads = opened_reloads;
-                            }
+                        if let Some(trial) = trial.filter(|trial| {
+                            keep.is_disjoint(&trial.spilled)
+                                && _traffic(&opened_body, &trial.spilled) + _added(&scoped, &opened_body)
+                                    < _traffic(&body, &got.spilled)
+                        }) {
+                            body = opened_body;
+                            retained = keep.clone();
+                            got = trial;
+                            reloads = opened_reloads;
+                        } else if let (Some(frame), Some(before)) = (&self.frame, &before) {
+                            frame.borrow_mut().restore(before);
                         }
                     }
                     if retained.is_empty() {
+                        // If the unfolded indexes still do not fit, commit
+                        // them to slots and consume those slots directly in
+                        // the identical dying-base adds.
+                        let before = self.frame.as_ref().map(|frame| frame.borrow().saved());
                         let (prepared, made) = if folded.is_empty() {
                             (scoped.clone(), BTreeSet::new())
                         } else {
@@ -1164,15 +1180,25 @@ impl RegAlloc {
                         };
                         let with: BTreeSet<u32> = reloads.union(&made).copied().collect();
                         let trial = trial_of(&prepared, &with, &keep)?;
-                        if let Some(trial) = trial {
-                            if keep.is_disjoint(&trial.spilled)
-                                && _traffic(&prepared, &trial.spilled) < _traffic(&body, &got.spilled)
-                            {
-                                body = prepared;
-                                retained = keep.clone();
-                                got = trial;
-                                reloads = with;
-                            }
+                        // The candidate may spill ordinary cold values into
+                        // normal slots. Admit it only when the whole
+                        // pre-folded trial lowers weighted traffic --
+                        // including its own folded slots, whose values
+                        // `prepared` no longer names.
+                        let slot_traffic = match &self.frame {
+                            Some(frame) => _slot_traffic(&prepared, &frame.borrow(), &folded),
+                            None => 0.0,
+                        };
+                        if let Some(trial) = trial.filter(|trial| {
+                            keep.is_disjoint(&trial.spilled)
+                                && _traffic(&prepared, &trial.spilled) + slot_traffic < _traffic(&body, &got.spilled)
+                        }) {
+                            body = prepared;
+                            retained = keep.clone();
+                            got = trial;
+                            reloads = with;
+                        } else if let (Some(frame), Some(before)) = (&self.frame, &before) {
+                            frame.borrow_mut().restore(before);
                         }
                     }
                 }
@@ -1367,6 +1393,52 @@ pub fn _traffic(body: &LirBody, spilled: &BTreeSet<u32>) -> f64 {
             for value in one.defines.iter().chain(&one.uses) {
                 if spilled.contains(value) {
                     total += each;
+                }
+            }
+        }
+    }
+    total
+}
+
+/// The instructions a plan inserted, weighted by loop depth.
+///
+/// Unpriced, sum_three's unfolded `add di,bx` looked free and the loop grew
+/// an instruction.
+fn _added(before: &LirBody, after: &LirBody) -> f64 {
+    let deep = ranges::depths(after);
+    let was: IndexMap<i64, usize> = before.blocks.iter().map(|block| (block.at, block.insns.len())).collect();
+    after
+        .blocks
+        .iter()
+        .map(|block| {
+            ranges::level(deep.get(&block.at).copied().unwrap_or(0))
+                * block.insns.len().saturating_sub(was.get(&block.at).copied().unwrap_or(0)) as f64
+        })
+        .sum()
+}
+
+/// The memory references to these values' frame slots, weighted by loop depth.
+fn _slot_traffic(body: &LirBody, frame: &Frame, values: &BTreeSet<u32>) -> f64 {
+    let homes: BTreeSet<i64> =
+        values.iter().filter_map(|value| frame.slots.get(&frames::SlotKey::from(*value)).copied()).collect();
+    if homes.is_empty() {
+        return 0.0;
+    }
+    let deep = ranges::depths(body);
+    let mut total = 0.0;
+    for block in &body.blocks {
+        let each = ranges::level(deep.get(&block.at).copied().unwrap_or(0));
+        for one in &block.insns {
+            let Some(what) = &one.what else {
+                continue;
+            };
+            for place in what.dests.iter().chain(&what.sources) {
+                if let Loc::Mem(cell) = place {
+                    if cell.addr.is_some_and(|addr| addr.space == Space::Frame && homes.contains(&addr.disp))
+                        && cell.base.is_none()
+                    {
+                        total += each;
+                    }
                 }
             }
         }
@@ -1684,8 +1756,16 @@ fn _placed(
     };
     let dests = what.dests.iter().map(|x| _settled(x, held, origin)).collect::<Result<Vec<_>, _>>()?;
     let sources = what.sources.iter().map(|x| _settled(x, held, origin)).collect::<Result<Vec<_>, _>>()?;
+    let mut name = what.name.clone();
+    if target::far_load(what) {
+        if let Loc::Reg(selector) = &dests[1] {
+            if let Some(spelt) = target::FAR_LOADS.get(&selector.register) {
+                name = Some((*spelt).to_owned());
+            }
+        }
+    }
     let mut made = (**one).clone();
-    made.what = Some(Semantics { dests, sources, ..what.clone() });
+    made.what = Some(Semantics { name, dests, sources, ..what.clone() });
     Ok(Arc::new(made))
 }
 

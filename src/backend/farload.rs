@@ -10,7 +10,7 @@ use crate::model::ir::{self, Held, Loc, Mem, Operation, Semantics};
 use crate::model::lir::{self, Insn};
 
 /// Select private `mov offset,[p]; mov selector,[p+2]` pairs as `les`.
-pub fn selected(insns: &[Arc<Insn>]) -> Vec<Arc<Insn>> {
+pub fn selected(insns: &[Arc<Insn>], selectors: &BTreeSet<u32>) -> Vec<Arc<Insn>> {
     let mut made: IndexMap<usize, Arc<Insn>> = IndexMap::new();
     let mut erased: BTreeSet<usize> = BTreeSet::new();
     for (at, first) in insns[..insns.len().saturating_sub(1)].iter().enumerate() {
@@ -18,7 +18,7 @@ pub fn selected(insns: &[Arc<Insn>]) -> Vec<Arc<Insn>> {
             continue;
         }
         let second = &insns[at + 1];
-        let Some(joined) = _pair(first, second) else {
+        let Some(joined) = _pair(first, second, selectors) else {
             continue;
         };
         made.insert(at, joined);
@@ -43,7 +43,7 @@ pub fn selected(insns: &[Arc<Insn>]) -> Vec<Arc<Insn>> {
         .collect()
 }
 
-fn _pair(first: &Insn, second: &Insn) -> Option<Arc<Insn>> {
+fn _pair(first: &Insn, second: &Insn, selectors: &BTreeSet<u32>) -> Option<Arc<Insn>> {
     if !_plain(first)
         || !_plain(second)
         || first.covers.is_some_and(|covers| covers.0 != covers.1)
@@ -74,7 +74,7 @@ fn _pair(first: &Insn, second: &Insn) -> Option<Arc<Insn>> {
     }
     let (first_dest, first_cell) = words[0].clone();
     let (second_dest, second_cell) = words[1].clone();
-    if !_next_word(&first_cell, &second_cell) || !_far_pointer_words(first, second) {
+    if !_next_word(&first_cell, &second_cell) || !selectors.contains(&second_dest.value) || _volatile(first, second) {
         return None;
     }
     // A fixed address survives allocation unchanged; only a virtual
@@ -89,8 +89,8 @@ fn _pair(first: &Insn, second: &Insn) -> Option<Arc<Insn>> {
     {
         return None;
     }
-    // C's far pointer is low offset then high selector; the allocator's
-    // selector order prefers ES, making LES the one-instruction load.
+    // Spelt `les`; the rewriter respells it for the segment register the
+    // selector is given.
     let what = Semantics {
         name: Some("les".to_owned()),
         dests: vec![Loc::Held(first_dest), Loc::Held(second_dest)],
@@ -149,27 +149,47 @@ fn _next_word(low: &Mem, high: &Mem) -> bool {
     moved == 2 && [0, 2].contains(&(high.offset - low.offset)) || moved == 0 && high.offset == low.offset + 2
 }
 
-/// Whether the two loads are adjacent halves of one typed far pointer.
-fn _far_pointer_words(first: &Insn, second: &Insn) -> bool {
-    for one in [first, second] {
-        let loaded: &[crate::model::mir::MemRef] = match &one.op {
-            None => &[],
-            Some(op) => &op.loads,
-        };
-        if loaded.len() != 1 || loaded[0].width != 2 || loaded[0].volatile || loaded[0].typed.is_none() {
-            return false;
-        }
-        if loaded[0].typed.as_ref().expect("checked").0 != "pointer4" {
-            return false;
+fn _volatile(first: &Insn, second: &Insn) -> bool {
+    [first, second]
+        .into_iter()
+        .filter_map(|one| one.op.as_ref())
+        .any(|op| op.loads.iter().any(|r#ref| r#ref.volatile))
+}
+
+/// Values read only as a cell's selector: what makes a far load the right load.
+///
+/// `kept` holds values a phi reads, which no instruction here shows.
+pub fn selectors(made: &IndexMap<i64, Vec<Arc<Insn>>>, kept: &BTreeSet<u32>) -> BTreeSet<u32> {
+    let mut selecting: BTreeSet<u32> = BTreeSet::new();
+    let mut numeric: BTreeSet<u32> = kept.clone();
+    for block in made.values() {
+        for one in block {
+            numeric.extend(one.requires.iter().chain(&one.delivers).map(|(held, _)| held.value));
+            let Some(what) = &one.what else {
+                continue;
+            };
+            for r#where in what.dests.iter().chain(&what.sources) {
+                if let Loc::Mem(cell) = r#where {
+                    numeric.extend([cell.base, cell.index].into_iter().flatten().map(|held| held.value));
+                    if let Some(selector) = cell.selector {
+                        selecting.insert(selector.value);
+                    }
+                }
+            }
+            numeric.extend(what.sources.iter().filter_map(|r#where| match r#where {
+                Loc::Held(held) => Some(held.value),
+                _ => None,
+            }));
         }
     }
-    true
+    selecting.difference(&numeric).copied().collect()
 }
 
 #[cfg(test)]
 mod tests {
     //! Port of `tests/test_farload.py`.
 
+    use std::collections::BTreeSet;
     use std::sync::Arc;
 
     use super::selected;
@@ -205,7 +225,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typed_far_pointer_words_without_object_provenance_are_joined() {
+    fn test_adjacent_words_are_one_far_load_only_when_the_high_word_is_a_selector() {
         // qcport's dynamic far-struct fields emitted two loads per far pointer.
         let (first_value, second_value) = (Value::new(1, 1), Value::new(2, 1));
         let first_ref = typed_ref(Space::Far, 4);
@@ -222,13 +242,15 @@ mod tests {
             load(2, second_value, second_ref, second_cell.clone(), values(&second_cell)),
         ];
 
-        let selected = selected(&original);
+        let selected = selected(&original, &BTreeSet::from([2]));
 
         assert_eq!(selected[0].what.as_ref().unwrap().name.as_deref(), Some("les"));
         let Loc::Mem(source) = &selected[0].what.as_ref().unwrap().sources[0] else { panic!() };
         assert_eq!(source.width, 4);
         assert_eq!(selected[0].defines, vec![1, 2]);
         assert_eq!(selected[1].what.as_ref().unwrap().op, Operation::Nothing);
+        // Adjacent words whose high one is a number, not a selector, stay two loads.
+        assert_eq!(super::selected(&original, &BTreeSet::new()), original);
     }
 
     #[test]
@@ -243,6 +265,6 @@ mod tests {
 
         let original = vec![load(1, values[0], 4), load(2, values[1], 6)];
 
-        assert_eq!(selected(&original), original);
+        assert_eq!(selected(&original, &BTreeSet::from([2])), original);
     }
 }

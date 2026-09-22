@@ -405,7 +405,7 @@ pub fn _instruction(
     let name = what.name.as_deref().unwrap_or("");
     if what.op == Operation::Fill {
         // Its operands are the registers the instruction names in its opcode.
-        return Ok(vec![format!("rep {name}")]);
+        return Ok(vec![format!("{}{name}", if what.sources.len() == 4 { "rep " } else { "" })]);
     }
     let dests = what.dests.iter().map(|x| _operand(x, names)).collect::<Result<Vec<_>, _>>()?;
     let sources = what.sources.iter().map(|x| _operand(x, names)).collect::<Result<Vec<_>, _>>()?;

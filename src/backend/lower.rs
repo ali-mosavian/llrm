@@ -9,9 +9,11 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 
 use iced_x86::Register;
+use num_bigint::BigInt;
 use num_traits::ToPrimitive;
 
-use super::{addressforms, arithmetic, comparefold, cpu, division, farload, lower_floats, lower_switches, rmw, target};
+use super::{addressforms, arithmetic, comparefold, cpu, division, farload, lower_floats, lower_switches, narrow, rmw, target};
+use crate::optimize::canonical;
 use crate::abi::runtime;
 use crate::legacy::calls;
 use crate::analysis::{consts, induction, liveness, loops, ssa};
@@ -20,7 +22,7 @@ use crate::support::pyset::PySet;
 use crate::model::lir::{self, Insn};
 use crate::model::ir::nodes::Node;
 use crate::model::ir::{self, Loc, Operation};
-use crate::model::mir::{AllocationHints, Arg, Held, Kind, MemRef, MirBody, Op, OpCode, Value};
+use crate::model::mir::{self, AllocationHints, Arg, Held, Kind, MemRef, MirBody, Op, OpCode, Value};
 use crate::objectfile::module::{Addr, Space};
 use crate::support::pyrepr::Repr;
 
@@ -514,6 +516,45 @@ fn _machine(one: &Placed, had: &[Loc], index: usize) -> Result<Loc, Unlowered> {
     Ok(Loc::Mem(ir::Mem { selector: _selector(one), ..(_addressed(one)?) }))
 }
 
+/// A near pointer into the frame as a data reference, DS reaching the stack.
+fn _near_frames(body: &MirBody) -> MirBody {
+    fn near_ref(r#ref: &MemRef) -> MemRef {
+        match r#ref.addr {
+            Some(addr) if r#ref.space == Some(Space::Frame) && addr.space == Space::Literal => {
+                MemRef { space: None, ..r#ref.clone() }
+            }
+            _ => r#ref.clone(),
+        }
+    }
+    fn near(arg: &Arg) -> Arg {
+        match arg {
+            Arg::Cell(cell) => Arg::Cell(mir::Cell { r#ref: near_ref(&cell.r#ref) }),
+            _ => arg.clone(),
+        }
+    }
+    MirBody {
+        blocks: body
+            .blocks
+            .iter()
+            .map(|block| mir::MirBlock {
+                ops: block
+                    .ops
+                    .iter()
+                    .map(|op| Op {
+                        loads: op.loads.iter().map(near_ref).collect(),
+                        stores: op.stores.iter().map(near_ref).collect(),
+                        args: op.args.iter().map(near).collect(),
+                        results: op.results.iter().map(near).collect(),
+                        ..op.clone()
+                    })
+                    .collect(),
+                ..block.clone()
+            })
+            .collect(),
+        ..body.clone()
+    }
+}
+
 /// Attach the machine selector implied by an abstract address space.
 fn _address(reference: &MemRef) -> Option<Addr> {
     match reference.addr {
@@ -940,51 +981,193 @@ fn _constant_store(op: &Op, lowering: &mut Lowering) -> Result<Option<Vec<ir::Se
     _pointer_access(op, lowering)
 }
 
+/// Python's `divmod`: floor division.
+fn _divmod(n: &BigInt, by: u32) -> (BigInt, BigInt) {
+    let by = BigInt::from(by);
+    let (mut quotient, mut remainder) = (n / &by, n % &by);
+    if remainder < BigInt::from(0) {
+        quotient -= 1;
+        remainder += by;
+    }
+    (quotient, remainder)
+}
+
 /// `rep stos`: the count in cx, the value in the accumulator, the cells through es:di.
-fn _fill(op: &Op, lowering: &mut Lowering) -> Parts {
+///
+/// A far cell's selector is an operand the allocation places in ES. Otherwise
+/// ES is saved and set to the segment the cells are in.
+fn _fill(op: &Op, lowering: &mut Lowering, preserve_flags: bool) -> Parts {
     let [value, count, address, selector @ ..] = &op.args[..] else {
         return Err(Unlowered(format!("fill at {:#x} has too few operands", op.at)));
     };
     let value_width = arg_width(value).ok_or_else(|| Unlowered(format!("fill of a cell at {:#x}", op.at)))?;
-    let name = match value_width {
+    let names = |width: u32| match width {
         1 => "stosb",
         2 => "stosw",
-        4 => "stosd",
-        _ => return Err(Unlowered(format!("fill of {value_width}-byte cells at {:#x}", op.at))),
+        _ => "stosd",
     };
-    let mut setup = vec![];
-    let mut in_register = |arg: &Arg, width: u32, setup: &mut Vec<ir::Semantics>| -> Result<Loc, Unlowered> {
+    if !matches!(value_width, 1 | 2 | 4) {
+        return Err(Unlowered(format!("fill of {value_width}-byte cells at {:#x}", op.at)));
+    }
+    let mut setup: Vec<ir::Semantics> = vec![];
+
+    // Python's `mir.Arg | ir.Loc`.
+    #[derive(Clone)]
+    enum Part {
+        Mir(Arg),
+        Ir(Loc),
+    }
+    let held_into = |arg: &Part, width: u32, into: &mut Vec<ir::Semantics>, lowering: &mut Lowering| {
+        let arg = match arg {
+            Part::Ir(loc) => return Ok(loc.clone()),
+            Part::Mir(arg) => arg,
+        };
         if matches!(arg, Arg::Held(_)) {
             return located(arg);
         }
-        let into = held(lowering.fresh(), width);
-        setup.push(sem(Operation::Move, "mov", vec![into.clone()], vec![located(arg)?]));
-        Ok(into)
+        let result = held(lowering.fresh(), width);
+        into.push(sem(Operation::Move, "mov", vec![result.clone()], vec![located(arg)?]));
+        Ok::<Loc, Unlowered>(result)
     };
-    let stored = in_register(value, value_width, &mut setup)?;
-    let counted = in_register(count, 2, &mut setup)?;
-    let through = in_register(address, 2, &mut setup)?;
-    let selected = match selector.first() {
-        Some(selector) => Some(in_register(selector, 2, &mut setup)?),
-        None => None,
+
+    // The same element replicated across one target-width string store.
+    let repeated = |constant: &mir::Const, width: u32| -> mir::Const {
+        let bits: BigInt = &constant.n & ((BigInt::from(1) << (constant.width * 8)) - 1);
+        let mut packed = BigInt::from(0);
+        let mut shift = 0;
+        while shift < width * 8 {
+            packed += &bits << shift;
+            shift += constant.width * 8;
+        }
+        mir::Const::new(packed, width)
     };
-    let (stepped, emptied) = (held(lowering.fresh(), 2), held(lowering.fresh(), 2));
-    let cells = Loc::Mem(ir::Mem::new(None, 0));
-    if let Some(selected) = selected {
-        setup.push(sem(Operation::Fill, name, vec![cells, stepped, emptied], vec![stored, counted, through, selected]));
-        return Ok(setup);
+
+    // A constant byte or word has one dword pattern regardless of how many
+    // cells follow.  Widen the bulk transfer here, where the target's string
+    // widths belong; MIR continues to say only "count cells of this value".
+    // A dynamic count retains a bounded tail.  A constant count proves which
+    // tails are empty, so no zero-trip STOS instruction is emitted.
+    let mut plan: Vec<(Part, Part, u32)> = vec![];
+    let factor = match value {
+        Arg::Const(_) if matches!(count, Arg::Const(_)) || !preserve_flags => 4 / value_width,
+        _ => 1,
+    };
+    if let (true, Arg::Const(constant), Arg::Const(counted)) = (factor > 1, value, count) {
+        let (bulk, tail) = _divmod(&counted.n, factor);
+        if bulk != BigInt::from(0) {
+            plan.push((
+                Part::Mir(Arg::Const(repeated(constant, 4))),
+                Part::Mir(Arg::Const(mir::Const::new(bulk, 2))),
+                4,
+            ));
+        }
+        let mut remaining = tail * value_width;
+        for width in [2, 1] {
+            if remaining >= BigInt::from(width) && width >= value_width {
+                plan.push((
+                    Part::Mir(Arg::Const(repeated(constant, width))),
+                    Part::Mir(Arg::Const(mir::Const::new(1, 2))),
+                    width,
+                ));
+                remaining -= width;
+            }
+        }
+        assert_eq!(remaining, BigInt::from(0));
+    } else if let (true, Arg::Const(constant)) = (factor > 1, value) {
+        let counted = held_into(&Part::Mir(count.clone()), 2, &mut setup, lowering)?;
+        let bulk = held(lowering.fresh(), 2);
+        let tail = held(lowering.fresh(), 2);
+        setup.extend([
+            sem(
+                Operation::Binary,
+                "shr",
+                vec![bulk.clone()],
+                vec![counted.clone(), immediate(i64::from(32 - factor.leading_zeros()) - 1, 1)],
+            ),
+            sem(Operation::Binary, "and", vec![tail.clone()], vec![counted, immediate(i64::from(factor) - 1, 2)]),
+        ]);
+        plan.extend([
+            (Part::Mir(Arg::Const(repeated(constant, 4))), Part::Ir(bulk), 4),
+            (Part::Mir(value.clone()), Part::Ir(tail), value_width),
+        ]);
+    } else {
+        plan.push((Part::Mir(value.clone()), Part::Mir(count.clone()), value_width));
     }
-    let extra = Loc::Reg(ir::Reg { register: Register::ES, width: 2 });
-    let source_segment =
-        if op.stores.iter().any(|one| one.space == Some(Space::Frame)) { Register::SS } else { Register::DS };
-    setup.extend([
-        sem(Operation::Push, "push", vec![], vec![extra.clone()]),
-        sem(Operation::Push, "push", vec![], vec![Loc::Reg(ir::Reg { register: source_segment, width: 2 })]),
-        sem(Operation::Pop, "pop", vec![extra.clone()], vec![]),
-        sem(Operation::Fill, name, vec![cells, stepped, emptied], vec![stored, counted, through, extra.clone()]),
-        sem(Operation::Pop, "pop", vec![extra], vec![]),
-    ]);
-    Ok(setup)
+
+    if plan.is_empty() {
+        return Ok(vec![sem(Operation::Nothing, "", vec![], vec![])]);
+    }
+
+    // STOSW and STOSB read aliases of the accumulator used by STOSD.  Give
+    // every constant-width part the same widest pattern so allocation keeps
+    // one value in EAX and the residual stores reuse AX and AL.
+    if let Arg::Const(constant) = value {
+        let widest = plan.iter().map(|(_, _, width)| *width).max().expect("not empty");
+        let pattern = repeated(constant, widest);
+        plan = plan
+            .into_iter()
+            .map(|(_, counted_arg, width)| (Part::Mir(Arg::Const(pattern.clone())), counted_arg, width))
+            .collect();
+    }
+
+    let through = held_into(&Part::Mir(address.clone()), 2, &mut setup, lowering)?;
+    let (segment, before, after) = match selector.first() {
+        Some(selector) => (held_into(&Part::Mir(selector.clone()), 2, &mut setup, lowering)?, vec![], vec![]),
+        None => {
+            let segment = Loc::Reg(ir::Reg { register: Register::ES, width: 2 });
+            let source_segment =
+                if op.stores.iter().any(|one| one.space == Some(Space::Frame)) { Register::SS } else { Register::DS };
+            let before = vec![
+                sem(Operation::Push, "push", vec![], vec![segment.clone()]),
+                sem(Operation::Push, "push", vec![], vec![Loc::Reg(ir::Reg { register: source_segment, width: 2 })]),
+                sem(Operation::Pop, "pop", vec![segment.clone()], vec![]),
+            ];
+            let after = vec![sem(Operation::Pop, "pop", vec![segment.clone()], vec![])];
+            (segment, before, after)
+        }
+    };
+
+    let mut parts = setup;
+    parts.extend(before);
+    let mut current = through;
+    let mut constant_values: IndexMap<mir::Const, Loc> = IndexMap::new();
+    let cells = Loc::Mem(ir::Mem::new(None, 0));
+    for (stored_arg, counted_arg, width) in plan {
+        let stored = match &stored_arg {
+            Part::Mir(Arg::Const(constant)) => match constant_values.get(constant) {
+                Some(stored) => stored.clone(),
+                None => {
+                    let stored = held_into(&stored_arg, constant.width, &mut parts, lowering)?;
+                    constant_values.insert(constant.clone(), stored.clone());
+                    stored
+                }
+            },
+            _ => held_into(&stored_arg, width, &mut parts, lowering)?,
+        };
+        let stepped = held(lowering.fresh(), 2);
+        if matches!(&counted_arg, Part::Mir(Arg::Const(one)) if one.n == BigInt::from(1)) {
+            // One string store needs neither a count register nor REP.  Its
+            // shorter semantic shape records exactly that machine effect.
+            parts.push(sem(
+                Operation::Fill,
+                names(width),
+                vec![cells.clone(), stepped.clone()],
+                vec![stored, current, segment.clone()],
+            ));
+        } else {
+            let counted = held_into(&counted_arg, 2, &mut parts, lowering)?;
+            let emptied = held(lowering.fresh(), 2);
+            parts.push(sem(
+                Operation::Fill,
+                names(width),
+                vec![cells.clone(), stepped.clone(), emptied],
+                vec![stored, counted, current, segment.clone()],
+            ));
+        }
+        current = stepped;
+    }
+    parts.extend(after);
+    Ok(parts)
 }
 
 /// A dead AND destination needs flags, not a two-address temporary.
@@ -1973,7 +2156,7 @@ impl<'a> Lowering<'a> {
             op
         };
         let mut parts = match op.kind {
-            Kind::Fill => Some(_fill(op, self)?),
+            Kind::Fill => Some(_fill(op, self, preserve_flags)?),
             Kind::Store => _constant_store(op, self)?,
             Kind::Extract => Some(_extract(op, self)?),
             Kind::Divmod | Kind::Udivmod => _word_division(op, self)?,
@@ -2159,7 +2342,8 @@ pub fn lowered(
     let default_hints = AllocationHints::new();
     let hints = options.hints.unwrap_or(&default_hints);
     let body = lower_switches::expanded(body).map_err(Unlowered)?;
-    let body = named(&body)?;
+    let body = narrow::narrowed(&canonical::compares(named(&body)?));
+    let body = if body.stack_in_data { _near_frames(&body) } else { body };
     lower_floats::checked(&body)?;
     let roots: BTreeSet<Value> =
         body.blocks.iter().flat_map(|block| &block.phis).map(|phi| phi.result).filter(|value| !value.flags).collect();
@@ -2180,7 +2364,9 @@ pub fn lowered(
     // always was: a statement that the register is destroyed.
     let mut read: BTreeSet<u32> =
         body.blocks.iter().flat_map(|block| &block.ops).flat_map(|op| &op.uses).map(|one| one.id).collect();
-    read.extend(body.blocks.iter().flat_map(|block| &block.phis).flat_map(|phi| phi.incoming.values()).map(|v| v.id));
+    let read_by_phis: BTreeSet<u32> =
+        body.blocks.iter().flat_map(|block| &block.phis).flat_map(|phi| phi.incoming.values()).map(|v| v.id).collect();
+    read.extend(read_by_phis.iter().copied());
     let no_calls = IndexMap::new();
     let calls = calls.unwrap_or(&no_calls);
     let mut making = Lowering::new(
@@ -2232,8 +2418,9 @@ pub fn lowered(
         made.insert(block.at, insns);
     }
     // A far-pointer field is two language-visible word loads but one target instruction.
+    let selecting = farload::selectors(&made, &read_by_phis);
     let made: IndexMap<i64, Vec<Arc<Insn>>> =
-        made.into_iter().map(|(at, insns)| (at, farload::selected(&insns))).collect();
+        made.into_iter().map(|(at, insns)| (at, farload::selected(&insns, &selecting))).collect();
     let promoted = making._address_promoted.clone();
     let made = addressforms::promote(&made, &promoted, &mut || making.fresh()).map_err(Unlowered)?;
     let uses = recount(&made, &body);
@@ -2278,7 +2465,7 @@ pub fn lowered(
                     incoming: phi.incoming.iter().map(|(at, value)| (*at, value.id)).collect(),
                 })
                 .collect(),
-                cold: block.cold,
+            cold: block.cold,
         })
         .collect();
     let mut all_pins: IndexMap<u32, Register> = pins.iter().map(|(value, r#where)| (value.id, *r#where)).collect();
@@ -2489,5 +2676,136 @@ mod tests {
     fn test_pointer_lowering_cannot_destroy_an_unrelated_live_condition() {
         let leaving = BTreeSet::from([Value { flags: true, ..Value::new(4, 0) }]);
         assert!(_check_inserted_conditions(&[pointer_offset()], &leaving).unwrap_err().0.contains("live condition"));
+    }
+
+    // tests/test_stack_segment.py
+
+    fn _lowered_fill(value: Arg, count: Arg, space: Space, offset: i64, preserve_flags: bool) -> Vec<ir::Semantics> {
+        let width = arg_width(&value).unwrap();
+        let mut op = Op::new(1, OpCode::Operation(Operation::Nothing), "", vec![], vec![]);
+        op.kind = Kind::Fill;
+        op.args = vec![value, count, Arg::Const(mir::Const::new(0, 2))];
+        op.stores = vec![MemRef { space: Some(space), ..MemRef::new(Some(Addr::new(space, offset)), width) }];
+        let calls = IndexMap::new();
+        let body = MirBody::new(0, vec![]);
+        let mut lowering =
+            Lowering::new(&body, BTreeSet::new(), &calls, BTreeSet::new(), None, "386", Options::default()).unwrap();
+        _fill(&op, &mut lowering, preserve_flags).unwrap()
+    }
+
+    fn constant(n: i64, width: u32) -> Arg {
+        Arg::Const(mir::Const::new(n, width))
+    }
+
+    fn runtime() -> Arg {
+        Arg::Held(Held { value: Value::new(7, 0), width: 2 })
+    }
+
+    fn fills(lowered: &[ir::Semantics]) -> Vec<&str> {
+        lowered.iter().filter(|one| one.op == Operation::Fill).map(|one| one.name.as_deref().unwrap()).collect()
+    }
+
+    #[test]
+    fn test_frame_fill_lowering_uses_the_stack_segment() {
+        // A frame memset must copy SS, rather than DS, into string-destination ES.
+        let lowered = _lowered_fill(constant(0, 1), constant(32, 2), Space::Frame, -32, false);
+
+        let pushed: Vec<&Vec<Loc>> =
+            lowered.iter().filter(|one| one.op == Operation::Push).map(|one| &one.sources).collect();
+        let segment = |register| vec![Loc::Reg(ir::Reg { register, width: 2 })];
+        assert!(pushed.contains(&&segment(Register::SS)));
+        assert!(!pushed.contains(&&segment(Register::DS)));
+    }
+
+    #[test]
+    fn test_constant_byte_fill_uses_only_dwords_when_there_is_no_remainder() {
+        // A 1024-byte clear took 1024 STOSB iterations instead of 256 STOSD iterations.
+        let lowered = _lowered_fill(constant(0, 1), constant(1024, 2), Space::Frame, -1024, false);
+
+        assert_eq!(fills(&lowered), ["stosd"]);
+    }
+
+    #[test]
+    fn test_constant_byte_fill_uses_the_exact_widest_store_sequence() {
+        // A constant tail used counted byte stores even when one word and byte suffice.
+        let cases: [(i64, &[&str]); 9] = [
+            (0, &[]),
+            (1, &["stosb"]),
+            (2, &["stosw"]),
+            (3, &["stosw", "stosb"]),
+            (4, &["stosd"]),
+            (1024, &["rep stosd"]),
+            (1025, &["rep stosd", "stosb"]),
+            (1026, &["rep stosd", "stosw"]),
+            (1027, &["rep stosd", "stosw", "stosb"]),
+        ];
+        for (count, expected) in cases {
+            let lowered = _lowered_fill(constant(0xA5, 1), constant(count, 2), Space::Frame, -1024, false);
+            let listing: Vec<String> = lowered
+                .iter()
+                .filter(|one| one.op == Operation::Fill)
+                .flat_map(|one| super::super::masm::_instruction(one, &IndexMap::new(), 0).unwrap())
+                .collect();
+            assert_eq!(listing, expected, "{count}");
+        }
+    }
+
+    #[test]
+    fn test_a_single_string_store_has_no_rep_prefix() {
+        // One residual byte paid for `mov cx,1; rep stosb` instead of `stosb`.
+        let register = |register, width| Loc::Reg(ir::Reg { register, width });
+        let one = sem(
+            Operation::Fill,
+            "stosb",
+            vec![Loc::Mem(ir::Mem::new(None, 0)), register(Register::DI, 2)],
+            vec![register(Register::AL, 1), register(Register::DI, 2), register(Register::ES, 2)],
+        );
+
+        let emitted = super::super::select::emit(&one, 0, None, false, false, None).unwrap();
+        assert_eq!(emitted.code, [0xaa]);
+        assert_eq!(super::super::masm::_instruction(&one, &IndexMap::new(), 0).unwrap(), ["stosb"]);
+    }
+
+    #[test]
+    fn test_narrow_constant_tails_reuse_the_wide_accumulator_value() {
+        // The word and byte tail reloaded AX and AL after EAX already held both.
+        let lowered = _lowered_fill(constant(0xA5, 1), constant(1027, 2), Space::Frame, -1024, false);
+        let patterns = [0xA5, 0xA5A5, 0xA5A5_A5A5];
+        let loaded: Vec<&Loc> = lowered
+            .iter()
+            .filter(|one| one.op == Operation::Move)
+            .flat_map(|one| &one.sources)
+            .filter(|source| matches!(source, Loc::Imm(imm) if patterns.contains(&imm.value)))
+            .collect();
+
+        assert_eq!(loaded, [&immediate(0xA5A5_A5A5, 4)]);
+    }
+
+    #[test]
+    fn test_constant_fill_replicates_the_element_across_the_dword() {
+        // Widening is a constant-element rule, not a zero-fill special case.
+        let lowered = _lowered_fill(constant(0xA5, 1), constant(100, 2), Space::Segment, 0, false);
+        let immediates: Vec<&Loc> =
+            lowered.iter().flat_map(|one| &one.sources).filter(|source| matches!(source, Loc::Imm(_))).collect();
+
+        assert!(immediates.contains(&&immediate(0xA5A5_A5A5, 4)));
+        assert_eq!(fills(&lowered), ["stosd"]);
+    }
+
+    #[test]
+    fn test_runtime_byte_fill_has_a_dword_bulk_and_byte_remainder() {
+        // An unknown byte count still uses the widest bulk operation and a bounded tail.
+        let lowered = _lowered_fill(constant(0, 1), runtime(), Space::Frame, -1024, false);
+
+        assert_eq!(fills(&lowered), ["stosd", "stosb"]);
+    }
+
+    #[test]
+    fn test_runtime_fill_keeps_its_original_width_when_flags_are_live() {
+        // Deriving a runtime quotient must not clobber flags that survive the semantic fill.
+        let lowered = _lowered_fill(constant(0, 1), runtime(), Space::Frame, -1024, true);
+
+        assert_eq!(fills(&lowered), ["stosb"]);
+        assert!(!lowered.iter().any(|one| one.op == Operation::Binary));
     }
 }
