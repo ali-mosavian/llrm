@@ -1486,6 +1486,45 @@ pub(crate) fn _reusing_halves<T>(inside: impl FnOnce() -> T) -> T {
     _halves_reuse.with(|reuse| *reuse.borrow_mut() = token);
     result
 }
+/// One step of `halves`' fixed point, on dense value indices.
+enum _HalfStep {
+    /// Add the halves in the mask.
+    Add(u32, u8),
+    /// Add HIGH of the second where the first's HIGH is read.
+    Carry(u32, u32),
+}
+
+/// `halves`' fixed point compiled once per body: the same set operations in
+/// the same order, on a mask per value index instead of a set of pairs.
+#[derive(Default)]
+struct _HalfSet {
+    index: crate::support::hash::HashMap<Value, u32>,
+    values: Vec<Value>,
+    masks: Vec<u8>,
+    count: usize,
+}
+
+impl _HalfSet {
+    fn of(&mut self, one: Value) -> u32 {
+        *self.index.entry(one).or_insert_with(|| {
+            self.values.push(one);
+            self.masks.push(0);
+            u32::try_from(self.values.len() - 1).expect("value index fits u32")
+        })
+    }
+
+    fn add(&mut self, one: u32, mask: u8) {
+        let held = &mut self.masks[one as usize];
+        let new = mask & !*held;
+        *held |= new;
+        self.count += new.count_ones() as usize;
+    }
+
+    fn has(&self, one: u32, half: u8) -> bool {
+        self.masks[one as usize] & (1 << half) != 0
+    }
+}
+
 /// Which half of which value something reads, to a fixed point.
 ///
 /// Both halves of everything reaching an exit are live.
@@ -1503,83 +1542,126 @@ pub(crate) fn halves(body: &MirBody) -> BTreeSet<(Value, u8)> {
         return saved;
     }
 
-    let mut out: BTreeSet<(Value, u8)> = BTreeSet::new();
+    const BOTH: u8 = 1 << LOW | 1 << HIGH;
+    let mut out = _HalfSet::default();
     for value in _leaving(body) {
-        out.insert((value, LOW));
-        out.insert((value, HIGH));
+        let one = out.of(value);
+        out.add(one, BOTH);
     }
 
-    let widths = |op: &Op| -> BTreeMap<Value, u32> {
-        let mut found: BTreeMap<Value, u32> = BTreeMap::new();
-        for one in &op.args {
-            if let Arg::Held(held) = one {
-                let widest = (*found.get(&held.value).unwrap_or(&0)).max(held.width);
-                found.insert(held.value, widest);
+    // Each operation as (kept, its defines, its steps); each phi as its
+    // result and incoming values. Ranges index `defines`, `steps`, `incoming`.
+    let mut defines: Vec<u32> = Vec::new();
+    let mut steps: Vec<_HalfStep> = Vec::new();
+    let mut incoming: Vec<u32> = Vec::new();
+    let mut blocks = Vec::with_capacity(body.blocks.len());
+    let mut read: Vec<(Value, u32)> = Vec::new();
+    for block in &body.blocks {
+        let mut ops = Vec::with_capacity(block.ops.len());
+        for op in &block.ops {
+            let defined = defines.len()..defines.len() + op.defines.len();
+            for one in &op.defines {
+                let one = out.of(*one);
+                defines.push(one);
             }
-        }
-        for reference in op.loads.iter().chain(&op.stores) {
-            if let Some(base) = reference.base {
-                let widest = (*found.get(&base).unwrap_or(&0)).max(reference.base_width);
-                found.insert(base, widest);
+            // The widest each value is read at by this operation.
+            read.clear();
+            let mut note = |one: Value, width: u32| match read.iter_mut().find(|(seen, _)| *seen == one) {
+                Some((_, widest)) => *widest = (*widest).max(width),
+                None => read.push((one, width)),
+            };
+            for one in &op.args {
+                if let Arg::Held(held) = one {
+                    note(held.value, held.width);
+                }
             }
+            for reference in op.loads.iter().chain(&op.stores) {
+                if let Some(base) = reference.base {
+                    note(base, reference.base_width);
+                }
+            }
+            let width = |one: &Value| read.iter().find(|(seen, _)| seen == one).map(|(_, widest)| *widest);
+            let first = steps.len();
+            let described = op.kind != Kind::Opaque && !op.barrier();
+            for one in &op.uses {
+                let index = out.of(*one);
+                if let Some(into) = op.merges.get(one) {
+                    // Read for the half it is merged into, and only if
+                    // something reads that half of the result.
+                    let into = out.of(*into);
+                    steps.push(_HalfStep::Carry(into, index));
+                    if width(one).is_none() {
+                        continue;
+                    }
+                }
+                // Where nothing written down says how much of it is read, both.
+                let mask = match width(one).filter(|_| described) {
+                    Some(widest) if widest < 4 => 1 << LOW,
+                    _ => BOTH,
+                };
+                steps.push(_HalfStep::Add(index, mask));
+            }
+            for reference in op.loads.iter().chain(&op.stores) {
+                for one in [reference.base, reference.segment].into_iter().flatten() {
+                    let wide = Some(one) == reference.segment || reference.base_width >= 4;
+                    let index = out.of(one);
+                    steps.push(_HalfStep::Add(index, if wide { BOTH } else { 1 << LOW }));
+                }
+            }
+            ops.push((_kept(op), defined, first..steps.len()));
         }
-        found
-    };
+        let mut phis = Vec::with_capacity(block.phis.len());
+        for phi in &block.phis {
+            let result = out.of(phi.result);
+            let first = incoming.len();
+            for one in phi.incoming.values() {
+                let one = out.of(*one);
+                incoming.push(one);
+            }
+            phis.push((result, first..incoming.len()));
+        }
+        blocks.push((ops, phis));
+    }
 
     let mut changing = true;
     while changing {
-        let before = out.len();
-        for block in &body.blocks {
-            for op in &block.ops {
-                if !_kept(op)
-                    && !op
-                        .defines
-                        .iter()
-                        .any(|one| [LOW, HIGH].iter().any(|half| out.contains(&(*one, *half))))
-                {
+        let before = out.count;
+        for (ops, phis) in &blocks {
+            for (kept, defined, stepped) in ops {
+                if !kept && !defines[defined.clone()].iter().any(|one| out.masks[*one as usize] != 0) {
                     continue;
                 }
-                let carried = &op.merges;
-                let read = widths(op);
-                let described = op.kind != Kind::Opaque && !op.barrier();
-                for one in &op.uses {
-                    if let Some(into) = carried.get(one) {
-                        if out.contains(&(*into, HIGH)) {
-                            out.insert((*one, HIGH));
-                        }
-                        if !read.contains_key(one) {
-                            continue;
-                        }
-                    }
-                    if !described || !read.contains_key(one) {
-                        out.insert((*one, LOW));
-                        out.insert((*one, HIGH));
-                        continue;
-                    }
-                    out.insert((*one, LOW));
-                    if read[one] >= 4 {
-                        out.insert((*one, HIGH));
-                    }
-                }
-                for reference in op.loads.iter().chain(&op.stores) {
-                    for one in [reference.base, reference.segment].into_iter().flatten() {
-                        out.insert((one, LOW));
-                        if Some(one) == reference.segment || reference.base_width >= 4 {
-                            out.insert((one, HIGH));
+                for step in &steps[stepped.clone()] {
+                    match *step {
+                        _HalfStep::Add(one, mask) => out.add(one, mask),
+                        _HalfStep::Carry(into, one) => {
+                            if out.has(into, HIGH) {
+                                out.add(one, 1 << HIGH);
+                            }
                         }
                     }
                 }
             }
-            for phi in &block.phis {
+            for (result, arms) in phis {
                 for half in [LOW, HIGH] {
-                    if out.contains(&(phi.result, half)) {
-                        out.extend(phi.incoming.values().map(|one| (*one, half)));
+                    if out.has(*result, half) {
+                        for one in &incoming[arms.clone()] {
+                            out.add(*one, 1 << half);
+                        }
                     }
                 }
             }
         }
-        changing = out.len() != before;
+        changing = out.count != before;
     }
+    let out: BTreeSet<(Value, u8)> = out
+        .values
+        .iter()
+        .zip(&out.masks)
+        .flat_map(|(one, mask)| {
+            [LOW, HIGH].into_iter().filter(move |half| mask & (1 << half) != 0).map(move |half| (*one, half))
+        })
+        .collect();
     _halves_reuse.with(|reuse| {
         if let Some(reused) = reuse.borrow_mut().as_mut() {
             reused.insert(key, (body.clone(), out.clone()));
