@@ -96,6 +96,9 @@ _AUDITED_GRAPHICS_STACK: dict[str, int] = {
 _AUDITED_STATEMENT_STACK: dict[str, int] = {
     "B$BEEP": 0,
     "B$LNIN": 10,
+    # Path descriptor, channel, record length -1 and mode; BCOM45 dkopen.asm
+    # B$OPEN at 0224 returns with RETF 8 at 0252.
+    "B$OPEN": 8,
     "B$SLEP": 4,
 }
 

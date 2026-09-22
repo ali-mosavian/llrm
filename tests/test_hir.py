@@ -2906,3 +2906,11 @@ def test_port_io_narrows_a_float_through_integer_and_prints_both_operands(tmp_pa
     lines = {" ".join(line.split(";")[0].split()) for line in masm.text(qb_compile.assembled(source)).splitlines()}
     assert {"out dx, al", "in al, dx"} <= lines, sorted(lines)
     assert any(line.startswith("fistp word ptr") for line in lines), sorted(lines)
+
+
+def test_open_compiles_with_its_callee_cleaned_arguments(tmp_path: Path) -> None:
+    """oimad's OPEN was refused: B$OPEN had no audited stack effect (RETF 8)."""
+    basic = tmp_path / "OPENS.BAS"
+    basic.write_bytes(b'open "DATA.DAT" for binary as #1\r\nclose #1\r\n')
+    source = qb_driver.parsed(basic, dialect="qb45", runtime="qb45")
+    assert "B$OPEN" in masm.text(qb_compile.assembled(source))
