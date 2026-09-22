@@ -638,3 +638,7 @@ pub fn scalar(body: RaisedBody) -> Result<RaisedBody, Unlowered> {
     }
     Ok(body.with_blocks(blocks))
 }
+
+#[cfg(test)]
+#[path = "raising_longs_tests.rs"]
+mod tests;

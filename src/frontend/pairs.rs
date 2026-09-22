@@ -8,7 +8,7 @@ use iced_x86::Register;
 
 use crate::backend::lower::{self, Place, Unlowered};
 use crate::model::ir::{self, Loc, Operation, root};
-use crate::model::mir::{self, MemRef, Op, OrderedMap, RaisedBody, Value};
+use crate::model::mir::{self, MemRef, Op, OpCode, OrderedMap, RaisedBody, Value};
 
 /// BC's own two, in lift.py's numbering and `mir::restore_pair`'s: pair 0 is
 /// ax:dx and pair 1 is cx:bx, low half first.
@@ -272,7 +272,12 @@ fn _shape(op: &Op) -> Result<Option<ir::Semantics>, Unlowered> {
     if op.floating_origin.is_some() {
         return Ok(None);
     }
-    lower::current(op, Place::Default, op.node().map(|node| &**node))
+    match lower::current(op, Place::Default, op.node().map(|node| &**node)) {
+        // Python's `ir.Semantics` carries a synthetic op such as an extract's
+        // HALF_TO_LOW, which Rust's cannot hold. No pair shape is one.
+        Err(_) if matches!(op.op, Some(OpCode::Synth(_))) => Ok(None),
+        other => other,
+    }
 }
 
 /// Python's `want` type argument to `_binary_against`: `ir.Imm` or `ir.Reg`.
