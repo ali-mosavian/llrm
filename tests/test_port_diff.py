@@ -60,3 +60,16 @@ def test_frozenset_order_is_not_a_divergence(tmp_path: Path) -> None:
     assert (
         port_diff.normalized("frozenset({'b', frozenset({2, 1}), 'a'})") == "frozenset({'a', 'b', frozenset({1, 2})})"
     )
+
+
+def test_a_relative_source_is_named_from_the_repository(monkeypatch) -> None:
+    """A relative path crashed the report: it was resolved to test, not to relativize."""
+    monkeypatch.chdir(port_diff.ROOT / "fixtures")
+    assert port_diff._display(Path("c/parity/scalar.cgs")) == Path("fixtures/c/parity/scalar.cgs")
+
+
+def test_sources_sharing_a_stem_get_their_own_dumps(tmp_path: Path) -> None:
+    """c/control.cgs and c/parity/control.cgs shared one work folder, each overwriting the other."""
+    one = port_diff._workdir(tmp_path, port_diff.ROOT / "fixtures/c/control.cgs")
+    other = port_diff._workdir(tmp_path, port_diff.ROOT / "fixtures/c/parity/control.cgs")
+    assert one != other

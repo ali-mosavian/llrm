@@ -191,6 +191,17 @@ def run(source: Path, work: Path, rust: Path, opt: bool) -> Result:
     return Result(source, matched, total, first, done.stderr.strip() if done.returncode else "")
 
 
+def _display(source: Path) -> Path:
+    """The source as the report names it: relative to the repository where it is inside it."""
+    resolved = source.resolve()
+    return resolved.relative_to(ROOT) if resolved.is_relative_to(ROOT) else source
+
+
+def _workdir(work: Path, source: Path) -> Path:
+    """Where one source's two dumps go, keyed by its whole path: stems repeat across fixture folders."""
+    return work / _display(source).with_suffix("")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("sources", nargs="*", type=Path)
@@ -206,8 +217,8 @@ def main(argv: list[str] | None = None) -> int:
     rust = _rust_binary()
     failed = 0
     for source in sources:
-        result = run(source.resolve(), args.work / source.stem, rust, args.opt)
-        name = source.relative_to(ROOT) if source.resolve().is_relative_to(ROOT) else source
+        result = run(source.resolve(), _workdir(args.work, source), rust, args.opt)
+        name = _display(source)
         if result.first is None:
             print(f"ok    {name}: {result.matched}/{result.total}")
             continue
