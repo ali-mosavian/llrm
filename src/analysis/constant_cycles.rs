@@ -95,6 +95,7 @@ pub(super) fn propagated(body: &MirBody, seeds: BTreeMap<Value, Known>) -> BTree
                     Arg::Const(_)
                     | Arg::Symbol(_)
                     | Arg::FrameAddress(_)
+                    | Arg::FrameSelector(_)
                     | Arg::Cell(_)
                     | Arg::Opaque(_) => None,
                 })
@@ -197,6 +198,7 @@ pub(super) fn propagated(body: &MirBody, seeds: BTreeMap<Value, Known>) -> BTree
                             Arg::Const(_)
                             | Arg::Symbol(_)
                             | Arg::FrameAddress(_)
+                            | Arg::FrameSelector(_)
                             | Arg::Cell(_)
                             | Arg::Opaque(_) => None,
                         })

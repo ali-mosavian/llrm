@@ -574,7 +574,7 @@ mod tests {
     };
     use crate::analysis::ranges::Interval;
     use crate::model::memory::{
-        MemoryKind, MemoryObject, ObjectIdentity, ObjectTag, Provenance, RestrictRoot, SliceError,
+        Identity, MemoryKind, MemoryObject, Provenance, SliceError,
     };
     use crate::model::mir::{MemRef, Symbol, Value};
     use crate::objectfile::module::{Addr, Space};
@@ -594,13 +594,10 @@ mod tests {
         MemRef::new(Some(address), width)
     }
 
-    fn object(index: i64, extent: Option<u32>) -> MemoryObject {
+    fn object(index: i64, extent: Option<i64>) -> MemoryObject {
         MemoryObject {
             kind: MemoryKind::Global,
-            identity: Some(ObjectIdentity::TaggedIndex {
-                tag: ObjectTag::Seg,
-                index,
-            }),
+            identity: Some(Identity::Tuple(vec![Identity::Space(Space::Segment), Identity::Int(index)])),
             generation: 0,
             extent,
         }
@@ -877,7 +874,7 @@ mod tests {
                 super::CEILING,
                 1,
                 1,
-                BTreeSet::from([RestrictRoot::Node { node: 1 }]),
+                BTreeSet::from([Identity::Int(1)]),
             )
             .unwrap(),
         );
@@ -890,7 +887,7 @@ mod tests {
                 super::CEILING,
                 1,
                 1,
-                BTreeSet::from([RestrictRoot::Node { node: 2 }]),
+                BTreeSet::from([Identity::Int(2)]),
             )
             .unwrap(),
         );

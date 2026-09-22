@@ -13,6 +13,8 @@ use std::sync::LazyLock;
 pub use crate::objectfile::module::{Addr, Space};
 use iced_x86::Register;
 
+use crate::support::pyrepr::{self, Repr};
+
 pub mod nodes;
 mod root;
 
@@ -595,3 +597,171 @@ mod tests {
     }
 }
 
+/// `Register_` is an int to Python, and prints as one.
+fn register_repr(register: Register) -> String {
+    (register as u32).to_string()
+}
+
+impl Operation {
+    /// The member name.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Move => "MOVE",
+            Self::Exchange => "EXCHANGE",
+            Self::Address => "ADDRESS",
+            Self::Binary => "BINARY",
+            Self::Multiply => "MULTIPLY",
+            Self::Divide => "DIVIDE",
+            Self::Compare => "COMPARE",
+            Self::Unary => "UNARY",
+            Self::Funnel => "FUNNEL",
+            Self::Extend => "EXTEND",
+            Self::Push => "PUSH",
+            Self::Pop => "POP",
+            Self::Leave => "LEAVE",
+            Self::Fill => "FILL",
+            Self::Jump => "JUMP",
+            Self::Branch => "BRANCH",
+            Self::Escape => "ESCAPE",
+            Self::Call => "CALL",
+            Self::Return => "RETURN",
+            Self::Nothing => "NOTHING",
+            Self::Restore => "RESTORE",
+            Self::Data => "DATA",
+            Self::FloatLoad => "FLOAT_LOAD",
+            Self::FloatStore => "FLOAT_STORE",
+            Self::FloatArith => "FLOAT_ARITH",
+            Self::FloatArithPop => "FLOAT_ARITH_POP",
+            Self::FloatUnary => "FLOAT_UNARY",
+            Self::Barrier => "BARRIER",
+        }
+    }
+}
+
+impl Repr for Operation {
+    fn repr(&self) -> String {
+        pyrepr::str_enum("Operation", self.name(), self.as_str())
+    }
+}
+
+impl Repr for Reg {
+    fn repr(&self) -> String {
+        pyrepr::dataclass("Reg", &[("register", register_repr(self.register)), ("width", self.width.repr())])
+    }
+}
+
+impl Repr for Held {
+    fn repr(&self) -> String {
+        pyrepr::dataclass("Held", &[("value", self.value.repr()), ("width", self.width.repr())])
+    }
+}
+
+impl Repr for Imm {
+    fn repr(&self) -> String {
+        pyrepr::dataclass(
+            "Imm",
+            &[("value", self.value.repr()), ("width", self.width.repr()), ("address", self.address.repr())],
+        )
+    }
+}
+
+impl Repr for Address {
+    fn repr(&self) -> String {
+        pyrepr::dataclass(
+            "Address",
+            &[
+                ("addr", self.addr.repr()),
+                ("through", register_repr(self.through)),
+                ("index", register_repr(self.index)),
+                ("scale", self.scale.repr()),
+                ("offset", self.offset.repr()),
+                ("disp_width", self.disp_width.repr()),
+            ],
+        )
+    }
+}
+
+impl Repr for Mem {
+    fn repr(&self) -> String {
+        pyrepr::dataclass(
+            "Mem",
+            &[
+                ("addr", self.addr.repr()),
+                ("width", self.width.repr()),
+                ("through", register_repr(self.through)),
+                ("offset", self.offset.repr()),
+                ("disp_width", self.disp_width.repr()),
+                ("base", self.base.repr()),
+                ("stack_argument", self.stack_argument.repr()),
+                ("selector", self.selector.repr()),
+                ("index", self.index.repr()),
+                ("scale", self.scale.repr()),
+                ("index_through", register_repr(self.index_through)),
+            ],
+        )
+    }
+}
+
+impl Repr for St {
+    fn repr(&self) -> String {
+        pyrepr::dataclass("St", &[("index", self.index.repr())])
+    }
+}
+
+impl Repr for Loc {
+    fn repr(&self) -> String {
+        match self {
+            Loc::Reg(one) => one.repr(),
+            Loc::Mem(one) => one.repr(),
+            Loc::Imm(one) => one.repr(),
+            Loc::Address(one) => one.repr(),
+            Loc::St(one) => one.repr(),
+            Loc::Held(one) => one.repr(),
+        }
+    }
+}
+
+impl Repr for Semantics {
+    fn repr(&self) -> String {
+        pyrepr::dataclass(
+            "Semantics",
+            &[
+                ("op", self.op.repr()),
+                ("name", self.name.repr()),
+                ("dests", pyrepr::tuple(&self.dests)),
+                ("sources", pyrepr::tuple(&self.sources)),
+                ("target", self.target.repr()),
+                ("indirect", self.indirect.repr()),
+            ],
+        )
+    }
+}
+
+#[cfg(test)]
+mod repr_tests {
+    use super::*;
+
+    /// Expected strings printed by Python's `repr` of the same values.
+    #[test]
+    fn reprs_match_python() {
+        assert_eq!(
+            Mem::new(None, 2).repr(),
+            "Mem(addr=None, width=2, through=0, offset=0, disp_width=0, base=None, stack_argument=False, \
+             selector=None, index=None, scale=1, index_through=0)"
+        );
+        assert_eq!(Address::new(None).repr(), "Address(addr=None, through=0, index=0, scale=1, offset=0, disp_width=0)");
+        assert_eq!(St { index: 1 }.repr(), "St(index=1)");
+        assert_eq!(Held { value: 3, width: 2 }.repr(), "Held(value=3, width=2)");
+        let semantics = Semantics {
+            name: Some("mov".to_owned()),
+            dests: vec![Loc::Reg(Reg { register: Register::AX, width: 2 })],
+            sources: vec![Loc::Imm(Imm { value: 1, width: 2, address: None })],
+            ..Semantics::new(Operation::Move)
+        };
+        assert_eq!(
+            semantics.repr(),
+            "Semantics(op=<Operation.MOVE: 'move'>, name='mov', dests=(Reg(register=21, width=2),), \
+             sources=(Imm(value=1, width=2, address=None),), target=None, indirect=False)"
+        );
+    }
+}

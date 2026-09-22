@@ -8,6 +8,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 
 use crate::model::mir::{Symbol, Value};
+use crate::support::pyrepr::{self, Repr};
 use crate::objectfile::module::Space;
 
 /// Python `qbopt.model.memory:Kind`.
@@ -42,150 +43,70 @@ impl MemoryKind {
     }
 }
 
+impl Repr for MemoryKind {
+    fn repr(&self) -> String {
+        pyrepr::str_enum("Kind", &self.as_str().to_uppercase(), self.as_str())
+    }
+}
+
 impl fmt::Display for MemoryKind {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.as_str())
     }
 }
 
-/// The spelling values used by Python's `Space` and source-storage enums.
-///
-/// `External` deliberately has one identity here: both Python
-/// `Space.EXTERNAL` and `Storage.EXTERNAL` spell the same string value.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub enum ObjectTag {
-    Seg,
-    External,
-    Bp,
-    Abs,
-    Grp,
-    Far,
-    Sp,
-    Local,
-    Parameter,
-    Static,
-    Module,
-    Common,
-}
-
-impl ObjectTag {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Seg => "seg",
-            Self::External => "external",
-            Self::Bp => "bp",
-            Self::Abs => "abs",
-            Self::Grp => "grp",
-            Self::Far => "far",
-            Self::Sp => "sp",
-            Self::Local => "local",
-            Self::Parameter => "parameter",
-            Self::Static => "static",
-            Self::Module => "module",
-            Self::Common => "common",
-        }
-    }
-}
-
-impl fmt::Display for ObjectTag {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.as_str())
-    }
-}
-
-impl From<Space> for ObjectTag {
-    fn from(space: Space) -> Self {
-        match space {
-            Space::Segment => Self::Seg,
-            Space::External => Self::External,
-            Space::Frame => Self::Bp,
-            Space::Literal => Self::Abs,
-            Space::Group => Self::Grp,
-            Space::Far => Self::Far,
-            Space::Stack => Self::Sp,
-        }
-    }
-}
-
-/// Closed identities discovered at the Python model's production sites.
-///
-/// This replaces Python's untyped `Object.identity`.  It is deliberately a
-/// value identity only; no target register, instruction encoding, or frontend
-/// implementation detail belongs to an object.
+/// Python's `object`, as `Object.identity` and `Provenance.restrict` hold it:
+/// ints, strings, spaces, symbols, values and tuples of them.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub enum ObjectIdentity {
-    Parameter {
-        index: u32,
-    },
-    Named {
-        selector: u32,
-    },
-    Frame {
-        owner: Option<u32>,
-        low: i64,
-        high: i64,
-    },
-    TaggedIndex {
-        tag: ObjectTag,
-        index: i64,
-    },
-    CallAllocation {
-        callee: String,
-        site: u32,
-    },
-    FloatConversion {
-        instruction: u32,
-    },
-    FloatResult {
-        owner: u32,
-    },
-    DescriptorAllocation {
-        descriptor: Symbol,
-        generation: u32,
-        root: Value,
-    },
+pub enum Identity {
+    Int(i64),
+    Str(String),
+    Space(Space),
+    Symbol(Symbol),
+    Value(Value),
+    Tuple(Vec<Identity>),
 }
 
-impl ObjectIdentity {
-    /// The canonical identity of a hidden floating-point result, whether its
-    /// owner originated as a function ID or an operation ID.
-    pub const fn float_result(owner: u32) -> Self {
-        Self::FloatResult { owner }
+impl Repr for Identity {
+    fn repr(&self) -> String {
+        match self {
+            Identity::Int(one) => one.repr(),
+            Identity::Str(one) => one.repr(),
+            Identity::Space(one) => one.repr(),
+            Identity::Symbol(one) => one.repr(),
+            Identity::Value(one) => one.repr(),
+            Identity::Tuple(items) => pyrepr::tuple(items),
+        }
     }
 }
 
 /// Python `qbopt.model.memory:Object`.
-///
-/// `extent` is a nonnegative byte size.  Slice bounds remain signed because
-/// they can be frame-relative; `Provenance::shifted` performs the one exact
-/// `u32`-to-`i64` comparison required for a bounded whole object.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct MemoryObject {
     pub kind: MemoryKind,
-    pub identity: Option<ObjectIdentity>,
-    pub generation: u32,
-    pub extent: Option<u32>,
+    pub identity: Option<Identity>,
+    pub generation: i64,
+    pub extent: Option<i64>,
 }
 
 impl MemoryObject {
     pub const fn new(kind: MemoryKind) -> Self {
-        Self {
-            kind,
-            identity: None,
-            generation: 0,
-            extent: None,
-        }
+        Self { kind, identity: None, generation: 0, extent: None }
     }
 }
 
-/// A restricted pointer root.  Unlike Python's historical `object` field,
-/// every production root has one closed, structural representation.
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub enum RestrictRoot {
-    Frame { displacement: i64 },
-    Global { symbol: u32 },
-    Far { selector: u32 },
-    Node { node: u32 },
+impl Repr for MemoryObject {
+    fn repr(&self) -> String {
+        pyrepr::dataclass(
+            "Object",
+            &[
+                ("kind", self.kind.repr()),
+                ("identity", self.identity.repr()),
+                ("generation", self.generation.repr()),
+                ("extent", self.extent.repr()),
+            ],
+        )
+    }
 }
 
 pub const WHOLE_LOW: i64 = -(1_i64 << 31);
@@ -327,7 +248,7 @@ fn gcd(mut one: i64, mut other: i64) -> i64 {
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Provenance {
     pub slices: BTreeSet<Slice>,
-    pub restrict: BTreeSet<RestrictRoot>,
+    pub restrict: BTreeSet<Identity>,
 }
 
 impl Provenance {
@@ -347,7 +268,7 @@ impl Provenance {
         high: i64,
         stride: i64,
         width: i64,
-        restrict: BTreeSet<RestrictRoot>,
+        restrict: BTreeSet<Identity>,
     ) -> Result<Self, SliceError> {
         Ok(Self {
             slices: BTreeSet::from([Slice::new(object, low, high, stride, width)?]),
@@ -365,7 +286,7 @@ impl Provenance {
                 let bounded_whole = one
                     .object
                     .extent
-                    .is_some_and(|extent| one.low == 0 && one.high == i64::from(extent));
+                    .is_some_and(|extent| one.low == 0 && one.high == extent);
                 if whole || bounded_whole {
                     one.clone()
                 } else {
@@ -398,6 +319,32 @@ impl Provenance {
         self.slices
             .iter()
             .any(|one| other.slices.iter().any(|two| one.intersects(two)))
+    }
+}
+
+impl Repr for Slice {
+    fn repr(&self) -> String {
+        pyrepr::dataclass(
+            "Slice",
+            &[
+                ("object", self.object.repr()),
+                ("low", self.low.repr()),
+                ("high", self.high.repr()),
+                ("stride", self.stride.repr()),
+                ("width", self.width.repr()),
+            ],
+        )
+    }
+}
+
+impl Repr for Provenance {
+    fn repr(&self) -> String {
+        let slices: Vec<&Slice> = self.slices.iter().collect();
+        let restrict: Vec<&Identity> = self.restrict.iter().collect();
+        pyrepr::dataclass(
+            "Provenance",
+            &[("slices", pyrepr::frozenset(&slices)), ("restrict", pyrepr::frozenset(&restrict))],
+        )
     }
 }
 
@@ -434,42 +381,13 @@ pub fn objects_may_alias(one: &MemoryObject, other: &MemoryObject) -> bool {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
 
     use super::{
-        MemoryKind, MemoryObject, ObjectIdentity, ObjectTag, Provenance, RestrictRoot, Slice,
-        SliceError, Space,
+        Identity, MemoryKind, MemoryObject, Provenance, Slice, SliceError, Space,
     };
 
     fn object(kind: MemoryKind) -> MemoryObject {
         MemoryObject::new(kind)
-    }
-
-    #[test]
-    fn memory_kind_and_space_tags_keep_their_python_spellings() {
-        assert_eq!(MemoryKind::Nonlocal.to_string(), "nonlocal");
-        assert_eq!(
-            [
-                Space::Segment,
-                Space::External,
-                Space::Frame,
-                Space::Literal,
-                Space::Group,
-                Space::Far,
-                Space::Stack,
-            ]
-            .map(ObjectTag::from),
-            [
-                ObjectTag::Seg,
-                ObjectTag::External,
-                ObjectTag::Bp,
-                ObjectTag::Abs,
-                ObjectTag::Grp,
-                ObjectTag::Far,
-                ObjectTag::Sp,
-            ],
-        );
     }
 
     #[test]
@@ -488,20 +406,12 @@ mod tests {
     fn provenance_subobjects_use_object_identity_and_byte_ranges() {
         let first = MemoryObject {
             kind: MemoryKind::Frame,
-            identity: Some(ObjectIdentity::Frame {
-                owner: Some(0),
-                low: -8,
-                high: 0,
-            }),
+            identity: Some(Identity::Tuple(vec![Identity::Int(0), Identity::Int(-8), Identity::Int(0)])),
             generation: 0,
             extent: Some(8),
         };
         let second = MemoryObject {
-            identity: Some(ObjectIdentity::Frame {
-                owner: Some(0),
-                low: -16,
-                high: -8,
-            }),
+            identity: Some(Identity::Tuple(vec![Identity::Int(0), Identity::Int(-16), Identity::Int(-8)])),
             ..first.clone()
         };
         let a = Provenance::one_with_slice(first.clone(), 0, 4, 1, 1, BTreeSet::new()).unwrap();
@@ -529,10 +439,7 @@ mod tests {
     fn provenance_strided_ranges_prove_interleaved_arrays_disjoint() {
         let object = MemoryObject {
             kind: MemoryKind::Global,
-            identity: Some(ObjectIdentity::TaggedIndex {
-                tag: ObjectTag::Seg,
-                index: 4,
-            }),
+            identity: Some(Identity::Tuple(vec![Identity::Space(Space::Segment), Identity::Int(4)])),
             generation: 0,
             extent: Some(64),
         };
@@ -549,10 +456,7 @@ mod tests {
         // tests/test_mir_alias.py::test_strided_slice_intersection_matches_the_bytes_it_describes.
         let object = MemoryObject {
             kind: MemoryKind::Allocation,
-            identity: Some(ObjectIdentity::CallAllocation {
-                callee: "allocation".to_owned(),
-                site: 1,
-            }),
+            identity: Some(Identity::Tuple(vec![Identity::Str("allocation".to_owned()), Identity::Int(1)])),
             generation: 0,
             extent: Some(12),
         };
@@ -591,7 +495,7 @@ mod tests {
             super::WHOLE_HIGH,
             1,
             1,
-            BTreeSet::from([RestrictRoot::Node { node: 1 }]),
+            BTreeSet::from([Identity::Int(1)]),
         )
         .unwrap();
         let right = Provenance::one_with_slice(
@@ -600,86 +504,11 @@ mod tests {
             super::WHOLE_HIGH,
             1,
             1,
-            BTreeSet::from([RestrictRoot::Node { node: 2 }]),
+            BTreeSet::from([Identity::Int(2)]),
         )
         .unwrap();
 
         assert!(!left.intersects(&right));
-    }
-
-    #[test]
-    fn external_tag_and_float_result_identity_are_shared() {
-        let from_space = ObjectIdentity::TaggedIndex {
-            tag: ObjectTag::from(Space::External),
-            index: 3,
-        };
-        // The future HIR Storage conversion must map its "external" spelling
-        // to this same tag; no second storage enum belongs in this layer.
-        let from_storage_spelling = ObjectIdentity::TaggedIndex {
-            tag: ObjectTag::External,
-            index: 3,
-        };
-        assert_eq!(from_space, from_storage_spelling);
-        let mut left = DefaultHasher::new();
-        let mut right = DefaultHasher::new();
-        from_space.hash(&mut left);
-        from_storage_spelling.hash(&mut right);
-        assert_eq!(left.finish(), right.finish());
-
-        let function_result = ObjectIdentity::float_result(9);
-        let operation_result = ObjectIdentity::FloatResult { owner: 9 };
-        assert_eq!(function_result, operation_result);
-        let mut function_hash = DefaultHasher::new();
-        let mut operation_hash = DefaultHasher::new();
-        function_result.hash(&mut function_hash);
-        operation_result.hash(&mut operation_hash);
-        assert_eq!(function_hash.finish(), operation_hash.finish());
-    }
-
-    #[test]
-    fn production_identity_shapes_are_closed_and_structurally_distinct() {
-        // Every shape used by the 28 production `memory.Object(...)` sites.
-        let identities = BTreeSet::from([
-            ObjectIdentity::Parameter { index: 1 },
-            ObjectIdentity::Named { selector: 2 },
-            ObjectIdentity::Frame {
-                owner: None,
-                low: -8,
-                high: -4,
-            },
-            ObjectIdentity::Frame {
-                owner: Some(3),
-                low: -8,
-                high: -4,
-            },
-            ObjectIdentity::TaggedIndex {
-                tag: ObjectTag::Module,
-                index: 4,
-            },
-            ObjectIdentity::CallAllocation {
-                callee: "malloc".to_owned(),
-                site: 5,
-            },
-            ObjectIdentity::FloatConversion { instruction: 6 },
-            ObjectIdentity::FloatResult { owner: 7 },
-            ObjectIdentity::DescriptorAllocation {
-                descriptor: super::Symbol::new(Space::Segment, 8, 10, 2),
-                generation: 9,
-                root: super::Value::new(10, 11),
-            },
-        ]);
-        assert_eq!(identities.len(), 9);
-
-        assert_eq!(
-            BTreeSet::from([
-                RestrictRoot::Frame { displacement: -2 },
-                RestrictRoot::Global { symbol: 1 },
-                RestrictRoot::Far { selector: 2 },
-                RestrictRoot::Node { node: 3 },
-            ])
-            .len(),
-            4
-        );
     }
 
     #[test]

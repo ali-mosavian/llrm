@@ -61,7 +61,7 @@ fn _operand(_op: &Op, argument: &Arg, known: &BTreeMap<Value, Known>) -> Option<
             constant.width,
         )),
         Arg::Held(held) => _read(known.get(&held.value), held.width),
-        Arg::Symbol(_) | Arg::FrameAddress(_) | Arg::Cell(_) | Arg::Opaque(_) => None,
+        Arg::Symbol(_) | Arg::FrameAddress(_) | Arg::FrameSelector(_) | Arg::Cell(_) | Arg::Opaque(_) => None,
     }
 }
 
@@ -87,6 +87,7 @@ fn _width(argument: &Arg) -> Option<u32> {
     match argument {
         Arg::Held(held) => Some(held.width),
         Arg::Const(constant) => Some(constant.width),
+        Arg::FrameSelector(selector) => Some(selector.width),
         Arg::Symbol(_) | Arg::FrameAddress(_) | Arg::Cell(_) | Arg::Opaque(_) => None,
     }
 }

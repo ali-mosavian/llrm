@@ -19,6 +19,7 @@ use crate::model::floating::Semantics as FloatingSemantics;
 use crate::model::ir::{Loc, Operation, Semantics};
 use crate::model::memory::Provenance;
 use crate::objectfile::module::{Addr, Space};
+use crate::support::pyrepr::{self, Repr};
 use iced_x86::Register;
 
 /// One SSA variable, deliberately with no register or historical home.
@@ -270,6 +271,19 @@ impl FrameAddress {
     }
 }
 
+/// The run-time selector of the current activation's frame segment.
+/// Direct port of `qbopt.model.mir:FrameSelector`.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct FrameSelector {
+    pub width: u32,
+}
+
+impl Default for FrameSelector {
+    fn default() -> Self {
+        Self { width: 2 }
+    }
+}
+
 /// Direct port of `qbopt.model.mir:ArrayRequest`.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ArrayRequest {
@@ -341,6 +355,7 @@ pub enum Arg {
     Const(Const),
     Symbol(Symbol),
     FrameAddress(FrameAddress),
+    FrameSelector(FrameSelector),
     Cell(Cell),
     Opaque(Opaque),
 }
@@ -1308,7 +1323,7 @@ pub fn consumed(op: &Op) -> BTreeSet<Value> {
             Arg::Cell(cell) => {
                 result.extend([cell.r#ref.base, cell.r#ref.segment].into_iter().flatten());
             }
-            Arg::Const(_) | Arg::Symbol(_) | Arg::FrameAddress(_) | Arg::Opaque(_) => {}
+            Arg::Const(_) | Arg::Symbol(_) | Arg::FrameAddress(_) | Arg::FrameSelector(_) | Arg::Opaque(_) => {}
         }
     }
     result
@@ -1340,6 +1355,7 @@ fn arg_width(arg: &Arg) -> u32 {
         Arg::Const(value) => value.width,
         Arg::Symbol(value) => value.width,
         Arg::FrameAddress(value) => value.width,
+        Arg::FrameSelector(value) => value.width,
         Arg::Cell(_) | Arg::Opaque(_) => 2,
     }
 }
@@ -1467,7 +1483,7 @@ fn renamed_arg(argument: &Arg, swap: &BTreeMap<u32, Value>, refs: &[(MemRef, Mem
             .find_map(|(old, new)| (old == &cell.r#ref).then(|| new.clone()))
             .map(|r#ref| Arg::Cell(Cell { r#ref }))
             .unwrap_or_else(|| argument.clone()),
-        Arg::Const(_) | Arg::Symbol(_) | Arg::FrameAddress(_) | Arg::Opaque(_) => argument.clone(),
+        Arg::Const(_) | Arg::Symbol(_) | Arg::FrameAddress(_) | Arg::FrameSelector(_) | Arg::Opaque(_) => argument.clone(),
     }
 }
 
@@ -1988,6 +2004,146 @@ fn python_padded_hex(value: i64) -> String {
     }
 }
 
+impl Repr for Value {
+    fn repr(&self) -> String {
+        self.to_string()
+    }
+}
+
+impl Repr for BigInt {
+    fn repr(&self) -> String {
+        self.to_string()
+    }
+}
+
+impl Repr for IntegerRange {
+    fn repr(&self) -> String {
+        pyrepr::dataclass(
+            "IntegerRange",
+            &[("low", self.low.repr()), ("high", self.high.repr()), ("width", self.width.repr())],
+        )
+    }
+}
+
+impl Repr for MemRef {
+    fn repr(&self) -> String {
+        let beyond = self.beyond.as_ref().map_or_else(
+            || "None".to_owned(),
+            |(segment, cells)| format!("({}, {})", segment, pyrepr::frozenset(&cells.iter().collect::<Vec<_>>())),
+        );
+        pyrepr::dataclass(
+            "MemRef",
+            &[
+                ("addr", self.addr.repr()),
+                ("width", self.width.repr()),
+                ("base", self.base.repr()),
+                ("segment", self.segment.repr()),
+                ("space", self.space.repr()),
+                ("beyond", beyond),
+                ("symbolic", self.symbolic.repr()),
+                ("allocation", self.allocation.repr()),
+                ("base_width", self.base_width.repr()),
+                ("pointer", self.pointer.repr()),
+                ("excludes", pyrepr::tuple(&self.excludes)),
+                ("typed", self.typed.repr()),
+                ("within", self.within.as_ref().map_or_else(|| "None".to_owned(), |one| pyrepr::tuple(one))),
+                ("provenance", self.provenance.repr()),
+                ("volatile", self.volatile.repr()),
+            ],
+        )
+    }
+}
+
+impl Repr for Held {
+    fn repr(&self) -> String {
+        pyrepr::dataclass("Held", &[("value", self.value.repr()), ("width", self.width.repr())])
+    }
+}
+
+impl Repr for Const {
+    fn repr(&self) -> String {
+        pyrepr::dataclass("Const", &[("n", self.n.repr()), ("width", self.width.repr())])
+    }
+}
+
+impl Repr for Symbol {
+    fn repr(&self) -> String {
+        pyrepr::dataclass(
+            "Symbol",
+            &[
+                ("space", self.space.repr()),
+                ("index", self.index.repr()),
+                ("offset", self.offset.repr()),
+                ("width", self.width.repr()),
+                ("addend", self.addend.repr()),
+            ],
+        )
+    }
+}
+
+impl Repr for FrameAddress {
+    fn repr(&self) -> String {
+        pyrepr::dataclass(
+            "FrameAddress",
+            &[("offset", self.offset.repr()), ("width", self.width.repr()), ("extent", self.extent.repr())],
+        )
+    }
+}
+
+impl Repr for FrameSelector {
+    fn repr(&self) -> String {
+        pyrepr::dataclass("FrameSelector", &[("width", self.width.repr())])
+    }
+}
+
+impl Repr for ArrayRequest {
+    fn repr(&self) -> String {
+        pyrepr::dataclass(
+            "ArrayRequest",
+            &[
+                ("descriptor", self.descriptor.repr()),
+                ("element_width", self.element_width.repr()),
+                ("bounds", pyrepr::tuple(&self.bounds)),
+                ("replaces", self.replaces.repr()),
+            ],
+        )
+    }
+}
+
+impl Repr for Cell {
+    fn repr(&self) -> String {
+        pyrepr::dataclass("Cell", &[("ref", self.r#ref.repr())])
+    }
+}
+
+impl Repr for Opaque {
+    fn repr(&self) -> String {
+        pyrepr::dataclass("Opaque", &[("what", self.what.repr()), ("name", self.name.repr())])
+    }
+}
+
+impl Repr for Arg {
+    fn repr(&self) -> String {
+        match self {
+            Arg::Held(one) => one.repr(),
+            Arg::Const(one) => one.repr(),
+            Arg::Symbol(one) => one.repr(),
+            Arg::FrameAddress(one) => one.repr(),
+            Arg::FrameSelector(one) => one.repr(),
+            Arg::Cell(one) => one.repr(),
+            Arg::Opaque(one) => one.repr(),
+        }
+    }
+}
+
+impl Repr for Phi {
+    fn repr(&self) -> String {
+        let incoming: Vec<String> =
+            self.incoming.iter().map(|(pred, value)| format!("{}: {}", pred, value.repr())).collect();
+        pyrepr::dataclass("Phi", &[("result", self.result.repr()), ("incoming", format!("{{{}}}", incoming.join(", ")))])
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
@@ -1998,7 +2154,7 @@ mod tests {
 
     use crate::model::floating::{Format, Precision, Rounding, Semantics as FloatingSemantics};
     use crate::model::ir::{Operation, Semantics};
-    use crate::model::memory::{MemoryKind, MemoryObject, ObjectIdentity, ObjectTag, Provenance};
+    use crate::model::memory::{Identity, MemoryKind, MemoryObject, Provenance};
     use crate::objectfile::module::{Addr, Space};
     use iced_x86::Register;
 
@@ -2406,10 +2562,7 @@ mod tests {
     fn unequal_provenance_is_not_the_same_bytes() {
         let object = |index| MemoryObject {
             kind: MemoryKind::Global,
-            identity: Some(ObjectIdentity::TaggedIndex {
-                tag: ObjectTag::Seg,
-                index,
-            }),
+            identity: Some(Identity::Tuple(vec![Identity::Space(Space::Segment), Identity::Int(index)])),
             generation: 0,
             extent: Some(2),
         };
