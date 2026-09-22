@@ -7,4 +7,6 @@ pub mod abi;
 pub mod compile;
 pub mod driver;
 pub mod inline_x87;
+pub mod main;
+pub mod qbstages;
 pub mod stage_text;
