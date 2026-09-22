@@ -174,13 +174,13 @@ BC = {
 
 
 def test_a_bc_dump_diverges_first_at_its_lower_numbered_stage(tmp_path: Path) -> None:
-    """s100 sorts before s11 by name; the BC-only emission is not compared until it is ported."""
+    """s100 sorts before s11 by name, so a name sort would report the LIR stage first."""
     python = _dump(tmp_path / "python", BC)
     rust = _dump(
         tmp_path / "rust", {"s00-mir-omf.txt": "raised\n", "s11-mir-r01-gvn.txt": "x\n", "s100-lir-jumps.txt": "y\n"}
     )
     matched, total, first = port_diff.compare(python, rust, bc=True)
-    assert (matched, total) == (1, 3)
+    assert (matched, total) == (1, 4)
     assert first == port_diff.Divergence("s11-mir-r01-gvn.txt", 1, "gvn", "x")
 
 

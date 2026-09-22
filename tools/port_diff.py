@@ -12,8 +12,7 @@ port writes the same tree (`llrm-c --dump`). With `--qb`, Python's is
 tests compile (`tools/qb_port_corpus.py`). A source's `.flags` sidecar holds
 the options both compilers get. With `--bc`, Python's is `tools/stages.py
 --dump` and Rust's `llrm-omf --dump`; with no objects it runs every
-`fixtures/omf/*.obj`, and the BC-only emission stage (`asm`) is not compared
-until it is ported. Stages are
+`fixtures/omf/*.obj`. Stages are
 compared in the order Python wrote them, so the first mismatch is the first
 stage the port gets wrong. `frozenset` elements are sorted on both sides: their order is Python's
 hash order, not a fact of the compiler.
@@ -32,8 +31,6 @@ ROOT = Path(__file__).resolve().parents[1]
 CORPUS = ("fixtures/c/*.cgs", "fixtures/c/mir/*.cgs", "fixtures/c/parity/*.cgs")
 QBFRONT = ROOT / "frontends/qb/target/release/qbfront"
 BC_CORPUS = "fixtures/omf/*.obj"
-# BC stage forms Rust does not write yet: the BC-only emission.
-BC_UNPORTED = ("asm",)
 OBJECT = "out.obj"
 REFUSAL = "refusal"
 
@@ -128,7 +125,6 @@ def _stages(python: Path, qb: bool = False, bc: bool = False) -> list[str]:
     """
     files = [one for one in python.rglob("*") if one.is_file() and one.name not in (OBJECT, REFUSAL)]
     if bc:
-        files = [one for one in files if _bc_stage(one.name)[1] not in BC_UNPORTED]
         files.sort(key=lambda one: _bc_stage(one.name))
     elif qb:
         files.sort(key=lambda one: (one.stat().st_mtime_ns, one.name))

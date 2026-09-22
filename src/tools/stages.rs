@@ -709,13 +709,14 @@ pub fn main(argv: &[String]) -> Result<i32, String> {
     // Observe the actual optimization run; never rebuild or re-resolve it for a dump.
     let mut mir_stages: IndexMap<String, Vec<(String, Rc<MirBody>)>> = IndexMap::default();
     let mut stages: IndexMap<String, Vec<(String, LirBody)>> = IndexMap::default();
+    let mut route = "the route was not reported".to_owned();
     let mut watch = |stage: &str, name: Option<&str>, low: Watched<'_>| match low {
         Watched::Mir(body) => {
             let stage = stage.strip_prefix("mir-").unwrap_or(stage);
             let name = name.unwrap_or("None").to_owned();
             mir_stages.entry(stage.to_owned()).or_default().push((name, Rc::new(body.clone())));
         }
-        Watched::Route(_) => {}
+        Watched::Route(said) => route = said.to_owned(),
         Watched::Lir(body) => {
             if name.is_some_and(|name| !selected(name)) {
                 return;
@@ -740,11 +741,65 @@ pub fn main(argv: &[String]) -> Result<i32, String> {
         was = dump(step, name, name, bodies, Some(&was), &debug, &found)?;
         step += 1;
     }
-    got.map_err(|raised| raised.message)?;
+    let got = got.map_err(|raised| raised.message)?;
     for (stage, bodies) in &stages {
         write(step, "lir", stage, &lir_stage(stage, bodies))?;
         step += 1;
     }
+    let mut emitted = format!("=== emitted ({}, {} bytes)\n  --- {route}\n", got.reason, got.data.len());
+    _asm(&mut emitted, &got.data)?;
+    write(step, "asm", "emitted", &emitted)?;
     Ok(0)
+}
+
+/// Python `_asm`: the emitted object's reachable code, with its relocations.
+fn _asm(out: &mut String, data: &[u8]) -> Result<(), String> {
+    use iced_x86::{Formatter, NasmFormatter};
+
+    let records = crate::objectfile::omf::parse(data).map_err(|error| error.to_string())?;
+    let Some(found) = crate::objectfile::module::of(&records) else {
+        return Ok(());
+    };
+    let mut formatter = NasmFormatter::new();
+    let _ = writeln!(out, "  --- reachable code (FP emulator instructions shown as x87 equivalents)");
+    let instructions = match crate::frontend::blocks::instructions(&found) {
+        Ok(instructions) => instructions,
+        Err(why) => {
+            let _ = writeln!(out, "  --- cannot map code: {why}");
+            return Ok(());
+        }
+    };
+    let externals = crate::objectfile::omf::externals(&found.records);
+    let mut relocations: IndexMap<i64, Vec<String>> = IndexMap::default();
+    for fixup in crate::objectfile::omf::fixups(&found.records) {
+        if fixup.seg != Some(found.seg) {
+            continue;
+        }
+        let target = if fixup.target == "external" {
+            externals[fixup.index as usize].clone()
+        } else {
+            format!("{}[{}]", fixup.target, fixup.index)
+        };
+        let loc = crate::objectfile::omf::LOCNAME
+            .get(&fixup.loc)
+            .map_or_else(|| fixup.loc.to_string(), |name| (*name).to_owned());
+        relocations.entry(fixup.offset).or_default().push(format!("{loc} {target}+{}", hex(fixup.disp)));
+    }
+    for insn in instructions {
+        let notes: Vec<String> = (insn.at as i64..insn.end() as i64)
+            .flat_map(|offset| {
+                relocations
+                    .get(&offset)
+                    .into_iter()
+                    .flatten()
+                    .map(move |target| format!("+{}: {target}", hex(offset - insn.at as i64)))
+            })
+            .collect();
+        let annotation = if notes.is_empty() { String::new() } else { format!("  ; reloc {}", notes.join(", ")) };
+        let mut text = String::new();
+        formatter.format(&insn.insn, &mut text);
+        let _ = writeln!(out, "    {}  {text}{annotation}", hex6(insn.at as i64));
+    }
+    Ok(())
 }
 
