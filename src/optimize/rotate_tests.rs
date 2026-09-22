@@ -165,7 +165,7 @@ fn counted_loop(observed: bool) -> MirBody {
 /// final listing, so dropping the zero-trip guard cannot satisfy the test.
 #[test]
 fn test_dead_dynamic_counter_counts_down_on_the_step_flags_after_a_zero_trip_guard() {
-    let body = entered(&counted_loop(false)).unwrap();
+    let body = entered(&Rc::new(MirBody::clone(&counted_loop(false)))).unwrap();
     let found = loops::loops(&body.blocks, Some(body.entry));
     let [loop_] = found.as_slice() else {
         panic!("{found:?}")
@@ -215,5 +215,5 @@ fn test_dead_dynamic_counter_counts_down_on_the_step_flags_after_a_zero_trip_gua
 fn test_countdown_refuses_an_observed_source_counter() {
     let body = counted_loop(true);
 
-    assert_eq!(entered(&body).unwrap(), body);
+    assert_eq!(entered(&Rc::new(MirBody::clone(&body))).unwrap(), Rc::new(body));
 }

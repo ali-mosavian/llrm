@@ -10,6 +10,7 @@
 
 #![allow(dead_code)] // The cfront optimizer port is its first production caller.
 
+use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::support::hash::IndexMap;
@@ -64,7 +65,7 @@ pub(crate) fn constant_parameters(
 /// missing or malformed contract is an unknown call, rather than permission
 /// to specialize a body that may still receive a different value.
 pub(crate) fn current_parameter_constants(
-    bodies: &IndexMap<String, MirBody>,
+    bodies: &IndexMap<String, Rc<MirBody>>,
     calls: &IndexMap<String, IndexMap<i64, String>>,
     arguments: &IndexMap<String, IndexMap<i64, BTreeSet<i64>>>,
     parameters: &IndexMap<String, Vec<MemRef>>,
@@ -93,7 +94,7 @@ pub(crate) fn current_parameter_constants(
 /// inlining decision may use one constant call even when a second dynamic
 /// call prevents whole-body parameter specialization.
 pub(crate) fn current_call_constants(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     calls: &IndexMap<i64, String>,
     arguments: &IndexMap<i64, BTreeSet<i64>>,
     parameters: &IndexMap<String, Vec<MemRef>>,
@@ -165,7 +166,7 @@ fn _agreed_parameters(actuals: &IndexMap<String, Vec<Vec<Option<Const>>>>) -> Pa
 }
 
 /// Seed agreed parameter bytes at procedure entry for ordinary SCCP.
-pub(crate) fn specialize_parameters(body: &MirBody, parameters: &[MemRef], constants: &[Option<Const>]) -> MirBody {
+pub(crate) fn specialize_parameters(body: &Rc<MirBody>, parameters: &[MemRef], constants: &[Option<Const>]) -> Rc<MirBody> {
     let known = parameters
         .iter()
         .zip(constants)
@@ -178,9 +179,9 @@ pub(crate) fn specialize_parameters(body: &MirBody, parameters: &[MemRef], const
     if added.is_empty() {
         return body.clone();
     }
-    let mut made = body.clone();
+    let mut made = MirBody::clone(body);
     made.initial.extend(added);
-    made
+    Rc::new(made)
 }
 
 /// The common integer tuple produced by every return of each body.
@@ -188,7 +189,7 @@ pub(crate) fn specialize_parameters(body: &MirBody, parameters: &[MemRef], const
 /// Absence is the conservative answer for void, floating, mixed-width or
 /// disagreeing returns.  Values are read from SCCP's fixed point, so copies,
 /// promoted locals, phis and folded expressions need no special cases here.
-pub(crate) fn constant_returns(bodies: &IndexMap<String, MirBody>) -> Returns {
+pub(crate) fn constant_returns(bodies: &IndexMap<String, Rc<MirBody>>) -> Returns {
     let mut out = Returns::default();
     for (name, body) in bodies {
         let facts = consts::known(body, None, None, None, None);
@@ -237,11 +238,11 @@ pub(crate) fn constant_returns(bodies: &IndexMap<String, MirBody>) -> Returns {
 /// body pipeline to propagate through phis and fold consumers.  Unmodelled
 /// extra results (for example DX after a 16-bit C result in AX) stay intact.
 pub(crate) fn propagate_returns(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     calls: &IndexMap<i64, String>,
     returns: &Returns,
     done: &BTreeSet<i64>,
-) -> Result<(MirBody, BTreeSet<i64>), String> {
+) -> Result<(Rc<MirBody>, BTreeSet<i64>), String> {
     let values = ssa::values(body).collect::<Vec<_>>();
     let mut serial = values.iter().map(|value| value.id).max().unwrap_or(0);
     let mut variable = values.iter().map(|value| value.variable).max().unwrap_or(0);
@@ -316,9 +317,9 @@ pub(crate) fn propagate_returns(
         blocks.push(made);
     }
     let made = if changed {
-        let mut made = body.clone();
+        let mut made = MirBody::clone(body);
         made.blocks = blocks;
-        made
+        Rc::new(made)
     } else {
         body.clone()
     };
@@ -535,7 +536,7 @@ pub(crate) fn noreturn_procedures(
 }
 
 /// Apply the shared MIR terminal-call cleanup to named direct C calls.
-pub(crate) fn terminal_calls(body: &MirBody, calls: &IndexMap<i64, String>, noreturn: &BTreeSet<String>) -> MirBody {
+pub(crate) fn terminal_calls(body: &Rc<MirBody>, calls: &IndexMap<i64, String>, noreturn: &BTreeSet<String>) -> Rc<MirBody> {
     let sites = calls
         .iter()
         .filter(|(_, target)| noreturn.contains(*target))
@@ -598,11 +599,11 @@ pub(crate) fn argument_sites(body: &MirBody, contracts: &IndexMap<i64, Contract>
 
 /// Remove effect-free calls whose result no operation still reads.
 pub(crate) fn remove_dead_pure_calls(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     calls: &IndexMap<i64, String>,
     pure: &BTreeSet<String>,
     arguments: &IndexMap<i64, BTreeSet<i64>>,
-) -> Result<MirBody, String> {
+) -> Result<Rc<MirBody>, String> {
     let mut used = BTreeSet::new();
     for block in &body.blocks {
         used.extend(block.phis.iter().flat_map(|phi| phi.incoming.values().copied()));
@@ -627,7 +628,7 @@ pub(crate) fn remove_dead_pure_calls(
         .iter()
         .flat_map(|at| arguments[at].iter().copied())
         .collect::<BTreeSet<_>>();
-    let mut made = body.clone();
+    let mut made = MirBody::clone(body);
     for block in &mut made.blocks {
         block.ops.retain(|op| {
             !((op.kind == Kind::Call && removed.contains(&op.at))
@@ -638,7 +639,7 @@ pub(crate) fn remove_dead_pure_calls(
     if !problems.is_empty() {
         return Err(format!("pure call removal broke SSA: {}", pyrepr::list(&problems[..problems.len().min(3)])));
     }
-    Ok(made)
+    Ok(Rc::new(made))
 }
 
 #[cfg(test)]

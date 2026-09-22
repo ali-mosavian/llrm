@@ -1,6 +1,7 @@
 //! Port of `qbopt/backend/addressforms.py`: fold address arithmetic into
 //! the memory operands that read it.
 
+use std::rc::Rc;
 use std::collections::BTreeSet;
 use crate::support::hash::HashMap;
 use std::sync::{Arc, LazyLock};
@@ -176,7 +177,7 @@ pub enum FoldedForm {
 /// objects; the address width below decides whether a scale is legal.
 #[allow(clippy::type_complexity)]
 pub fn indexed(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     exposed: &BTreeSet<u32>,
     address_forms: &[AddressForm],
     costs: Option<&OperationCosts>,
@@ -997,6 +998,7 @@ pub fn scaled(what: Option<&Semantics>, forms: &IndexMap<u32, FoldedForm>) -> Op
 mod tests {
     //! Port of `tests/test_addressforms.py`, the tests that need no
     //! unported module.
+    use std::rc::Rc;
 
     use std::collections::BTreeSet;
 
@@ -1120,7 +1122,7 @@ mod tests {
         let load = load(2, Operation::Move, "mov", Kind::Load, loaded, 2, &r#ref);
         let body = MirBody::new(0, vec![MirBlock::new(0, vec![], vec![add, load], vec![])]);
 
-        let (_forms, folded, _promoted) = indexed(&body, &set(&[]), &[], None).unwrap();
+        let (_forms, folded, _promoted) = indexed(&Rc::new(MirBody::clone(&body)), &set(&[]), &[], None).unwrap();
 
         assert_eq!(folded, set(&[address.id]));
     }
@@ -1136,7 +1138,7 @@ mod tests {
         let load = load(2, Operation::Move, "mov", Kind::Load, loaded, 4, &r#ref);
         let body = MirBody::new(0, vec![MirBlock::new(0, vec![], vec![add, load], vec![])]);
 
-        let (forms, folded, _promoted) = indexed(&body, &set(&[]), &[], None).unwrap();
+        let (forms, folded, _promoted) = indexed(&Rc::new(MirBody::clone(&body)), &set(&[]), &[], None).unwrap();
 
         assert_eq!(forms, IndexMap::default());
         assert_eq!(folded, set(&[address.id]));
@@ -1156,7 +1158,7 @@ mod tests {
         let load = load(2, Operation::Move, "mov", Kind::Load, loaded, 2, &r#ref);
         let body = MirBody::new(0, vec![MirBlock::new(0, vec![], vec![add, load], vec![])]);
 
-        let (_forms, folded, _promoted) = indexed(&body, &set(&[]), &[], None).unwrap();
+        let (_forms, folded, _promoted) = indexed(&Rc::new(MirBody::clone(&body)), &set(&[]), &[], None).unwrap();
 
         assert!(!folded.contains(&address.id));
     }
@@ -1192,7 +1194,7 @@ mod tests {
             vec![MirBlock::new(0, vec![], vec![shift, add, load], vec![])],
         );
 
-        let (forms, folded, _promoted) = indexed(&body, &set(&[]), &[], None).unwrap();
+        let (forms, folded, _promoted) = indexed(&Rc::new(MirBody::clone(&body)), &set(&[]), &[], None).unwrap();
 
         let expected: IndexMap<u32, FoldedForm> = [(
             address.id,
@@ -1243,7 +1245,7 @@ mod tests {
             0,
             vec![MirBlock::new(0, vec![], vec![made, add, load], vec![])],
         );
-        let (forms, folded, _promoted) = indexed(&body, &set(&[]), &[], None).unwrap();
+        let (forms, folded, _promoted) = indexed(&Rc::new(MirBody::clone(&body)), &set(&[]), &[], None).unwrap();
         let what = Semantics {
             name: Some("mov".to_owned()),
             dests: vec![Loc::Held(ir::Held {
@@ -1342,7 +1344,7 @@ mod tests {
             )],
         );
 
-        let (forms, folded, _promoted) = indexed(&body, &set(&[]), &[], None).unwrap();
+        let (forms, folded, _promoted) = indexed(&Rc::new(MirBody::clone(&body)), &set(&[]), &[], None).unwrap();
         let changed = scaled(Some(&fld(cell_of(element.id, 8))), &forms);
 
         assert_eq!(folded, set(&[frame.id, end.id, element.id]));
@@ -1360,7 +1362,7 @@ mod tests {
         let add = add_constant(2, derived, frame, 14);
         let body = MirBody::new(0, vec![MirBlock::new(0, vec![], vec![made, add], vec![])]);
 
-        let (forms, folded, _promoted) = indexed(&body, &set(&[derived.id]), &[], None).unwrap();
+        let (forms, folded, _promoted) = indexed(&Rc::new(MirBody::clone(&body)), &set(&[derived.id]), &[], None).unwrap();
 
         assert_eq!(forms, IndexMap::default());
         assert_eq!(folded, set(&[]));
@@ -1432,7 +1434,7 @@ mod tests {
 
         let target = cpu::profile("386").unwrap();
         let (forms, folded, promoted) = indexed(
-            &body,
+            &Rc::new(MirBody::clone(&body)),
             &set(&[]),
             &target.address_forms,
             Some(&target.operations),

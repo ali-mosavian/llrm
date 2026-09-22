@@ -32,6 +32,7 @@
 //! `lower.lowered` half is skipped, as is the `strength.reduced` half of
 //! `test_composed_offset_can_carry_an_invariant_pointer`.
 
+use std::rc::Rc;
 use std::collections::BTreeSet;
 
 use crate::support::hash::IndexMap;
@@ -81,7 +82,7 @@ fn looped(header: i64, latches: &[i64], body: &[i64]) -> Loop {
 }
 
 fn derive(body: &MirBody, loop_: &Loop) -> Vec<Derived> {
-    derived(body, loop_, None, &BTreeSet::new(), None).unwrap()
+    derived(&Rc::new(body.clone()), loop_, None, &BTreeSet::new(), None).unwrap()
 }
 
 /// `tests/test_counted_loops.py:_unit_loop`: `i = start; while not (i exit_test bound): i += 1`,
@@ -135,7 +136,7 @@ fn test_an_inclusive_test_at_its_types_maximum_is_not_counted() {
         let body = _unit_loop(start, bound, exit_test);
         let found = crate::analysis::loops::loops(&body.blocks, Some(body.entry));
         let [loop_] = &found[..] else { panic!("one loop") };
-        let proofs = super::counted(&body, loop_, None);
+        let proofs = super::counted(&Rc::new(body.clone()), loop_, None);
 
         let maxima = proofs.iter().map(|proof| proof.maximum.clone()).collect::<Vec<_>>();
         let expected = trips.map(|trips| vec![Some(BigInt::from(trips))]).unwrap_or_default();
@@ -253,7 +254,7 @@ fn test_posttested_counter_has_an_exact_fixed_trip_count() {
         ],
     );
     let loop_ = looped(1, &[2], &[1, 2]);
-    let facts = consts::known(&body, None, None, None, None);
+    let facts = consts::known(&Rc::new(MirBody::clone(&body)), None, None, None, None);
     assert_eq!(trip_count(&body, &loop_, &facts), Some(BigInt::from(4)));
 }
 
@@ -293,7 +294,7 @@ fn test_posttested_symbolic_sentinel_keeps_its_exact_trip_count() {
         ],
     );
     let loop_ = looped(1, &[2], &[1, 2]);
-    let facts = consts::known(&body, None, None, None, None);
+    let facts = consts::known(&Rc::new(MirBody::clone(&body)), None, None, None, None);
     assert_eq!(trip_count(&body, &loop_, &facts), Some(BigInt::from(32)));
 }
 

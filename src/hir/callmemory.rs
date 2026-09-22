@@ -29,7 +29,7 @@ pub fn annotated(
     let mut procedures: IndexMap<String, alias::Procedure> = IndexMap::default();
     let mut lowered_by_name: IndexMap<String, Lowered> = IndexMap::default();
     for (function, lowered) in functions.iter().zip(semantic) {
-        let body = alias::annotated(&lowered.body)?;
+        let body = alias::annotated(&std::rc::Rc::new(lowered.body.clone()))?;
         let mut calls: IndexMap<i64, String> = IndexMap::default();
         let mut arguments: IndexMap<i64, Vec<Actual>> = IndexMap::default();
         let abi_sites: Vec<i64> = function.calls.iter().map(|site| site.instruction).collect();

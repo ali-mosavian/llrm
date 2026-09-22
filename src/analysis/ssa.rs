@@ -3,6 +3,7 @@
 //! `use_index` returns snapshot-local [`OpOccurrence`] keys where Python
 //! returns operation objects, whose identity distinguishes equal operations.
 
+use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
@@ -95,7 +96,7 @@ pub(crate) fn use_index(
 /// Drop phis nothing needs, including cycles only other dead phis read.
 ///
 /// Direct port of `qbopt.analysis.ssa:pruned_phis`.
-pub(crate) fn pruned_phis(body: &MirBody, roots: &BTreeSet<Value>) -> MirBody {
+pub(crate) fn pruned_phis(body: &Rc<MirBody>, roots: &BTreeSet<Value>) -> Rc<MirBody> {
     let mut needed: BTreeSet<Value> = roots | &crate::model::mir::exposed(body);
     for op in body.blocks.iter().flat_map(|block| &block.ops) {
         needed.extend(operation_consumed(op));
@@ -116,7 +117,7 @@ pub(crate) fn pruned_phis(body: &MirBody, roots: &BTreeSet<Value>) -> MirBody {
     if removed.is_empty() {
         return body.clone();
     }
-    let mut body = body.clone();
+    let mut body = MirBody::clone(body);
     for block in &mut body.blocks {
         block.phis.retain(|phi| !removed.contains(&phi.result));
         for op in &mut block.ops {
@@ -124,7 +125,7 @@ pub(crate) fn pruned_phis(body: &MirBody, roots: &BTreeSet<Value>) -> MirBody {
             op.merges = op.merges.iter().filter(|(source, _)| !removed.contains(source)).map(|(&s, &t)| (s, t)).collect();
         }
     }
-    body
+    Rc::new(body)
 }
 
 /// Follow an id-keyed substitution until its provider is unchanged.
@@ -552,6 +553,7 @@ pub(crate) fn values(body: &MirBody) -> impl Iterator<Item = Value> + '_ {
 
 #[cfg(test)]
 mod tests {
+    use std::rc::Rc;
     use std::collections::{BTreeMap, BTreeSet};
 
     use crate::model::ir::Operation;
@@ -591,7 +593,7 @@ mod tests {
                 vec![MirBlock::new(0, vec![], vec![], vec![1]), MirBlock::new(1, phis.clone(), ops, vec![1])],
             );
             let roots = if reader == "root" { BTreeSet::from([first]) } else { BTreeSet::new() };
-            let result = pruned_phis(&body, &roots);
+            let result = pruned_phis(&Rc::new(body), &roots);
             assert_eq!(result.blocks[1].phis, if reader == "none" { vec![] } else { phis }, "{reader}");
         }
     }

@@ -7,6 +7,7 @@
 //! `test_nbody_scaled_index_is_bounded_only_inside_its_loop`,
 //! `test_rngarm_writes_its_counter_only_after_the_loop`.
 
+use std::rc::Rc;
 use crate::support::hash::IndexMap;
 use num_bigint::BigInt;
 
@@ -89,7 +90,7 @@ fn test_guard_refines_subscript_without_leaking_to_the_join() {
     let body = guarded_loop();
     let counter = body.blocks[1].phis[0].result;
     let offset = value(6, 30);
-    let known = bounded(&body).unwrap();
+    let known = bounded(&Rc::new(MirBody::clone(&body))).unwrap();
 
     assert_eq!(known[&30][&counter], interval(0, 3, 2));
     assert_eq!(known[&30][&offset], interval(0, 6, 2));

@@ -29,7 +29,7 @@ fn phi(result: Value, incoming: &[(i64, Value)]) -> Phi {
 }
 
 fn reused_(body: &MirBody, insert: bool) -> MirBody {
-    reused(body, None, insert).expect("reused")
+    MirBody::clone(&reused(&std::rc::Rc::new(body.clone()), None, insert).expect("reused"))
 }
 
 // ---- tests/test_memory_joins.py ----

@@ -5,6 +5,7 @@
 
 #![allow(dead_code)] // its consumers are not yet ported
 
+use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::support::hash::IndexMap;
@@ -161,7 +162,7 @@ pub(crate) fn _memory(
 
 /// Operation identities proven numerically exact; pending checks remain separate.
 pub(crate) fn exact(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     constants: &IndexMap<Value, Finite>,
     dgroup: &BTreeSet<i64>,
 ) -> Result<BTreeSet<OpOccurrence>, String> {
@@ -169,7 +170,7 @@ pub(crate) fn exact(
         return Ok(BTreeSet::new());
     }
     let mut safe = BTreeSet::new();
-    let mut shadow = body.clone();
+    let mut shadow = MirBody::clone(body);
     for block in &mut shadow.blocks {
         for op in &mut block.ops {
             if op.barrier() || op.kind == Kind::Opaque || (op.kind == Kind::Call && op.stores.is_empty()) {
@@ -177,6 +178,7 @@ pub(crate) fn exact(
             }
         }
     }
+    let shadow = Rc::new(shadow);
     let memory = floatfacts::cells(&shadow, dgroup, &IndexMap::default());
     let scoped = ranges::bounded(body)?;
     let definitions = body

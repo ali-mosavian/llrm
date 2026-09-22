@@ -4,6 +4,7 @@
 //! know about the module it is compiling is given when the pass is made.
 
 use std::any::Any;
+use std::rc::Rc;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -25,7 +26,7 @@ pub trait MIRTransform {
         ""
     }
 
-    fn transform(&mut self, body: MirBody) -> Result<MirBody, String> {
+    fn transform(&mut self, body: Rc<MirBody>) -> Result<Rc<MirBody>, String> {
         let _ = body;
         Err(format!("{} has no transform", self.class_name()))
     }

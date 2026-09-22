@@ -4,6 +4,7 @@
 //! a store also defines a fresh variable, a load becomes a use of it, and
 //! `ssa::constructed` places the phis.
 
+use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};
 use crate::support::hash::{HashMap, HashSet};
 
@@ -298,7 +299,7 @@ impl MIRTransform for Promote {
         "promote"
     }
 
-    fn transform(&mut self, body: MirBody) -> Result<MirBody, String> {
+    fn transform(&mut self, body: Rc<MirBody>) -> Result<Rc<MirBody>, String> {
         promoted(
             &body,
             &self.r#where.dgroup,
@@ -330,9 +331,9 @@ impl MIRTransform for Sroa {
         "sroa"
     }
 
-    fn transform(&mut self, body: MirBody) -> Result<MirBody, String> {
+    fn transform(&mut self, body: Rc<MirBody>) -> Result<Rc<MirBody>, String> {
         let body = _allocation_leaves(&body);
-        let body = _bounded_leaves(&body)?;
+        let body = Rc::new(_bounded_leaves(&body)?);
         let body = _canonical_leaf_types(&body);
         let body = _split_copies(&body);
         promoted(
@@ -746,7 +747,7 @@ pub(crate) fn _bounded_leaves(body: &MirBody) -> Result<MirBody, String> {
 /// A C aggregate move is byte-typed at the raise while a later field access
 /// carries the field's type; they are the same bytes.  Two explicit,
 /// distinct type classes retain the union/type-pun rejection.
-pub(crate) fn _canonical_leaf_types(body: &MirBody) -> MirBody {
+pub(crate) fn _canonical_leaf_types(body: &Rc<MirBody>) -> Rc<MirBody> {
     let mut types = IndexMap::<(MemoryObject, i64, i64), BTreeSet<String>>::default();
     for op in body.blocks.iter().flat_map(|block| &block.ops) {
         if op.source_backed || !op.absorbed.is_empty() || op.id.is_none() {
@@ -788,9 +789,9 @@ pub(crate) fn _canonical_leaf_types(body: &MirBody) -> MirBody {
             None => r#ref.clone(),
         }
     };
-    _rewritten_refs(body, reference, |op| {
+    Rc::new(_rewritten_refs(body, reference, |op| {
         op.source_backed || !op.absorbed.is_empty() || op.id.is_none()
-    })
+    }))
 }
 
 /// The exact scalar partition of a whole-object move destination, if any.
@@ -843,7 +844,7 @@ pub(crate) fn _copy_piece(r#ref: &MemRef, whole: &_Leaf, piece: &_Leaf, low: i64
 /// byte range must already have a contiguous scalar partition.  Far,
 /// indexed, volatile, overlapping or incompletely partitioned copies stay
 /// whole, as do source-backed instructions.
-pub(crate) fn _split_copies(body: &MirBody) -> MirBody {
+pub(crate) fn _split_copies(body: &Rc<MirBody>) -> Rc<MirBody> {
     let leaves = body
         .blocks
         .iter()
@@ -937,7 +938,7 @@ pub(crate) fn _split_copies(body: &MirBody) -> MirBody {
         blocks.push(block.with_ops(ops));
     }
     if changed {
-        body.with_blocks(blocks)
+        Rc::new(body.with_blocks(blocks))
     } else {
         body.clone()
     }
@@ -1270,13 +1271,13 @@ pub(crate) fn _available(
 /// Reuse eligible stored values without removing observable writes.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn promoted(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     dgroup: &BTreeSet<i64>,
     bounds: Option<&Bounds>,
     loop_only: bool,
     split_updates: bool,
     aggregate_only: bool,
-) -> Result<MirBody, String> {
+) -> Result<Rc<MirBody>, String> {
     let original = body;
     let mut aggregate_objects = None;
     if aggregate_only {
@@ -1299,7 +1300,7 @@ pub(crate) fn promoted(
     }
     let separated;
     let body = if split_updates {
-        separated = _separated(body, aggregate_objects.as_ref());
+        separated = Rc::new(_separated(body, aggregate_objects.as_ref()));
         &separated
     } else {
         body
@@ -1437,6 +1438,7 @@ pub(crate) fn promoted(
         &body.with_blocks(blocks),
         &holds.values().copied().collect(),
     )
+    .map(Rc::new)
     .map_err(|error| error.to_string())
 }
 

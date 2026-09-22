@@ -2,6 +2,7 @@
 //!
 //! Ported so far: the operand and naming half, up to `lowered`.
 
+use std::rc::Rc;
 use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::Arc;
@@ -1743,7 +1744,7 @@ pub struct Options<'a> {
 
 impl<'a> Lowering<'a> {
     pub fn new(
-        body: &MirBody,
+        body: &Rc<MirBody>,
         read: BTreeSet<u32>,
         calls: &'a IndexMap<i64, String>,
         absorbed: BTreeSet<u32>,
@@ -2336,12 +2337,12 @@ pub fn lowered(
     let default_hints = AllocationHints::new();
     let hints = options.hints.unwrap_or(&default_hints);
     let body = lower_switches::expanded(body).map_err(Unlowered)?;
-    let body = narrow::narrowed(&canonical::compares(named(&body)?));
+    let body = narrow::narrowed(&canonical::compares(Rc::new(named(&body)?)));
     let body = if body.stack_in_data { _near_frames(&body) } else { body };
     lower_floats::checked(&body)?;
     let roots: BTreeSet<Value> =
         body.blocks.iter().flat_map(|block| &block.phis).map(|phi| phi.result).filter(|value| !value.flags).collect();
-    let body = ssa::pruned_phis(&body, &roots);
+    let body = ssa::pruned_phis(&Rc::new(body), &roots);
     let values: PySet<Value> = ssa::values(&body).collect();
     let origin: IndexMap<Value, Register> =
         values.iter().filter_map(|value| hints.origin_of(*value).map(|r#where| (*value, r#where))).collect();
@@ -2635,7 +2636,7 @@ mod tests {
             let calls = IndexMap::default();
             let model = super::super::pointers::Model::new(super::super::pointers::HugeShift::Fixed(12)).unwrap();
             let mut making = Lowering::new(
-                &body,
+                &Rc::new(MirBody::clone(&body)),
                 BTreeSet::from([1, 2, 3]),
                 &calls,
                 BTreeSet::new(),
@@ -2662,7 +2663,7 @@ mod tests {
         let body = MirBody::new(0, vec![MirBlock::new(0, vec![], vec![op.clone()], vec![])]);
         let calls = IndexMap::default();
         let mut making =
-            Lowering::new(&body, BTreeSet::from([3]), &calls, BTreeSet::new(), None, "386", Options::default()).unwrap();
+            Lowering::new(&Rc::new(MirBody::clone(&body)), BTreeSet::from([3]), &calls, BTreeSet::new(), None, "386", Options::default()).unwrap();
         assert!(making.expand(&op, true).unwrap_err().0.contains("pointer ABI"));
     }
 
@@ -2683,7 +2684,7 @@ mod tests {
         let calls = IndexMap::default();
         let body = MirBody::new(0, vec![]);
         let mut lowering =
-            Lowering::new(&body, BTreeSet::new(), &calls, BTreeSet::new(), None, "386", Options::default()).unwrap();
+            Lowering::new(&Rc::new(MirBody::clone(&body)), BTreeSet::new(), &calls, BTreeSet::new(), None, "386", Options::default()).unwrap();
         _fill(&op, &mut lowering, preserve_flags).unwrap()
     }
 

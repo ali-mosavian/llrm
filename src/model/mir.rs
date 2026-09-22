@@ -1323,6 +1323,13 @@ impl MirBody {
     }
 }
 
+// Proof caches key on a body's identity, so a shared body must not change:
+// no Cell, RefCell or Rc may hide inside one.  All three are !Sync.
+const _: () = {
+    const fn frozen<T: Sync>() {}
+    frozen::<MirBody>();
+};
+
 /// Private raise-time placement view, sufficient only to externalize
 /// `AllocationHints`.  Rust has no struct inheritance, so `Deref` gives this
 /// the same read-only body surface as Python's `_RaisedBody(MirBody)` while

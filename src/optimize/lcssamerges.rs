@@ -2,6 +2,7 @@
 //!
 //! Python's `ValueError` from `ssa.substituted` is the `Err` text.
 
+use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::support::hash::IndexMap;
@@ -10,7 +11,7 @@ use crate::analysis::loops::{self, Loop};
 use crate::analysis::ssa;
 use crate::model::mir::{MirBlock, MirBody, Phi, Value};
 
-pub(crate) fn closed(body: &MirBody, loop_: &Loop) -> Result<MirBody, String> {
+pub(crate) fn closed(body: &Rc<MirBody>, loop_: &Loop) -> Result<Rc<MirBody>, String> {
     let mut body = body.clone();
     let predecessors = loops::predecessors(&body.blocks);
     let dominators = loops::dominators(&body.blocks, Some(body.entry));
@@ -91,12 +92,12 @@ pub(crate) fn closed(body: &MirBody, loop_: &Loop) -> Result<MirBody, String> {
 }
 
 pub(crate) fn _merged(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     value: Value,
     needed: &BTreeSet<i64>,
     exits: &BTreeSet<i64>,
     predecessors: &BTreeMap<i64, BTreeSet<i64>>,
-) -> Result<MirBody, String> {
+) -> Result<Rc<MirBody>, String> {
     let mut reaching = needed
         .iter()
         .map(|&at| (at, if exits.contains(&at) { BTreeSet::from([at]) } else { BTreeSet::new() }))
@@ -211,7 +212,7 @@ pub(crate) fn _merged(
         };
         blocks.push(MirBlock { phis: phis_here, ..block.with_ops(ops) });
     }
-    Ok(body.with_blocks(blocks))
+    Ok(Rc::new(body.with_blocks(blocks)))
 }
 
 #[cfg(test)]

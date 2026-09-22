@@ -2,6 +2,7 @@
 //!
 //! Python's `ValueError` from `ssa.substituted` is the `Err` text.
 
+use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::support::hash::IndexMap;
@@ -23,13 +24,13 @@ impl MIRTransform for LoopClosedSSA {
         "lcssa"
     }
 
-    fn transform(&mut self, body: MirBody) -> Result<MirBody, String> {
+    fn transform(&mut self, body: Rc<MirBody>) -> Result<Rc<MirBody>, String> {
         closed(&body)
     }
 }
 
 /// Return `body` with every supported natural loop in closed SSA form.
-pub(crate) fn closed(body: &MirBody) -> Result<MirBody, String> {
+pub(crate) fn closed(body: &Rc<MirBody>) -> Result<Rc<MirBody>, String> {
     let mut result = body.clone();
     // loops() deliberately returns inner loops first.  Closing an inner loop
     // first makes its exit value an ordinary definition in an enclosing loop.
@@ -39,7 +40,7 @@ pub(crate) fn closed(body: &MirBody) -> Result<MirBody, String> {
     Ok(result)
 }
 
-pub(crate) fn _closed_loop(body: &MirBody, loop_: &Loop) -> Result<MirBody, String> {
+pub(crate) fn _closed_loop(body: &Rc<MirBody>, loop_: &Loop) -> Result<Rc<MirBody>, String> {
     let blocks = body.blocks.iter().map(|block| (block.at, block)).collect::<BTreeMap<_, _>>();
     let exiting = body
         .blocks
@@ -188,7 +189,7 @@ pub(crate) fn _closed_loop(body: &MirBody, loop_: &Loop) -> Result<MirBody, Stri
     };
 
     let blocks = body.blocks.iter().map(rewritten).collect::<Result<Vec<_>, _>>()?;
-    Ok(body.with_blocks(blocks))
+    Ok(Rc::new(body.with_blocks(blocks)))
 }
 
 #[cfg(test)]

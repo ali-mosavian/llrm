@@ -3,6 +3,7 @@
 //! Python's `is` on an unchanged body becomes `==`: a grouping always adds a
 //! block, so a changed body never equals its input.
 
+use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::analysis::{loops, ssa};
@@ -22,12 +23,12 @@ impl MIRTransform for LoopSimplify {
         "loopsimplify"
     }
 
-    fn transform(&mut self, body: MirBody) -> Result<MirBody, String> {
+    fn transform(&mut self, body: Rc<MirBody>) -> Result<Rc<MirBody>, String> {
         Ok(simplified(&body))
     }
 }
 
-pub(crate) fn grouped(body: &MirBody, target: i64, sources: &BTreeSet<i64>) -> MirBody {
+pub(crate) fn grouped(body: &Rc<MirBody>, target: i64, sources: &BTreeSet<i64>) -> Rc<MirBody> {
     let destination = body.block(target);
     let predecessors = loops::predecessors(&body.blocks);
     let Some(destination) = destination else {
@@ -119,10 +120,10 @@ pub(crate) fn grouped(body: &MirBody, target: i64, sources: &BTreeSet<i64>) -> M
         changed.push(block);
     }
     changed.push(bridge);
-    body.with_blocks(changed)
+    Rc::new(body.with_blocks(changed))
 }
 
-pub(crate) fn simplified(body: &MirBody) -> MirBody {
+pub(crate) fn simplified(body: &Rc<MirBody>) -> Rc<MirBody> {
     let mut body = body.clone();
     if !loops::irreducible(&body.blocks, Some(body.entry)).is_empty() {
         return body;
@@ -143,13 +144,13 @@ pub(crate) fn simplified(body: &MirBody) -> MirBody {
         };
         if outside.len() != 1 || parent.succ != [original.header] {
             candidate = grouped(&candidate, original.header, &outside);
-            if candidate == body {
+            if Rc::ptr_eq(&candidate, &body) {
                 continue;
             }
         }
         if original.latches.len() != 1 {
             let changed = grouped(&candidate, original.header, &original.latches);
-            if changed == candidate {
+            if Rc::ptr_eq(&changed, &candidate) {
                 continue;
             }
             candidate = changed;
@@ -173,7 +174,7 @@ pub(crate) fn simplified(body: &MirBody) -> MirBody {
             let sources = reaching.intersection(&current.body).copied().collect::<BTreeSet<_>>();
             if !reaching.is_subset(&current.body) {
                 let changed = grouped(&candidate, target, &sources);
-                if changed == candidate {
+                if Rc::ptr_eq(&changed, &candidate) {
                     broke = true;
                     break;
                 }

@@ -6,6 +6,7 @@
 //! phis and through exact pointer spill slots.  Unknown stores kill spill
 //! facts; they never manufacture a disjointness proof.
 
+use std::rc::Rc;
 use std::collections::BTreeSet;
 use std::sync::LazyLock;
 
@@ -1102,7 +1103,7 @@ fn _keys_overlap(one: Option<&CellKey>, other: Option<&CellKey>) -> bool {
 }
 
 /// Known `value == residue (mod modulus)` facts; modulus zero is exact.
-pub fn congruences(body: &MirBody) -> IndexMap<Value, (BigInt, BigInt)> {
+pub fn congruences(body: &Rc<MirBody>) -> IndexMap<Value, (BigInt, BigInt)> {
     let constants = consts::known(body, None, None, None, None);
     let values = body.values().into_iter().map(|value| (value.id, value)).collect::<IndexMap<_, _>>();
     let mut result: IndexMap<Value, (BigInt, BigInt)> = IndexMap::default();
@@ -1288,7 +1289,7 @@ pub fn named_bytes(body: &MirBody) -> NamedBytes {
 }
 
 /// Attach solved provenance to every indirect reference in a body.
-pub fn annotated(body: &MirBody) -> Result<MirBody, String> {
+pub fn annotated(body: &Rc<MirBody>) -> Result<MirBody, String> {
     let facts = points_to(body, None, None)?;
     let bounded = ranges::bounded(body)?;
     let constants = ranges::constants(body, None, None);
@@ -1416,7 +1417,7 @@ pub fn annotated(body: &MirBody) -> Result<MirBody, String> {
         tagged.ops = ops;
         blocks.push(tagged);
     }
-    let mut annotated = body.clone();
+    let mut annotated = MirBody::clone(body);
     annotated.blocks = blocks;
     Ok(annotated)
 }
@@ -1424,6 +1425,7 @@ pub fn annotated(body: &MirBody) -> Result<MirBody, String> {
 #[cfg(test)]
 mod tests {
     //! Ports of `tests/test_mir_alias.py`.
+    use std::rc::Rc;
 
     use std::collections::BTreeSet;
 
@@ -1574,7 +1576,7 @@ mod tests {
         let mut made = MirBody::new(1, vec![MirBlock::new(1, vec![], vec![push], vec![])]);
         made.sealed = true;
 
-        let written = annotated(&made).unwrap().blocks[0].ops[0].stores[0].clone();
+        let written = annotated(&Rc::new(MirBody::clone(&made))).unwrap().blocks[0].ops[0].stores[0].clone();
         let local = frame(-22);
 
         assert!(written.excludes.contains(&WHOLE_FRAME));
@@ -1630,7 +1632,7 @@ mod tests {
         let mut made = body(vec![MirBlock::new(0, vec![], vec![make_address, load], vec![])], &[], &[]);
         made.sealed = true;
 
-        let tagged = annotated(&made).unwrap().blocks[0].ops[1].loads[0].clone();
+        let tagged = annotated(&Rc::new(MirBody::clone(&made))).unwrap().blocks[0].ops[1].loads[0].clone();
 
         let provenance = tagged.provenance.expect("a derived provenance");
         let kinds = provenance.slices.iter().map(|one| one.object.kind).collect::<BTreeSet<_>>();
@@ -1895,7 +1897,7 @@ mod tests {
         );
         made.sealed = true;
 
-        let tagged = annotated(&made).unwrap().blocks[0].ops[0].stores[0].clone();
+        let tagged = annotated(&Rc::new(MirBody::clone(&made))).unwrap().blocks[0].ops[0].stores[0].clone();
 
         let provenance = tagged.provenance.expect("a merged provenance");
         let objects = provenance.slices.iter().map(|one| one.object.clone()).collect::<BTreeSet<_>>();
@@ -1922,11 +1924,11 @@ mod tests {
         load.loads = vec![reference];
         made.blocks[3].ops.push(load);
 
-        let strides = congruences(&made)
+        let strides = congruences(&Rc::new(MirBody::clone(&made)))
             .into_iter()
             .map(|(value, (modulus, residue))| format!("{value}: ({modulus}, {residue})"))
             .collect::<Vec<_>>();
-        let tagged = annotated(&made).unwrap().blocks[3].ops[1].loads[0].repr();
+        let tagged = annotated(&Rc::new(MirBody::clone(&made))).unwrap().blocks[3].ops[1].loads[0].repr();
 
         assert_eq!(strides, ["v2: (1, 0)", "v1: (0, 0)", "v6: (2, 0)"]);
         assert_eq!(

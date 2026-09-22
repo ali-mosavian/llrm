@@ -2,6 +2,7 @@
 //!
 //! Port of `qbopt/optimize/unroll.py`.
 
+use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::support::hash::IndexMap;
@@ -34,7 +35,7 @@ impl MIRTransform for Unroll {
         "unroll"
     }
 
-    fn transform(&mut self, body: MirBody) -> Result<MirBody, String> {
+    fn transform(&mut self, body: Rc<MirBody>) -> Result<Rc<MirBody>, String> {
         expanded(&body, &self.r#where, &self.r#where.named(), &BTreeSet::new(), None)
     }
 }
@@ -44,12 +45,12 @@ fn substitution(error: ssa::SubstitutionError) -> String {
 }
 
 pub fn expanded(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     r#where: &Where,
     calls: &IndexMap<i64, String>,
     skip: &BTreeSet<i64>,
     tried: Option<&BTreeSet<Signature>>,
-) -> Result<MirBody, String> {
+) -> Result<Rc<MirBody>, String> {
     let blocks = body
         .blocks
         .iter()
@@ -217,7 +218,7 @@ pub fn expanded(
         }) {
             continue;
         }
-        let candidate = _expanded(body, &loop_, header, latch, &bridge_ops, &latch_ops, exit_at, entry, count)?;
+        let candidate = Rc::new(_expanded(body, &loop_, header, latch, &bridge_ops, &latch_ops, exit_at, entry, count)?);
         if count > 4 && floating_loop {
             let exact = floatfacts::known(&candidate, dgroup, calls, None);
             let results = candidate
@@ -351,12 +352,12 @@ pub(crate) fn _rejection(
 /// `tried` outlives this call: the fixed point asks every round, and a loop
 /// it already rejected, unchanged, is not asked about again.
 pub fn optimized(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     r#where: &Where,
-    optimize: &mut dyn FnMut(MirBody) -> Result<MirBody, String>,
+    optimize: &mut dyn FnMut(Rc<MirBody>) -> Result<Rc<MirBody>, String>,
     tried: &std::cell::RefCell<BTreeSet<Signature>>,
     mut watch: Option<&mut dyn FnMut(&str, &MirBody)>,
-) -> Result<MirBody, String> {
+) -> Result<Rc<MirBody>, String> {
     if !priced(body, r#where) {
         return Ok(body.clone());
     }
@@ -364,7 +365,7 @@ pub fn optimized(
     let mut rejected = BTreeSet::<i64>::new();
     loop {
         let candidate = expanded(&body, r#where, &r#where.named(), &rejected, Some(&tried.borrow()))?;
-        if candidate == body {
+        if Rc::ptr_eq(&candidate, &body) {
             return Ok(body);
         }
         let additions = &candidate.repetitions[body.repetitions.len()..];
@@ -400,7 +401,7 @@ pub(crate) fn priced(body: &MirBody, r#where: &Where) -> bool {
     profit::r#static(body, &r#where.costs).is_some()
 }
 
-fn _signature(body: &MirBody, latch: i64, count: i64, r#where: &Where) -> Signature {
+fn _signature(body: &Rc<MirBody>, latch: i64, count: i64, r#where: &Where) -> Signature {
     let found = loops::loops(&body.blocks, Some(body.entry))
         .into_iter()
         .filter(|one| one.latches.contains(&latch))

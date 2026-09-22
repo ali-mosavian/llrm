@@ -1085,7 +1085,7 @@ fn _optimized(
     // optimization is running.
     let (rooted, temporary_root) = _machine_side_entry(&optimizer_body, &entries)?;
     let transformed = flow::optimized(
-        &rooted,
+        &Rc::new(rooted),
         &dgroup,
         &semantic_calls,
         ProfileOrName::Profile(target),
@@ -1438,8 +1438,9 @@ pub fn assembled(
         let ordinary_fallback = ordinary_block.filter(|block| block.succ.len() == 1).map(|block| block.succ[0]);
         let external_entries = _external_entries(function, handler_at);
         let (machine_body, temporary_root) = _machine_side_entry(&physical.lowered.body, &external_entries)?;
-        let machine_body = rotate::entered(&machine_body).map_err(|error| CompileError::Value(error.to_string()))?;
-        let rotated = Lowered { body: machine_body.clone(), ..physical.lowered.clone() };
+        let machine_body =
+            rotate::entered(&Rc::new(machine_body)).map_err(|error| CompileError::Value(error.to_string()))?;
+        let rotated = Lowered { body: mir::MirBody::clone(&machine_body), ..physical.lowered.clone() };
         _observe(&mut observer, "rotated-mir", StageValue::Lowered(&rotated), Some(function), None)?;
         let low = lower::lowered(
             &body.name,

@@ -2,6 +2,7 @@
 //! Skipped, needing the corpus and `transform.applied`:
 //! test_compiled_early_exit_accumulator_is_closed.
 
+use std::rc::Rc;
 use std::collections::BTreeSet;
 
 use crate::analysis::loops;
@@ -23,8 +24,8 @@ fn multiple_exits() -> (MirBody, Value) {
 #[test]
 fn test_distinct_exits_merge_before_the_downstream_use() {
     let (body, carried) = multiple_exits();
-    let result = closed(&body).unwrap();
-    assert_ne!(result, body);
+    let result = closed(&Rc::new(MirBody::clone(&body))).unwrap();
+    assert_ne!(*result, body);
     let (first, second, join) = (result.block(3).unwrap(), result.block(4).unwrap(), result.block(5).unwrap());
     assert_eq!(first.phis[0].incoming, incoming(&[(1, carried)]));
     assert_eq!(second.phis[0].incoming, incoming(&[(2, carried)]));
@@ -47,7 +48,7 @@ fn test_bypass_phi_keeps_its_non_loop_input() {
         vec![],
         vec![],
     ));
-    let result = closed(&body).unwrap();
+    let result = closed(&Rc::new(MirBody::clone(&body))).unwrap();
     let join = result.block(5).unwrap();
     let bypass = result.block(6).unwrap();
     assert!(!join.phis.is_empty());
@@ -59,7 +60,7 @@ fn test_bypass_phi_keeps_its_non_loop_input() {
 fn test_direct_use_after_a_bypass_is_not_fabricated() {
     let (mut body, _) = multiple_exits();
     body.blocks[0].succ = vec![1, 5];
-    assert_eq!(closed(&body).unwrap(), body);
+    assert_eq!(closed(&Rc::new(MirBody::clone(&body))).unwrap(), Rc::new(body));
 }
 
 #[test]
@@ -68,8 +69,8 @@ fn test_following_cycle_keeps_complete_phi_edges() {
     let last = body.blocks.len() - 1;
     body.blocks[last].succ = vec![5, 6];
     body.blocks.push(MirBlock::new(6, vec![], vec![], vec![]));
-    let result = closed(&body).unwrap();
-    assert_ne!(result, body);
+    let result = closed(&Rc::new(MirBody::clone(&body))).unwrap();
+    assert_ne!(*result, body);
     let predecessors = loops::predecessors(&result.blocks);
     for block in &result.blocks {
         for phi in &block.phis {

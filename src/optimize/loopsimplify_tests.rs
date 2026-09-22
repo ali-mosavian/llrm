@@ -3,6 +3,8 @@
 //! test_adjacent_angle_loops_reach_a_fixed_point,
 //! test_real_timer_loop_has_one_backedge.
 
+use std::rc::Rc;
+use crate::model::mir::MirBody;
 use std::collections::BTreeSet;
 
 use super::{grouped, simplified};
@@ -29,7 +31,7 @@ fn test_grouping_preserves_each_phi_edge_value() {
     blocks.extend(body.blocks[2..].iter().cloned());
     blocks.push(other);
     let body = crate::model::mir::MirBody { blocks, ..body };
-    let result = grouped(&body, 1, &BTreeSet::from([0, 4]));
+    let result = grouped(&Rc::new(MirBody::clone(&body)), 1, &BTreeSet::from([0, 4]));
     let bridge = result.blocks.last().unwrap();
     assert_eq!(bridge.phis[0].incoming, incoming(&[(0, seed), (4, other_seed)]));
     let header = result.block(1).unwrap();
@@ -52,7 +54,7 @@ fn test_unsupported_group_is_atomic() {
         } else {
             body.blocks[1].phis[0].incoming = incoming(&[]);
         }
-        assert_eq!(grouped(&body, target, &sources), body, "{hazard}");
+        assert_eq!(grouped(&Rc::new(MirBody::clone(&body)), target, &sources), Rc::new(body), "{hazard}");
     }
 }
 
@@ -75,9 +77,9 @@ fn test_conditional_entry_and_shared_exit_become_dedicated() {
         let header_at = header.at;
         let exit_at = exit_block.at;
         let body = crate::model::mir::MirBody { blocks: vec![entry, header, latch, exit_block], ..body };
-        let result = simplified(&body);
+        let result = simplified(&Rc::new(MirBody::clone(&body)));
         if unsupported_exit {
-            assert_eq!(result, body);
+            assert_eq!(result, Rc::new(body));
             continue;
         }
         let found = loops::loops(&result.blocks, Some(result.entry));

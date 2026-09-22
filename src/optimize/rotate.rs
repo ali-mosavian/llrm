@@ -8,6 +8,7 @@
 //! `occurrence` (block index, op index) comparison; an exception from
 //! `ssa.substituted` is a `SubstitutionError`.
 
+use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::analysis::loops::{self, Loop};
@@ -25,7 +26,7 @@ use super::{cfg, transform};
 /// After the passes, not among them: a rotated loop is no longer the
 /// pretested shape the counted-loop analyses read, and peeling and
 /// unrolling it in a later round found no loop to work on.
-pub(crate) fn entered(body: &MirBody) -> Result<MirBody, SubstitutionError> {
+pub(crate) fn entered(body: &Rc<MirBody>) -> Result<Rc<MirBody>, SubstitutionError> {
     cfg::merged(&rotated(&_counted_down(body)?)?)
 }
 
@@ -46,7 +47,7 @@ pub(crate) fn entered(body: &MirBody) -> Result<MirBody, SubstitutionError> {
 /// The first implementation deliberately takes the canonical one-body-block
 /// form produced by loop simplification.  More involved loops remain on the
 /// original representation rather than acquiring a partially repaired CFG.
-pub(crate) fn _counted_down(body: &MirBody) -> Result<MirBody, SubstitutionError> {
+pub(crate) fn _counted_down(body: &Rc<MirBody>) -> Result<Rc<MirBody>, SubstitutionError> {
     let blocks = body
         .blocks
         .iter()
@@ -257,7 +258,7 @@ pub(crate) fn _counted_down(body: &MirBody) -> Result<MirBody, SubstitutionError
         let changed = body.with_blocks(rewritten);
         let changed_header = changed.block(header.at).expect("header is a block");
         let changed_latch = changed.block(latch.at).expect("latch is a block");
-        return _counted_down(&at_body(
+        return _counted_down(&Rc::new(at_body(
             &changed,
             &loop_,
             preheader,
@@ -265,12 +266,12 @@ pub(crate) fn _counted_down(body: &MirBody) -> Result<MirBody, SubstitutionError
             changed_latch,
             &entry_ops,
             Some(&[changed_latch.at, proof.exit]),
-        )?);
+        )?));
     }
     Ok(body.clone())
 }
 
-pub(crate) fn rotated(body: &MirBody) -> Result<MirBody, SubstitutionError> {
+pub(crate) fn rotated(body: &Rc<MirBody>) -> Result<Rc<MirBody>, SubstitutionError> {
     let blocks = body
         .blocks
         .iter()
@@ -338,9 +339,7 @@ pub(crate) fn rotated(body: &MirBody) -> Result<MirBody, SubstitutionError> {
         let body = _step_test(body, &loop_, header);
         let header = body.block(header.at).expect("header is a block");
         let first = body.block(first.at).expect("first is a block");
-        return rotated(&at_body(
-            &body, &loop_, preheader, header, first, &ops, None,
-        )?);
+        return rotated(&Rc::new(at_body(&body, &loop_, preheader, header, first, &ops, None)?));
     }
     Ok(body.clone())
 }
@@ -352,7 +351,7 @@ pub(crate) fn rotated(body: &MirBody) -> Result<MirBody, SubstitutionError> {
 /// whether that updated recurrence is zero, a second compare computes the
 /// flags the update already produced.  Keep this in MIR: the relationship is
 /// a loop fact, not a post-allocation instruction coincidence.
-pub(crate) fn _step_test(body: &MirBody, loop_: &Loop, header: &MirBlock) -> MirBody {
+pub(crate) fn _step_test(body: &Rc<MirBody>, loop_: &Loop, header: &MirBlock) -> Rc<MirBody> {
     if loop_.latches.len() != 1 || header.ops.last().is_none_or(|op| op.kind != Kind::Branch) {
         return body.clone();
     }
@@ -519,7 +518,7 @@ pub(crate) fn _step_test(body: &MirBody, loop_: &Loop, header: &MirBlock) -> Mir
             }
             rewritten.push(block.with_ops(ops));
         }
-        return body.with_blocks(rewritten);
+        return Rc::new(body.with_blocks(rewritten));
     }
     body.clone()
 }

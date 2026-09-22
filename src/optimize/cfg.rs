@@ -2,6 +2,7 @@
 //!
 //! Direct port of `qbopt/optimize/cfg.py`.
 
+use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::analysis::loops;
@@ -37,7 +38,7 @@ fn _empty(op: &Op) -> bool {
 /// Direct port of `qbopt/optimize/cfg.py:merged`.  Python lets substitution
 /// raise a `ValueError` for an id-keyed cycle; Rust returns that same refusal
 /// explicitly instead of retaining a partially rewritten body.
-pub(crate) fn merged(body: &MirBody) -> Result<MirBody, SubstitutionError> {
+pub(crate) fn merged(body: &Rc<MirBody>) -> Result<Rc<MirBody>, SubstitutionError> {
     // Python's `dict(body.repetitions)`: later duplicate keys win once for
     // the entire fixed-point walk.
     let repeated = body.repetitions.iter().copied().collect::<BTreeMap<_, _>>();
@@ -198,7 +199,7 @@ pub(crate) fn merged(body: &MirBody) -> Result<MirBody, SubstitutionError> {
                 cold: block.cold,
             });
         }
-        body.blocks = blocks;
+        Rc::make_mut(&mut body).blocks = blocks;
     }
 }
 
@@ -209,6 +210,7 @@ mod tests {
     //! test_udtrng_bounds_compare_explicit_values, test_udtrng_guards_constrain_subsequent_reads_of_slot,
     //! test_only_established_terminal_contracts_remove_return_edges,
     //! test_bools_constant_program_is_one_live_block, test_localp_keeps_termination_after_interleaved_procedure.
+    use std::rc::Rc;
     use super::merged;
     use crate::model::ir::Operation;
     use crate::model::mir::{Arg, Const, Held, Kind, MirBlock, MirBody, Op, OpCode, Phi, Value};
@@ -269,7 +271,7 @@ mod tests {
     /// `tests/test_cfg_merge.py:test_single_entry_phi_is_replaced_and_jump_bytes_are_retained`.
     #[test]
     fn test_single_entry_phi_is_replaced_and_jump_bytes_are_retained() {
-        let result = merged(&chain()).unwrap();
+        let result = merged(&Rc::new(MirBody::clone(&chain()))).unwrap();
         assert_eq!(result.blocks.len(), 1);
         let block = &result.blocks[0];
         assert!(block.phis.is_empty());
@@ -299,7 +301,7 @@ mod tests {
                 op.absorbed.clear();
             }
         }
-        let result = merged(&body).unwrap();
+        let result = merged(&Rc::new(MirBody::clone(&body))).unwrap();
         assert_eq!(result.blocks.len(), 1);
         assert_eq!(
             result.blocks[0].ops.last().unwrap().args,
@@ -331,7 +333,7 @@ mod tests {
         );
         body.blocks[1].ops[1].absorbed = vec![2];
 
-        let result = merged(&body).unwrap();
+        let result = merged(&Rc::new(MirBody::clone(&body))).unwrap();
         assert_eq!(result.blocks.len(), 2);
         assert_eq!(
             result.block(0).unwrap().ops.last().unwrap().args,
@@ -350,24 +352,24 @@ mod tests {
     fn test_merge_preserves_alternate_entries_and_layout() {
         let mut entry = chain();
         entry.entry = 10;
-        assert_eq!(merged(&entry).unwrap(), entry);
+        assert_eq!(*merged(&Rc::new(entry.clone())).unwrap(), entry);
 
         let mut other_predecessor = chain();
         other_predecessor
             .blocks
             .push(MirBlock::new(20, Vec::new(), Vec::new(), vec![10]));
-        assert_eq!(merged(&other_predecessor).unwrap(), other_predecessor);
+        assert_eq!(*merged(&Rc::new(other_predecessor.clone())).unwrap(), other_predecessor);
 
         let mut repetition = chain();
         repetition.repetitions = vec![(10, 2)];
-        assert_eq!(merged(&repetition).unwrap(), repetition);
+        assert_eq!(*merged(&Rc::new(repetition.clone())).unwrap(), repetition);
 
         let mut intervening = chain();
         let operation = intervening.blocks[1].ops[0].clone();
         intervening
             .blocks
             .push(MirBlock::new(5, Vec::new(), vec![operation], Vec::new()));
-        assert_eq!(merged(&intervening).unwrap(), intervening);
+        assert_eq!(*merged(&Rc::new(intervening.clone())).unwrap(), intervening);
     }
 
     /// A later join must still receive the value from the merged path.
@@ -387,7 +389,7 @@ mod tests {
         body.blocks
             .push(MirBlock::new(30, Vec::new(), Vec::new(), vec![20]));
 
-        let result = merged(&body).unwrap();
+        let result = merged(&Rc::new(MirBody::clone(&body))).unwrap();
         assert_eq!(result.block(0).unwrap().succ, vec![20]);
         assert_eq!(
             result.block(20).unwrap().phis[0]
@@ -418,7 +420,7 @@ mod tests {
         body.blocks
             .push(MirBlock::new(5, Vec::new(), vec![empty], Vec::new()));
 
-        let result = merged(&body).unwrap();
+        let result = merged(&Rc::new(MirBody::clone(&body))).unwrap();
         assert_eq!(result.blocks.len(), 1);
         assert_eq!(
             result.blocks[0]

@@ -6,6 +6,7 @@
 //! Results are modulo their own width.  Only the controlling recurrence must
 //! be proven not to wrap.
 
+use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::support::hash::IndexMap;
@@ -24,7 +25,7 @@ type Terms = Vec<(AffineOperand, BigInt)>;
 
 /// Python `evaluated`.  Python returns `body` itself when nothing changes;
 /// Rust returns an equal clone.
-pub(crate) fn evaluated(body: &MirBody) -> Result<MirBody, String> {
+pub(crate) fn evaluated(body: &Rc<MirBody>) -> Result<Rc<MirBody>, String> {
     let facts = consts::known(body, None, None, None, None);
     let blocks = body
         .blocks
@@ -189,7 +190,7 @@ pub(crate) fn evaluated(body: &MirBody) -> Result<MirBody, String> {
             .chain(header.ops[..header.ops.len() - 1].iter().map(_cleared))
             .chain(std::iter::once(jump))
             .collect();
-        let mut changed = body.clone();
+        let mut changed = MirBody::clone(body);
         changed.blocks = body
             .blocks
             .iter()
@@ -207,6 +208,7 @@ pub(crate) fn evaluated(body: &MirBody) -> Result<MirBody, String> {
             })
             .collect();
         return transform::_trivial_phis(&transform::_unreachable(&changed))
+            .map(Rc::new)
             .map_err(|error| error.to_string());
     }
     Ok(body.clone())
@@ -215,7 +217,7 @@ pub(crate) fn evaluated(body: &MirBody) -> Result<MirBody, String> {
 /// Python `_exit_terms`: sum a linear increment over N iterations using
 /// N(N-1)/2, before modular reduction.
 fn _exit_terms(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     loop_: &Loop,
     counters: &OrderedMap<u32, Affine>,
     count: &BigInt,
@@ -361,7 +363,7 @@ fn _exit_terms(
 
 /// Python `_widened_counters`.
 fn _widened_counters(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     loop_: &Loop,
     counters: &OrderedMap<u32, Affine>,
     facts: &IndexMap<Value, Known>,
@@ -428,12 +430,12 @@ fn _widened_counters(
 /// Python `_constant_exits`: replace constant live-outs after the loop,
 /// leaving its observable work intact.  `None` is Python returning `body`.
 fn _constant_exits(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     loop_: &Loop,
     exits: &IndexMap<u32, Terms>,
     exit_at: i64,
     facts: &IndexMap<Value, Known>,
-) -> Result<Option<MirBody>, String> {
+) -> Result<Option<Rc<MirBody>>, String> {
     let predecessors = loops::predecessors(&body.blocks);
     if predecessors.get(&exit_at).cloned().unwrap_or_default() != BTreeSet::from([loop_.header]) {
         return Ok(None);
@@ -574,8 +576,9 @@ fn _constant_exits(
         merged
     };
 
-    let changed = _substituted_exits(body, exit_at, &following, &added, &with_aliases(&swap))
-        .map_err(|error| error.to_string())?;
+    let changed = Rc::new(
+        _substituted_exits(body, exit_at, &following, &added, &with_aliases(&swap)).map_err(|error| error.to_string())?,
+    );
     let alive = transform::live(&changed)
         .into_iter()
         .map(|value| value.id)
@@ -602,7 +605,7 @@ fn _constant_exits(
         &added,
         &with_aliases(&profitable),
     )
-    .map(Some)
+    .map(|changed| Some(Rc::new(changed)))
     .map_err(|error| error.to_string())
 }
 

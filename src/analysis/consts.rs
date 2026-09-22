@@ -75,10 +75,15 @@ impl _MemoryQueries {
     pub(crate) fn resolve(&mut self, reference: &MemRef) -> Rc<MemRef> {
         let key = std::ptr::from_ref(reference) as usize;
         let known = &self.known;
-        self.addressed
-            .entry(key)
-            .or_insert_with(|| Rc::new(_addressed(reference, known)))
-            .clone()
+        if let Some(saved) = self.addressed.get(&key) {
+            if crate::support::checking_caches() {
+                assert!(format!("{saved:?}") == format!("{:?}", _addressed(reference, known)), "_MemoryQueries.resolve: a cache hit disagrees with its recomputation");
+            }
+            return Rc::clone(saved);
+        }
+        let made = Rc::new(_addressed(reference, known));
+        self.addressed.insert(key, Rc::clone(&made));
+        made
     }
 
     /// The space a resolved store lands in is its object, where its displacement is its offset there.
@@ -101,8 +106,17 @@ impl _MemoryQueries {
     pub(crate) fn may_overlap(&mut self, where_: (Addr, u32), reference: &Rc<MemRef>) -> bool {
         let key = (where_, Rc::as_ptr(reference) as usize);
         if let Some(answer) = self.overlaps.get(&key) {
+            if crate::support::checking_caches() {
+                assert_eq!(*answer, self._overlap(where_, reference), "_MemoryQueries.may_overlap: a cache hit disagrees with its recomputation");
+            }
             return *answer;
         }
+        let answer = self._overlap(where_, reference);
+        self.overlaps.insert(key, answer);
+        answer
+    }
+
+    fn _overlap(&self, where_: (Addr, u32), reference: &Rc<MemRef>) -> bool {
         let mut cell = MemRef::new(Some(where_.0), where_.1);
         let named = (0..i64::from(where_.1))
             .map(|byte| self.named.at.get(&where_.0.plus(byte)))
@@ -142,16 +156,7 @@ impl _MemoryQueries {
         // frozenset is not a `module.Group`: that is `layout=None`.  An
         // endpoint Rust cannot represent is taken to overlap.
         let _ = self.dgroup;
-        let answer = super::regions::overlapping(
-            &cell,
-            reference,
-            Some(&self.facts),
-            Some(&self.facts),
-            None,
-        )
-        .unwrap_or(true);
-        self.overlaps.insert(key, answer);
-        answer
+        super::regions::overlapping(&cell, reference, Some(&self.facts), Some(&self.facts), None).unwrap_or(true)
     }
 }
 
@@ -159,9 +164,9 @@ type ReuseKey = (usize, Option<BTreeSet<i64>>, Option<Vec<(i64, String)>>);
 
 thread_local! {
     #[allow(non_upper_case_globals)]
-    /// Python's `_reuse` context variable.  The saved body is compared as
-    /// well as its address: Python holds the body alive, Rust cannot.
-    static _reuse: RefCell<Option<HashMap<ReuseKey, (MirBody, IndexMap<Value, Known>)>>> =
+    /// Python's `_reuse` context variable.  Holding the body keeps its
+    /// address from being recycled, as Python's holding keeps its `id`.
+    static _reuse: RefCell<Option<HashMap<ReuseKey, (Rc<MirBody>, IndexMap<Value, Known>)>>> =
         const { RefCell::new(None) };
 }
 
@@ -174,7 +179,7 @@ pub(crate) fn reusing<T>(inside: impl FnOnce() -> T) -> T {
 }
 
 fn _reuse_key(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     dgroup: Option<&BTreeSet<i64>>,
     calls: Option<&IndexMap<i64, String>>,
     edges: Option<&IndexMap<(i64, i64), Cells>>,
@@ -188,7 +193,7 @@ fn _reuse_key(
         items.sort();
         items
     });
-    Some((std::ptr::from_ref(body) as usize, dgroup.cloned(), named))
+    Some((Rc::as_ptr(body) as usize, dgroup.cloned(), named))
 }
 
 /// The low `width` bytes of a value are `n`. Nothing is said above them.
@@ -959,24 +964,28 @@ fn _pointer_stores(body: &MirBody, _dgroup: &BTreeSet<i64>) -> IndexMap<Value, A
 /// know is some absolute segment; the ones that came out numbers keep the
 /// assumption and the rest lose it, until every one still assumed resolved.
 pub(crate) fn known(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     dgroup: Option<&BTreeSet<i64>>,
     calls: Option<&IndexMap<i64, String>>,
     edges: Option<&IndexMap<(i64, i64), Cells>>,
     initial: Option<&Cells>,
 ) -> IndexMap<Value, Known> {
     let key = _reuse_key(body, dgroup, calls, edges, initial);
+    let mut checked = None;
     if let Some(key) = &key {
         let saved = _reuse.with(|reuse| {
             reuse.borrow().as_ref().and_then(|cache| {
                 cache
                     .get(key)
-                    .filter(|(saved, _)| saved == body)
+                    .filter(|(saved, _)| Rc::ptr_eq(saved, body))
                     .map(|(_, facts)| facts.clone())
             })
         });
         if let Some(saved) = saved {
-            return saved;
+            if !crate::support::checking_caches() {
+                return saved;
+            }
+            checked = Some(saved);
         }
     }
     let mut allowed: Option<BTreeSet<Value>> = None;
@@ -988,10 +997,14 @@ pub(crate) fn known(
             .copied()
             .collect::<BTreeSet<_>>();
         if resolved == assumed {
+            if let Some(saved) = checked {
+                assert!(saved.iter().eq(got.iter()), "consts.known: a cache hit disagrees with its recomputation");
+                return saved;
+            }
             if let Some(key) = key {
                 _reuse.with(|reuse| {
                     if let Some(cache) = reuse.borrow_mut().as_mut() {
-                        cache.insert(key, (body.clone(), got.clone()));
+                        cache.insert(key, (Rc::clone(body), got.clone()));
                     }
                 });
             }
@@ -999,6 +1012,12 @@ pub(crate) fn known(
         }
         allowed = Some(resolved);
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Fixed points solved, for the tests that pin cache reuse to Python's.
+    pub(crate) static SOLVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 fn _solved(
@@ -1010,6 +1029,8 @@ fn _solved(
     mut assume: Option<BTreeSet<Value>>,
     allowed: Option<&BTreeSet<Value>>,
 ) -> (IndexMap<Value, Known>, BTreeSet<Value>) {
+    #[cfg(test)]
+    SOLVED.with(|solved| solved.set(solved.get() + 1));
     let mut facts = IndexMap::<Value, Known>::default();
     let mut carries = IndexMap::<Value, BigInt>::default();
     let mut held = IndexMap::<(i64, usize), Cells>::default();

@@ -5,6 +5,7 @@
 //! retain the residual loop as a correctness fallback, and let the normal
 //! fixed point prove the residual unreachable.
 
+use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};
 
 use num_bigint::BigInt;
@@ -41,7 +42,7 @@ impl MIRTransform for Peel {
         "peel"
     }
 
-    fn transform(&mut self, body: MirBody) -> Result<MirBody, String> {
+    fn transform(&mut self, body: Rc<MirBody>) -> Result<Rc<MirBody>, String> {
         let found = _candidate(&body, &self.r#where, &BTreeSet::new(), &BTreeSet::new())?;
         Ok(match found {
             None => body,
@@ -65,11 +66,11 @@ fn _conditional_floating(loop_: &Loop, blocks: &BTreeMap<i64, &MirBlock>) -> boo
 
 /// Clone the first bounded exact loop, returning body, latch, count and signature.
 fn _candidate(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     r#where: &Where,
     skip: &BTreeSet<i64>,
     tried: &BTreeSet<Signature>,
-) -> Result<Option<(MirBody, i64, i64, Signature)>, String> {
+) -> Result<Option<(Rc<MirBody>, i64, i64, Signature)>, String> {
     let closed = lcssa::closed(body)?;
     let facts = consts::known(&closed, Some(&r#where.dgroup), Some(&r#where.named()), None, None);
     for loop_ in loops::loops(&closed.blocks, Some(closed.entry)) {
@@ -111,7 +112,7 @@ fn _candidate(
         }
         let count = count.to_i64().expect("count fits");
         if let Some(candidate) = loopclone::peeled(&closed, &loop_, count)? {
-            return Ok(Some((candidate, latch, count, signature)));
+            return Ok(Some((Rc::new(candidate), latch, count, signature)));
         }
     }
     Ok(None)
@@ -119,12 +120,12 @@ fn _candidate(
 
 /// Peel exact loops transactionally and retain only target-priced wins.
 pub fn optimized(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     r#where: &Where,
-    optimize: &mut dyn FnMut(MirBody) -> Result<MirBody, String>,
+    optimize: &mut dyn FnMut(Rc<MirBody>) -> Result<Rc<MirBody>, String>,
     tried: &std::cell::RefCell<BTreeSet<Signature>>,
     mut watch: Option<&mut dyn FnMut(&str, &MirBody)>,
-) -> Result<MirBody, String> {
+) -> Result<Rc<MirBody>, String> {
     if !unroll::priced(body, r#where) {
         return Ok(body.clone());
     }

@@ -2,6 +2,7 @@
 
 #![allow(dead_code)] // The cfront optimizer port is its first production caller.
 
+use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::support::hash::IndexMap;
@@ -78,7 +79,7 @@ pub(crate) fn _cannot_return(body: &MirBody, terminal_calls: &BTreeSet<i64>) -> 
 /// their blocks in place for ordinary CFG cleanup.  Already-truncated blocks
 /// are returned unchanged, making it safe to use at the no-return fixed
 /// point boundary.
-pub(crate) fn after_terminal_calls(body: &MirBody, terminal_calls: &BTreeSet<i64>) -> MirBody {
+pub(crate) fn after_terminal_calls(body: &Rc<MirBody>, terminal_calls: &BTreeSet<i64>) -> Rc<MirBody> {
     let mut blocks = Vec::new();
     let mut changed = false;
     for block in &body.blocks {
@@ -111,9 +112,9 @@ pub(crate) fn after_terminal_calls(body: &MirBody, terminal_calls: &BTreeSet<i64
     // normalized here, rather than left as executable work for lowering.  The
     // shared CFG normalizer retains its source-byte owner as inert MIR, which
     // is the required object-emission provenance contract.
-    let mut made = body.clone();
+    let mut made = MirBody::clone(body);
     made.blocks = blocks;
-    transform::_unreachable(&made)
+    Rc::new(transform::_unreachable(&made))
 }
 
 #[cfg(test)]

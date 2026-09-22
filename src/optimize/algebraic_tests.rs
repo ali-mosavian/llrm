@@ -469,7 +469,7 @@ fn test_extracted_halves_recombine_to_the_original_value() {
             ),
             concat.clone(),
         ]);
-        let done = simplified(&body, &set(&[result]), &BTreeSet::new()).unwrap();
+        let done = simplified(&Rc::new(MirBody::clone(&body)), &set(&[result]), &BTreeSet::new()).unwrap();
         let done = done.blocks[0].ops.last().unwrap();
         if recombined {
             assert_eq!(done.kind, Kind::Copy);
@@ -551,7 +551,7 @@ fn test_joined_halves_are_consumed_as_halves() {
             );
         }
         let count = ops.len();
-        let done = simplified(&one_block(ops), &set(&[other]), &BTreeSet::new()).unwrap();
+        let done = simplified(&Rc::new(MirBody::clone(&one_block(ops))), &set(&[other]), &BTreeSet::new()).unwrap();
         let done = &done.blocks[0].ops;
         let readers = done.iter().filter(|op| op.uses.contains(&whole)).count();
         if mode != "halves" {
@@ -859,7 +859,7 @@ fn test_signed_power_division_preserves_quotient_and_remainder() {
             } else {
                 one_block(vec![copy, divide])
             };
-            let done = _divisions(&body);
+            let done = _divisions(&Rc::new(MirBody::clone(&body)));
             assert!(done.blocks[0].ops.iter().all(|op| op.kind != Kind::Divmod));
             let (lowest, highest) = (-(1_i64 << (bits - 1)), (1_i64 << (bits - 1)) - 1);
             for number in [
@@ -933,7 +933,7 @@ fn test_constant_word_concatenation() {
                 vec![],
             )
         };
-        let done = simplified(&one_block(vec![op]), &set(&[result]), &BTreeSet::new()).unwrap();
+        let done = simplified(&Rc::new(MirBody::clone(&one_block(vec![op]))), &set(&[result]), &BTreeSet::new()).unwrap();
         let done = &done.blocks[0].ops[0];
         assert_eq!(done.kind, Kind::Copy);
         assert_eq!(done.args, vec![constant(answer, 4)]);
@@ -1095,7 +1095,7 @@ fn test_reextending_an_already_zero_extended_low_byte_is_a_copy() {
     };
 
     let done = simplified(
-        &one_block(vec![first, second, used]),
+        &Rc::new(MirBody::clone(&one_block(vec![first, second, used]))),
         &BTreeSet::new(),
         &BTreeSet::new(),
     )

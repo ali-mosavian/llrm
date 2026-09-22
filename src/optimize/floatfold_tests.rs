@@ -131,9 +131,9 @@ fn test_storage_requires_exact_bits() {
         store.floating = Some(Semantics::new([Format::Extended80], format, Precision::Destination, Rounding::Dynamic));
         let body = body(0, vec![MirBlock::new(0, vec![], vec![load, store], vec![])]);
         let facts = IndexMap::from_iter([(source, Finite::new(number, false))]);
-        let changed = stored(&body, &facts);
+        let changed = stored(&Rc::new(MirBody::clone(&body)), &facts);
         let Some(expected) = expected else {
-            assert_eq!(changed, body);
+            assert_eq!(changed, Rc::new(body));
             continue;
         };
         assert_eq!(
@@ -180,9 +180,9 @@ fn test_exact_pair_keeps_checks_and_refuses_observable_results() {
         let mut ops = vec![load, conversion];
         ops.extend(extra);
         let body = body(0, vec![MirBlock::new(0, vec![], ops, vec![])]);
-        let changed = discarded(&body, &converted);
+        let changed = discarded(&Rc::new(MirBody::clone(&body)), &converted);
         if guard != "none" {
-            assert_eq!(changed, body, "{guard}");
+            assert_eq!(changed, Rc::new(body), "{guard}");
             continue;
         }
         assert_eq!(

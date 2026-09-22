@@ -3,6 +3,7 @@
 //! Tests: every test in `tests/test_ivshare.py` is skipped; each builds its
 //! input through `wholeseg.emitted`, which is not ported.
 
+use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::analysis::induction::{self, Affine, AffineOperand};
@@ -12,7 +13,7 @@ use crate::optimize::strength::_made;
 use crate::optimize::transform;
 
 /// Direct port of `qbopt/optimize/ivshare.py:shared`.
-pub(crate) fn shared(body: &MirBody) -> MirBody {
+pub(crate) fn shared(body: &Rc<MirBody>) -> Rc<MirBody> {
     let mut definitions: BTreeMap<u32, &Op> = BTreeMap::new();
     for block in &body.blocks {
         for op in &block.ops {
@@ -33,7 +34,7 @@ pub(crate) fn shared(body: &MirBody) -> MirBody {
         for derived in counters.values() {
             let twin = _twin(&counters, derived, header, &required);
             if let Some(twin) = twin {
-                return _replacing(body, header_index, derived, twin, derived.start.width());
+                return Rc::new(_replacing(body, header_index, derived, twin, derived.start.width()));
             }
             let AffineOperand::Held(start) = &derived.start else {
                 continue;
@@ -120,9 +121,9 @@ pub(crate) fn shared(body: &MirBody) -> MirBody {
             let mut changed = header.clone();
             changed.phis.remove(phi_index);
             changed.ops.insert(0, operation);
-            let mut result = body.clone();
+            let mut result = MirBody::clone(body);
             result.blocks[header_index] = changed;
-            return result;
+            return Rc::new(result);
         }
     }
     body.clone()

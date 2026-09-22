@@ -17,6 +17,7 @@
 //! In their place, one hand-built `i < 4; s += i` loop, with every expected
 //! listing taken from running Python `loopexit.evaluated` on the same body.
 
+use std::rc::Rc;
 use crate::analysis::{consts, loops};
 use crate::model::mir::{
     Arg, Cell, Const, Held, Kind, MemRef, MirBlock, MirBody, Op, OrderedMap, Phi, Value,
@@ -172,7 +173,7 @@ fn listing(body: &MirBody) -> Vec<String> {
 }
 
 fn known(body: &MirBody, id: u32) -> Option<(i64, u32)> {
-    consts::known(body, None, None, None, None)
+    consts::known(&Rc::new(body.clone()), None, None, None, None)
         .iter()
         .find(|(value, _)| value.id == id)
         .map(|(_, fact)| (i64::try_from(&fact.n).expect("small"), fact.width))
@@ -181,7 +182,7 @@ fn known(body: &MirBody, id: u32) -> Option<(i64, u32)> {
 #[test]
 fn disposable_loop_becomes_its_exit_values() {
     let body = build(None);
-    let result = evaluated(&body).expect("evaluated");
+    let result = evaluated(&Rc::new(MirBody::clone(&body))).expect("evaluated");
     assert!(loops::loops(&result.blocks, Some(result.entry)).is_empty());
     assert_eq!(
         listing(&result),
@@ -214,13 +215,13 @@ fn disposable_loop_becomes_its_exit_values() {
 #[test]
 fn accumulator_read_by_a_store_is_kept() {
     let body = build(Some("s"));
-    assert_eq!(evaluated(&body).expect("evaluated"), body);
+    assert_eq!(evaluated(&Rc::new(MirBody::clone(&body))).expect("evaluated"), Rc::new(body));
 }
 
 #[test]
 fn constant_exit_replaces_an_unobserved_accumulator() {
     let body = build(Some("i"));
-    let result = evaluated(&body).expect("evaluated");
+    let result = evaluated(&Rc::new(MirBody::clone(&body))).expect("evaluated");
     assert_eq!(loops::loops(&result.blocks, Some(result.entry)).len(), 1);
     assert_eq!(
         listing(&result)[listing(&result).len() - 3..],

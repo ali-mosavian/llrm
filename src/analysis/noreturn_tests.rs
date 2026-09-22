@@ -5,6 +5,7 @@
 //! object corpus, `runtime.for_module`, `lower`, `allocate`, `frame` and
 //! `prologue` on the BASIC path, not yet ported).
 
+use std::rc::Rc;
 use std::collections::BTreeSet;
 
 use crate::support::hash::IndexMap;
@@ -54,7 +55,7 @@ fn test_terminal_call_inerts_newly_unreachable_successor() {
         ],
     );
 
-    let trimmed = after_terminal_calls(&body, &BTreeSet::from([2]));
+    let trimmed = after_terminal_calls(&Rc::new(MirBody::clone(&body)), &BTreeSet::from([2]));
 
     assert!(trimmed.block(0).unwrap().succ.is_empty());
     let orphan = trimmed.block(10).unwrap();
@@ -76,7 +77,7 @@ fn test_terminal_call_inerts_its_same_block_source_tail() {
         ],
     );
 
-    let trimmed = after_terminal_calls(&body, &BTreeSet::from([2]));
+    let trimmed = after_terminal_calls(&Rc::new(MirBody::clone(&body)), &BTreeSet::from([2]));
 
     let owner = trimmed.block(0).unwrap().ops.last().unwrap();
     assert_eq!(owner.at, 3);

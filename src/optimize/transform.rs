@@ -2,6 +2,7 @@
 //! optimised body out.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
 use crate::support::hash::IndexMap;
 
@@ -80,7 +81,7 @@ pub(crate) const _PURE: [Kind; 30] = [
 ];
 
 /// One operation where two computed the same thing from the same values.
-pub(crate) fn subexpressions(body: &MirBody, dgroup: &BTreeSet<i64>, avoid_store_crossing: bool) -> Result<MirBody, String> {
+pub(crate) fn subexpressions(body: &Rc<MirBody>, dgroup: &BTreeSet<i64>, avoid_store_crossing: bool) -> Result<Rc<MirBody>, String> {
     use crate::analysis::{floatbounds, floatfacts, occurrence};
 
     let doms = loopy::dominators(&body.blocks, Some(body.entry));
@@ -192,7 +193,7 @@ pub(crate) fn subexpressions(body: &MirBody, dgroup: &BTreeSet<i64>, avoid_store
     if gone.is_empty() && floating_gone.is_empty() {
         return Ok(body.clone());
     }
-    let mut body = body.clone();
+    let mut body = MirBody::clone(body);
     if !floating_gone.is_empty() {
         let erased = floating_gone
             .iter()
@@ -220,7 +221,7 @@ pub(crate) fn subexpressions(body: &MirBody, dgroup: &BTreeSet<i64>, avoid_store
             .map_err(|error| error.to_string())?;
         blocks.push(MirBlock { phis, ..block.with_ops(ops) });
     }
-    Ok(MirBody { blocks, ..body })
+    Ok(Rc::new(MirBody { blocks, ..body }))
 }
 
 pub(crate) fn _reusable_float_path(
@@ -603,10 +604,10 @@ pub(crate) fn _read(body: &MirBody, value: Value) -> bool {
 /// The second divide becomes a copy of the first's answer, only where
 /// everything else it defined is dead.
 pub(crate) fn reused_divides(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     dgroup: &BTreeSet<i64>,
     found: Option<&std::sync::Arc<dyn std::any::Any + Send + Sync>>,
-) -> Result<MirBody, String> {
+) -> Result<Rc<MirBody>, String> {
     use crate::model::ir::Operation;
 
     let _ = found;
@@ -663,7 +664,7 @@ pub(crate) fn reused_divides(
         .iter()
         .map(|block| block.with_ops(block.ops.iter().map(|op| into.get(&std::ptr::from_ref(op)).unwrap_or(op).clone()).collect()))
         .collect();
-    Ok(body.with_blocks(blocks))
+    Ok(Rc::new(body.with_blocks(blocks)))
 }
 
 /// Each divide whose answers the divide before it already computed, as
@@ -718,23 +719,26 @@ pub(crate) fn _undisturbed(one: &Op, _earlier: &Op, between: &[Op], _dgroup: &BT
 }
 
 /// Anything standing inside a call's argument run, moved ahead of it.
-pub(crate) fn placed(body: &MirBody, dgroup: &BTreeSet<i64>, calls: &IndexMap<i64, String>) -> Result<MirBody, String> {
-    let mut out = body.clone();
-    for block in &mut out.blocks {
-        for index in (0..block.ops.len()).rev() {
-            if block.ops[index].kind != Kind::Call {
+pub(crate) fn placed(body: &Rc<MirBody>, dgroup: &BTreeSet<i64>, calls: &IndexMap<i64, String>) -> Result<Rc<MirBody>, String> {
+    // Copied on the first move, so an unchanged body comes back as itself.
+    let mut out: Option<MirBody> = None;
+    for number in 0..body.blocks.len() {
+        for index in (0..body.blocks[number].ops.len()).rev() {
+            let ops = &out.as_ref().unwrap_or(body).blocks[number].ops;
+            if ops[index].kind != Kind::Call {
                 continue;
             }
-            let Some((first, standing)) = _argument_run(&block.ops, index, dgroup, calls) else {
+            let Some((first, standing)) = _argument_run(ops, index, dgroup, calls) else {
                 continue;
             };
-            let kept = (0..block.ops.len()).filter(|at| !standing.contains(at)).collect::<Vec<_>>();
+            let kept = (0..ops.len()).filter(|at| !standing.contains(at)).collect::<Vec<_>>();
             let order = kept[..first].iter().chain(&standing).chain(&kept[first..]).copied().collect::<Vec<_>>();
+            let block = &mut out.get_or_insert_with(|| MirBody::clone(body)).blocks[number];
             let mut ops = std::mem::take(&mut block.ops).into_iter().map(Some).collect::<Vec<_>>();
             block.ops = order.into_iter().map(|at| ops[at].take().expect("each once")).collect();
         }
     }
-    Ok(out)
+    Ok(out.map_or_else(|| Rc::clone(body), Rc::new))
 }
 
 /// (where the run starts, which of its operations do not belong to it).
@@ -854,13 +858,13 @@ pub(crate) fn _empty_operation(op: &crate::model::mir::Op) -> crate::model::mir:
 
 /// Every store overwritten, or never observable, before anything read it, removed.
 pub(crate) fn without_dead_stores(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     _dgroup: &BTreeSet<i64>,
     calls: &IndexMap<i64, String>,
     private: Option<&dyn Fn(&mir::MemRef) -> bool>,
     bounds: Option<&IndexMap<(crate::objectfile::module::Space, i64), Vec<i64>>>,
     handles_errors: bool,
-) -> Result<MirBody, String> {
+) -> Result<Rc<MirBody>, String> {
     let gone: BTreeSet<*const Op> =
         crate::analysis::avail::dead_stores(body, None, calls, private, bounds, handles_errors)
             .into_iter()
@@ -869,7 +873,7 @@ pub(crate) fn without_dead_stores(
     if gone.is_empty() {
         return Ok(body.clone());
     }
-    let mut out = body.clone();
+    let mut out = MirBody::clone(body);
     out.blocks = body
         .blocks
         .iter()
@@ -879,7 +883,7 @@ pub(crate) fn without_dead_stores(
             block
         })
         .collect();
-    Ok(out)
+    Ok(Rc::new(out))
 }
 
 // A root register at the width an operand reads it. ir.ROOT maps the narrow
@@ -889,11 +893,11 @@ pub(crate) fn without_dead_stores(
 
 /// Replace known memory operands with SSA values, extending their uses.
 pub(crate) fn forwarded(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     _dgroup: &BTreeSet<i64>,
     calls: &IndexMap<i64, String>,
     avoid_store_crossing: bool,
-) -> Result<MirBody, String> {
+) -> Result<Rc<MirBody>, String> {
     use crate::analysis::avail::{self, Holder};
 
     let want: BTreeSet<i64> =
@@ -1037,9 +1041,9 @@ pub(crate) fn forwarded(
         next.ops = ops;
         out.push(next);
     }
-    let mut result = body.clone();
+    let mut result = MirBody::clone(body);
     result.blocks = out;
-    Ok(result)
+    Ok(Rc::new(result))
 }
 
 /// `op`'s one memory source read from whatever holds `holder` instead.
@@ -1470,13 +1474,19 @@ pub(crate) fn _leaving(body: &MirBody) -> std::collections::BTreeSet<crate::mode
 pub(crate) const LOW: u8 = 0;
 pub(crate) const HIGH: u8 = 1;
 
-type _HalvesReuse = crate::support::hash::HashMap<usize, (MirBody, BTreeSet<(Value, u8)>)>;
+type _HalvesReuse = crate::support::hash::HashMap<usize, (Rc<MirBody>, BTreeSet<(Value, u8)>)>;
 
 thread_local! {
-    /// Python's `_halves_reuse` context variable.  The saved body is compared
-    /// as well as its address: Python holds the body alive, Rust cannot.
+    /// Python's `_halves_reuse` context variable.  Holding the body keeps its
+    /// address from being recycled, as Python's holding keeps its `id`.
     #[allow(non_upper_case_globals)]
     static _halves_reuse: std::cell::RefCell<Option<_HalvesReuse>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Half-liveness fixed points solved, for the tests that pin reuse to Python's.
+    pub(crate) static HALVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Share half-liveness for immutable states in one transaction.
@@ -1528,19 +1538,35 @@ impl _HalfSet {
 /// Which half of which value something reads, to a fixed point.
 ///
 /// Both halves of everything reaching an exit are live.
-pub(crate) fn halves(body: &MirBody) -> BTreeSet<(Value, u8)> {
-    let key = std::ptr::from_ref(body) as usize;
+pub(crate) fn halves(body: &Rc<MirBody>) -> BTreeSet<(Value, u8)> {
+    let key = Rc::as_ptr(body) as usize;
     let saved = _halves_reuse.with(|reuse| {
         reuse
             .borrow()
             .as_ref()
             .and_then(|reused| reused.get(&key))
-            .filter(|saved| saved.0 == *body)
+            .filter(|saved| Rc::ptr_eq(&saved.0, body))
             .map(|saved| saved.1.clone())
     });
     if let Some(saved) = saved {
+        if !crate::support::checking_caches() {
+            return saved;
+        }
+        assert!(saved == _halved(body), "transform.halves: a cache hit disagrees with its recomputation");
         return saved;
     }
+    let out = _halved(body);
+    _halves_reuse.with(|reuse| {
+        if let Some(reused) = reuse.borrow_mut().as_mut() {
+            reused.insert(key, (Rc::clone(body), out.clone()));
+        }
+    });
+    out
+}
+
+fn _halved(body: &MirBody) -> BTreeSet<(Value, u8)> {
+    #[cfg(test)]
+    HALVED.with(|halved| halved.set(halved.get() + 1));
 
     const BOTH: u8 = 1 << LOW | 1 << HIGH;
     let mut out = _HalfSet::default();
@@ -1662,18 +1688,13 @@ pub(crate) fn halves(body: &MirBody) -> BTreeSet<(Value, u8)> {
             [LOW, HIGH].into_iter().filter(move |half| mask & (1 << half) != 0).map(move |half| (*one, half))
         })
         .collect();
-    _halves_reuse.with(|reuse| {
-        if let Some(reused) = reuse.borrow_mut().as_mut() {
-            reused.insert(key, (body.clone(), out.clone()));
-        }
-    });
     out
 }
 
 /// Values some half of which something reads.
 ///
 /// Direct port of `qbopt/optimize/transform.py:live`.
-pub(crate) fn live(body: &MirBody) -> std::collections::BTreeSet<crate::model::mir::Value> {
+pub(crate) fn live(body: &Rc<MirBody>) -> std::collections::BTreeSet<crate::model::mir::Value> {
     halves(body).into_iter().map(|(one, _)| one).collect()
 }
 
@@ -1885,7 +1906,7 @@ pub(crate) fn _executable_successors(
 }
 
 /// Bypass empty control-flow blocks without changing any incoming phi value.
-pub(crate) fn _threaded(body: &MirBody) -> Result<MirBody, String> {
+pub(crate) fn _threaded(body: &Rc<MirBody>) -> Result<Rc<MirBody>, String> {
     let known = body.blocks.iter().map(|block| (block.at, block)).collect::<BTreeMap<_, _>>();
     let predecessors = loopy::predecessors(&body.blocks);
     let mut loop_edges = BTreeSet::new();
@@ -2032,17 +2053,17 @@ pub(crate) fn _threaded(body: &MirBody) -> Result<MirBody, String> {
         converged.push(MirBlock { ops, succ: vec![target], ..block });
         changed = true;
     }
-    Ok(if changed { _unreachable(&body.with_blocks(converged)) } else { body.clone() })
+    Ok(if changed { Rc::new(_unreachable(&body.with_blocks(converged))) } else { body.clone() })
 }
 
 /// A branch on two numbers, resolved.
 ///
 /// Taken becomes an unconditional jump and not-taken becomes an inert owner.
 pub(crate) fn decided(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     dgroup: &BTreeSet<i64>,
     calls: &IndexMap<i64, String>,
-) -> Result<MirBody, String> {
+) -> Result<Rc<MirBody>, String> {
     use crate::analysis::{alias, constant_cycles, consts, ranges};
 
     let body = _threaded(body)?;
@@ -2135,7 +2156,7 @@ pub(crate) fn decided(
         return Ok(body);
     }
     // Remove dead edges without losing the unreachable blocks' byte ownership.
-    _trivial_phis(&_unreachable(&MirBody { blocks: out, ..body }))
+    Ok(Rc::new(_trivial_phis(&_unreachable(&MirBody { blocks: out, ..MirBody::clone(&body) }))?))
 }
 
 /// Dead blocks retain byte ownership, but no instructions or outgoing edges.
@@ -2215,7 +2236,7 @@ pub(crate) fn _trivial_phis(body: &MirBody) -> Result<MirBody, String> {
 /// Operations whose results nothing reads, removed.
 ///
 /// A removed computation leaves an empty ownership marker.
-pub(crate) fn dead(body: &MirBody) -> Result<MirBody, String> {
+pub(crate) fn dead(body: &Rc<MirBody>) -> Result<Rc<MirBody>, String> {
     // Incomplete readers forbid global removal, but a result overwritten
     // locally before reaching one cannot supply its hidden inputs.
     let limited = body
@@ -2297,7 +2318,7 @@ pub(crate) fn dead(body: &MirBody) -> Result<MirBody, String> {
         .filter(|value| !after.contains(value))
         .copied()
         .collect::<BTreeSet<_>>();
-    Ok(body.with_blocks(out
+    Ok(Rc::new(body.with_blocks(out
             .into_iter()
             .map(|block| MirBlock {
                 ops: block
@@ -2321,7 +2342,7 @@ pub(crate) fn dead(body: &MirBody) -> Result<MirBody, String> {
                     .collect(),
                 ..block
             })
-            .collect()))
+            .collect())))
 }
 
 /// Results replaced before reaching an opaque reader or a block exit.
@@ -2444,10 +2465,10 @@ pub(crate) const _EDGE_FOLDABLE: [Kind; 25] = {
 
 /// Fold one pure join expression independently on every incoming edge.
 pub(crate) fn _folded_phi_edges(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     facts: &IndexMap<Value, crate::analysis::consts::Known>,
     wanted: &BTreeSet<Value>,
-) -> Result<MirBody, String> {
+) -> Result<Rc<MirBody>, String> {
     use crate::analysis::consts;
     use crate::model::ir::Operation;
     use crate::model::mir::{Const, OpCode};
@@ -2619,7 +2640,7 @@ pub(crate) fn _folded_phi_edges(
 
                 changed[&block.at].phis.push(Phi { result: target, incoming });
                 changed[&operation_block.at].ops[index] = _empty_operation(op);
-                return Ok(body.with_blocks(body.blocks.iter().map(|one| changed[&one.at].clone()).collect()));
+                return Ok(Rc::new(body.with_blocks(body.blocks.iter().map(|one| changed[&one.at].clone()).collect())));
             }
         }
     }
@@ -2627,7 +2648,7 @@ pub(crate) fn _folded_phi_edges(
 }
 
 /// An operation whose result is a number, replaced by that number.
-pub(crate) fn folded(body: &MirBody, dgroup: &BTreeSet<i64>, calls: &IndexMap<i64, String>) -> Result<MirBody, String> {
+pub(crate) fn folded(body: &Rc<MirBody>, dgroup: &BTreeSet<i64>, calls: &IndexMap<i64, String>) -> Result<Rc<MirBody>, String> {
     use crate::analysis::{consts, floatfacts};
     use crate::optimize::floatfold;
 
@@ -2660,12 +2681,15 @@ pub(crate) fn folded(body: &MirBody, dgroup: &BTreeSet<i64>, calls: &IndexMap<i6
 
     let nothing = consts::Cells::default();
     let mut out = Vec::new();
+    let mut changed = false;
     for block in &body.blocks {
         let mut ops = Vec::new();
         for (index, op) in block.ops.iter().enumerate() {
             let here = memory.get(&(block.at, index)).unwrap_or(&nothing);
             if let Some(numbers) = consts::division(op, &facts, here) {
-                ops.extend(_folded_division(op, numbers, &wanted));
+                let replacements = _folded_division(op, numbers, &wanted);
+                changed |= replacements.as_slice() != std::slice::from_ref(op);
+                ops.extend(replacements);
                 continue;
             }
             let updated = _constant_update(op, &facts, here, &wanted);
@@ -2675,12 +2699,14 @@ pub(crate) fn folded(body: &MirBody, dgroup: &BTreeSet<i64>, calls: &IndexMap<i6
                 Some(here),
                 Some(&symbols),
             );
+            // Python's `made is not op`: every helper returns its input or a rewrite.
+            changed = changed || made != *op;
             ops.push(made);
         }
         out.push(block.with_ops(ops));
     }
 
-    let result = body.with_blocks(out);
+    let result = if changed { Rc::new(body.with_blocks(out)) } else { body.clone() };
     let result = _folded_phi_edges(&result, &facts, &wanted)?;
     // An exact exit fact describes only the path leaving a numeric loop.  It
     // may fold a successor load, but it is not permission for ordinary
@@ -3214,11 +3240,11 @@ pub(crate) fn _literal(op: &Op) -> bool {
 /// The whole run moves, so implicit operands are used inside it in the
 /// preheader and only its result crosses into the loop.
 pub(crate) fn hoisted(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     dgroup: &BTreeSet<i64>,
     calls: &IndexMap<i64, String>,
     bounds: Option<&IndexMap<(crate::objectfile::module::Space, i64), Vec<i64>>>,
-) -> Result<MirBody, String> {
+) -> Result<Rc<MirBody>, String> {
     use crate::support::hash::HashMap;
 
     use crate::analysis::ranges::{self, Interval};
@@ -3403,12 +3429,12 @@ pub(crate) fn hoisted(
 
     // What crossed the loop edge is its own variable now, so re-deriving SSA
     // cannot join it to the counter that shared its register.
-    let mut moved_out = body.clone();
+    let mut moved_out = MirBody::clone(body);
     moved_out.blocks = out;
     if !crossed.is_empty() {
         moved_out = _reparented(&moved_out, &crossed);
     }
-    Ok(moved_out)
+    Ok(Rc::new(moved_out))
 }
 
 // Every transform, as the one thing a transform is. The functions above stay
@@ -3427,7 +3453,7 @@ impl crate::model::passes::MIRTransform for Fold {
         "fold"
     }
 
-    fn transform(&mut self, body: MirBody) -> Result<MirBody, String> {
+    fn transform(&mut self, body: Rc<MirBody>) -> Result<Rc<MirBody>, String> {
         Ok(crate::optimize::canonical::compares(folded(&body, &self.r#where.dgroup, &self.r#where.named())?))
     }
 }
@@ -3445,7 +3471,7 @@ impl crate::model::passes::MIRTransform for Decide {
         "decide"
     }
 
-    fn transform(&mut self, body: MirBody) -> Result<MirBody, String> {
+    fn transform(&mut self, body: Rc<MirBody>) -> Result<Rc<MirBody>, String> {
         crate::optimize::cfg::merged(&decided(&body, &self.r#where.dgroup, &self.r#where.named())?)
             .map_err(|error| error.to_string())
     }
@@ -3462,7 +3488,7 @@ impl crate::model::passes::MIRTransform for Dead {
         "dead"
     }
 
-    fn transform(&mut self, body: MirBody) -> Result<MirBody, String> {
+    fn transform(&mut self, body: Rc<MirBody>) -> Result<Rc<MirBody>, String> {
         dead(&body)
     }
 }
@@ -3481,7 +3507,7 @@ impl crate::model::passes::MIRTransform for FloatLoop {
         "floatloop"
     }
 
-    fn transform(&mut self, body: MirBody) -> Result<MirBody, String> {
+    fn transform(&mut self, body: Rc<MirBody>) -> Result<Rc<MirBody>, String> {
         crate::optimize::floatloop::specialized(&body, &self.r#where.dgroup, &self.r#where.named())
     }
 }
@@ -3499,7 +3525,7 @@ impl crate::model::passes::MIRTransform for Hoist {
         "hoist"
     }
 
-    fn transform(&mut self, body: MirBody) -> Result<MirBody, String> {
+    fn transform(&mut self, body: Rc<MirBody>) -> Result<Rc<MirBody>, String> {
         let body = hoisted(&body, &self.r#where.dgroup, &self.r#where.named(), self.r#where.bounds.as_ref())?;
         crate::optimize::loopmotion::sunk_stores(
             &body,
@@ -3523,7 +3549,7 @@ impl crate::model::passes::MIRTransform for DropStores {
         "drop_stores"
     }
 
-    fn transform(&mut self, body: MirBody) -> Result<MirBody, String> {
+    fn transform(&mut self, body: Rc<MirBody>) -> Result<Rc<MirBody>, String> {
         let private =
             crate::analysis::observers::private(&body, self.r#where.found.as_ref(), self.r#where.blocks.as_ref())?;
         without_dead_stores(
@@ -3558,7 +3584,7 @@ impl crate::model::passes::MIRTransform for Gvn {
         "gvn"
     }
 
-    fn transform(&mut self, body: MirBody) -> Result<MirBody, String> {
+    fn transform(&mut self, body: Rc<MirBody>) -> Result<Rc<MirBody>, String> {
         crate::optimize::gvn::optimized(&body, &self.r#where)
     }
 }
@@ -3576,7 +3602,7 @@ impl crate::model::passes::MIRTransform for Place {
         "place"
     }
 
-    fn transform(&mut self, body: MirBody) -> Result<MirBody, String> {
+    fn transform(&mut self, body: Rc<MirBody>) -> Result<Rc<MirBody>, String> {
         placed(&body, &self.r#where.dgroup, &self.r#where.named())
     }
 }
@@ -3592,13 +3618,14 @@ impl crate::model::passes::MIRTransform for Algebraic {
         "algebraic"
     }
 
-    fn transform(&mut self, body: MirBody) -> Result<MirBody, String> {
+    fn transform(&mut self, body: Rc<MirBody>) -> Result<Rc<MirBody>, String> {
         let demanded = halves(&body);
         crate::optimize::algebraic::simplified(
             &body,
             &demanded.iter().map(|(value, _)| *value).collect(),
             &demanded.iter().filter(|(_, part)| *part == HIGH).map(|(value, _)| *value).collect(),
         )
+        .map(Rc::new)
     }
 }
 
@@ -3614,7 +3641,7 @@ impl crate::model::passes::MIRTransform for SplitPointers {
         "split_pointers"
     }
 
-    fn transform(&mut self, body: MirBody) -> Result<MirBody, String> {
+    fn transform(&mut self, body: Rc<MirBody>) -> Result<Rc<MirBody>, String> {
         Ok(crate::optimize::pointeraccess::split(body))
     }
 }
@@ -3631,8 +3658,8 @@ impl crate::model::passes::MIRTransform for PointerProvenance {
         "provenance"
     }
 
-    fn transform(&mut self, body: MirBody) -> Result<MirBody, String> {
-        crate::analysis::alias::annotated(&body)
+    fn transform(&mut self, body: Rc<MirBody>) -> Result<Rc<MirBody>, String> {
+        crate::analysis::alias::annotated(&body).map(Rc::new)
     }
 }
 
@@ -3723,11 +3750,11 @@ impl Default for Applied<'_> {
 
 /// Every transform this module has, or the one `only` names.
 pub(crate) fn applied(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     dgroup: &BTreeSet<i64>,
     calls: &IndexMap<i64, String>,
     options: Applied<'_>,
-) -> Result<MirBody, String> {
+) -> Result<Rc<MirBody>, String> {
     crate::analysis::consts::reusing(|| _reusing_halves(|| _applied(body, dgroup, calls, options)))
 }
 
@@ -3756,7 +3783,7 @@ impl _Transaction<'_, '_> {
         }
     }
 
-    fn scalarized(&self, state: MirBody, stage: &str) -> Result<MirBody, String> {
+    fn scalarized(&self, state: Rc<MirBody>, stage: &str) -> Result<Rc<MirBody>, String> {
         let mut state = state;
         let mut boundary = self.boundary.borrow_mut();
         for one in boundary.iter_mut() {
@@ -3766,16 +3793,16 @@ impl _Transaction<'_, '_> {
         Ok(state)
     }
 
-    fn fixed(&self, state: MirBody, consider_unroll: bool, prefix: &str) -> Result<MirBody, String> {
+    fn fixed(&self, state: Rc<MirBody>, consider_unroll: bool, prefix: &str) -> Result<Rc<MirBody>, String> {
         // A monotone chain may expose one simplification per operation.
         // Scale with the body and separately reject a repeated state, so an
         // oscillator fails immediately instead of consuming that allowance.
         let size = state.blocks.iter().map(|block| 1 + block.phis.len() + block.ops.len()).sum::<usize>();
         let limit = std::cmp::max(16, size + 1);
         let mut state = state;
-        let mut history = vec![state.clone()];
+        let mut history = vec![Rc::clone(&state)];
         for iteration in 0..limit {
-            let before = state.clone();
+            let before = Rc::clone(&state);
             {
                 let mut passes = self.passes.borrow_mut();
                 for one in passes.iter_mut() {
@@ -3788,7 +3815,7 @@ impl _Transaction<'_, '_> {
             if consider_unroll && !self.unrollers.borrow().is_empty() {
                 let stage = format!("{prefix}candidate-unroll");
                 let inner = format!("{prefix}candidate-unroll-");
-                let mut optimize = |candidate: MirBody| self.structural_candidate(candidate, &stage, &inner, false);
+                let mut optimize = |candidate: Rc<MirBody>| self.structural_candidate(candidate, &stage, &inner, false);
                 let mut watch = |stage: &str, candidate: &MirBody| self.watch(&format!("{prefix}{stage}"), candidate);
                 let watching = self.watching();
                 state = crate::optimize::unroll::optimized(
@@ -3803,12 +3830,12 @@ impl _Transaction<'_, '_> {
                 // A structural candidate can make its last cloned region
                 // unreachable on the same round that reaches the scalar fixed
                 // point, so normalize the public boundary itself.
-                return Ok(_unreachable(&state));
+                return Ok(Rc::new(_unreachable(&state)));
             }
             if history.iter().any(|previous| state == *previous) {
                 return Err(format!("MIR optimization did not converge: cycle after {} rounds", iteration + 1));
             }
-            history.push(state.clone());
+            history.push(Rc::clone(&state));
         }
         Err(format!("MIR optimization did not converge after {limit} size-scaled rounds"))
     }
@@ -3816,13 +3843,13 @@ impl _Transaction<'_, '_> {
     /// Normalize addresses and newly exact leaves before pricing a CFG clone.
     fn structural_candidate(
         &self,
-        candidate: MirBody,
+        candidate: Rc<MirBody>,
         stage: &str,
         prefix: &str,
         consider_unroll: bool,
-    ) -> Result<MirBody, String> {
+    ) -> Result<Rc<MirBody>, String> {
         let state = self.fixed(self.scalarized(candidate, stage)?, consider_unroll, prefix)?;
-        let scalar = self.scalarized(state.clone(), &format!("{stage}-settled"))?;
+        let scalar = self.scalarized(Rc::clone(&state), &format!("{stage}-settled"))?;
         if scalar == state {
             return Ok(state);
         }
@@ -3843,11 +3870,11 @@ impl _Transaction<'_, '_> {
 }
 
 fn _applied(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     dgroup: &BTreeSet<i64>,
     calls: &IndexMap<i64, String>,
     options: Applied<'_>,
-) -> Result<MirBody, String> {
+) -> Result<Rc<MirBody>, String> {
     let Applied {
         blocks,
         found,
@@ -3924,26 +3951,27 @@ fn _applied(
         watch: std::cell::RefCell::new(watch),
     };
 
-    let mut body = transaction.scalarized(body.clone(), "r01")?;
+    let mut body = transaction.scalarized(Rc::clone(body), "r01")?;
     if only.is_some() && has_boundary {
-        return Ok(_unreachable(&body));
+        return Ok(Rc::new(_unreachable(&body)));
     }
     if only.is_some() && has_unrollers {
         body = unrollers[0].transform(body)?;
         transaction.watch("r01-unroll", &body);
-        return Ok(_unreachable(&body));
+        return Ok(Rc::new(_unreachable(&body)));
     }
     if only.is_some() && !peelers.is_empty() {
         body = peelers[0].transform(body)?;
         transaction.watch("r01-peel", &body);
-        return Ok(_unreachable(&body));
+        return Ok(Rc::new(_unreachable(&body)));
     }
     *transaction.unrollers.borrow_mut() = std::mem::take(&mut unrollers);
 
     body = transaction.fixed(body, has_unrollers, "")?;
     if !peelers.is_empty() {
-        let mut optimize =
-            |candidate: MirBody| transaction.structural_candidate(candidate, "candidate-peel", "candidate-peel-", has_unrollers);
+        let mut optimize = |candidate: Rc<MirBody>| {
+            transaction.structural_candidate(candidate, "candidate-peel", "candidate-peel-", has_unrollers)
+        };
         let mut watch = |stage: &str, candidate: &MirBody| transaction.watch(stage, candidate);
         let watching = transaction.watching();
         body = crate::optimize::peel::optimized(
@@ -3972,7 +4000,7 @@ fn _applied(
             },
         )?;
     }
-    Ok(_unreachable(&body))
+    Ok(Rc::new(_unreachable(&body)))
 }
 #[cfg(test)]
 #[path = "transform_tests.rs"]

@@ -4,6 +4,7 @@
 
 #![allow(dead_code)] // its consumers are not yet ported
 
+use std::rc::Rc;
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
 use std::ops::{Add, Div, Mul, Neg, Sub};
@@ -405,7 +406,7 @@ pub(crate) struct LoopExit {
 }
 
 /// Proven numeric exits of canonical loops with storage-rounded FP state.
-pub(crate) fn loop_exits(body: &MirBody, dgroup: &BTreeSet<i64>, calls: &IndexMap<i64, String>) -> Vec<LoopExit> {
+pub(crate) fn loop_exits(body: &Rc<MirBody>, dgroup: &BTreeSet<i64>, calls: &IndexMap<i64, String>) -> Vec<LoopExit> {
     if !body.blocks.iter().any(|block| block.ops.iter().any(|op| op.kind == Kind::Fstore)) {
         return Vec::new();
     }
@@ -510,7 +511,7 @@ pub(crate) fn loop_exits(body: &MirBody, dgroup: &BTreeSet<i64>, calls: &IndexMa
 
 /// Numeric memory facts on exit edges, never on a header's backedge.
 pub(crate) fn exit_cells(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     dgroup: &BTreeSet<i64>,
     calls: &IndexMap<i64, String>,
 ) -> IndexMap<(i64, i64), Cells> {
@@ -547,7 +548,7 @@ pub(crate) fn exit_cells(
 
 /// Numeric facts, optionally given independently established entry bytes.
 pub(crate) fn known(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     dgroup: &BTreeSet<i64>,
     calls: &IndexMap<i64, String>,
     initial: Option<&IndexMap<Addr, BigInt>>,
@@ -557,7 +558,7 @@ pub(crate) fn known(
 
 /// Exact integer conversion results, without permission to remove FP effects.
 pub(crate) fn converted(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     dgroup: &BTreeSet<i64>,
     calls: &IndexMap<i64, String>,
     facts: Option<&IndexMap<Value, Finite>>,
@@ -612,7 +613,7 @@ pub(crate) fn converted(
 
 /// Memory facts including exact floating storage conversions.
 pub(crate) fn cells(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     dgroup: &BTreeSet<i64>,
     calls: &IndexMap<i64, String>,
 ) -> IndexMap<(i64, usize), Cells> {
@@ -620,7 +621,7 @@ pub(crate) fn cells(
 }
 
 fn _analyzed(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     dgroup: &BTreeSet<i64>,
     calls: &IndexMap<i64, String>,
     initial: Option<&IndexMap<Addr, BigInt>>,
@@ -658,7 +659,7 @@ fn _analyzed(
             store.uses = Vec::new();
             store
         };
-        let mut shadow = body.clone();
+        let mut shadow = MirBody::clone(body);
         for block in &mut shadow.blocks {
             block.ops = block.ops.iter().map(stored).collect();
         }

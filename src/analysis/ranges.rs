@@ -3,6 +3,7 @@
 //! Port of `qbopt/analysis/ranges.py`.
 
 use std::borrow::Cow;
+use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::support::hash::IndexMap;
@@ -374,7 +375,7 @@ fn _recurrence_span(start: &BigInt, step: &BigInt, advances: &BigInt, width: u32
 }
 
 /// Direct port of `qbopt.analysis.ranges:bounded`.
-pub(crate) fn bounded(body: &MirBody) -> Result<IndexMap<i64, IndexMap<Value, Interval>>, String> {
+pub(crate) fn bounded(body: &Rc<MirBody>) -> Result<IndexMap<i64, IndexMap<Value, Interval>>, String> {
     let facts = consts::known(body, None, None, None, None);
     let mut result: IndexMap<i64, IndexMap<Value, Interval>> = IndexMap::default();
     let predecessors = loops::predecessors(&body.blocks);
@@ -534,7 +535,7 @@ pub(crate) fn bounded(body: &MirBody) -> Result<IndexMap<i64, IndexMap<Value, In
 /// Direct port of `qbopt.analysis.ranges:dominated_edges`.  An edge counts
 /// only when its destination has that one predecessor and dominates the
 /// queried block: a join is a second way around the check.
-pub(crate) fn dominated_edges(body: &MirBody) -> Result<IndexMap<i64, IndexMap<Value, Interval>>, String> {
+pub(crate) fn dominated_edges(body: &Rc<MirBody>) -> Result<IndexMap<i64, IndexMap<Value, Interval>>, String> {
     let facts = consts::known(body, None, None, None, None);
     let predecessors = loops::predecessors(&body.blocks);
     let dominators = loops::dominators(&body.blocks, Some(body.entry));
@@ -572,7 +573,7 @@ pub(crate) fn dominated_edges(body: &MirBody) -> Result<IndexMap<i64, IndexMap<V
 
 /// Every value `consts` knows, as the singleton interval an alias query reads.
 pub(crate) fn constants(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     dgroup: Option<&BTreeSet<i64>>,
     calls: Option<&IndexMap<i64, String>>,
 ) -> IndexMap<Value, Interval> {

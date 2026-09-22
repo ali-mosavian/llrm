@@ -11,6 +11,7 @@
 //! `test_c_mandel_reuses_coordinate_recurrences_for_both_outer_loops`,
 //! `test_counting_one_loop_to_zero_leaves_a_loop_sharing_its_start_alone`.
 
+use std::rc::Rc;
 use crate::analysis::{consts, induction, loops};
 use crate::model::ir::Operation;
 use crate::model::mir::{
@@ -144,13 +145,13 @@ fn test_symbolic_control_rebases_a_nonzero_start_recurrence() {
     let body = _symbolic_control_body(5);
     let found = loops::loops(&body.blocks, Some(body.entry));
     let [loop_] = &found[..] else { panic!("one loop") };
-    let proofs = induction::counted(&body, loop_, None);
+    let proofs = induction::counted(&Rc::new(MirBody::clone(&body)), loop_, None);
     let [proof] = &proofs[..] else { panic!("one proof") };
     let basics = induction::basics(&body, loop_);
     let candidate = basics.values().find(|one| **one != proof.counter).expect("a second recurrence");
 
-    assert!(induction::zero_terminating_control(&body, loop_, proof, candidate, None).is_some());
-    assert_ne!(symbolically_zeroed(&body).unwrap(), body);
+    assert!(induction::zero_terminating_control(&Rc::new(body.clone()), loop_, proof, candidate, None).is_some());
+    assert_ne!(*symbolically_zeroed(&Rc::new(body.clone())).unwrap(), body);
 }
 
 /// The same bounded recurrence is usable when its final update is zero.
@@ -159,12 +160,12 @@ fn test_symbolic_control_proves_a_zero_terminal_recurrence() {
     let body = _symbolic_control_body(0);
     let found = loops::loops(&body.blocks, Some(body.entry));
     let [loop_] = &found[..] else { panic!("one loop") };
-    let proofs = induction::counted(&body, loop_, None);
+    let proofs = induction::counted(&Rc::new(MirBody::clone(&body)), loop_, None);
     let [proof] = &proofs[..] else { panic!("one proof") };
     let basics = induction::basics(&body, loop_);
     let candidate = basics.values().find(|one| **one != proof.counter).expect("a second recurrence");
 
-    let got = induction::zero_terminating_control(&body, loop_, proof, candidate, None).expect("a proof");
+    let got = induction::zero_terminating_control(&Rc::new(MirBody::clone(&body)), loop_, proof, candidate, None).expect("a proof");
 
     assert!(std::ptr::eq(got.replacement.counted, proof));
     assert_eq!(
@@ -277,7 +278,7 @@ fn test_scaled_recurrences_replace_nested_counter_equality(hazard: Option<&str>)
         ],
     );
 
-    let changed = simplified(&built).unwrap();
+    let changed = simplified(&Rc::new(MirBody::clone(&built))).unwrap();
     let condition = block(&changed, 3).ops.iter().find(|op| op.kind == Kind::Sub).expect("a compare");
     let equality = block(&changed, 4).ops.iter().find(|op| op.kind == Kind::Sub).expect("a compare");
 
@@ -376,7 +377,7 @@ fn test_cross_width_recurrence_replaces_counter_only_for_its_full_period(
         ],
     );
 
-    let changed = simplified(&body).unwrap();
+    let changed = simplified(&Rc::new(MirBody::clone(&body))).unwrap();
     let condition = changed.blocks[1].ops.iter().find(|op| op.kind == Kind::Sub).expect("a compare");
 
     if reused {
@@ -476,12 +477,12 @@ fn test_exact_nested_recurrence_rewinds_before_reloading_its_start() {
         OperationCosts { add: 1, r#move: 1, load: 1, store: 1, memory_update: 1, ..OperationCosts::default() };
     let i386 = OperationCosts { add: 2, r#move: 2, load: 4, store: 2, memory_update: 8, ..OperationCosts::default() };
 
-    let changed = rewound(&body, 1, Some(&later_core));
+    let changed = rewound(&Rc::new(MirBody::clone(&body)), 1, Some(&later_core));
     let outer_header = block(&changed, 1);
     let inner_header = block(&changed, 3);
     let latch = block(&changed, 5);
 
-    assert_ne!(changed, body);
+    assert_ne!(*changed, body);
     assert_eq!(changed.loop_trip_counts, vec![(3, 4)]);
     let changed_inner = loops::loops(&changed.blocks, Some(changed.entry))
         .into_iter()
@@ -497,12 +498,12 @@ fn test_exact_nested_recurrence_rewinds_before_reloading_its_start() {
             && op.args.contains(&constant(-8 & 0xFFFF_FFFF, 4))
             && op.uses.iter().any(|value| value.variable == following.variable)
     }));
-    assert_eq!(rewound(&body, 1, Some(&i386)), body);
+    assert_eq!(*rewound(&Rc::new(body.clone()), 1, Some(&i386)), body);
 
     // The first production version rewound Mandel's rematerializable `px =
     // -16` control before the coordinate recurrence existed.  That blocked
     // strength reduction and grew P6 from 199/55/88 to 219/62/95.
     let mut constant_body = body.clone();
     constant_body.blocks[0].ops[0] = copy(0, start, constant(5, 4));
-    assert_eq!(rewound(&constant_body, 1, Some(&later_core)), constant_body);
+    assert_eq!(*rewound(&Rc::new(constant_body.clone()), 1, Some(&later_core)), constant_body);
 }

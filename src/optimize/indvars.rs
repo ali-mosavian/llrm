@@ -6,6 +6,7 @@
 //! only outside `following`: Python rebuilds every operation there and keeps
 //! the rest.
 
+use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::support::hash::IndexMap;
@@ -34,7 +35,7 @@ use super::{counting, loopexit, rotate, strength, transform};
 /// in frame cells, the old form is a load plus a store and the new form is a
 /// memory update.  The 386/486/P5 profiles price the latter higher and retain
 /// the copy.  Later profiles may take it.  Nothing here names either form.
-pub(crate) fn rewound(body: &MirBody, registers: i64, costs: Option<&OperationCosts>) -> MirBody {
+pub(crate) fn rewound(body: &Rc<MirBody>, registers: i64, costs: Option<&OperationCosts>) -> Rc<MirBody> {
     let default_costs;
     let costs = match costs {
         Some(costs) => costs,
@@ -251,13 +252,13 @@ pub(crate) fn rewound(body: &MirBody, registers: i64, costs: Option<&OperationCo
             }
             let mut counts = body.loop_trip_counts.iter().copied().collect::<BTreeMap<_, _>>();
             counts.insert(inner.header, i64::try_from(&count).expect("trip count fits the MIR table"));
-            return MirBody { loop_trip_counts: counts.into_iter().collect(), ..body.with_blocks(changed) };
+            return Rc::new(MirBody { loop_trip_counts: counts.into_iter().collect(), ..body.with_blocks(changed) });
         }
     }
     body.clone()
 }
 
-pub(crate) fn simplified(body: &MirBody) -> Result<MirBody, SubstitutionError> {
+pub(crate) fn simplified(body: &Rc<MirBody>) -> Result<Rc<MirBody>, SubstitutionError> {
     let facts = consts::known(body, None, None, None, None);
     let blocks = body.blocks.iter().enumerate().map(|(index, block)| (block.at, index)).collect::<BTreeMap<_, _>>();
     let made = body
@@ -467,7 +468,7 @@ pub(crate) fn simplified(body: &MirBody) -> Result<MirBody, SubstitutionError> {
                     }
                     out.push(block.with_ops(ops));
                 }
-                return Ok(MirBody { blocks: out, ..changed });
+                return Ok(Rc::new(MirBody { blocks: out, ..changed }));
             }
         }
     }
@@ -501,7 +502,7 @@ fn _recurrences(
 /// such a use when both sides have the same affine map and their combined
 /// proven domain is shorter than the map's modular period.
 fn _rebased_equalities(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     counter: Value,
     update: Value,
     control: (usize, usize),
@@ -652,7 +653,7 @@ fn _before_leaving(ops: &mut Vec<Op>, inserted: Vec<Op>) {
 /// exactly the final iteration, so the original unit counter disappears.
 /// The proof is target-independent: `induction.counted` supplies `n` and
 /// `AffineMap.period` the modular safety condition.
-pub(crate) fn symbolically_zeroed(body: &MirBody) -> Result<MirBody, SubstitutionError> {
+pub(crate) fn symbolically_zeroed(body: &Rc<MirBody>) -> Result<Rc<MirBody>, SubstitutionError> {
     let facts = consts::known(body, None, None, None, None);
     let blocks = body.blocks.iter().enumerate().map(|(index, block)| (block.at, index)).collect::<BTreeMap<_, _>>();
     let operation = |at: (usize, usize)| &body.blocks[at.0].ops[at.1];
@@ -918,7 +919,7 @@ pub(crate) fn symbolically_zeroed(body: &MirBody) -> Result<MirBody, Substitutio
                 &entry_ops,
                 Some(&[proof.latch, proof.exit]),
             )?;
-            return symbolically_zeroed(&rotated);
+            return symbolically_zeroed(&Rc::new(rotated));
         }
     }
     Ok(body.clone())
@@ -931,7 +932,7 @@ pub(crate) fn symbolically_zeroed(body: &MirBody) -> Result<MirBody, Substitutio
 /// read is an invariant plus the counter, or plus the counter shifted, and
 /// the invariant takes `final`, shifted the same, once before the loop:
 /// both sides wrap at the add's own width, so the sum is unchanged.
-pub(crate) fn zeroed(body: &MirBody, address_offsets: bool) -> Result<MirBody, SubstitutionError> {
+pub(crate) fn zeroed(body: &Rc<MirBody>, address_offsets: bool) -> Result<Rc<MirBody>, SubstitutionError> {
     let facts = consts::known(body, None, None, None, None);
     let blocks = body.blocks.iter().enumerate().map(|(index, block)| (block.at, index)).collect::<BTreeMap<_, _>>();
     let dominators = loops::dominators(&body.blocks, Some(body.entry));
@@ -1241,7 +1242,7 @@ pub(crate) fn zeroed(body: &MirBody, address_offsets: bool) -> Result<MirBody, S
                     .collect();
                 out.push(MirBlock { at: block.at, phis, ops, succ: block.succ.clone(), cold: block.cold });
             }
-            return zeroed(&MirBody { blocks: out, ..changed }, address_offsets);
+            return zeroed(&Rc::new(MirBody { blocks: out, ..changed }), address_offsets);
         }
     }
     Ok(body.clone())

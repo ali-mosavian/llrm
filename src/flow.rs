@@ -64,7 +64,7 @@ pub fn machine<'a>(
 /// entering a loop -- does not have; that is a fact about the body.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn optimized<'a>(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     dgroup: &BTreeSet<i64>,
     calls: &IndexMap<i64, String>,
     cpu: impl Into<ProfileOrName<'a>>,
@@ -73,7 +73,7 @@ pub(crate) fn optimized<'a>(
     found: Option<Arc<dyn Any + Send + Sync>>,
     only: Option<String>,
     watch: Option<&mut dyn FnMut(&str, &MirBody)>,
-) -> Result<MirBody, String> {
+) -> Result<Rc<MirBody>, String> {
     use crate::analysis::loops;
 
     let target = targets::profile(cpu)?;
