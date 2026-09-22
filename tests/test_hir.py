@@ -2829,3 +2829,71 @@ def test_unchecked_bounds_read_the_descriptor_without_runtime_calls() -> None:
 
     assert "B$LBND" not in procedure and "B$UBND" not in procedure
     assert re.search(r"word ptr \[\w+\+\w+\+16\]", procedure)
+
+
+def _function(source: Path, text: str, name: str, *, dialect: str = "vbdos") -> tuple[hir.Program, hir.Function]:
+    source.write_text(text)
+    program = qb_driver.parsed(source, dialect=dialect, runtime=dialect)
+    return program, next(one for one in program.modules[0].functions if one.name == name)
+
+
+def _value_exit(function: hir.Function) -> hir.Block:
+    return next(
+        block
+        for block in function.blocks
+        if block.terminator.kind is hir.TerminatorKind.RETURN and block.terminator.operands
+    )
+
+
+def test_an_unsuffixed_decimal_above_32767_is_a_long_literal(tmp_path: Path) -> None:
+    """Qlight printed 3492255: 1000000 was lexed as INTEGER 0x4240 and sign-extended."""
+    program, function = _function(
+        tmp_path / "scale.bas",
+        "function qlightScale (word as integer) as long\nqlightScale = clng(word) * 1000000\nend function\n",
+        "QLIGHTSCALE",
+        dialect="qb45",
+    )
+    widths = {one.id: one.width for module in program.modules for one in module.types}
+    constants = [
+        operand
+        for block in function.blocks
+        for instruction in block.instructions
+        for operand in instruction.operands
+        if isinstance(operand, hir.Constant) and operand.value == 1000000
+    ]
+
+    assert constants and all(widths[one.type] == 4 for one in constants)
+
+
+def test_a_long_function_reloads_its_result_after_erasing_local_arrays(tmp_path: Path) -> None:
+    """Loading TOTAL before B$ERAS let the cleanup call clobber the returned value."""
+    _, function = _function(
+        tmp_path / "total.bas",
+        "function total as long\ndim cells(0 to 0) as integer\ntotal = 42\nend function\n",
+        "TOTAL",
+    )
+    result = next(one.id for one in function.places if one.name == "TOTAL")
+    exit_ = _value_exit(function)
+    calls = [one.callee for one in exit_.instructions]
+    loads = [
+        at
+        for at, one in enumerate(exit_.instructions)
+        if one.op is hir.Op.LOAD and one.operands == (hir.PlaceRef(result),)
+    ]
+
+    assert loads and calls.index("B$ERAS") < loads[-1]
+
+
+def test_a_string_function_copies_its_result_before_freeing_other_locals(tmp_path: Path) -> None:
+    """The scalar reload must not reorder STRING results: B$SCPF runs before B$STDL frees OTHER."""
+    _, function = _function(
+        tmp_path / "pick.bas",
+        'function pick as string\ndim other as string\nother = "kept"\npick = other\nend function\n',
+        "PICK",
+    )
+    exit_ = _value_exit(function)
+    calls = [one.callee for one in exit_.instructions]
+    copied = exit_.instructions[calls.index("B$SCPF")]
+
+    assert calls.index("B$SCPF") < calls.index("B$STDL")
+    assert exit_.terminator.operands == (hir.ValueRef(copied.results[0]),)

@@ -290,7 +290,7 @@ Module {
                 right: Literal(
                     Integer(
                         40000,
-                        Integer,
+                        Long,
                     ),
                     Span {
                         line: 15,
