@@ -123,6 +123,24 @@ that needed it, and they cost more than the mechanism would have.
   load-bearing; what makes it safe is that it is written down in one place
   with its justification, not spread implicitly across a dozen match arms.
 
+## Shared proofs — the seventh rule
+
+**A fact about the program is proved once, by one analysis, and every pass
+asks it.** A pass that derives its own proof -- its own stride walk, its own
+escape scan, its own trip bound -- disagrees with the next pass's version on
+the first case either missed. Design by SRP, DRY, Open/Closed and separation
+of concerns:
+
+- **One owner per fact.** Escape, provenance, trip counts, strides: each has
+  one analysis. A pass consumes it; it never re-derives it.
+- **A language's promise is stated by its frontend, in the IR.** That an
+  access stays in its object, or a value is in range, is marked where the
+  source says it -- not assumed by an analysis for every frontend.
+- **Machine facts come from the target.** An analysis that needs an object
+  size or address width reads it from the IR or `Where`, never a literal.
+- **New cases extend the analysis, not its callers.** When a pass needs a
+  fact the analysis cannot give, the analysis grows; the pass does not.
+
 A post-compilation pass over the `.OBJ` BC produces, between BC and LINK.
 Most of what is here was established the hard way by a runtime version of the
 same idea that still lives in uGL. What survived the move is below.
@@ -675,15 +693,17 @@ than the runtime pass's blunter option of costing the whole module.
 - **When careful measurements of the source all come back clean and the
   program still misbehaves, stop measuring the source and check what was
   actually built.**
-- **Consult an Opus-model agent for design review before writing code, after
-  writing it, and whenever stuck.** Give it the actual plan or diff and every
-  file it is grounded in, and ask it to trace the mechanism against real
-  examples rather than judge the prose -- that is what caught a plan whose
-  core mechanism fired on zero bytes of its own input. Resume the same agent
-  across multiple rounds of one question rather than starting fresh each
-  time, so each round builds on the last. If Opus is unavailable or fails,
-  fall back to Fable. Opus plans, reviews and unblocks; it does not write the
-  diff -- the implementing agent stays on its default model throughout.
+- **Consult an Opus-model agent to review a design or diff, and whenever
+  stuck.** A review is big-picture, not adversarial. Ask it:
+  - Is this at the right abstraction level? Does it generalize to cases not
+    yet seen?
+  - Does it follow DRY, SRP, Open/Closed and separation of concerns?
+  - How does it fit the bigger picture? Does something need re-architecting?
+  - What will a skilled engineer think of it in three years?
+
+  Give it the plan or diff and the files it is grounded in. Resume the same
+  agent across rounds of one question. If Opus is unavailable, fall back to
+  Fable. Opus reviews and unblocks; it does not write the diff.
 - Report what was measured, not what was expected. Several figures here were
   corrected after the fact: a parity number that was timer quantisation, a
   "no absorption" reading that was the relocation artifact above, and a

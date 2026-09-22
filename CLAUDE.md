@@ -1,11 +1,11 @@
 # qbopt
 
 See [AGENTS.md](AGENTS.md). It carries the goal, the architecture and the
-six rules, and this file exists only so that either name finds them.
+seven rules, and this file exists only so that either name finds them.
 
-The six rules, because they are the ones most easily forgotten mid-task.
-The first three are global; the last three are this project's own, and all
-six get restated at the end of a reply here:
+The seven rules, because they are the ones most easily forgotten mid-task.
+The first three are global; the last four are this project's own, and all
+seven get restated at the end of a reply here:
 
 1. **Say it and stop.** The minimum needed to understand, in every word
    written -- comments, commit messages, docs, tests, replies alike.
@@ -28,3 +28,13 @@ six get restated at the end of a reply here:
    mechanism is wrong. Name the general rule it is an instance of first; if
    there is none, building it is the work. Deleting code is the evidence it
    landed.
+7. **Prove a fact once and share it.** One analysis owns each fact --
+   escape, provenance, trip counts, strides -- and every pass asks it
+   rather than deriving its own. A language's promise is marked by its
+   frontend in the IR; a machine fact comes from the target. SRP, DRY,
+   Open/Closed, separation of concerns.
+
+Reviews (AGENTS.md, Method) are big-picture, not adversarial: right
+abstraction level, generalizes to unseen cases, DRY/SRP/Open-Closed/
+separation of concerns, fit in the bigger picture, whether something needs
+re-architecting, and what a skilled engineer will think of it in three years.
