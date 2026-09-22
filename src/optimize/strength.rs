@@ -8,11 +8,11 @@
 //! `ivshare.shared`, `transform.dead`, `exitsink.sunk`, `loopexit.evaluated`
 //! and four `indvars` rewrites that have no Rust port.
 
+use indexmap::IndexMap;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::sync::LazyLock;
 
-use indexmap::IndexMap;
 use num_bigint::BigInt;
 
 use crate::analysis::consts::{self, Known, masked};
@@ -80,6 +80,7 @@ impl From<ConstructionError> for StrengthError {
 #[allow(dead_code)] // `Strength.transform` is its caller once indvars is ported.
 pub(crate) fn reduced(
     body: &MirBody,
+    dgroup: &BTreeSet<i64>,
     layout: Option<&RegionLayout>,
     registers: i64,
     scales: &BTreeSet<i64>,
@@ -89,7 +90,7 @@ pub(crate) fn reduced(
     control_recurrences: bool,
 ) -> Result<MirBody, StrengthError> {
     let op_at = |at: OpOccurrence| &body.blocks[at.block_index()].ops[at.operation_index()];
-    let found = induction::of(body, &BTreeSet::new(), layout)?;
+    let found = induction::of(body, dgroup, layout)?;
     if found.is_empty() {
         return Ok(body.clone());
     }

@@ -99,6 +99,7 @@ fn occurrence(body: &MirBody, block: usize, index: usize) -> OpOccurrence {
 fn reduced_default(body: &MirBody, registers: i64) -> MirBody {
     reduced(
         body,
+        &BTreeSet::new(),
         None,
         registers,
         &BTreeSet::new(),
@@ -591,7 +592,7 @@ fn test_composed_offset_can_carry_an_invariant_pointer() {
             built.blocks[2].clone(),
         ],
     );
-    let derived = induction::derived(&built, &loop_, None, &std::collections::BTreeSet::new(), None).unwrap();
+    let derived = induction::derived(&built, &loop_, None, &BTreeSet::new(), None).unwrap();
     let carried = derived
         .iter()
         .find(|one| one.op == occurrence(&built, 1, 3))

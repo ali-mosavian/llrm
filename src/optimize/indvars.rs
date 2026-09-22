@@ -1447,7 +1447,7 @@ fn _offsets(
                         unreachable!("added checked the result");
                     };
                     let result = result.value;
-                    let constant = induction::_signed(&Arg::Const(invariant.clone()), &indexmap::IndexMap::new(), invariant.width)
+                    let constant = induction::_signed(&Arg::Const(invariant.clone()), &IndexMap::new(), invariant.width)
                         .expect("a constant is known");
                     let forms = readers
                         .get(&result)
@@ -1498,7 +1498,7 @@ fn _offsets(
                 && constants[0].width == held[0].width
                 && held[0].width == result_width(op)
             {
-                scale = induction::_signed(&Arg::Const(constants[0].clone()), &indexmap::IndexMap::new(), constants[0].width);
+                scale = induction::_signed(&Arg::Const(constants[0].clone()), &IndexMap::new(), constants[0].width);
             }
         }
         if form.is_none() {

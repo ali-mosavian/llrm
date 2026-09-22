@@ -282,6 +282,7 @@ pub(crate) fn _without(ops: &[crate::model::mir::Op], drop: impl Fn(&crate::mode
 }
 
 // ---- early port (agent F) ----
+
 /// Direct port of `qbopt/optimize/transform.py:_OBSERVED`.
 pub(crate) const _OBSERVED: [crate::model::mir::Kind; 20] = {
     use crate::model::mir::Kind;
@@ -431,4 +432,3 @@ pub(crate) fn _kept(op: &crate::model::mir::Op) -> bool {
     }
     op.defines.iter().all(|one| one.flags)
 }
-
