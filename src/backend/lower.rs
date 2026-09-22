@@ -2912,3 +2912,7 @@ mod tests {
         assert!(!lowered.iter().any(|one| one.op == Operation::Binary));
     }
 }
+
+#[cfg(test)]
+#[path = "lir_tests.rs"]
+mod lir_tests;
