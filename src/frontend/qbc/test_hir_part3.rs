@@ -145,10 +145,6 @@ fn all_word(text: &str) -> bool {
     !text.is_empty() && text.chars().all(is_word)
 }
 
-fn all_digits(text: &str) -> bool {
-    !text.is_empty() && text.chars().all(|one| one.is_ascii_digit())
-}
-
 /// `re.search(r"v\d+, v\d+ <- call B\$HARY\(v\d+:2\)", text)`.
 fn has_hary_pair(text: &str) -> bool {
     let needle = " <- call B$HARY(v";
@@ -163,17 +159,6 @@ fn has_hary_pair(text: &str) -> bool {
                 trimmed.len() < rest.len() && trimmed.ends_with('v')
             });
         after_ok && before_ok
-    })
-}
-
-/// `re.search(r"    jle (L\d+_\d+)\n", text)` as `(group(1), end())`.
-fn jle_label(text: &str) -> Option<(String, usize)> {
-    let needle = "    jle ";
-    text.match_indices(needle).find_map(|(at, _)| {
-        let rest = &text[at + needle.len()..];
-        let line = rest.split_once('\n')?.0;
-        let (low, high) = line.strip_prefix('L')?.split_once('_')?;
-        (all_digits(low) && all_digits(high)).then(|| (line.to_owned(), at + needle.len() + line.len() + 1))
     })
 }
 
@@ -231,8 +216,19 @@ fn jumps(text: &str, newline: bool) -> Vec<(usize, usize, String)> {
 }
 
 /// `re.findall(r"^(\w+):$", text, re.MULTILINE)`.
-fn labels(text: &str) -> BTreeSet<String> {
-    text.lines().filter_map(|line| line.strip_suffix(':').filter(|name| all_word(name)).map(str::to_owned)).collect()
+/// Labels of `re.findall(r"^(\w+):\n((?:    .*\n)*)", text, re.MULTILINE)` blocks calling B$...BND.
+fn bound_call_labels(text: &str) -> BTreeSet<String> {
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let mut found = BTreeSet::new();
+    for (at, line) in lines.iter().enumerate() {
+        let Some(name) = line.strip_suffix(":\n").filter(|name| all_word(name)) else { continue };
+        let block: String =
+            lines[at + 1..].iter().take_while(|one| one.starts_with("    ") && one.ends_with('\n')).copied().collect();
+        if block.contains("B$") && block.contains("BND") {
+            found.insert(name.to_owned());
+        }
+    }
+    found
 }
 
 fn sum_three(unchecked: bool) -> String {
@@ -1049,9 +1045,7 @@ fn test_a_constant_on_the_left_of_a_comparison_still_encodes() {
 #[test]
 fn test_array_parameters_do_not_pin_private_statics_inside_their_loop() {
     let procedure = sum_three(false);
-    let (label, end) = jle_label(&procedure).expect("a jle head");
-    let start = procedure.find(&format!("{label}:\n")).expect("the head label");
-    let loop_ = if start <= end { &procedure[start..end] } else { "" };
+    let loop_ = &backward_loop(&procedure);
 
     assert!(!["bx", "si", "di"]
         .iter()
@@ -1104,10 +1098,9 @@ fn test_the_bound_error_call_is_placed_after_the_hot_path() {
 fn test_the_first_dimension_is_not_rank_checked() {
     let procedure = sum_three(false);
 
-    let returned = procedure.find("retf").expect("retf");
-    let cold = labels(&procedure[returned..]);
-    let branches = jumps(&procedure[..returned], false);
-    assert_eq!(branches.iter().filter(|(_, _, label)| cold.contains(label)).count(), 2);
+    let calls = bound_call_labels(&procedure);
+    let branches = jumps(&procedure, false);
+    assert_eq!(branches.iter().filter(|(_, _, label)| calls.contains(label)).count(), 2);
 }
 
 /// --unchecked-bounds trusts the descriptor: no B$LBND/B$UBND fallback.
