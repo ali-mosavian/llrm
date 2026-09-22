@@ -3,6 +3,7 @@
 //!
 //! One pass owns reuse, whether the value came from arithmetic or memory.
 
+use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};
 
 use indexmap::IndexMap;
@@ -14,7 +15,7 @@ use crate::model::passes::Where;
 use crate::optimize::{floatfold, loadjoins, profit, transform};
 
 /// Number values, reuse dominating providers, and complete join PRE.
-pub(crate) fn optimized(body: &MirBody, where_: &Where) -> Result<MirBody, String> {
+pub(crate) fn optimized(body: &Rc<MirBody>, where_: &Where) -> Result<Rc<MirBody>, String> {
     let mut avoid_store_crossing = false;
     if where_.registers != 0 {
         let pressure = profit::spill_risk(body, &where_.costs, where_.registers, None);
@@ -29,7 +30,7 @@ pub(crate) fn optimized(body: &MirBody, where_: &Where) -> Result<MirBody, Strin
     // local numbering has stabilized.
     let combined = joined(&canonical, canonical == body)?;
     let loaded = loadjoins::reused(&combined, None, combined == canonical)?;
-    Ok(floatfold::checks(&loaded))
+    Ok(Rc::new(floatfold::checks(&loaded)))
 }
 
 /// Translate simultaneously: an incoming phi value belongs to the prior edge.
@@ -110,7 +111,7 @@ fn _insertion(
 /// A phi combines independently dominating providers. Missing providers may
 /// be inserted on unconditional incoming edges, but only when another edge
 /// already supplies the result. Memory and floating expressions stay out.
-pub(crate) fn joined(body: &MirBody, insert: bool) -> Result<MirBody, String> {
+pub(crate) fn joined(body: &Rc<MirBody>, insert: bool) -> Result<Rc<MirBody>, String> {
     let predecessors = loops::predecessors(&body.blocks);
     if !predecessors.values().any(|parents| parents.len() > 1) {
         return Ok(body.clone());
@@ -313,5 +314,5 @@ pub(crate) fn joined(body: &MirBody, insert: bool) -> Result<MirBody, String> {
             .map_err(|error| error.to_string())?;
         out.push(MirBlock { phis, ops, ..block });
     }
-    Ok(MirBody { blocks: out, ..body.clone() })
+    Ok(Rc::new(MirBody { blocks: out, ..MirBody::clone(body) }))
 }

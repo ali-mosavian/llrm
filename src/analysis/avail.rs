@@ -21,6 +21,7 @@
 
 #![allow(private_interfaces)] // `RegionLayout` and `Interval` are crate-private types.
 
+use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};
 
 use indexmap::IndexMap;
@@ -278,7 +279,7 @@ fn _meet(maps: &[&Holders]) -> Holders {
 }
 
 /// Which value each cell holds, at every block's entry and exit.
-pub fn holders(body: &MirBody, dgroup: Option<&RegionLayout>, calls: Option<&IndexMap<i64, String>>) -> Held {
+pub fn holders(body: &Rc<MirBody>, dgroup: Option<&RegionLayout>, calls: Option<&IndexMap<i64, String>>) -> Held {
     let calls = calls.cloned().unwrap_or_default();
     // Python's `dgroup` is always a set here; its members only key the consts cache.
     let known: BTreeMap<Value, Interval> =
@@ -323,7 +324,7 @@ pub fn holders(body: &MirBody, dgroup: Option<&RegionLayout>, calls: Option<&Ind
 ///
 /// A new use extends its lifetime; this says nothing about its allocation.
 pub fn provider(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     dgroup: Option<&RegionLayout>,
     at: i64,
     r#ref: &MemRef,
@@ -564,7 +565,7 @@ pub fn dead_stores<'a>(
 /// the provider's lifetime. Operation identity distinguishes captures that
 /// share a source address.
 pub fn forwardable<'a>(
-    body: &'a MirBody,
+    body: &'a Rc<MirBody>,
     dgroup: Option<&RegionLayout>,
     calls: &IndexMap<i64, String>,
     want: &BTreeSet<i64>,

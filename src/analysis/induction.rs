@@ -4,6 +4,7 @@
 //! of the analysed body; `floor_div`, `mod_floor`, `modular_inverse` and
 //! `gcd` are Python's `//`, `%`, `pow(x, -1, m)` and `math.gcd` on `BigInt`.
 
+use std::rc::Rc;
 use std::cmp::max;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
@@ -237,7 +238,7 @@ pub(crate) fn derived_map(formula: &Derived, facts: &IndexMap<Value, Known>) -> 
 /// Exact division of a non-wrapping recurrence is another recurrence.  The
 /// operation occurrence comes from this immutable body snapshot, preserving
 /// Python's exact `mir.Op` identity rather than source operation provenance.
-fn _quotients(body: &MirBody, loop_: &Loop, found: &OrderedMap<u32, Affine>) -> Vec<Derived> {
+fn _quotients(body: &Rc<MirBody>, loop_: &Loop, found: &OrderedMap<u32, Affine>) -> Vec<Derived> {
     let facts = consts::known(body, None, None, None, None);
     let mut out = Vec::new();
     for (occurrence, block, operation) in operations(body) {
@@ -476,7 +477,7 @@ fn _multiplier(op: &Op, by: &Arg) -> Arg {
 /// operation overwrites its formula without moving that operation's output
 /// position.  [`OpOccurrence`] is the corresponding snapshot-local identity.
 fn _composed<F>(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     loop_: &Loop,
     found: &OrderedMap<u32, Affine>,
     made: &BTreeMap<u32, &Op>,
@@ -772,7 +773,7 @@ where
 /// `mir.overlapping` hands `bounds` to regions and `dgroup` as a layout
 /// that is not a `module.Group`: a landmarks-only [`RegionLayout`] is both.
 fn unwritten<'a>(
-    body: &'a MirBody,
+    body: &'a Rc<MirBody>,
     inside: &'a BTreeSet<i64>,
     dgroup: &'a BTreeSet<i64>,
     bounds: Option<&'a RegionLayout>,
@@ -803,7 +804,7 @@ fn unwritten<'a>(
 
 /// Every multiply inside the loop whose operand is one of its counters.
 pub(crate) fn derived(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     loop_: &Loop,
     found: Option<&OrderedMap<u32, Affine>>,
     dgroup: &BTreeSet<i64>,
@@ -959,7 +960,7 @@ pub(crate) fn derived(
 /// Every loop in this body, with its counters and what they derive.
 #[allow(clippy::type_complexity)]
 pub(crate) fn of(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     dgroup: &BTreeSet<i64>,
     bounds: Option<&RegionLayout>,
 ) -> Result<Vec<(Loop, OrderedMap<u32, Affine>, Vec<Derived>)>, RegionError> {
@@ -976,7 +977,7 @@ pub(crate) fn of(
 }
 
 /// Prove every canonical unsigned `0..<bound` control recurrence.
-pub(crate) fn counted(body: &MirBody, loop_: &Loop, facts: Option<&IndexMap<Value, Known>>) -> Vec<CountedLoop> {
+pub(crate) fn counted(body: &Rc<MirBody>, loop_: &Loop, facts: Option<&IndexMap<Value, Known>>) -> Vec<CountedLoop> {
     let computed;
     let facts = match facts {
         Some(facts) => facts,
@@ -1117,7 +1118,7 @@ pub(crate) fn counted(body: &MirBody, loop_: &Loop, facts: Option<&IndexMap<Valu
 ///
 /// The bytes-per-iteration view of `basics` and `derived`; nothing here
 /// re-derives which values are affine.
-pub(crate) fn advances(body: &MirBody, loop_: &Loop) -> IndexMap<Value, BigInt> {
+pub(crate) fn advances(body: &Rc<MirBody>, loop_: &Loop) -> IndexMap<Value, BigInt> {
     let found = basics(body, loop_);
     let header = body.blocks.iter().find(|block| block.at == loop_.header).expect("the loop's header is a block");
     let mut out = IndexMap::new();
@@ -1143,7 +1144,7 @@ pub(crate) fn advances(body: &MirBody, loop_: &Loop) -> IndexMap<Value, BigInt> 
 ///
 /// Iteration i reaches `b + i*s` inside one object, and an offset `w` bytes
 /// wide addresses at most 2**(8w) of them, so i*s + width <= 2**(8w).
-fn _inbounds_trips(body: &MirBody, loop_: &Loop, latch: i64) -> Option<BigInt> {
+fn _inbounds_trips(body: &Rc<MirBody>, loop_: &Loop, latch: i64) -> Option<BigInt> {
     let step = advances(body, loop_);
     let dominators = loops::dominators(&body.blocks, Some(body.entry));
     let empty = BTreeSet::new();
@@ -1745,7 +1746,7 @@ fn _sentinel_trip_count(
 }
 
 /// Python's `nonempty(body, loop)`.
-pub(crate) fn nonempty(body: &MirBody, loop_: &Loop) -> bool {
+pub(crate) fn nonempty(body: &Rc<MirBody>, loop_: &Loop) -> bool {
     let facts = consts::known(body, None, None, None, None);
     trip_count(body, loop_, &facts).is_some()
 }
@@ -2223,7 +2224,7 @@ pub(crate) fn control_replacement<'a>(
 
 /// Prove that `candidate` can supply a counted loop's terminating flags.
 pub(crate) fn zero_terminating_control<'a>(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     loop_: &Loop,
     proof: &'a CountedLoop,
     candidate: &Affine,

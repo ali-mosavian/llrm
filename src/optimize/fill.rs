@@ -2,6 +2,7 @@
 //!
 //! Port of `qbopt/optimize/fill.py`.
 
+use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};
 
 use num_bigint::BigInt;
@@ -45,16 +46,16 @@ impl MIRTransform for Fill {
         "fill"
     }
 
-    fn transform(&mut self, body: MirBody) -> Result<MirBody, String> {
+    fn transform(&mut self, body: Rc<MirBody>) -> Result<Rc<MirBody>, String> {
         Ok(filled(&body))
     }
 }
 
 /// `body` with every such loop's body made one fill.
-pub fn filled(body: &MirBody) -> MirBody {
+pub fn filled(body: &Rc<MirBody>) -> Rc<MirBody> {
     for loop_ in loopy::loops(&body.blocks, Some(body.entry)) {
         if let Some(made) = _filled(body, &loop_) {
-            return filled(&made);
+            return filled(&Rc::new(made));
         }
     }
     body.clone()

@@ -110,15 +110,15 @@ fn at(body: &MirBody, at: i64) -> Op {
 }
 
 fn plain(body: &MirBody) -> MirBody {
-    promoted(body, &BTreeSet::new(), None, false, true, false).unwrap()
+    MirBody::clone(&promoted(&Rc::new(body.clone()), &BTreeSet::new(), None, false, true, false).unwrap())
 }
 
 fn aggregate(body: &MirBody) -> MirBody {
-    promoted(body, &BTreeSet::new(), None, false, true, true).unwrap()
+    MirBody::clone(&promoted(&Rc::new(body.clone()), &BTreeSet::new(), None, false, true, true).unwrap())
 }
 
 fn sroa(body: &MirBody) -> MirBody {
-    Sroa::new(Where::default()).transform(body.clone()).unwrap()
+    MirBody::clone(&Sroa::new(Where::default()).transform(Rc::new(body.clone())).unwrap())
 }
 
 fn no_cells(op: &Op) -> bool {
@@ -761,7 +761,7 @@ fn test_packed_capture_keeps_wide_and_narrow_definitions_and_rejects_unknown_ove
         overwrite.clone(),
         read(18, &half),
     ]);
-    let result = promoted(&body, &BTreeSet::from([5]), None, false, true, false).unwrap();
+    let result = promoted(&Rc::new(MirBody::clone(&body)), &BTreeSet::from([5]), None, false, true, false).unwrap();
     let ops = &result.blocks[0].ops;
     assert!(ops.contains(&first) && ops.contains(&overwrite));
     assert!(at(&result, 8).loads.is_empty());
@@ -802,7 +802,7 @@ fn test_split_initializer_requires_every_byte() {
                 .chain([load(10, loaded, vec![], &whole)])
                 .collect(),
         );
-        let result = promoted(&body, &BTreeSet::from([5]), None, false, true, false).unwrap();
+        let result = promoted(&Rc::new(MirBody::clone(&body)), &BTreeSet::from([5]), None, false, true, false).unwrap();
         let ops = &result.blocks[0].ops;
         assert!(stores.iter().all(|op| ops.contains(op)));
         assert_eq!(at(&result, 10).loads.is_empty(), complete, "{complete}");

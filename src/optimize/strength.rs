@@ -8,6 +8,7 @@
 //! `ivshare.shared`, `transform.dead`, `exitsink.sunk`, `loopexit.evaluated`
 //! and four `indvars` rewrites that have no Rust port.
 
+use std::rc::Rc;
 use indexmap::IndexMap;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
@@ -91,7 +92,7 @@ impl crate::model::passes::MIRTransform for Strength {
         "strength"
     }
 
-    fn transform(&mut self, body: MirBody) -> Result<MirBody, String> {
+    fn transform(&mut self, body: Rc<MirBody>) -> Result<Rc<MirBody>, String> {
         use super::{exitsink, indvars, ivshare, loopexit};
 
         let layout = self.r#where.bounds.as_ref().map(|bounds| RegionLayout {
@@ -125,7 +126,7 @@ impl crate::model::passes::MIRTransform for Strength {
 /// `induction.of` takes for them.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn reduced(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     dgroup: &BTreeSet<i64>,
     layout: Option<&RegionLayout>,
     registers: i64,
@@ -134,7 +135,7 @@ pub(crate) fn reduced(
     costs: &OperationCosts,
     address_forms: &[AddressForm],
     control_recurrences: bool,
-) -> Result<MirBody, StrengthError> {
+) -> Result<Rc<MirBody>, StrengthError> {
     let op_at = |at: OpOccurrence| &body.blocks[at.block_index()].ops[at.operation_index()];
     let found = induction::of(body, dgroup, layout)?;
     if found.is_empty() {
@@ -585,7 +586,7 @@ pub(crate) fn reduced(
         return Ok(body.clone());
     }
     let pointer_rebases = _local_pointer_rebases(body, &pointer_bindings, &replacements);
-    let mut changed = body.clone();
+    let mut changed = MirBody::clone(body);
     let none = BTreeMap::new();
     for (index, block) in body.blocks.iter().enumerate() {
         let occurrences = operations(body)
@@ -605,7 +606,7 @@ pub(crate) fn reduced(
         }
         changed.blocks[index].ops = ops;
     }
-    Ok(ssa::constructed(&changed, &(first..=taken).collect())?)
+    Ok(Rc::new(ssa::constructed(&changed, &(first..=taken).collect())?))
 }
 
 fn _candidates(body: &MirBody, derived: &[Derived], scales: &BTreeSet<i64>) -> Vec<Derived> {
@@ -691,7 +692,7 @@ type Found = Vec<(Loop, OrderedMap<u32, Affine>, Vec<Derived>)>;
 /// data use of `i` and the counted-loop proof says the source is otherwise
 /// control-only, so its net pressure cost is zero.
 fn _control_credits(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     found: &Found,
     groups: &BTreeMap<i64, Vec<Derived>>,
     costs: &OperationCosts,
@@ -751,7 +752,7 @@ fn _control_credits(
 /// when that counter has a candidate with the identical injective map.
 /// Candidate pairs are retained to a fixed point.
 fn _replacement_credits(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     found: &Found,
     groups: &BTreeMap<i64, Vec<Derived>>,
     costs: &OperationCosts,

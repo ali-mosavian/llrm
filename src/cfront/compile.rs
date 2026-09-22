@@ -107,11 +107,11 @@ pub fn assembled(
     let known = libfunc::summaries(callees.iter().map(String::as_str));
     let modref = alias::summaries(&aliases, Some(&known)).map_err(hir::Unsupported)?;
     let initial = _constant_initializers(&unit);
-    let mut bodies: IndexMap<String, MirBody> = IndexMap::new();
+    let mut bodies: IndexMap<String, Rc<MirBody>> = IndexMap::new();
     for one in &raised_procedures {
         let mut body = alias::calls_annotated(&aliases[&one.name], &modref).map_err(hir::Unsupported)?;
         body.initial = _body_initializers(&body, &initial);
-        bodies.insert(one.name.clone(), body);
+        bodies.insert(one.name.clone(), Rc::new(body));
     }
     let address_taken = _address_taken_procedures(&unit);
     let call_arguments: IndexMap<String, IndexMap<i64, BTreeSet<i64>>> = raised_procedures
@@ -141,7 +141,7 @@ pub fn assembled(
         }
     }
 
-    let run_optimiser = |raised: &raise_hir::Raised, body: &MirBody, prefix: &str| -> Result<MirBody, CompileError> {
+    let run_optimiser = |raised: &raise_hir::Raised, body: &Rc<MirBody>, prefix: &str| -> Result<Rc<MirBody>, CompileError> {
         let mut failed = None;
         let mut observe = |stage: &str, after: &MirBody| {
             if failed.is_none() {
@@ -191,16 +191,16 @@ pub fn assembled(
             .map(|one| (one.name.clone(), one.parameters.clone()))
             .collect::<IndexMap<_, _>>();
         let call_far = profile.cost("call_far").map_err(hir::Unsupported)?;
-        let procedures_of = |bodies: &IndexMap<String, MirBody>| {
+        let procedures_of = |bodies: &IndexMap<String, Rc<MirBody>>| {
             raised_procedures
                 .iter()
                 .map(|one| (one.name.clone(), (bodies[&one.name].clone(), one.calls.clone())))
                 .collect::<IndexMap<_, _>>()
         };
         fn borrowed(
-            owned: &IndexMap<String, (MirBody, IndexMap<i64, String>)>,
+            owned: &IndexMap<String, (Rc<MirBody>, IndexMap<i64, String>)>,
         ) -> IndexMap<String, (&MirBody, &IndexMap<i64, String>)> {
-            owned.iter().map(|(name, (body, calls))| (name.clone(), (body, calls))).collect()
+            owned.iter().map(|(name, (body, calls))| (name.clone(), (&**body, calls))).collect()
         }
         let pure = interprocedural::pure_procedures(&borrowed(&procedures_of(&bodies)));
         let mut inline_round = 0;
@@ -227,7 +227,7 @@ pub fn assembled(
                     Some(&constant),
                 )
                 .map_err(hir::Unsupported)?;
-                if after == before {
+                if Rc::ptr_eq(&after, &before) {
                     continue;
                 }
                 let stage = format!("inline{inline_round}");
@@ -247,7 +247,7 @@ pub fn assembled(
         let mut return_round = 0;
 
         // Materialize every newly constant result, retaining seen calls.
-        let propagate_constant_returns = |bodies: &mut IndexMap<String, MirBody>,
+        let propagate_constant_returns = |bodies: &mut IndexMap<String, Rc<MirBody>>,
                                           propagated: &mut IndexMap<String, BTreeSet<i64>>,
                                           return_round: &mut i64|
          -> Result<(), CompileError> {
@@ -260,7 +260,7 @@ pub fn assembled(
                         interprocedural::propagate_returns(&before, &raised.calls, &returns, &propagated[&raised.name])
                             .map_err(hir::Unsupported)?;
                     propagated.insert(raised.name.clone(), done);
-                    if after == before {
+                    if Rc::ptr_eq(&after, &before) {
                         continue;
                     }
                     let optimised = run_optimiser(raised, &after, &format!("ipa{return_round}."))?;
@@ -294,7 +294,7 @@ pub fn assembled(
                 };
                 let before = bodies[&raised.name].clone();
                 let after = interprocedural::specialize_parameters(&before, &raised.parameters, constants_for_body);
-                if after == before {
+                if Rc::ptr_eq(&after, &before) {
                     continue;
                 }
                 let optimised = run_optimiser(raised, &after, &format!("ipa-args{argument_round}."))?;
@@ -329,7 +329,7 @@ pub fn assembled(
                     Some(&constant),
                 )
                 .map_err(hir::Unsupported)?;
-                if after == before {
+                if Rc::ptr_eq(&after, &before) {
                     continue;
                 }
                 let optimised = run_optimiser(raised, &after, &format!("ipa-inline{argument_round}."))?;
@@ -355,7 +355,7 @@ pub fn assembled(
                 &call_arguments[&raised.name],
             )
             .map_err(hir::Unsupported)?;
-            if after != before {
+            if !Rc::ptr_eq(&after, &before) {
                 let optimised = run_optimiser(raised, &after, "ipa-pure.")?;
                 bodies.insert(raised.name.clone(), optimised);
             }
@@ -369,7 +369,7 @@ pub fn assembled(
             for raised in &raised_procedures {
                 let before = bodies[&raised.name].clone();
                 let after = interprocedural::terminal_calls(&before, &raised.calls, &noreturn);
-                if after == before {
+                if Rc::ptr_eq(&after, &before) {
                     continue;
                 }
                 let optimised = run_optimiser(raised, &after, "ipa-noreturn.")?;
@@ -583,7 +583,7 @@ fn _address_taken_procedures(unit: &hir::Unit) -> BTreeSet<String> {
 /// Defined procedure bodies reachable through calls that survived MIR.
 fn _reachable_procedures(
     procedures: &[raise_hir::Raised],
-    bodies: &IndexMap<String, MirBody>,
+    bodies: &IndexMap<String, Rc<MirBody>>,
     roots: &BTreeSet<String>,
 ) -> BTreeSet<String> {
     let defined = procedures.iter().map(|one| one.name.clone()).collect::<BTreeSet<_>>();
@@ -738,7 +738,7 @@ fn _literals(shared: &raise_hir::Shared) -> Vec<(String, Vec<masm::Datum>)> {
 /// Only a labelled non-procedure symbol that is neither imported nor public
 /// is deleted, and only after every root has been closed over
 /// data-initializer pointers.
-fn _reachable_data(unit: &hir::Unit, bodies: &IndexMap<String, MirBody>) -> BTreeSet<i64> {
+fn _reachable_data(unit: &hir::Unit, bodies: &IndexMap<String, Rc<MirBody>>) -> BTreeSet<i64> {
     let labels = _data_labels(unit);
     let candidates = labels
         .keys()
@@ -1210,6 +1210,22 @@ mod tests {
         let body = MirBody::new(1, vec![MirBlock::new(1, vec![], vec![load], vec![])]);
 
         assert_eq!(_body_initializers(&body, &initial), [initial[0].clone()]);
+    }
+
+    /// A pass that changed nothing returned a copy, so the proof caches keyed
+    /// on the body missed: matmul solved 268 constant fixed points to
+    /// Python's 186.  Python solves 33 and 15 on this fixture.
+    #[test]
+    fn test_unchanged_bodies_reuse_their_proofs_as_python_does() {
+        use crate::analysis::consts::SOLVED;
+        use crate::optimize::transform::HALVED;
+
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/c/loopaddr.cgs");
+        let text = std::fs::read_to_string(path).unwrap();
+        SOLVED.with(|solved| solved.set(0));
+        HALVED.with(|halved| halved.set(0));
+        assert!(assembled(&text, "loopaddr", true, None, "386", &crate::model::passes::O2()).is_ok());
+        assert_eq!((SOLVED.with(|solved| solved.get()), HALVED.with(|halved| halved.get())), (33, 15));
     }
 
     /// A callee taking arguments in registers: the raise pushed them anyway,

@@ -109,7 +109,7 @@ mod subexpressions_tests {
             let reader = op(4, Operation::Push, "push", vec![], vec![copied], Kind::Opaque);
             let body = one_block(vec![first, copy, reader]);
 
-            let done = subexpressions(&body, &BTreeSet::new(), false).unwrap();
+            let done = subexpressions(&std::rc::Rc::new(MirBody::clone(&body)), &BTreeSet::new(), false).unwrap();
 
             let ops = &done.blocks[0].ops;
             assert_eq!(ops.last().unwrap().uses, vec![if preserves_high { copied } else { source }]);
@@ -132,7 +132,7 @@ mod subexpressions_tests {
         };
         let body = one_block(vec![address(0, first), address(1, duplicate), reader]);
 
-        let done = subexpressions(&body, &BTreeSet::new(), false).unwrap();
+        let done = subexpressions(&std::rc::Rc::new(MirBody::clone(&body)), &BTreeSet::new(), false).unwrap();
 
         let ops = &done.blocks[0].ops;
         assert_eq!(ops.iter().filter(|one| one.kind == Kind::Address).count(), 1);
@@ -215,7 +215,7 @@ mod b_tests {
         let mut used = op(9, Operation::Push, "push", vec![], vec![loaded], Kind::Arg);
         used.args = vec![Arg::Held(Held { value: loaded, width: 2 })];
         let body = MirBody::new(0, vec![MirBlock::new(0, vec![], vec![first, written, read, overwrite, used], vec![])]);
-        let done = without_dead_stores(&body, &BTreeSet::from([5]), &IndexMap::new(), None, None, true).unwrap();
+        let done = without_dead_stores(&std::rc::Rc::new(MirBody::clone(&body)), &BTreeSet::from([5]), &IndexMap::new(), None, None, true).unwrap();
         let ops = &done.blocks[0].ops;
         assert!(ops.iter().any(|op| op.defines.contains(&loaded)));
         assert_eq!(ops.iter().filter(|op| !op.stores.is_empty()).count(), 1);
@@ -232,7 +232,7 @@ mod b_tests {
         let read = load(2, loaded, &target);
         let neighbor = load(2, unrelated, &other);
         let body = MirBody::new(0, vec![MirBlock::new(0, vec![], vec![first, written, read, neighbor.clone()], vec![])]);
-        let done = forwarded(&body, &BTreeSet::from([5]), &IndexMap::new(), false).unwrap();
+        let done = forwarded(&std::rc::Rc::new(MirBody::clone(&body)), &BTreeSet::from([5]), &IndexMap::new(), false).unwrap();
         let done = &done.blocks[0].ops;
         assert_eq!(done[2].args, vec![Arg::Held(Held { value: source, width: 4 })]);
         assert!(done[2].loads.is_empty());
@@ -441,14 +441,14 @@ mod d_tests {
                 _ => {}
             }
             let body = MirBody::new(0, vec![entry, middle, end]);
-            let result = _threaded(&body).expect("threads");
+            let result = _threaded(&std::rc::Rc::new(MirBody::clone(&body))).expect("threads");
             if guard == "none" {
                 assert_eq!(result.blocks[0].succ, vec![2]);
                 assert_eq!(result.blocks[0].ops.last().unwrap().target, Some(2));
                 assert_eq!(result.blocks[1].ops.last().unwrap().kind, Kind::Nothing);
                 assert_eq!(result.blocks[1].ops.last().unwrap().name, "");
             } else {
-                assert_eq!(result, body, "{guard}");
+                assert_eq!(result, std::rc::Rc::new(body), "{guard}");
             }
         }
     }
@@ -472,12 +472,12 @@ mod d_tests {
         let mut doomed = op(0x12, Operation::Move, "mov", vec![Value::new(2, 0x12)], Kind::Copy);
         doomed.absorbed = vec![2];
         let plain = MirBody::new(0x10, vec![MirBlock::new(0x10, vec![], vec![first.clone(), doomed.clone()], vec![])]);
-        assert_ne!(dead(&plain).expect("dead"), plain, "a dead move goes when the body is readable");
+        assert_ne!(*dead(&std::rc::Rc::new(plain.clone())).expect("dead"), plain, "a dead move goes when the body is readable");
 
         let mut opaque = Op::new(0x14, OpCode::Operation(Operation::Barrier), "?", vec![], vec![]);
         opaque.absorbed = vec![3];
         let body = MirBody::new(0x10, vec![MirBlock::new(0x10, vec![], vec![first, doomed, opaque], vec![])]);
-        assert_eq!(dead(&body).expect("dead"), body, "and stays when the body holds a barrier");
+        assert_eq!(*dead(&std::rc::Rc::new(body.clone())).expect("dead"), body, "and stays when the body holds a barrier");
     }
 }
 mod folded_tests {
@@ -549,7 +549,7 @@ mod pipeline_tests {
         );
 
         let result = applied(
-            &body,
+            &std::rc::Rc::new(MirBody::clone(&body)),
             &BTreeSet::new(),
             &IndexMap::new(),
             Applied { only: Some("no-such-pass".to_owned()), ..Default::default() },
@@ -569,7 +569,7 @@ mod pipeline_tests {
         );
 
         let result = applied(
-            &body,
+            &std::rc::Rc::new(MirBody::clone(&body)),
             &BTreeSet::new(),
             &IndexMap::new(),
             Applied { only: Some("no-such-pass".to_owned()), ..Default::default() },

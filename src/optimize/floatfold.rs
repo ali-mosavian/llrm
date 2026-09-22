@@ -4,6 +4,7 @@
 
 // Its callers live in transform.py, not yet ported.
 
+use std::rc::Rc;
 use std::collections::BTreeMap;
 
 use indexmap::IndexMap;
@@ -167,7 +168,7 @@ pub fn checks(body: &MirBody) -> MirBody {
 }
 
 /// Write exact storage bits and retain checks for the now-unused computation.
-pub fn stored(body: &MirBody, facts: &IndexMap<Value, Finite>) -> MirBody {
+pub fn stored(body: &Rc<MirBody>, facts: &IndexMap<Value, Finite>) -> Rc<MirBody> {
     if facts.is_empty() {
         return body.clone();
     }
@@ -228,13 +229,13 @@ pub fn stored(body: &MirBody, facts: &IndexMap<Value, Finite>) -> MirBody {
         block.ops = ops;
         blocks.push(block);
     }
-    _dead_values(
+    Rc::new(_dead_values(
         MirBody {
             blocks,
-            ..body.clone()
+            ..MirBody::clone(body)
         },
         facts,
-    )
+    ))
 }
 
 fn _dead_values(mut changed: MirBody, facts: &IndexMap<Value, Finite>) -> MirBody {
@@ -272,7 +273,7 @@ fn _dead_values(mut changed: MirBody, facts: &IndexMap<Value, Finite>) -> MirBod
     }
 }
 
-pub fn discarded(body: &MirBody, converted: &IndexMap<Value, Known>) -> MirBody {
+pub fn discarded(body: &Rc<MirBody>, converted: &IndexMap<Value, Known>) -> Rc<MirBody> {
     if converted.is_empty() {
         return body.clone();
     }
@@ -335,10 +336,10 @@ pub fn discarded(body: &MirBody, converted: &IndexMap<Value, Known>) -> MirBody 
         block.ops = ops;
         blocks.push(block);
     }
-    MirBody {
+    Rc::new(MirBody {
         blocks,
-        ..body.clone()
-    }
+        ..MirBody::clone(body)
+    })
 }
 
 #[cfg(test)]

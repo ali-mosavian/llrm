@@ -6,6 +6,7 @@
 //! skipped; each builds its input from an object fixture or `wholeseg`,
 //! neither of which is ported.
 
+use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};
 
 use indexmap::IndexMap;
@@ -17,10 +18,10 @@ use crate::optimize::{strength, transform};
 
 /// Direct port of `qbopt/optimize/floatloop.py:specialized`.
 pub(crate) fn specialized(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     dgroup: &BTreeSet<i64>,
     calls: &IndexMap<i64, String>,
-) -> Result<MirBody, String> {
+) -> Result<Rc<MirBody>, String> {
     let proofs = floatfacts::loop_exits(body, dgroup, calls)
         .into_iter()
         .filter(|proof| proof.count > BigInt::from(1))
@@ -173,7 +174,7 @@ pub(crate) fn specialized(
         }
         if !broke {
             let final_ = Const::new(consts::masked(&(start + step * &proof.count), width), width);
-            return _rewritten(body, header, latch, exit_at, checkpoint, seeds, phi.result, final_);
+            return _rewritten(body, header, latch, exit_at, checkpoint, seeds, phi.result, final_).map(Rc::new);
         }
     }
     Ok(body.clone())

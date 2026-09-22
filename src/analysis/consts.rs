@@ -158,9 +158,9 @@ type ReuseKey = (usize, Option<BTreeSet<i64>>, Option<Vec<(i64, String)>>);
 
 thread_local! {
     #[allow(non_upper_case_globals)]
-    /// Python's `_reuse` context variable.  The saved body is compared as
-    /// well as its address: Python holds the body alive, Rust cannot.
-    static _reuse: RefCell<Option<HashMap<ReuseKey, (MirBody, IndexMap<Value, Known>)>>> =
+    /// Python's `_reuse` context variable.  Holding the body keeps its
+    /// address from being recycled, as Python's holding keeps its `id`.
+    static _reuse: RefCell<Option<HashMap<ReuseKey, (Rc<MirBody>, IndexMap<Value, Known>)>>> =
         const { RefCell::new(None) };
 }
 
@@ -173,7 +173,7 @@ pub(crate) fn reusing<T>(inside: impl FnOnce() -> T) -> T {
 }
 
 fn _reuse_key(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     dgroup: Option<&BTreeSet<i64>>,
     calls: Option<&IndexMap<i64, String>>,
     edges: Option<&IndexMap<(i64, i64), Cells>>,
@@ -187,7 +187,7 @@ fn _reuse_key(
         items.sort();
         items
     });
-    Some((std::ptr::from_ref(body) as usize, dgroup.cloned(), named))
+    Some((Rc::as_ptr(body) as usize, dgroup.cloned(), named))
 }
 
 /// The low `width` bytes of a value are `n`. Nothing is said above them.
@@ -962,7 +962,7 @@ fn _pointer_stores(body: &MirBody, _dgroup: &BTreeSet<i64>) -> IndexMap<Value, A
 /// know is some absolute segment; the ones that came out numbers keep the
 /// assumption and the rest lose it, until every one still assumed resolved.
 pub(crate) fn known(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     dgroup: Option<&BTreeSet<i64>>,
     calls: Option<&IndexMap<i64, String>>,
     edges: Option<&IndexMap<(i64, i64), Cells>>,
@@ -974,7 +974,7 @@ pub(crate) fn known(
             reuse.borrow().as_ref().and_then(|cache| {
                 cache
                     .get(key)
-                    .filter(|(saved, _)| saved == body)
+                    .filter(|(saved, _)| Rc::ptr_eq(saved, body))
                     .map(|(_, facts)| facts.clone())
             })
         });
@@ -994,7 +994,7 @@ pub(crate) fn known(
             if let Some(key) = key {
                 _reuse.with(|reuse| {
                     if let Some(cache) = reuse.borrow_mut().as_mut() {
-                        cache.insert(key, (body.clone(), got.clone()));
+                        cache.insert(key, (Rc::clone(body), got.clone()));
                     }
                 });
             }
@@ -1002,6 +1002,12 @@ pub(crate) fn known(
         }
         allowed = Some(resolved);
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Fixed points solved, for the tests that pin cache reuse to Python's.
+    pub(crate) static SOLVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 fn _solved(
@@ -1013,6 +1019,8 @@ fn _solved(
     mut assume: Option<BTreeSet<Value>>,
     allowed: Option<&BTreeSet<Value>>,
 ) -> (IndexMap<Value, Known>, BTreeSet<Value>) {
+    #[cfg(test)]
+    SOLVED.with(|solved| solved.set(solved.get() + 1));
     let mut facts = IndexMap::<Value, Known>::new();
     let mut carries = IndexMap::<Value, BigInt>::new();
     let mut held = IndexMap::<(i64, usize), Cells>::new();

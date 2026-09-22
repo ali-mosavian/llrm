@@ -14,6 +14,7 @@
 //! Direct port of `qbopt/optimize/inline.py`.
 
 
+use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};
 
 use indexmap::IndexMap;
@@ -51,7 +52,7 @@ const _FORBIDDEN: [Kind; 20] = [
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Candidate {
-    pub body: MirBody,
+    pub body: Rc<MirBody>,
     pub parameters: Vec<MemRef>,
 }
 
@@ -78,7 +79,7 @@ macro_rules! width_of {
 /// work.  This lets a short arithmetic helper disappear at every site while
 /// keeping branchy or code-growing helpers out of the allocator's region.
 pub(crate) fn candidates(
-    bodies: &IndexMap<String, MirBody>,
+    bodies: &IndexMap<String, Rc<MirBody>>,
     parameters: &IndexMap<String, Vec<MemRef>>,
     calls: &Counter,
     private: &BTreeSet<String>,
@@ -115,7 +116,7 @@ pub(crate) fn candidates(
 /// As with repeated-leaf inlining, the target profile must price the call
 /// above the cloned semantic work.
 pub(crate) fn constant_sites(
-    bodies: &IndexMap<String, MirBody>,
+    bodies: &IndexMap<String, Rc<MirBody>>,
     parameters: &IndexMap<String, Vec<MemRef>>,
     calls: &IndexMap<i64, String>,
     constants: &IndexMap<i64, Vec<Option<Const>>>,
@@ -195,7 +196,7 @@ fn _leaf(body: &MirBody, parameters: &[MemRef]) -> bool {
 
 /// Surviving direct call counts, never stale entries in a source side table.
 pub(crate) fn call_counts(
-    bodies: &IndexMap<String, MirBody>,
+    bodies: &IndexMap<String, Rc<MirBody>>,
     calls: &IndexMap<String, IndexMap<i64, String>>,
 ) -> Counter {
     let mut counts = Counter::new();
@@ -212,12 +213,12 @@ pub(crate) fn call_counts(
 
 /// Inline the first legal call site in `body`, or return it unchanged.
 pub(crate) fn expanded(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     calls: &IndexMap<i64, String>,
     arguments: &IndexMap<i64, BTreeSet<i64>>,
     available: &IndexMap<String, Candidate>,
     constant: Option<&IndexMap<i64, Candidate>>,
-) -> Result<MirBody, String> {
+) -> Result<Rc<MirBody>, String> {
     let empty = IndexMap::new();
     let constant = constant.unwrap_or(&empty);
     let mut used = BTreeSet::new();
@@ -245,7 +246,7 @@ pub(crate) fn expanded(
                         pyrepr::list(&problems[..problems.len().min(3)])
                     ));
                 }
-                return Ok(made);
+                return Ok(Rc::new(made));
             }
         }
     }

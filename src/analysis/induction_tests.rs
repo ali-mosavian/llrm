@@ -32,6 +32,7 @@
 //! `lower.lowered` half is skipped, as is the `strength.reduced` half of
 //! `test_composed_offset_can_carry_an_invariant_pointer`.
 
+use std::rc::Rc;
 use std::collections::BTreeSet;
 
 use indexmap::IndexMap;
@@ -81,7 +82,7 @@ fn looped(header: i64, latches: &[i64], body: &[i64]) -> Loop {
 }
 
 fn derive(body: &MirBody, loop_: &Loop) -> Vec<Derived> {
-    derived(body, loop_, None, &BTreeSet::new(), None).unwrap()
+    derived(&Rc::new(body.clone()), loop_, None, &BTreeSet::new(), None).unwrap()
 }
 
 #[test]
@@ -194,7 +195,7 @@ fn test_posttested_counter_has_an_exact_fixed_trip_count() {
         ],
     );
     let loop_ = looped(1, &[2], &[1, 2]);
-    let facts = consts::known(&body, None, None, None, None);
+    let facts = consts::known(&Rc::new(MirBody::clone(&body)), None, None, None, None);
     assert_eq!(trip_count(&body, &loop_, &facts), Some(BigInt::from(4)));
 }
 
@@ -234,7 +235,7 @@ fn test_posttested_symbolic_sentinel_keeps_its_exact_trip_count() {
         ],
     );
     let loop_ = looped(1, &[2], &[1, 2]);
-    let facts = consts::known(&body, None, None, None, None);
+    let facts = consts::known(&Rc::new(MirBody::clone(&body)), None, None, None, None);
     assert_eq!(trip_count(&body, &loop_, &facts), Some(BigInt::from(32)));
 }
 

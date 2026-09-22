@@ -4,6 +4,7 @@
 //! is skipped; it builds its input through `wholeseg.emitted`, which is not
 //! ported.
 
+use std::rc::Rc;
 use std::collections::BTreeMap;
 
 use crate::analysis::liveness;
@@ -15,7 +16,7 @@ use crate::optimize::transform;
 
 /// Direct port of `qbopt/optimize/exitsink.py:sunk`.  Python lets
 /// `ssa.substituted` raise; Rust returns that refusal.
-pub(crate) fn sunk(body: &MirBody) -> Result<MirBody, SubstitutionError> {
+pub(crate) fn sunk(body: &Rc<MirBody>) -> Result<Rc<MirBody>, SubstitutionError> {
     if body.blocks.iter().flat_map(|block| &block.ops).any(|op| {
         (op.barrier() || op.kind == Kind::Opaque) && !op.reads_complete
     }) {
@@ -119,7 +120,7 @@ pub(crate) fn sunk(body: &MirBody) -> Result<MirBody, SubstitutionError> {
                         export
                     })
                     .collect::<Vec<_>>();
-                let mut changed = body.clone();
+                let mut changed = MirBody::clone(body);
                 for (position, one) in body.blocks.iter().enumerate() {
                     if position == index {
                         let target = &mut changed.blocks[position];
@@ -161,7 +162,7 @@ pub(crate) fn sunk(body: &MirBody) -> Result<MirBody, SubstitutionError> {
                             .collect();
                     }
                 }
-                return Ok(changed);
+                return Ok(Rc::new(changed));
             }
         }
     }

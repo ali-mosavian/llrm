@@ -3,6 +3,7 @@
 
 #![allow(private_interfaces)] // `RegionLayout` is regions' crate-private type.
 
+use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};
 
 use indexmap::IndexMap;
@@ -129,7 +130,7 @@ fn _insertion(
     Some((cut, values))
 }
 
-pub fn reused(body: &MirBody, dgroup: Option<&RegionLayout>, insert: bool) -> Result<MirBody, String> {
+pub fn reused(body: &Rc<MirBody>, dgroup: Option<&RegionLayout>, insert: bool) -> Result<Rc<MirBody>, String> {
     let predecessors = loops::predecessors(&body.blocks);
     if !predecessors.values().any(|parents| parents.len() > 1) {
         return Ok(body.clone());
@@ -283,11 +284,11 @@ pub fn reused(body: &MirBody, dgroup: Option<&RegionLayout>, insert: bool) -> Re
             block.ops.insert(cut, load);
         }
     }
-    let mut result = MirBody { blocks, ..body.clone() };
+    let mut result = MirBody { blocks, ..MirBody::clone(body) };
     for ((parent, target), (label, loads)) in bridges {
         result = edges::split(&result, parent, target, label, loads)?;
     }
-    Ok(result)
+    Ok(Rc::new(result))
 }
 
 #[cfg(test)]

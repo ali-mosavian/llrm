@@ -6,6 +6,7 @@
 //! Every test in `tests/test_unswitch.py` is skipped: each needs the corpus
 //! or a monkeypatched pipeline.
 
+use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};
 
 use indexmap::IndexMap;
@@ -28,14 +29,13 @@ pub(crate) struct Optimized<'a> {
 }
 
 pub(crate) fn optimized(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     dgroup: &BTreeSet<i64>,
     calls: &IndexMap<i64, String>,
     options: Optimized<'_>,
-) -> Result<MirBody, String> {
+) -> Result<Rc<MirBody>, String> {
     let candidate = specialized(body)?;
-    // Python's `candidate is body`: `specialized` returns its input unchanged.
-    if candidate == *body {
+    if Rc::ptr_eq(&candidate, body) {
         return Ok(body.clone());
     }
     let Optimized {
@@ -47,7 +47,7 @@ pub(crate) fn optimized(
         options,
         watch,
     } = options;
-    let mut stages = vec![("unswitch".to_owned(), candidate.clone())];
+    let mut stages = vec![("unswitch".to_owned(), MirBody::clone(&candidate))];
     let prices = costs.clone().unwrap_or_default();
     let result = {
         let mut collect = |name: &str, state: &MirBody| stages.push((name.to_owned(), state.clone()));
@@ -90,7 +90,7 @@ pub(crate) fn optimized(
     Ok(result)
 }
 
-pub(crate) fn specialized(body: &MirBody) -> Result<MirBody, String> {
+pub(crate) fn specialized(body: &Rc<MirBody>) -> Result<Rc<MirBody>, String> {
     let closed = lcssa::closed(body)?;
     let mut owners: IndexMap<Value, i64> = IndexMap::new();
     for block in &closed.blocks {
@@ -143,7 +143,7 @@ pub(crate) fn specialized(body: &MirBody) -> Result<MirBody, String> {
                 continue;
             };
             let candidate = _specialized(&closed, &copied, &loop_, entry, block, compare, branch)?;
-            return transform::_trivial_phis(&transform::_unreachable(&candidate));
+            return transform::_trivial_phis(&transform::_unreachable(&candidate)).map(Rc::new);
         }
     }
     Ok(body.clone())

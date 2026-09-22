@@ -1,5 +1,6 @@
 //! Port of `tests/test_lcssa.py`. `is` assertions compare by `==`.
 
+use std::rc::Rc;
 use crate::model::ir::Operation;
 use crate::model::mir::{Arg, Const, Held, Kind, MirBlock, MirBody, Op, OpCode, OrderedMap, Phi, Value};
 
@@ -56,7 +57,7 @@ pub(crate) fn loop_with_exit_use() -> (MirBody, Value, Op) {
 fn test_a_loop_value_used_after_the_exit_gets_an_exit_phi() {
     let (body, carried, consume) = loop_with_exit_use();
 
-    let result = closed(&body).unwrap();
+    let result = closed(&Rc::new(MirBody::clone(&body))).unwrap();
 
     let exit_block = result.block(3).unwrap();
     assert_eq!(exit_block.phis.len(), 1);
@@ -73,7 +74,7 @@ fn test_a_loop_value_used_after_the_exit_gets_an_exit_phi() {
 #[test]
 fn test_loop_closed_ssa_is_idempotent() {
     let (body, _, _) = loop_with_exit_use();
-    let once = closed(&body).unwrap();
+    let once = closed(&Rc::new(MirBody::clone(&body))).unwrap();
     assert_eq!(closed(&once).unwrap(), once);
 }
 
@@ -90,7 +91,7 @@ fn test_exit_edge_into_a_bypass_join_is_closed_once() {
         vec![],
         vec![],
     ));
-    let result = closed(&body).unwrap();
+    let result = closed(&Rc::new(MirBody::clone(&body))).unwrap();
     let exit_value = result.block(3).unwrap().phis[0].result;
     assert_eq!(result.block(4).unwrap().phis[0].incoming, incoming(&[(0, seed), (3, exit_value)]));
     assert_eq!(closed(&result).unwrap(), result);
@@ -119,7 +120,7 @@ fn test_a_value_already_consumed_by_an_exit_phi_is_closed() {
             })
             .collect(),
     );
-    assert_eq!(closed(&body).unwrap(), body);
+    assert_eq!(closed(&Rc::new(MirBody::clone(&body))).unwrap(), Rc::new(body));
 }
 
 #[test]
@@ -139,7 +140,7 @@ fn test_multiple_edges_to_one_dedicated_exit_are_closed() {
             })
             .collect(),
     );
-    let result = closed(&body).unwrap();
+    let result = closed(&Rc::new(MirBody::clone(&body))).unwrap();
     let exit_block = result.block(3).unwrap();
     assert_eq!(exit_block.phis.len(), 1);
     assert_eq!(exit_block.phis[0].incoming, incoming(&[(1, carried), (2, carried)]));
@@ -156,12 +157,12 @@ fn test_exit_phi_cannot_read_a_value_missing_on_one_edge() {
     changed.uses = vec![stepped];
     changed.args = vec![held(stepped, 2)];
     body.blocks[3].ops = vec![changed];
-    assert_eq!(closed(&body).unwrap(), body);
+    assert_eq!(closed(&Rc::new(MirBody::clone(&body))).unwrap(), Rc::new(body));
 }
 
 #[test]
 fn test_exit_shared_with_a_bypass_still_requires_canonicalization() {
     let (mut body, _, _) = loop_with_exit_use();
     body.blocks[0].succ = vec![1, 3];
-    assert_eq!(closed(&body).unwrap(), body);
+    assert_eq!(closed(&Rc::new(MirBody::clone(&body))).unwrap(), Rc::new(body));
 }

@@ -2,6 +2,7 @@
 //!
 //! Direct port of `qbopt/optimize/wholephis.py`.
 
+use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};
 
 use indexmap::IndexMap;
@@ -39,7 +40,7 @@ pub(crate) fn _source(arg: &Arg, definitions: &BTreeMap<Value, &Op>) -> Arg {
     arg
 }
 
-pub(crate) fn joined(body: &MirBody) -> MirBody {
+pub(crate) fn joined(body: &Rc<MirBody>) -> Rc<MirBody> {
     let definitions = body
         .blocks
         .iter()
@@ -261,8 +262,8 @@ pub(crate) fn joined(body: &MirBody) -> MirBody {
             ..block.clone()
         });
     }
-    MirBody {
+    Rc::new(MirBody {
         blocks: changed,
-        ..body.clone()
-    }
+        ..MirBody::clone(body)
+    })
 }

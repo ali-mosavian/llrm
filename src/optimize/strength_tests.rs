@@ -23,6 +23,7 @@
 //!     pipeline, test_strength_does_not_spill_cheap_loop_work, and the
 //!     matrix/harr `wholeseg` fixtures
 
+use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};
 
 use num_bigint::BigInt;
@@ -97,8 +98,8 @@ fn occurrence(body: &MirBody, block: usize, index: usize) -> OpOccurrence {
 }
 
 fn reduced_default(body: &MirBody, registers: i64) -> MirBody {
-    reduced(
-        body,
+    MirBody::clone(&reduced(
+        &Rc::new(body.clone()),
         &BTreeSet::new(),
         None,
         registers,
@@ -108,7 +109,7 @@ fn reduced_default(body: &MirBody, registers: i64) -> MirBody {
         &[],
         true,
     )
-    .expect("reduces")
+    .expect("reduces"))
 }
 
 /// `tests/test_induction_identity.py:body`.
@@ -592,7 +593,7 @@ fn test_composed_offset_can_carry_an_invariant_pointer() {
             built.blocks[2].clone(),
         ],
     );
-    let derived = induction::derived(&built, &loop_, None, &BTreeSet::new(), None).unwrap();
+    let derived = induction::derived(&Rc::new(MirBody::clone(&built)), &loop_, None, &BTreeSet::new(), None).unwrap();
     let carried = derived
         .iter()
         .find(|one| one.op == occurrence(&built, 1, 3))

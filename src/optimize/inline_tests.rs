@@ -77,14 +77,14 @@ fn _caller(use_clobber: bool) -> (MirBody, Value) {
 }
 
 fn leaf_available(leaf: MirBody, parameters: Vec<MemRef>) -> IndexMap<String, Candidate> {
-    IndexMap::from([("leaf".to_owned(), Candidate { body: leaf, parameters })])
+    IndexMap::from([("leaf".to_owned(), Candidate { body: Rc::new(leaf), parameters })])
 }
 
 #[test]
 fn test_inline_splices_return_before_the_original_successor_phi() {
     let (body, result) = _caller(false);
     let made = expanded(
-        &body,
+        &Rc::new(MirBody::clone(&body)),
         &IndexMap::from([(2, "leaf".to_owned())]),
         &IndexMap::from([(2, BTreeSet::new())]),
         &leaf_available(_leaf(), vec![]),
@@ -92,7 +92,7 @@ fn test_inline_splices_return_before_the_original_successor_phi() {
     )
     .unwrap();
 
-    assert_ne!(made, body);
+    assert_ne!(*made, body);
     assert!(!made.blocks.iter().flat_map(|block| &block.ops).any(|op| op.kind == Kind::Call));
     let successor = made.block(4).unwrap();
     assert_ne!(successor.phis[0].incoming.keys().copied().collect::<BTreeSet<_>>(), BTreeSet::from([1]));
@@ -105,14 +105,14 @@ fn test_inline_refuses_a_live_unmodelled_call_result() {
     let (body, _) = _caller(true);
     assert_eq!(
         expanded(
-            &body,
+            &Rc::new(MirBody::clone(&body)),
             &IndexMap::from([(2, "leaf".to_owned())]),
             &IndexMap::from([(2, BTreeSet::new())]),
             &leaf_available(_leaf(), vec![]),
             None,
         )
         .unwrap(),
-        body
+        Rc::new(body)
     );
 }
 
@@ -141,7 +141,7 @@ fn test_inline_materializes_an_actual_whose_id_is_a_callee_substitution_key() {
     let caller = sealed(1, vec![MirBlock::new(1, vec![], vec![_copy(1, actual, 7), argument, call], vec![])]);
 
     let made = expanded(
-        &caller,
+        &Rc::new(MirBody::clone(&caller)),
         &IndexMap::from([(3, "leaf".to_owned())]),
         &IndexMap::from([(3, BTreeSet::from([2]))]),
         &leaf_available(leaf, vec![parameter]),
@@ -175,7 +175,7 @@ fn test_inline_policy_refuses_repeated_work_without_a_call_cost() {
     let leaf_set = BTreeSet::from(["leaf".to_owned()]);
     assert_eq!(
         candidates(
-            &IndexMap::from([("leaf".to_owned(), leaf)]),
+            &IndexMap::from([("leaf".to_owned(), Rc::new(leaf))]),
             &IndexMap::from([("leaf".to_owned(), vec![])]),
             &Counter::from([("leaf".to_owned(), 2)]),
             &leaf_set,

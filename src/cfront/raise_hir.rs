@@ -7,6 +7,7 @@
 //! Python's `eval` returns one of a dozen types; that union is `Got`.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
 use indexmap::IndexMap;
 use num_bigint::BigInt;
@@ -891,8 +892,8 @@ impl<'a> _Raise<'a> {
         body.sealed = true;
         body.pointer_values = self.pointer_values.clone();
         body.pointer_seeds = self.pointer_seeds.clone();
-        let body = RaisedBody::new(mir::frame_bounded(body, true));
-        let body = RaisedBody { body: alias::annotated(&body.body).map_err(Unsupported)?, ..body };
+        let RaisedBody { body, origin, pins } = RaisedBody::new(mir::frame_bounded(body, true));
+        let body = RaisedBody { body: alias::annotated(&Rc::new(body)).map_err(Unsupported)?, origin, pins };
         // Even an unknown C callee has a precise language-level boundary.
         let procedure =
             alias::Procedure { body: body.body.clone(), calls: self.calls.clone(), arguments: self.arguments.clone() };

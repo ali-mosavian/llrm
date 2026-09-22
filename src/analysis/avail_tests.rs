@@ -142,13 +142,14 @@ fn beyond(owner: i64) -> MemRef {
 #[test]
 fn test_runtime_name_cannot_override_unknown_mir_effects() {
     let body = body_with_call(MemRef::new(None, 0), false);
-    assert!(forwardable(&body, None, &calls(&[(1, "B$MUI4")]), &BTreeSet::from([2])).is_empty());
+    assert!(forwardable(&Rc::new(body.clone()), None, &calls(&[(1, "B$MUI4")]), &BTreeSet::from([2])).is_empty());
 }
 
 #[test]
 fn test_disjoint_mir_effects_keep_values_without_runtime_names() {
     let body = body_with_call(beyond(1), true);
-    let forwarded = forwardable(&body, None, &IndexMap::new(), &BTreeSet::from([2]));
+    let shared = Rc::new(body.clone());
+    let forwarded = forwardable(&shared, None, &IndexMap::new(), &BTreeSet::from([2]));
     assert_eq!(forwarded.len(), 1);
     assert_eq!(forwarded[0].value, Holder::Value(body.blocks[0].ops[0].uses[0]));
 }
@@ -178,7 +179,7 @@ fn test_opaque_memory_footprint_preserves_only_disjoint_values() {
         barrier.op = Some(OpCode::Operation(Operation::Barrier));
         barrier.kind = Kind::Opaque;
         barrier.memory_complete = complete;
-        assert_eq!(!forwardable(&body, None, &IndexMap::new(), &BTreeSet::from([2])).is_empty(), reused);
+        assert_eq!(!forwardable(&Rc::new(body.clone()), None, &IndexMap::new(), &BTreeSet::from([2])).is_empty(), reused);
     }
 }
 
@@ -263,7 +264,8 @@ fn loop_body(alias: bool) -> MirBody {
 #[test]
 fn test_preheader_store_serves_a_loop_read() {
     let body = loop_body(false);
-    let found = forwardable(&body, None, &IndexMap::new(), &BTreeSet::from([1]));
+    let shared = Rc::new(body.clone());
+    let found = forwardable(&shared, None, &IndexMap::new(), &BTreeSet::from([1]));
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].value, Holder::Value(body.blocks[0].ops[0].uses[0]));
 }
@@ -271,7 +273,7 @@ fn test_preheader_store_serves_a_loop_read() {
 #[test]
 fn test_aliasing_backedge_keeps_the_load() {
     let body = loop_body(true);
-    assert!(forwardable(&body, None, &IndexMap::new(), &BTreeSet::from([1])).is_empty());
+    assert!(forwardable(&Rc::new(body.clone()), None, &IndexMap::new(), &BTreeSet::from([1])).is_empty());
 }
 
 #[test]
@@ -279,12 +281,12 @@ fn test_store_on_only_one_entry_path_cannot_supply_the_load() {
     let mut body = loop_body(false);
     body.entry = 4;
     body.blocks.push(MirBlock::new(4, vec![], vec![], vec![0, 1]));
-    assert!(forwardable(&body, None, &IndexMap::new(), &BTreeSet::from([1])).is_empty());
+    assert!(forwardable(&Rc::new(body.clone()), None, &IndexMap::new(), &BTreeSet::from([1])).is_empty());
 }
 
 #[test]
 fn test_call_on_backedge_invalidates_the_preheader_store() {
     let mut body = loop_body(false);
     body.blocks[2].ops = vec![op(2, Operation::Call, vec![], vec![], Kind::Call)];
-    assert!(forwardable(&body, None, &IndexMap::new(), &BTreeSet::from([1])).is_empty());
+    assert!(forwardable(&Rc::new(body.clone()), None, &IndexMap::new(), &BTreeSet::from([1])).is_empty());
 }

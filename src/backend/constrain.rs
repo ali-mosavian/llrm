@@ -489,6 +489,8 @@ fn _next_value(body: &LirBody) -> u32 {
 #[cfg(test)]
 mod tests {
     //! Port of `tests/test_constrain.py`.
+    use std::rc::Rc;
+    use crate::model::mir::MirBody;
 
     use std::collections::BTreeSet;
     use std::sync::Arc;
@@ -654,7 +656,7 @@ mod tests {
         let contracts = IndexMap::new();
         let options = lower::Options { origin: [(segment, Register::ES)].into_iter().collect(), ..Default::default() };
         let mut lowering = lower::Lowering::new(
-            &context,
+            &Rc::new(MirBody::clone(&context)),
             BTreeSet::from([segment.id]),
             &calls,
             BTreeSet::new(),
@@ -726,7 +728,7 @@ mod tests {
             ..Default::default()
         };
         let mut lowering = lower::Lowering::new(
-            &context,
+            &Rc::new(MirBody::clone(&context)),
             BTreeSet::from([1, 2]),
             &calls,
             BTreeSet::new(),

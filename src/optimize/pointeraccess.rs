@@ -2,6 +2,7 @@
 //!
 //! Direct port of `qbopt/optimize/pointeraccess.py`.
 
+use std::rc::Rc;
 use std::collections::BTreeMap;
 
 use crate::analysis::ssa;
@@ -38,7 +39,7 @@ pub(crate) fn _reference(r#ref: &MemRef, pieces: &BTreeMap<Value, (Value, Value)
 }
 
 /// Name each packed access's offset and selector as word SSA values.
-pub(crate) fn split(body: MirBody) -> MirBody {
+pub(crate) fn split(body: Rc<MirBody>) -> Rc<MirBody> {
     if !body
         .blocks
         .iter()
@@ -208,7 +209,7 @@ pub(crate) fn split(body: MirBody) -> MirBody {
     }
 
     if changed {
-        MirBody { blocks, ..body }
+        Rc::new(MirBody { blocks, ..MirBody::clone(&body) })
     } else {
         body
     }

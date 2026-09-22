@@ -16,6 +16,7 @@
 //! `test_constant_analysis_scope_reuses_an_unchanged_body_without_sharing_mutation`
 //! keeps its mutation half; counting `_solved` calls needs a monkeypatch.
 
+use std::rc::Rc;
 use std::collections::BTreeSet;
 
 use indexmap::IndexMap;
@@ -61,7 +62,7 @@ fn test_an_index_constant_is_not_the_value_of_an_indexed_store() {
     load.loads = vec![reference];
     let body = MirBody::new(0, vec![MirBlock::new(0, vec![], vec![set_index, store, load], vec![])]);
 
-    let found = known(&body, Some(&BTreeSet::from([5])), Some(&IndexMap::new()), None, None);
+    let found = known(&Rc::new(MirBody::clone(&body)), Some(&BTreeSet::from([5])), Some(&IndexMap::new()), None, None);
     assert!(!found.contains_key(&loaded));
 }
 
@@ -73,9 +74,9 @@ fn test_constant_analysis_scope_reuses_an_unchanged_body_without_sharing_mutatio
     copy.results = vec![held(value, 2)];
     let body = MirBody::new(0, vec![MirBlock::new(0, vec![], vec![copy], vec![])]);
     let second = reusing(|| {
-        let mut first = known(&body, None, None, None, None);
+        let mut first = known(&Rc::new(MirBody::clone(&body)), None, None, None, None);
         first.insert(value, Known::new(99, 2));
-        known(&body, None, None, None, None)
+        known(&Rc::new(MirBody::clone(&body)), None, None, None, None)
     });
     assert_eq!(second[&value], Known::new(7, 2));
 }

@@ -1,5 +1,6 @@
 //! Ports of the `interprocedural` tests in `tests/test_sccp.py`.
 
+use std::rc::Rc;
 use std::collections::BTreeSet;
 
 use indexmap::IndexMap;
@@ -81,7 +82,7 @@ fn test_module_constant_returns_require_every_exit_to_agree() {
     let mut disagrees = agrees.clone();
     disagrees.blocks = vec![left, right];
     assert_eq!(
-        constant_returns(&IndexMap::from([("yes".to_owned(), agrees), ("no".to_owned(), disagrees)])),
+        constant_returns(&IndexMap::from([("yes".to_owned(), Rc::new(agrees)), ("no".to_owned(), Rc::new(disagrees))])),
         IndexMap::from([("yes".to_owned(), vec![Const::new(37, 2)])])
     );
 }
@@ -119,7 +120,7 @@ fn test_current_parameter_constants_reads_a_sccp_returned_actual() {
     let body = sealed(1, vec![MirBlock::new(1, vec![], vec![materialized, argument, call], vec![])]);
     assert_eq!(
         current_parameter_constants(
-            &IndexMap::from([("caller".to_owned(), body)]),
+            &IndexMap::from([("caller".to_owned(), Rc::new(body))]),
             &IndexMap::from([("caller".to_owned(), calls(&[(2, "choose")]))]),
             &IndexMap::from([("caller".to_owned(), IndexMap::from([(2, BTreeSet::from([1]))]))]),
             &IndexMap::from([("choose".to_owned(), vec![frame_parameter()])]),
@@ -143,12 +144,12 @@ fn test_current_call_constants_keeps_a_per_call_fact_when_another_call_is_dynami
     let calls = calls(&[(2, "choose"), (4, "choose")]);
     let arguments = IndexMap::from([(2, BTreeSet::from([1])), (4, BTreeSet::from([3]))]);
     assert_eq!(
-        current_call_constants(&body, &calls, &arguments, &parameters),
+        current_call_constants(&Rc::new(MirBody::clone(&body)), &calls, &arguments, &parameters),
         IndexMap::from([(2, vec![Some(Const::new(4, 2))]), (4, vec![None])])
     );
     assert_eq!(
         current_parameter_constants(
-            &IndexMap::from([("caller".to_owned(), body)]),
+            &IndexMap::from([("caller".to_owned(), Rc::new(body))]),
             &IndexMap::from([("caller".to_owned(), calls)]),
             &IndexMap::from([("caller".to_owned(), arguments)]),
             &parameters,
@@ -175,7 +176,7 @@ fn test_pure_call_removal_drops_its_exact_argument_pushes() {
     contract.caller_cleanup = 2;
 
     let sites = argument_sites(&body, &IndexMap::from([(2, contract)]));
-    let made = remove_dead_pure_calls(&body, &calls(&[(2, "leaf")]), &names(&["leaf"]), &sites).unwrap();
+    let made = remove_dead_pure_calls(&Rc::new(MirBody::clone(&body)), &calls(&[(2, "leaf")]), &names(&["leaf"]), &sites).unwrap();
     assert_eq!(made.blocks[0].ops.iter().map(|op| op.kind).collect::<Vec<_>>(), vec![Kind::Copy, Kind::Return]);
 }
 
@@ -244,7 +245,7 @@ fn test_direct_noreturn_summary_prunes_only_the_callers_impossible_tail() {
     ]);
 
     assert_eq!(noreturn_procedures(&procedures, &names(&["spin", "caller"])), names(&["spin", "caller"]));
-    let pruned = terminal_calls(&caller, &caller_calls, &names(&["spin"]));
+    let pruned = terminal_calls(&Rc::new(MirBody::clone(&caller)), &caller_calls, &names(&["spin"]));
     assert_eq!(pruned.blocks[0].ops, vec![call]);
     assert!(pruned.blocks[0].succ.is_empty());
 }

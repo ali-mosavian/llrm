@@ -2,6 +2,7 @@
 //!
 //! Direct port of `qbopt/optimize/algebraic.py`.
 
+use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use num_bigint::BigInt;
@@ -61,11 +62,11 @@ fn unique(values: impl IntoIterator<Item = Value>) -> Vec<Value> {
 }
 
 pub(crate) fn simplified(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     wanted: &BTreeSet<Value>,
     wide: &BTreeSet<Value>,
 ) -> Result<MirBody, String> {
-    let body = wholestores::joined(&wholephis::joined(body));
+    let body = Rc::new(wholestores::joined(&wholephis::joined(body)));
     let body = _halved(&_divisions(&body));
     let body = _reassociated_recurrences(&body);
     let body = _forwarded_zero_tests(&body)?;
@@ -1395,7 +1396,7 @@ pub(crate) fn _shift_chain(
 }
 
 /// Divide by positive powers of two, biasing negatives to truncate toward zero.
-pub(crate) fn _divisions(body: &MirBody) -> MirBody {
+pub(crate) fn _divisions(body: &Rc<MirBody>) -> Rc<MirBody> {
     if !body
         .blocks
         .iter()
@@ -1560,10 +1561,10 @@ pub(crate) fn _divisions(body: &MirBody) -> MirBody {
             ..block.clone()
         });
     }
-    MirBody {
+    Rc::new(MirBody {
         blocks,
-        ..body.clone()
-    }
+        ..MirBody::clone(body)
+    })
 }
 
 pub(crate) fn _product(op: &Op, wanted: &BTreeSet<Value>, wide: &BTreeSet<Value>) -> Op {

@@ -4,6 +4,7 @@
 
 // Its callers live in transform.py, not yet ported.
 
+use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use indexmap::IndexMap;
@@ -45,11 +46,11 @@ fn overlapping(
 }
 
 pub fn sunk_stores(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     dgroup: &BTreeSet<i64>,
     bounds: Option<&Bounds>,
     handles_errors: bool,
-) -> Result<MirBody, String> {
+) -> Result<Rc<MirBody>, String> {
     let mut body = body.clone();
     let predecessors = loops::predecessors(&body.blocks);
     for loop_ in loops::loops(&body.blocks, Some(body.entry)) {
@@ -227,12 +228,12 @@ pub fn sunk_stores(
             .iter()
             .map(|block| updates.get(&block.at).cloned().unwrap_or_else(|| block.clone()))
             .collect();
-        body = MirBody { blocks, ..body };
+        body = Rc::new(MirBody { blocks, ..MirBody::clone(&body) });
     }
     Ok(body)
 }
 
-fn _last_counter_value(op: &Op, body: &MirBody, loop_: &Loop) -> Option<Const> {
+fn _last_counter_value(op: &Op, body: &Rc<MirBody>, loop_: &Loop) -> Option<Const> {
     let [Arg::Held(stored)] = op.args.as_slice() else {
         return None;
     };

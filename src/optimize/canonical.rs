@@ -6,6 +6,7 @@
 //! every test reading its flags mirrored; a reader that is not a test gets
 //! the constant as a copied value instead.
 
+use std::rc::Rc;
 use std::collections::BTreeSet;
 
 use indexmap::IndexMap;
@@ -14,7 +15,7 @@ use crate::analysis::ssa;
 use crate::model::ir::Operation;
 use crate::model::mir::{self, Arg, Held, Kind, MirBody, Op, OpCode, Value};
 
-pub(crate) fn compares(body: MirBody) -> MirBody {
+pub(crate) fn compares(body: Rc<MirBody>) -> Rc<MirBody> {
     let mut readers = IndexMap::<Value, Vec<&Op>>::new();
     for block in &body.blocks {
         for op in &block.ops {
@@ -86,7 +87,7 @@ pub(crate) fn compares(body: MirBody) -> MirBody {
         block.ops = ops;
         blocks.push(block);
     }
-    MirBody { blocks, ..body }
+    Rc::new(MirBody { blocks, ..MirBody::clone(&body) })
 }
 
 fn _constant_left(op: &Op) -> bool {
