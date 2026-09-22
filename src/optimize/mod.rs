@@ -7,6 +7,7 @@ pub(crate) mod lcssa;
 pub(crate) mod lcssamerges;
 pub(crate) mod loopclone;
 pub(crate) mod loopsimplify;
+pub(crate) mod profit;
 pub(crate) mod rotate;
 pub(crate) mod strength;
 pub(crate) mod transform;
