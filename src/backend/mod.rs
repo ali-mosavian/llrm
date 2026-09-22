@@ -1,5 +1,6 @@
 //! Ports of `qbopt/backend`.
 
+pub mod addressforms;
 pub mod addressvalues;
 pub mod arithmetic;
 pub mod comparefold;
