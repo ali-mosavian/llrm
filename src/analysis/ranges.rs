@@ -400,7 +400,7 @@ pub(crate) fn bounded(body: &MirBody) -> Result<IndexMap<i64, IndexMap<Value, In
     let facts = consts::known(body);
     let mut result: IndexMap<i64, IndexMap<Value, Interval>> = IndexMap::new();
     let predecessors = loops::predecessors(&body.blocks);
-    let dominators = loops::dominators(&body.blocks, body.entry);
+    let dominators = loops::dominators(&body.blocks, Some(body.entry));
     for loop_ in loops::loops(&body.blocks, Some(body.entry)) {
         let mut inside = loop_.body.clone();
         inside.remove(&loop_.header);
@@ -559,7 +559,7 @@ pub(crate) fn bounded(body: &MirBody) -> Result<IndexMap<i64, IndexMap<Value, In
 pub(crate) fn dominated_edges(body: &MirBody) -> Result<IndexMap<i64, IndexMap<Value, Interval>>, String> {
     let facts = consts::known(body);
     let predecessors = loops::predecessors(&body.blocks);
-    let dominators = loops::dominators(&body.blocks, body.entry);
+    let dominators = loops::dominators(&body.blocks, Some(body.entry));
     let mut edges = body
         .blocks
         .iter()

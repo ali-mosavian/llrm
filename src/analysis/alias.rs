@@ -752,7 +752,7 @@ pub fn points_to(
     }
     // A pointer value is otherwise an exact byte slice.  Natural-loop joins
     // are the one place those exact facts can grow without a program bound.
-    let dominators = loops::dominators(&body.blocks, body.entry);
+    let dominators = loops::dominators(&body.blocks, Some(body.entry));
     let back_edges = body
         .blocks
         .iter()
