@@ -208,3 +208,123 @@ pub(crate) fn encoded(value: &Finite, format: Format) -> Option<BigInt> {
             | (significand.to_integer() - shl(precision - 1)),
     )
 }
+
+fn _inputs(
+    op: &crate::model::mir::Op,
+    integers: &std::collections::BTreeMap<crate::model::mir::Value, crate::analysis::consts::Known>,
+    memory: &crate::analysis::consts::Cells,
+    facts: &indexmap::IndexMap<crate::model::mir::Value, Finite>,
+) -> Option<Vec<Finite>> {
+    use crate::analysis::consts;
+    use crate::model::mir::Arg;
+
+    let floating = op.floating.as_ref()?;
+    if op.args.len() != floating.inputs.len() {
+        return None;
+    }
+    let mut inputs = Vec::new();
+    for (arg, format) in op.args.iter().zip(floating.inputs.iter()) {
+        let fact = match arg {
+            Arg::Held(held) if held.width == 10 => facts.get(&held.value).cloned(),
+            _ => {
+                // Python's `consts._operand(op, arg, integers, memory)`, whose cell arm reads memory.
+                let bits = match arg {
+                    Arg::Cell(cell) => consts::_cell(memory, &consts::_addressed(&cell.r#ref, integers)),
+                    _ => consts::_operand(op, arg, integers),
+                };
+                bits.and_then(|bits| decoded(&bits.n, *format))
+            }
+        };
+        inputs.push(fact?);
+    }
+    Some(inputs)
+}
+
+/// Numeric facts, optionally given independently established entry bytes.
+pub(crate) fn known(
+    body: &crate::model::mir::MirBody,
+    dgroup: &std::collections::BTreeSet<i64>,
+    calls: &indexmap::IndexMap<i64, String>,
+    initial: Option<&indexmap::IndexMap<crate::objectfile::module::Addr, BigInt>>,
+) -> Result<indexmap::IndexMap<crate::model::mir::Value, Finite>, String> {
+    Ok(_analyzed(body, dgroup, calls, initial)?.0)
+}
+
+#[allow(clippy::type_complexity)]
+fn _analyzed(
+    body: &crate::model::mir::MirBody,
+    dgroup: &std::collections::BTreeSet<i64>,
+    calls: &indexmap::IndexMap<i64, String>,
+    initial: Option<&indexmap::IndexMap<crate::objectfile::module::Addr, BigInt>>,
+) -> Result<
+    (
+        indexmap::IndexMap<crate::model::mir::Value, Finite>,
+        indexmap::IndexMap<(i64, usize), crate::analysis::consts::Cells>,
+    ),
+    String,
+> {
+    use crate::analysis::consts::{self, Cells, Known};
+    use crate::model::mir::{Arg, Const, Op};
+
+    let seed = initial.map(|initial| {
+        initial
+            .iter()
+            .map(|(addr, byte)| ((*addr, 1), Known::new(byte.clone(), 1)))
+            .collect::<Cells>()
+    });
+    // Python passes `dgroup, calls, initial=seed`; the Rust `consts::known`
+    // is still the value-only slice.
+    let integers = consts::known(body);
+    let mut facts = indexmap::IndexMap::<crate::model::mir::Value, Finite>::new();
+    let mut memory = indexmap::IndexMap::new();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        let stored = |op: &Op| -> Op {
+            let (Kind::Fstore, Some(floating), [Arg::Held(held)]) =
+                (op.kind, op.floating.as_ref(), op.args.as_slice())
+            else {
+                return op.clone();
+            };
+            let Some(fact) = facts.get(&held.value) else {
+                return op.clone();
+            };
+            let result = evaluated(op.kind, floating, &[fact.clone()]);
+            let bits = result.as_ref().and_then(|result| encoded(result, floating.result));
+            let Some(bits) = bits.filter(|_| op.stores.len() == 1) else {
+                return op.clone();
+            };
+            let mut store = op.clone();
+            store.kind = Kind::Store;
+            store.args = vec![Arg::Const(Const::new(bits, op.stores[0].width))];
+            store.uses = Vec::new();
+            store
+        };
+        let mut shadow = body.clone();
+        for block in &mut shadow.blocks {
+            block.ops = block.ops.iter().map(stored).collect();
+        }
+        memory = consts::cells(&shadow, dgroup, calls, Some(&integers), seed.as_ref(), None, None, None)
+            .map_err(|error| format!("{error:?}"))?;
+        let empty = Cells::new();
+        for block in &body.blocks {
+            for (index, op) in block.ops.iter().enumerate() {
+                let inputs = _inputs(op, &integers, memory.get(&(block.at, index)).unwrap_or(&empty), &facts);
+                if let Some(inputs) = inputs {
+                    let floating = op.floating.as_ref().expect("inputs need floating");
+                    if let Some(result) = evaluated(op.kind, floating, &inputs) {
+                        for target in &op.results {
+                            if let Arg::Held(target) = target {
+                                if target.width == 10 && !facts.contains_key(&target.value) {
+                                    facts.insert(target.value, result.clone());
+                                    changed = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok((facts, memory))
+}

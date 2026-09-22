@@ -54,7 +54,7 @@ fn _read(fact: Option<&Known>, width: u32) -> Option<Known> {
 ///
 /// `Arg::Cell` deliberately remains unknown here.  Its Python counterpart
 /// delegates that case to the memory lattice, which is outside this port.
-fn _operand(_op: &Op, argument: &Arg, known: &BTreeMap<Value, Known>) -> Option<Known> {
+pub(crate) fn _operand(_op: &Op, argument: &Arg, known: &BTreeMap<Value, Known>) -> Option<Known> {
     match argument {
         Arg::Const(constant) => Some(Known::new(
             masked(&constant.n, constant.width),

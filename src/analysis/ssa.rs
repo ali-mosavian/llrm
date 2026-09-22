@@ -907,3 +907,55 @@ mod tests {
         );
     }
 }
+
+// ---- early port (agent E) ----
+
+/// Carry semantic pointer facts onto fresh SSA definitions.
+pub(crate) fn cloned_pointer_metadata<'a>(
+    body: &MirBody,
+    mappings: impl Iterator<Item = &'a indexmap::IndexMap<u32, Value>>,
+) -> (
+    BTreeSet<Value>,
+    crate::model::mir::OrderedMap<Value, crate::model::memory::Provenance>,
+) {
+    let pointer_ids = body.pointer_values.iter().map(|value| value.id).collect::<BTreeSet<u32>>();
+    let seeds = body
+        .pointer_seeds
+        .iter()
+        .map(|(value, provenance)| (value.id, provenance.clone()))
+        .collect::<indexmap::IndexMap<u32, _>>();
+    let mut pointer_values = body.pointer_values.clone();
+    let mut pointer_seeds = body.pointer_seeds.clone();
+    for mapping in mappings {
+        for (original, cloned) in mapping {
+            if pointer_ids.contains(original) {
+                pointer_values.insert(*cloned);
+            }
+            if let Some(seed) = seeds.get(original) {
+                pointer_seeds.insert(*cloned, seed.clone());
+            }
+        }
+    }
+    (pointer_values, pointer_seeds)
+}
+
+/// Carry frontend integer facts onto structurally cloned values.
+pub(crate) fn cloned_integer_ranges<'a>(
+    body: &MirBody,
+    mappings: impl Iterator<Item = &'a indexmap::IndexMap<u32, Value>>,
+) -> crate::model::mir::OrderedMap<Value, crate::model::mir::IntegerRange> {
+    let ranges = body
+        .integer_ranges
+        .iter()
+        .map(|(value, interval)| (value.id, interval.clone()))
+        .collect::<indexmap::IndexMap<u32, _>>();
+    let mut cloned_ranges = body.integer_ranges.clone();
+    for mapping in mappings {
+        for (original, cloned) in mapping {
+            if let Some(interval) = ranges.get(original) {
+                cloned_ranges.insert(*cloned, interval.clone());
+            }
+        }
+    }
+    cloned_ranges
+}
