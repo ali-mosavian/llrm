@@ -295,7 +295,7 @@ pub(crate) fn rotated(body: &MirBody) -> Result<MirBody, SubstitutionError> {
         if loop_.latches.len() != 1 {
             continue;
         }
-        let Some(preheader) = transform::preheader(body, &loop_) else {
+        let Some(preheader) = transform::_preheader(body, &loop_) else {
             continue;
         };
         if body.blocks[blocks[&preheader]].succ != [loop_.header] {

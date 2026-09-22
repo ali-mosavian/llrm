@@ -37,7 +37,7 @@ pub(crate) fn evaluated(body: &MirBody) -> Result<MirBody, String> {
         }
         let header = blocks[&loop_.header];
         let latch = blocks[loop_.latches.iter().next().expect("one latch")];
-        let preheader = transform::preheader(body, &loop_);
+        let preheader = transform::_preheader(body, &loop_);
         let Some(preheader) = preheader else {
             continue;
         };

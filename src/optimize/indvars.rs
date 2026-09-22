@@ -84,8 +84,8 @@ pub(crate) fn rewound(body: &MirBody, registers: i64, costs: Option<&OperationCo
         if parent.latches.len() != 1 {
             continue;
         }
-        let inner_preheader = transform::preheader(body, inner);
-        let parent_preheader = transform::preheader(body, parent);
+        let inner_preheader = transform::_preheader(body, inner);
+        let parent_preheader = transform::_preheader(body, parent);
         let inner_latch = *inner.latches.iter().next().expect("one latch");
         let parent_latch = *parent.latches.iter().next().expect("one latch");
         let (Some(inner_preheader), Some(parent_preheader)) = (inner_preheader, parent_preheader) else {
@@ -274,7 +274,7 @@ pub(crate) fn simplified(body: &MirBody) -> Result<MirBody, SubstitutionError> {
         if loop_.latches.len() != 1 {
             continue;
         }
-        let preheader = transform::preheader(body, &loop_);
+        let preheader = transform::_preheader(body, &loop_);
         let Some(preheader) = preheader.filter(|preheader| body.blocks[blocks[preheader]].succ == [loop_.header])
         else {
             continue;
@@ -1008,7 +1008,7 @@ pub(crate) fn zeroed(body: &MirBody, address_offsets: bool) -> Result<MirBody, S
         if loop_.latches.len() != 1 {
             continue;
         }
-        let preheader = transform::preheader(body, &loop_);
+        let preheader = transform::_preheader(body, &loop_);
         let Some(preheader) = preheader.filter(|preheader| body.blocks[blocks[preheader]].succ == [loop_.header])
         else {
             continue;

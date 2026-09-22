@@ -29,7 +29,7 @@ use crate::model::mir::{
 use crate::model::passes::{AddressForm, OperationCosts};
 use crate::objectfile::module::Space;
 
-use super::transform as passes;
+use super::transform;
 
 #[cfg_attr(not(test), allow(dead_code))]
 static _DEFAULT_COSTS: LazyLock<OperationCosts> = LazyLock::new(OperationCosts::default);
@@ -138,7 +138,7 @@ pub(crate) fn reduced(
         IndexMap::new()
     };
     for (loop_, _basics, _derived) in &found {
-        let preheader = passes::preheader(body, loop_);
+        let preheader = transform::_preheader(body, loop_);
         let latches = loop_
             .latches
             .iter()
