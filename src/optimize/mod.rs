@@ -5,6 +5,7 @@ pub(crate) mod cfg;
 pub(crate) mod edges;
 pub(crate) mod exitsink;
 pub(crate) mod fill;
+pub(crate) mod floatloop;
 pub(crate) mod floatfold;
 pub(crate) mod indvars;
 pub(crate) mod inline;
