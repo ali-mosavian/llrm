@@ -439,6 +439,18 @@ pub fn restore_pair(pair: i64) -> Option<(Register, Register)> {
     }
 }
 
+/// What each absorbable routine computes, in MIR's own vocabulary. Direct
+/// port of `mir._ABSORBS`; a comparison subtracts and keeps only the flags.
+pub const _ABSORBS: [(&str, Kind); 4] =
+    [("B$MUI4", Kind::Mul), ("B$DVI4", Kind::Divmod), ("B$RMI4", Kind::Divmod), ("B$CPI4", Kind::Sub)];
+
+/// The kind a site of this name raises as, or None if it stays a call.
+/// Direct port of `mir.absorbs`.
+pub fn absorbs(name: &str) -> Option<Kind> {
+    let upper = name.to_uppercase();
+    _ABSORBS.iter().find(|(one, _)| *one == upper).map(|&(_, kind)| kind)
+}
+
 /// Each contract register at its own name. Direct port of `mir.AS_NAMED`.
 pub fn as_named(one: crate::abi::runtime::Reg) -> Option<Register> {
     use crate::abi::runtime::Reg;

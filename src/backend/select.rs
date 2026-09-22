@@ -788,10 +788,12 @@ pub static RESTORE: LazyLock<IndexMap<i64, Vec<u8>>> = LazyLock::new(|| {
 
 /// One absorbable runtime call as the instructions that replace it.
 ///
-/// `Ok(Err(reason))` is Python's `str` answer. calls.absorb and its
-/// CallSite are BC-decoded and not ported, so this refuses.
-pub fn absorbed<S>(_site: &S, _live: ir::Flag, _restore: bool) -> Result<Result<Emitted, String>, String> {
-    Err("not yet ported: qbopt.legacy.calls.absorb".to_owned())
+/// Four instructions for a long divide, two of which carry a fixup, which
+/// is why Emitted reports a field per instruction. `Err(reason)` is
+/// Python's `str` answer.
+pub fn absorbed(site: &machine::CallSite, live: ir::Flag, restore: bool) -> Result<Emitted, String> {
+    let made = machine::absorb(site, live, restore)?;
+    Ok(Emitted { fields: made.relocations.iter().map(|&(r#where, _field)| r#where).collect(), ..Emitted::new(made.code) })
 }
 
 /// A divide emitted from the operation's own operands.
@@ -863,9 +865,11 @@ pub fn divides(op: &mir::Op, seats: (Register, Register), restore: bool) -> Resu
 
 /// Which fixup each of an absorbed site's fields names, in the same order.
 ///
-/// calls.absorb is not ported, so this refuses.
-pub fn absorbed_fixups<S>(_site: &S, _live: ir::Flag, _restore: bool) -> Result<Vec<usize>, String> {
-    Err("not yet ported: qbopt.legacy.calls.absorb".to_owned())
+/// The same relocations `absorbed` reads the offsets from, so the two
+/// cannot disagree about how many there are or which is which.
+pub fn absorbed_fixups(site: &machine::CallSite, live: ir::Flag, restore: bool) -> Vec<usize> {
+    machine::absorb(site, live, restore)
+        .map_or_else(|_| Vec::new(), |made| made.relocations.iter().map(|&(_where, field)| field).collect())
 }
 
 /// The idiom that puts a widened value's halves back where BC reads them.
